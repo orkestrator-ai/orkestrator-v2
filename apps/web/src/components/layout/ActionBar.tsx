@@ -1,6 +1,7 @@
 import {
   cloneElement,
   createContext,
+  lazy,
   useContext,
   useState,
   useEffect,
@@ -72,8 +73,6 @@ import {
   createResolveConflictsPrompt,
   createOrkestratorScriptPrompt,
 } from "@/prompts";
-import { RepositorySettings, SettingsPage } from "@/components/settings";
-import { EnvironmentSettingsDialog } from "@/components/environments/EnvironmentSettingsDialog";
 import { DockerStatsDialog } from "@/components/docker";
 import * as backend from "@/lib/backend";
 import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
@@ -89,6 +88,20 @@ import {
   buildReviewModelCatalog,
   resolveDefaultReviewTabType,
 } from "@/lib/review-launch-options";
+import {
+  LazyDialogLoadingFallback,
+  LazyLoadBoundary,
+} from "@/components/LazyLoadBoundary";
+
+const LazyRepositorySettings = lazy(async () => ({
+  default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
+}));
+const LazySettingsPage = lazy(async () => ({
+  default: (await import("@/components/settings/SettingsPage")).SettingsPage,
+}));
+const LazyEnvironmentSettingsDialog = lazy(async () => ({
+  default: (await import("@/components/environments/EnvironmentSettingsDialog")).EnvironmentSettingsDialog,
+}));
 
 function isEditableShortcutTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -235,9 +248,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const toggleFilesPanel = useFilesPanelStore((state) => state.togglePanel);
   const changes = useFilesPanelStore((state) => state.changes);
 
-  const [repoSettingsOpen, setRepoSettingsOpen] = useState(false);
+  // Settings dialogs are pinned by id, not by snapshot: the store stays the
+  // single source of truth, so a background update to the pinned entity is
+  // reflected live and a deletion closes the dialog instead of leaving an
+  // orphaned copy whose saves would silently no-op.
+  const [repoSettingsProjectId, setRepoSettingsProjectId] = useState<string | null>(null);
   const [globalSettingsOpen, setGlobalSettingsOpen] = useState(false);
-  const [envSettingsOpen, setEnvSettingsOpen] = useState(false);
+  const [envSettingsEnvironmentId, setEnvSettingsEnvironmentId] = useState<string | null>(null);
   const [dockerStatsOpen, setDockerStatsOpen] = useState(false);
   const [isOpeningEditor, setIsOpeningEditor] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
@@ -270,6 +287,29 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const selectedProject = selectedProjectId
     ? getProjectById(selectedProjectId)
     : null;
+  const repoSettingsProject = useProjectStore((state) => (
+    repoSettingsProjectId
+      ? state.projects.find((project) => project.id === repoSettingsProjectId) ?? null
+      : null
+  ));
+  const envSettingsEnvironment = useEnvironmentStore((state) => (
+    envSettingsEnvironmentId
+      ? state.environments.find(
+        (environment) => environment.id === envSettingsEnvironmentId,
+      ) ?? null
+      : null
+  ));
+  // The pinned entity disappeared (deleted, or the project list was replaced).
+  // Drop the pin too, so a later entity that happens to reuse the id cannot
+  // resurrect a dialog the user never reopened.
+  useEffect(() => {
+    if (repoSettingsProjectId && !repoSettingsProject) setRepoSettingsProjectId(null);
+  }, [repoSettingsProject, repoSettingsProjectId]);
+  useEffect(() => {
+    if (envSettingsEnvironmentId && !envSettingsEnvironment) {
+      setEnvSettingsEnvironmentId(null);
+    }
+  }, [envSettingsEnvironment, envSettingsEnvironmentId]);
   const isProjectBoardView = !!selectedProject && !selectedEnvironment;
   const isCleanupTargetDeleting = Boolean(
     cleanupTarget
@@ -1041,7 +1081,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  onClick={() => setRepoSettingsOpen(true)}
+                  onClick={() => setRepoSettingsProjectId(selectedProject?.id ?? null)}
                   aria-label="Repository settings"
                   disabled={!selectedProject}
                 >
@@ -1057,7 +1097,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  onClick={() => setEnvSettingsOpen(true)}
+                  onClick={() => setEnvSettingsEnvironmentId(selectedEnvironment?.id ?? null)}
                   aria-label="Environment settings"
                   disabled={!selectedEnvironment}
                 >
@@ -1863,26 +1903,53 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       />
 
       {/* Settings Dialogs */}
-      <SettingsPage open={globalSettingsOpen} onOpenChange={setGlobalSettingsOpen} />
+      {globalSettingsOpen && (
+        <LazyLoadBoundary
+          loadingFallback={
+            <LazyDialogLoadingFallback label="Loading global settings…" />
+          }
+        >
+          <LazySettingsPage
+            open={globalSettingsOpen}
+            onOpenChange={setGlobalSettingsOpen}
+          />
+        </LazyLoadBoundary>
+      )}
       <DockerStatsDialog open={dockerStatsOpen} onOpenChange={setDockerStatsOpen} />
 
-      {selectedProject && (
-        <RepositorySettings
-          project={selectedProject}
-          open={repoSettingsOpen}
-          onOpenChange={setRepoSettingsOpen}
-          onUpdateProject={updateProject}
-        />
+      {repoSettingsProject && (
+        <LazyLoadBoundary
+          loadingFallback={
+            <LazyDialogLoadingFallback label="Loading repository settings…" />
+          }
+        >
+          <LazyRepositorySettings
+            project={repoSettingsProject}
+            open
+            onOpenChange={(open) => {
+              if (!open) setRepoSettingsProjectId(null);
+            }}
+            onUpdateProject={updateProject}
+          />
+        </LazyLoadBoundary>
       )}
 
-      {selectedEnvironment && (
-        <EnvironmentSettingsDialog
-          open={envSettingsOpen}
-          onOpenChange={setEnvSettingsOpen}
-          environment={selectedEnvironment}
-          onUpdate={(updated) => updateEnvironment(updated.id, updated)}
-          onRestart={backend.recreateEnvironment}
-        />
+      {envSettingsEnvironment && (
+        <LazyLoadBoundary
+          loadingFallback={
+            <LazyDialogLoadingFallback label="Loading environment settings…" />
+          }
+        >
+          <LazyEnvironmentSettingsDialog
+            open
+            onOpenChange={(open) => {
+              if (!open) setEnvSettingsEnvironmentId(null);
+            }}
+            environment={envSettingsEnvironment}
+            onUpdate={(updated) => updateEnvironment(updated.id, updated)}
+            onRestart={backend.recreateEnvironment}
+          />
+        </LazyLoadBoundary>
       )}
 
       {/* Editor Error Dialog */}

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { TurnAccumulator } from "../sessions/turn-accumulator.js";
 import { clearTranscriptCache } from "../transcript-cache.js";
 import {
+  SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
   TRUNCATION_NOTICE,
   beginTurnRenderState,
   createTurnRenderState,
@@ -130,6 +131,84 @@ describe("effectiveItem", () => {
       type: "reasoning",
       text: "authoritative reasoning",
     });
+  });
+
+  test("hides successful raw patch candidates until the turn is terminal", () => {
+    const accumulator = turn();
+    accumulator.onDynamicToolStarted({
+      id: "raw-patch",
+      type: "dynamic_tool_call",
+      tool: "apply_patch",
+      arguments: "*** Begin Patch",
+      content_items: [],
+      status: "in_progress",
+    });
+    accumulator.onDynamicToolOutput("raw-patch", "Done!");
+
+    expect(effectiveItem(
+      accumulator,
+      accumulator.items.get("raw-patch")!,
+    )).toBeNull();
+
+    accumulator.complete("completed");
+    expect(effectiveItem(
+      accumulator,
+      accumulator.items.get("raw-patch")!,
+    )).toMatchObject({
+      type: "dynamic_tool_call",
+      status: "completed",
+    });
+  });
+
+  test("keeps the structured patch preview visible when the raw call follows it", () => {
+    const accumulator = turn();
+    // The live diff app-server streams while the model writes the patch. The
+    // raw `custom_tool_call` for the same call id arrives afterwards and must
+    // not hide it — behind an approval prompt this gap is user-visible for as
+    // long as the human takes to answer.
+    accumulator.onItemUpdated({
+      id: "call-patch",
+      type: "file_change",
+      changes: [{ path: "src/a.ts", kind: "update" }],
+      status: "in_progress",
+    });
+    accumulator.onDynamicToolStarted({
+      id: "call-patch",
+      type: "dynamic_tool_call",
+      tool: "apply_patch",
+      arguments: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-a\n+A\n*** End Patch",
+      content_items: [],
+      status: "in_progress",
+    });
+
+    expect(effectiveItem(
+      accumulator,
+      accumulator.items.get("call-patch")!,
+    )).toMatchObject({ type: "file_change", status: "in_progress" });
+  });
+
+  test("a failed raw patch is visible immediately, without waiting for the turn", () => {
+    const accumulator = turn();
+    accumulator.onDynamicToolStarted({
+      id: "raw-patch",
+      type: "dynamic_tool_call",
+      tool: "apply_patch",
+      arguments: "*** Begin Patch\n*** Update File: missing.ts\n@@\n-a\n+A\n*** End Patch",
+      content_items: [],
+      status: "in_progress",
+    });
+    // No structured `fileChange` is coming for a failure, so holding it back
+    // would leave the user with no sign the patch was even attempted.
+    accumulator.onDynamicToolOutput(
+      "raw-patch",
+      "Failed to read file to update: missing.ts",
+    );
+
+    expect(accumulator.isTerminal()).toBe(false);
+    expect(effectiveItem(
+      accumulator,
+      accumulator.items.get("raw-patch")!,
+    )).toMatchObject({ type: "dynamic_tool_call", status: "failed" });
   });
 
   test("combines command deltas, truncation, and empty authoritative text", () => {
@@ -562,6 +641,33 @@ describe("renderTurn", () => {
     accumulator.complete("completed");
     await render();
     expect(loads).toBe(2);
+  });
+
+  test("the shipped probe interval actually throttles", async () => {
+    // `probeIntervalMs <= 0` means "probe on every render", which is the
+    // ~10x/second disk read this constant exists to stop. Nothing else pins the
+    // exported value, so a zeroed or negated one would regress silently.
+    expect(SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS).toBeGreaterThan(0);
+
+    const accumulator = turn();
+    accumulator.onItemCompleted({ id: "text", type: "agent_message", text: "done" });
+    const state = createTurnRenderState();
+    let loads = 0;
+    const render = () => renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state,
+      subagentProbeIntervalMs: SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
+      loadSubagentParts: async () => {
+        loads += 1;
+        return [];
+      },
+    });
+
+    await render();
+    await render();
+    await render();
+    expect(loads).toBe(1);
   });
 
   test("renders item parts and interleaves injected subagent activity", async () => {

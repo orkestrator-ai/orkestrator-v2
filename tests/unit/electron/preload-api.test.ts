@@ -113,6 +113,10 @@ describe("preload API factory", () => {
     await expect(api.connections.forget("remote-1")).resolves.toEqual({ channel: "orkestrator:connections:forget", args: ["remote-1"] });
     await expect(api.process.exit(7)).resolves.toEqual({ channel: "orkestrator:process:exit", args: [7] });
     await expect(api.window.startDragging()).resolves.toEqual({ channel: "orkestrator:window:start-dragging", args: [] });
+    await expect(api.window.setZoomFactor(1.5)).resolves.toEqual({
+      channel: "orkestrator:window:set-zoom-factor",
+      args: [1.5],
+    });
     const bounds = { x: 10, y: 20, width: 640, height: 480 };
     await expect(api.browserPreview.attach({
       tabId: "browser-1",

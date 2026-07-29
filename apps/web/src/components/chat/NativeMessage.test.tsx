@@ -1704,6 +1704,285 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     // Should render generic tool part with tool name
     expect(container.textContent).toContain("Read");
   });
+
+  test("shows a background command's description and authoritative lifecycle state", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: {
+            command: "bun test",
+            description: "Run the full suite",
+            run_in_background: true,
+          },
+          backgroundTask: {
+            id: "bg-suite",
+            description: "Run the full suite",
+            status: "running",
+          },
+        }])}
+      />,
+    );
+
+    const row = screen.getByRole("button", {
+      name: /Run Command Run the full suite running/,
+    });
+    expect(row).toBeTruthy();
+    expect(row.textContent).not.toContain("success");
+  });
+
+  test("shows the task name, id, and stopped state on TaskStop rows", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "TaskStop",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-wait" },
+          toolOutput: JSON.stringify({
+            task_id: "bg-wait",
+            command: "sleep 300; echo waited",
+          }),
+          backgroundTask: {
+            id: "bg-wait",
+            description: "Wait for remaining review thread",
+            status: "killed",
+          },
+        }])}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /TaskStop Wait for remaining review thread bg-wait stopped/,
+    })).toBeTruthy();
+  });
+
+  test("reads the stopped command from a structured TaskStop result when no name was recovered", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "TaskStop",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-legacy" },
+          toolOutput: JSON.stringify({
+            message: "Successfully stopped task: bg-legacy (sleep 120; echo waited)",
+            task_id: "bg-legacy",
+            task_type: "bash",
+            command: "sleep 120; echo waited",
+          }),
+        }])}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /TaskStop sleep 120; echo waited bg-legacy stopped/,
+    })).toBeTruthy();
+  });
+
+  test("recovers the stopped command from a legacy plain-text TaskStop result", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "TaskStop",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-legacy" },
+          toolOutput: "Successfully stopped task: bg-legacy (sleep 120; echo waited)",
+        }])}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /TaskStop sleep 120; echo waited bg-legacy stopped/,
+    })).toBeTruthy();
+  });
+
+  test("falls back to the task id when nothing names a stopped task", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "TaskStop",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-orphan" },
+        }])}
+      />,
+    );
+
+    const row = screen.getByRole("button", { name: /TaskStop bg-orphan stopped/ });
+    // The id is the row's only label here, so the secondary id chip must not
+    // repeat it.
+    expect(row.textContent?.match(/bg-orphan/g)).toHaveLength(1);
+  });
+
+  test("names a TaskOutput row after its task and shows the task's live state", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "TaskOutput",
+          toolName: "TaskOutput",
+          toolState: "success",
+          toolArgs: { task_id: "bg-suite" },
+          toolOutput: "…partial output…",
+          backgroundTask: {
+            id: "bg-suite",
+            description: "Run the full suite",
+            status: "running",
+          },
+        }])}
+      />,
+    );
+
+    const row = screen.getByRole("button", {
+      name: /TaskOutput Run the full suite bg-suite running/,
+    });
+    expect(row.textContent).not.toContain("success");
+  });
+
+  test.each([
+    ["pending", "running…"],
+    ["running", "running…"],
+    ["paused", "paused"],
+    ["completed", "completed"],
+    ["failed", "failed"],
+    ["killed", "stopped"],
+  ] as const)(
+    "labels a background command whose task is %s as %s",
+    (status, label) => {
+      render(
+        <NativeMessage
+          message={makeMessage([{
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: {
+              command: "bun test",
+              description: "Run the full suite",
+              run_in_background: true,
+            },
+            backgroundTask: { id: "bg-suite", description: "Run the full suite", status },
+          }])}
+        />,
+      );
+
+      const row = screen.getByRole("button", { name: /Run Command Run the full suite/ });
+      expect(row.textContent).toContain(label);
+      expect(row.textContent).not.toContain("success");
+    },
+  );
+
+  test("shows a failed task action instead of the task's own lifecycle state", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "TaskStop",
+          toolName: "TaskStop",
+          toolState: "failure",
+          toolArgs: { task_id: "bg-suite" },
+          toolError: "Task bg-suite is not running (status: completed)",
+          backgroundTask: {
+            id: "bg-suite",
+            description: "Run the full suite",
+            status: "completed",
+          },
+        }])}
+      />,
+    );
+
+    const row = screen.getByRole("button", { name: /TaskStop Run the full suite bg-suite/ });
+    expect(row.textContent).toContain("failure");
+    expect(row.textContent).not.toContain("completed");
+  });
+
+  test("labels an in-flight stop as stopping", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "TaskStop",
+          toolName: "TaskStop",
+          toolState: "pending",
+          toolArgs: { task_id: "bg-suite" },
+        }])}
+      />,
+    );
+
+    const row = screen.getByRole("button", { name: /TaskStop bg-suite stopping/ });
+    expect(row.textContent).not.toContain("running...");
+  });
+
+  test("renders a task description as prose and a command as code", () => {
+    const { unmount } = render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: {
+            command: "bun test",
+            description: "Run the full suite",
+            run_in_background: true,
+          },
+          backgroundTask: { id: "bg-suite", description: "Run the full suite", status: "running" },
+        }])}
+      />,
+    );
+
+    expect(screen.getByText("Run the full suite").className).not.toContain("font-mono");
+    unmount();
+
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun test", description: "Run the full suite" },
+        }])}
+      />,
+    );
+
+    expect(screen.getByText("bun test").className).toContain("font-mono");
+  });
+
+  test.each(["task_stop", " TaskStop "] as const)(
+    "treats %s as a background task stop row",
+    (toolName) => {
+      render(
+        <NativeMessage
+          message={makeMessage([{
+            type: "tool-invocation",
+            content: toolName,
+            toolName,
+            toolState: "success",
+            toolArgs: { taskId: "bg-suite" },
+            backgroundTask: {
+              id: "bg-suite",
+              description: "Run the full suite",
+              status: "killed",
+            },
+          }])}
+        />,
+      );
+
+      expect(screen.getByRole("button", {
+        name: /Run the full suite bg-suite stopped/,
+      })).toBeTruthy();
+    },
+  );
 });
 
 describe("NativeMessage thinking parts", () => {

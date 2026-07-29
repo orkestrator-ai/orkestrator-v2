@@ -18,6 +18,7 @@ import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import { Button } from "@/components/ui/button";
 import { useMediaQuery } from "@/hooks";
 import type { GitFileStatus } from "@/types/paneLayout";
+import { ensureMonacoConfigured, isMonacoConfigured } from "@/lib/monaco-loader";
 
 interface DiffViewerTabProps {
   filePath: string;
@@ -77,6 +78,9 @@ export function DiffViewerTab({
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [diffMode, setDiffMode] = useState<DiffMode>("side-by-side");
+  const [monacoReady, setMonacoReady] = useState(isMonacoConfigured);
+  const [monacoFailed, setMonacoFailed] = useState(false);
+  const [monacoAttempt, setMonacoAttempt] = useState(0);
 
   // Two columns of code cannot fit on a phone, so the mode toggle is hidden there
   // and the view is pinned to inline regardless of the remembered desktop mode.
@@ -188,6 +192,23 @@ export function DiffViewerTab({
   const isNewFile = gitStatus === "?" || gitStatus === "A";
   const isDeletedFile = gitStatus === "D";
 
+  useEffect(() => {
+    if (monacoReady) return;
+    let cancelled = false;
+    setMonacoFailed(false);
+    void ensureMonacoConfigured().then(
+      () => {
+        if (!cancelled) setMonacoReady(true);
+      },
+      () => {
+        if (!cancelled) setMonacoFailed(true);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [monacoAttempt, monacoReady]);
+
   // Fetch both original and modified content
   useEffect(() => {
     let cancelled = false;
@@ -266,8 +287,36 @@ export function DiffViewerTab({
     isDeletedFile,
   ]);
 
+  if (monacoFailed) {
+    return (
+      <div
+        className={cn(
+          "absolute inset-0 flex items-center justify-center",
+          !isActive && "pointer-events-none opacity-0",
+        )}
+        style={{ backgroundColor: terminalAppearance.backgroundColor }}
+      >
+        <div className="flex flex-col items-center gap-2 text-center">
+          <AlertCircle className="h-8 w-8 text-red-400" />
+          <p className="text-sm text-red-400">Failed to load diff editor</p>
+          <p className="max-w-md text-xs text-muted-foreground">
+            The diff editor resources could not be loaded.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setMonacoAttempt((attempt) => attempt + 1)}
+          >
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   // Loading state
-  if (isLoading) {
+  if (isLoading || !monacoReady) {
     return (
       <div
         className={cn(

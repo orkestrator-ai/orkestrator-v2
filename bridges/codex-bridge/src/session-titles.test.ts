@@ -89,6 +89,22 @@ function expectProcessGone(pid: number): void {
   expect(() => process.kill(pid, 0)).toThrow();
 }
 
+async function waitForProcessPid(commandPath: string): Promise<number> {
+  const deadline = Date.now() + 1_000;
+  do {
+    const output = spawnSync("ps", ["-axo", "pid=,command="], {
+      encoding: "utf8",
+    }).stdout;
+    for (const line of output.split("\n")) {
+      if (!line.includes(commandPath)) continue;
+      const pid = Number.parseInt(line.trimStart(), 10);
+      if (Number.isInteger(pid) && pid > 0) return pid;
+    }
+    await Bun.sleep(2);
+  } while (Date.now() < deadline);
+  throw new Error(`Timed out waiting for test process ${commandPath}`);
+}
+
 afterEach(async () => {
   await shutdownSessionTitleGeneration();
   for (const directory of temporaryDirectories.splice(0)) {
@@ -299,19 +315,25 @@ printf '%s' 'x' > "$out"`);
   });
 
   test("hard-kills a timeout-resistant process before rejecting", async () => {
-    const directory = createTemporaryDirectory();
-    const pidPath = join(directory, "pid.txt");
-    process.env.FAKE_CODEX_TITLE_PID = pidPath;
     const executable = createExecutable(`
-printf '%s' "$$" > "$FAKE_CODEX_TITLE_PID"
 trap '' TERM
 while :; do sleep 1; done`);
 
-    await expect(generateSessionTitleWithCodexExec(executable, "prompt", {
+    const result = generateSessionTitleWithCodexExec(executable, "prompt", {
       timeoutMs: 1_000,
       terminationGraceMs: 20,
-    })).rejects.toThrow("timed out");
-    expectProcessGone(parsePid(pidPath));
+    });
+    const rejection = result.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    // Capture the spawned PID from the process table. Waiting for the shell
+    // body to write its own PID races the deliberately short timeout when the
+    // parallel suite is CPU constrained, even though the child exists.
+    const pid = await waitForProcessPid(executable);
+    expect(await rejection).toBeInstanceOf(Error);
+    expect((await rejection as Error).message).toContain("timed out");
+    expectProcessGone(pid);
     expect(getActiveSessionTitleCommandCountForTesting()).toBe(0);
   });
 
@@ -325,7 +347,9 @@ trap '' TERM
 while :; do printf '0123456789abcdef'; done`);
     await expect(generateSessionTitleWithCodexExec(stdoutFlood, "prompt", {
       maxOutputBytes: 64,
-      timeoutMs: 1_000,
+      // This test exercises the output cap, so keep the unrelated command
+      // timeout well clear of process startup under parallel CPU pressure.
+      timeoutMs: 10_000,
       terminationGraceMs: 20,
     })).rejects.toThrow("output exceeded the limit");
     expectProcessGone(parsePid(pidPath));

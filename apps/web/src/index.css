@@ -13,7 +13,7 @@
 /* FiraCode Nerd Font for terminal */
 @font-face {
   font-family: "FiraCode Nerd Font";
-  src: url("./assets/fonts/FiraCodeNerdFont-Regular.ttf") format("truetype");
+  src: url("./assets/fonts/FiraCodeNerdFont-Regular.woff2") format("woff2");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
@@ -21,7 +21,7 @@
 
 @font-face {
   font-family: "FiraCode Nerd Font";
-  src: url("./assets/fonts/FiraCodeNerdFont-Bold.ttf") format("truetype");
+  src: url("./assets/fonts/FiraCodeNerdFont-Bold.woff2") format("woff2");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
@@ -87,6 +87,13 @@ body {
   touch-action: manipulation;
 }
 
+/*
+ * Percentages, not viewport units. When CSS `zoom` applies to the root element
+ * Chromium scales the initial containing block to match, so this chain stays
+ * exactly one viewport tall at any zoom level. `dvh`/`vw` would not: they
+ * resolve against the unzoomed viewport and are then scaled, overflowing the
+ * window by the zoom factor.
+ */
 #root {
   height: 100%;
   overflow: hidden;

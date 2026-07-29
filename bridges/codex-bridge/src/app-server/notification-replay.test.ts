@@ -170,6 +170,78 @@ describe("synthetic-full-turn fixture", () => {
   });
 });
 
+describe("synthetic-raw-apply-patch fixture", () => {
+  const read = () => readFixture("synthetic-raw-apply-patch.jsonl");
+
+  /**
+   * Raw `apply_patch` calls are the only representation of a patch when Codex
+   * emits no structured `fileChange`. They arrive as `item.dynamic.started` /
+   * `item.dynamic.output`, which are *known* kinds — so a replay that dropped
+   * them would report no unknown methods and no unsupported items, and this
+   * harness would call a transcript missing every patch a clean pass.
+   */
+  test("replays raw patch calls rather than dropping them on the floor", async () => {
+    const summary = await replayRecording(read());
+    const [turn] = summary.turns;
+
+    expect(summary.unknownMethods).toEqual([]);
+    expect(summary.unsupportedItemTypes).toEqual([]);
+    expect(turn?.phase).toBe("completed");
+
+    const patches = (turn?.parts ?? []).filter((part) => part.toolName === "apply_patch");
+    expect(patches.map((part) => [part.toolTitle, part.toolState])).toEqual([
+      // Structured item wins for the call id it shares with the raw call…
+      ["update: /replay/workspace/README.md", "success"],
+      // …while a raw-only patch still renders one card per file…
+      ["update: src/a.ts", "success"],
+      ["add: src/b.ts", "success"],
+      // …and a failure surfaces as a failure.
+      ["update: src/missing.ts", "failure"],
+    ]);
+  });
+
+  test("gives a raw-only patch a per-file diff, not an opaque blob of patch text", async () => {
+    const summary = await replayRecording(read());
+    const added = summary.turns[0]?.parts.find(
+      (part) => part.toolTitle === "add: src/b.ts",
+    );
+
+    expect(added?.toolDiff).toMatchObject({
+      filePath: "/replay/workspace/src/b.ts",
+      additions: 1,
+      deletions: 0,
+    });
+    expect(added?.toolDiff?.diff).toContain("--- /dev/null");
+    expect(added?.toolArgs).toEqual({ path: "src/b.ts", kind: "add" });
+  });
+
+  test("the structured preview is not blanked by the raw call that follows it", async () => {
+    // Truncate just before the structured completion: what remains is the
+    // preview plus the raw call, which is the window a user actually watches
+    // while a patch waits for approval.
+    const lines = read().filter((line) => !line.includes('"fileChange"'));
+    const summary = await replayRecording(lines);
+    const preview = summary.turns[0]?.parts.find(
+      (part) => part.toolTitle === "update: /replay/workspace/README.md",
+    );
+
+    expect(preview).toBeDefined();
+    expect(preview?.toolName).toBe("apply_patch");
+  });
+
+  test("a successful raw-only patch stays hidden until the turn is terminal", async () => {
+    const lines = read().filter((line) => !line.includes('"turn/completed"'));
+    const summary = await replayRecording(lines);
+    const titles = (summary.turns[0]?.parts ?? []).map((part) => part.toolTitle);
+
+    expect(summary.turns[0]?.phase).not.toBe("completed");
+    // The failure is not held back — nothing structured is coming for it.
+    expect(titles).toContain("update: src/missing.ts");
+    expect(titles).not.toContain("update: src/a.ts");
+    expect(titles).not.toContain("add: src/b.ts");
+  });
+});
+
 describe("NotificationRecorder", () => {
   function makeRecorder(overrides: Partial<ConstructorParameters<typeof NotificationRecorder>[0]> = {}) {
     const writes: string[] = [];

@@ -479,7 +479,20 @@ export function ClaudeChatTab({
         setBackgroundTasks(key, {});
       } else {
         const backgroundTasks = parseClaudeBackgroundTasks(serverSession.backgroundTasks);
-        if (backgroundTasks) {
+        /*
+         * Mirrors the SSE guard below. `lookupSession` drops individual
+         * malformed tasks and reports each one as `backgroundTasks.<id>`, so a
+         * snapshot that arrives empty *because* every task was rejected is a
+         * malformed payload, not an authoritative "no tasks left". Writing it
+         * would remove the Stop controls for tasks that are still running.
+         */
+        const droppedEveryTask =
+          backgroundTasks !== undefined
+          && Object.keys(backgroundTasks).length === 0
+          && Array.from(invalidFields).some((field) =>
+            field.startsWith("backgroundTasks."),
+          );
+        if (backgroundTasks && !droppedEveryTask) {
           setBackgroundTasks(key, backgroundTasks);
         }
       }

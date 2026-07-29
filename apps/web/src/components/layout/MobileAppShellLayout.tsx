@@ -18,6 +18,14 @@ interface MobileAppShellLayoutProps {
   onTitleBarMouseDown: (event: MouseEvent<HTMLDivElement>) => void;
 }
 
+function usesNativeWindowDragRegion(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    window.orkestratorGateway?.desktop === true ||
+    (Boolean(window.orkestrator) && window.orkestratorGateway?.enabled !== true)
+  );
+}
+
 export function MobileAppShellLayout({
   selectedProjectId,
   selectedEnvironmentId,
@@ -34,10 +42,13 @@ export function MobileAppShellLayout({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [titleTooltipOpen, setTitleTooltipOpen] = useState(false);
+  const titlePointerTypeRef = useRef<string | null>(null);
+  const titleTooltipWasOpenOnPointerDownRef = useRef(false);
   const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
   const toolsTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreSidebarFocusRef = useRef(false);
   const restoreToolsFocusRef = useRef(false);
+  const titleUsesNativeDragRegion = usesNativeWindowDragRegion();
 
   const closeSidebar = () => {
     restoreSidebarFocusRef.current = true;
@@ -55,10 +66,14 @@ export function MobileAppShellLayout({
     setSidebarOpen(false);
     setToolsOpen(false);
     setTitleTooltipOpen(false);
+    titlePointerTypeRef.current = null;
+    titleTooltipWasOpenOnPointerDownRef.current = false;
   }, [selectedEnvironmentId, selectedProjectId]);
 
   useEffect(() => {
     setTitleTooltipOpen(false);
+    titlePointerTypeRef.current = null;
+    titleTooltipWasOpenOnPointerDownRef.current = false;
   }, [title]);
 
   useEffect(() => {
@@ -113,13 +128,35 @@ export function MobileAppShellLayout({
             <button
               type="button"
               className="absolute left-12 right-[5.5rem] min-w-0 truncate px-1 text-center text-sm font-medium text-foreground"
-              style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
-              onMouseDown={(event) => event.stopPropagation()}
+              data-backend-drag-region={titleUsesNativeDragRegion ? "" : undefined}
+              style={{
+                WebkitAppRegion: titleUsesNativeDragRegion ? "drag" : "no-drag",
+              } as CSSProperties}
+              onMouseDown={(event) => {
+                if (!titleUsesNativeDragRegion) event.stopPropagation();
+              }}
+              onPointerDown={(event) => {
+                titlePointerTypeRef.current = event.pointerType;
+                titleTooltipWasOpenOnPointerDownRef.current = titleTooltipOpen;
+              }}
+              onPointerCancel={() => {
+                titlePointerTypeRef.current = null;
+                titleTooltipWasOpenOnPointerDownRef.current = false;
+              }}
               onClick={(event) => {
-                // Radix closes tooltips on click by default. Cancelling the
-                // default lets a touch tap explicitly open this controlled one.
-                event.preventDefault();
-                setTitleTooltipOpen(true);
+                const pointerType = titlePointerTypeRef.current;
+                const wasOpen = titleTooltipWasOpenOnPointerDownRef.current;
+                titlePointerTypeRef.current = null;
+                titleTooltipWasOpenOnPointerDownRef.current = false;
+
+                // Radix intentionally closes tooltips on activation. Touch and
+                // pen do not have a preceding hover, so toggle from the state
+                // captured before Radix's pointer-down close. Mouse and keyboard
+                // activations retain Radix's standard close behavior.
+                if (pointerType === "touch" || pointerType === "pen") {
+                  event.preventDefault();
+                  setTitleTooltipOpen(!wasOpen);
+                }
               }}
               aria-label={title}
               aria-expanded={titleTooltipOpen}

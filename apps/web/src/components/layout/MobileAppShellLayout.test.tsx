@@ -3,7 +3,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { createPortal } from "react-dom";
 import { MobileAppShellLayout } from "./MobileAppShellLayout";
 
-afterEach(cleanup);
+const originalOrkestrator = window.orkestrator;
+const originalGateway = window.orkestratorGateway;
+
+afterEach(() => {
+  cleanup();
+  window.orkestrator = originalOrkestrator;
+  window.orkestratorGateway = originalGateway;
+});
 
 function renderLayout(overrides: Partial<React.ComponentProps<typeof MobileAppShellLayout>> = {}) {
   const props: React.ComponentProps<typeof MobileAppShellLayout> = {
@@ -21,6 +28,12 @@ function renderLayout(overrides: Partial<React.ComponentProps<typeof MobileAppSh
     ...overrides,
   };
   return { ...render(<MobileAppShellLayout {...props} />), props };
+}
+
+function touchTap(element: Element) {
+  fireEvent.pointerDown(element, { pointerType: "touch" });
+  fireEvent.pointerUp(element, { pointerType: "touch" });
+  fireEvent.click(element);
 }
 
 describe("MobileAppShellLayout", () => {
@@ -53,16 +66,37 @@ describe("MobileAppShellLayout", () => {
     expect(rightOffset(slot)).toBeGreaterThan(rightOffset(tools));
   });
 
-  test("keeps the agent-info slot out of the title bar's drag region", () => {
+  test("keeps interactive controls out of the browser title bar's drag handler", () => {
     // The bar starts a window drag on mouse-down; without the stop, tapping the
     // button drags the window instead of opening the panel.
     const { container, props } = renderLayout();
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Open projects and environments" }));
+    fireEvent.mouseDown(screen.getByRole("button", { name: "pgstack1 - feature-auth" }));
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Open tools" }));
     fireEvent.mouseDown(screen.getByRole("button", { name: "Agent info" }));
     expect(props.onTitleBarMouseDown).not.toHaveBeenCalled();
 
-    // The uncovered bar itself still drags, so the guard is scoped to controls.
+    fireEvent.click(screen.getByRole("button", { name: "Open tools" }));
+    fireEvent.mouseDown(screen.getByRole("dialog", { name: "Tools" }));
+    expect(props.onTitleBarMouseDown).not.toHaveBeenCalled();
+
+    // The uncovered bar itself still drags, so the guards are scoped to controls.
     const titleBar = container.querySelector<HTMLElement>("div[data-backend-drag-region]")!;
     fireEvent.mouseDown(titleBar);
+    expect(props.onTitleBarMouseDown).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps the title draggable in a narrow Electron window", () => {
+    window.orkestrator = {
+      window: { startDragging: async () => {} },
+    } as Window["orkestrator"];
+    delete window.orkestratorGateway;
+    const { props } = renderLayout();
+
+    const titleButton = screen.getByRole("button", { name: "pgstack1 - feature-auth" });
+    expect(titleButton.hasAttribute("data-backend-drag-region")).toBe(true);
+
+    fireEvent.mouseDown(titleButton);
     expect(props.onTitleBarMouseDown).toHaveBeenCalledTimes(1);
   });
 
@@ -89,9 +123,17 @@ describe("MobileAppShellLayout", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open tools" }));
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Tools" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open tools" }));
+    const closeToolsTrigger = screen
+      .getAllByRole("button", { name: "Close tools" })
+      .find((button) => button.hasAttribute("aria-controls"));
+    expect(closeToolsTrigger).toBeTruthy();
+    fireEvent.click(closeToolsTrigger!);
+    expect(screen.queryByRole("dialog", { name: "Tools" })).toBeNull();
   });
 
-  test("bounds the mobile title between the header controls and reveals its full text on tap", async () => {
+  test("bounds the mobile title and toggles its full text with touch taps", async () => {
     const title = "A project and environment name that is far too long for a mobile title bar";
     const { props } = renderLayout({ title });
 
@@ -102,16 +144,81 @@ describe("MobileAppShellLayout", () => {
 
     fireEvent.mouseDown(titleButton);
     expect(props.onTitleBarMouseDown).not.toHaveBeenCalled();
-    // A real tap may focus the trigger before click. Clicking must keep that
-    // focus-opened tooltip visible rather than toggling it closed again.
-    fireEvent.focus(titleButton);
-    fireEvent.click(titleButton);
+    touchTap(titleButton);
 
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toContain(title);
     expect(titleButton.getAttribute("aria-expanded")).toBe("true");
 
+    touchTap(titleButton);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    expect(titleButton.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("preserves Radix keyboard activation, Escape, hover, blur, and outside dismissal", async () => {
+    renderLayout();
+    const titleButton = screen.getByRole("button", { name: "pgstack1 - feature-auth" });
+
+    fireEvent.focus(titleButton);
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+    fireEvent.click(titleButton, { detail: 0 });
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+
+    fireEvent.blur(titleButton);
+    fireEvent.focus(titleButton);
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
     fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+
+    fireEvent.blur(titleButton);
+    fireEvent.pointerMove(titleButton, { pointerType: "mouse" });
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+    fireEvent.pointerDown(document.body, { pointerType: "mouse" });
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+
+    fireEvent.focus(titleButton);
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+    fireEvent.blur(titleButton);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  });
+
+  test("does not misclassify keyboard activation after a cancelled touch", async () => {
+    renderLayout();
+    const titleButton = screen.getByRole("button", { name: "pgstack1 - feature-auth" });
+
+    fireEvent.pointerDown(titleButton, { pointerType: "touch" });
+    fireEvent.pointerCancel(titleButton, { pointerType: "touch" });
+    fireEvent.pointerUp(document, { pointerType: "touch" });
+    fireEvent.blur(titleButton);
+    fireEvent.focus(titleButton);
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+    fireEvent.click(titleButton, { detail: 0 });
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  });
+
+  test("closes the title tooltip when its title, project, or environment changes", async () => {
+    const { rerender, props } = renderLayout();
+    const openTooltip = async () => {
+      const trigger = screen.getByRole("button", { name: props.title });
+      fireEvent.blur(trigger);
+      fireEvent.focus(trigger);
+      expect(await screen.findByRole("tooltip")).toBeTruthy();
+    };
+
+    await openTooltip();
+    rerender(<MobileAppShellLayout {...props} title="Renamed title" />);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+
+    const renamedProps = { ...props, title: "Renamed title" };
+    fireEvent.focus(screen.getByRole("button", { name: "Renamed title" }));
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+    rerender(<MobileAppShellLayout {...renamedProps} selectedProjectId="project-2" />);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+
+    fireEvent.blur(screen.getByRole("button", { name: "Renamed title" }));
+    fireEvent.focus(screen.getByRole("button", { name: "Renamed title" }));
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+    rerender(<MobileAppShellLayout {...renamedProps} selectedEnvironmentId="environment-2" />);
     await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
   });
 
@@ -146,6 +253,13 @@ describe("MobileAppShellLayout", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open tools" }));
     fireEvent.keyDown(screen.getByRole("button", { name: "Nested control" }), { key: "Escape" });
 
+    expect(screen.getByRole("dialog", { name: "Tools" })).toBeTruthy();
+  });
+
+  test("keeps tools open when non-action popover content is clicked", () => {
+    renderLayout({ actionBar: <div>Tool status</div> });
+    fireEvent.click(screen.getByRole("button", { name: "Open tools" }));
+    fireEvent.click(screen.getByText("Tool status"));
     expect(screen.getByRole("dialog", { name: "Tools" })).toBeTruthy();
   });
 
@@ -209,6 +323,10 @@ describe("MobileAppShellLayout", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open projects and environments" }));
     rerender(<MobileAppShellLayout {...props} selectedEnvironmentId="environment-2" />);
     expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open projects and environments" }));
+    rerender(<MobileAppShellLayout {...props} selectedProjectId="project-2" />);
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
   });
 
   test("closes the tools popover when the active selection changes", () => {
@@ -218,8 +336,16 @@ describe("MobileAppShellLayout", () => {
     expect(screen.queryByRole("dialog", { name: "Tools" })).toBeNull();
   });
 
-  test("shows the files panel as a mobile overlay", () => {
-    renderLayout({ filesPanelOpen: true });
+  test("applies the central panel style and conditionally shows the files overlay", () => {
+    const { rerender, props } = renderLayout();
+    const workspaceMain = screen.getByText("Workspace").parentElement;
+    expect(workspaceMain?.parentElement?.getAttribute("style")).toContain(
+      "background-color: rgb(1, 2, 3)",
+    );
+    expect(screen.queryByRole("complementary", { name: "Workspace files" })).toBeNull();
+    expect(screen.queryByText("Files")).toBeNull();
+
+    rerender(<MobileAppShellLayout {...props} filesPanelOpen />);
     expect(screen.getByRole("complementary", { name: "Workspace files" })).toBeTruthy();
     expect(screen.getByText("Files")).toBeTruthy();
   });

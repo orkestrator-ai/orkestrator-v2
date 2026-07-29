@@ -2064,6 +2064,121 @@ describe("session lifecycle", () => {
     });
   });
 
+  test("the streamed patch preview survives the raw call that follows it", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "patch the file",
+      requestId: "req-preview-before-raw",
+      attachments: [],
+    });
+    const child = h.child();
+
+    // app-server streams the in-progress patch while the model writes it.
+    child.notify("item/fileChange/patchUpdated", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "patch-preview",
+      changes: [{ path: "src/example.ts", kind: { type: "update" } }],
+    });
+    await h.drain();
+
+    let messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toHaveLength(1);
+    expect(messages[1]!.parts[0]).toMatchObject({ toolName: "apply_patch" });
+
+    // The raw `custom_tool_call` uses the same call id and lands afterwards. It
+    // is only a recovery candidate, so it must not blank the preview already on
+    // screen — the gap lasts until the patch applies, or until an approval is
+    // answered, which is unbounded.
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "patch-preview",
+        name: "apply_patch",
+        input: `*** Begin Patch
+*** Update File: src/example.ts
+@@
+-old
++new
+*** End Patch`,
+        status: "completed",
+      },
+    });
+    await h.drain();
+
+    messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toHaveLength(1);
+    expect(messages[1]!.parts[0]).toMatchObject({
+      toolName: "apply_patch",
+      toolTitle: "update: src/example.ts",
+    });
+
+    child.notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "patch-preview",
+        type: "fileChange",
+        status: "completed",
+        changes: [{ path: "src/example.ts", kind: { type: "update" } }],
+      },
+    });
+    await h.drain();
+
+    messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toHaveLength(1);
+    expect(messages[1]!.parts[0]).toMatchObject({
+      toolName: "apply_patch",
+      toolState: "success",
+      toolTitle: "update: src/example.ts",
+    });
+  });
+
+  test("a raw patch call from a stale turn is dropped rather than applied", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "patch the file",
+      requestId: "req-stale-raw-patch",
+      attachments: [],
+    });
+    const child = h.child();
+
+    // A turn that has already moved on must not have a previous turn's patch
+    // spliced into it; `accepts` is the only thing standing between them.
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-0",
+      item: {
+        type: "custom_tool_call",
+        call_id: "stale-patch",
+        name: "apply_patch",
+        input: "*** Begin Patch\n*** Add File: stale.ts\n+stale\n*** End Patch",
+        status: "completed",
+      },
+    });
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-0",
+      item: {
+        type: "custom_tool_call_output",
+        call_id: "stale-patch",
+        output: "Failed to read file to update: stale.ts",
+      },
+    });
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toEqual([]);
+  });
+
   test("a coalesced publish rejection is contained and reported", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

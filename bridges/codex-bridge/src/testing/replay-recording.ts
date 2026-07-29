@@ -113,6 +113,19 @@ function applyEvent(
     case "item.completed":
       turn.onItemCompleted(event.item as EngineItem);
       return;
+    /**
+     * Raw `apply_patch` calls and their outputs. These must be replayed like any
+     * other event: they are the *only* representation of a patch when Codex emits
+     * no structured `fileChange`, so dropping them here would let a fixture
+     * containing a real patch replay to a transcript with the patch missing —
+     * and silently, since a known kind never reaches `unknownMethods`.
+     */
+    case "item.dynamic.started":
+      turn.onDynamicToolStarted(event.item as EngineItem);
+      return;
+    case "item.dynamic.output":
+      turn.onDynamicToolOutput(event.itemId, event.output);
+      return;
     case "item.text.delta":
       turn.onTextDelta(event.itemId, event.delta);
       return;

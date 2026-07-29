@@ -204,12 +204,29 @@ export class TurnAccumulator {
     accumulator.completedAt ??= completedAtMs;
   }
 
-  /** Retains a raw patch call without presenting it as an authoritative item. */
+  /**
+   * Retains a raw patch call without presenting it as an authoritative item.
+   *
+   * The raw `custom_tool_call` and the structured `fileChange` share a call id,
+   * and the raw one can arrive *after* app-server has already streamed the
+   * structured patch preview. It must never demote what is already there:
+   * overwriting an in-progress `fileChange` with the raw call would also hide it
+   * (see `effectiveItem`), so the live diff the agent is building would vanish
+   * until the patch is applied — which, behind an approval prompt, is however
+   * long the user takes to answer.
+   *
+   * Leaving `rawFallback` alone in that case is also what keeps `completed`
+   * honest: `rawFallback` is true only while the held item *is* the raw
+   * candidate, so the `replacesRawFallback` branches below can never clear a
+   * completion that came from an authoritative `item/completed`.
+   */
   onDynamicToolStarted(item: EngineItem, startedAtMs?: number): void {
     const accumulator = this.ensureItem(item.id);
-    if (!accumulator.completed) accumulator.item = item;
-    accumulator.rawFallback = true;
     accumulator.startedAt ??= startedAtMs;
+    if (accumulator.completed) return;
+    if (accumulator.item && !accumulator.rawFallback) return;
+    accumulator.item = item;
+    accumulator.rawFallback = true;
   }
 
   onTextDelta(itemId: string, delta: string): void {

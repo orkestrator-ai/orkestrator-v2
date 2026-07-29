@@ -16,11 +16,44 @@ export interface RawApplyPatchChange {
   deletions: number;
 }
 
-function rawPatchInput(value: unknown): string | undefined {
-  if (typeof value === "string" && value.trim().length > 0) return value;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+function patchInputFromRecord(value: object): string | undefined {
   const input = (value as Record<string, unknown>).input;
   return typeof input === "string" && input.trim().length > 0 ? input : undefined;
+}
+
+/** The patch text as carried by a `custom_tool_call` or a pre-parsed record. */
+function rawPatchInput(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.trim().length > 0 ? value : undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return patchInputFromRecord(value);
+}
+
+/**
+ * The patch text hiding inside JSON-encoded `function_call` arguments.
+ *
+ * A `custom_tool_call` carries the patch verbatim, but a `function_call` carries
+ * `{"input":"*** Begin Patch\\n…"}` — where the control lines are escaped, so no
+ * line-oriented scan can see them. Tried only after a direct parse found
+ * nothing, which keeps the common path free of a speculative decode.
+ *
+ * Bounded like every other read of this untrusted content: an oversized string
+ * is refused rather than handed to `JSON.parse`, which would materialise the
+ * decoded value with no cap at all.
+ */
+function decodedPatchInput(input: string): string | undefined {
+  if (input.length > MAX_RAW_APPLY_PATCH_SCAN_CHARS) return undefined;
+  if (!input.trimStart().startsWith("{")) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input);
+  } catch {
+    return undefined;
+  }
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? patchInputFromRecord(parsed)
+    : undefined;
 }
 
 function countBodyLines(lines: readonly string[]): {
@@ -49,6 +82,13 @@ export function parseRawApplyPatchChanges(value: unknown): RawApplyPatchChange[]
   const input = rawPatchInput(value);
   if (!input) return [];
 
+  const direct = parseControlLines(input);
+  if (direct.length > 0) return direct;
+  const decoded = decodedPatchInput(input);
+  return decoded ? parseControlLines(decoded) : [];
+}
+
+function parseControlLines(input: string): RawApplyPatchChange[] {
   const source = input.slice(0, MAX_RAW_APPLY_PATCH_SCAN_CHARS);
   const lines = source.split(/\r?\n/);
   const changes: RawApplyPatchChange[] = [];

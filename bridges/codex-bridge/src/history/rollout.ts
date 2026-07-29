@@ -878,7 +878,9 @@ export async function hydrateMessagesFromPersistedSession(
     string,
     { message: NormalizedMessage; partIndexes: number[] }
   >();
-  const transcriptCwd = meta.cwd ?? getWorkingDirectory();
+  // `asNonEmptyString` rather than `??`: a rollout whose `session_meta` carries
+  // an empty `cwd` would otherwise resolve every patch path relatively.
+  const transcriptCwd = asNonEmptyString(meta.cwd) ?? getWorkingDirectory();
   /**
    * Turn boundaries reconstructed from the rollout.
    *

@@ -58,12 +58,14 @@ function sessionMeta(threadId: string): unknown {
 async function hydrateRollout(
   threadId: string,
   lines: unknown[],
+  /** Overridable so a rollout carrying no `cwd` can be told apart from one that does. */
+  processCwd = "/workspace",
 ): Promise<Awaited<ReturnType<typeof hydrateMessagesFromPersistedSession>>> {
   const path = await temporaryRollout(threadId, lines);
   const previousHome = process.env.CODEX_HOME;
   const previousCwd = process.env.CWD;
   process.env.CODEX_HOME = dirname(dirname(path));
-  process.env.CWD = "/workspace";
+  process.env.CWD = processCwd;
   try {
     return await hydrateMessagesFromPersistedSession(threadId);
   } finally {
@@ -1944,5 +1946,137 @@ describe("rollout public helpers (continued)", () => {
       if (previousCwd === undefined) delete process.env.CWD;
       else process.env.CWD = previousCwd;
     }
+  });
+});
+
+describe("persisted multi-file apply_patch hydration", () => {
+  const MULTI_FILE_PATCH = `*** Begin Patch
+*** Update File: src/a.ts
+@@
+-a
++A
+*** Add File: src/b.ts
++B
+*** End Patch`;
+
+  test("clears the state of every part when the output records no outcome", async () => {
+    // A `function_call_output` is written whether the call succeeded or failed
+    // and carries no status, so "unknown" is the only honest state — and it has
+    // to reach *all* of the parts one call now expands into, not just the first.
+    const hydrated = await hydrateRollout("thread-fnpatch", [
+      sessionMeta("thread-fnpatch"),
+      { type: "turn_context", payload: { turn_id: "turn-1", cwd: "/workspace" } },
+      {
+        timestamp: "2026-07-25T12:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "apply_patch",
+          call_id: "call-patch",
+          arguments: JSON.stringify({ input: MULTI_FILE_PATCH }),
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:01:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-patch",
+          output: "Patch applied to 2 files",
+        },
+      },
+    ]);
+
+    const parts = hydrated.messages.flatMap((message) => message.parts);
+    expect(parts).toHaveLength(2);
+    expect(parts.map((part) => part.toolTitle)).toEqual([
+      "update: src/a.ts",
+      "add: src/b.ts",
+    ]);
+    for (const part of parts) {
+      expect(part.toolName).toBe("apply_patch");
+      expect(part.toolState).toBeUndefined();
+      expect(part.toolOutput).toBe("Patch applied to 2 files");
+      expect(part.toolError).toBeUndefined();
+    }
+  });
+
+  test("marks every part failed when the output reports a patch failure", async () => {
+    // apply_patch is atomic, so one file failing means none were written.
+    const hydrated = await hydrateRollout("thread-failpatch", [
+      sessionMeta("thread-failpatch"),
+      { type: "turn_context", payload: { turn_id: "turn-1", cwd: "/workspace" } },
+      {
+        timestamp: "2026-07-25T12:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "apply_patch",
+          call_id: "call-patch",
+          status: "completed",
+          input: MULTI_FILE_PATCH,
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:01:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "call-patch",
+          output: "Failed to read file to update: src/a.ts",
+        },
+      },
+    ]);
+
+    const parts = hydrated.messages.flatMap((message) => message.parts);
+    expect(parts).toHaveLength(2);
+    for (const part of parts) {
+      expect(part.toolState).toBe("failure");
+      expect(part.toolError).toBe("Failed to read file to update: src/a.ts");
+      expect(part.toolOutput).toBeUndefined();
+    }
+  });
+
+  test.each([
+    ["carries no cwd at all", undefined],
+    ["carries a blank cwd", ""],
+  ])("resolves patch paths against the process cwd when the rollout %s", async (
+    _label,
+    cwd,
+  ) => {
+    const hydrated = await hydrateRollout(
+      "thread-nocwd",
+      [
+        {
+          type: "session_meta",
+          payload: {
+            id: "thread-nocwd",
+            ...(cwd === undefined ? {} : { cwd }),
+            timestamp: "2026-07-25T12:00:00.000Z",
+          },
+        },
+        { type: "turn_context", payload: { turn_id: "turn-1" } },
+        {
+          timestamp: "2026-07-25T12:01:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call",
+            name: "apply_patch",
+            call_id: "call-patch",
+            status: "completed",
+            input: MULTI_FILE_PATCH,
+          },
+        },
+      ],
+      "/fallback-workspace",
+    );
+
+    const parts = hydrated.messages.flatMap((message) => message.parts);
+    // A blank `cwd` must fall back rather than joining relatively, which would
+    // leave the UI with a path it cannot open.
+    expect(parts.map((part) => part.toolDiff?.filePath)).toEqual([
+      "/fallback-workspace/src/a.ts",
+      "/fallback-workspace/src/b.ts",
+    ]);
   });
 });

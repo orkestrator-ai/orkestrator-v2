@@ -211,6 +211,71 @@ describe("item/completed is authoritative", () => {
     });
   });
 
+  test("a raw patch call arriving after the structured preview does not replace it", () => {
+    const turn = accumulator();
+    // app-server streams `item/fileChange/patchUpdated` while the model writes
+    // the patch, then the raw `custom_tool_call` for the same call id lands.
+    // Demoting to the raw item would also hide it, blanking the live preview
+    // for as long as the patch takes to apply — including an approval wait.
+    turn.onItemUpdated({
+      id: "call-patch",
+      type: "file_change",
+      changes: [{ path: "src/example.ts", kind: "update" }],
+      status: "in_progress",
+    });
+    startPatch(turn);
+
+    expect(turn.items.get("call-patch")).toMatchObject({
+      rawFallback: false,
+      completed: false,
+      item: { type: "file_change", status: "in_progress" },
+    });
+  });
+
+  test("a raw patch call arriving after item/completed cannot un-complete it", () => {
+    const turn = accumulator();
+    turn.onItemCompleted({
+      id: "call-patch",
+      type: "file_change",
+      changes: [{ path: "src/example.ts", kind: "update" }],
+      status: "completed",
+    });
+    // Duplicate delivery is expected on reconnect, and may replay the raw call
+    // and the in-progress preview *after* the authoritative completion.
+    startPatch(turn);
+    turn.onItemUpdated({
+      id: "call-patch",
+      type: "file_change",
+      changes: [{ path: "src/example.ts", kind: "update" }],
+      status: "in_progress",
+    });
+
+    expect(turn.items.get("call-patch")).toMatchObject({
+      completed: true,
+      rawFallback: false,
+      item: { type: "file_change", status: "completed" },
+    });
+  });
+
+  test("a repeated raw patch call still refreshes its own candidate", () => {
+    const turn = accumulator();
+    startPatch(turn);
+    turn.onDynamicToolStarted({
+      id: "call-patch",
+      type: "dynamic_tool_call",
+      tool: "apply_patch",
+      arguments: "*** Begin Patch\n*** Add File: a.ts\n+a\n*** End Patch",
+      content_items: [],
+      status: "in_progress",
+    });
+
+    expect(turn.items.get("call-patch")).toMatchObject({
+      rawFallback: true,
+      item: { arguments: "*** Begin Patch\n*** Add File: a.ts\n+a\n*** End Patch" },
+    });
+    expect(turn.itemOrder).toEqual(["call-patch"]);
+  });
+
   test.each([
     ["empty string", ""],
     ["undefined", undefined],

@@ -8,10 +8,13 @@ import {
   __testing as normalizationTesting,
   capCommandOutput,
   countDiffLines,
+  getFileChangeDiffMetadata,
+  hasVisibleText,
   itemToParts,
   readGitHeadTextFile,
   runGitDiffNoIndex,
 } from "./normalization.js";
+import { BaselineMap } from "./diff-budget.js";
 
 async function withIsolatedTempDir<T>(
   callback: (directory: string) => Promise<T>,
@@ -198,6 +201,110 @@ describe("git diff fallbacks", () => {
 
       expect(diff).toBeUndefined();
       expect(await readdir(directory)).toEqual([]);
+    });
+  });
+});
+
+describe("hasVisibleText", () => {
+  test.each([
+    ["an empty string", ""],
+    ["ascii whitespace", " \n\t\r"],
+    ["a next-line control", ""],
+    ["a byte-order mark", "﻿"],
+    ["a zero-width joiner", "‍"],
+    ["a soft hyphen", "­"],
+    ["mixed invisibles", "﻿ ​\n"],
+  ])("treats %s as invisible", (_label, value) => {
+    expect(hasVisibleText(value)).toBe(false);
+  });
+
+  test.each([
+    ["ordinary text", "hello"],
+    ["a lone punctuation mark", "."],
+    ["an emoji", "🙂"],
+    ["text padded with invisibles", "﻿ hi ​"],
+    ["a non-breaking space with content", " x"],
+  ])("treats %s as visible", (_label, value) => {
+    expect(hasVisibleText(value)).toBe(true);
+  });
+
+  test("a non-breaking space alone is whitespace, not content", () => {
+    // `\p{White_Space}` includes U+00A0, so an "empty" reasoning summary made of
+    // them must not render as a blank bubble.
+    expect(hasVisibleText("  ")).toBe(false);
+  });
+});
+
+describe("getFileChangeDiffMetadata", () => {
+  test("prefers a retained baseline over git HEAD for the before content", async () => {
+    await withIsolatedTempDir(async () => {
+      const context = {
+        baselines: new BaselineMap([["tracked.txt", "from-baseline\n"]]),
+        cache: new Map(),
+      };
+      const metadata = await getFileChangeDiffMetadata(
+        "/path/that/does/not/exist",
+        { path: "tracked.txt", kind: "update" },
+        context,
+      );
+
+      // A baseline is what makes a second edit diff against the previous turn
+      // rather than against HEAD, so it must win even when HEAD is readable.
+      expect(metadata.before).toBe("from-baseline\n");
+      expect(metadata.filePath).toBe("/path/that/does/not/exist/tracked.txt");
+    });
+  });
+
+  test("returns a cache hit verbatim without re-running git", async () => {
+    const cached = { filePath: "/cached.ts", diff: "cached diff" };
+    const metadata = await getFileChangeDiffMetadata(
+      "/path/that/does/not/exist",
+      { path: "cached.ts", kind: "update" },
+      { baselines: new BaselineMap(), cache: new Map([["key", cached]]) },
+      "key",
+    );
+
+    expect(metadata).toBe(cached);
+  });
+
+  test("reports zero counts rather than throwing when git cannot run", async () => {
+    await withIsolatedTempDir(async (directory) => {
+      const metadata = await getFileChangeDiffMetadata(
+        "/path/that/does/not/exist",
+        { path: "missing.ts", kind: "update" },
+      );
+
+      // Diff detail is additive; a transcript must still render without it.
+      expect(metadata).toMatchObject({ additions: 0, deletions: 0 });
+      expect(metadata.diff).toBeUndefined();
+      expect(await readdir(directory)).toEqual([]);
+    });
+  });
+
+  test("resolves an absolute change path without re-joining it to cwd", async () => {
+    await withIsolatedTempDir(async () => {
+      const metadata = await getFileChangeDiffMetadata(
+        "/path/that/does/not/exist",
+        { path: "/tmp/elsewhere/a.ts", kind: "add" },
+      );
+
+      expect(metadata.filePath).toBe("/tmp/elsewhere/a.ts");
+    });
+  });
+
+  test("skips the HEAD read for an added file and the disk read for a deleted one", async () => {
+    await withIsolatedTempDir(async () => {
+      const added = await getFileChangeDiffMetadata(
+        "/path/that/does/not/exist",
+        { path: "added.ts", kind: "add" },
+      );
+      const deleted = await getFileChangeDiffMetadata(
+        "/path/that/does/not/exist",
+        { path: "deleted.ts", kind: "delete" },
+      );
+
+      expect(added.before).toBeUndefined();
+      expect(deleted.after).toBeUndefined();
     });
   });
 });

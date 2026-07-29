@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Code2, Globe2, Loader2, RefreshCw, Server, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, Code2, Globe2, Loader2, RefreshCw, Server, ShieldCheck, Smartphone } from "lucide-react";
 import type { BrowserPreviewBounds, BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
 import { Button } from "@/components/ui/button";
+import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { cn } from "@/lib/utils";
 import { resolveBrowserAddress } from "@/lib/browser-address";
 import {
@@ -80,6 +81,10 @@ function displayUrlFromNativePreview(previewUrl: string, currentDisplayUrl: stri
   }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function BrowserTab({
   tabId,
   environmentId,
@@ -96,6 +101,15 @@ export function BrowserTab({
     (state) => state.findPaneWithTab(tabId, environmentId)?.id,
   );
   const nativeBrowserPreview = hasNativeBrowserPreview();
+  const browserPreviewSupported = (() => {
+    try {
+      return isGatewayBrowserPreviewSupported();
+    } catch {
+      // Address resolution reports malformed gateway state in the existing
+      // error surface. Do not let the availability notice mask that error.
+      return true;
+    }
+  })();
   const [address, setAddress] = useState(data.url);
   const [currentUrl, setCurrentUrl] = useState(data.url);
   const [history, setHistory] = useState<string[]>(() => data.url ? [data.url] : []);
@@ -146,7 +160,7 @@ export function BrowserTab({
       if (nativeBrowserPreview && nativeAttachedRef.current) {
         void reloadBrowserPreview(tabId).then(applyNativeState).catch((reloadError) => {
           setIsLoading(false);
-          setError(reloadError instanceof Error ? reloadError.message : String(reloadError));
+          setError(errorMessage(reloadError));
         });
       } else if (!nativeBrowserPreview) {
         setLoadRevision((revision) => revision + 1);
@@ -155,9 +169,9 @@ export function BrowserTab({
   }, [applyNativeState, currentUrl, nativeBrowserPreview, refreshRequestId, tabId]);
 
   useEffect(() => {
-    if (!nativeBrowserPreview) return;
+    if (!nativeBrowserPreview || !browserPreviewSupported) return;
     return window.orkestrator?.listen<BrowserPreviewState>("browser-preview-state", applyNativeState);
-  }, [applyNativeState, nativeBrowserPreview]);
+  }, [applyNativeState, browserPreviewSupported, nativeBrowserPreview]);
 
   const focusAddressBar = useCallback(() => {
     addressInputRef.current?.focus();
@@ -165,7 +179,7 @@ export function BrowserTab({
   }, []);
 
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive || !browserPreviewSupported) return;
 
     return window.orkestrator?.listen<string>(
       "browser-preview-focus-address",
@@ -180,6 +194,7 @@ export function BrowserTab({
   }, [
     environmentId,
     focusAddressBar,
+    browserPreviewSupported,
     isActive,
     owningPaneId,
     setActivePane,
@@ -187,7 +202,7 @@ export function BrowserTab({
   ]);
 
   useEffect(() => {
-    if (!isActive || activePaneId !== owningPaneId) return;
+    if (!browserPreviewSupported || !isActive || activePaneId !== owningPaneId) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const isAddressShortcut =
@@ -205,10 +220,10 @@ export function BrowserTab({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [activePaneId, focusAddressBar, isActive, owningPaneId]);
+  }, [activePaneId, browserPreviewSupported, focusAddressBar, isActive, owningPaneId]);
 
   useEffect(() => {
-    if (!nativeBrowserPreview) return;
+    if (!nativeBrowserPreview || !browserPreviewSupported) return;
     const update = () => setHasBlockingOverlay(hasVisuallyBlockingOverlay());
     const updateAfterOverlayMotion = (event: Event) => {
       if (
@@ -249,16 +264,21 @@ export function BrowserTab({
         document.removeEventListener(eventName, updateAfterOverlayMotion, true);
       }
     };
-  }, [nativeBrowserPreview]);
+  }, [browserPreviewSupported, nativeBrowserPreview]);
 
-  const resolved = useMemo(() => {
-    if (!currentUrl) return null;
-    try {
-      return resolveBrowserAddress(currentUrl);
-    } catch {
-      return null;
+  const resolution = useMemo(() => {
+    if (!currentUrl || !browserPreviewSupported) {
+      return { resolved: null, error: null };
     }
-  }, [currentUrl]);
+    try {
+      return { resolved: resolveBrowserAddress(currentUrl), error: null };
+    } catch (resolutionError) {
+      return { resolved: null, error: errorMessage(resolutionError) };
+    }
+  }, [browserPreviewSupported, currentUrl]);
+  const resolved = resolution.resolved;
+  const visibleError = error ?? resolution.error;
+  const visibleLoading = isLoading && resolved !== null;
   // Direct loopback previews need their real origin for normal browser behavior
   // (module loading, CORS, cookies, storage, and workers). Gateway previews are
   // served from the renderer's origin, so those must remain opaque to prevent a
@@ -274,7 +294,7 @@ export function BrowserTab({
     try {
       next = resolveBrowserAddress(nextAddress);
     } catch (navigationError) {
-      setError(navigationError instanceof Error ? navigationError.message : String(navigationError));
+      setError(errorMessage(navigationError));
       return;
     }
 
@@ -289,7 +309,7 @@ export function BrowserTab({
     if (nativeBrowserPreview && nativeAttachedRef.current) {
       void navigateBrowserPreview(tabId, next.iframeUrl).then(applyNativeState).catch((navigationError) => {
         setIsLoading(false);
-        setError(navigationError instanceof Error ? navigationError.message : String(navigationError));
+        setError(errorMessage(navigationError));
       });
     }
 
@@ -314,7 +334,7 @@ export function BrowserTab({
     if (nativeBrowserPreview) {
       const action = offset === -1 ? goBackBrowserPreview : goForwardBrowserPreview;
       void action(tabId).then(applyNativeState).catch((navigationError) => {
-        setError(navigationError instanceof Error ? navigationError.message : String(navigationError));
+        setError(errorMessage(navigationError));
       });
       return;
     }
@@ -331,7 +351,7 @@ export function BrowserTab({
     if (nativeBrowserPreview && nativeAttachedRef.current) {
       void reloadBrowserPreview(tabId).then(applyNativeState).catch((reloadError) => {
         setIsLoading(false);
-        setError(reloadError instanceof Error ? reloadError.message : String(reloadError));
+        setError(errorMessage(reloadError));
       });
       return;
     }
@@ -340,14 +360,23 @@ export function BrowserTab({
 
   useEffect(() => {
     if (!nativeBrowserPreview) return;
+    let disposed = false;
+    const hideNativePreview = (reportFailure: boolean) => {
+      void setBrowserPreviewVisible(tabId, false).catch((visibilityError) => {
+        if (disposed || !reportFailure) return;
+        setIsLoading(false);
+        setError(errorMessage(visibilityError));
+      });
+    };
     const host = previewHostRef.current;
-    if (!host || !resolved) {
-      void setBrowserPreviewVisible(tabId, false);
-      return;
+    if (!browserPreviewSupported || !host || !resolved) {
+      hideNativePreview(true);
+      return () => {
+        disposed = true;
+      };
     }
 
     let frame = 0;
-    let disposed = false;
     const sync = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
@@ -370,7 +399,7 @@ export function BrowserTab({
         }).catch((attachError) => {
           if (disposed) return;
           setIsLoading(false);
-          setError(attachError instanceof Error ? attachError.message : String(attachError));
+          setError(errorMessage(attachError));
         });
       });
     };
@@ -386,14 +415,46 @@ export function BrowserTab({
       observer.disconnect();
       window.removeEventListener("resize", sync);
       window.removeEventListener("scroll", sync, true);
-      void setBrowserPreviewVisible(tabId, false);
+      hideNativePreview(false);
     };
-  }, [applyNativeState, hasBlockingOverlay, isActive, nativeBrowserPreview, resolved, tabId]);
+  }, [
+    applyNativeState,
+    browserPreviewSupported,
+    hasBlockingOverlay,
+    isActive,
+    nativeBrowserPreview,
+    resolved,
+    tabId,
+  ]);
 
   const canGoBack = nativeBrowserPreview ? Boolean(nativeState?.canGoBack) : historyIndex > 0;
   const canGoForward = nativeBrowserPreview
     ? Boolean(nativeState?.canGoForward)
     : historyIndex >= 0 && historyIndex < history.length - 1;
+  const isIosClient = window.__orkestratorClientPlatform === "ios-wkwebview"
+    || window.__orkestratorClientPlatform === "ipad-wkwebview"
+    || window.__orkestratorClientPlatform === "iphone-wkwebview";
+
+  if (!browserPreviewSupported) {
+    return (
+      <div className={cn(
+        "@container/browser absolute inset-0 grid min-w-0 place-items-center overflow-hidden bg-background p-6",
+        !isActive && "hidden",
+      )}>
+        <div className="w-full min-w-0 max-w-sm text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-muted/30 shadow-sm">
+            <Smartphone className="h-6 w-6 text-muted-foreground" />
+          </div>
+          <h2 className="text-base font-semibold text-foreground">
+            {isIosClient ? "Browser tabs aren’t supported on iOS" : "Browser tabs aren’t supported here"}
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            Open this browser tab in the Orkestrator desktop app to view the local development server.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={cn("@container/browser absolute inset-0 flex min-w-0 flex-col overflow-hidden bg-background", !isActive && "hidden")}>
@@ -426,10 +487,10 @@ export function BrowserTab({
           size="icon"
           className="h-8 w-8 shrink-0"
           aria-label="Reload preview"
-          disabled={!currentUrl}
+          disabled={!resolved}
           onClick={reload}
         >
-          <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
+          <RefreshCw className={cn("h-4 w-4", visibleLoading && "animate-spin")} />
         </Button>
 
         <form
@@ -438,7 +499,7 @@ export function BrowserTab({
         >
           <div className={cn(
             "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-background shadow-sm transition-colors focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15",
-            error ? "border-destructive/70" : "border-border",
+            visibleError ? "border-destructive/70" : "border-border",
           )}>
             <div className="hidden h-full shrink-0 items-center gap-1.5 border-r border-border/70 px-2.5 text-[11px] font-medium text-muted-foreground @lg/browser:flex">
               <Server className="h-3.5 w-3.5 text-primary" />
@@ -450,13 +511,13 @@ export function BrowserTab({
               onChange={(event) => setAddress(event.target.value)}
               className="h-full min-w-0 flex-1 bg-transparent px-2.5 font-mono text-xs text-foreground outline-none placeholder:font-sans placeholder:text-muted-foreground"
               aria-label="Browser address"
-              aria-invalid={Boolean(error)}
+              aria-invalid={Boolean(visibleError)}
               placeholder="localhost:3000"
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
             />
-            {isLoading && <Loader2 className="mr-2 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />}
+            {visibleLoading && <Loader2 className="mr-2 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />}
           </div>
           <Button type="submit" size="sm" className="ml-1.5 h-8 shrink-0 px-3">
             Go
@@ -473,7 +534,7 @@ export function BrowserTab({
             disabled={!resolved || !nativeAttachedRef.current}
             onClick={() => {
               void openBrowserPreviewDevTools(tabId).then(applyNativeState).catch((devToolsError) => {
-                setError(devToolsError instanceof Error ? devToolsError.message : String(devToolsError));
+                setError(errorMessage(devToolsError));
               });
             }}
           >
@@ -482,9 +543,9 @@ export function BrowserTab({
         )}
       </div>
 
-      {error && (
+      {visibleError && (
         <div role="alert" className="min-w-0 shrink-0 overflow-x-hidden border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-xs text-destructive break-words [overflow-wrap:anywhere]">
-          {error}
+          {visibleError}
         </div>
       )}
 

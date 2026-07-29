@@ -89,6 +89,7 @@ import {
   payloadToQuestion,
   compactConsecutiveAssistantMessages,
   createClaudeTmuxStateKey,
+  migrateLegacyClaudeTmuxState,
   useClaudeTmuxStore,
   type TmuxPendingApproval,
   type TmuxPendingElicitation,
@@ -116,7 +117,15 @@ import {
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
-import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
+import {
+  acknowledgeAgentPromptClaim,
+  claimAgentPromptQueueHead,
+  enqueueAgentPrompt,
+  moveAgentPrompt,
+  rejectAgentPromptClaim,
+  removeAgentPrompt,
+} from "@/lib/prompt-queue-sources";
+import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 import {
   getClaudeModelCatalog,
   renameEnvironmentFromPrompt,
@@ -219,6 +228,11 @@ const EFFORT_DESCRIPTIONS: Record<ClaudeEffortLevel, string> = {
   max: "Maximum effort (select models only)",
 };
 const DEFAULT_EFFORT: ClaudeEffortLevel = "high";
+/**
+ * First cooldown before a queue head that failed to send is retried. Doubles
+ * per consecutive failure on the same head, capped at 30s.
+ */
+const PAUSED_QUEUE_HEAD_BASE_DELAY_MS = 500;
 
 function resolveTmuxModelPreference(
   modelId: string | undefined,
@@ -347,7 +361,7 @@ export function ClaudeTmuxChatTab({
     legacyTabState &&
     (!legacyTabState.environmentId || legacyTabState.environmentId === environmentId);
   const tabState = scopedTabState ?? (shouldUseLegacyTabState ? legacyTabState : undefined);
-  const storeKey = scopedTabState ? stateKey : shouldUseLegacyTabState ? tabId : stateKey;
+  const storeKey = stateKey;
   const setRunning = useClaudeTmuxStore((s) => s.setRunning);
   const applyTranscriptLine = useClaudeTmuxStore((s) => s.applyTranscriptLine);
   const replaceTranscript = useClaudeTmuxStore((s) => s.replaceTranscript);
@@ -363,7 +377,6 @@ export function ClaudeTmuxChatTab({
   const removePendingElicitation = useClaudeTmuxStore((s) => s.removePendingElicitation);
   const replacePendingHooks = useClaudeTmuxStore((s) => s.replacePendingHooks);
   const setTabBusy = useClaudeTmuxStore((s) => s.setBusy);
-  const addToQueue = useClaudeTmuxStore((s) => s.addToQueue);
   const clearTabInitialPrompt = usePaneLayoutStore((s) => s.clearTabInitialPrompt);
   const clearTabInitialAgentOptions = usePaneLayoutStore((s) => s.clearTabInitialAgentOptions);
   const setConfig = useConfigStore((s) => s.setConfig);
@@ -409,6 +422,32 @@ export function ClaudeTmuxChatTab({
   const startedRef = useRef(false);
   const permissionModeEventVersionRef = useRef(0);
   const isProcessingQueueRef = useRef(false);
+  /**
+   * Head this tab has stopped retrying, and for how many consecutive failures.
+   *
+   * A restored head is byte-identical to the one that just failed, so an
+   * unconditional re-drive would spin against an unavailable session. The pause
+   * is released on a backoff rather than held until the head changes: a send
+   * that failed once must still drain when the session recovers.
+   */
+  const pausedQueueHeadRef = useRef<{ id: string; attempts: number } | null>(null);
+  const pausedQueueHeadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pauseQueueHeadRef = useRef<(headId: string) => void>(() => {});
+  const queueMountedRef = useRef(true);
+  const claimSettlementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingClaimSettlementRef = useRef<{
+    operation: "acknowledge" | "reject";
+    claim: { entry: TmuxQueuedMessage; claimToken: string };
+  } | null>(null);
+  const retryClaimSettlementRef = useRef<
+    (
+      operation: "acknowledge" | "reject",
+      claim: { entry: TmuxQueuedMessage; claimToken: string },
+      attempt: number,
+      reported: boolean,
+    ) => Promise<boolean>
+  >(async () => false);
+  const processQueueRef = useRef<() => void>(() => {});
   const submitPromptRef = useRef<
     ((
       text: string,
@@ -487,6 +526,12 @@ export function ClaudeTmuxChatTab({
       [storeKey],
     ),
   );
+  const queueHeadId = useClaudeTmuxStore(
+    useCallback(
+      (state) => state.messageQueue.get(storeKey)?.[0]?.id,
+      [storeKey],
+    ),
+  );
   const isQueueBlockedByDraft = useClaudeTmuxStore(
     useCallback(
       (state) =>
@@ -517,6 +562,10 @@ export function ClaudeTmuxChatTab({
     effortOptions.length > 0 && !effortOptions.includes(selectedEffort)
       ? fallbackEffort(effortOptions)
       : selectedEffort;
+
+  useLayoutEffect(() => {
+    migrateLegacyClaudeTmuxState(tabId, stateKey, environmentId);
+  }, [environmentId, stateKey, tabId]);
 
   useEffect(() => {
     if (!initialLaunchReasoningEffort) return;
@@ -1006,15 +1055,139 @@ export function ClaudeTmuxChatTab({
   submitPromptRef.current = submitPrompt;
 
   const handleQueue = useCallback(
-    (text: string, attachments: TmuxAttachment[]) => {
-      addToQueue(storeKey, {
-        id: createUuid(),
-        text,
-        attachments,
-      });
+    async (text: string, attachments: TmuxAttachment[]) => {
+      setError(null);
+      try {
+        await enqueueAgentPrompt<TmuxQueuedMessage>("claude-tmux", storeKey, {
+          id: createUuid(),
+          text,
+          attachments,
+        });
+      } catch (error) {
+        setError(
+          `Failed to queue prompt: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`,
+        );
+        throw error;
+      }
     },
-    [addToQueue, storeKey],
+    [storeKey],
   );
+
+  const clearPausedQueueHead = useCallback(() => {
+    pausedQueueHeadRef.current = null;
+    if (pausedQueueHeadTimerRef.current) {
+      clearTimeout(pausedQueueHeadTimerRef.current);
+      pausedQueueHeadTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Stop retrying one head for a bounded cooldown, then drain again.
+   *
+   * Without the cooldown a sender that keeps refusing would be re-claimed as
+   * fast as the backend can answer; without the automatic release the queue
+   * would stay stalled behind a prompt whose only problem was transient.
+   */
+  const pauseQueueHead = useCallback((headId: string) => {
+    const previous = pausedQueueHeadRef.current;
+    const attempts = previous?.id === headId ? previous.attempts + 1 : 1;
+    pausedQueueHeadRef.current = { id: headId, attempts };
+    if (pausedQueueHeadTimerRef.current) {
+      clearTimeout(pausedQueueHeadTimerRef.current);
+    }
+    pausedQueueHeadTimerRef.current = setTimeout(() => {
+      pausedQueueHeadTimerRef.current = null;
+      if (pausedQueueHeadRef.current?.id !== headId || !queueMountedRef.current) {
+        return;
+      }
+      if (pendingClaimSettlementRef.current) {
+        // A settlement retry still owns the durable claim, so resuming would
+        // race it for the same message. Wait again rather than returning: the
+        // cooldown is the only thing that will restart this head.
+        pauseQueueHeadRef.current(headId);
+        return;
+      }
+      pausedQueueHeadRef.current = null;
+      processQueueRef.current();
+    }, Math.min(PAUSED_QUEUE_HEAD_BASE_DELAY_MS * (2 ** (attempts - 1)), 30_000));
+  }, []);
+  pauseQueueHeadRef.current = pauseQueueHead;
+
+  retryClaimSettlementRef.current = async (
+    operation,
+    claim,
+    attempt,
+    reported,
+  ) => {
+    pendingClaimSettlementRef.current = { operation, claim };
+    // Set this before the reject call applies its authoritative snapshot.
+    // Zustand subscribers can render synchronously during that application;
+    // the guard must already be visible when their queue effect runs.
+    if (operation === "reject") {
+      pauseQueueHead(claim.entry.id);
+    }
+    try {
+      if (operation === "acknowledge") {
+        await acknowledgeAgentPromptClaim<TmuxQueuedMessage>(
+          "claude-tmux",
+          storeKey,
+          claim.claimToken,
+        );
+      } else {
+        await rejectAgentPromptClaim<TmuxQueuedMessage>(
+          "claude-tmux",
+          storeKey,
+          claim.claimToken,
+        );
+      }
+      pendingClaimSettlementRef.current = null;
+      if (operation === "acknowledge") {
+        // The head advanced, so the cooldown taken for an earlier failure on
+        // this tab no longer describes anything.
+        clearPausedQueueHead();
+      } else if (queueMountedRef.current) {
+        setError("Failed to send queued prompt. It was returned to the queue.");
+      }
+      return true;
+    } catch (settlementError) {
+      if (!reported) {
+        const detail =
+          settlementError instanceof Error
+            ? settlementError.message
+            : "Unknown error";
+        setError(
+          operation === "acknowledge"
+            ? `Queued prompt was sent, but its queue claim could not be acknowledged yet: ${detail}`
+            : `Failed to send queued prompt and return it to the queue yet: ${detail}`,
+        );
+      }
+      if (!queueMountedRef.current) {
+        // Leave the durable claim alone. Copying the prompt back into this
+        // tab's draft would duplicate it: the backend lease still holds the
+        // same message and re-heads it when the lease expires.
+        pendingClaimSettlementRef.current = null;
+        return false;
+      }
+
+      const delay = Math.min(250 * (2 ** attempt), 30_000);
+      claimSettlementTimerRef.current = setTimeout(() => {
+        claimSettlementTimerRef.current = null;
+        void retryClaimSettlementRef.current(
+          operation,
+          claim,
+          attempt + 1,
+          true,
+        ).then((settled) => {
+          if (settled && operation === "acknowledge") {
+            processQueueRef.current();
+          }
+        });
+      }, delay);
+      return false;
+    }
+  };
 
   const processQueue = useCallback(() => {
     if (isProcessingQueueRef.current) return;
@@ -1030,6 +1203,15 @@ export function ClaudeTmuxChatTab({
     }
 
     const tmuxState = useClaudeTmuxStore.getState();
+    const currentHeadId = tmuxState.getQueuedMessages(storeKey)[0]?.id ?? null;
+    const paused = pausedQueueHeadRef.current;
+    if (paused) {
+      // Still cooling down on the head that failed; its timer will re-drive.
+      if (paused.id === currentHeadId) return;
+      // A different head means the queue moved on under us, so the cooldown
+      // and its retry count no longer apply.
+      clearPausedQueueHead();
+    }
     if (
       tmuxState.getDraftText(storeKey).trim().length > 0 ||
       tmuxState.getAttachments(storeKey).length > 0
@@ -1038,21 +1220,42 @@ export function ClaudeTmuxChatTab({
     }
 
     isProcessingQueueRef.current = true;
+    const headBeforeClaimId = tmuxState.getQueuedMessages(storeKey)[0]?.id;
+    let claimedPrompt: {
+      entry: TmuxQueuedMessage;
+      claimToken: string;
+    } | null = null;
     void claimAgentPromptQueueHead<TmuxQueuedMessage>("claude-tmux", storeKey)
-      .then((nextMessage) => {
-        if (!nextMessage) return;
+      .then((nextClaim) => {
+        if (!nextClaim) return;
+        claimedPrompt = nextClaim;
         return submitPromptRef.current?.(
-          nextMessage.text,
-          nextMessage.attachments,
+          nextClaim.entry.text,
+          nextClaim.entry.attachments,
           false,
         );
       })
-      .then((sent) => {
-        if (sent === false) {
-          setError((current) => current ?? "Failed to send queued prompt");
+      .then(async (sent) => {
+        if (!claimedPrompt) return;
+        if (sent === true) {
+          await retryClaimSettlementRef.current(
+            "acknowledge",
+            claimedPrompt,
+            0,
+            false,
+          );
+          return;
         }
+
+        await retryClaimSettlementRef.current(
+          "reject",
+          claimedPrompt,
+          0,
+          false,
+        );
       })
       .catch((e) => {
+        if (headBeforeClaimId) pauseQueueHead(headBeforeClaimId);
         setError(
           `Failed to send queued prompt: ${
             e instanceof Error ? e.message : "Unknown error"
@@ -1062,12 +1265,20 @@ export function ClaudeTmuxChatTab({
       })
       .finally(() => {
         isProcessingQueueRef.current = false;
+        const headAfterClaimId = useClaudeTmuxStore
+          .getState()
+          .getQueuedMessages(storeKey)[0]?.id;
+        if (!claimedPrompt && headAfterClaimId !== headBeforeClaimId) {
+          processQueueRef.current();
+        }
       });
   }, [
     backendHydrated,
+    clearPausedQueueHead,
     isThinking,
     modelSwitching,
     effortSwitching,
+    pauseQueueHead,
     running,
     sending,
     setTabBusy,
@@ -1075,19 +1286,51 @@ export function ClaudeTmuxChatTab({
   ]);
 
   useEffect(() => {
+    processQueueRef.current = processQueue;
+  }, [processQueue]);
+
+  useEffect(() => {
+    queueMountedRef.current = true;
+    return () => {
+      queueMountedRef.current = false;
+      /*
+       * Drop this tab's timers and forget any unsettled claim, but never touch
+       * the prompt itself. The backend still owns it under a lease and re-heads
+       * it when that lease expires, so restoring it locally as well would put
+       * the same prompt in both the composer and the queue and send it twice.
+       */
+      if (claimSettlementTimerRef.current) {
+        clearTimeout(claimSettlementTimerRef.current);
+        claimSettlementTimerRef.current = null;
+      }
+      if (pausedQueueHeadTimerRef.current) {
+        clearTimeout(pausedQueueHeadTimerRef.current);
+        pausedQueueHeadTimerRef.current = null;
+      }
+      pendingClaimSettlementRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
     if (queueLength > 0 && !isQueueBlockedByDraft) {
       processQueue();
     }
-  }, [isQueueBlockedByDraft, processQueue, queueLength, isThinking]);
+  }, [isQueueBlockedByDraft, processQueue, queueHeadId, queueLength, isThinking]);
 
-  const promoteNextQueuedPromptToDraft = useCallback(() => {
+  const promoteNextQueuedPromptToDraft = useCallback(async () => {
     const store = useClaudeTmuxStore.getState();
     const hasCurrentDraft =
       store.getDraftText(storeKey).trim().length > 0 ||
       store.getAttachments(storeKey).length > 0;
     if (hasCurrentDraft) return;
 
-    const nextMessage = store.removeFromQueue(storeKey);
+    const head = store.getQueuedMessages(storeKey)[0];
+    if (!head) return;
+    const nextMessage = await removeAgentPrompt<TmuxQueuedMessage>(
+      "claude-tmux",
+      storeKey,
+      head.id,
+    );
     if (!nextMessage) return;
 
     store.setDraftText(storeKey, nextMessage.text);
@@ -1107,7 +1350,9 @@ export function ClaudeTmuxChatTab({
     setError(null);
     try {
       await interruptSession(tabId, environmentId);
-      promoteNextQueuedPromptToDraft();
+      await promoteNextQueuedPromptToDraft().catch((error) => {
+        console.error("[ClaudeTmuxChatTab] Failed to promote queued prompt:", error);
+      });
       setTabBusy(storeKey, false);
     } catch (e) {
       setError(String(e));
@@ -1678,6 +1923,7 @@ export function ClaudeTmuxChatTab({
               autoFocus={isActive}
               onSubmit={handleSubmit}
               onQueue={handleQueue}
+              onQueueError={setError}
               queueLength={queueLength}
               showAddressAll={showAddressAll}
               onAddressAll={handleAddressAll}
@@ -2458,7 +2704,8 @@ interface TmuxComposeBarProps {
   submitting: boolean;
   autoFocus?: boolean;
   onSubmit: (text: string, attachments: TmuxAttachment[]) => Promise<boolean> | boolean | void;
-  onQueue?: (text: string, attachments: TmuxAttachment[]) => void;
+  onQueue?: (text: string, attachments: TmuxAttachment[]) => Promise<void> | void;
+  onQueueError?: (message: string) => void;
   queueLength?: number;
   showAddressAll?: boolean;
   onAddressAll?: () => void;
@@ -2488,6 +2735,7 @@ function TmuxComposeBar({
   autoFocus,
   onSubmit,
   onQueue,
+  onQueueError,
   queueLength = 0,
   showAddressAll = false,
   onAddressAll,
@@ -2512,6 +2760,8 @@ function TmuxComposeBar({
   const pendingCursorPositionRef = useRef<number | null>(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
+  const [queueSubmitting, setQueueSubmitting] = useState(false);
+  const queueSubmittingRef = useRef(false);
   const value = useClaudeTmuxStore((state) => state.draftText.get(sessionKey) ?? "");
   const fileMentions = useClaudeTmuxStore(
     useCallback(
@@ -2536,8 +2786,6 @@ function TmuxComposeBar({
   const addAttachmentToStore = useClaudeTmuxStore((state) => state.addAttachment);
   const removeAttachmentFromStore = useClaudeTmuxStore((state) => state.removeAttachment);
   const clearAttachments = useClaudeTmuxStore((state) => state.clearAttachments);
-  const removeQueueItem = useClaudeTmuxStore((state) => state.removeQueueItem);
-  const moveQueueItem = useClaudeTmuxStore((state) => state.moveQueueItem);
   const modelObj = useMemo(
     () => getTmuxModel(selectedModel, models),
     [selectedModel, models],
@@ -2685,7 +2933,7 @@ function TmuxComposeBar({
   });
 
   const handleSubmit = async () => {
-    if (submitting || disabled) return;
+    if (submitting || queueSubmittingRef.current || disabled) return;
     const serializedText = serializeTmuxFileMentions(
       value.trim(),
       fileMentions,
@@ -2695,10 +2943,21 @@ function TmuxComposeBar({
     if (!serializedText && attachments.length === 0) return;
 
     if (busy) {
-      onQueue?.(serializedText, attachments);
-      setValue(sessionKey, "");
-      setFileMentions(sessionKey, []);
-      clearAttachments(sessionKey);
+      if (!onQueue) return;
+      queueSubmittingRef.current = true;
+      setQueueSubmitting(true);
+      try {
+        await onQueue(serializedText, attachments);
+        setValue(sessionKey, "");
+        setFileMentions(sessionKey, []);
+        clearAttachments(sessionKey);
+      } catch {
+        // The parent reports the backend error. Keep the draft intact so the
+        // user can retry without reconstructing the prompt or attachments.
+      } finally {
+        queueSubmittingRef.current = false;
+        setQueueSubmitting(false);
+      }
       return;
     }
 
@@ -2711,22 +2970,40 @@ function TmuxComposeBar({
   };
 
   const handleQueuedMessageClick = useCallback(
-    (message: TmuxQueuedMessage) => {
-      if (value.trim() || attachments.length > 0) return;
-      removeQueueItem(sessionKey, message.id);
-      setValue(sessionKey, message.text);
-      setFileMentions(sessionKey, []);
-      clearAttachments(sessionKey);
-      for (const attachment of message.attachments) {
-        addAttachmentToStore(sessionKey, attachment);
+    async (message: TmuxQueuedMessage) => {
+      // Editing loads the prompt into the composer, so anything already there
+      // would be destroyed. This used to return silently, which read as the
+      // click simply not working.
+      if (value.trim() || attachments.length > 0) {
+        throw composerOccupiedError();
       }
-      setQueueDialogOpen(false);
+      try {
+        const removed = await removeAgentPrompt<TmuxQueuedMessage>(
+          "claude-tmux",
+          sessionKey,
+          message.id,
+        );
+        if (!removed) return;
+        setValue(sessionKey, removed.text);
+        setFileMentions(sessionKey, []);
+        clearAttachments(sessionKey);
+        for (const attachment of removed.attachments) {
+          addAttachmentToStore(sessionKey, attachment);
+        }
+        setQueueDialogOpen(false);
+      } catch (error) {
+        onQueueError?.(
+          `Failed to edit queued prompt: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`,
+        );
+      }
     },
     [
       addAttachmentToStore,
       attachments.length,
       clearAttachments,
-      removeQueueItem,
+      onQueueError,
       sessionKey,
       setFileMentions,
       setValue,
@@ -2735,17 +3012,40 @@ function TmuxComposeBar({
   );
 
   const handleMoveQueuedMessage = useCallback(
-    (fromIndex: number, toIndex: number) => {
-      moveQueueItem(sessionKey, fromIndex, toIndex);
+    async (fromIndex: number, toIndex: number) => {
+      const message = queuedMessages[fromIndex];
+      if (!message || Math.abs(toIndex - fromIndex) !== 1) return;
+      try {
+        await moveAgentPrompt(
+          "claude-tmux",
+          sessionKey,
+          message.id,
+          toIndex < fromIndex ? "up" : "down",
+        );
+      } catch (error) {
+        onQueueError?.(
+          `Failed to move queued prompt: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`,
+        );
+      }
     },
-    [moveQueueItem, sessionKey],
+    [onQueueError, queuedMessages, sessionKey],
   );
 
   const handleRemoveQueuedMessage = useCallback(
-    (messageId: string) => {
-      removeQueueItem(sessionKey, messageId);
+    async (messageId: string) => {
+      try {
+        await removeAgentPrompt("claude-tmux", sessionKey, messageId);
+      } catch (error) {
+        onQueueError?.(
+          `Failed to remove queued prompt: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`,
+        );
+      }
     },
-    [removeQueueItem, sessionKey],
+    [onQueueError, sessionKey],
   );
 
   return (
@@ -2894,7 +3194,7 @@ function TmuxComposeBar({
               ? "Session not running"
               : "Ask Claude anything… (@ to mention, / for commands)"
           }
-          disabled={disabled || submitting}
+          disabled={disabled || submitting || queueSubmitting}
           rows={2}
           autoFocus={autoFocus && !isMobile}
           className={cn(
@@ -3084,6 +3384,7 @@ function TmuxComposeBar({
           disabled={
             disabled ||
             submitting ||
+            queueSubmitting ||
             (!busy && !value.trim() && attachments.length === 0)
           }
           className="h-7 w-7 p-0 rounded-full"

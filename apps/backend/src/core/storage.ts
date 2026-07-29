@@ -55,6 +55,9 @@ import type {
 export type JsonRecord = Record<string, unknown>;
 
 const MAX_FRONTEND_AGENT_ACTIVITY_OBSERVERS = 32;
+const PROMPT_QUEUE_CLAIM_LEASE_MS = 5 * 60 * 1000;
+const MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES = 4 * 1024;
+const MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES = 1024;
 
 export type KanbanComment = {
   id: string;
@@ -374,6 +377,18 @@ function isPersistedLoopedReviewWorkflow(
     && isPositiveInteger(value.revision);
 }
 
+function isPersistedPromptQueueClaim(
+  value: unknown,
+): value is NonNullable<PersistedPromptQueue["outstandingClaim"]> {
+  return isRecord(value)
+    && isNonBlankString(value.token)
+    && Object.hasOwn(value, "message")
+    && typeof value.claimedAt === "string"
+    && Number.isFinite(Date.parse(value.claimedAt))
+    && typeof value.expiresAt === "string"
+    && Number.isFinite(Date.parse(value.expiresAt));
+}
+
 function isPersistedPromptQueue(
   value: unknown,
   expectedKey?: string,
@@ -383,6 +398,10 @@ function isPersistedPromptQueue(
     && (expectedKey === undefined || value.queueKey === expectedKey)
     && isNonBlankString(value.environmentId)
     && Array.isArray(value.messages)
+    && (
+      value.outstandingClaim === undefined
+      || isPersistedPromptQueueClaim(value.outstandingClaim)
+    )
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt))
     && isPositiveInteger(value.revision);
@@ -392,12 +411,25 @@ function isPersistedComposeDraft(
   value: unknown,
   expectedKey?: string,
 ): value is PersistedComposeDraft {
+  const source = isRecord(value) ? value.sourcePromptQueue : undefined;
   return isRecord(value)
     && isNonBlankString(value.draftKey)
     && (expectedKey === undefined || value.draftKey === expectedKey)
     && (value.ownerType === "environment" || value.ownerType === "project")
     && isNonBlankString(value.ownerId)
     && Object.hasOwn(value, "value")
+    && (
+      source === undefined
+      || (
+        isRecord(source)
+        && isNonBlankString(source.queueKey)
+        && Buffer.byteLength(source.queueKey, "utf8")
+          <= MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES
+        && isNonBlankString(source.messageId)
+        && Buffer.byteLength(source.messageId, "utf8")
+          <= MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES
+      )
+    )
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt))
     && isPositiveInteger(value.revision);
@@ -988,6 +1020,7 @@ export class StorageService {
   private loopedReviewMutation: Promise<unknown> = Promise.resolve();
   private buildPipelineMutation: Promise<unknown> = Promise.resolve();
   private promptQueueMutation: Promise<unknown> = Promise.resolve();
+  private promptQueueClaimRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private composeDraftMutation: Promise<unknown> = Promise.resolve();
   private fileDraftMutation: Promise<unknown> = Promise.resolve();
   private kanbanMutation: Promise<unknown> = Promise.resolve();
@@ -1006,9 +1039,21 @@ export class StorageService {
    * inode), and an in-place foreign write moves size/mtime.
    */
   private readonly jsonReadCache = new Map<string, { fingerprint: string; value: unknown }>();
+  private readonly promptQueueClaimLeaseMs: number;
 
-  constructor(dataDir: string) {
+  constructor(
+    dataDir: string,
+    options: { promptQueueClaimLeaseMs?: number } = {},
+  ) {
     this.dataDir = dataDir;
+    this.promptQueueClaimLeaseMs =
+      options.promptQueueClaimLeaseMs ?? PROMPT_QUEUE_CLAIM_LEASE_MS;
+    if (
+      !Number.isFinite(this.promptQueueClaimLeaseMs)
+      || this.promptQueueClaimLeaseMs <= 0
+    ) {
+      throw new Error("Prompt queue claim lease must be positive");
+    }
   }
 
   /**
@@ -1148,6 +1193,7 @@ export class StorageService {
 
   async init(): Promise<void> {
     await fs.mkdir(this.dataDir, { recursive: true });
+    await this.recoverExpiredPromptQueueClaims();
   }
 
   private async writeAtomic(
@@ -2709,6 +2755,96 @@ export class StorageService {
     }
   }
 
+  private validatePromptQueueMessage(message: unknown): asserts message is Record<string, unknown> {
+    if (!isRecord(message) || !isNonBlankString(message.id)) {
+      throw new Error("Prompt queue message must have a non-blank ID");
+    }
+    this.validatePromptQueueMessages([message]);
+  }
+
+  private async savePromptQueueMutation(
+    queues: Record<string, PersistedPromptQueue>,
+    queueKey: string,
+    environmentId: string,
+    messages: unknown[],
+    previous?: PersistedPromptQueue,
+    outstandingClaim: PersistedPromptQueue["outstandingClaim"] | null
+      = previous?.outstandingClaim ?? null,
+  ): Promise<PersistedPromptQueue> {
+    this.validatePromptQueueMessages(messages);
+    const saved: PersistedPromptQueue = {
+      queueKey,
+      environmentId,
+      messages,
+      ...(outstandingClaim ? { outstandingClaim } : {}),
+      updatedAt: nowIso(),
+      revision: (previous?.revision ?? 0) + 1,
+    };
+    queues[queueKey] = saved;
+    await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+    this.announce("prompt-queue", environmentId);
+    this.schedulePromptQueueClaimRecovery(queues);
+    return saved;
+  }
+
+  private schedulePromptQueueClaimRecovery(
+    queues: Record<string, PersistedPromptQueue>,
+  ): void {
+    if (this.promptQueueClaimRecoveryTimer) {
+      clearTimeout(this.promptQueueClaimRecoveryTimer);
+      this.promptQueueClaimRecoveryTimer = null;
+    }
+    const nextExpiry = Object.values(queues).reduce<number | null>((soonest, queue) => {
+      if (!queue.outstandingClaim) return soonest;
+      const expiry = Date.parse(queue.outstandingClaim.expiresAt);
+      if (!Number.isFinite(expiry)) return soonest;
+      return soonest === null || expiry < soonest ? expiry : soonest;
+    }, null);
+    if (nextExpiry === null) return;
+    this.promptQueueClaimRecoveryTimer = setTimeout(() => {
+      this.promptQueueClaimRecoveryTimer = null;
+      void this.recoverExpiredPromptQueueClaims().catch(() => {
+        // A future read, mutation, or backend restart retries recovery. Avoid
+        // logging queue errors because their values may contain prompt data.
+      });
+    }, Math.max(0, nextExpiry - Date.now()));
+    this.promptQueueClaimRecoveryTimer.unref?.();
+  }
+
+  private async recoverExpiredPromptQueueClaims(): Promise<void> {
+    await this.enqueuePromptQueueMutation(async () => {
+      const queues = await this.loadPromptQueues();
+      const now = Date.now();
+      const changedEnvironmentIds = new Set<string>();
+      let changed = false;
+      for (const queue of Object.values(queues)) {
+        const claim = queue.outstandingClaim;
+        if (!claim || Date.parse(claim.expiresAt) > now) continue;
+        const messageId = isRecord(claim.message) ? claim.message.id : undefined;
+        queue.messages = [
+          claim.message,
+          ...queue.messages.filter((candidate) =>
+            messageId === undefined
+            || !isRecord(candidate)
+            || candidate.id !== messageId
+          ),
+        ];
+        delete queue.outstandingClaim;
+        queue.updatedAt = nowIso();
+        queue.revision += 1;
+        changedEnvironmentIds.add(queue.environmentId);
+        changed = true;
+      }
+      if (changed) {
+        await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+        for (const environmentId of changedEnvironmentIds) {
+          this.announce("prompt-queue", environmentId);
+        }
+      }
+      this.schedulePromptQueueClaimRecovery(queues);
+    });
+  }
+
   private async assertEnvironmentAcceptsBackgroundState(
     environmentId: string,
     label: string,
@@ -2798,7 +2934,197 @@ export class StorageService {
       queues[queueKey] = saved;
       await this.saveSensitiveJson(this.promptQueuesFile(), queues);
       this.announce("prompt-queue", environmentId);
+      this.schedulePromptQueueClaimRecovery(queues);
       return saved;
+    });
+  }
+
+  /**
+   * Appends one prompt atomically.
+   *
+   * Renderers never replace the queue: they submit intent-level mutations and
+   * consume the returned snapshot. This preserves concurrent appends from
+   * multiple clients instead of letting the last whole-list write win.
+   */
+  async enqueuePromptQueueMessage(
+    queueKey: string,
+    environmentId: string,
+    message: unknown,
+  ): Promise<PersistedPromptQueue> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    this.validatePromptQueueMessage(message);
+
+    return this.enqueuePromptQueueMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (previous && previous.environmentId !== environmentId) {
+        throw new Error("Prompt queue belongs to another environment");
+      }
+      if (
+        (
+          isRecord(previous?.outstandingClaim?.message)
+          && previous.outstandingClaim.message.id === message.id
+        )
+        || previous?.messages.some((candidate) =>
+          isRecord(candidate) && candidate.id === message.id
+        )
+      ) {
+        return previous;
+      }
+      return this.savePromptQueueMutation(
+        queues,
+        queueKey,
+        environmentId,
+        [...(previous?.messages ?? []), message],
+        previous,
+      );
+    });
+  }
+
+  /**
+   * Inserts a previously claimed prompt back at the head when a renderer
+   * discovers that its agent sender is no longer ready.
+   */
+  async requeuePromptQueueMessage(
+    queueKey: string,
+    environmentId: string,
+    message: unknown,
+  ): Promise<PersistedPromptQueue> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    this.validatePromptQueueMessage(message);
+
+    return this.enqueuePromptQueueMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (previous && previous.environmentId !== environmentId) {
+        throw new Error("Prompt queue belongs to another environment");
+      }
+      if (
+        previous?.outstandingClaim
+        && isRecord(previous.outstandingClaim.message)
+        && previous.outstandingClaim.message.id === message.id
+      ) {
+        return this.savePromptQueueMutation(
+          queues,
+          queueKey,
+          environmentId,
+          [message, ...previous.messages.filter((candidate) =>
+            !isRecord(candidate) || candidate.id !== message.id
+          )],
+          previous,
+          null,
+        );
+      }
+      if (previous?.messages.some((candidate) =>
+        isRecord(candidate) && candidate.id === message.id
+      )) {
+        return previous;
+      }
+      return this.savePromptQueueMutation(
+        queues,
+        queueKey,
+        environmentId,
+        [message, ...(previous?.messages ?? [])],
+        previous,
+      );
+    });
+  }
+
+  async removePromptQueueMessage(
+    queueKey: string,
+    environmentId: string,
+    messageId: string,
+  ): Promise<{ removed: unknown | null; queue: PersistedPromptQueue | null }> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    if (!isNonBlankString(messageId)) {
+      throw new Error("Prompt queue message ID must not be blank");
+    }
+
+    return this.enqueuePromptQueueMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (!previous) return { removed: null, queue: null };
+      if (previous.environmentId !== environmentId) {
+        throw new Error("Prompt queue belongs to another environment");
+      }
+      const index = previous.messages.findIndex((candidate) =>
+        isRecord(candidate) && candidate.id === messageId
+      );
+      if (index < 0) return { removed: null, queue: previous };
+      const messages = [...previous.messages];
+      const [removed] = messages.splice(index, 1);
+      const queue = await this.savePromptQueueMutation(
+        queues,
+        queueKey,
+        environmentId,
+        messages,
+        previous,
+      );
+      return { removed: removed ?? null, queue };
+    });
+  }
+
+  async movePromptQueueMessage(
+    queueKey: string,
+    environmentId: string,
+    messageId: string,
+    direction: "up" | "down",
+  ): Promise<PersistedPromptQueue | null> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    if (!isNonBlankString(messageId)) {
+      throw new Error("Prompt queue message ID must not be blank");
+    }
+    if (direction !== "up" && direction !== "down") {
+      throw new Error("Prompt queue move direction must be up or down");
+    }
+
+    return this.enqueuePromptQueueMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (!previous) return null;
+      if (previous.environmentId !== environmentId) {
+        throw new Error("Prompt queue belongs to another environment");
+      }
+      const index = previous.messages.findIndex((candidate) =>
+        isRecord(candidate) && candidate.id === messageId
+      );
+      const target = direction === "up" ? index - 1 : index + 1;
+      if (index < 0 || target < 0 || target >= previous.messages.length) {
+        return previous;
+      }
+      const messages = [...previous.messages];
+      [messages[index], messages[target]] = [messages[target], messages[index]];
+      return this.savePromptQueueMutation(
+        queues,
+        queueKey,
+        environmentId,
+        messages,
+        previous,
+      );
     });
   }
 
@@ -2806,8 +3132,11 @@ export class StorageService {
     queueKey: string,
     environmentId: string,
     expectedMessageId: string,
-    candidateMessages: unknown[],
-  ): Promise<{ claimed: unknown | null; queue: PersistedPromptQueue | null }> {
+  ): Promise<{
+    claimed: unknown | null;
+    claimToken: string | null;
+    queue: PersistedPromptQueue | null;
+  }> {
     if (!isNonBlankString(queueKey)) {
       throw new Error("Prompt queue key must not be blank");
     }
@@ -2817,8 +3146,6 @@ export class StorageService {
     if (!isNonBlankString(expectedMessageId)) {
       throw new Error("Expected prompt message ID must not be blank");
     }
-    this.validatePromptQueueMessages(candidateMessages);
-
     return this.enqueuePromptQueueMutation(async () => {
       await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
       const queues = await this.loadPromptQueues();
@@ -2827,27 +3154,278 @@ export class StorageService {
         throw new Error("Prompt queue belongs to another environment");
       }
 
-      const messages = previous?.messages ?? candidateMessages;
+      let current = previous;
+      if (current?.outstandingClaim) {
+        const expiresAt = Date.parse(current.outstandingClaim.expiresAt);
+        if (expiresAt > Date.now()) {
+          return { claimed: null, claimToken: null, queue: current };
+        }
+        const recoveredMessage = current.outstandingClaim.message;
+        const recoveredId = isRecord(recoveredMessage) ? recoveredMessage.id : undefined;
+        const recoveredMessages = [
+          recoveredMessage,
+          ...current.messages.filter((candidate) =>
+            recoveredId === undefined
+            || !isRecord(candidate)
+            || candidate.id !== recoveredId
+          ),
+        ];
+        current = await this.savePromptQueueMutation(
+          queues,
+          queueKey,
+          environmentId,
+          recoveredMessages,
+          current,
+          null,
+        );
+      }
+
+      const messages = current?.messages ?? [];
       const head = messages[0];
       if (
         !isRecord(head)
         || head.id !== expectedMessageId
       ) {
-        return { claimed: null, queue: previous ?? null };
+        return { claimed: null, claimToken: null, queue: current ?? null };
       }
 
-      const saved: PersistedPromptQueue = {
+      const claimedAt = new Date();
+      const claimToken = randomUUID();
+      const saved = await this.savePromptQueueMutation(
+        queues,
         queueKey,
         environmentId,
-        messages: messages.slice(1),
-        updatedAt: nowIso(),
-        revision: (previous?.revision ?? 0) + 1,
-      };
-      queues[queueKey] = saved;
-      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
-      this.announce("prompt-queue", environmentId);
-      return { claimed: head, queue: saved };
+        messages.slice(1),
+        current,
+        {
+          token: claimToken,
+          message: head,
+          claimedAt: claimedAt.toISOString(),
+          expiresAt: new Date(
+            claimedAt.getTime() + this.promptQueueClaimLeaseMs,
+          ).toISOString(),
+        },
+      );
+      return { claimed: head, claimToken, queue: saved };
     });
+  }
+
+  async acknowledgePromptQueueClaim(
+    queueKey: string,
+    environmentId: string,
+    claimToken: string,
+  ): Promise<PersistedPromptQueue | null> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    if (!isNonBlankString(claimToken)) {
+      throw new Error("Prompt queue claim token must not be blank");
+    }
+    return this.enqueuePromptQueueMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (!previous) return null;
+      if (previous.environmentId !== environmentId) {
+        throw new Error("Prompt queue belongs to another environment");
+      }
+      if (!previous.outstandingClaim) return previous;
+      if (previous.outstandingClaim.token !== claimToken) {
+        throw new Error("Prompt queue claim token does not match");
+      }
+      return this.savePromptQueueMutation(
+        queues,
+        queueKey,
+        environmentId,
+        previous.messages,
+        previous,
+        null,
+      );
+    });
+  }
+
+  async rejectPromptQueueClaim(
+    queueKey: string,
+    environmentId: string,
+    claimToken: string,
+  ): Promise<PersistedPromptQueue | null> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    if (!isNonBlankString(claimToken)) {
+      throw new Error("Prompt queue claim token must not be blank");
+    }
+    return this.enqueuePromptQueueMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Prompt queue");
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (!previous) return null;
+      if (previous.environmentId !== environmentId) {
+        throw new Error("Prompt queue belongs to another environment");
+      }
+      if (!previous.outstandingClaim) return previous;
+      if (previous.outstandingClaim.token !== claimToken) {
+        throw new Error("Prompt queue claim token does not match");
+      }
+      const message = previous.outstandingClaim.message;
+      const messageId = isRecord(message) ? message.id : undefined;
+      return this.savePromptQueueMutation(
+        queues,
+        queueKey,
+        environmentId,
+        [
+          message,
+          ...previous.messages.filter((candidate) =>
+            messageId === undefined
+            || !isRecord(candidate)
+            || candidate.id !== messageId
+          ),
+        ],
+        previous,
+        null,
+      );
+    });
+  }
+
+  /**
+   * Moves one queued message into an authoritative compose draft without a
+   * loss window. The draft is committed before the queue removal while both
+   * stores are locked. Bounded provenance on the draft makes a retry finish
+   * the removal after a process death or queue-write failure, while unrelated
+   * existing drafts remain protected.
+   */
+  async transferPromptQueueMessageToComposeDraft(
+    queueKey: string,
+    environmentId: string,
+    messageId: string,
+    draftKey: string,
+    ownerType: "environment" | "project",
+    ownerId: string,
+    expectedDraftRevision?: number,
+  ): Promise<{
+    removed: unknown | null;
+    queue: PersistedPromptQueue | null;
+    draft: PersistedComposeDraft | null;
+  }> {
+    if (!isNonBlankString(queueKey)) throw new Error("Prompt queue key must not be blank");
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    if (!isNonBlankString(messageId)) {
+      throw new Error("Prompt queue message ID must not be blank");
+    }
+    if (Buffer.byteLength(queueKey, "utf8") > MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES) {
+      throw new Error("Prompt queue transfer key is too large");
+    }
+    if (
+      Buffer.byteLength(messageId, "utf8")
+      > MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES
+    ) {
+      throw new Error("Prompt queue transfer message ID is too large");
+    }
+    if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
+    if (ownerType !== "environment" && ownerType !== "project") {
+      throw new Error("Compose draft owner type is invalid");
+    }
+    if (!isNonBlankString(ownerId)) throw new Error("Compose draft owner ID must not be blank");
+    if (expectedDraftRevision !== undefined && !isNonNegativeInteger(expectedDraftRevision)) {
+      throw new Error("Compose draft expected revision must be a non-negative integer");
+    }
+    return this.enqueuePromptQueueMutation(async () =>
+      this.enqueueComposeDraftMutation(async () => {
+        const environment = await this.assertEnvironmentAcceptsBackgroundState(
+          environmentId,
+          "Prompt queue",
+        );
+        if (
+          (ownerType === "environment" && ownerId !== environmentId)
+          || (ownerType === "project" && ownerId !== environment.projectId)
+        ) {
+          throw new Error("Compose draft owner does not own the prompt queue");
+        }
+        const queues = await this.loadPromptQueues();
+        const previousQueue = queues[queueKey];
+        if (!previousQueue) {
+          return { removed: null, queue: null, draft: null };
+        }
+        if (previousQueue.environmentId !== environmentId) {
+          throw new Error("Prompt queue belongs to another environment");
+        }
+        const messageIndex = previousQueue.messages.findIndex((candidate) =>
+          isRecord(candidate) && candidate.id === messageId
+        );
+        if (messageIndex < 0) {
+          return { removed: null, queue: previousQueue, draft: null };
+        }
+        const authoritativeMessage = previousQueue.messages[messageIndex];
+        if (
+          !isRecord(authoritativeMessage)
+          || typeof authoritativeMessage.text !== "string"
+          || !Array.isArray(authoritativeMessage.attachments)
+        ) {
+          throw new Error(
+            "Queued prompt must have text and attachments before transfer",
+          );
+        }
+        const value = {
+          text: authoritativeMessage.text,
+          mentions: [],
+          attachments: authoritativeMessage.attachments,
+        };
+
+        const drafts = await this.loadComposeDrafts();
+        const previousDraft = drafts[draftKey];
+        let draft: PersistedComposeDraft;
+        if (previousDraft) {
+          if (
+            previousDraft.ownerType !== ownerType
+            || previousDraft.ownerId !== ownerId
+          ) {
+            throw new Error("Compose draft belongs to another owner");
+          }
+          if (
+            previousDraft.sourcePromptQueue?.queueKey !== queueKey
+            || previousDraft.sourcePromptQueue.messageId !== messageId
+          ) {
+            throw new Error("Compose draft already exists");
+          }
+          draft = previousDraft;
+        } else {
+          if (expectedDraftRevision !== undefined && expectedDraftRevision !== 0) {
+            throw new Error("Compose draft revision conflict");
+          }
+          draft = {
+            draftKey,
+            ownerType,
+            ownerId,
+            value,
+            sourcePromptQueue: { queueKey, messageId },
+            updatedAt: nowIso(),
+            revision: 1,
+          };
+          drafts[draftKey] = draft;
+          await this.saveSensitiveJson(this.composeDraftsFile(), drafts);
+          this.announce("compose-draft", ownerId);
+        }
+
+        const messages = [...previousQueue.messages];
+        const [removed] = messages.splice(messageIndex, 1);
+        const queue = await this.savePromptQueueMutation(
+          queues,
+          queueKey,
+          environmentId,
+          messages,
+          previousQueue,
+        );
+        return { removed: removed ?? null, queue, draft };
+      })
+    );
   }
 
   async deletePromptQueuesByEnvironment(environmentId: string): Promise<string[]> {
@@ -2864,6 +3442,7 @@ export class StorageService {
         await this.saveSensitiveJson(this.promptQueuesFile(), queues);
         this.announce("prompt-queue", environmentId);
       }
+      this.schedulePromptQueueClaimRecovery(queues);
 
       // Queued prompts carry user-authored text and pasted attachments, and
       // rotating the primary file leaves them readable in its backups. Always
@@ -2986,6 +3565,9 @@ export class StorageService {
         ownerType,
         ownerId,
         value,
+        ...(previous?.sourcePromptQueue
+          ? { sourcePromptQueue: previous.sourcePromptQueue }
+          : {}),
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,
       };

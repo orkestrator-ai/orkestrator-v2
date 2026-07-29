@@ -653,23 +653,17 @@ describe("pane-layout binding", () => {
     useEnvironmentStore.setState({
       environments: [containerEnvironment("container-b")],
     });
-    // initialize() deliberately preserves tabs that may have been inserted
-    // before a container mounts. Model an actual container replacement here
-    // by installing the new authoritative renderer state, rather than relying
-    // on initialize() to discard container A's tabs.
-    usePaneLayoutStore.setState((state) => ({
-      environments: new Map(state.environments).set("env-1", {
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [{ id: "container-b-tab", type: "plain" }],
-          activeTabId: "container-b-tab",
-        },
-        activePaneId: "default",
-        containerId: "container-b",
-        backendRevision: 0,
-      }),
-    }));
+    // TerminalContainer resets the old container's tabs before initializing
+    // the replacement. Mirror that production transition here so this test
+    // isolates the delayed authoritative read rather than initialize()'s
+    // intentional preservation of tabs inserted before a container mounts.
+    usePaneLayoutStore.getState().reset("env-1");
+    usePaneLayoutStore.getState().initialize("container-b", "env-1");
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "container-b-tab", type: "plain" },
+      "env-1",
+    );
     resolveLayout({
       version: 1,
       environmentId: "env-1",
@@ -689,6 +683,11 @@ describe("pane-layout binding", () => {
     expect(
       usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
     ).toEqual(["container-b-tab"]);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").some(
+        ({ id }) => id === "stale-a-tab",
+      ),
+    ).toBe(false);
     expect(
       usePaneLayoutStore.getState().environments.get("env-1")?.containerId,
     ).toBe("container-b");

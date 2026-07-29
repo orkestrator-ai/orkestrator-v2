@@ -28,6 +28,57 @@ const mockCreateMention = mock(() => ({
   relativePath: "src/app.ts",
 }));
 const mockInputFocus = mock(() => {});
+const mockRemovePromptQueueMessage = mock(
+  async (
+    _queueKey: string,
+    _environmentId: string,
+    _messageId: string,
+  ): Promise<{
+    removed: unknown | null;
+    queue: {
+      queueKey: string;
+      environmentId: string;
+      messages: unknown[];
+      updatedAt: string;
+      revision: number;
+    } | null;
+  }> => ({ removed: null, queue: null }),
+);
+const mockMovePromptQueueMessage = mock(
+  async (
+    _queueKey: string,
+    _environmentId: string,
+    _messageId: string,
+    _direction: "up" | "down",
+  ): Promise<{
+    queueKey: string;
+    environmentId: string;
+    messages: unknown[];
+    updatedAt: string;
+    revision: number;
+  } | null> => null,
+);
+const mockTransferPromptQueueMessageToComposeDraft = mock(
+  async (
+    _queueKey: string,
+    _environmentId: string,
+    _messageId: string,
+    _draftKey: string,
+    _ownerType: "environment" | "project",
+    _ownerId: string,
+  ): Promise<{
+    removed: unknown | null;
+    queue: {
+      queueKey: string;
+      environmentId: string;
+      messages: unknown[];
+      updatedAt: string;
+      revision: number;
+    } | null;
+    draft: unknown | null;
+  }> => ({ removed: null, queue: null, draft: null }),
+);
+let mockPromptQueueRevision = 0;
 let mockFileMentionMenuOpen = false;
 
 // Snapshot the real SlashCommandMenu module BEFORE we stub it below, so we
@@ -39,6 +90,7 @@ import * as realMentionableInput from "@/components/chat/MentionableInput";
 import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 import * as realUseFileMentions from "@/hooks/useFileMentions";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 const realSlashCommandMenuSnapshot = { ...realSlashCommandMenu };
 const realMentionableInputSnapshot = { ...realMentionableInput };
 const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
@@ -67,6 +119,10 @@ mock.module("@/lib/backend", () => ({
   updateAgentModelDefault: mockUpdateAgentModelDefault,
   getFileTree: mockGetFileTree,
   getLocalFileTree: mockGetLocalFileTree,
+  removePromptQueueMessage: mockRemovePromptQueueMessage,
+  movePromptQueueMessage: mockMovePromptQueueMessage,
+  transferPromptQueueMessageToComposeDraft:
+    mockTransferPromptQueueMessageToComposeDraft,
 }));
 
 // @/lib/native/clipboard is centrally mocked in tests/setup.ts.
@@ -161,6 +217,24 @@ const SESSION_KEY = `env-${ENV_ID}:${TAB_ID}`;
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 
+function sessionKeyFromQueueKey(queueKey: string): string {
+  return queueKey.slice(queueKey.indexOf("\u0000") + 1);
+}
+
+function claudeQueueSnapshot(
+  queueKey: string,
+  environmentId: string,
+  messages: unknown[],
+) {
+  return {
+    queueKey,
+    environmentId,
+    messages,
+    updatedAt: new Date().toISOString(),
+    revision: ++mockPromptQueueRevision,
+  };
+}
+
 function deferred() {
   let resolve!: () => void;
   let reject!: (error: Error) => void;
@@ -244,6 +318,77 @@ describe("ClaudeComposeBar", () => {
       relativePath: "src/app.ts",
     }));
     mockInputFocus.mockReset();
+    mockRemovePromptQueueMessage.mockReset();
+    mockRemovePromptQueueMessage.mockImplementation(
+      async (queueKey, environmentId, messageId) => {
+        const messages = [
+          ...(useClaudeStore.getState().messageQueue.get(
+            sessionKeyFromQueueKey(queueKey),
+          ) ?? []),
+        ];
+        const removed = messages.find((message) => message.id === messageId) ?? null;
+        return {
+          removed,
+          queue: claudeQueueSnapshot(
+            queueKey,
+            environmentId,
+            messages.filter((message) => message.id !== messageId),
+          ),
+        };
+      },
+    );
+    mockMovePromptQueueMessage.mockReset();
+    mockMovePromptQueueMessage.mockImplementation(
+      async (queueKey, environmentId, messageId, direction) => {
+        const messages = [
+          ...(useClaudeStore.getState().messageQueue.get(
+            sessionKeyFromQueueKey(queueKey),
+          ) ?? []),
+        ];
+        const fromIndex = messages.findIndex((message) => message.id === messageId);
+        const toIndex = direction === "up" ? fromIndex - 1 : fromIndex + 1;
+        if (fromIndex >= 0 && toIndex >= 0 && toIndex < messages.length) {
+          [messages[fromIndex], messages[toIndex]] = [
+            messages[toIndex]!,
+            messages[fromIndex]!,
+          ];
+        }
+        return claudeQueueSnapshot(queueKey, environmentId, messages);
+      },
+    );
+    mockTransferPromptQueueMessageToComposeDraft.mockReset();
+    mockTransferPromptQueueMessageToComposeDraft.mockImplementation(
+      async (queueKey, environmentId, messageId, draftKey, ownerType, ownerId) => {
+        const messages = [
+          ...(useClaudeStore.getState().messageQueue.get(
+            sessionKeyFromQueueKey(queueKey),
+          ) ?? []),
+        ];
+        const removed = messages.find((message) => message.id === messageId) ?? null;
+        return {
+          removed,
+          queue: claudeQueueSnapshot(
+            queueKey,
+            environmentId,
+            messages.filter((message) => message.id !== messageId),
+          ),
+          draft: removed
+            ? {
+                draftKey,
+                ownerType,
+                ownerId,
+                value: {
+                  text: removed.text,
+                  mentions: [],
+                  attachments: removed.attachments,
+                },
+                updatedAt: new Date().toISOString(),
+                revision: 1,
+              }
+            : null,
+        };
+      },
+    );
     mockToastError.mockClear();
     mockFileMentionMenuOpen = false;
     mockReadImage.mockImplementation(async () => ({
@@ -755,7 +900,7 @@ describe("ClaudeComposeBar", () => {
   });
 
   test("clicking a queued prompt restores its text, settings, and attachments for editing", async () => {
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued follow-up",
       attachments: [
@@ -784,6 +929,84 @@ describe("ClaudeComposeBar", () => {
     expect(useClaudeStore.getState().getEffort(SESSION_KEY)).toBe("max");
     expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(true);
     expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(0);
+  });
+
+  test("keeps the queue and draft unchanged when restoring a queued prompt fails", async () => {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
+      id: "queue-rejected-edit",
+      text: "Queued follow-up",
+      attachments: [],
+      effort: "high",
+      planModeEnabled: false,
+    });
+    mockTransferPromptQueueMessageToComposeDraft.mockRejectedValueOnce(
+      new Error("Queue storage is unavailable"),
+    );
+
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByText("Queued follow-up"));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Could not confirm the prompt queue update",
+    );
+    expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("");
+    expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(1);
+    expect(screen.getByText("Queued follow-up")).toBeTruthy();
+  });
+
+  test("explains that an occupied composer blocks editing instead of overwriting it", async () => {
+    /**
+     * This used to discard whatever the user had typed. The backend now refuses
+     * to overwrite a draft it did not create, so without a local guard the click
+     * failed with the generic "wait for the queue to refresh" banner — advice
+     * that would never resolve the situation.
+     */
+    useClaudeStore.getState().setDraftText(SESSION_KEY, "Existing draft");
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
+      id: "queue-blocked-edit",
+      text: "Queued follow-up",
+      attachments: [],
+      effort: "high",
+      planModeEnabled: false,
+    });
+
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByText("Queued follow-up"));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Send or clear it before editing a queued prompt",
+    );
+    expect(mockTransferPromptQueueMessageToComposeDraft).not.toHaveBeenCalled();
+    expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe(
+      "Existing draft",
+    );
+    expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(1);
+  });
+
+  test("translates the backend's occupied-draft refusal into the same guidance", async () => {
+    // A draft record can outlive the local composer for as long as the compose
+    // bar's debounced discard is still in flight.
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
+      id: "queue-stale-draft",
+      text: "Queued follow-up",
+      attachments: [],
+      effort: "high",
+      planModeEnabled: false,
+    });
+    mockTransferPromptQueueMessageToComposeDraft.mockRejectedValueOnce(
+      new Error("Compose draft already exists"),
+    );
+
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByText("Queued follow-up"));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Send or clear it before editing a queued prompt",
+    );
+    expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(1);
   });
 
   test("serializes file mentions before sending", async () => {
@@ -1078,7 +1301,7 @@ describe("ClaudeComposeBar", () => {
   });
 
   test("removes queued prompts from the dialog", async () => {
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued follow-up",
       attachments: [],
@@ -1105,7 +1328,7 @@ describe("ClaudeComposeBar", () => {
   });
 
   test("renders queued prompt metadata and attachment pluralization", () => {
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "metadata-one",
       text: "Plan carefully",
       attachments: [{
@@ -1119,7 +1342,7 @@ describe("ClaudeComposeBar", () => {
       planModeEnabled: true,
       fastModeEnabled: true,
     });
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "metadata-two",
       text: "Build carefully",
       attachments: [
@@ -1166,7 +1389,7 @@ describe("ClaudeComposeBar", () => {
       ["queue-1", "First queued prompt"],
       ["queue-2", "Second queued prompt"],
     ] as const) {
-      useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
         id,
         text,
         attachments: [],

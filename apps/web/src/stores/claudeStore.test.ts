@@ -11,6 +11,7 @@ import {
   claudeQuestionDraftKey,
   usePromptDraftStore,
 } from "./promptDraftStore";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
 const SESSION_KEY = createSessionKey("env-1", "tab-1");
 
@@ -169,7 +170,7 @@ describe("claudeStore cleanup and queue helpers", () => {
       fetchedAt: "2026-07-25T12:00:00.000Z",
       stale: false,
     });
-    store.addToQueue(sessionKeyA, {
+    seedQueuedPrompt(store, sessionKeyA, {
       id: "queue-a",
       text: "queued",
       attachments: [],
@@ -490,7 +491,7 @@ describe("claudeStore cleanup and queue helpers", () => {
     const queueB = createSessionKey("env-1", "tab-2");
     const store = useClaudeStore.getState();
 
-    store.addToQueue(queueA, {
+    seedQueuedPrompt(store, queueA, {
       id: "q-1",
       text: "first",
       attachments: [],
@@ -498,7 +499,7 @@ describe("claudeStore cleanup and queue helpers", () => {
       planModeEnabled: false,
       fastModeEnabled: false,
     });
-    store.addToQueue(queueA, {
+    seedQueuedPrompt(store, queueA, {
       id: "q-2",
       text: "second",
       attachments: [],
@@ -506,7 +507,7 @@ describe("claudeStore cleanup and queue helpers", () => {
       planModeEnabled: true,
       fastModeEnabled: false,
     });
-    store.addToQueue(queueB, {
+    seedQueuedPrompt(store, queueB, {
       id: "q-3",
       text: "other-tab",
       attachments: [],
@@ -519,12 +520,8 @@ describe("claudeStore cleanup and queue helpers", () => {
       "q-1",
       "q-2",
     ]);
-    expect(store.removeFromQueue(queueA)?.id).toBe("q-1");
-    expect(store.getQueuedMessages(queueA).map((item) => item.id)).toEqual([
-      "q-2",
-    ]);
 
-    store.clearQueue(queueA);
+    store.setQueueProjection(queueA, []);
 
     expect(store.getQueueLength(queueA)).toBe(0);
     expect(store.getQueueLength(queueB)).toBe(1);
@@ -1336,7 +1333,7 @@ describe("claudeStore per-session turn options", () => {
       store.setSelectedModel(key, "claude-sonnet-4");
       store.setDraftText(key, "half-written prompt");
       store.setDraftMentions(key, ["src/index.ts"] as never);
-      store.addToQueue(key, { id: "queued-1", text: "later" } as never);
+      seedQueuedPrompt(store, key, { id: "queued-1", text: "later" } as never);
     }
 
     store.clearEnvironment("env-1");

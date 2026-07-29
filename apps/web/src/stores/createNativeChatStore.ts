@@ -88,23 +88,17 @@ export interface NativeChatStoreSlice<TClient, TMessage, TAttachment, TQueued> {
   setDraftMentions: (sessionKey: string, mentions: FileMention[]) => void;
   getDraftMentions: (sessionKey: string) => FileMention[];
 
-  addToQueue: (sessionKey: string, message: TQueued) => void;
-  removeFromQueue: (sessionKey: string) => TQueued | undefined;
   /**
-   * Put an entry back at the head of the queue.
+   * Overwrite this session's local view of the backend-owned queue.
    *
-   * The drain dequeues before it knows the sender is ready, so an entry it
-   * cannot dispatch has to go back where it came from — appending would silently
-   * reorder the user's prompts.
+   * `messageQueue` is a projection, not the queue. Every real mutation is an
+   * atomic backend command in `@/lib/prompt-queue-sources`, which installs the
+   * authoritative snapshot through here. Writing a queue change straight into
+   * the projection would look right until the next hydrate silently reverted
+   * it, so the append/remove/reorder helpers this store used to expose are
+   * deliberately gone.
    */
-  requeueToFront: (sessionKey: string, message: TQueued) => void;
-  removeQueueItem: (sessionKey: string, messageId: string) => void;
-  moveQueueItem: (
-    sessionKey: string,
-    fromIndex: number,
-    toIndex: number,
-  ) => void;
-  clearQueue: (sessionKey: string) => void;
+  setQueueProjection: (sessionKey: string, messages: TQueued[]) => void;
   getQueueLength: (sessionKey: string) => number;
   getQueuedMessages: (sessionKey: string) => TQueued[];
 }
@@ -346,71 +340,10 @@ export function createNativeChatStoreSlice<
     getDraftMentions: (sessionKey) =>
       get().draftMentions.get(sessionKey) ?? EMPTY_MENTIONS,
 
-    addToQueue: (sessionKey, message) =>
-      set((state) => {
-        const current = state.messageQueue.get(sessionKey) ?? [];
-        const next = new Map(state.messageQueue);
-        next.set(sessionKey, [...current, message]);
-        return { messageQueue: next };
-      }),
-
-    removeFromQueue: (sessionKey) => {
-      let removed: TQueued | undefined;
-      set((state) => {
-        const current = state.messageQueue.get(sessionKey) ?? [];
-        if (current.length === 0) return state;
-        const [first, ...rest] = current;
-        removed = first;
-        const next = new Map(state.messageQueue);
-        next.set(sessionKey, rest);
-        return { messageQueue: next };
-      });
-      return removed;
-    },
-
-    requeueToFront: (sessionKey, message) =>
-      set((state) => {
-        const current = state.messageQueue.get(sessionKey) ?? [];
-        const next = new Map(state.messageQueue);
-        next.set(sessionKey, [message, ...current]);
-        return { messageQueue: next };
-      }),
-
-    removeQueueItem: (sessionKey, messageId) =>
-      set((state) => {
-        const current = state.messageQueue.get(sessionKey) ?? [];
-        const filtered = current.filter((m) => m.id !== messageId);
-        if (filtered.length === current.length) return state;
-        const next = new Map(state.messageQueue);
-        next.set(sessionKey, filtered);
-        return { messageQueue: next };
-      }),
-
-    moveQueueItem: (sessionKey, fromIndex, toIndex) =>
-      set((state) => {
-        const current = state.messageQueue.get(sessionKey) ?? [];
-        if (
-          fromIndex < 0 ||
-          toIndex < 0 ||
-          fromIndex >= current.length ||
-          toIndex >= current.length ||
-          fromIndex === toIndex
-        ) {
-          return state;
-        }
-        const reordered = [...current];
-        const [moved] = reordered.splice(fromIndex, 1);
-        if (!moved) return state;
-        reordered.splice(toIndex, 0, moved);
-        const next = new Map(state.messageQueue);
-        next.set(sessionKey, reordered);
-        return { messageQueue: next };
-      }),
-
-    clearQueue: (sessionKey) =>
+    setQueueProjection: (sessionKey, messages) =>
       set((state) => {
         const next = new Map(state.messageQueue);
-        next.set(sessionKey, []);
+        next.set(sessionKey, messages);
         return { messageQueue: next };
       }),
 

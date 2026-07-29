@@ -765,7 +765,10 @@ describe("FeaturesView message drafts", () => {
       "project",
       "project-1",
       { "feature:feature-1": "Persist before unmount" },
-      1,
+      // 0 because hydration found no stored draft, and hydration is ordered
+      // ahead of this save. It used to assert 1: the save ran before hydration
+      // published, inheriting the cursor a previous mount had left behind.
+      0,
     ));
   });
 

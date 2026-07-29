@@ -1847,17 +1847,56 @@ export async function listPromptQueues<T = unknown>(
   return invoke<Array<PersistedPromptQueue<T>>>("list_prompt_queues", { environmentId });
 }
 
-export async function savePromptQueue<T>(
+export async function enqueuePromptQueueMessage<T>(
   queueKey: string,
   environmentId: string,
-  messages: T[],
-  expectedRevision?: number,
+  message: T,
 ): Promise<PersistedPromptQueue<T>> {
-  return invoke<PersistedPromptQueue<T>>("save_prompt_queue", {
+  return invoke<PersistedPromptQueue<T>>("enqueue_prompt_queue_message", {
     queueKey,
     environmentId,
-    messages,
-    ...(expectedRevision === undefined ? {} : { expectedRevision }),
+    message,
+  });
+}
+
+export async function requeuePromptQueueMessage<T>(
+  queueKey: string,
+  environmentId: string,
+  message: T,
+): Promise<PersistedPromptQueue<T>> {
+  return invoke<PersistedPromptQueue<T>>("requeue_prompt_queue_message", {
+    queueKey,
+    environmentId,
+    message,
+  });
+}
+
+export async function removePromptQueueMessage<T>(
+  queueKey: string,
+  environmentId: string,
+  messageId: string,
+): Promise<{
+  removed: T | null;
+  queue: PersistedPromptQueue<T> | null;
+}> {
+  return invoke("remove_prompt_queue_message", {
+    queueKey,
+    environmentId,
+    messageId,
+  });
+}
+
+export async function movePromptQueueMessage<T>(
+  queueKey: string,
+  environmentId: string,
+  messageId: string,
+  direction: "up" | "down",
+): Promise<PersistedPromptQueue<T> | null> {
+  return invoke<PersistedPromptQueue<T> | null>("move_prompt_queue_message", {
+    queueKey,
+    environmentId,
+    messageId,
+    direction,
   });
 }
 
@@ -1865,16 +1904,63 @@ export async function claimPromptQueueHead<T>(
   queueKey: string,
   environmentId: string,
   expectedMessageId: string,
-  candidateMessages: T[],
 ): Promise<{
   claimed: T | null;
+  claimToken: string | null;
   queue: PersistedPromptQueue<T> | null;
 }> {
   return invoke("claim_prompt_queue_head", {
     queueKey,
     environmentId,
     expectedMessageId,
-    candidateMessages,
+  });
+}
+
+export async function acknowledgePromptQueueClaim<T>(
+  queueKey: string,
+  environmentId: string,
+  claimToken: string,
+): Promise<PersistedPromptQueue<T> | null> {
+  return invoke<PersistedPromptQueue<T> | null>("acknowledge_prompt_queue_claim", {
+    queueKey,
+    environmentId,
+    claimToken,
+  });
+}
+
+export async function rejectPromptQueueClaim<T>(
+  queueKey: string,
+  environmentId: string,
+  claimToken: string,
+): Promise<PersistedPromptQueue<T> | null> {
+  return invoke<PersistedPromptQueue<T> | null>("reject_prompt_queue_claim", {
+    queueKey,
+    environmentId,
+    claimToken,
+  });
+}
+
+export async function transferPromptQueueMessageToComposeDraft<T>(
+  queueKey: string,
+  environmentId: string,
+  messageId: string,
+  draftKey: string,
+  ownerType: "environment" | "project",
+  ownerId: string,
+  expectedDraftRevision?: number,
+): Promise<{
+  removed: T | null;
+  queue: PersistedPromptQueue<T> | null;
+  draft: PersistedComposeDraft | null;
+}> {
+  return invoke("transfer_prompt_queue_message_to_compose_draft", {
+    queueKey,
+    environmentId,
+    messageId,
+    draftKey,
+    ownerType,
+    ownerId,
+    ...(expectedDraftRevision === undefined ? {} : { expectedDraftRevision }),
   });
 }
 

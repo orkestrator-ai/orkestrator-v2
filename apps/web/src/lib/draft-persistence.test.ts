@@ -88,6 +88,200 @@ afterAll(() => {
 });
 
 describe("compose draft persistence", () => {
+  test("records revisions created by an atomic external draft mutation", async () => {
+    const key = "draft:atomic-transfer";
+    saveComposeDraft.mockResolvedValueOnce({
+      draftKey: key,
+      ownerType: "environment",
+      ownerId: "env-1",
+      value: "edited",
+      updatedAt: "2026-07-29T00:00:00.000Z",
+      revision: 8,
+    });
+
+    compose.recordComposeDraftRevision(key, 7);
+    await compose.persistComposeDraft(
+      key,
+      "environment",
+      "env-1",
+      "edited",
+    );
+
+    expect(saveComposeDraft).toHaveBeenCalledWith(
+      key,
+      "environment",
+      "env-1",
+      "edited",
+      7,
+    );
+  });
+
+  test("recording a revision clears a conflict recorded against the old one", async () => {
+    /**
+     * A conflict latches every later save into failing until it is resolved.
+     * An atomic backend mutation that rewrites the draft has already settled
+     * the disagreement, so leaving the latch set would wedge the composer.
+     */
+    const key = "draft:conflict-then-transfer";
+    const state = compose.createDraftRevisionState();
+    saveComposeDraft.mockRejectedValueOnce(
+      Object.assign(new Error("Compose draft revision conflict"), {
+        message: "Compose draft revision conflict",
+      }),
+    );
+    getComposeDraft.mockResolvedValueOnce({
+      draftKey: key,
+      ownerType: "environment",
+      ownerId: "env-1",
+      value: "theirs",
+      updatedAt: "2026-07-29T00:00:00.000Z",
+      revision: 4,
+    });
+
+    await expect(
+      compose.persistComposeDraft(key, "environment", "env-1", "mine", state),
+    ).rejects.toThrow(compose.DraftRevisionConflictError);
+    expect(state.conflictRevision).toBe(4);
+
+    compose.recordComposeDraftRevision(key, 9, state);
+    expect(state.conflictRevision).toBeNull();
+
+    saveComposeDraft.mockResolvedValueOnce({ revision: 10 });
+    await compose.persistComposeDraft(key, "environment", "env-1", "mine", state);
+    expect(saveComposeDraft).toHaveBeenLastCalledWith(
+      key,
+      "environment",
+      "env-1",
+      "mine",
+      9,
+    );
+  });
+
+  test("a hydrating read cannot roll back a revision a save advanced", async () => {
+    /**
+     * The read publishes `state.revision` for every later compare-and-swap. It
+     * used to do so outside the write chain, so a save that landed while the
+     * read was in flight had its revision overwritten with the pre-save value.
+     * The next save then swapped against a revision the backend had already
+     * moved past — a self-inflicted conflict on a draft only one client touched,
+     * and a discard-on-submit that leaves the draft behind to resurface.
+     */
+    const key = "draft:hydrate-vs-save";
+    const state = compose.createDraftRevisionState();
+    let releaseRead: (() => void) | undefined;
+    getComposeDraft.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        releaseRead = () => resolve(null);
+      }),
+    );
+    saveComposeDraft.mockResolvedValueOnce({ revision: 1 });
+
+    const load = compose.loadComposeDraft(key, state);
+    const save = compose.persistComposeDraft(
+      key,
+      "environment",
+      "env-1",
+      "typed while hydrating",
+      state,
+    );
+
+    // Give the save every chance to run ahead of the read.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    releaseRead?.();
+    await Promise.all([load, save]);
+
+    expect(state.revision).toBe(1);
+
+    saveComposeDraft.mockResolvedValueOnce({ revision: 2 });
+    await compose.persistComposeDraft(
+      key,
+      "environment",
+      "env-1",
+      "typed again",
+      state,
+    );
+    expect(saveComposeDraft).toHaveBeenLastCalledWith(
+      key,
+      "environment",
+      "env-1",
+      "typed again",
+      1,
+    );
+  });
+
+  test("a save during hydration swaps against the hydrated revision, not a leftover cursor", async () => {
+    /**
+     * `KanbanTaskDialog`, `FeaturesView`, the terminal compose bar and the
+     * native compose bars all share one cursor per draft key rather than owning
+     * a per-mount one. A second mount therefore inherits whatever the previous
+     * mount left behind, and used to save against it whenever the user typed
+     * before hydration finished — swapping against a revision the backend may
+     * no longer have.
+     */
+    const key = "draft:stale-cursor";
+    saveComposeDraft.mockResolvedValueOnce({ revision: 3 });
+    await compose.persistComposeDraft(key, "project", "project-1", "first mount");
+
+    // The stored draft is gone by the time the next mount reads it.
+    let releaseRead: (() => void) | undefined;
+    getComposeDraft.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        releaseRead = () => resolve(null);
+      }),
+    );
+    saveComposeDraft.mockResolvedValueOnce({ revision: 1 });
+
+    const load = compose.loadComposeDraft(key);
+    const save = compose.persistComposeDraft(key, "project", "project-1", "second mount");
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    releaseRead?.();
+    await Promise.all([load, save]);
+
+    expect(saveComposeDraft).toHaveBeenLastCalledWith(
+      key,
+      "project",
+      "project-1",
+      "second mount",
+      0,
+    );
+  });
+
+  test("awaitComposeDraftWrites settles queued saves, including a failed one", async () => {
+    /**
+     * The queue-to-draft transfer waits on this before asking the backend
+     * whether the draft slot is free. If a rejected write escaped, the caller
+     * would see an unhandled rejection instead of an answer.
+     */
+    const key = "draft:await-writes";
+    let releaseSave: (() => void) | undefined;
+    saveComposeDraft.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => {
+        releaseSave = () => reject(new Error("backend unavailable"));
+      }),
+    );
+
+    let settled = false;
+    const pending = compose.persistComposeDraft(key, "environment", "env-1", "mine");
+    pending.catch(() => undefined);
+    const waiter = compose.awaitComposeDraftWrites(key).then(() => {
+      settled = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(settled).toBe(false);
+
+    releaseSave?.();
+    await waiter;
+    expect(settled).toBe(true);
+  });
+
+  test("awaitComposeDraftWrites resolves immediately for an untouched key", async () => {
+    await expect(
+      compose.awaitComposeDraftWrites("draft:never-written"),
+    ).resolves.toBeUndefined();
+  });
+
   test("encodes local keys so separators and Unicode remain one key segment", () => {
     expect(compose.composeDraftKey("linear", "project", "issue:/💾")).toBe(
       "linear:project:issue%3A%2F%F0%9F%92%BE",

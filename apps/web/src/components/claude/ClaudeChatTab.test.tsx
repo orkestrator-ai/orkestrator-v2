@@ -21,6 +21,7 @@ import * as realResumeSessionDialog from "./ResumeSessionDialog";
 // The SSE and metadata paths run payloads through the real helpers, so the
 // module mock hands back the genuine module and overrides only what it must.
 import * as realClaudeClient from "@/lib/claude-client";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
 const realClaudeClientSnapshot = { ...realClaudeClient };
 const mockForkClaudeSession = mock<
@@ -205,22 +206,124 @@ mock.module("@/lib/claude-client", () => ({
   SessionNotFoundError: MockSessionNotFoundError,
 }));
 
+let mockQueueRevision = 1;
+const mockOutstandingQueueClaims = new Map<string, { id: string }>();
+const queueSessionKey = (queueKey: string) =>
+  queueKey.slice(queueKey.indexOf("\u0000") + 1);
+const queueSnapshot = (
+  queueKey: string,
+  environmentId: string,
+  messages: Array<{ id: string }>,
+) => ({
+  queueKey,
+  environmentId,
+  messages,
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  revision: mockQueueRevision++,
+});
+const mockRemovePromptQueueMessage = mock(
+  async (queueKey: string, environmentId: string, messageId: string) => {
+    const current = useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+    return {
+      removed: current.find((message) => message.id === messageId) ?? null,
+      queue: queueSnapshot(
+        queueKey,
+        environmentId,
+        current.filter((message) => message.id !== messageId),
+      ),
+    };
+  },
+);
+const mockTransferPromptQueueMessageToComposeDraft = mock(
+  async (
+    queueKey: string,
+    environmentId: string,
+    messageId: string,
+    draftKey: string,
+    ownerType: "environment" | "project",
+    ownerId: string,
+  ) => {
+    const result = await mockRemovePromptQueueMessage(queueKey, environmentId, messageId);
+    return {
+      ...result,
+      draft: result.removed
+        ? {
+            draftKey,
+            ownerType,
+            ownerId,
+            value: { text: "", mentions: [], attachments: [] },
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            revision: 1,
+          }
+        : null,
+    };
+  },
+);
+const mockAcknowledgePromptQueueClaim = mock(
+  async (queueKey: string, environmentId: string, claimToken: string) => {
+    mockOutstandingQueueClaims.delete(claimToken);
+    return queueSnapshot(
+      queueKey,
+      environmentId,
+      useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+    );
+  },
+);
+const mockRejectPromptQueueClaim = mock(
+  async (queueKey: string, environmentId: string, claimToken: string) => {
+    const claimed = mockOutstandingQueueClaims.get(claimToken);
+    mockOutstandingQueueClaims.delete(claimToken);
+    const current = useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+    return queueSnapshot(
+      queueKey,
+      environmentId,
+      claimed ? [claimed, ...current] : current,
+    );
+  },
+);
+
 mock.module("@/lib/backend", () => ({
   claimPromptQueueHead: mock(async (
     queueKey: string,
     environmentId: string,
     _expectedMessageId: string,
     candidateMessages: Array<{ id: string }>,
-  ) => ({
-    claimed: candidateMessages[0] ?? null,
-    queue: {
+  ) => {
+    const claimed = candidateMessages[0] ?? null;
+    const claimToken = claimed ? `claim-${claimed.id}` : null;
+    if (claimed && claimToken) mockOutstandingQueueClaims.set(claimToken, claimed);
+    return {
+      claimed,
+      claimToken,
+      queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
+    };
+  }),
+  acknowledgePromptQueueClaim: mockAcknowledgePromptQueueClaim,
+  rejectPromptQueueClaim: mockRejectPromptQueueClaim,
+  enqueuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    queueSnapshot(queueKey, environmentId, [
+      ...useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+      message,
+    ])),
+  requeuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    {
+      const current = useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+      return queueSnapshot(
+        queueKey,
+        environmentId,
+        current.some((candidate) => candidate.id === message.id)
+          ? current
+          : [message, ...current],
+      );
+    }),
+  removePromptQueueMessage: mockRemovePromptQueueMessage,
+  transferPromptQueueMessageToComposeDraft: mockTransferPromptQueueMessageToComposeDraft,
+  movePromptQueueMessage: mock(async (queueKey, environmentId) =>
+    queueSnapshot(
       queueKey,
       environmentId,
-      messages: candidateMessages.slice(1),
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      revision: 1,
-    },
-  })),
+      useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+    )),
   getAgentHandoff: mockGetAgentHandoff,
   startClaudeServer: mockStartClaudeServer,
   getClaudeServerStatus: mockGetClaudeServerStatus,
@@ -548,6 +651,9 @@ describe("ClaudeChatTab", () => {
   beforeEach(() => {
     cleanup();
     resetStores();
+    mockOutstandingQueueClaims.clear();
+    mockAcknowledgePromptQueueClaim.mockClear();
+    mockRejectPromptQueueClaim.mockClear();
     mockIsAtBottom = true;
     mockScrollToBottom.mockClear();
     // `mockClear` only drops call history. Without restoring the factory too, a
@@ -583,6 +689,39 @@ describe("ClaudeChatTab", () => {
     mockGetStructuredOutput.mockResolvedValue(null);
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => true);
+    mockRemovePromptQueueMessage.mockReset();
+    mockRemovePromptQueueMessage.mockImplementation(
+      async (queueKey, environmentId, messageId) => {
+        const current = useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+        return {
+          removed: current.find((message) => message.id === messageId) ?? null,
+          queue: queueSnapshot(
+            queueKey,
+            environmentId,
+            current.filter((message) => message.id !== messageId),
+          ),
+        };
+      },
+    );
+    mockTransferPromptQueueMessageToComposeDraft.mockReset();
+    mockTransferPromptQueueMessageToComposeDraft.mockImplementation(
+      async (queueKey, environmentId, messageId, draftKey, ownerType, ownerId) => {
+        const result = await mockRemovePromptQueueMessage(queueKey, environmentId, messageId);
+        return {
+          ...result,
+          draft: result.removed
+            ? {
+                draftKey,
+                ownerType,
+                ownerId,
+                value: { text: "", mentions: [], attachments: [] },
+                updatedAt: "2026-01-01T00:00:00.000Z",
+                revision: 1,
+              }
+            : null,
+        };
+      },
+    );
     mockUpdateSessionPreferences.mockReset();
     mockUpdateSessionPreferences.mockResolvedValue(undefined);
     mockSubscribeToEvents.mockReset();
@@ -3793,7 +3932,7 @@ describe("ClaudeChatTab", () => {
 
   test("drains queued prompts when the session is idle", async () => {
     mockSendPrompt.mockImplementation(async () => true as any);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Run the queued review",
       attachments: [],
@@ -3819,6 +3958,7 @@ describe("ClaudeChatTab", () => {
           attachments: undefined,
           effort: "high",
           permissionMode: "bypassPermissions",
+          requestId: "queue-1",
         }),
       );
     });
@@ -3827,7 +3967,7 @@ describe("ClaudeChatTab", () => {
   test("renames compact Electron timestamp environments before draining the first queued prompt", async () => {
     resetStores("202604151234567");
     mockSendPrompt.mockImplementation(async () => true as any);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Run the queued rename",
       attachments: [],
@@ -3858,7 +3998,7 @@ describe("ClaudeChatTab", () => {
     useEnvironmentStore.setState({
       workspaceReadyEnvironments: new Set(),
     });
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Run after Claude setup",
       attachments: [],
@@ -3901,12 +4041,12 @@ describe("ClaudeChatTab", () => {
     });
   });
 
-  test("removes a queued prompt and clears loading when queued send fails", async () => {
+  test("restores a queued prompt and clears loading when queued send fails", async () => {
     const originalError = console.error;
     const consoleError = mock(() => {});
     console.error = consoleError as unknown as typeof console.error;
     mockSendPrompt.mockImplementation(async () => false as any);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued Claude failure",
       attachments: [],
@@ -3936,11 +4076,53 @@ describe("ClaudeChatTab", () => {
       await waitFor(() => {
         const state = useClaudeStore.getState();
         expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
-        expect(state.messageQueue.get(SESSION_KEY)).toEqual([]);
+        expect(state.messageQueue.get(SESSION_KEY)).toEqual([
+          expect.objectContaining({ id: "queue-1" }),
+        ]);
       });
     } finally {
       console.error = originalError;
     }
+  });
+
+  test("retains an ambiguous queued prompt claim until dispatch reconciliation", async () => {
+    mockSendPrompt.mockResolvedValue({
+      ok: false,
+      outcome: "unknown",
+      requestId: "queue-ambiguous",
+    } as any);
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
+      id: "queue-ambiguous",
+      text: "Queued Claude ambiguity",
+      attachments: [],
+      effort: "high",
+      planModeEnabled: false,
+      fastModeEnabled: false,
+    });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        "Queued Claude ambiguity",
+        expect.objectContaining({ requestId: "queue-ambiguous" }),
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(mockAcknowledgePromptQueueClaim).not.toHaveBeenCalled();
+    expect(mockRejectPromptQueueClaim).not.toHaveBeenCalled();
+    expect(mockOutstandingQueueClaims.has("claim-queue-ambiguous")).toBe(true);
   });
 
   test("records the rejected queued send error and clears the loading state", async () => {
@@ -3949,7 +4131,7 @@ describe("ClaudeChatTab", () => {
     const sendError = new Error("Claude bridge rejected the queued prompt");
     console.error = consoleError as unknown as typeof console.error;
     mockSendPrompt.mockRejectedValue(sendError);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-rejection",
       text: "Queued Claude rejection",
       attachments: [],
@@ -3985,7 +4167,9 @@ describe("ClaudeChatTab", () => {
           /^error-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
         );
         expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
-        expect(state.messageQueue.get(SESSION_KEY)).toEqual([]);
+        expect(state.messageQueue.get(SESSION_KEY)).toEqual([
+          expect.objectContaining({ id: "queue-rejection" }),
+        ]);
       });
       expect(consoleError).toHaveBeenCalledWith(
         "[ClaudeChatTab] Failed to send queued prompt:",
@@ -3998,7 +4182,7 @@ describe("ClaudeChatTab", () => {
 
   test("does not drain queued prompts while a draft exists", async () => {
     useClaudeStore.getState().setDraftText(SESSION_KEY, "Keep this Claude draft");
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued behind Claude draft",
       attachments: [],
@@ -4035,7 +4219,7 @@ describe("ClaudeChatTab", () => {
       previewUrl: "data:image/png;base64,staged",
       name: "staged.png",
     });
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued behind Claude attachment",
       attachments: [],
@@ -4066,7 +4250,7 @@ describe("ClaudeChatTab", () => {
     ]);
   });
 
-  test("stop immediately clears loading and promotes the next queued prompt to draft", async () => {
+  test("stop aborts before promoting the queue and stays locked until the turn settles", async () => {
     const queuedAttachment = {
       id: "queued-attachment",
       type: "image" as const,
@@ -4076,7 +4260,7 @@ describe("ClaudeChatTab", () => {
     };
 
     useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued Claude prompt",
       attachments: [queuedAttachment],
@@ -4084,7 +4268,7 @@ describe("ClaudeChatTab", () => {
       planModeEnabled: false,
       fastModeEnabled: false,
     });
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-2",
       text: "Second queued Claude prompt",
       attachments: [],
@@ -4113,7 +4297,20 @@ describe("ClaudeChatTab", () => {
 
     await waitFor(() => {
       const state = useClaudeStore.getState();
-      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+      expect(state.draftText.get(SESSION_KEY) ?? "").toBe("");
+      expect(state.messageQueue.get(SESSION_KEY)?.map((message) => message.text)).toEqual([
+        "Queued Claude prompt",
+        "Second queued Claude prompt",
+      ]);
+    });
+
+    resolveAbort?.(true);
+
+    await waitFor(() => {
+      const state = useClaudeStore.getState();
+      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(true);
       expect(state.draftText.get(SESSION_KEY)).toBe("Queued Claude prompt");
       expect(state.messageQueue.get(SESSION_KEY)?.map((message) => message.text)).toEqual([
         "Second queued Claude prompt",
@@ -4123,9 +4320,6 @@ describe("ClaudeChatTab", () => {
       expect(state.planMode.get(SESSION_KEY)).toBe(false);
       expect(state.fastMode.get(SESSION_KEY)).toBe(false);
     });
-    expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
-
-    resolveAbort?.(true);
 
     await waitFor(() => {
       const messages = useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
@@ -4133,6 +4327,45 @@ describe("ClaudeChatTab", () => {
         /^system-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       );
     });
+
+    act(() => useClaudeStore.getState().setSessionLoading(SESSION_KEY, false));
+  });
+
+  test("keeps the queue intact when post-abort promotion fails", async () => {
+    const consoleError = mock(() => {});
+    const originalError = console.error;
+    console.error = consoleError as unknown as typeof console.error;
+    mockTransferPromptQueueMessageToComposeDraft.mockRejectedValue(
+      new Error("queue unavailable"),
+    );
+    useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
+      id: "queue-1",
+      text: "Keep this Claude prompt",
+      attachments: [],
+      effort: "medium",
+      planModeEnabled: false,
+      fastModeEnabled: false,
+    });
+
+    try {
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+      fireEvent.click(screen.getByTitle("Stop current query"));
+
+      await waitFor(() => {
+        expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+        expect(consoleError).toHaveBeenCalledWith(
+          "[ClaudeChatTab] Failed to promote queued prompt:",
+          expect.any(Error),
+        );
+      });
+      expect(useClaudeStore.getState().getQueuedMessages(SESSION_KEY)).toEqual([
+        expect.objectContaining({ id: "queue-1" }),
+      ]);
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    } finally {
+      console.error = originalError;
+    }
   });
 
   test("parks the stalled-turn watchdog while the user's own refresh is running", async () => {

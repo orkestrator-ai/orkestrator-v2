@@ -263,7 +263,6 @@ const mockListPromptQueues = mock(async (_environmentId: string) => []);
 const mockListBuildPipelines = mock(async (_projectId: string) => []);
 const appPersistenceLifecycle: string[] = [];
 const mockStopBuildPipelinePersistence = mock(() => undefined);
-const mockStopPromptQueuePersistence = mock(() => undefined);
 const mockMigrateLegacyBuildPipelines = mock(async () => {
   appPersistenceLifecycle.push("migrate-build");
   return { importedIds: [], skipped: 0 };
@@ -271,10 +270,6 @@ const mockMigrateLegacyBuildPipelines = mock(async () => {
 const mockStartBuildPipelinePersistence = mock(() => {
   appPersistenceLifecycle.push("start-build");
   return mockStopBuildPipelinePersistence;
-});
-const mockStartPromptQueuePersistence = mock(() => {
-  appPersistenceLifecycle.push("start-prompt");
-  return mockStopPromptQueuePersistence;
 });
 
 mock.module("@/lib/build-pipeline-persistence", () => ({
@@ -289,7 +284,6 @@ mock.module("@/lib/prompt-queue-persistence", () => ({
   ...realPromptQueuePersistenceSnapshot,
   hydratePromptQueuesForEnvironment: (environmentId: string) =>
     mockListPromptQueues(environmentId),
-  startPromptQueuePersistence: mockStartPromptQueuePersistence,
 }));
 
 mock.module("@/components/review/LoopedReviewSupervisor", () => ({
@@ -469,10 +463,8 @@ function resetAppMocks() {
   mockListBuildPipelines.mockResolvedValue([]);
   appPersistenceLifecycle.length = 0;
   mockStopBuildPipelinePersistence.mockClear();
-  mockStopPromptQueuePersistence.mockClear();
   mockMigrateLegacyBuildPipelines.mockClear();
   mockStartBuildPipelinePersistence.mockClear();
-  mockStartPromptQueuePersistence.mockClear();
   mockSaveLoopedReviewWorkflow.mockClear();
   mockLoopedReviewSupervisorRender.mockClear();
   mockToastError.mockClear();
@@ -648,13 +640,11 @@ describe("App background processing mounts", () => {
       expect(appEventCallbacks.has("resource-changed")).toBe(true);
       expect(appEventCallbacks.has("native-event-stream-connected")).toBe(true);
       expect(mockStartBuildPipelinePersistence).not.toHaveBeenCalled();
-      expect(mockStartPromptQueuePersistence).toHaveBeenCalledTimes(1);
     });
 
     cleanup();
     expect(mockAppUnlisten.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(mockStopBuildPipelinePersistence).not.toHaveBeenCalled();
-    expect(mockStopPromptQueuePersistence).toHaveBeenCalledTimes(1);
   });
 
   test("hydrates every environment queue and project pipeline independently", async () => {
@@ -1138,10 +1128,10 @@ describe("App background processing mounts", () => {
     expect(screen.getByTestId("terminal-env-queued-opencode").getAttribute("data-active")).toBe("false");
 
     act(() => {
-      useClaudeStore.getState().clearQueue(claudeSessionKey);
-      useClaudeTmuxStore.getState().clearQueue(tmuxStateKey);
-      useCodexStore.getState().clearQueue(codexSessionKey);
-      useOpenCodeStore.getState().clearQueue(openCodeSessionKey);
+      useClaudeStore.getState().setQueueProjection(claudeSessionKey, []);
+      useClaudeTmuxStore.getState().setQueueProjection(tmuxStateKey, []);
+      useCodexStore.getState().setQueueProjection(codexSessionKey, []);
+      useOpenCodeStore.getState().setQueueProjection(openCodeSessionKey, []);
     });
 
     await waitFor(() => {

@@ -71,95 +71,137 @@ async function withCommands<T>(
 const KEY = "claude env-e1:tab-1";
 
 describe("prompt queue commands", () => {
-  test("saves and reads back a queue", async () => {
+  test("mutates and reads back a backend-owned queue", async () => {
     await withCommands(async (invoke) => {
-      await expect(invoke("save_prompt_queue", {
-        queueKey: KEY, environmentId: "e1", messages: [{ id: "m1" }],
+      await expect(invoke("enqueue_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", message: { id: "m1" },
       })).resolves.toMatchObject({ queueKey: KEY, revision: 1 });
+      await invoke("enqueue_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", message: { id: "m2" },
+      });
+      await invoke("move_prompt_queue_message", {
+        queueKey: KEY,
+        environmentId: "e1",
+        messageId: "m2",
+        direction: "up",
+      });
 
       await expect(invoke("get_prompt_queue", { queueKey: KEY }))
-        .resolves.toMatchObject({ messages: [{ id: "m1" }] });
+        .resolves.toMatchObject({ messages: [{ id: "m2" }, { id: "m1" }] });
       await expect(invoke("list_prompt_queues", { environmentId: "e1" }))
         .resolves.toHaveLength(1);
-    });
-  });
-
-  test("rejects a malformed message list rather than emptying the queue", async () => {
-    // Coercing a bad payload to [] would turn a malformed request into a
-    // deletion that also bumps the revision every other client compares against.
-    await withCommands(async (invoke, storage) => {
-      await invoke("save_prompt_queue", {
-        queueKey: KEY, environmentId: "e1", messages: [{ id: "m1" }],
+      await expect(invoke("remove_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", messageId: "m2",
+      })).resolves.toMatchObject({
+        removed: { id: "m2" },
+        queue: { messages: [{ id: "m1" }] },
       });
-
-      await expect(invoke("save_prompt_queue", {
-        queueKey: KEY, environmentId: "e1", messages: "not-an-array", expectedRevision: 1,
-      })).rejects.toThrow("must be an array");
-
-      const stored = await storage.getPromptQueue(KEY);
-      expect(stored).toMatchObject({ messages: [{ id: "m1" }], revision: 1 });
-    });
-  });
-
-  test("rejects a missing message list rather than emptying the queue", async () => {
-    await withCommands(async (invoke, storage) => {
-      await invoke("save_prompt_queue", {
-        queueKey: KEY, environmentId: "e1", messages: [{ id: "m1" }],
-      });
-
-      await expect(invoke("save_prompt_queue", {
-        queueKey: KEY, environmentId: "e1", expectedRevision: 1,
-      })).rejects.toThrow("must be an array");
-
-      expect(await storage.getPromptQueue(KEY)).toMatchObject({ revision: 1 });
-    });
-  });
-
-  test("still accepts an explicitly emptied queue", async () => {
-    await withCommands(async (invoke) => {
-      await invoke("save_prompt_queue", {
-        queueKey: KEY, environmentId: "e1", messages: [{ id: "m1" }],
-      });
-
-      await expect(invoke("save_prompt_queue", {
-        queueKey: KEY, environmentId: "e1", messages: [], expectedRevision: 1,
-      })).resolves.toMatchObject({ messages: [], revision: 2 });
-    });
-  });
-
-  test("forwards the compare-and-swap expectation so a stale write loses", async () => {
-    await withCommands(async (invoke) => {
-      await invoke("save_prompt_queue", {
-        queueKey: KEY, environmentId: "e1", messages: [{ id: "m1" }],
-      });
-
-      await expect(invoke("save_prompt_queue", {
-        queueKey: KEY, environmentId: "e1", messages: [], expectedRevision: 0,
-      })).rejects.toThrow("revision conflict");
     });
   });
 
   test("atomically claims the expected queue head", async () => {
     await withCommands(async (invoke) => {
-      const candidateMessages = [{ id: "m1" }, { id: "m2" }];
-      await expect(invoke("claim_prompt_queue_head", {
+      await invoke("enqueue_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", message: { id: "m1" },
+      });
+      await invoke("enqueue_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", message: { id: "m2" },
+      });
+      const first = await invoke("claim_prompt_queue_head", {
         queueKey: KEY,
         environmentId: "e1",
         expectedMessageId: "m1",
-        candidateMessages,
-      })).resolves.toMatchObject({
+      }) as { claimToken: string };
+      expect(first).toMatchObject({
         claimed: { id: "m1" },
-        queue: { messages: [{ id: "m2" }], revision: 1 },
+        queue: { messages: [{ id: "m2" }], revision: 3 },
       });
 
       await expect(invoke("claim_prompt_queue_head", {
         queueKey: KEY,
         environmentId: "e1",
-        expectedMessageId: "m1",
-        candidateMessages,
+        expectedMessageId: "m2",
       })).resolves.toMatchObject({
         claimed: null,
-        queue: { messages: [{ id: "m2" }], revision: 1 },
+        claimToken: null,
+        queue: {
+          messages: [{ id: "m2" }],
+          revision: 3,
+          outstandingClaim: { message: { id: "m1" } },
+        },
+      });
+      await expect(invoke("acknowledge_prompt_queue_claim", {
+        queueKey: KEY,
+        environmentId: "e1",
+        claimToken: first.claimToken,
+      })).resolves.toMatchObject({
+        messages: [{ id: "m2" }],
+        revision: 4,
+      });
+    });
+  });
+
+  test("requeues, nacks, and acknowledges through registry commands", async () => {
+    await withCommands(async (invoke) => {
+      await invoke("requeue_prompt_queue_message", {
+        queueKey: KEY,
+        environmentId: "e1",
+        message: { id: "m1", text: "first", attachments: [] },
+      });
+      const claim = await invoke("claim_prompt_queue_head", {
+        queueKey: KEY,
+        environmentId: "e1",
+        expectedMessageId: "m1",
+      }) as { claimToken: string };
+      await expect(invoke("reject_prompt_queue_claim", {
+        queueKey: KEY,
+        environmentId: "e1",
+        claimToken: claim.claimToken,
+      })).resolves.toMatchObject({ messages: [{ id: "m1" }] });
+
+      const retry = await invoke("claim_prompt_queue_head", {
+        queueKey: KEY,
+        environmentId: "e1",
+        expectedMessageId: "m1",
+      }) as { claimToken: string };
+      await expect(invoke("acknowledge_prompt_queue_claim", {
+        queueKey: KEY,
+        environmentId: "e1",
+        claimToken: retry.claimToken,
+      })).resolves.toMatchObject({ messages: [] });
+    });
+  });
+
+  test("atomically transfers the authoritative queued payload to a draft", async () => {
+    await withCommands(async (invoke) => {
+      await invoke("enqueue_prompt_queue_message", {
+        queueKey: KEY,
+        environmentId: "e1",
+        message: {
+          id: "m1",
+          text: "authoritative",
+          attachments: [{ id: "attachment-1" }],
+          mode: "plan",
+        },
+      });
+      await expect(invoke("transfer_prompt_queue_message_to_compose_draft", {
+        queueKey: KEY,
+        environmentId: "e1",
+        messageId: "m1",
+        draftKey: "compose:e1:tab-1",
+        ownerType: "environment",
+        ownerId: "e1",
+        expectedDraftRevision: 0,
+      })).resolves.toMatchObject({
+        removed: { id: "m1", mode: "plan" },
+        queue: { messages: [] },
+        draft: {
+          value: {
+            text: "authoritative",
+            mentions: [],
+            attachments: [{ id: "attachment-1" }],
+          },
+        },
       });
     });
   });
@@ -170,21 +212,82 @@ describe("prompt queue commands", () => {
         queueKey: KEY,
         environmentId: "e1",
         expectedMessageId: "",
-        candidateMessages: [],
       })).rejects.toThrow();
-      await expect(invoke("claim_prompt_queue_head", {
+      await expect(invoke("enqueue_prompt_queue_message", {
         queueKey: KEY,
         environmentId: "e1",
-        expectedMessageId: "m1",
-        candidateMessages: "bad",
-      })).rejects.toThrow("must be an array");
+        message: "bad",
+      })).rejects.toThrow("non-blank ID");
+      await expect(invoke("acknowledge_prompt_queue_claim", {
+        queueKey: KEY,
+        environmentId: "e1",
+        claimToken: "",
+      })).rejects.toThrow();
+      await expect(invoke("reject_prompt_queue_claim", {
+        queueKey: KEY,
+        environmentId: "e1",
+        claimToken: "",
+      })).rejects.toThrow();
+      await expect(invoke("transfer_prompt_queue_message_to_compose_draft", {
+        queueKey: KEY,
+        environmentId: "e1",
+        messageId: "",
+        draftKey: "compose:e1:tab-1",
+        ownerType: "environment",
+        ownerId: "e1",
+      })).rejects.toThrow();
+    });
+  });
+
+  test("rejects malformed reorder, removal, and requeue arguments", async () => {
+    // Each of these coerces at the registry boundary, so a bad payload must
+    // fail there rather than reaching storage as a plausible-looking value.
+    await withCommands(async (invoke) => {
+      await expect(invoke("move_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", messageId: "m1", direction: 1,
+      })).rejects.toThrow("direction");
+      await expect(invoke("move_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", messageId: "m1",
+      })).rejects.toThrow("direction");
+      await expect(invoke("move_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", messageId: "m1", direction: "sideways",
+      })).rejects.toThrow("must be up or down");
+      await expect(invoke("remove_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", messageId: 7,
+      })).rejects.toThrow("messageId");
+      await expect(invoke("requeue_prompt_queue_message", {
+        queueKey: KEY, environmentId: "e1", message: "bad",
+      })).rejects.toThrow("non-blank ID");
+    });
+  });
+
+  test("rejects a non-numeric expected draft revision before the transfer runs", async () => {
+    await withCommands(async (invoke, storage) => {
+      await invoke("enqueue_prompt_queue_message", {
+        queueKey: KEY,
+        environmentId: "e1",
+        message: { id: "m1", text: "queued", attachments: [] },
+      });
+
+      await expect(invoke("transfer_prompt_queue_message_to_compose_draft", {
+        queueKey: KEY,
+        environmentId: "e1",
+        messageId: "m1",
+        draftKey: "compose:e1:tab-1",
+        ownerType: "environment",
+        ownerId: "e1",
+        expectedDraftRevision: "1",
+      })).rejects.toThrow("expectedDraftRevision");
+
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [{ id: "m1" }] });
+      expect(await storage.getComposeDraft("compose:e1:tab-1")).toBeNull();
     });
   });
 
   test("rejects blank identifiers", async () => {
     await withCommands(async (invoke) => {
-      await expect(invoke("save_prompt_queue", {
-        queueKey: "", environmentId: "e1", messages: [],
+      await expect(invoke("enqueue_prompt_queue_message", {
+        queueKey: "", environmentId: "e1", message: { id: "m1" },
       })).rejects.toThrow();
       await expect(invoke("get_prompt_queue", { queueKey: "" })).rejects.toThrow();
       await expect(invoke("list_prompt_queues", { environmentId: "" })).rejects.toThrow();

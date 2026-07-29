@@ -34,6 +34,12 @@ import type {
 } from "@/lib/codex-client";
 import type { CodexAttachment, CodexQueuedMessage } from "@/stores/codexStore";
 import type { FileCandidate, FileMention } from "@/types";
+import {
+  moveAgentPrompt,
+  removeAgentPrompt,
+  transferAgentPromptToComposeDraft,
+} from "@/lib/prompt-queue-sources";
+import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 
 const EMPTY_ATTACHMENTS: CodexAttachment[] = [];
 const EMPTY_MENTIONS: FileMention[] = [];
@@ -137,8 +143,6 @@ export function CodexComposeBar({
   const addAttachment = useCodexStore((state) => state.addAttachment);
   const removeAttachment = useCodexStore((state) => state.removeAttachment);
   const clearAttachments = useCodexStore((state) => state.clearAttachments);
-  const removeQueueItem = useCodexStore((state) => state.removeQueueItem);
-  const moveQueueItem = useCodexStore((state) => state.moveQueueItem);
 
   const worktreePath = useEnvironmentStore(
     (state) => state.getEnvironmentById(environmentId)?.worktreePath,
@@ -311,44 +315,63 @@ export function CodexComposeBar({
   });
 
   const handleQueuedMessageClick = useCallback(
-    (message: CodexQueuedMessage) => {
-      setDraftText(sessionKey, message.text);
+    async (message: CodexQueuedMessage) => {
+      // Editing loads the prompt into the composer, so anything already there
+      // would be destroyed. Refusing with a reason beats the silent overwrite
+      // this used to do and beats the backend's opaque rejection downstream.
+      if (text.trim().length > 0 || attachments.length > 0) {
+        throw composerOccupiedError();
+      }
+      const removed = await transferAgentPromptToComposeDraft<CodexQueuedMessage>(
+        "codex",
+        sessionKey,
+        message.id,
+      );
+      if (!removed) return;
+      setDraftText(sessionKey, removed.text);
       setDraftMentions(sessionKey, []);
       clearAttachments(sessionKey);
-      for (const attachment of message.attachments) {
+      for (const attachment of removed.attachments) {
         addAttachment(sessionKey, attachment);
       }
-      if (message.fastMode !== fastModeEnabled) {
-        onFastModeChange(message.fastMode);
+      if (removed.fastMode !== fastModeEnabled) {
+        onFastModeChange(removed.fastMode);
       }
-      removeQueueItem(sessionKey, message.id);
       setQueueDialogOpen(false);
       inputRef.current?.focus();
     },
     [
       addAttachment,
+      attachments,
       clearAttachments,
       fastModeEnabled,
       onFastModeChange,
-      removeQueueItem,
       sessionKey,
       setDraftMentions,
       setDraftText,
+      text,
     ],
   );
 
   const handleMoveQueuedMessage = useCallback(
-    (fromIndex: number, toIndex: number) => {
-      moveQueueItem(sessionKey, fromIndex, toIndex);
+    async (fromIndex: number, toIndex: number) => {
+      const message = queuedMessages[fromIndex];
+      if (!message || Math.abs(toIndex - fromIndex) !== 1) return;
+      await moveAgentPrompt(
+        "codex",
+        sessionKey,
+        message.id,
+        toIndex < fromIndex ? "up" : "down",
+      );
     },
-    [moveQueueItem, sessionKey],
+    [queuedMessages, sessionKey],
   );
 
   const handleRemoveQueuedMessage = useCallback(
-    (messageId: string) => {
-      removeQueueItem(sessionKey, messageId);
+    async (messageId: string) => {
+      await removeAgentPrompt("codex", sessionKey, messageId);
     },
-    [removeQueueItem, sessionKey],
+    [sessionKey],
   );
 
   const sendDisabled =

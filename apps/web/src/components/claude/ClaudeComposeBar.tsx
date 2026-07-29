@@ -35,6 +35,12 @@ import { useSlashCommandMenu } from "@/hooks/useSlashCommandMenu";
 import { useNativeComposeSubmit } from "@/hooks/useNativeComposeSubmit";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { FileMention, FileCandidate } from "@/types";
+import {
+  moveAgentPrompt,
+  removeAgentPrompt,
+  transferAgentPromptToComposeDraft,
+} from "@/lib/prompt-queue-sources";
+import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 
 const EFFORT_LABELS: Record<ClaudeEffortLevel, string> = {
   low: "Low",
@@ -113,8 +119,6 @@ export function ClaudeComposeBar({
   const setEffort = useClaudeStore((state) => state.setEffort);
   const setPlanMode = useClaudeStore((state) => state.setPlanMode);
   const setFastMode = useClaudeStore((state) => state.setFastMode);
-  const removeQueueItem = useClaudeStore((state) => state.removeQueueItem);
-  const moveQueueItem = useClaudeStore((state) => state.moveQueueItem);
 
   // Use a selector for sessionInitData to ensure reactivity when SSE session.init event arrives
   const sessionInitData = useClaudeStore(
@@ -399,35 +403,53 @@ export function ClaudeComposeBar({
   };
 
   const handleRemoveQueuedMessage = useCallback(
-    (messageId: string) => {
-      removeQueueItem(sessionKey, messageId);
+    async (messageId: string) => {
+      await removeAgentPrompt("claude", sessionKey, messageId);
     },
-    [removeQueueItem, sessionKey]
+    [sessionKey]
   );
 
   const handleMoveQueuedMessage = useCallback(
-    (fromIndex: number, toIndex: number) => {
-      moveQueueItem(sessionKey, fromIndex, toIndex);
+    async (fromIndex: number, toIndex: number) => {
+      const message = queuedMessages[fromIndex];
+      if (!message || Math.abs(toIndex - fromIndex) !== 1) return;
+      await moveAgentPrompt(
+        "claude",
+        sessionKey,
+        message.id,
+        toIndex < fromIndex ? "up" : "down",
+      );
     },
-    [moveQueueItem, sessionKey]
+    [queuedMessages, sessionKey]
   );
 
   const handleQueuedMessageClick = useCallback(
-    (message: QueuedMessage) => {
-      removeQueueItem(sessionKey, message.id);
+    async (message: QueuedMessage) => {
+      // Editing loads the prompt into the composer, so anything already there
+      // would be destroyed. Refusing with a reason beats the silent overwrite
+      // this used to do and beats the backend's opaque rejection downstream.
+      if (text.trim().length > 0 || attachments.length > 0) {
+        throw composerOccupiedError();
+      }
+      const removed = await transferAgentPromptToComposeDraft<QueuedMessage>(
+        "claude",
+        sessionKey,
+        message.id,
+      );
+      if (!removed) return;
       clearAttachments(sessionKey);
-      for (const attachment of message.attachments) {
+      for (const attachment of removed.attachments) {
         addAttachment(sessionKey, attachment);
       }
-      setDraftText(sessionKey, message.text);
+      setDraftText(sessionKey, removed.text);
       setDraftMentions(sessionKey, []);
-      setEffort(sessionKey, message.effort);
-      applyPlanMode(message.planModeEnabled);
-      setFastMode(sessionKey, message.fastModeEnabled);
+      setEffort(sessionKey, removed.effort);
+      applyPlanMode(removed.planModeEnabled);
+      setFastMode(sessionKey, removed.fastModeEnabled);
       setQueueDialogOpen(false);
       inputRef.current?.focus();
     },
-    [removeQueueItem, sessionKey, clearAttachments, addAttachment, setDraftText, setDraftMentions, setEffort, applyPlanMode, setFastMode]
+    [text, attachments, sessionKey, clearAttachments, addAttachment, setDraftText, setDraftMentions, setEffort, applyPlanMode, setFastMode]
   );
 
   const handleRemoveAttachment = (id: string) => {

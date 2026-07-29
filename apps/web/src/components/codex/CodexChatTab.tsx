@@ -96,7 +96,13 @@ import {
 import { requireCodexForkPlanEntry } from "./codex-message-fork";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
-import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
+import {
+  acknowledgeAgentPromptClaim,
+  claimAgentPromptQueueHead,
+  enqueueAgentPrompt,
+  rejectAgentPromptClaim,
+  transferAgentPromptToComposeDraft,
+} from "@/lib/prompt-queue-sources";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { CodexNativeData } from "@/types/paneLayout";
 import type { CodexAttachment, CodexQueuedMessage } from "@/stores/codexStore";
@@ -357,7 +363,6 @@ export function CodexChatTab({
   const setSelectedMode = useCodexStore((state) => state.setSelectedMode);
   const setSelectedReasoningEffort = useCodexStore((state) => state.setSelectedReasoningEffort);
   const setFastMode = useCodexStore((state) => state.setFastMode);
-  const addToQueue = useCodexStore((state) => state.addToQueue);
   const claimPromptDispatch = useCodexStore((state) => state.claimPromptDispatch);
   const releasePromptDispatch = useCodexStore((state) => state.releasePromptDispatch);
   const client = useCodexStore(
@@ -563,6 +568,12 @@ export function CodexChatTab({
   const queueLength = useCodexStore(
     useCallback(
       (state) => state.messageQueue.get(sessionKey)?.length ?? 0,
+      [sessionKey],
+    ),
+  );
+  const queueHeadId = useCodexStore(
+    useCallback(
+      (state) => state.messageQueue.get(sessionKey)?.[0]?.id,
       [sessionKey],
     ),
   );
@@ -924,9 +935,9 @@ export function CodexChatTab({
   }, [handleSend]);
 
   const handleQueue = useCallback(
-    (text: string, attachments: CodexAttachment[]) => {
+    async (text: string, attachments: CodexAttachment[]) => {
       const requestId = createUuid();
-      addToQueue(sessionKey, {
+      await enqueueAgentPrompt<CodexQueuedMessage>("codex", sessionKey, {
         id: requestId,
         requestId,
         text,
@@ -937,13 +948,17 @@ export function CodexChatTab({
         fastMode: fastModeEnabled,
       });
     },
-    [addToQueue, fastModeEnabled, selectedMode, selectedModel, selectedReasoningEffort, sessionKey],
+    [fastModeEnabled, selectedMode, selectedModel, selectedReasoningEffort, sessionKey],
   );
 
   useNativeMessageQueue({
     agentLabel: "Codex",
     sessionKey,
     claimHead: () => claimAgentPromptQueueHead<CodexQueuedMessage>("codex", sessionKey),
+    acknowledgeClaim: (claimToken) =>
+      acknowledgeAgentPromptClaim("codex", sessionKey, claimToken),
+    rejectClaim: (claimToken) =>
+      rejectAgentPromptClaim("codex", sessionKey, claimToken),
     store: useCodexStore,
     canDrain:
       handoff.ready
@@ -951,6 +966,7 @@ export function CodexChatTab({
       && connectionState === "connected"
       && !!client,
     queueLength,
+    queueHeadId,
     isLoading: session?.isLoading ?? false,
     blockedByDraft: isQueueBlockedByDraft,
     send: (entry) =>
@@ -977,14 +993,20 @@ export function CodexChatTab({
     },
   });
 
-  const promoteNextQueuedPromptToDraft = useCallback(() => {
+  const promoteNextQueuedPromptToDraft = useCallback(async () => {
     const store = useCodexStore.getState();
     const hasCurrentDraft =
       store.getDraftText(sessionKey).trim().length > 0 ||
       store.getAttachments(sessionKey).length > 0;
     if (hasCurrentDraft) return;
 
-    const nextMessage = store.removeFromQueue(sessionKey);
+    const head = store.getQueuedMessages(sessionKey)[0];
+    if (!head) return;
+    const nextMessage = await transferAgentPromptToComposeDraft<CodexQueuedMessage>(
+      "codex",
+      sessionKey,
+      head.id,
+    );
     if (!nextMessage) return;
 
     store.setDraftText(sessionKey, nextMessage.text);
@@ -1002,7 +1024,6 @@ export function CodexChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session?.sessionId) return;
 
-    promoteNextQueuedPromptToDraft();
     setSessionError(sessionKey, undefined);
 
     /**
@@ -1021,6 +1042,9 @@ export function CodexChatTab({
       // The marker is written when the turn actually ends, not here — the
       // interrupt is asynchronous and the turn may still produce output.
       awaitingStopMarkerRef.current = true;
+      await promoteNextQueuedPromptToDraft().catch((error) => {
+        console.error("[CodexChatTab] Failed to promote queued prompt:", error);
+      });
       return;
     }
 

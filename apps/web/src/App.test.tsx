@@ -1590,6 +1590,87 @@ describe("App startup checks and global events", () => {
     });
   });
 
+  test("switches from the CSS fallback to native page zoom and clears the fallback", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+    const originalOrkestrator = window.orkestrator;
+    let nativeZoomSupported = false;
+    const setZoomFactor = mock(async () => nativeZoomSupported);
+    window.orkestrator = {
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor,
+      },
+    } as unknown as Window["orkestrator"];
+
+    try {
+      render(<App />);
+
+      // A client that cannot zoom natively reports false, so the CSS fallback
+      // is applied and has to stay in place.
+      await waitFor(() => {
+        expect(setZoomFactor).toHaveBeenCalledWith(1);
+        expect(document.documentElement.style.zoom).toBe("100%");
+      });
+
+      // Once native zoom takes over, the stale fallback has to be cleared: the
+      // compositor is already applying a factor, so leaving CSS zoom set would
+      // compound the two.
+      nativeZoomSupported = true;
+      await waitFor(() => expect(appEventCallbacks.has("menu-zoom")).toBe(true));
+      act(() => {
+        appEventCallbacks.get("menu-zoom")?.({ payload: "in" });
+      });
+
+      await waitFor(() => {
+        expect(setZoomFactor).toHaveBeenCalledWith(1.1);
+        expect(document.documentElement.style.zoom).toBe("");
+      });
+    } finally {
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
+  test("falls back to CSS zoom when the native zoom bridge rejects", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+    const originalOrkestrator = window.orkestrator;
+    const originalConsoleWarn = console.warn;
+    const consoleWarn = mock(() => undefined);
+    console.warn = consoleWarn;
+    const setZoomFactor = mock(async () => {
+      throw new Error("Expected zoom factor to be a finite number greater than zero");
+    });
+    window.orkestrator = {
+      window: {
+        startDragging: async () => undefined,
+        setZoomFactor,
+      },
+    } as unknown as Window["orkestrator"];
+
+    try {
+      render(<App />);
+
+      await waitFor(() => {
+        expect(setZoomFactor).toHaveBeenCalledWith(1);
+        expect(document.documentElement.style.zoom).toBe("100%");
+      });
+      expect(consoleWarn).toHaveBeenCalledWith(
+        "[App] Failed to apply native zoom; using CSS fallback:",
+        expect.any(Error),
+      );
+    } finally {
+      console.warn = originalConsoleWarn;
+      window.orkestrator = originalOrkestrator;
+    }
+  });
+
   test("handles every zoom shortcut and throttles alternate credential errors", async () => {
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
     render(<App />);

@@ -125,6 +125,9 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       startDragging(): Promise<void> {
         return ipcRenderer.invoke("orkestrator:window:start-dragging");
       },
+      setZoomFactor(factor: number): Promise<boolean> {
+        return ipcRenderer.invoke("orkestrator:window:set-zoom-factor", factor);
+      },
     },
 
     browserPreview: {

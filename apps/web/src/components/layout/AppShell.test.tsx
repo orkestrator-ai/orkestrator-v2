@@ -191,7 +191,7 @@ afterEach(() => {
 
 describe("AppShell", () => {
   test("derives the mobile title and uses the grid action presentation", () => {
-    render(<AppShell>Workspace</AppShell>);
+    const { container } = render(<AppShell>Workspace</AppShell>);
 
     expect(screen.getByTestId("mobile-layout").getAttribute("data-title")).toBe(
       "pgstack1 - feature-auth",
@@ -199,6 +199,9 @@ describe("AppShell", () => {
     expect(screen.getByTestId("action-bar").getAttribute("data-presentation")).toBe("grid");
     expect(document.title).toBe("pgstack1 - feature-auth");
     expect(screen.getByText("Workspace")).toBeTruthy();
+    expect(container.firstElementChild?.classList.contains("h-full")).toBe(true);
+    expect(container.firstElementChild?.classList.contains("w-full")).toBe(true);
+    expect(container.firstElementChild?.classList.contains("h-dvh")).toBe(false);
   });
 
   test("derives the desktop title, uses the bar presentation, and starts window dragging", () => {

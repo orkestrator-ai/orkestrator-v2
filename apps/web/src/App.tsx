@@ -1,6 +1,7 @@
 import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@/lib/native/events";
 import { exit } from "@/lib/native/process";
+import { getCurrentWindow } from "@/lib/native/window";
 import { toast } from "sonner";
 import { AppShell } from "@/components/layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -455,9 +456,36 @@ function App() {
     }
   };
 
-  // Apply zoom level to the document
+  // Prefer Chromium's real page zoom in Electron. Unlike CSS `zoom`, native page
+  // zoom changes the layout viewport as well as the painted pixels, so the app
+  // renders at the device pixel ratio rather than being upscaled. Browser
+  // clients fall back to CSS `zoom`, which sizes correctly as long as the shell
+  // measures itself against its container instead of viewport units.
   useEffect(() => {
-    document.documentElement.style.zoom = `${zoomLevel}%`;
+    let active = true;
+    const rootStyle = document.documentElement.style;
+    const applyCssFallback = () => {
+      rootStyle.zoom = `${zoomLevel}%`;
+    };
+
+    void getCurrentWindow()
+      .setZoomFactor(zoomLevel / 100)
+      .then((appliedNatively) => {
+        if (!active) return;
+        // Clear any fallback left over from a client that could not zoom
+        // natively; leaving it set would compound with the native factor.
+        if (appliedNatively) rootStyle.zoom = "";
+        else applyCssFallback();
+      })
+      .catch((error) => {
+        if (!active) return;
+        console.warn("[App] Failed to apply native zoom; using CSS fallback:", error);
+        applyCssFallback();
+      });
+
+    return () => {
+      active = false;
+    };
   }, [zoomLevel]);
 
   // Surface Claude credential refresh/push failures as a non-blocking toast.

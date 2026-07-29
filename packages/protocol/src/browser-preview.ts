@@ -1,3 +1,10 @@
+/**
+ * Preview host geometry in **renderer CSS pixels**, as reported by
+ * `getBoundingClientRect()`. This is deliberately not the native window's
+ * coordinate space: the host applies page zoom, so the main process scales
+ * these by the host's zoom factor before handing them to `setBounds`. Senders
+ * must not pre-scale, or the factor would be applied twice.
+ */
 export interface BrowserPreviewBounds {
   x: number;
   y: number;

@@ -253,6 +253,15 @@ export function registerMainIpc({
   });
 
   handle("orkestrator:window:start-dragging", () => undefined);
+  handle("orkestrator:window:set-zoom-factor", (_event, factor: unknown) => {
+    if (typeof factor !== "number" || !Number.isFinite(factor) || factor <= 0) {
+      throw new Error("Expected zoom factor to be a finite number greater than zero");
+    }
+    const window = getMainWindow();
+    if (!window) return false;
+    window.webContents.setZoomFactor(factor);
+    return true;
+  });
 
   const previews = (): BrowserPreviewController => {
     if (!browserPreviews) throw new Error("Native browser previews are unavailable");

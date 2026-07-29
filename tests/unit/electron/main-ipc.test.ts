@@ -15,7 +15,10 @@ function createHarness(options: {
   const backend = options.backend === undefined
     ? { invoke: mock(async (_command: string, args: Record<string, unknown>) => ({ ok: true, args })) }
     : options.backend;
-  const window = options.window === undefined ? { id: 1 } : options.window;
+  const setZoomFactor = mock(() => undefined);
+  const window = options.window === undefined
+    ? { id: 1, webContents: { setZoomFactor } }
+    : options.window;
   const resizedClipboardImage = {
     isEmpty: mock(() => false),
     getSize: mock(() => ({ width: 2000, height: 1000 })),
@@ -128,7 +131,7 @@ function createHarness(options: {
   const invokeSync = (channel: string, ...args: unknown[]) =>
     invokeSyncFrom(trustedRendererUrl, channel, ...args);
 
-  return { invoke, invokeFrom, invokeSync, invokeSyncFrom, handlers, syncHandlers, backend, window, clipboardApi, clipboardImage, resizedClipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, resetWebClientServe, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection, browserPreviews };
+  return { invoke, invokeFrom, invokeSync, invokeSyncFrom, handlers, syncHandlers, backend, window, setZoomFactor, clipboardApi, clipboardImage, resizedClipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, resetWebClientServe, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection, browserPreviews };
 }
 
 describe("main IPC registration", () => {
@@ -157,6 +160,8 @@ describe("main IPC registration", () => {
     await harness.invoke("orkestrator:process:exit", 7);
     expect(harness.appApi.exit).toHaveBeenCalledWith(7);
     await expect(harness.invoke("orkestrator:window:start-dragging")).resolves.toBeUndefined();
+    await expect(harness.invoke("orkestrator:window:set-zoom-factor", 1.5)).resolves.toBe(true);
+    expect(harness.setZoomFactor).toHaveBeenCalledWith(1.5);
 
     await expect(harness.invoke("orkestrator:web-client:get-status")).resolves.toMatchObject({
       enabled: true,
@@ -190,6 +195,21 @@ describe("main IPC registration", () => {
     await expect(harness.invoke("orkestrator:web-client:set-token", 42)).rejects.toThrow(
       "Expected token to be a string",
     );
+  });
+
+  test("validates zoom factors and reports a missing main window", async () => {
+    const harness = createHarness();
+
+    for (const factor of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "1.5"]) {
+      await expect(
+        harness.invoke("orkestrator:window:set-zoom-factor", factor),
+      ).rejects.toThrow("Expected zoom factor");
+    }
+
+    const withoutWindow = createHarness({ window: null });
+    await expect(
+      withoutWindow.invoke("orkestrator:window:set-zoom-factor", 1.1),
+    ).resolves.toBe(false);
   });
 
   test("validates and routes native browser preview operations", async () => {

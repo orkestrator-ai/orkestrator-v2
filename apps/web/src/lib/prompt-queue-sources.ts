@@ -3,9 +3,14 @@ import {
   applyPromptQueueSnapshot,
   claimPromptQueueHead,
   promptQueueKey,
+  type ClaimedPrompt,
   type PromptQueueSource,
   type QueuedItem,
 } from "@/lib/prompt-queue-persistence";
+import {
+  composeDraftKey,
+  recordComposeDraftRevision,
+} from "@/lib/compose-draft-persistence";
 import * as backend from "@/lib/backend";
 import { useClaudeStore } from "@/stores/claudeStore";
 import {
@@ -97,7 +102,7 @@ export function createPromptQueueSources(): PromptQueueSource[] {
 export async function claimAgentPromptQueueHead<TItem extends QueuedItem>(
   agent: string,
   sessionKey: string,
-): Promise<TItem | null> {
+): Promise<ClaimedPrompt<TItem> | null> {
   const source = getSharedSources().find((candidate) => candidate.agent === agent);
   if (!source) return null;
   return claimPromptQueueHead(
@@ -159,6 +164,53 @@ export async function requeueAgentPrompt<TItem extends QueuedItem>(
   applyPromptQueueSnapshot(source, queue);
 }
 
+async function settleAgentPromptClaim<TItem extends QueuedItem>(
+  agent: string,
+  sessionKey: string,
+  claimToken: string,
+  settle: (
+    queueKey: string,
+    environmentId: string,
+    claimToken: string,
+  ) => Promise<import("@/types").PersistedPromptQueue<TItem> | null>,
+): Promise<void> {
+  const source = sourceFor<TItem>(agent);
+  if (!source) throw new Error(`Unknown prompt queue agent: ${agent}`);
+  const identity = queueIdentity(source, sessionKey);
+  const queue = await settle(identity.queueKey, identity.environmentId, claimToken);
+  if (queue) {
+    applyPromptQueueSnapshot(source, queue);
+  } else {
+    source.setQueue(sessionKey, []);
+  }
+}
+
+export async function acknowledgeAgentPromptClaim<TItem extends QueuedItem>(
+  agent: string,
+  sessionKey: string,
+  claimToken: string,
+): Promise<void> {
+  await settleAgentPromptClaim<TItem>(
+    agent,
+    sessionKey,
+    claimToken,
+    backend.acknowledgePromptQueueClaim,
+  );
+}
+
+export async function rejectAgentPromptClaim<TItem extends QueuedItem>(
+  agent: string,
+  sessionKey: string,
+  claimToken: string,
+): Promise<void> {
+  await settleAgentPromptClaim<TItem>(
+    agent,
+    sessionKey,
+    claimToken,
+    backend.rejectPromptQueueClaim,
+  );
+}
+
 export async function removeAgentPrompt<TItem extends QueuedItem>(
   agent: string,
   sessionKey: string,
@@ -176,6 +228,38 @@ export async function removeAgentPrompt<TItem extends QueuedItem>(
     applyPromptQueueSnapshot(source, result.queue);
   } else {
     source.setQueue(sessionKey, []);
+  }
+  return result.removed;
+}
+
+export async function transferAgentPromptToComposeDraft<
+  TItem extends QueuedItem,
+>(
+  agent: "claude" | "codex" | "opencode",
+  sessionKey: string,
+  messageId: string,
+): Promise<TItem | null> {
+  const source = sourceFor<TItem>(agent);
+  if (!source) throw new Error(`Unknown prompt queue agent: ${agent}`);
+  const identity = queueIdentity(source, sessionKey);
+  const result = await backend.transferPromptQueueMessageToComposeDraft<TItem>(
+    identity.queueKey,
+    identity.environmentId,
+    messageId,
+    composeDraftKey(agent, identity.environmentId, sessionKey),
+    "environment",
+    identity.environmentId,
+  );
+  if (result.queue) {
+    applyPromptQueueSnapshot(source, result.queue);
+  } else {
+    source.setQueue(sessionKey, []);
+  }
+  if (result.draft && typeof result.draft.revision === "number") {
+    recordComposeDraftRevision(
+      composeDraftKey(agent, identity.environmentId, sessionKey),
+      result.draft.revision,
+    );
   }
   return result.removed;
 }

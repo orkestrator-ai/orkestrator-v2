@@ -55,7 +55,11 @@ import type {
   OpenCodeSlashCommand,
 } from "@/lib/opencode-client";
 import type { FileCandidate, FileMention } from "@/types";
-import { moveAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
+import {
+  moveAgentPrompt,
+  removeAgentPrompt,
+  transferAgentPromptToComposeDraft,
+} from "@/lib/prompt-queue-sources";
 
 interface OpenCodeComposeBarProps {
   environmentId: string;
@@ -470,7 +474,7 @@ export function OpenCodeComposeBar({
    */
   const handleQueuedMessageClick = useCallback(
     async (message: OpenCodeQueuedMessage) => {
-      const removed = await removeAgentPrompt<OpenCodeQueuedMessage>(
+      const removed = await transferAgentPromptToComposeDraft<OpenCodeQueuedMessage>(
         "opencode",
         sessionKey,
         message.id,

@@ -4,6 +4,7 @@ import { ERROR_MESSAGE_PREFIX, type ClaudeMessage } from "@/lib/claude-client";
 import {
   createClaudeTmuxStateKey,
   getEnvironmentIdFromClaudeTmuxStateKey,
+  migrateLegacyClaudeTmuxState,
   compactConsecutiveAssistantMessages,
   payloadToApproval,
   payloadToElicitation,
@@ -27,6 +28,7 @@ function reset() {
     draftText: new Map(),
     draftMentions: new Map(),
     messageQueue: new Map(),
+    effortLevels: new Map(),
   });
   usePromptDraftStore.getState().reset();
 }
@@ -44,6 +46,95 @@ describe("state keys", () => {
     expect(getEnvironmentIdFromClaudeTmuxStateKey("tab-a")).toBeNull();
     expect(getEnvironmentIdFromClaudeTmuxStateKey("env::tab:tab-a")).toBeNull();
     expect(getEnvironmentIdFromClaudeTmuxStateKey("env:env-1")).toBeNull();
+  });
+
+  test("atomically migrates matching legacy tab and compose state to a scoped key", () => {
+    const store = useClaudeTmuxStore.getState();
+    const scopedKey = createClaudeTmuxStateKey("env-1", "tab-a");
+    store.setRunning("tab-a", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    store.setDraftText("tab-a", "legacy draft");
+    store.setDraftMentions("tab-a", [
+      { id: "mention-1", filename: "a.ts", relativePath: "src/a.ts" },
+    ]);
+    store.addAttachment("tab-a", {
+      id: "attachment-1",
+      type: "image",
+      path: "/workspace/a.png",
+      previewUrl: "data:image/png;base64,a",
+      name: "a.png",
+    });
+    store.addToQueue("tab-a", {
+      id: "queue-1",
+      text: "legacy queue",
+      attachments: [],
+    });
+    store.setEffortLevel("tab-a", "xhigh");
+
+    expect(migrateLegacyClaudeTmuxState("tab-a", scopedKey, "env-1")).toBe(true);
+
+    const migrated = useClaudeTmuxStore.getState();
+    expect(migrated.tabs.has("tab-a")).toBe(false);
+    expect(migrated.getTab(scopedKey)).toMatchObject({
+      running: true,
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    expect(migrated.getDraftText(scopedKey)).toBe("legacy draft");
+    expect(migrated.getDraftMentions(scopedKey)).toEqual([
+      { id: "mention-1", filename: "a.ts", relativePath: "src/a.ts" },
+    ]);
+    expect(migrated.getAttachments(scopedKey).map((item) => item.id)).toEqual([
+      "attachment-1",
+    ]);
+    expect(migrated.getQueuedMessages(scopedKey).map((item) => item.id)).toEqual([
+      "queue-1",
+    ]);
+    expect(migrated.effortLevels.get(scopedKey)).toBe("xhigh");
+    expect(migrated.draftText.has("tab-a")).toBe(false);
+    expect(migrated.draftMentions.has("tab-a")).toBe(false);
+    expect(migrated.attachments.has("tab-a")).toBe(false);
+    expect(migrated.messageQueue.has("tab-a")).toBe(false);
+    expect(migrated.effortLevels.has("tab-a")).toBe(false);
+  });
+
+  test("does not migrate legacy state owned by another environment", () => {
+    const store = useClaudeTmuxStore.getState();
+    const scopedKey = createClaudeTmuxStateKey("env-2", "tab-a");
+    store.setRunning("tab-a", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    store.setDraftText("tab-a", "do not move");
+
+    expect(migrateLegacyClaudeTmuxState("tab-a", scopedKey, "env-2")).toBe(false);
+    expect(useClaudeTmuxStore.getState().tabs.has(scopedKey)).toBe(false);
+    expect(useClaudeTmuxStore.getState().getDraftText("tab-a")).toBe("do not move");
+  });
+
+  test("keeps newer scoped values while removing duplicate legacy values", () => {
+    const store = useClaudeTmuxStore.getState();
+    const scopedKey = createClaudeTmuxStateKey("env-1", "tab-a");
+    store.setRunning("tab-a", true, {
+      environmentId: "env-1",
+      sessionId: "legacy-session",
+    });
+    store.setDraftText("tab-a", "legacy draft");
+    store.setRunning(scopedKey, true, {
+      environmentId: "env-1",
+      sessionId: "scoped-session",
+    });
+    store.setDraftText(scopedKey, "new scoped draft");
+
+    expect(migrateLegacyClaudeTmuxState("tab-a", scopedKey, "env-1")).toBe(true);
+
+    const migrated = useClaudeTmuxStore.getState();
+    expect(migrated.tabs.has("tab-a")).toBe(false);
+    expect(migrated.getTab(scopedKey).sessionId).toBe("scoped-session");
+    expect(migrated.getDraftText(scopedKey)).toBe("new scoped draft");
+    expect(migrated.draftText.has("tab-a")).toBe(false);
   });
 });
 

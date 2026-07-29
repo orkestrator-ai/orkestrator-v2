@@ -29,7 +29,10 @@ function persisted(
   };
 }
 
-function createSource(agent = "claude"): PromptQueueSource & {
+function createSource(
+  agent = "claude",
+  environmentIdFor: (sessionKey: string) => string | null = () => "env-1",
+): PromptQueueSource & {
   read: () => QueuedItem[];
 } {
   let queues = new Map<string, QueuedItem[]>();
@@ -40,7 +43,7 @@ function createSource(agent = "claude"): PromptQueueSource & {
       queues = new Map(queues);
       queues.set(sessionKey, messages);
     },
-    environmentIdFor: () => "env-1",
+    environmentIdFor,
     read: () => queues.get(SESSION) ?? [],
   };
 }
@@ -55,12 +58,49 @@ describe("backend-owned prompt queue projections", () => {
     });
   });
 
+  test("rejects malformed composite queue keys", () => {
+    expect(parsePromptQueueKey("")).toBeNull();
+    expect(parsePromptQueueKey("claude")).toBeNull();
+    expect(parsePromptQueueKey("\u0000session")).toBeNull();
+  });
+
   test("never lets an older backend response overwrite a newer snapshot", () => {
     const source = createSource();
     const key = promptQueueKey("claude", SESSION);
     applyPromptQueueSnapshot(source, persisted(key, [{ id: "new" }], 3));
     applyPromptQueueSnapshot(source, persisted(key, [{ id: "old" }], 2));
     expect(source.read()).toEqual([{ id: "new" }]);
+  });
+
+  test("accepts an equal-revision reconciliation and filters malformed messages", () => {
+    const source = createSource();
+    const key = promptQueueKey("claude", SESSION);
+    applyPromptQueueSnapshot(source, persisted(key, [{ id: "first" }], 3));
+    applyPromptQueueSnapshot(
+      source,
+      persisted(
+        key,
+        [
+          { id: "replacement" },
+          null,
+          "bad",
+          { missingId: true },
+        ] as unknown as QueuedItem[],
+        3,
+      ),
+    );
+    expect(source.read()).toEqual([{ id: "replacement" }]);
+  });
+
+  test("ignores malformed and wrong-agent snapshots", () => {
+    const source = createSource();
+    source.setQueue(SESSION, [{ id: "current" }]);
+    applyPromptQueueSnapshot(source, persisted("malformed", [{ id: "bad" }], 2));
+    applyPromptQueueSnapshot(
+      source,
+      persisted(promptQueueKey("codex", SESSION), [{ id: "bad" }], 3),
+    );
+    expect(source.read()).toEqual([{ id: "current" }]);
   });
 
   test("hydrates all queues for an environment", async () => {
@@ -78,6 +118,32 @@ describe("backend-owned prompt queue projections", () => {
     expect(codex.read()).toEqual([{ id: "x1" }]);
   });
 
+  test("filters unrelated, malformed, and unknown-agent environment entries", async () => {
+    const source = createSource();
+    await hydratePromptQueuesForEnvironment(
+      "env-1",
+      [source],
+      async () => [
+        persisted(promptQueueKey("claude", SESSION), [{ id: "valid" }], 1),
+        persisted(promptQueueKey("claude", "other"), [{ id: "other-env" }], 1, "env-2"),
+        persisted(promptQueueKey("unknown", SESSION), [{ id: "unknown" }], 1),
+        persisted("malformed", [{ id: "malformed" }], 1),
+      ],
+    );
+    expect(source.read()).toEqual([{ id: "valid" }]);
+  });
+
+  test("ignores a malformed environment-list response", async () => {
+    const source = createSource();
+    source.setQueue(SESSION, [{ id: "current" }]);
+    await hydratePromptQueuesForEnvironment(
+      "env-1",
+      [source],
+      async () => "bad" as unknown as PersistedPromptQueue<QueuedItem>[],
+    );
+    expect(source.read()).toEqual([{ id: "current" }]);
+  });
+
   test("clears the projection when the backend record is gone", async () => {
     const source = createSource();
     source.setQueue(SESSION, [{ id: "ghost" }]);
@@ -87,6 +153,68 @@ describe("backend-owned prompt queue projections", () => {
       async () => null,
     );
     expect(source.read()).toEqual([]);
+  });
+
+  test("hydrates one matching queue and ignores malformed or unknown queue keys", async () => {
+    const source = createSource();
+    const key = promptQueueKey("claude", SESSION);
+    await hydratePromptQueue(key, [source], async () =>
+      persisted(key, [{ id: "restored" }], 1)
+    );
+    expect(source.read()).toEqual([{ id: "restored" }]);
+
+    await hydratePromptQueue("malformed", [source], async () => {
+      throw new Error("loader must not run");
+    });
+    await hydratePromptQueue(
+      promptQueueKey("codex", SESSION),
+      [source],
+      async () => {
+        throw new Error("loader must not run");
+      },
+    );
+    expect(source.read()).toEqual([{ id: "restored" }]);
+  });
+
+  test("does not claim an unscoped or empty projection", async () => {
+    const unscoped = createSource("claude", () => null);
+    const empty = createSource();
+    let calls = 0;
+    const claim = async () => {
+      calls += 1;
+      return { claimed: null, claimToken: null, queue: null };
+    };
+    await expect(claimPromptQueueHead(unscoped, SESSION, claim)).resolves.toBeNull();
+    await expect(claimPromptQueueHead(empty, SESSION, claim)).resolves.toBeNull();
+    expect(calls).toBe(0);
+  });
+
+  test("clears a ghost projection when a claim reports no backend queue", async () => {
+    const source = createSource();
+    source.setQueue(SESSION, [{ id: "ghost" }]);
+    await expect(
+      claimPromptQueueHead(source, SESSION, async () => ({
+        claimed: null,
+        claimToken: null,
+        queue: null,
+      })),
+    ).resolves.toBeNull();
+    expect(source.read()).toEqual([]);
+  });
+
+  test("rejects malformed or mismatched claimed messages while applying the snapshot", async () => {
+    for (const claimed of [null, "bad", { id: "different" }, { id: 7 }]) {
+      const source = createSource();
+      source.setQueue(SESSION, [{ id: "expected" }]);
+      await expect(
+        claimPromptQueueHead(source, SESSION, async (key, environmentId) => ({
+          claimed: claimed as QueuedItem | null,
+          claimToken: claimed ? "claim-token" : null,
+          queue: persisted(key, [], 2, environmentId),
+        })),
+      ).resolves.toBeNull();
+      expect(source.read()).toEqual([]);
+    }
   });
 
   test("allows only one of two clients to claim an authoritative head", async () => {
@@ -106,6 +234,7 @@ describe("backend-owned prompt queue projections", () => {
       if (!head || head.id !== expectedId) {
         return {
           claimed: null,
+          claimToken: null,
           queue: persisted(key, backendQueue, revision, environmentId),
         };
       }
@@ -113,6 +242,7 @@ describe("backend-owned prompt queue projections", () => {
       revision += 1;
       return {
         claimed: head,
+        claimToken: `claim-${head.id}`,
         queue: persisted(key, backendQueue, revision, environmentId),
       };
     };
@@ -121,7 +251,10 @@ describe("backend-owned prompt queue projections", () => {
       claimPromptQueueHead(first, SESSION, claim),
       claimPromptQueueHead(second, SESSION, claim),
     ]);
-    expect(winner).toEqual({ id: "m1" });
+    expect(winner).toEqual({
+      entry: { id: "m1" },
+      claimToken: "claim-m1",
+    });
     expect(loser).toBeNull();
     expect(first.read()).toEqual([{ id: "m2" }]);
     expect(second.read()).toEqual([{ id: "m2" }]);

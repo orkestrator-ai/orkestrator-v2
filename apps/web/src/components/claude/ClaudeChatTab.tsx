@@ -7,7 +7,10 @@ import {
   useManualSessionRefresh,
   type RefreshSessionOptions,
 } from "@/hooks/useManualSessionRefresh";
-import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
+import {
+  useNativeMessageQueue,
+  type QueueDispatchOutcome,
+} from "@/hooks/useNativeMessageQueue";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
@@ -80,10 +83,11 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import {
+  acknowledgeAgentPromptClaim,
   claimAgentPromptQueueHead,
   enqueueAgentPrompt,
-  removeAgentPrompt,
-  requeueAgentPrompt,
+  rejectAgentPromptClaim,
+  transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
 import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
 import {
@@ -217,6 +221,8 @@ export function ClaudeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
+  const [stopInProgress, setStopInProgress] = useState(false);
+  const stopPromotionPendingRef = useRef(false);
   const automaticInitRetryCountRef = useRef(0);
   const automaticInitRetryWindowStartedAtRef = useRef<number | null>(null);
   const setupPendingObservedForInitRetryRef = useRef(false);
@@ -238,7 +244,7 @@ export function ClaudeChatTab({
    */
   const backgroundRefreshSequenceRef = useRef(0);
   const resumeSequenceRef = useRef(0);
-  const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean, requestId?: string) => Promise<void>) | null>(null);
+  const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean, requestId?: string) => Promise<QueueDispatchOutcome>) | null>(null);
   const planPreferenceWriteRef = useRef<Promise<void>>(Promise.resolve());
   // Retain the newest successfully requested value until an authoritative
   // snapshot confirms it. A GET started before the PUT may otherwise land
@@ -2105,7 +2111,7 @@ export function ClaudeChatTab({
 
   const handleSend = useCallback(
     async (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean, requestId?: string) => {
-      if (!client || !session) return;
+      if (!client || !session) return "rejected" as const;
 
       const selectedModel = getSelectedModel(sessionKey);
 
@@ -2175,10 +2181,23 @@ export function ClaudeChatTab({
         requestId,
       });
 
-      if (!shouldReconcileClaudePrompt(success)) {
+      const accepted = shouldReconcileClaudePrompt(success);
+      if (!accepted) {
         console.error("[ClaudeChatTab] Failed to send prompt");
         setSessionLoading(sessionKey, false);
+        return "rejected" as const;
       }
+      // A lost response deliberately keeps the session locked while status is
+      // reconciled, but it does not prove the bridge accepted a queued prompt.
+      // Preserve the durable queue claim until that ambiguity is resolved.
+      return (
+        typeof success === "object"
+        && success !== null
+        && "outcome" in success
+        && success.outcome === "unknown"
+      )
+        ? "unknown" as const
+        : "accepted" as const;
     },
     [client, session, sessionKey, environmentId, getSelectedModel, addMessage, removeMessage, setSessionLoading]
   );
@@ -2209,7 +2228,7 @@ export function ClaudeChatTab({
 
     const head = store.getQueuedMessages(sessionKey)[0];
     if (!head) return;
-    const nextMessage = await removeAgentPrompt<QueuedMessage>(
+    const nextMessage = await transferAgentPromptToComposeDraft<QueuedMessage>(
       "claude",
       sessionKey,
       head.id,
@@ -2231,11 +2250,11 @@ export function ClaudeChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    await promoteNextQueuedPromptToDraft().catch((error) => {
-      console.error("[ClaudeChatTab] Failed to promote queued prompt:", error);
-    });
-    setSessionLoading(sessionKey, false);
-
+    // Block queue draining before yielding to either backend request. The
+    // abort must be issued first: promoting the queue is durable I/O and may
+    // stall, while the active turn must be interrupted immediately.
+    stopPromotionPendingRef.current = true;
+    setStopInProgress(true);
     const success = await abortSession(client, session.sessionId);
     if (success) {
       // Leave a marker in the transcript. Without it an interrupted turn is
@@ -2248,10 +2267,27 @@ export function ClaudeChatTab({
         timestamp: new Date().toISOString(),
       };
       addMessage(sessionKey, systemMessage);
+      await promoteNextQueuedPromptToDraft().catch((error) => {
+        console.error("[ClaudeChatTab] Failed to promote queued prompt:", error);
+      });
     } else {
       console.error("[ClaudeChatTab] Failed to abort session");
     }
-  }, [client, session, sessionKey, promoteNextQueuedPromptToDraft, setSessionLoading, addMessage]);
+    stopPromotionPendingRef.current = false;
+    if (useClaudeStore.getState().sessions.get(sessionKey)?.isLoading !== true) {
+      setStopInProgress(false);
+    }
+  }, [client, session, sessionKey, promoteNextQueuedPromptToDraft, addMessage]);
+
+  useEffect(() => {
+    if (
+      stopInProgress
+      && !stopPromotionPendingRef.current
+      && session?.isLoading === false
+    ) {
+      setStopInProgress(false);
+    }
+  }, [session?.isLoading, stopInProgress]);
 
   const handlePlanModeChange = useCallback((enabled: boolean) => {
     if (!client || !session) return;
@@ -2351,21 +2387,28 @@ export function ClaudeChatTab({
       handoff.ready
       && !setupPending
       && connectionState === "connected"
-      && !!client,
+      && !!client
+      && !stopInProgress,
     queueLength,
     queueHeadId,
     isLoading: session?.isLoading ?? false,
     blockedByDraft: isQueueBlockedByDraft,
     claimHead: () => claimAgentPromptQueueHead<QueuedMessage>("claude", sessionKey),
-    requeue: (entry) => requeueAgentPrompt("claude", sessionKey, entry),
-    send: (entry) =>
-      handleSendRef.current?.(
+    acknowledgeClaim: (claimToken) =>
+      acknowledgeAgentPromptClaim("claude", sessionKey, claimToken),
+    rejectClaim: (claimToken) =>
+      rejectAgentPromptClaim("claude", sessionKey, claimToken),
+    send: (entry) => {
+      const dispatch = handleSendRef.current?.(
         entry.text,
         entry.attachments,
         entry.effort,
         entry.planModeEnabled,
         entry.fastModeEnabled,
-      ),
+        entry.id,
+      );
+      return dispatch;
+    },
     onError: (error) => {
       const errorText = `Failed to send queued message: ${
         error instanceof Error ? error.message : "Unknown error"
@@ -2716,7 +2759,9 @@ export function ClaudeChatTab({
           tabId={tabId}
           containerId={containerId}
           models={models}
-          onSend={handleSend}
+          onSend={async (...args) => {
+            await handleSend(...args);
+          }}
           disabled={!handoff.ready || !client || !session}
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}

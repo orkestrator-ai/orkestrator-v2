@@ -97,10 +97,11 @@ import { requireCodexForkPlanEntry } from "./codex-message-fork";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import {
+  acknowledgeAgentPromptClaim,
   claimAgentPromptQueueHead,
   enqueueAgentPrompt,
-  removeAgentPrompt,
-  requeueAgentPrompt,
+  rejectAgentPromptClaim,
+  transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { CodexNativeData } from "@/types/paneLayout";
@@ -954,7 +955,10 @@ export function CodexChatTab({
     agentLabel: "Codex",
     sessionKey,
     claimHead: () => claimAgentPromptQueueHead<CodexQueuedMessage>("codex", sessionKey),
-    requeue: (entry) => requeueAgentPrompt("codex", sessionKey, entry),
+    acknowledgeClaim: (claimToken) =>
+      acknowledgeAgentPromptClaim("codex", sessionKey, claimToken),
+    rejectClaim: (claimToken) =>
+      rejectAgentPromptClaim("codex", sessionKey, claimToken),
     store: useCodexStore,
     canDrain:
       handoff.ready
@@ -998,7 +1002,7 @@ export function CodexChatTab({
 
     const head = store.getQueuedMessages(sessionKey)[0];
     if (!head) return;
-    const nextMessage = await removeAgentPrompt<CodexQueuedMessage>(
+    const nextMessage = await transferAgentPromptToComposeDraft<CodexQueuedMessage>(
       "codex",
       sessionKey,
       head.id,
@@ -1020,9 +1024,6 @@ export function CodexChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session?.sessionId) return;
 
-    await promoteNextQueuedPromptToDraft().catch((error) => {
-      console.error("[CodexChatTab] Failed to promote queued prompt:", error);
-    });
     setSessionError(sessionKey, undefined);
 
     /**
@@ -1041,6 +1042,9 @@ export function CodexChatTab({
       // The marker is written when the turn actually ends, not here — the
       // interrupt is asynchronous and the turn may still produce output.
       awaitingStopMarkerRef.current = true;
+      await promoteNextQueuedPromptToDraft().catch((error) => {
+        console.error("[CodexChatTab] Failed to promote queued prompt:", error);
+      });
       return;
     }
 

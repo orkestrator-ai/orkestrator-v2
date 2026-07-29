@@ -35,7 +35,11 @@ import { useSlashCommandMenu } from "@/hooks/useSlashCommandMenu";
 import { useNativeComposeSubmit } from "@/hooks/useNativeComposeSubmit";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { FileMention, FileCandidate } from "@/types";
-import { moveAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
+import {
+  moveAgentPrompt,
+  removeAgentPrompt,
+  transferAgentPromptToComposeDraft,
+} from "@/lib/prompt-queue-sources";
 
 const EFFORT_LABELS: Record<ClaudeEffortLevel, string> = {
   low: "Low",
@@ -420,7 +424,7 @@ export function ClaudeComposeBar({
 
   const handleQueuedMessageClick = useCallback(
     async (message: QueuedMessage) => {
-      const removed = await removeAgentPrompt<QueuedMessage>(
+      const removed = await transferAgentPromptToComposeDraft<QueuedMessage>(
         "claude",
         sessionKey,
         message.id,

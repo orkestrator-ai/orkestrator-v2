@@ -291,6 +291,17 @@ export interface PersistedPromptQueue {
   queueKey: string;
   environmentId: string;
   messages: unknown[];
+  /**
+   * A durable, exclusive claim on the message currently being handed to an
+   * agent. The message stays here until the renderer acknowledges that the
+   * bridge accepted it, so a renderer crash cannot silently discard it.
+   */
+  outstandingClaim?: {
+    token: string;
+    message: unknown;
+    claimedAt: string;
+    expiresAt: string;
+  };
   updatedAt: string;
   revision: number;
 }
@@ -307,6 +318,14 @@ export interface PersistedComposeDraft {
   ownerType: "environment" | "project";
   ownerId: string;
   value: unknown;
+  /**
+   * Bounded provenance for an idempotent queue-to-draft transfer. Ordinary
+   * draft saves never set this field.
+   */
+  sourcePromptQueue?: {
+    queueKey: string;
+    messageId: string;
+  };
   updatedAt: string;
   revision: number;
 }

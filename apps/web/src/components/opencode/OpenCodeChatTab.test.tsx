@@ -156,11 +156,18 @@ const mockClaimPromptQueueHead = mock(async (
   environmentId: string,
   _expectedMessageId: string,
   candidateMessages: Array<{ id: string }>,
-) => ({
-  claimed: candidateMessages[0] ?? null,
-  queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
-}));
+) => {
+  const claimed = candidateMessages[0] ?? null;
+  const claimToken = claimed ? `claim-${claimed.id}` : null;
+  if (claimed && claimToken) mockOutstandingQueueClaims.set(claimToken, claimed);
+  return {
+    claimed,
+    claimToken,
+    queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
+  };
+});
 let mockQueueRevision = 1;
+const mockOutstandingQueueClaims = new Map<string, { id: string }>();
 const queueSessionKey = (queueKey: string) =>
   queueKey.slice(queueKey.indexOf("\u0000") + 1);
 const queueSnapshot = (
@@ -174,6 +181,44 @@ const queueSnapshot = (
   updatedAt: "2026-01-01T00:00:00.000Z",
   revision: mockQueueRevision++,
 });
+const mockRemovePromptQueueMessage = mock(
+  async (queueKey: string, environmentId: string, messageId: string) => {
+    const current = useOpenCodeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+    return {
+      removed: current.find((message) => message.id === messageId) ?? null,
+      queue: queueSnapshot(
+        queueKey,
+        environmentId,
+        current.filter((message) => message.id !== messageId),
+      ),
+    };
+  },
+);
+const mockTransferPromptQueueMessageToComposeDraft = mock(
+  async (
+    queueKey: string,
+    environmentId: string,
+    messageId: string,
+    draftKey: string,
+    ownerType: "environment" | "project",
+    ownerId: string,
+  ) => {
+    const result = await mockRemovePromptQueueMessage(queueKey, environmentId, messageId);
+    return {
+      ...result,
+      draft: result.removed
+        ? {
+            draftKey,
+            ownerType,
+            ownerId,
+            value: { text: "", mentions: [], attachments: [] },
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            revision: 1,
+          }
+        : null,
+    };
+  },
+);
 const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
 
 const openCodeClientModuleFactory = () => ({
@@ -206,6 +251,24 @@ mock.module("@/lib/opencode-client", openCodeClientModuleFactory);
 
 mock.module("@/lib/backend", () => ({
   claimPromptQueueHead: mockClaimPromptQueueHead,
+  acknowledgePromptQueueClaim: mock(async (queueKey, environmentId, claimToken) => {
+    mockOutstandingQueueClaims.delete(claimToken);
+    return queueSnapshot(
+      queueKey,
+      environmentId,
+      useOpenCodeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+    );
+  }),
+  rejectPromptQueueClaim: mock(async (queueKey, environmentId, claimToken) => {
+    const claimed = mockOutstandingQueueClaims.get(claimToken);
+    mockOutstandingQueueClaims.delete(claimToken);
+    const current = useOpenCodeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+    return queueSnapshot(
+      queueKey,
+      environmentId,
+      claimed ? [claimed, ...current] : current,
+    );
+  }),
   enqueuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
     queueSnapshot(queueKey, environmentId, [
       ...useOpenCodeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
@@ -223,17 +286,8 @@ mock.module("@/lib/backend", () => ({
           : [message, ...current],
       );
     }),
-  removePromptQueueMessage: mock(async (queueKey, environmentId, messageId) => {
-    const current = useOpenCodeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
-    return {
-      removed: current.find((message) => message.id === messageId) ?? null,
-      queue: queueSnapshot(
-        queueKey,
-        environmentId,
-        current.filter((message) => message.id !== messageId),
-      ),
-    };
-  }),
+  removePromptQueueMessage: mockRemovePromptQueueMessage,
+  transferPromptQueueMessageToComposeDraft: mockTransferPromptQueueMessageToComposeDraft,
   movePromptQueueMessage: mock(async (queueKey, environmentId) =>
     queueSnapshot(
       queueKey,
@@ -729,6 +783,7 @@ afterAll(() => {
 describe("OpenCodeChatTab", () => {
   beforeEach(() => {
     cleanup();
+    mockOutstandingQueueClaims.clear();
     // Other OpenCode component suites restore this broadly mocked module in
     // afterAll. Re-register it per test so parallel files cannot leave this
     // long-running suite bound to the real network client.
@@ -739,10 +794,16 @@ describe("OpenCodeChatTab", () => {
       environmentId,
       _expectedMessageId,
       candidateMessages,
-    ) => ({
-      claimed: candidateMessages[0] ?? null,
-      queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
-    }));
+    ) => {
+      const claimed = candidateMessages[0] ?? null;
+      const claimToken = claimed ? `claim-${claimed.id}` : null;
+      if (claimed && claimToken) mockOutstandingQueueClaims.set(claimToken, claimed);
+      return {
+        claimed,
+        claimToken,
+        queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
+      };
+    });
     composeText = "Rename the environment";
     composeAttachments = [];
     mockRenameEnvironmentFromPrompt.mockClear();
@@ -756,6 +817,39 @@ describe("OpenCodeChatTab", () => {
     }));
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => true);
+    mockRemovePromptQueueMessage.mockReset();
+    mockRemovePromptQueueMessage.mockImplementation(
+      async (queueKey, environmentId, messageId) => {
+        const current = useOpenCodeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+        return {
+          removed: current.find((message) => message.id === messageId) ?? null,
+          queue: queueSnapshot(
+            queueKey,
+            environmentId,
+            current.filter((message) => message.id !== messageId),
+          ),
+        };
+      },
+    );
+    mockTransferPromptQueueMessageToComposeDraft.mockReset();
+    mockTransferPromptQueueMessageToComposeDraft.mockImplementation(
+      async (queueKey, environmentId, messageId, draftKey, ownerType, ownerId) => {
+        const result = await mockRemovePromptQueueMessage(queueKey, environmentId, messageId);
+        return {
+          ...result,
+          draft: result.removed
+            ? {
+                draftKey,
+                ownerType,
+                ownerId,
+                value: { text: "", mentions: [], attachments: [] },
+                updatedAt: "2026-01-01T00:00:00.000Z",
+                revision: 1,
+              }
+            : null,
+        };
+      },
+    );
     mockCreateSession.mockClear();
     mockCreateSession.mockImplementation(async () => ({
       id: "session-1",
@@ -2840,9 +2934,67 @@ describe("OpenCodeChatTab", () => {
           model: "openai/gpt-5",
           mode: "build",
           attachments: undefined,
+          requestId: "queue-1",
         }),
       );
     });
+  });
+
+  test("retries a denied stale claim when the authoritative head changes at the same length", async () => {
+    const current = {
+      id: "queue-current",
+      text: "Dispatch the authoritative OpenCode head",
+      attachments: [],
+      model: "openai/gpt-5",
+      mode: "build" as const,
+    };
+    let attempts = 0;
+    mockClaimPromptQueueHead.mockImplementation(async (
+      queueKey,
+      environmentId,
+      _expectedMessageId,
+      candidateMessages,
+    ) => {
+      attempts += 1;
+      if (attempts === 1) {
+        return {
+          claimed: null,
+          claimToken: null,
+          queue: queueSnapshot(queueKey, environmentId, [current]),
+        };
+      }
+      const claimed = candidateMessages[0] ?? null;
+      const claimToken = claimed ? `claim-${claimed.id}` : null;
+      if (claimed && claimToken) mockOutstandingQueueClaims.set(claimToken, claimed);
+      return {
+        claimed,
+        claimToken,
+        queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
+      };
+    });
+    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-stale",
+      text: "Stale projected head",
+      attachments: [],
+      model: "openai/gpt-5",
+      mode: "build",
+    });
+
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        current.text,
+        expect.objectContaining({
+          model: current.model,
+          mode: current.mode,
+          requestId: current.id,
+        }),
+      );
+    });
+    expect(mockClaimPromptQueueHead).toHaveBeenCalledTimes(2);
   });
 
   test("a failed backend claim does not spin or dispatch the unclaimed prompt", async () => {
@@ -2879,7 +3031,7 @@ describe("OpenCodeChatTab", () => {
     }
   });
 
-  test("removes a queued prompt and records an error when queued send fails", async () => {
+  test("restores a queued prompt and records an error when queued send fails", async () => {
     const originalError = console.error;
     const consoleError = mock(() => {});
     console.error = consoleError as unknown as typeof console.error;
@@ -2918,7 +3070,9 @@ describe("OpenCodeChatTab", () => {
         const state = useOpenCodeStore.getState();
         const messages = state.sessions.get(SESSION_KEY)?.messages ?? [];
         expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
-        expect(state.messageQueue.get(SESSION_KEY)).toEqual([]);
+        expect(state.messageQueue.get(SESSION_KEY)).toEqual([
+          expect.objectContaining({ id: "queue-1" }),
+        ]);
         expect(messages.some((message) => message.content === "OpenCode unavailable")).toBe(true);
       });
     } finally {
@@ -2949,7 +3103,9 @@ describe("OpenCodeChatTab", () => {
 
       await waitFor(() => {
         const state = useOpenCodeStore.getState();
-        expect(state.messageQueue.get(SESSION_KEY)).toEqual([]);
+        expect(state.messageQueue.get(SESSION_KEY)).toEqual([
+          expect.objectContaining({ id: "queue-rejection" }),
+        ]);
         expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
         expect(
           state.sessions
@@ -3036,7 +3192,7 @@ describe("OpenCodeChatTab", () => {
     ]);
   });
 
-  test("stop immediately clears loading and promotes the next queued prompt to draft", async () => {
+  test("stop aborts before promoting the queue and stays locked until the turn settles", async () => {
     const queuedAttachment = {
       id: "queued-attachment",
       type: "image" as const,
@@ -3082,7 +3238,20 @@ describe("OpenCodeChatTab", () => {
 
     await waitFor(() => {
       const state = useOpenCodeStore.getState();
-      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+      expect(state.draftText.get(SESSION_KEY) ?? "").toBe("");
+      expect(state.messageQueue.get(SESSION_KEY)?.map((message) => message.text)).toEqual([
+        "Queued OpenCode prompt",
+        "Second queued OpenCode prompt",
+      ]);
+    });
+
+    resolveAbort?.(true);
+
+    await waitFor(() => {
+      const state = useOpenCodeStore.getState();
+      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(true);
       expect(state.draftText.get(SESSION_KEY)).toBe("Queued OpenCode prompt");
       expect(state.messageQueue.get(SESSION_KEY)?.map((message) => message.text)).toEqual([
         "Second queued OpenCode prompt",
@@ -3092,9 +3261,43 @@ describe("OpenCodeChatTab", () => {
       expect(state.selectedVariant.get(SESSION_KEY)).toBe("fast");
       expect(state.selectedMode.get(SESSION_KEY)).toBe("build");
     });
-    expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+    act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, false));
+  });
 
-    resolveAbort?.(true);
+  test("keeps the queue intact when post-abort promotion fails", async () => {
+    const consoleError = mock(() => {});
+    const originalError = console.error;
+    console.error = consoleError as unknown as typeof console.error;
+    mockTransferPromptQueueMessageToComposeDraft.mockRejectedValue(
+      new Error("queue unavailable"),
+    );
+    useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
+    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Keep this OpenCode prompt",
+      attachments: [],
+      model: "openai/gpt-5",
+      mode: "build",
+    });
+
+    try {
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+      fireEvent.click(screen.getByTestId("opencode-stop"));
+
+      await waitFor(() => {
+        expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+        expect(consoleError).toHaveBeenCalledWith(
+          "[OpenCodeChatTab] Failed to promote queued prompt:",
+          expect.any(Error),
+        );
+      });
+      expect(useOpenCodeStore.getState().getQueuedMessages(SESSION_KEY)).toEqual([
+        expect.objectContaining({ id: "queue-1" }),
+      ]);
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    } finally {
+      console.error = originalError;
+    }
   });
 
   test("dispatches the initialPrompt while the OpenCode tab is inactive", async () => {
@@ -3650,7 +3853,7 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
-  test("stop logs a failed abort after clearing local loading state", async () => {
+  test("stop logs a failed abort without unlocking the running session", async () => {
     const originalError = console.error;
     const consoleError = mock(() => {});
     console.error = consoleError as unknown as typeof console.error;
@@ -3669,7 +3872,7 @@ describe("OpenCodeChatTab", () => {
       fireEvent.click(screen.getByTestId("opencode-stop"));
 
       await waitFor(() => {
-        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
         expect(consoleError).toHaveBeenCalledWith("[OpenCodeChatTab] Failed to abort session");
       });
     } finally {
@@ -4675,7 +4878,7 @@ describe("OpenCodeChatTab", () => {
 
       await waitFor(() => expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1"));
       expect(event.defaultPrevented).toBe(true);
-      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
     });
 
     test("ignores Escape when inactive, modified, repeated, composing, or already prevented", async () => {

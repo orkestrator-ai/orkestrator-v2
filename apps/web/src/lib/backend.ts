@@ -1906,12 +1906,61 @@ export async function claimPromptQueueHead<T>(
   expectedMessageId: string,
 ): Promise<{
   claimed: T | null;
+  claimToken: string | null;
   queue: PersistedPromptQueue<T> | null;
 }> {
   return invoke("claim_prompt_queue_head", {
     queueKey,
     environmentId,
     expectedMessageId,
+  });
+}
+
+export async function acknowledgePromptQueueClaim<T>(
+  queueKey: string,
+  environmentId: string,
+  claimToken: string,
+): Promise<PersistedPromptQueue<T> | null> {
+  return invoke<PersistedPromptQueue<T> | null>("acknowledge_prompt_queue_claim", {
+    queueKey,
+    environmentId,
+    claimToken,
+  });
+}
+
+export async function rejectPromptQueueClaim<T>(
+  queueKey: string,
+  environmentId: string,
+  claimToken: string,
+): Promise<PersistedPromptQueue<T> | null> {
+  return invoke<PersistedPromptQueue<T> | null>("reject_prompt_queue_claim", {
+    queueKey,
+    environmentId,
+    claimToken,
+  });
+}
+
+export async function transferPromptQueueMessageToComposeDraft<T>(
+  queueKey: string,
+  environmentId: string,
+  messageId: string,
+  draftKey: string,
+  ownerType: "environment" | "project",
+  ownerId: string,
+  expectedDraftRevision?: number,
+): Promise<{
+  removed: T | null;
+  queue: PersistedPromptQueue<T> | null;
+  draft: PersistedComposeDraft | null;
+}> {
+  return invoke("transfer_prompt_queue_message_to_compose_draft", {
+    queueKey,
+    environmentId,
+    messageId,
+    draftKey,
+    ownerType,
+    ownerId,
+    ...(expectedDraftRevision === undefined ? {} : { expectedDraftRevision }),
   });
 }
 

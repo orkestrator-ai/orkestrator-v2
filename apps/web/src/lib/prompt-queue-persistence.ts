@@ -84,8 +84,14 @@ export type PromptQueueClaimer<TItem extends QueuedItem = QueuedItem> = (
   projectedMessages?: TItem[],
 ) => Promise<{
   claimed: TItem | null;
+  claimToken: string | null;
   queue: PersistedPromptQueue<TItem> | null;
 }>;
+
+export interface ClaimedPrompt<TItem extends QueuedItem> {
+  entry: TItem;
+  claimToken: string;
+}
 
 /** Atomically takes one queue head before its irreversible agent dispatch. */
 export async function claimPromptQueueHead<TItem extends QueuedItem>(
@@ -93,7 +99,7 @@ export async function claimPromptQueueHead<TItem extends QueuedItem>(
   sessionKey: string,
   claim: PromptQueueClaimer<TItem> =
     backend.claimPromptQueueHead as PromptQueueClaimer<TItem>,
-): Promise<TItem | null> {
+): Promise<ClaimedPrompt<TItem> | null> {
   const environmentId = source.environmentIdFor(sessionKey);
   if (!environmentId) return null;
 
@@ -121,8 +127,10 @@ export async function claimPromptQueueHead<TItem extends QueuedItem>(
     && claimed !== null
     && typeof claimed.id === "string"
     && claimed.id === expected.id
+    && typeof result.claimToken === "string"
+    && result.claimToken.trim().length > 0
   )
-    ? claimed
+    ? { entry: claimed, claimToken: result.claimToken }
     : null;
 }
 

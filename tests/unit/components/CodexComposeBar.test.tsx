@@ -23,6 +23,57 @@ const mockRefreshFileTree = mock(() => {});
 const mockSearchFiles = mock(() => []);
 const mockInsertMentionAtCursor = mock(() => {});
 const mockInputFocus = mock(() => {});
+const mockRemovePromptQueueMessage = mock(
+  async (
+    _queueKey: string,
+    _environmentId: string,
+    _messageId: string,
+  ): Promise<{
+    removed: unknown | null;
+    queue: {
+      queueKey: string;
+      environmentId: string;
+      messages: unknown[];
+      updatedAt: string;
+      revision: number;
+    } | null;
+  }> => ({ removed: null, queue: null }),
+);
+const mockMovePromptQueueMessage = mock(
+  async (
+    _queueKey: string,
+    _environmentId: string,
+    _messageId: string,
+    _direction: "up" | "down",
+  ): Promise<{
+    queueKey: string;
+    environmentId: string;
+    messages: unknown[];
+    updatedAt: string;
+    revision: number;
+  } | null> => null,
+);
+const mockTransferPromptQueueMessageToComposeDraft = mock(
+  async (
+    _queueKey: string,
+    _environmentId: string,
+    _messageId: string,
+    _draftKey: string,
+    _ownerType: "environment" | "project",
+    _ownerId: string,
+  ): Promise<{
+    removed: unknown | null;
+    queue: {
+      queueKey: string;
+      environmentId: string;
+      messages: unknown[];
+      updatedAt: string;
+      revision: number;
+    } | null;
+    draft: unknown | null;
+  }> => ({ removed: null, queue: null, draft: null }),
+);
+let mockPromptQueueRevision = 0;
 let mockFileMentionMenuOpen = false;
 let mockFileSearchError: string | null = null;
 
@@ -52,6 +103,10 @@ mock.module("@/lib/backend", () => ({
   writeLocalFile: mockWriteLocalFile,
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
+  removePromptQueueMessage: mockRemovePromptQueueMessage,
+  movePromptQueueMessage: mockMovePromptQueueMessage,
+  transferPromptQueueMessageToComposeDraft:
+    mockTransferPromptQueueMessageToComposeDraft,
 }));
 
 // @/lib/native/clipboard is centrally mocked in tests/setup.ts.
@@ -168,6 +223,24 @@ const SESSION_KEY = `env-${ENV_ID}:default`;
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 
+function sessionKeyFromQueueKey(queueKey: string): string {
+  return queueKey.slice(queueKey.indexOf("\u0000") + 1);
+}
+
+function codexQueueSnapshot(
+  queueKey: string,
+  environmentId: string,
+  messages: unknown[],
+) {
+  return {
+    queueKey,
+    environmentId,
+    messages,
+    updatedAt: new Date().toISOString(),
+    revision: ++mockPromptQueueRevision,
+  };
+}
+
 function deferred() {
   let resolve!: () => void;
   let reject!: (error: Error) => void;
@@ -259,6 +332,77 @@ describe("CodexComposeBar", () => {
     mockSearchFiles.mockImplementation(() => []);
     mockInsertMentionAtCursor.mockReset();
     mockInputFocus.mockReset();
+    mockRemovePromptQueueMessage.mockReset();
+    mockRemovePromptQueueMessage.mockImplementation(
+      async (queueKey, environmentId, messageId) => {
+        const messages = [
+          ...(useCodexStore.getState().messageQueue.get(
+            sessionKeyFromQueueKey(queueKey),
+          ) ?? []),
+        ];
+        const removed = messages.find((message) => message.id === messageId) ?? null;
+        return {
+          removed,
+          queue: codexQueueSnapshot(
+            queueKey,
+            environmentId,
+            messages.filter((message) => message.id !== messageId),
+          ),
+        };
+      },
+    );
+    mockMovePromptQueueMessage.mockReset();
+    mockMovePromptQueueMessage.mockImplementation(
+      async (queueKey, environmentId, messageId, direction) => {
+        const messages = [
+          ...(useCodexStore.getState().messageQueue.get(
+            sessionKeyFromQueueKey(queueKey),
+          ) ?? []),
+        ];
+        const fromIndex = messages.findIndex((message) => message.id === messageId);
+        const toIndex = direction === "up" ? fromIndex - 1 : fromIndex + 1;
+        if (fromIndex >= 0 && toIndex >= 0 && toIndex < messages.length) {
+          [messages[fromIndex], messages[toIndex]] = [
+            messages[toIndex]!,
+            messages[fromIndex]!,
+          ];
+        }
+        return codexQueueSnapshot(queueKey, environmentId, messages);
+      },
+    );
+    mockTransferPromptQueueMessageToComposeDraft.mockReset();
+    mockTransferPromptQueueMessageToComposeDraft.mockImplementation(
+      async (queueKey, environmentId, messageId, draftKey, ownerType, ownerId) => {
+        const messages = [
+          ...(useCodexStore.getState().messageQueue.get(
+            sessionKeyFromQueueKey(queueKey),
+          ) ?? []),
+        ];
+        const removed = messages.find((message) => message.id === messageId) ?? null;
+        return {
+          removed,
+          queue: codexQueueSnapshot(
+            queueKey,
+            environmentId,
+            messages.filter((message) => message.id !== messageId),
+          ),
+          draft: removed
+            ? {
+                draftKey,
+                ownerType,
+                ownerId,
+                value: {
+                  text: removed.text,
+                  mentions: [],
+                  attachments: removed.attachments,
+                },
+                updatedAt: new Date().toISOString(),
+                revision: 1,
+              }
+            : null,
+        };
+      },
+    );
     mockFileMentionMenuOpen = false;
     mockFileSearchError = null;
     mockReadImage.mockImplementation(async () => ({
@@ -913,6 +1057,57 @@ describe("CodexComposeBar", () => {
     expect(useCodexStore.getState().getDraftMentions(SESSION_KEY)).toEqual([]);
     expect(onFastModeChange).toHaveBeenCalledWith(true);
     expect(useCodexStore.getState().getQueueLength(SESSION_KEY)).toBe(0);
+  });
+
+  test("restores the authoritative removed prompt instead of a stale rendered row", async () => {
+    useCodexStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-authoritative",
+      text: "Stale rendered text",
+      attachments: [],
+      model: "gpt-5.3-codex",
+      mode: "build",
+      reasoningEffort: "high",
+      fastMode: false,
+    });
+    mockTransferPromptQueueMessageToComposeDraft.mockResolvedValueOnce({
+      removed: {
+        id: "queue-authoritative",
+        text: "Authoritative backend text",
+        attachments: [
+          {
+            id: "authoritative-attachment",
+            type: "image",
+            path: "/workspace/current.png",
+            previewUrl: "data:image/png;base64,current",
+            name: "current.png",
+          },
+        ],
+        model: "gpt-5.4",
+        mode: "plan",
+        reasoningEffort: "xhigh",
+        fastMode: true,
+      },
+      queue: codexQueueSnapshot(
+        `codex\u0000${SESSION_KEY}`,
+        ENV_ID,
+        [],
+      ),
+      draft: null,
+    });
+
+    const { onFastModeChange } = renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByText("Stale rendered text"));
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe(
+        "Authoritative backend text",
+      );
+    });
+    expect(useCodexStore.getState().getAttachments(SESSION_KEY)).toEqual([
+      expect.objectContaining({ id: "authoritative-attachment" }),
+    ]);
+    expect(onFastModeChange).toHaveBeenCalledWith(true);
   });
 
   test("keeps an equal queued fast-mode setting without dispatching a redundant change", async () => {

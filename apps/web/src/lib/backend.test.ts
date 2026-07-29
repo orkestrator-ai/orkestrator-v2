@@ -582,6 +582,11 @@ describe("backend setup wrappers", () => {
       "env-1",
       message,
     );
+    await backendWrappers.requeuePromptQueueMessage(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      message,
+    );
     await backendWrappers.movePromptQueueMessage(
       "codex\u0000env-1:tab-1",
       "env-1",
@@ -598,11 +603,35 @@ describe("backend setup wrappers", () => {
       "env-1",
       "message-1",
     );
+    await backendWrappers.acknowledgePromptQueueClaim(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      "claim-1",
+    );
+    await backendWrappers.rejectPromptQueueClaim(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      "claim-2",
+    );
+    await backendWrappers.transferPromptQueueMessageToComposeDraft(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      "message-1",
+      "codex:env-1:env-1%3Atab-1",
+      "environment",
+      "env-1",
+      4,
+    );
 
     expect(invokeMock.mock.calls).toEqual([
       ["get_prompt_queue", { queueKey: "codex\u0000env-1:tab-1" }],
       ["list_prompt_queues", { environmentId: "env-1" }],
       ["enqueue_prompt_queue_message", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        message,
+      }],
+      ["requeue_prompt_queue_message", {
         queueKey: "codex\u0000env-1:tab-1",
         environmentId: "env-1",
         message,
@@ -622,6 +651,25 @@ describe("backend setup wrappers", () => {
         queueKey: "codex\u0000env-1:tab-1",
         environmentId: "env-1",
         expectedMessageId: "message-1",
+      }],
+      ["acknowledge_prompt_queue_claim", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        claimToken: "claim-1",
+      }],
+      ["reject_prompt_queue_claim", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        claimToken: "claim-2",
+      }],
+      ["transfer_prompt_queue_message_to_compose_draft", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        messageId: "message-1",
+        draftKey: "codex:env-1:env-1%3Atab-1",
+        ownerType: "environment",
+        ownerId: "env-1",
+        expectedDraftRevision: 4,
       }],
     ]);
   });

@@ -107,11 +107,12 @@ describe("prompt queue commands", () => {
       await invoke("enqueue_prompt_queue_message", {
         queueKey: KEY, environmentId: "e1", message: { id: "m2" },
       });
-      await expect(invoke("claim_prompt_queue_head", {
+      const first = await invoke("claim_prompt_queue_head", {
         queueKey: KEY,
         environmentId: "e1",
         expectedMessageId: "m1",
-      })).resolves.toMatchObject({
+      }) as { claimToken: string };
+      expect(first).toMatchObject({
         claimed: { id: "m1" },
         queue: { messages: [{ id: "m2" }], revision: 3 },
       });
@@ -119,10 +120,88 @@ describe("prompt queue commands", () => {
       await expect(invoke("claim_prompt_queue_head", {
         queueKey: KEY,
         environmentId: "e1",
-        expectedMessageId: "m1",
+        expectedMessageId: "m2",
       })).resolves.toMatchObject({
         claimed: null,
-        queue: { messages: [{ id: "m2" }], revision: 3 },
+        claimToken: null,
+        queue: {
+          messages: [{ id: "m2" }],
+          revision: 3,
+          outstandingClaim: { message: { id: "m1" } },
+        },
+      });
+      await expect(invoke("acknowledge_prompt_queue_claim", {
+        queueKey: KEY,
+        environmentId: "e1",
+        claimToken: first.claimToken,
+      })).resolves.toMatchObject({
+        messages: [{ id: "m2" }],
+        revision: 4,
+      });
+    });
+  });
+
+  test("requeues, nacks, and acknowledges through registry commands", async () => {
+    await withCommands(async (invoke) => {
+      await invoke("requeue_prompt_queue_message", {
+        queueKey: KEY,
+        environmentId: "e1",
+        message: { id: "m1", text: "first", attachments: [] },
+      });
+      const claim = await invoke("claim_prompt_queue_head", {
+        queueKey: KEY,
+        environmentId: "e1",
+        expectedMessageId: "m1",
+      }) as { claimToken: string };
+      await expect(invoke("reject_prompt_queue_claim", {
+        queueKey: KEY,
+        environmentId: "e1",
+        claimToken: claim.claimToken,
+      })).resolves.toMatchObject({ messages: [{ id: "m1" }] });
+
+      const retry = await invoke("claim_prompt_queue_head", {
+        queueKey: KEY,
+        environmentId: "e1",
+        expectedMessageId: "m1",
+      }) as { claimToken: string };
+      await expect(invoke("acknowledge_prompt_queue_claim", {
+        queueKey: KEY,
+        environmentId: "e1",
+        claimToken: retry.claimToken,
+      })).resolves.toMatchObject({ messages: [] });
+    });
+  });
+
+  test("atomically transfers the authoritative queued payload to a draft", async () => {
+    await withCommands(async (invoke) => {
+      await invoke("enqueue_prompt_queue_message", {
+        queueKey: KEY,
+        environmentId: "e1",
+        message: {
+          id: "m1",
+          text: "authoritative",
+          attachments: [{ id: "attachment-1" }],
+          mode: "plan",
+        },
+      });
+      await expect(invoke("transfer_prompt_queue_message_to_compose_draft", {
+        queueKey: KEY,
+        environmentId: "e1",
+        messageId: "m1",
+        draftKey: "compose:e1:tab-1",
+        ownerType: "environment",
+        ownerId: "e1",
+        expectedDraftRevision: 0,
+      })).resolves.toMatchObject({
+        removed: { id: "m1", mode: "plan" },
+        queue: { messages: [] },
+        draft: {
+          value: {
+            text: "authoritative",
+            mentions: [],
+            attachments: [{ id: "attachment-1" }],
+          },
+        },
       });
     });
   });
@@ -139,6 +218,24 @@ describe("prompt queue commands", () => {
         environmentId: "e1",
         message: "bad",
       })).rejects.toThrow("non-blank ID");
+      await expect(invoke("acknowledge_prompt_queue_claim", {
+        queueKey: KEY,
+        environmentId: "e1",
+        claimToken: "",
+      })).rejects.toThrow();
+      await expect(invoke("reject_prompt_queue_claim", {
+        queueKey: KEY,
+        environmentId: "e1",
+        claimToken: "",
+      })).rejects.toThrow();
+      await expect(invoke("transfer_prompt_queue_message_to_compose_draft", {
+        queueKey: KEY,
+        environmentId: "e1",
+        messageId: "",
+        draftKey: "compose:e1:tab-1",
+        ownerType: "environment",
+        ownerId: "e1",
+      })).rejects.toThrow();
     });
   });
 

@@ -56,7 +56,46 @@ describe("OrkestratorBackend resource event wiring", () => {
       await backend.invoke("enqueue_prompt_queue_message", {
         queueKey: "claude env-e1:tab-1",
         environmentId: "e1",
-        message: { id: "m1" },
+        message: { id: "m1", text: "queued", attachments: [] },
+      });
+      const claim = await backend.invoke<{ claimToken: string }>(
+        "claim_prompt_queue_head",
+        {
+          queueKey: "claude env-e1:tab-1",
+          environmentId: "e1",
+          expectedMessageId: "m1",
+        },
+      );
+      await backend.invoke("reject_prompt_queue_claim", {
+        queueKey: "claude env-e1:tab-1",
+        environmentId: "e1",
+        claimToken: claim.claimToken,
+      });
+      await backend.invoke("transfer_prompt_queue_message_to_compose_draft", {
+        queueKey: "claude env-e1:tab-1",
+        environmentId: "e1",
+        messageId: "m1",
+        draftKey: "compose:e1:tab-1",
+        ownerType: "environment",
+        ownerId: "e1",
+      });
+      await backend.invoke("enqueue_prompt_queue_message", {
+        queueKey: "claude env-e1:tab-1",
+        environmentId: "e1",
+        message: { id: "m2" },
+      });
+      const acknowledged = await backend.invoke<{ claimToken: string }>(
+        "claim_prompt_queue_head",
+        {
+          queueKey: "claude env-e1:tab-1",
+          environmentId: "e1",
+          expectedMessageId: "m2",
+        },
+      );
+      await backend.invoke("acknowledge_prompt_queue_claim", {
+        queueKey: "claude env-e1:tab-1",
+        environmentId: "e1",
+        claimToken: acknowledged.claimToken,
       });
 
       expect(events).toContainEqual({
@@ -66,6 +105,18 @@ describe("OrkestratorBackend resource event wiring", () => {
           id: pipeline.id,
         }),
       });
+      expect(events).toContainEqual({
+        event: RESOURCE_CHANGED_EVENT,
+        payload: expect.objectContaining({
+          resource: "compose-draft",
+          id: "e1",
+        }),
+      });
+      expect(events.filter(({ payload }) =>
+        typeof payload === "object"
+        && payload !== null
+        && (payload as { resource?: string }).resource === "prompt-queue"
+      )).toHaveLength(7);
       expect(events).toContainEqual({
         event: RESOURCE_CHANGED_EVENT,
         payload: expect.objectContaining({

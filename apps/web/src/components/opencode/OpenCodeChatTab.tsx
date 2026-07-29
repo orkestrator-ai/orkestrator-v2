@@ -27,10 +27,11 @@ import { useConfigStore } from "@/stores/configStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import {
+  acknowledgeAgentPromptClaim,
   claimAgentPromptQueueHead,
   enqueueAgentPrompt,
-  removeAgentPrompt,
-  requeueAgentPrompt,
+  rejectAgentPromptClaim,
+  transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
 import {
   checkClientHealth,
@@ -252,6 +253,8 @@ export function OpenCodeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
+  const [stopInProgress, setStopInProgress] = useState(false);
+  const stopPromotionPendingRef = useRef(false);
   const automaticInitRetryCountRef = useRef(0);
   const automaticInitRetryWindowStartedAtRef = useRef<number | null>(null);
   const setupPendingObservedForInitRetryRef = useRef(false);
@@ -1461,8 +1464,6 @@ export function OpenCodeChatTab({
     isActive,
     handoffPending,
     isLocal,
-    queueLength,
-    queueHeadId,
     syncPendingRequests,
     getSelectedModel,
     getSelectedVariant,
@@ -2264,19 +2265,27 @@ export function OpenCodeChatTab({
       handoff.ready
       && !setupPending
       && connectionState === "connected"
-      && !!client,
+      && !!client
+      && !stopInProgress,
     queueLength,
+    queueHeadId,
     isLoading: session?.isLoading ?? false,
     blockedByDraft: isQueueBlockedByDraft,
     claimHead: () =>
       claimAgentPromptQueueHead<OpenCodeQueuedMessage>("opencode", sessionKey),
-    requeue: (entry) => requeueAgentPrompt("opencode", sessionKey, entry),
-    send: (entry) =>
-      handleSendRef.current?.(entry.text, entry.attachments, {
+    acknowledgeClaim: (claimToken) =>
+      acknowledgeAgentPromptClaim("opencode", sessionKey, claimToken),
+    rejectClaim: (claimToken) =>
+      rejectAgentPromptClaim("opencode", sessionKey, claimToken),
+    send: (entry) => {
+      const dispatch = handleSendRef.current?.(entry.text, entry.attachments, {
         model: entry.model,
         variant: entry.variant,
         mode: entry.mode,
-      }),
+        requestId: entry.id,
+      });
+      return dispatch?.then((result) => result?.success ? "accepted" : "rejected");
+    },
     onError: (error) => {
       const errorText = `Failed to send queued prompt: ${
         error instanceof Error ? error.message : "Unknown error"
@@ -2381,7 +2390,7 @@ export function OpenCodeChatTab({
 
     const head = store.getQueuedMessages(sessionKey)[0];
     if (!head) return;
-    const nextMessage = await removeAgentPrompt<OpenCodeQueuedMessage>(
+    const nextMessage = await transferAgentPromptToComposeDraft<OpenCodeQueuedMessage>(
       "opencode",
       sessionKey,
       head.id,
@@ -2405,11 +2414,10 @@ export function OpenCodeChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    await promoteNextQueuedPromptToDraft().catch((error) => {
-      console.error("[OpenCodeChatTab] Failed to promote queued prompt:", error);
-    });
-    setSessionLoading(sessionKey, false);
-
+    // Prevent queue draining immediately, then interrupt the live request
+    // before starting the durable queue-to-draft transfer.
+    stopPromotionPendingRef.current = true;
+    setStopInProgress(true);
     const success = await abortSession(client, session.sessionId);
     if (success) {
       // Leave a marker in the transcript. Without it an interrupted turn is
@@ -2421,8 +2429,15 @@ export function OpenCodeChatTab({
         parts: [{ type: "text", content: TURN_STOPPED_BY_USER }],
         createdAt: new Date().toISOString(),
       });
+      await promoteNextQueuedPromptToDraft().catch((error) => {
+        console.error("[OpenCodeChatTab] Failed to promote queued prompt:", error);
+      });
     } else {
       console.error("[OpenCodeChatTab] Failed to abort session");
+    }
+    stopPromotionPendingRef.current = false;
+    if (useOpenCodeStore.getState().sessions.get(sessionKey)?.isLoading !== true) {
+      setStopInProgress(false);
     }
   }, [
     addMessage,
@@ -2430,8 +2445,17 @@ export function OpenCodeChatTab({
     session,
     sessionKey,
     promoteNextQueuedPromptToDraft,
-    setSessionLoading,
   ]);
+
+  useEffect(() => {
+    if (
+      stopInProgress
+      && !stopPromotionPendingRef.current
+      && session?.isLoading === false
+    ) {
+      setStopInProgress(false);
+    }
+  }, [session?.isLoading, stopInProgress]);
 
   useEscapeToStop({
     isActive,

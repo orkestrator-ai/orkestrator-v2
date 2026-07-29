@@ -88,6 +88,34 @@ afterAll(() => {
 });
 
 describe("compose draft persistence", () => {
+  test("records revisions created by an atomic external draft mutation", async () => {
+    const key = "draft:atomic-transfer";
+    saveComposeDraft.mockResolvedValueOnce({
+      draftKey: key,
+      ownerType: "environment",
+      ownerId: "env-1",
+      value: "edited",
+      updatedAt: "2026-07-29T00:00:00.000Z",
+      revision: 8,
+    });
+
+    compose.recordComposeDraftRevision(key, 7);
+    await compose.persistComposeDraft(
+      key,
+      "environment",
+      "env-1",
+      "edited",
+    );
+
+    expect(saveComposeDraft).toHaveBeenCalledWith(
+      key,
+      "environment",
+      "env-1",
+      "edited",
+      7,
+    );
+  });
+
   test("encodes local keys so separators and Unicode remain one key segment", () => {
     expect(compose.composeDraftKey("linear", "project", "issue:/💾")).toBe(
       "linear:project:issue%3A%2F%F0%9F%92%BE",

@@ -34,7 +34,11 @@ import type {
 } from "@/lib/codex-client";
 import type { CodexAttachment, CodexQueuedMessage } from "@/stores/codexStore";
 import type { FileCandidate, FileMention } from "@/types";
-import { moveAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
+import {
+  moveAgentPrompt,
+  removeAgentPrompt,
+  transferAgentPromptToComposeDraft,
+} from "@/lib/prompt-queue-sources";
 
 const EMPTY_ATTACHMENTS: CodexAttachment[] = [];
 const EMPTY_MENTIONS: FileMention[] = [];
@@ -311,20 +315,20 @@ export function CodexComposeBar({
 
   const handleQueuedMessageClick = useCallback(
     async (message: CodexQueuedMessage) => {
-      const removed = await removeAgentPrompt<CodexQueuedMessage>(
+      const removed = await transferAgentPromptToComposeDraft<CodexQueuedMessage>(
         "codex",
         sessionKey,
         message.id,
       );
       if (!removed) return;
-      setDraftText(sessionKey, message.text);
+      setDraftText(sessionKey, removed.text);
       setDraftMentions(sessionKey, []);
       clearAttachments(sessionKey);
-      for (const attachment of message.attachments) {
+      for (const attachment of removed.attachments) {
         addAttachment(sessionKey, attachment);
       }
-      if (message.fastMode !== fastModeEnabled) {
-        onFastModeChange(message.fastMode);
+      if (removed.fastMode !== fastModeEnabled) {
+        onFastModeChange(removed.fastMode);
       }
       setQueueDialogOpen(false);
       inputRef.current?.focus();

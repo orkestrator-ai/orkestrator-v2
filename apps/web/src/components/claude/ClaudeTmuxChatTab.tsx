@@ -89,6 +89,7 @@ import {
   payloadToQuestion,
   compactConsecutiveAssistantMessages,
   createClaudeTmuxStateKey,
+  migrateLegacyClaudeTmuxState,
   useClaudeTmuxStore,
   type TmuxPendingApproval,
   type TmuxPendingElicitation,
@@ -117,11 +118,12 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import {
+  acknowledgeAgentPromptClaim,
   claimAgentPromptQueueHead,
   enqueueAgentPrompt,
   moveAgentPrompt,
+  rejectAgentPromptClaim,
   removeAgentPrompt,
-  requeueAgentPrompt,
 } from "@/lib/prompt-queue-sources";
 import {
   getClaudeModelCatalog,
@@ -353,7 +355,7 @@ export function ClaudeTmuxChatTab({
     legacyTabState &&
     (!legacyTabState.environmentId || legacyTabState.environmentId === environmentId);
   const tabState = scopedTabState ?? (shouldUseLegacyTabState ? legacyTabState : undefined);
-  const storeKey = scopedTabState ? stateKey : shouldUseLegacyTabState ? tabId : stateKey;
+  const storeKey = stateKey;
   const setRunning = useClaudeTmuxStore((s) => s.setRunning);
   const applyTranscriptLine = useClaudeTmuxStore((s) => s.applyTranscriptLine);
   const replaceTranscript = useClaudeTmuxStore((s) => s.replaceTranscript);
@@ -414,6 +416,24 @@ export function ClaudeTmuxChatTab({
   const startedRef = useRef(false);
   const permissionModeEventVersionRef = useRef(0);
   const isProcessingQueueRef = useRef(false);
+  const pausedQueueHeadIdRef = useRef<string | null>(null);
+  const queueMountedRef = useRef(true);
+  const claimSettlementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingClaimSettlementRef = useRef<{
+    operation: "acknowledge" | "reject";
+    claim: { entry: TmuxQueuedMessage; claimToken: string };
+  } | null>(null);
+  const restoreClaimedPromptToDraftRef = useRef<(message: TmuxQueuedMessage) => void>(
+    () => {},
+  );
+  const retryClaimSettlementRef = useRef<
+    (
+      operation: "acknowledge" | "reject",
+      claim: { entry: TmuxQueuedMessage; claimToken: string },
+      attempt: number,
+      reported: boolean,
+    ) => Promise<boolean>
+  >(async () => false);
   const processQueueRef = useRef<() => void>(() => {});
   const submitPromptRef = useRef<
     ((
@@ -529,6 +549,10 @@ export function ClaudeTmuxChatTab({
     effortOptions.length > 0 && !effortOptions.includes(selectedEffort)
       ? fallbackEffort(effortOptions)
       : selectedEffort;
+
+  useLayoutEffect(() => {
+    migrateLegacyClaudeTmuxState(tabId, stateKey, environmentId);
+  }, [environmentId, stateKey, tabId]);
 
   useEffect(() => {
     if (!initialLaunchReasoningEffort) return;
@@ -1019,14 +1043,116 @@ export function ClaudeTmuxChatTab({
 
   const handleQueue = useCallback(
     async (text: string, attachments: TmuxAttachment[]) => {
-      await enqueueAgentPrompt<TmuxQueuedMessage>("claude-tmux", storeKey, {
-        id: createUuid(),
-        text,
-        attachments,
-      });
+      setError(null);
+      try {
+        await enqueueAgentPrompt<TmuxQueuedMessage>("claude-tmux", storeKey, {
+          id: createUuid(),
+          text,
+          attachments,
+        });
+      } catch (error) {
+        setError(
+          `Failed to queue prompt: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`,
+        );
+        throw error;
+      }
     },
     [storeKey],
   );
+
+  const restoreClaimedPromptToDraft = useCallback(
+    (message: TmuxQueuedMessage) => {
+      const store = useClaudeTmuxStore.getState();
+      const currentText = store.getDraftText(storeKey);
+      const currentAttachments = store.getAttachments(storeKey);
+      store.setDraftText(
+        storeKey,
+        currentText.trim()
+          ? `${message.text}\n\n${currentText}`
+          : message.text,
+      );
+      store.clearAttachments(storeKey);
+      for (const attachment of [...message.attachments, ...currentAttachments]) {
+        if (!store.getAttachments(storeKey).some((item) => item.id === attachment.id)) {
+          store.addAttachment(storeKey, attachment);
+        }
+      }
+    },
+    [storeKey],
+  );
+  restoreClaimedPromptToDraftRef.current = restoreClaimedPromptToDraft;
+
+  retryClaimSettlementRef.current = async (
+    operation,
+    claim,
+    attempt,
+    reported,
+  ) => {
+    pendingClaimSettlementRef.current = { operation, claim };
+    // Set this before the reject call applies its authoritative snapshot.
+    // Zustand subscribers can render synchronously during that application;
+    // the guard must already be visible when their queue effect runs.
+    if (operation === "reject") {
+      pausedQueueHeadIdRef.current = claim.entry.id;
+    }
+    try {
+      if (operation === "acknowledge") {
+        await acknowledgeAgentPromptClaim<TmuxQueuedMessage>(
+          "claude-tmux",
+          storeKey,
+          claim.claimToken,
+        );
+      } else {
+        await rejectAgentPromptClaim<TmuxQueuedMessage>(
+          "claude-tmux",
+          storeKey,
+          claim.claimToken,
+        );
+      }
+      pendingClaimSettlementRef.current = null;
+      if (operation === "reject" && queueMountedRef.current) {
+        setError("Failed to send queued prompt. It was returned to the queue.");
+      }
+      return true;
+    } catch (settlementError) {
+      if (!reported) {
+        const detail =
+          settlementError instanceof Error
+            ? settlementError.message
+            : "Unknown error";
+        setError(
+          operation === "acknowledge"
+            ? `Queued prompt was sent, but its queue claim could not be acknowledged yet: ${detail}`
+            : `Failed to send queued prompt and return it to the queue yet: ${detail}`,
+        );
+      }
+      if (!queueMountedRef.current) {
+        if (operation === "reject") {
+          restoreClaimedPromptToDraftRef.current(claim.entry);
+        }
+        pendingClaimSettlementRef.current = null;
+        return false;
+      }
+
+      const delay = Math.min(250 * (2 ** attempt), 30_000);
+      claimSettlementTimerRef.current = setTimeout(() => {
+        claimSettlementTimerRef.current = null;
+        void retryClaimSettlementRef.current(
+          operation,
+          claim,
+          attempt + 1,
+          true,
+        ).then((settled) => {
+          if (settled && operation === "acknowledge") {
+            processQueueRef.current();
+          }
+        });
+      }, delay);
+      return false;
+    }
+  };
 
   const processQueue = useCallback(() => {
     if (isProcessingQueueRef.current) return;
@@ -1042,6 +1168,16 @@ export function ClaudeTmuxChatTab({
     }
 
     const tmuxState = useClaudeTmuxStore.getState();
+    const currentHeadId = tmuxState.getQueuedMessages(storeKey)[0]?.id ?? null;
+    if (
+      pausedQueueHeadIdRef.current &&
+      pausedQueueHeadIdRef.current === currentHeadId
+    ) {
+      return;
+    }
+    if (pausedQueueHeadIdRef.current && pausedQueueHeadIdRef.current !== currentHeadId) {
+      pausedQueueHeadIdRef.current = null;
+    }
     if (
       tmuxState.getDraftText(storeKey).trim().length > 0 ||
       tmuxState.getAttachments(storeKey).length > 0
@@ -1051,24 +1187,41 @@ export function ClaudeTmuxChatTab({
 
     isProcessingQueueRef.current = true;
     const headBeforeClaimId = tmuxState.getQueuedMessages(storeKey)[0]?.id;
-    let claimedMessage: TmuxQueuedMessage | null = null;
+    let claimedPrompt: {
+      entry: TmuxQueuedMessage;
+      claimToken: string;
+    } | null = null;
     void claimAgentPromptQueueHead<TmuxQueuedMessage>("claude-tmux", storeKey)
-      .then((nextMessage) => {
-        if (!nextMessage) return;
-        claimedMessage = nextMessage;
+      .then((nextClaim) => {
+        if (!nextClaim) return;
+        claimedPrompt = nextClaim;
         return submitPromptRef.current?.(
-          nextMessage.text,
-          nextMessage.attachments,
+          nextClaim.entry.text,
+          nextClaim.entry.attachments,
           false,
         );
       })
       .then(async (sent) => {
-        if (sent === false && claimedMessage) {
-          await requeueAgentPrompt("claude-tmux", storeKey, claimedMessage);
-          setError((current) => current ?? "Failed to send queued prompt");
+        if (!claimedPrompt) return;
+        if (sent === true) {
+          await retryClaimSettlementRef.current(
+            "acknowledge",
+            claimedPrompt,
+            0,
+            false,
+          );
+          return;
         }
+
+        await retryClaimSettlementRef.current(
+          "reject",
+          claimedPrompt,
+          0,
+          false,
+        );
       })
       .catch((e) => {
+        pausedQueueHeadIdRef.current = headBeforeClaimId ?? null;
         setError(
           `Failed to send queued prompt: ${
             e instanceof Error ? e.message : "Unknown error"
@@ -1081,7 +1234,7 @@ export function ClaudeTmuxChatTab({
         const headAfterClaimId = useClaudeTmuxStore
           .getState()
           .getQueuedMessages(storeKey)[0]?.id;
-        if (!claimedMessage && headAfterClaimId !== headBeforeClaimId) {
+        if (!claimedPrompt && headAfterClaimId !== headBeforeClaimId) {
           processQueueRef.current();
         }
       });
@@ -1099,6 +1252,26 @@ export function ClaudeTmuxChatTab({
   useEffect(() => {
     processQueueRef.current = processQueue;
   }, [processQueue]);
+
+  useEffect(() => {
+    queueMountedRef.current = true;
+    return () => {
+      queueMountedRef.current = false;
+      let cancelledScheduledRetry = false;
+      if (claimSettlementTimerRef.current) {
+        clearTimeout(claimSettlementTimerRef.current);
+        claimSettlementTimerRef.current = null;
+        cancelledScheduledRetry = true;
+      }
+      const pending = pendingClaimSettlementRef.current;
+      if (cancelledScheduledRetry) {
+        pendingClaimSettlementRef.current = null;
+      }
+      if (cancelledScheduledRetry && pending?.operation === "reject") {
+        restoreClaimedPromptToDraftRef.current(pending.claim.entry);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (queueLength > 0 && !isQueueBlockedByDraft) {
@@ -1712,6 +1885,7 @@ export function ClaudeTmuxChatTab({
               autoFocus={isActive}
               onSubmit={handleSubmit}
               onQueue={handleQueue}
+              onQueueError={setError}
               queueLength={queueLength}
               showAddressAll={showAddressAll}
               onAddressAll={handleAddressAll}
@@ -2493,6 +2667,7 @@ interface TmuxComposeBarProps {
   autoFocus?: boolean;
   onSubmit: (text: string, attachments: TmuxAttachment[]) => Promise<boolean> | boolean | void;
   onQueue?: (text: string, attachments: TmuxAttachment[]) => Promise<void> | void;
+  onQueueError?: (message: string) => void;
   queueLength?: number;
   showAddressAll?: boolean;
   onAddressAll?: () => void;
@@ -2522,6 +2697,7 @@ function TmuxComposeBar({
   autoFocus,
   onSubmit,
   onQueue,
+  onQueueError,
   queueLength = 0,
   showAddressAll = false,
   onAddressAll,
@@ -2546,6 +2722,8 @@ function TmuxComposeBar({
   const pendingCursorPositionRef = useRef<number | null>(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
+  const [queueSubmitting, setQueueSubmitting] = useState(false);
+  const queueSubmittingRef = useRef(false);
   const value = useClaudeTmuxStore((state) => state.draftText.get(sessionKey) ?? "");
   const fileMentions = useClaudeTmuxStore(
     useCallback(
@@ -2717,7 +2895,7 @@ function TmuxComposeBar({
   });
 
   const handleSubmit = async () => {
-    if (submitting || disabled) return;
+    if (submitting || queueSubmittingRef.current || disabled) return;
     const serializedText = serializeTmuxFileMentions(
       value.trim(),
       fileMentions,
@@ -2727,10 +2905,21 @@ function TmuxComposeBar({
     if (!serializedText && attachments.length === 0) return;
 
     if (busy) {
-      await onQueue?.(serializedText, attachments);
-      setValue(sessionKey, "");
-      setFileMentions(sessionKey, []);
-      clearAttachments(sessionKey);
+      if (!onQueue) return;
+      queueSubmittingRef.current = true;
+      setQueueSubmitting(true);
+      try {
+        await onQueue(serializedText, attachments);
+        setValue(sessionKey, "");
+        setFileMentions(sessionKey, []);
+        clearAttachments(sessionKey);
+      } catch {
+        // The parent reports the backend error. Keep the draft intact so the
+        // user can retry without reconstructing the prompt or attachments.
+      } finally {
+        queueSubmittingRef.current = false;
+        setQueueSubmitting(false);
+      }
       return;
     }
 
@@ -2745,24 +2934,33 @@ function TmuxComposeBar({
   const handleQueuedMessageClick = useCallback(
     async (message: TmuxQueuedMessage) => {
       if (value.trim() || attachments.length > 0) return;
-      const removed = await removeAgentPrompt<TmuxQueuedMessage>(
-        "claude-tmux",
-        sessionKey,
-        message.id,
-      );
-      if (!removed) return;
-      setValue(sessionKey, removed.text);
-      setFileMentions(sessionKey, []);
-      clearAttachments(sessionKey);
-      for (const attachment of removed.attachments) {
-        addAttachmentToStore(sessionKey, attachment);
+      try {
+        const removed = await removeAgentPrompt<TmuxQueuedMessage>(
+          "claude-tmux",
+          sessionKey,
+          message.id,
+        );
+        if (!removed) return;
+        setValue(sessionKey, removed.text);
+        setFileMentions(sessionKey, []);
+        clearAttachments(sessionKey);
+        for (const attachment of removed.attachments) {
+          addAttachmentToStore(sessionKey, attachment);
+        }
+        setQueueDialogOpen(false);
+      } catch (error) {
+        onQueueError?.(
+          `Failed to edit queued prompt: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`,
+        );
       }
-      setQueueDialogOpen(false);
     },
     [
       addAttachmentToStore,
       attachments.length,
       clearAttachments,
+      onQueueError,
       sessionKey,
       setFileMentions,
       setValue,
@@ -2774,21 +2972,37 @@ function TmuxComposeBar({
     async (fromIndex: number, toIndex: number) => {
       const message = queuedMessages[fromIndex];
       if (!message || Math.abs(toIndex - fromIndex) !== 1) return;
-      await moveAgentPrompt(
-        "claude-tmux",
-        sessionKey,
-        message.id,
-        toIndex < fromIndex ? "up" : "down",
-      );
+      try {
+        await moveAgentPrompt(
+          "claude-tmux",
+          sessionKey,
+          message.id,
+          toIndex < fromIndex ? "up" : "down",
+        );
+      } catch (error) {
+        onQueueError?.(
+          `Failed to move queued prompt: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`,
+        );
+      }
     },
-    [queuedMessages, sessionKey],
+    [onQueueError, queuedMessages, sessionKey],
   );
 
   const handleRemoveQueuedMessage = useCallback(
     async (messageId: string) => {
-      await removeAgentPrompt("claude-tmux", sessionKey, messageId);
+      try {
+        await removeAgentPrompt("claude-tmux", sessionKey, messageId);
+      } catch (error) {
+        onQueueError?.(
+          `Failed to remove queued prompt: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`,
+        );
+      }
     },
-    [sessionKey],
+    [onQueueError, sessionKey],
   );
 
   return (
@@ -2937,7 +3151,7 @@ function TmuxComposeBar({
               ? "Session not running"
               : "Ask Claude anything… (@ to mention, / for commands)"
           }
-          disabled={disabled || submitting}
+          disabled={disabled || submitting || queueSubmitting}
           rows={2}
           autoFocus={autoFocus && !isMobile}
           className={cn(
@@ -3127,6 +3341,7 @@ function TmuxComposeBar({
           disabled={
             disabled ||
             submitting ||
+            queueSubmitting ||
             (!busy && !value.trim() && attachments.length === 0)
           }
           className="h-7 w-7 p-0 rounded-full"

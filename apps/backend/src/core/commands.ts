@@ -8315,6 +8315,50 @@ export function createCommandRegistry(
         asString(expectedMessageId, "expectedMessageId"),
       ),
   );
+  register(
+    "acknowledge_prompt_queue_claim",
+    ({ queueKey, environmentId, claimToken }, { storage }) =>
+      storage.acknowledgePromptQueueClaim(
+        asString(queueKey, "queueKey"),
+        asString(environmentId, "environmentId"),
+        asString(claimToken, "claimToken"),
+      ),
+  );
+  register(
+    "reject_prompt_queue_claim",
+    ({ queueKey, environmentId, claimToken }, { storage }) =>
+      storage.rejectPromptQueueClaim(
+        asString(queueKey, "queueKey"),
+        asString(environmentId, "environmentId"),
+        asString(claimToken, "claimToken"),
+      ),
+  );
+  register(
+    "transfer_prompt_queue_message_to_compose_draft",
+    (
+      {
+        queueKey,
+        environmentId,
+        messageId,
+        draftKey,
+        ownerType,
+        ownerId,
+        expectedDraftRevision,
+      },
+      { storage },
+    ) =>
+      storage.transferPromptQueueMessageToComposeDraft(
+        asString(queueKey, "queueKey"),
+        asString(environmentId, "environmentId"),
+        asString(messageId, "messageId"),
+        asString(draftKey, "draftKey"),
+        asString(ownerType, "ownerType") as "environment" | "project",
+        asString(ownerId, "ownerId"),
+        expectedDraftRevision === undefined
+          ? undefined
+          : asNumber(expectedDraftRevision, "expectedDraftRevision"),
+      ),
+  );
   register("get_compose_draft", ({ draftKey }, { storage }) =>
     storage.getComposeDraft(asString(draftKey, "draftKey")),
   );

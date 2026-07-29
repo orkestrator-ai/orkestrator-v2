@@ -46,6 +46,8 @@ export interface ItemAccumulator {
   outputDelta: string;
   outputTruncated: boolean;
   completed: boolean;
+  /** Raw apply_patch recovery candidate, hidden while a structured item may arrive. */
+  rawFallback: boolean;
   startedAt?: number;
   completedAt?: number;
 }
@@ -154,6 +156,7 @@ export class TurnAccumulator {
         outputDelta: "",
         outputTruncated: false,
         completed: false,
+        rawFallback: false,
       };
       this.items.set(itemId, accumulator);
       this.itemOrder.push(itemId);
@@ -175,13 +178,21 @@ export class TurnAccumulator {
     const accumulator = this.ensureItem(item.id);
     // A repeated `item/started` must not reset text already streamed, and must
     // not clobber a final item that somehow arrived first.
-    if (!accumulator.completed) accumulator.item = item;
+    const replacesRawFallback =
+      accumulator.rawFallback && item.type === "file_change";
+    if (!accumulator.completed || replacesRawFallback) accumulator.item = item;
+    if (replacesRawFallback) accumulator.completed = false;
+    if (item.type === "file_change") accumulator.rawFallback = false;
     accumulator.startedAt ??= startedAtMs;
   }
 
   onItemUpdated(item: EngineItem): void {
     const accumulator = this.ensureItem(item.id);
-    if (!accumulator.completed) accumulator.item = item;
+    const replacesRawFallback =
+      accumulator.rawFallback && item.type === "file_change";
+    if (!accumulator.completed || replacesRawFallback) accumulator.item = item;
+    if (replacesRawFallback) accumulator.completed = false;
+    if (item.type === "file_change") accumulator.rawFallback = false;
   }
 
   /** `item/completed` is authoritative: it replaces everything the deltas built. */
@@ -189,7 +200,16 @@ export class TurnAccumulator {
     const accumulator = this.ensureItem(item.id);
     accumulator.item = item;
     accumulator.completed = true;
+    accumulator.rawFallback = false;
     accumulator.completedAt ??= completedAtMs;
+  }
+
+  /** Retains a raw patch call without presenting it as an authoritative item. */
+  onDynamicToolStarted(item: EngineItem, startedAtMs?: number): void {
+    const accumulator = this.ensureItem(item.id);
+    if (!accumulator.completed) accumulator.item = item;
+    accumulator.rawFallback = true;
+    accumulator.startedAt ??= startedAtMs;
   }
 
   onTextDelta(itemId: string, delta: string): void {
@@ -232,6 +252,11 @@ export class TurnAccumulator {
    * Completes a raw custom-tool fallback only when its matching call introduced
    * a dynamic item. Structured app-server items use the same call id and remain
    * authoritative: a later `fileChange` completion replaces this fallback.
+   *
+   * Returns true only when the fallback must be published immediately. Failed
+   * patches have no structured `fileChange`, so they flush at once. Successful
+   * results wait for the structured completion (or the final turn render), which
+   * avoids flashing a less-authoritative raw card first.
    */
   onDynamicToolOutput(itemId: string, output: unknown, completedAtMs?: number): boolean {
     const accumulator = this.items.get(itemId);
@@ -260,7 +285,7 @@ export class TurnAccumulator {
     };
     accumulator.completed = true;
     accumulator.completedAt ??= completedAtMs;
-    return true;
+    return state === "failure";
   }
 
   onTurnDiff(diff: string): void {

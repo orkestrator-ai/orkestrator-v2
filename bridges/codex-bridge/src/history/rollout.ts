@@ -28,6 +28,7 @@ import {
   type NormalizedPart,
   type ToolState,
 } from "../messages/types.js";
+import { rawApplyPatchParts } from "../messages/apply-patch.js";
 import {
   applyTranscriptToolOutput,
   normalizeTranscriptToolArgs,
@@ -727,32 +728,38 @@ function persistedToolState(value: unknown): ToolState {
       : "pending";
 }
 
-function createPersistedToolPart(
+function createPersistedToolParts(
   payload: Record<string, unknown>,
-): NormalizedPart {
+  cwd: string,
+): NormalizedPart[] {
   const toolName = asNonEmptyString(payload.name) ?? "tool";
   const rawArgs = payload.type === "custom_tool_call"
     ? payload.input
     : payload.arguments;
   const toolState = persistedToolState(payload.status);
-  const part: NormalizedPart = {
-    type: "tool-invocation",
-    content: toolName,
-    toolName,
-    toolArgs: normalizeTranscriptToolArgs(toolName, rawArgs),
-    toolState,
-    toolTitle: toolName,
-  };
+  const parsedPatchParts = toolName.trim().toLowerCase() === "apply_patch"
+    ? rawApplyPatchParts(rawArgs, cwd, toolState)
+    : [];
+  const parts: NormalizedPart[] = parsedPatchParts.length > 0
+    ? parsedPatchParts
+    : [{
+        type: "tool-invocation",
+        content: toolName,
+        toolName,
+        toolArgs: normalizeTranscriptToolArgs(toolName, rawArgs),
+        toolState,
+        toolTitle: toolName,
+      }];
 
   // Only a `custom_tool_call` can carry both a terminal outcome and an inline
   // result on the call record itself; a `function_call` never does.
   return payload.type === "custom_tool_call" && toolState !== "pending"
-    ? applyTranscriptToolOutput(
+    ? parts.map((part) => applyTranscriptToolOutput(
         part,
         payload.output,
         resolveTranscriptToolOutputState(toolName, payload.output, toolState),
-      )
-    : part;
+      ))
+    : parts;
 }
 
 /**
@@ -869,8 +876,9 @@ export async function hydrateMessagesFromPersistedSession(
   const messages: NormalizedMessage[] = [];
   const toolPartsByCallId = new Map<
     string,
-    { message: NormalizedMessage; partIndex: number }
+    { message: NormalizedMessage; partIndexes: number[] }
   >();
+  const transcriptCwd = meta.cwd ?? getWorkingDirectory();
   /**
    * Turn boundaries reconstructed from the rollout.
    *
@@ -925,14 +933,15 @@ export async function hydrateMessagesFromPersistedSession(
 
     if (payload.type === "function_call" || payload.type === "custom_tool_call") {
       const assistantMessage = ensureAssistantMessage();
-      const part = createPersistedToolPart(payload);
-      assistantMessage.parts.push(part);
+      const parts = createPersistedToolParts(payload, transcriptCwd);
+      const firstPartIndex = assistantMessage.parts.length;
+      assistantMessage.parts.push(...parts);
 
       const callId = asNonEmptyString(payload.call_id);
       if (callId) {
         toolPartsByCallId.set(callId, {
           message: assistantMessage,
-          partIndex: assistantMessage.parts.length - 1,
+          partIndexes: parts.map((_part, index) => firstPartIndex + index),
         });
       }
       continue;
@@ -948,12 +957,14 @@ export async function hydrateMessagesFromPersistedSession(
       const target = callId ? toolPartsByCallId.get(callId) : undefined;
       if (callId) toolPartsByCallId.delete(callId);
       if (target) {
-        const existing = target.message.parts[target.partIndex]!;
-        target.message.parts[target.partIndex] = applyTranscriptToolOutput(
-          existing,
-          payload.output,
-          persistedOutputState(payload.type, existing, payload.output),
-        );
+        for (const partIndex of target.partIndexes) {
+          const existing = target.message.parts[partIndex]!;
+          target.message.parts[partIndex] = applyTranscriptToolOutput(
+            existing,
+            payload.output,
+            persistedOutputState(payload.type, existing, payload.output),
+          );
+        }
       }
       continue;
     }

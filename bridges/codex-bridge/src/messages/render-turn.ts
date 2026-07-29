@@ -145,6 +145,16 @@ export function effectiveItem(
     return null;
   }
 
+  if (
+    accumulator.rawFallback
+    && item.type === "dynamic_tool_call"
+    && item.tool.trim().toLowerCase() === "apply_patch"
+    && item.status !== "failed"
+    && !turn.isTerminal()
+  ) {
+    return null;
+  }
+
   switch (item.type) {
     /**
      * An in-progress command reports no aggregated output; the live output only

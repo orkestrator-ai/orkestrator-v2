@@ -285,6 +285,18 @@ export type EngineEvent = EngineEventMeta &
         turnId: string;
         item: EngineItem;
       }
+    | {
+        /**
+         * Raw apply_patch call retained silently as a recovery candidate.
+         * It becomes visible only if the raw output fails, no structured
+         * `fileChange` arrives before turn completion, or final rendering needs
+         * the fallback.
+         */
+        kind: "item.dynamic.started";
+        threadId: string | null;
+        turnId: string;
+        item: EngineItem;
+      }
     | { kind: "item.text.delta"; threadId: string | null; turnId: string; itemId: string; delta: string }
     | {
         kind: "item.reasoning.delta";

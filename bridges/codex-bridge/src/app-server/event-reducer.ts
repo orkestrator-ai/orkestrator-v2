@@ -442,7 +442,7 @@ export function reduceNotification(
       if (payloadType === "custom_tool_call" && str(rawItem.name) === "apply_patch") {
         return {
           events: [{
-            kind: "item.started",
+            kind: "item.dynamic.started",
             threadId,
             turnId,
             item: {

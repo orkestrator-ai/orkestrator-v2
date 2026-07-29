@@ -200,6 +200,44 @@ describe("itemToParts", () => {
     });
   });
 
+  test("renders raw multi-file apply_patch calls as per-file edit parts", async () => {
+    const item: EngineItem = {
+      id: "dynamic-patch",
+      type: "dynamic_tool_call",
+      tool: "apply_patch",
+      arguments: `*** Begin Patch
+*** Update File: src/a.ts
+@@
+-a
++A
+*** Add File: src/b.ts
++B
+*** End Patch`,
+      content_items: [{ type: "inputText", text: "Done!" }],
+      status: "completed",
+    };
+
+    const parts = await itemToParts(item, DUMMY_CWD);
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toMatchObject({
+      content: "src/a.ts",
+      toolName: "apply_patch",
+      toolState: "success",
+      toolTitle: "update: src/a.ts",
+      toolOutput: "Done!",
+      toolDiff: {
+        filePath: `${DUMMY_CWD}/src/a.ts`,
+        additions: 1,
+        deletions: 1,
+      },
+    });
+    expect(parts[1]).toMatchObject({
+      content: "src/b.ts",
+      toolTitle: "add: src/b.ts",
+      toolDiff: { filePath: `${DUMMY_CWD}/src/b.ts` },
+    });
+  });
+
   test("reports an unfinished dynamic tool call as pending", async () => {
     const item: EngineItem = {
       id: "dynamic-3",

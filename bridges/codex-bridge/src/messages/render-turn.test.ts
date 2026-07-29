@@ -132,6 +132,33 @@ describe("effectiveItem", () => {
     });
   });
 
+  test("hides successful raw patch candidates until the turn is terminal", () => {
+    const accumulator = turn();
+    accumulator.onDynamicToolStarted({
+      id: "raw-patch",
+      type: "dynamic_tool_call",
+      tool: "apply_patch",
+      arguments: "*** Begin Patch",
+      content_items: [],
+      status: "in_progress",
+    });
+    accumulator.onDynamicToolOutput("raw-patch", "Done!");
+
+    expect(effectiveItem(
+      accumulator,
+      accumulator.items.get("raw-patch")!,
+    )).toBeNull();
+
+    accumulator.complete("completed");
+    expect(effectiveItem(
+      accumulator,
+      accumulator.items.get("raw-patch")!,
+    )).toMatchObject({
+      type: "dynamic_tool_call",
+      status: "completed",
+    });
+  });
+
   test("combines command deltas, truncation, and empty authoritative text", () => {
     const accumulator = turn();
     accumulator.onItemStarted({

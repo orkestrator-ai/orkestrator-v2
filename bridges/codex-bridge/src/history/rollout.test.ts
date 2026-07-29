@@ -1245,10 +1245,38 @@ describe("rollout public helpers (continued)", () => {
         timestamp: "2026-07-25T12:01:04.000Z",
         type: "response_item",
         payload: {
+          type: "function_call",
+          name: "update_plan",
+          call_id: "call-plan",
+          arguments: JSON.stringify({
+            plan: [{ step: "Patch files", status: "in_progress" }],
+          }),
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:01:04.100Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-plan",
+          output: "Plan updated",
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:01:04.200Z",
+        type: "response_item",
+        payload: {
           type: "custom_tool_call",
           name: "apply_patch",
           call_id: "call-patch",
-          input: "*** Begin Patch",
+          input: `*** Begin Patch
+*** Update File: src/a.ts
+@@
+-a
++A
+*** Add File: src/b.ts
++B
+*** End Patch`,
           status: "completed",
         },
       },
@@ -1258,7 +1286,7 @@ describe("rollout public helpers (continued)", () => {
         payload: {
           type: "custom_tool_call_output",
           call_id: "call-patch",
-          output: "Patch applied to 1 file",
+          output: "Patch applied to 2 files",
         },
       },
       {
@@ -1339,14 +1367,48 @@ describe("rollout public helpers (continued)", () => {
         },
         {
           type: "tool-invocation",
-          content: "apply_patch",
+          content: "update_plan",
+          toolName: "update_plan",
+          toolArgs: {
+            plan: [{ step: "Patch files", status: "in_progress" }],
+          },
+          toolState: undefined,
+          toolTitle: "update_plan",
+          toolOutput: "Plan updated",
+          toolError: undefined,
+        },
+        {
+          type: "tool-invocation",
+          content: "src/a.ts",
           toolName: "apply_patch",
-          toolArgs: { input: "*** Begin Patch" },
+          toolArgs: { path: "src/a.ts", kind: "update" },
           // This successful patch output agrees with the call record.
           toolState: "success",
-          toolTitle: "apply_patch",
-          toolOutput: "Patch applied to 1 file",
+          toolTitle: "update: src/a.ts",
+          toolOutput: "Patch applied to 2 files",
           toolError: undefined,
+          toolDiff: {
+            filePath: "/workspace/src/a.ts",
+            diff: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-a\n+A",
+            additions: 1,
+            deletions: 1,
+          },
+        },
+        {
+          type: "tool-invocation",
+          content: "src/b.ts",
+          toolName: "apply_patch",
+          toolArgs: { path: "src/b.ts", kind: "add" },
+          toolState: "success",
+          toolTitle: "add: src/b.ts",
+          toolOutput: "Patch applied to 2 files",
+          toolError: undefined,
+          toolDiff: {
+            filePath: "/workspace/src/b.ts",
+            diff: "--- /dev/null\n+++ b/src/b.ts\n+B",
+            additions: 1,
+            deletions: 0,
+          },
         },
         {
           type: "tool-invocation",

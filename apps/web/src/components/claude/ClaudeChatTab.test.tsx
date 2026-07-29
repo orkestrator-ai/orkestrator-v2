@@ -403,6 +403,7 @@ function resetStores(environmentName = "review-table") {
     includeLocalSettings: new Map(),
     selectedAgent: new Map(),
     backgroundTasks: new Map(),
+    backgroundTaskRevisions: new Map(),
   });
 
   useEnvironmentStore.setState({
@@ -1482,6 +1483,84 @@ describe("ClaudeChatTab", () => {
     expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toContainEqual(
       liveMessage,
     );
+  });
+
+  test("does not miss an add-then-clear task ABA while an older refresh is pending", async () => {
+    const channel = eventChannel();
+    mockSubscribeToEvents.mockImplementation(() => channel.stream);
+    const { rerender } = render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+    );
+    try {
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      const staleMessages = deferred<ClaudeMessageType[]>();
+      mockGetSession.mockReset();
+      mockGetSession.mockResolvedValue({
+        status: "running",
+        backgroundTasks: {
+          "child-1": {
+            id: "child-1",
+            toolUseId: "agent-launch-1",
+            status: "running",
+          },
+        },
+      });
+      mockGetSessionMessages.mockReset();
+      mockGetSessionMessages.mockImplementation(() => staleMessages.promise);
+      mockToastError.mockClear();
+
+      rerender(
+        <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+      );
+      await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+      channel.push({
+        type: "session.updated",
+        sessionId: "session-1",
+        data: {
+          backgroundTasks: {
+            "child-1": {
+              id: "child-1",
+              toolUseId: "agent-launch-1",
+              status: "running",
+            },
+          },
+        },
+      } as any);
+      await waitFor(() =>
+        expect(
+          useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)?.["child-1"]?.status,
+        ).toBe("running"),
+      );
+      channel.push({
+        type: "session.updated",
+        sessionId: "session-1",
+        data: { backgroundTasks: {} },
+      } as any);
+      await waitFor(() => {
+        const state = useClaudeStore.getState();
+        expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
+        expect(state.backgroundTaskRevisions.get(SESSION_KEY)).toBe(2);
+      });
+
+      await act(async () => {
+        staleMessages.resolve([]);
+        await staleMessages.promise;
+      });
+
+      expect(useClaudeStore.getState().backgroundTasks.has(SESSION_KEY)).toBe(false);
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          "Failed to refresh Claude tab",
+          {
+            description: "Claude background tasks changed while refreshing; try again",
+          },
+        ),
+      );
+    } finally {
+      channel.close();
+    }
   });
 
   test("shows the scroll down accessory in the compose dock and scrolls to the bottom when clicked", () => {
@@ -3440,6 +3519,60 @@ describe("ClaudeChatTab", () => {
     });
   });
 
+  test("rehydrates a successful background-agent launch as active until its task settles", async () => {
+    const backgroundAgent: ClaudeMessageType = {
+      id: "assistant-background-agent",
+      role: "assistant",
+      content: "",
+      parts: [{
+        type: "tool-invocation",
+        content: "Agent",
+        toolName: "Agent",
+        toolUseId: "agent-launch-1",
+        toolState: "success",
+        toolArgs: { description: "Background worker" },
+      }],
+      timestamp: "2026-03-07T12:00:00.000Z",
+    };
+
+    act(() => {
+      useClaudeStore.getState().setSession(SESSION_KEY, {
+        sessionId: "session-1",
+        isLoading: true,
+        messages: [backgroundAgent],
+      });
+      useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+        "child-1": {
+          id: "child-1",
+          toolUseId: "agent-launch-1",
+          status: "running",
+        },
+      });
+    });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
+      "assistant-background-agent:active-agents",
+    ]);
+
+    act(() => {
+      useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {});
+    });
+
+    await waitFor(() => {
+      expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
+        "assistant-background-agent",
+      ]);
+    });
+  });
+
   test("splits delayed Claude text before pinning active agent task groups", () => {
     const delayedMessage: ClaudeMessageType = {
       id: "assistant-delayed-agent",
@@ -4126,6 +4259,58 @@ describe("ClaudeChatTab", () => {
       .toContainEqual(liveMessage);
     expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages)
       .not.toContainEqual(staleMessage);
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test("a background watchdog refresh silently preserves newer task lifecycle state", async () => {
+    installTimerHarness(2_500_000);
+    mockGetSession.mockResolvedValue({ status: "running" });
+    act(() => useClaudeStore.getState().setSessionLoading(SESSION_KEY, true));
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await flushAsyncWork();
+
+    const transcriptGate = deferred<ClaudeMessageType[]>();
+    mockGetSession.mockClear();
+    mockGetSession.mockResolvedValue({
+      status: "running",
+      backgroundTasks: {
+        "child-1": {
+          id: "child-1",
+          toolUseId: "agent-launch-1",
+          status: "running",
+        },
+      },
+    });
+    mockGetSessionMessages.mockReset();
+    mockGetSessionMessages.mockImplementation(() => transcriptGate.promise);
+    mockToastError.mockClear();
+
+    mockedNow += 20_000;
+    await act(async () => {
+      intervalCallback?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+    act(() => {
+      useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+        "child-1": {
+          id: "child-1",
+          toolUseId: "agent-launch-1",
+          status: "completed",
+        },
+      });
+    });
+    await act(async () => {
+      transcriptGate.resolve([]);
+      await transcriptGate.promise;
+    });
+    await flushAsyncWork();
+
+    expect(
+      useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)?.["child-1"]?.status,
+    ).toBe("completed");
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
@@ -4820,6 +5005,74 @@ describe("ClaudeChatTab", () => {
         expect(
           useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)?.["bg-1"]?.description,
         ).toBe("Long build");
+      });
+    });
+
+    test("correlates background task lifecycle to the launching agent row", async () => {
+      const backgroundAgent: ClaudeMessageType = {
+        id: "assistant-background-agent",
+        role: "assistant",
+        content: "",
+        parts: [{
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolUseId: "agent-launch-1",
+          toolState: "success",
+          toolArgs: { description: "Background worker" },
+        }],
+        timestamp: "2026-07-26T01:00:00.000Z",
+      };
+      useClaudeStore.getState().setMessages(SESSION_KEY, [backgroundAgent]);
+
+      await withChannel(async (channel) => {
+        const publishStatus = async (
+          status: "running" | "completed" | "failed" | "killed",
+        ) => {
+          channel.push({
+            type: "session.updated",
+            sessionId: "session-1",
+            data: {
+              backgroundTasks: {
+                "child-1": {
+                  id: "child-1",
+                  toolUseId: "agent-launch-1",
+                  status,
+                },
+              },
+            },
+          } as any);
+          await waitFor(() =>
+            expect(
+              useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)?.["child-1"],
+            ).toMatchObject({
+              toolUseId: "agent-launch-1",
+              status,
+            }),
+          );
+        };
+
+        await publishStatus("running");
+        await waitFor(() => {
+          expect(
+            lastVirtualizedMessages.map((message) => message.id),
+          ).toContain("assistant-background-agent:active-agents");
+          expect(screen.getByText("Active")).toBeTruthy();
+        });
+
+        await publishStatus("completed");
+        await waitFor(() => {
+          expect(
+            lastVirtualizedMessages.map((message) => message.id),
+          ).toContain("assistant-background-agent");
+          expect(screen.getByText("Finished")).toBeTruthy();
+        });
+
+        await publishStatus("failed");
+        await waitFor(() => expect(screen.getByText("Failed")).toBeTruthy());
+
+        await publishStatus("killed");
+        await waitFor(() => expect(screen.getByText("Failed")).toBeTruthy());
       });
     });
 

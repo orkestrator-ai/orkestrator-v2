@@ -18,6 +18,7 @@ export interface NativeToolDiffMetadata {
 }
 
 export type NativeToolState = "success" | "failure" | "pending";
+export type NativeAgentState = "active" | "finished" | "failed";
 
 /**
  * A point-in-time view of the agent's task list.
@@ -39,6 +40,14 @@ export interface NativeBasePart {
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolState?: NativeToolState;
+  /**
+   * Lifecycle of an agent spawned by this tool.
+   *
+   * This is deliberately separate from `toolState`: background-agent tools
+   * can return successfully as soon as the child launches, while the child is
+   * still active.
+   */
+  agentState?: NativeAgentState;
   toolTitle?: string;
   toolOutput?: string;
   toolError?: string;

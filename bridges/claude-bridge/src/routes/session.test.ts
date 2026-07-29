@@ -1544,6 +1544,72 @@ describe("persisted session routes", () => {
 
   // --- GET /session/:id ---
   describe("GET /session/:id", () => {
+    test("hydrates persisted lifecycle state before serving the authoritative snapshot", async () => {
+      const persisted = {
+        id: "s-1",
+        title: "Persisted",
+        status: "idle" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+        persistedMessagesLoaded: false,
+        backgroundTasks: undefined as
+          | Record<string, {
+              id: string;
+              toolUseId: string;
+              status: "failed";
+              error: string;
+            }>
+          | undefined,
+      };
+      mockGetSession.mockImplementationOnce(
+        () => persisted as ReturnType<typeof mockGetSession>,
+      );
+      mockHydratePersistedSessionMessages.mockImplementationOnce(async () => {
+        persisted.persistedMessagesLoaded = true;
+        persisted.backgroundTasks = {
+          "task-restored": {
+            id: "task-restored",
+            toolUseId: "agent-tool-restored",
+            status: "failed",
+            error: "Restored failure",
+          },
+        };
+        return [];
+      });
+
+      const response = await app.request("/session/s-1");
+
+      expect(response.status).toBe(200);
+      expect(mockHydratePersistedSessionMessages).toHaveBeenCalledWith("s-1");
+      expect((await jsonBody(response)).backgroundTasks).toEqual({
+        "task-restored": {
+          id: "task-restored",
+          toolUseId: "agent-tool-restored",
+          status: "failed",
+          error: "Restored failure",
+        },
+      });
+    });
+
+    test("reports a persisted lifecycle hydration failure with a JSON body", async () => {
+      mockGetSession.mockReturnValueOnce({
+        id: "s-1",
+        title: "Persisted",
+        status: "idle" as const,
+        createdAt: new Date("2026-01-01"),
+        lastActivity: new Date("2026-01-01"),
+        persistedMessagesLoaded: false,
+      } as ReturnType<typeof mockGetSession>);
+      mockHydratePersistedSessionMessages.mockImplementationOnce(async () => {
+        throw new Error("transcript unreadable");
+      });
+
+      const response = await app.request("/session/s-1");
+
+      expect(response.status).toBe(500);
+      expect(await jsonBody(response)).toEqual({ error: "transcript unreadable" });
+    });
+
     test("serves the authoritative background-task and rate-limit snapshot", async () => {
       mockGetSession.mockReturnValueOnce({
         id: "s-1",
@@ -1552,7 +1618,14 @@ describe("persisted session routes", () => {
         createdAt: new Date("2026-01-01"),
         lastActivity: new Date("2026-01-01"),
         backgroundTasks: {
-          "task-1": { id: "task-1", status: "running", description: "Build" },
+          "task-1": {
+            id: "task-1",
+            toolUseId: "agent-tool-1",
+            status: "failed",
+            description: "Build",
+            error: "Compiler failed",
+            endedAt: 1_769_990_400_000,
+          },
         },
         rateLimits: [{ label: "Five Hour", usedPercent: 42 }],
         rewindInProgress: true,
@@ -1562,7 +1635,14 @@ describe("persisted session routes", () => {
 
       // A tab that was unmounted while this changed rehydrates from here.
       expect(data.backgroundTasks).toEqual({
-        "task-1": { id: "task-1", status: "running", description: "Build" },
+        "task-1": {
+          id: "task-1",
+          toolUseId: "agent-tool-1",
+          status: "failed",
+          description: "Build",
+          error: "Compiler failed",
+          endedAt: 1_769_990_400_000,
+        },
       });
       expect(data.rateLimits).toEqual([{ label: "Five Hour", usedPercent: 42 }]);
       expect(data.rewindInProgress).toBe(true);

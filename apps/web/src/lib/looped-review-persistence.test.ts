@@ -29,6 +29,19 @@ async function settle(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 15));
 }
 
+async function waitUntil(
+  predicate: () => boolean,
+  timeoutMs = 10_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for looped-review persistence");
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 function persisted(workflow: LoopedReviewWorkflow, revision = workflow.backendRevision) {
   return {
     id: workflow.id,
@@ -216,9 +229,9 @@ describe("looped-review authoritative persistence", () => {
       load: mock(async () => null),
     });
 
-    await settle();
+    await waitUntil(() => save.mock.calls.length === 2);
     const callsAfterFailure = save.mock.calls.length;
-    await settle();
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
     expect(callsAfterFailure).toBe(2);
     expect(save).toHaveBeenCalledTimes(callsAfterFailure);
     expect([...useLoopedReviewStore.getState().workflows.values()][0]).toMatchObject({
@@ -226,7 +239,7 @@ describe("looped-review authoritative persistence", () => {
       failure: { code: "persistence" },
     });
     stop();
-  });
+  }, 15_000);
 
   test("cancels a deleted workflow's pending timer", async () => {
     const workflow = createWorkflow();

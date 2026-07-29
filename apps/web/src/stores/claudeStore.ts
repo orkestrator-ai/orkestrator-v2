@@ -148,6 +148,15 @@ interface ClaudeState
    */
   dismissedPromptSuggestions: Map<ClaudeSessionKey, string>;
   backgroundTasks: Map<ClaudeSessionKey, Record<string, ClaudeBackgroundTask>>;
+  /**
+   * Monotonic lifecycle revision for each tab's authoritative task snapshots.
+   *
+   * The task map deliberately deletes empty records, so comparing its value
+   * cannot detect an absent → present → absent sequence while a REST refresh
+   * is in flight. This revision changes for every task snapshot, including an
+   * explicit empty snapshot, and lets refresh reconciliation detect that ABA.
+   */
+  backgroundTaskRevisions: Map<ClaudeSessionKey, number>;
   pendingQuestions: Map<string, ClaudeQuestionRequest>;
   pendingPlanApprovals: Map<string, ClaudePlanApprovalRequest>;
 
@@ -281,6 +290,7 @@ const CLAUDE_SESSION_KEYED_MAPS = [
   "promptSuggestions",
   "dismissedPromptSuggestions",
   "backgroundTasks",
+  "backgroundTaskRevisions",
 ] as const satisfies ReadonlyArray<keyof ClaudeState>;
 
 export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
@@ -310,6 +320,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   promptSuggestions: new Map(),
   dismissedPromptSuggestions: new Map(),
   backgroundTasks: new Map(),
+  backgroundTaskRevisions: new Map(),
   pendingQuestions: new Map(),
   pendingPlanApprovals: new Map(),
 
@@ -486,9 +497,17 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   setBackgroundTasks: (sessionKey, tasks) =>
     set((state) => {
       const next = new Map(state.backgroundTasks);
+      const revisions = new Map(state.backgroundTaskRevisions);
       if (Object.keys(tasks).length > 0) next.set(sessionKey, tasks);
       else next.delete(sessionKey);
-      return { backgroundTasks: next };
+      revisions.set(
+        sessionKey,
+        (state.backgroundTaskRevisions.get(sessionKey) ?? 0) + 1,
+      );
+      return {
+        backgroundTasks: next,
+        backgroundTaskRevisions: revisions,
+      };
     }),
 
   replaceSessionIdentity: (sessionKey, session) =>
@@ -527,6 +546,9 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
           state.dismissedPromptSuggestions,
         ),
         backgroundTasks: withoutSessionKey(state.backgroundTasks),
+        backgroundTaskRevisions: withoutSessionKey(
+          state.backgroundTaskRevisions,
+        ),
         pendingQuestions,
         pendingPlanApprovals,
       };

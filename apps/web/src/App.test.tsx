@@ -1450,11 +1450,18 @@ describe("App startup checks and global events", () => {
       screen.getByRole("button", { name: "Retry" }).click();
     });
 
-    await waitFor(() => {
-      expect(mockCheckClaudeCli).toHaveBeenCalledTimes(2);
-      expect(screen.queryByText("AI CLI Required")).toBeNull();
-    });
-  });
+    await waitFor(
+      () => {
+        expect(mockCheckClaudeCli).toHaveBeenCalledTimes(2);
+        expect(screen.queryByText("AI CLI Required")).toBeNull();
+      },
+      {
+        // The aggregate runner executes the bridge suites concurrently; allow
+        // the retry's async React updates to drain under that sustained load.
+        timeout: 10_000,
+      },
+    );
+  }, 15_000);
 
   test("shows Claude login required when Claude is installed but not configured", async () => {
     mockCheckClaudeCli.mockImplementation(async () => true);

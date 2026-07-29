@@ -58,6 +58,8 @@ export interface ClaudeMessagePart {
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolState?: "success" | "failure" | "pending";
+  /** Agent lifecycle, distinct from whether the Task/Agent tool call succeeded. */
+  agentState?: "active" | "finished" | "failed";
   toolTitle?: string;
   toolOutput?: string;
   toolError?: string;
@@ -123,6 +125,8 @@ export interface ClaudeAgentProfile {
 
 export interface ClaudeBackgroundTask {
   id: string;
+  /** Originating Task/Agent tool call, when supplied by the Agent SDK. */
+  toolUseId?: string;
   description?: string;
   status: "pending" | "running" | "completed" | "failed" | "killed" | "paused";
   isBackgrounded?: boolean;
@@ -362,6 +366,7 @@ export function parseClaudeBackgroundTasks(
     }
     const {
       id,
+      toolUseId,
       description,
       status,
       isBackgrounded,
@@ -375,6 +380,7 @@ export function parseClaudeBackgroundTasks(
       || id !== taskId
       || typeof status !== "string"
       || !CLAUDE_BACKGROUND_TASK_STATUSES.has(status as ClaudeBackgroundTask["status"])
+      || !isOptionalString(toolUseId)
       || !isOptionalString(description)
       || (isBackgrounded !== undefined && typeof isBackgrounded !== "boolean")
       || !isOptionalFiniteNumber(startedAt)

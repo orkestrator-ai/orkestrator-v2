@@ -174,6 +174,22 @@ session.get("/:id", async (c) => {
     return c.json({ error: "Session not found" }, 404);
   }
 
+  // Background-task bookends live in the persisted transcript. A metadata-only
+  // session materialized after bridge restart has not reduced them yet, so
+  // serving it immediately would make this authoritative endpoint claim the
+  // task set is empty. Hydrate before serializing the first snapshot.
+  if (sessionData.persistedMessagesLoaded === false) {
+    try {
+      await hydratePersistedSessionMessages(id);
+    } catch (error) {
+      console.error("[session] Failed to hydrate session task state:", error);
+      return c.json(
+        { error: errorMessage(error, "Failed to hydrate session task state") },
+        sessionErrorStatus(error),
+      );
+    }
+  }
+
   return c.json({
     id: sessionData.id,
     title: sessionData.title,

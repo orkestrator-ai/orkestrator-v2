@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ClaudeMessage } from "@/lib/claude-client";
+import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import {
   applyTmuxAgentUsageSummaries,
   parseTmuxAgentUsageSummaries,
@@ -152,6 +152,7 @@ Running 2 Explore agents...
       tokenCount: 20_400,
       tokenCountText: "20.4k tokens",
       agentUsageDisplay: "token-only",
+      agentState: "active",
     });
     expect(updated?.parts[1]).not.toHaveProperty("toolUseCount");
   });
@@ -298,7 +299,7 @@ Running 3 Worker agents...
     });
   });
 
-  test("applies exact token-only matches to completed agents", () => {
+  test("marks exact token-only matches active even after their launch tool succeeds", () => {
     const message: ClaudeMessage = {
       id: "assistant-1",
       role: "assistant",
@@ -335,8 +336,45 @@ Running 3 Worker agents...
       tokenCount: 45_700,
       tokenCountText: "45.7k tokens",
       agentUsageDisplay: "token-only",
+      agentState: "active",
     });
     expect(updated?.parts[0]).not.toHaveProperty("toolUseCount");
+  });
+
+  test("preserves message and part identity when a matching live summary is already applied", () => {
+    const part: ClaudeMessagePart = {
+      type: "tool-invocation",
+      toolName: "Agent",
+      toolTitle: "Agent",
+      toolState: "success",
+      toolArgs: { description: "Review db-api test correctness" },
+      toolUseId: "agent-1",
+      toolUseCount: 12,
+      tokenCount: 45_700,
+      tokenCountText: "45.7k tokens",
+      agentUsageDisplay: "token-only",
+      agentState: "active",
+    };
+    const message: ClaudeMessage = {
+      id: "assistant-idempotent",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-25T18:20:00.000Z",
+      parts: [part],
+    };
+    const messages = [message];
+
+    const updated = applyTmuxAgentUsageSummaries(messages, [{
+      name: "Review db-api test correctness",
+      role: "Explore",
+      toolUseCount: 12,
+      tokenCount: 45_700,
+      tokenCountText: "45.7k tokens",
+    }]);
+
+    expect(updated).toBe(messages);
+    expect(updated[0]).toBe(message);
+    expect(updated[0]?.parts[0]).toBe(part);
   });
 
   test("does not match agents by generic tool labels", () => {

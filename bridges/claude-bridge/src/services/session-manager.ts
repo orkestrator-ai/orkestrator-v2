@@ -1898,6 +1898,258 @@ function buildMessageParts(
   return result;
 }
 
+interface BackgroundTaskSystemMessage {
+  subtype:
+    | "task_started"
+    | "task_progress"
+    | "task_updated"
+    | "task_notification";
+  task_id: string;
+  tool_use_id?: string;
+  description?: string;
+  summary?: string;
+  status?: "completed" | "failed" | "stopped";
+  patch?: {
+    status?: BackgroundTaskSnapshot["status"];
+    description?: string;
+    end_time?: number;
+    error?: string;
+    is_backgrounded?: boolean;
+  };
+}
+
+const MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH = 512;
+const MAX_PERSISTED_BACKGROUND_TASK_TEXT_LENGTH = 4_096;
+const MAX_PERSISTED_TIMESTAMP_FUTURE_SKEW_MS = 5 * 60 * 1000;
+
+function persistedTaskIdentifier(value: unknown): string | undefined {
+  if (
+    typeof value !== "string"
+    || value.length === 0
+    || value.length > MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH
+  ) {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (
+    normalized.length === 0
+    || normalized.length > MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH
+    || /[\u0000-\u001f\u007f]/.test(normalized)
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function persistedTaskText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  let normalized = value
+    .slice(0, MAX_PERSISTED_BACKGROUND_TASK_TEXT_LENGTH + 1)
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .trim()
+    .slice(0, MAX_PERSISTED_BACKGROUND_TASK_TEXT_LENGTH);
+  // Do not expose a dangling UTF-16 high surrogate when the byte-unaware
+  // bound cuts immediately between an emoji's two code units.
+  if (/[\ud800-\udbff]$/.test(normalized)) {
+    normalized = normalized.slice(0, -1);
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function persistedTaskStatus(
+  value: unknown,
+): BackgroundTaskSnapshot["status"] | undefined {
+  return value === "pending"
+    || value === "running"
+    || value === "completed"
+    || value === "failed"
+    || value === "killed"
+    || value === "paused"
+    ? value
+    : undefined;
+}
+
+function persistedNotificationStatus(
+  value: unknown,
+): "completed" | "failed" | "stopped" | undefined {
+  return value === "completed" || value === "failed" || value === "stopped"
+    ? value
+    : undefined;
+}
+
+function persistedTimestamp(
+  value: unknown,
+  now: number,
+): number | undefined {
+  const timestamp =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Date.parse(value)
+        : Number.NaN;
+  return Number.isFinite(timestamp)
+    && timestamp >= 0
+    && timestamp <= now + MAX_PERSISTED_TIMESTAMP_FUTURE_SKEW_MS
+    ? timestamp
+    : undefined;
+}
+
+function persistedBackgroundTaskMessage(raw: {
+  message: unknown;
+}): BackgroundTaskSystemMessage | undefined {
+  // Current SDK session reads place the original transcript payload in
+  // `message`. Accept the outer record too so older/custom SessionStore
+  // adapters that return system fields directly remain readable.
+  for (const candidate of [raw.message, raw]) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const message = candidate as Record<string, unknown>;
+    if (
+      message.subtype !== "task_started"
+      && message.subtype !== "task_progress"
+      && message.subtype !== "task_updated"
+      && message.subtype !== "task_notification"
+    ) {
+      continue;
+    }
+    const taskId = persistedTaskIdentifier(message.task_id);
+    if (!taskId) continue;
+    const notificationStatus =
+      message.subtype === "task_notification"
+        ? persistedNotificationStatus(message.status)
+        : undefined;
+    // A malformed terminal record is not evidence of success. Ignore it and
+    // let a preceding live edge reconcile to killed when hydration observes
+    // that its owning process is gone.
+    if (message.subtype === "task_notification" && !notificationStatus) {
+      continue;
+    }
+    const rawPatch =
+      message.patch && typeof message.patch === "object" && !Array.isArray(message.patch)
+        ? message.patch as Record<string, unknown>
+        : undefined;
+    const patchStatus = persistedTaskStatus(rawPatch?.status);
+    const patchDescription = persistedTaskText(rawPatch?.description);
+    const patchEndTime = persistedTimestamp(rawPatch?.end_time, Date.now());
+    const patchError = persistedTaskText(rawPatch?.error);
+    const patchIsBackgrounded =
+      typeof rawPatch?.is_backgrounded === "boolean"
+        ? rawPatch.is_backgrounded
+        : undefined;
+    const hasPatch =
+      patchStatus !== undefined
+      || patchDescription !== undefined
+      || patchEndTime !== undefined
+      || patchError !== undefined
+      || patchIsBackgrounded !== undefined;
+    return {
+      subtype: message.subtype,
+      task_id: taskId,
+      tool_use_id: persistedTaskIdentifier(message.tool_use_id),
+      description: persistedTaskText(message.description),
+      summary: persistedTaskText(message.summary),
+      status: notificationStatus,
+      ...(hasPatch
+        ? {
+            patch: {
+              status: patchStatus,
+              description: patchDescription,
+              end_time: patchEndTime,
+              error: patchError,
+              is_backgrounded: patchIsBackgrounded,
+            },
+          }
+        : {}),
+    };
+  }
+  return undefined;
+}
+
+function persistedRecordTime(raw: { message: unknown }): number {
+  const now = Date.now();
+  const outerTimestamp = (raw as { timestamp?: unknown }).timestamp;
+  const innerTimestamp =
+    raw.message && typeof raw.message === "object"
+      ? (raw.message as { timestamp?: unknown }).timestamp
+      : undefined;
+  for (const candidate of [innerTimestamp, outerTimestamp]) {
+    const parsed = persistedTimestamp(candidate, now);
+    if (parsed !== undefined) return parsed;
+  }
+  return now;
+}
+
+function reducePersistedBackgroundTaskMessage(
+  tasks: Record<string, BackgroundTaskSnapshot> | undefined,
+  message: BackgroundTaskSystemMessage,
+  timestamp: number,
+): Record<string, BackgroundTaskSnapshot> {
+  const previous = tasks?.[message.task_id];
+  if (message.subtype === "task_notification") {
+    if (!message.status) return tasks ?? {};
+    const startedAt = previous?.startedAt ?? timestamp;
+    const endedAt = timestamp >= startedAt ? timestamp : previous?.endedAt;
+    const terminalStatus: BackgroundTaskSnapshot["status"] =
+      message.status === "failed"
+        ? "failed"
+        : message.status === "stopped"
+          ? "killed"
+          : message.status === "completed"
+            ? "completed"
+            : "killed";
+    return boundBackgroundTaskHistory({
+      ...(tasks ?? {}),
+      [message.task_id]: {
+        id: message.task_id,
+        toolUseId: message.tool_use_id ?? previous?.toolUseId,
+        description:
+          previous?.description
+          ?? message.description
+          ?? message.summary,
+        status: terminalStatus,
+        isBackgrounded: previous?.isBackgrounded,
+        startedAt,
+        endedAt,
+        error:
+          terminalStatus === "failed"
+            ? (message.summary ?? previous?.error)
+            : previous?.error,
+      },
+    });
+  }
+
+  const patchStatus = message.patch?.status;
+  const nextStatus =
+    previous && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)
+      && (patchStatus === undefined || LIVE_BACKGROUND_TASK_STATUSES.has(patchStatus))
+      ? previous.status
+      : (patchStatus ?? previous?.status ?? "running");
+  const startedAt = previous?.startedAt ?? timestamp;
+  const patchedEndTime =
+    message.patch?.end_time !== undefined
+    && message.patch.end_time >= startedAt
+      ? message.patch.end_time
+      : undefined;
+  return boundBackgroundTaskHistory({
+    ...(tasks ?? {}),
+    [message.task_id]: {
+      id: message.task_id,
+      toolUseId: message.tool_use_id ?? previous?.toolUseId,
+      description:
+        message.patch?.description
+        ?? message.description
+        ?? previous?.description,
+      status: nextStatus,
+      isBackgrounded:
+        message.patch?.is_backgrounded
+        ?? previous?.isBackgrounded
+        ?? true,
+      startedAt,
+      endedAt: patchedEndTime ?? previous?.endedAt,
+      error: message.patch?.error ?? previous?.error,
+    },
+  });
+}
+
 function normalizePersistedSessionMessages(
   persisted: Array<{
     type: "user" | "assistant" | "system";
@@ -1907,10 +2159,15 @@ function normalizePersistedSessionMessages(
     parent_tool_use_id: string | null;
     isSidechain?: boolean;
   }>,
-): { messages: NormalizedMessage[]; taskRegistry: TaskRegistry } {
+): {
+  messages: NormalizedMessage[];
+  taskRegistry: TaskRegistry;
+  backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
+} {
   const toolTracker = new ToolTracker();
   const taskRegistry = new TaskRegistry();
   const activeTaskIds = new Set<string>();
+  let backgroundTasks: Record<string, BackgroundTaskSnapshot> | undefined;
   const parsed: Array<{
     raw: (typeof persisted)[number];
     content: string;
@@ -1918,7 +2175,17 @@ function normalizePersistedSessionMessages(
   }> = [];
 
   for (const raw of persisted) {
-    if (raw.type === "system") continue;
+    if (raw.type === "system") {
+      const taskMessage = persistedBackgroundTaskMessage(raw);
+      if (taskMessage) {
+        backgroundTasks = reducePersistedBackgroundTaskMessage(
+          backgroundTasks,
+          taskMessage,
+          persistedRecordTime(raw),
+        );
+      }
+      continue;
+    }
     const result = parseMessageContent(
       raw,
       toolTracker,
@@ -1973,7 +2240,27 @@ function normalizePersistedSessionMessages(
       ...(entry.raw.uuid ? { sdkUuid: entry.raw.uuid } : {}),
     });
   }
-  return { messages, taskRegistry };
+  if (backgroundTasks) {
+    const processEndedAt = Date.now();
+    backgroundTasks = boundBackgroundTaskHistory(
+      Object.fromEntries(
+        Object.entries(backgroundTasks).map(([id, task]) => [
+          id,
+          LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
+            ? {
+                ...task,
+                status: "killed" as const,
+                endedAt: task.endedAt ?? processEndedAt,
+                error:
+                  task.error
+                  ?? "The Claude process that owned this task is no longer running",
+              }
+            : task,
+        ]),
+      ),
+    );
+  }
+  return { messages, taskRegistry, backgroundTasks };
 }
 
 async function claudeSdk() {
@@ -2245,7 +2532,11 @@ export async function ensurePersistedSession(
  */
 async function readPersistedSessionMessages(
   session: SessionState,
-): Promise<{ messages: NormalizedMessage[]; taskRegistry: TaskRegistry } | undefined> {
+): Promise<{
+  messages: NormalizedMessage[];
+  taskRegistry: TaskRegistry;
+  backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
+} | undefined> {
   if (!session.sdkSessionId) return undefined;
   const sdk = await claudeSdk();
   if (typeof sdk.getSessionMessages !== "function") return undefined;
@@ -2258,7 +2549,11 @@ async function readPersistedSessionMessages(
 
 function readPersistedSessionMessagesOnce(
   session: SessionState,
-): Promise<{ messages: NormalizedMessage[]; taskRegistry: TaskRegistry } | undefined> {
+): Promise<{
+  messages: NormalizedMessage[];
+  taskRegistry: TaskRegistry;
+  backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
+} | undefined> {
   if (session.persistedHydration) return session.persistedHydration;
   const hydration = readPersistedSessionMessages(session);
   session.persistedHydration = hydration;
@@ -2298,6 +2593,7 @@ export async function hydratePersistedSessionMessages(
     if (hydrated) {
       session.messages = hydrated.messages;
       session.taskRegistry = hydrated.taskRegistry;
+      session.backgroundTasks = hydrated.backgroundTasks;
     }
     session.persistedMessagesLoaded = true;
     touchSession(session);
@@ -2746,6 +3042,42 @@ const LIVE_BACKGROUND_TASK_STATUSES = new Set<BackgroundTaskSnapshot["status"]>(
   "paused",
 ]);
 
+/**
+ * Terminal task snapshots retained for launch correlation and restart display.
+ *
+ * Live membership is separately bounded by the provider's replacement set.
+ * Keeping only the most recent terminal bookends prevents long sessions that
+ * delegate repeatedly from growing the authoritative session snapshot without
+ * limit.
+ */
+export const MAX_TERMINAL_BACKGROUND_TASKS = 128;
+
+function boundBackgroundTaskHistory(
+  tasks: Record<string, BackgroundTaskSnapshot>,
+): Record<string, BackgroundTaskSnapshot> {
+  const terminalEntries = Object.entries(tasks)
+    .map(([id, task], index) => ({ id, task, index }))
+    .filter(({ task }) => !LIVE_BACKGROUND_TASK_STATUSES.has(task.status));
+  if (terminalEntries.length <= MAX_TERMINAL_BACKGROUND_TASKS) return tasks;
+
+  const retainedTerminalIds = new Set(
+    terminalEntries
+      .sort((left, right) =>
+        (right.task.endedAt ?? right.task.startedAt ?? 0)
+        - (left.task.endedAt ?? left.task.startedAt ?? 0)
+        || right.index - left.index)
+      .slice(0, MAX_TERMINAL_BACKGROUND_TASKS)
+      .map(({ id }) => id),
+  );
+  return Object.fromEntries(
+    Object.entries(tasks).filter(
+      ([id, task]) =>
+        LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
+        || retainedTerminalIds.has(id),
+    ),
+  );
+}
+
 const NO_CONTROL_CHANNEL: StopBackgroundTaskResult = {
   ok: false,
   reason: "no_control_channel",
@@ -2768,7 +3100,7 @@ function settleBackgroundTask(
 ): boolean {
   const previous = session.backgroundTasks?.[taskId];
   if (!previous) return false;
-  session.backgroundTasks = {
+  session.backgroundTasks = boundBackgroundTaskHistory({
     ...(session.backgroundTasks ?? {}),
     [taskId]: {
       ...previous,
@@ -2776,7 +3108,7 @@ function settleBackgroundTask(
       endedAt: previous.endedAt ?? Date.now(),
       ...(error !== undefined ? { error: previous.error ?? error } : {}),
     },
-  };
+  });
   const owner = session.backgroundTaskControls?.get(taskId);
   session.backgroundTaskControls?.delete(taskId);
   if (session.backgroundTaskControls?.size === 0) {
@@ -3120,6 +3452,7 @@ async function readWorkspaceImageAttachment(
   filePath: string,
   cwd: string,
   afterSymlinkValidation?: (filePath: string) => void | Promise<void>,
+  afterCanonicalValidation?: (filePath: string) => void | Promise<void>,
   afterInitialValidation?: (filePath: string) => void | Promise<void>,
 ): Promise<Buffer> {
   const lexicalRoot = resolve(cwd);
@@ -3148,6 +3481,7 @@ async function readWorkspaceImageAttachment(
       "Image attachment must be contained in the current workspace.",
     );
   }
+  await afterCanonicalValidation?.(targetPath);
 
   const noFollow = constants.O_NOFOLLOW ?? 0;
   const handle = await open(targetPath, constants.O_RDONLY | noFollow).catch(
@@ -3242,6 +3576,7 @@ async function buildSdkPrompt(
   attachments: PromptOptions["attachments"] | undefined,
   cwd: string,
   afterAttachmentSymlinkValidation?: (filePath: string) => void | Promise<void>,
+  afterAttachmentCanonicalValidation?: (filePath: string) => void | Promise<void>,
   afterAttachmentInitialValidation?: (filePath: string) => void | Promise<void>,
 ): Promise<string | AsyncIterable<SDKUserMessage>> {
   const imageAttachments = attachments?.filter((att) => att.type === "image") ?? [];
@@ -3275,6 +3610,7 @@ async function buildSdkPrompt(
         att.path,
         cwd,
         afterAttachmentSymlinkValidation,
+        afterAttachmentCanonicalValidation,
         afterAttachmentInitialValidation,
       );
       base64Data = buffer.toString("base64");
@@ -3410,6 +3746,7 @@ export async function sendPrompt(
   options?: PromptOptions,
   testHooks?: {
     afterAttachmentSymlinkValidation?: (filePath: string) => void | Promise<void>;
+    afterAttachmentCanonicalValidation?: (filePath: string) => void | Promise<void>;
     afterAttachmentInitialValidation?: (filePath: string) => void | Promise<void>;
     onQueryStarted?: () => void;
   },
@@ -3561,6 +3898,7 @@ export async function sendPrompt(
       if (hydrated) {
         session.messages = hydrated.messages;
         session.taskRegistry = hydrated.taskRegistry;
+        session.backgroundTasks = hydrated.backgroundTasks;
       }
     } catch (error) {
       // A turn that cannot read its own history is not a debug-level event: the
@@ -3704,6 +4042,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       options?.attachments,
       cwd,
       testHooks?.afterAttachmentSymlinkValidation,
+      testHooks?.afterAttachmentCanonicalValidation,
       testHooks?.afterAttachmentInitialValidation,
     );
     const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal);
@@ -4623,6 +4962,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         const taskMessage = message as {
           subtype?: string;
           task_id?: string;
+          tool_use_id?: string;
           description?: string;
           summary?: string;
           /** Only on `task_notification`; the terminal edge of a task. */
@@ -4657,16 +4997,27 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           && taskMessage.task_id
         ) {
           const previous = session.backgroundTasks?.[taskMessage.task_id];
+          const patchedStatus =
+            taskMessage.patch?.status
+            ?? previous?.status
+            ?? "running";
+          // Task ids are process-unique. Because level and edge messages may
+          // be delivered in either order, a late start/progress edge must
+          // enrich a terminal record rather than resurrect it.
+          const status =
+            previous
+            && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)
+            && LIVE_BACKGROUND_TASK_STATUSES.has(patchedStatus)
+              ? previous.status
+              : patchedStatus;
           const task: BackgroundTaskSnapshot = {
             id: taskMessage.task_id,
+            toolUseId: taskMessage.tool_use_id ?? previous?.toolUseId,
             description:
               taskMessage.patch?.description
               ?? taskMessage.description
               ?? previous?.description,
-            status:
-              taskMessage.patch?.status
-              ?? previous?.status
-              ?? "running",
+            status,
             isBackgrounded:
               taskMessage.patch?.is_backgrounded
               ?? previous?.isBackgrounded,
@@ -4674,10 +5025,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             endedAt: taskMessage.patch?.end_time ?? previous?.endedAt,
             error: taskMessage.patch?.error ?? previous?.error,
           };
-          session.backgroundTasks = {
+          session.backgroundTasks = boundBackgroundTaskHistory({
             ...(session.backgroundTasks ?? {}),
             [task.id]: task,
-          };
+          });
           if (LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) {
             (session.backgroundTaskControls ??= new Map()).set(task.id, queryIterator);
           } else {
@@ -4698,6 +5049,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
                 : "completed";
           const task: BackgroundTaskSnapshot = {
             id: taskMessage.task_id,
+            toolUseId: taskMessage.tool_use_id ?? previous?.toolUseId,
             description:
               previous?.description
               ?? taskMessage.description
@@ -4711,10 +5063,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
                 ? (taskMessage.summary ?? previous?.error)
                 : previous?.error,
           };
-          session.backgroundTasks = {
+          session.backgroundTasks = boundBackgroundTaskHistory({
             ...(session.backgroundTasks ?? {}),
             [task.id]: task,
-          };
+          });
           const owner = session.backgroundTaskControls?.get(task.id);
           session.backgroundTaskControls?.delete(task.id);
           closeQueryControlIfUnused(session, owner);
@@ -4723,10 +5075,17 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           taskMessage.subtype === "background_tasks_changed"
           && Array.isArray(taskMessage.tasks)
         ) {
-          // A level signal, not an edge: the SDK's own contract is that
-          // consumers REPLACE their set from it, so a bookend lost to a
-          // reconnect cannot wedge a stale running indicator.
-          const replacement: Record<string, BackgroundTaskSnapshot> = {};
+          // A level signal replaces live membership only. Terminal bookends
+          // are retained (within the bounded history) because the SDK permits
+          // this level to arrive after the terminal edge for the same
+          // transition; replacing the whole snapshot here erased failures and
+          // could even resurrect the task as running.
+          const replacement: Record<string, BackgroundTaskSnapshot> =
+            Object.fromEntries(
+              Object.entries(session.backgroundTasks ?? {}).filter(
+                ([, task]) => !LIVE_BACKGROUND_TASK_STATUSES.has(task.status),
+              ),
+            );
           const previousControls = session.backgroundTaskControls;
           const previousOwners = new Set(previousControls?.values() ?? []);
           const replacementControls = new Map<
@@ -4737,8 +5096,13 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             const id = entry?.task_id;
             if (typeof id !== "string" || id.length === 0) continue;
             const previous = session.backgroundTasks?.[id];
+            if (previous && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)) {
+              replacement[id] = previous;
+              continue;
+            }
             replacement[id] = {
               id,
+              toolUseId: previous?.toolUseId,
               description: entry.description ?? previous?.description,
               status: LIVE_BACKGROUND_TASK_STATUSES.has(previous?.status ?? "running")
                 ? (previous?.status ?? "running")
@@ -4749,7 +5113,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             const owner = previousControls?.get(id) ?? queryIterator;
             replacementControls.set(id, owner);
           }
-          session.backgroundTasks = replacement;
+          session.backgroundTasks = boundBackgroundTaskHistory(replacement);
           session.backgroundTaskControls =
             replacementControls.size > 0 ? replacementControls : undefined;
           for (const owner of previousOwners) {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type { NativeMessage } from "./native-message-types";
 import {
+  applyClaudeBackgroundTaskStates,
   dedupeStreamedNativeParts,
   dropEmptyThinkingParts,
   getClaudeSourceMessageId,
@@ -18,6 +19,177 @@ import {
 } from "./native-message-adapters";
 
 describe("native message adapters", () => {
+  test("joins authoritative Claude background-agent state by tool use id", () => {
+    const messages: ClaudeMessage[] = [{
+      id: "assistant-background-agent",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:00:00.000Z",
+      parts: [{
+        type: "tool-invocation",
+        content: "Agent",
+        toolName: "Agent",
+        toolUseId: "agent-launch",
+        toolState: "success",
+      }],
+    }];
+
+    const active = applyClaudeBackgroundTaskStates(messages, {
+      "child-task": {
+        id: "child-task",
+        toolUseId: "agent-launch",
+        status: "running",
+      },
+    });
+    expect(active[0]?.parts[0]).toMatchObject({
+      toolState: "success",
+      agentState: "active",
+    });
+    expect(messages[0]?.parts[0]?.agentState).toBeUndefined();
+
+    const finished = applyClaudeBackgroundTaskStates(messages, {
+      "child-task": {
+        id: "child-task",
+        toolUseId: "agent-launch",
+        status: "completed",
+      },
+    });
+    expect(finished[0]?.parts[0]).toMatchObject({ agentState: "finished" });
+  });
+
+  test.each([
+    ["pending", "active"],
+    ["running", "active"],
+    ["paused", "active"],
+    ["completed", "finished"],
+    ["failed", "failed"],
+    ["killed", "failed"],
+  ] as const)(
+    "maps Claude background task status %s to agent state %s",
+    (status, expectedAgentState) => {
+      const messages: ClaudeMessage[] = [{
+        id: `assistant-${status}`,
+        role: "assistant",
+        content: "",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolUseId: "agent-launch",
+          toolState: "success",
+        }],
+      }];
+
+      const updated = applyClaudeBackgroundTaskStates(messages, {
+        task: {
+          id: "task",
+          toolUseId: "agent-launch",
+          status,
+        },
+      });
+
+      expect(updated[0]?.parts[0]?.agentState).toBe(expectedAgentState);
+    },
+  );
+
+  test("ignores background tasks and message parts without a usable correlation", () => {
+    const nonToolPart: ClaudeMessagePart = {
+      type: "text",
+      content: "Agent",
+    };
+    const missingToolUseId: ClaudeMessagePart = {
+      type: "tool-invocation",
+      toolName: "Agent",
+      toolState: "success",
+    };
+    const nonAgentTool: ClaudeMessagePart = {
+      type: "tool-invocation",
+      toolName: "Read",
+      toolUseId: "read-tool",
+      toolState: "success",
+    };
+    const messages: ClaudeMessage[] = [{
+      id: "assistant-guards",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:00:00.000Z",
+      parts: [nonToolPart, missingToolUseId, nonAgentTool],
+    }];
+
+    expect(applyClaudeBackgroundTaskStates(messages, {
+      missingToolUseId: {
+        id: "missingToolUseId",
+        status: "running",
+      },
+      unmatched: {
+        id: "unmatched",
+        toolUseId: "different-tool",
+        status: "completed",
+      },
+      read: {
+        id: "read",
+        toolUseId: "read-tool",
+        status: "failed",
+      },
+    })).toBe(messages);
+  });
+
+  test("preserves message and part identity when the agent state is already current", () => {
+    const part: ClaudeMessagePart = {
+      type: "tool-invocation",
+      toolName: "Task",
+      toolUseId: "task-launch",
+      toolState: "success",
+      agentState: "active",
+    };
+    const message: ClaudeMessage = {
+      id: "assistant-current-state",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:00:00.000Z",
+      parts: [part],
+    };
+    const messages = [message];
+
+    const updated = applyClaudeBackgroundTaskStates(messages, {
+      task: {
+        id: "task",
+        toolUseId: "task-launch",
+        status: "running",
+      },
+    });
+
+    expect(updated).toBe(messages);
+    expect(updated[0]).toBe(message);
+    expect(updated[0]?.parts[0]).toBe(part);
+  });
+
+  test("never correlates Claude background tasks by description", () => {
+    const messages: ClaudeMessage[] = [{
+      id: "assistant-unmatched-agent",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:00:00.000Z",
+      parts: [{
+        type: "tool-invocation",
+        toolName: "Task",
+        toolUseId: "different-tool-use",
+        toolState: "success",
+        toolArgs: { description: "Same description" },
+      }],
+    }];
+
+    expect(applyClaudeBackgroundTaskStates(messages, {
+      task: {
+        id: "task",
+        toolUseId: "actual-tool-use",
+        description: "Same description",
+        status: "running",
+      },
+    })).toBe(messages);
+  });
+
   test("preserves model attribution through provider-neutral normalization", () => {
     const message: NativeMessage = {
       id: "native-model",
@@ -321,6 +493,60 @@ describe("native message adapters", () => {
       expect(normalized.parts[0].task.toolArgs?.description).toBe("Review presentation polish");
       expect(normalized.parts[0].childTools.map((part) => part.toolName)).toEqual(["Read"]);
     }
+  });
+
+  test("associates an adjacent child tool positionally when no parent id is available", () => {
+    const message: ClaudeMessage = {
+      id: "claude-agent-positional-child",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:02:30.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "Agent",
+          content: "Run reviewer",
+          toolUseId: "agent-positional",
+        },
+        {
+          type: "tool-invocation",
+          toolName: "Read",
+          content: "Read without parent metadata",
+          toolUseId: "read-positional",
+        },
+      ],
+    };
+
+    const normalized = normalizeClaudeMessage(message);
+
+    expect(normalized.parts).toHaveLength(1);
+    expect(normalized.parts[0]?.type).toBe("task-group");
+    if (normalized.parts[0]?.type === "task-group") {
+      expect(normalized.parts[0].task.toolUseId).toBe("agent-positional");
+      expect(normalized.parts[0].childTools).toEqual([
+        expect.objectContaining({
+          toolName: "Read",
+          toolUseId: "read-positional",
+        }),
+      ]);
+    }
+  });
+
+  test("discards standalone Claude tool-result parts from display grouping", () => {
+    const message: ClaudeMessage = {
+      id: "claude-standalone-tool-result",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:02:30.000Z",
+      parts: [{
+        type: "tool-result",
+        toolName: "Read",
+        content: "raw provider result",
+        toolState: "success",
+      }],
+    };
+
+    expect(normalizeClaudeMessage(message).parts).toEqual([]);
   });
 
   test("keeps subagent thinking, text, and edits inside the Agent group", () => {

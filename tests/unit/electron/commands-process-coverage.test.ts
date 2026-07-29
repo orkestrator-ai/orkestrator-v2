@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import type { Environment } from "../../../apps/backend/src/core/models";
 
-const { createCommandRegistry } = await import("../../../apps/backend/src/core/commands");
+const { createCommandRegistry, __testing } = await import("../../../apps/backend/src/core/commands");
 
 type Handler = NonNullable<ReturnType<typeof createCommandRegistry>["get"] extends (name: string) => infer T ? T : never>;
 
@@ -23,6 +23,11 @@ const originalDockerNoPort = process.env.FAKE_DOCKER_NO_PORT;
 const originalCodexBridgeToken = process.env.FAKE_CODEX_BRIDGE_TOKEN;
 const originalClaudeBridgeToken = process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
 const originalOpenCodeServerPassword = process.env.FAKE_OPENCODE_SERVER_PASSWORD;
+const originalDockerHostResolves = process.env.FAKE_DOCKER_HOST_RESOLVES;
+const originalDockerHostsOutput = process.env.FAKE_DOCKER_HOSTS_OUTPUT;
+const originalDockerGateway = process.env.FAKE_DOCKER_GATEWAY;
+const originalClaudeAgentToolsFingerprint = process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
+const originalCodexAgentToolsFingerprint = process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
 let root = "";
 let binDir = "";
 let commandLog = "";
@@ -50,6 +55,10 @@ if [ "$1" = "create" ]; then
 fi
 if [ "$1" = "inspect" ] && [ "$2" = "-f" ]; then
   printf '%s\n' "\${FAKE_DOCKER_STATUS:-running}"
+  exit 0
+fi
+if [ "$1" = "inspect" ] && [ "$2" = "--format" ]; then
+  printf '%s\n' "\${FAKE_DOCKER_GATEWAY:-172.17.0.1}"
   exit 0
 fi
 if [ "$1" = "ps" ] && [ "$2" = "-a" ]; then
@@ -85,6 +94,15 @@ if [ "$1" = "system" ] && [ "$2" = "prune" ]; then
 fi
 if [ "$1" = "exec" ]; then
   case "$*" in
+    *"getent hosts host.docker.internal"*)
+      if [ -n "\${FAKE_DOCKER_HOSTS_OUTPUT:-}" ]; then
+        printf '%s' "\${FAKE_DOCKER_HOSTS_OUTPUT}"
+      elif [ "\${FAKE_DOCKER_HOST_RESOLVES:-}" = "1" ]; then
+        printf '%s %s\n' "\${FAKE_DOCKER_GATEWAY:-172.17.0.1}" host.docker.internal
+      fi
+      ;;
+    *claude-agent-tools-fingerprint*) printf '%s' "\${FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT:-}" ;;
+    *codex-agent-tools-fingerprint*) printf '%s' "\${FAKE_CODEX_AGENT_TOOLS_FINGERPRINT:-}" ;;
     *codex-bridge-token*) printf '%s' "\${FAKE_CODEX_BRIDGE_TOKEN:-}" ;;
     *claude-bridge-token*) printf '%s' "\${FAKE_CLAUDE_BRIDGE_TOKEN:-}" ;;
     *opencode-server-password*) printf '%s' "\${FAKE_OPENCODE_SERVER_PASSWORD:-}" ;;
@@ -137,6 +155,7 @@ function createContext(initialEnvironment = environment()): {
     emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
     storage: {
       getEnvironment: mock(async (id: string) => id === initialEnvironment.id ? initialEnvironment : null),
+      loadEnvironments: mock(async () => [initialEnvironment]),
       updateEnvironment: mock(async (id: string, update: Record<string, unknown>) => {
         if (id !== initialEnvironment.id) throw new Error(`Environment not found: ${id}`);
         updates.push(update);
@@ -205,6 +224,55 @@ async function startHealthServer(status = 200): Promise<{ port: number; close: (
 
 const startHealthyServer = () => startHealthServer(200);
 
+async function startOpenCodeServer(): Promise<{
+  port: number;
+  close: () => Promise<void>;
+  configurations: Array<Record<string, unknown>>;
+}> {
+  const configurations: Array<Record<string, unknown>> = [];
+  const server = http.createServer(async (request, response) => {
+    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (request.method === "OPTIONS") {
+      response.writeHead(204, {
+        "access-control-allow-origin": "*",
+        "access-control-allow-methods": "GET, POST, OPTIONS",
+        "access-control-allow-headers": "authorization, content-type",
+      });
+      response.end();
+      return;
+    }
+    if (request.method === "GET" && pathname === "/global/health") {
+      response.writeHead(200, { "access-control-allow-origin": "*" });
+      response.end("ok");
+      return;
+    }
+    if (request.method === "POST" && pathname === "/mcp") {
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      configurations.push(JSON.parse(body) as Record<string, unknown>);
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+      });
+      response.end(JSON.stringify({ orkestrator: { status: "connected" } }));
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return {
+    port: (server.address() as AddressInfo).port,
+    close: () => new Promise<void>((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve())
+    ),
+    configurations,
+  };
+}
+
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-process-command-coverage-"));
   binDir = path.join(root, "bin");
@@ -236,6 +304,11 @@ beforeEach(async () => {
   delete process.env.FAKE_CODEX_BRIDGE_TOKEN;
   delete process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
   delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
+  delete process.env.FAKE_DOCKER_HOST_RESOLVES;
+  delete process.env.FAKE_DOCKER_HOSTS_OUTPUT;
+  delete process.env.FAKE_DOCKER_GATEWAY;
+  delete process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
+  delete process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
 });
 
 afterEach(() => {
@@ -266,6 +339,16 @@ afterAll(async () => {
   else process.env.FAKE_CLAUDE_BRIDGE_TOKEN = originalClaudeBridgeToken;
   if (originalOpenCodeServerPassword === undefined) delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
   else process.env.FAKE_OPENCODE_SERVER_PASSWORD = originalOpenCodeServerPassword;
+  if (originalDockerHostResolves === undefined) delete process.env.FAKE_DOCKER_HOST_RESOLVES;
+  else process.env.FAKE_DOCKER_HOST_RESOLVES = originalDockerHostResolves;
+  if (originalDockerHostsOutput === undefined) delete process.env.FAKE_DOCKER_HOSTS_OUTPUT;
+  else process.env.FAKE_DOCKER_HOSTS_OUTPUT = originalDockerHostsOutput;
+  if (originalDockerGateway === undefined) delete process.env.FAKE_DOCKER_GATEWAY;
+  else process.env.FAKE_DOCKER_GATEWAY = originalDockerGateway;
+  if (originalClaudeAgentToolsFingerprint === undefined) delete process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
+  else process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT = originalClaudeAgentToolsFingerprint;
+  if (originalCodexAgentToolsFingerprint === undefined) delete process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
+  else process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT = originalCodexAgentToolsFingerprint;
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -428,6 +511,141 @@ describe("process and platform command behavior", () => {
         wasRunning: true,
         authToken: "b".repeat(43),
       });
+    } finally {
+      await healthy.close();
+    }
+  });
+
+  test("rehydrates OpenCode agent tools from status and repairs legacy container host resolution", async () => {
+    const openCode = await startOpenCodeServer();
+    process.env.FAKE_DOCKER_PORT = String(openCode.port);
+    process.env.FAKE_OPENCODE_SERVER_PASSWORD = "o".repeat(43);
+    const connection = {
+      url: "http://host.docker.internal:45678/mcp",
+      token: "project-scoped-secret-token",
+    };
+    const agentTools = {
+      connection: mock(() => connection),
+      revokeEnvironment: mock(() => undefined),
+    };
+    const context = {
+      ...fixture.context,
+      agentTools,
+    } as CommandContext;
+    try {
+      await expect(invoke(
+        "get_opencode_server_status",
+        { containerId: "container-existing" },
+        context,
+      )).resolves.toEqual({
+        running: true,
+        hostPort: openCode.port,
+        authToken: "o".repeat(43),
+      });
+      expect(agentTools.connection).toHaveBeenCalledWith(
+        "environment-1",
+        "project-1",
+        "container",
+      );
+      expect(openCode.configurations).toEqual([
+        expect.objectContaining({
+          name: "orkestrator",
+          config: expect.objectContaining({
+            url: connection.url,
+            headers: { Authorization: `Bearer ${connection.token}` },
+          }),
+        }),
+      ]);
+
+      const log = await readCommandLog();
+      expect(log).toContain(
+        "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
+      );
+      expect(log).toContain("docker exec --user root container-existing");
+      expect(log).not.toContain(connection.token);
+    } finally {
+      await openCode.close();
+    }
+  });
+
+  test("does not rewrite container hosts when Docker already resolves the agent-tools host", async () => {
+    process.env.FAKE_DOCKER_HOST_RESOLVES = "1";
+    await __testing.ensureContainerAgentToolsHost("container-existing");
+    const log = await readCommandLog();
+    expect(log).toContain("getent hosts host.docker.internal");
+    expect(log).toContain("docker inspect --format");
+    expect(log).not.toContain("docker exec --user root");
+  });
+
+  test("rewrites a stale host.docker.internal mapping before trusting the alias", async () => {
+    process.env.FAKE_DOCKER_HOSTS_OUTPUT = "10.0.0.7 host.docker.internal\n";
+    process.env.FAKE_DOCKER_GATEWAY = "172.17.0.1";
+
+    await __testing.ensureContainerAgentToolsHost("container-existing");
+
+    const log = await readCommandLog();
+    expect(log).toContain("getent hosts host.docker.internal");
+    expect(log).toContain(
+      "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
+    );
+    expect(log).toContain("docker exec --user root container-existing");
+  });
+
+  test("fails closed when Docker does not report a usable gateway for the alias repair", async () => {
+    process.env.FAKE_DOCKER_GATEWAY = "not-an-ip";
+
+    await expect(
+      __testing.ensureContainerAgentToolsHost("container-existing"),
+    ).rejects.toThrow("Could not determine the Docker host gateway");
+
+    const log = await readCommandLog();
+    expect(log).toContain(
+      "docker inspect --format {{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}} container-existing",
+    );
+    expect(log).not.toContain("docker exec --user root container-existing");
+  });
+
+  test("status reuses Claude and Codex bridges with the current agent-tools fingerprint", async () => {
+    const healthy = await startHealthyServer();
+    process.env.FAKE_DOCKER_PORT = String(healthy.port);
+    process.env.FAKE_DOCKER_HOST_RESOLVES = "1";
+    process.env.FAKE_CLAUDE_BRIDGE_TOKEN = "c".repeat(43);
+    process.env.FAKE_CODEX_BRIDGE_TOKEN = "d".repeat(43);
+    const connection = {
+      url: "http://host.docker.internal:45678/mcp",
+      token: "current-project-token",
+    };
+    const fingerprint = __testing.agentToolConnectionFingerprint(connection);
+    process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT = fingerprint;
+    process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT = fingerprint;
+    const agentTools = {
+      connection: mock(() => connection),
+      revokeEnvironment: mock(() => undefined),
+    };
+    const context = { ...fixture.context, agentTools } as CommandContext;
+    try {
+      await expect(invoke(
+        "get_claude_server_status",
+        { containerId: "container-existing" },
+        context,
+      )).resolves.toEqual({
+        running: true,
+        hostPort: healthy.port,
+        authToken: "c".repeat(43),
+      });
+      await expect(invoke(
+        "get_codex_server_status",
+        { containerId: "container-existing" },
+        context,
+      )).resolves.toEqual({
+        running: true,
+        hostPort: healthy.port,
+        authToken: "d".repeat(43),
+      });
+      expect(agentTools.connection).toHaveBeenCalledTimes(2);
+      const log = await readCommandLog();
+      expect(log).not.toContain("pkill -f");
+      expect(log).not.toContain(connection.token);
     } finally {
       await healthy.close();
     }

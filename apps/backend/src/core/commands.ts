@@ -1,5 +1,6 @@
 import { constants as fsConstants, existsSync, promises as fs } from "node:fs";
 import os from "node:os";
+import { isIP } from "node:net";
 import path from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
@@ -69,6 +70,12 @@ import {
 } from "./storage.js";
 import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import {
+  ORKESTRATOR_AGENT_MCP_SERVER_NAME,
+  ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
+  ORKESTRATOR_AGENT_MCP_URL_ENV,
+  type AgentToolConnection,
+} from "./agent-tools.js";
+import {
   CommandFailedError,
   commandExists,
   homePath,
@@ -136,6 +143,14 @@ export type CommandContext = {
   resourceRoot: string;
   environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   toolchainBinDir?: string;
+  agentTools?: {
+    connection(
+      environmentId: string,
+      projectId: string,
+      target: "host" | "container",
+    ): AgentToolConnection;
+    revokeEnvironment(environmentId: string): void;
+  };
   buildPipelines?: BuildPipelineService;
 };
 
@@ -4279,6 +4294,91 @@ async function dockerExec(
   return stdout;
 }
 
+const CONTAINER_AGENT_TOOLS_HOST = "host.docker.internal";
+
+function parseIpTokens(output: string): string[] {
+  return output
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter((value) => isIP(value));
+}
+
+/**
+ * Containers created before agent tools were introduced do not have Docker's
+ * host-gateway alias on Linux. Repair those persisted containers in place
+ * before handing an agent a URL that uses the alias.
+ */
+async function ensureContainerAgentToolsHost(
+  containerId: string,
+): Promise<void> {
+  const existing = await dockerExec(
+    containerId,
+    `getent hosts ${CONTAINER_AGENT_TOOLS_HOST} 2>/dev/null || true`,
+    10_000,
+  );
+
+  const { stdout } = await runCommand(
+    "docker",
+    [
+      "inspect",
+      "--format",
+      "{{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}}",
+      containerId,
+    ],
+    { timeoutMs: 10_000 },
+  );
+  const gateway = parseIpTokens(stdout)[0];
+  if (!gateway) {
+    throw new Error(
+      `Could not determine the Docker host gateway for container ${containerId}`,
+    );
+  }
+  if (parseIpTokens(existing).includes(gateway)) return;
+
+  const repairHosts = `
+    set -eu
+    gateway="$1"
+    hosts_tmp="/tmp/orkestrator-hosts.$$"
+    trap 'rm -f "$hosts_tmp"' EXIT
+    awk '$2 != "${CONTAINER_AGENT_TOOLS_HOST}"' /etc/hosts > "$hosts_tmp"
+    printf '%s\\t%s\\n' "$gateway" "${CONTAINER_AGENT_TOOLS_HOST}" >> "$hosts_tmp"
+    cat "$hosts_tmp" > /etc/hosts
+  `;
+  await runCommand(
+    "docker",
+    [
+      "exec",
+      "--user",
+      "root",
+      containerId,
+      "bash",
+      "-lc",
+      repairHosts,
+      "orkestrator-host-repair",
+      gateway,
+    ],
+    { timeoutMs: 10_000 },
+  );
+}
+
+async function resolveContainerAgentToolConnection(
+  context: CommandContext,
+  containerId: string,
+): Promise<AgentToolConnection | undefined> {
+  if (!context.agentTools) return undefined;
+  const environment = findEnvironmentByContainerId(
+    await context.storage.loadEnvironments(),
+    containerId,
+  );
+  if (!environment) return undefined;
+  await ensureContainerAgentToolsHost(containerId);
+  return context.agentTools.connection(
+    environment.id,
+    environment.projectId,
+    "container",
+  );
+}
+
 function parseHeadCommit(stdout: string): string | undefined {
   const trimmed = stdout.trim();
   return /^[0-9a-f]{40}$/i.test(trimmed) ? trimmed : undefined;
@@ -4582,8 +4682,129 @@ function openCodeHealthHeaders(password: string): Record<string, string> {
   };
 }
 
+async function configureOpenCodeAgentTools(
+  port: number,
+  password: string,
+  connection: AgentToolConnection,
+  directory: string,
+): Promise<void> {
+  const url = new URL(`http://127.0.0.1:${port}/mcp`);
+  url.searchParams.set("directory", directory);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      ...openCodeHealthHeaders(password),
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      name: ORKESTRATOR_AGENT_MCP_SERVER_NAME,
+      config: {
+        type: "remote",
+        url: connection.url,
+        enabled: true,
+        oauth: false,
+        headers: {
+          Authorization: `Bearer ${connection.token}`,
+        },
+      },
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    // Never include the response body: OpenCode may echo the submitted MCP
+    // config, which contains the project-scoped bearer credential.
+    throw new Error(
+      `OpenCode rejected the Orkestrator agent tools configuration (${response.status})`,
+    );
+  }
+
+  const payload = await readBoundedOpenCodeResponse(response);
+  if (
+    !payload
+    || typeof payload !== "object"
+    || Array.isArray(payload)
+  ) {
+    throw new Error("OpenCode returned an invalid MCP status response");
+  }
+  const entry = (payload as Record<string, unknown>)[
+    ORKESTRATOR_AGENT_MCP_SERVER_NAME
+  ];
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error("OpenCode omitted the Orkestrator MCP status");
+  }
+  const status = (entry as Record<string, unknown>).status;
+  if (status !== "connected") {
+    // Treat transitional states as unsuccessful too: startup must not advertise
+    // a server whose ticket tools are not usable yet. Do not include the remote
+    // error field because it may echo connection configuration or credentials.
+    const safeStatus = typeof status === "string"
+      && /^[a-z][a-z0-9_-]{0,31}$/.test(status)
+      ? status
+      : "invalid";
+    throw new Error(
+      `OpenCode did not connect the Orkestrator agent tools (${safeStatus})`,
+    );
+  }
+}
+
+const MAX_OPENCODE_MCP_STATUS_BYTES = 64 * 1024;
+
+async function readBoundedOpenCodeResponse(
+  response: Response,
+): Promise<unknown> {
+  if (!response.body) {
+    throw new Error("OpenCode returned an empty MCP status response");
+  }
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (
+    Number.isFinite(declaredLength)
+    && declaredLength > MAX_OPENCODE_MCP_STATUS_BYTES
+  ) {
+    await response.body.cancel().catch(() => undefined);
+    throw new Error("OpenCode MCP status response is too large");
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_OPENCODE_MCP_STATUS_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("OpenCode MCP status response is too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = Buffer.concat(
+    chunks.map((chunk) => Buffer.from(chunk)),
+    bytes,
+  ).toString("utf8");
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new Error("OpenCode returned an invalid MCP status response");
+  }
+}
+
 function claudeBridgeAuthHeaders(token: string): Record<string, string> {
   return { "X-Orkestrator-Claude-Token": token };
+}
+
+function agentToolConnectionFingerprint(
+  connection: AgentToolConnection,
+): string {
+  return createHash("sha256")
+    .update(connection.url)
+    .update("\0")
+    .update(connection.token)
+    .digest("hex");
 }
 
 function releaseLocalServerOwnership(
@@ -4617,18 +4838,31 @@ async function startLocalServerUnlocked(
       ? openCodeHealthHeaders(authToken)
       : undefined;
     if (port && authToken && await checkHttpHealth(port, "/global/health", healthHeaders)) {
-        return {
+      if (kind === "opencode" && env?.worktreePath && context.agentTools) {
+        await configureOpenCodeAgentTools(
           port,
-          pid: existing.pid,
-          wasRunning: true,
           authToken,
-        };
+          context.agentTools.connection(env.id, env.projectId, "host"),
+          env.worktreePath,
+        );
+      }
+      return {
+        port,
+        pid: existing.pid,
+        wasRunning: true,
+        authToken,
+      };
     }
     await terminateLocalServerChild(key, existing);
   }
 
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment?.worktreePath) throw new Error("Local environment worktree is not available");
+  const agentToolConnection = context.agentTools?.connection(
+    environment.id,
+    environment.projectId,
+    "host",
+  );
 
   const port = await allocateLocalPort();
   let command = "";
@@ -4642,6 +4876,12 @@ async function startLocalServerUnlocked(
     // without running its shutdown path. Advertising our PID lets each bridge
     // watch for that and drain itself instead of orphaning its children.
     ORKESTRATOR_PARENT_PID: String(process.pid),
+    ...(agentToolConnection
+      ? {
+          [ORKESTRATOR_AGENT_MCP_URL_ENV]: agentToolConnection.url,
+          [ORKESTRATOR_AGENT_MCP_TOKEN_ENV]: agentToolConnection.token,
+        }
+      : {}),
   };
 
   if (kind === "opencode") {
@@ -4725,6 +4965,14 @@ async function startLocalServerUnlocked(
       kind,
       kind === "opencode" && authToken ? openCodeHealthHeaders(authToken) : undefined,
     );
+    if (kind === "opencode" && authToken && agentToolConnection) {
+      await configureOpenCodeAgentTools(
+        port,
+        authToken,
+        agentToolConnection,
+        environment.worktreePath,
+      );
+    }
     await context.storage.updateEnvironment(environmentId, { [field]: port, [pidField]: child.pid });
   } catch (error) {
     let terminationError: unknown;
@@ -4897,6 +5145,7 @@ async function deleteEnvironment(
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);
+      context.agentTools?.revokeEnvironment(environmentId);
       await storage.removeEnvironment(environmentId);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);
       // A terminal start that began before the tombstone may have been awaiting
@@ -6092,6 +6341,11 @@ async function createDockerContainer(environment: Environment, context: CommandC
     "/workspace",
     "--cap-add",
     "NET_ADMIN",
+    // Linux does not provide Docker Desktop's host.docker.internal DNS entry
+    // automatically. The host-gateway mapping is also accepted by Docker
+    // Desktop, giving container agents one portable address for backend tools.
+    "--add-host",
+    "host.docker.internal:host-gateway",
     "-e",
     `GIT_URL=${project.gitUrl}`,
     "-e",
@@ -6271,12 +6525,26 @@ async function startContainerOpenCodeServer(
  */
 async function startContainerClaudeServer(
   containerId: string,
+  agentToolConnection?: AgentToolConnection,
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
+  const expectedAgentToolsFingerprint = agentToolConnection
+    ? agentToolConnectionFingerprint(agentToolConnection)
+    : null;
   const readPersistedToken = async (): Promise<string | null> => {
     const persistedToken = (
       await dockerExec(containerId, "cat /tmp/claude-bridge-token 2>/dev/null || true")
     ).trim();
     return BRIDGE_TOKEN_PATTERN.test(persistedToken) ? persistedToken : null;
+  };
+  const hasCurrentAgentTools = async (): Promise<boolean> => {
+    if (!expectedAgentToolsFingerprint) return true;
+    const persisted = (
+      await dockerExec(
+        containerId,
+        "cat /tmp/claude-agent-tools-fingerprint 2>/dev/null || true",
+      )
+    ).trim();
+    return persisted === expectedAgentToolsFingerprint;
   };
   const replaceRunningBridge = async (port: number): Promise<void> => {
     await dockerExec(containerId, "pkill -f '[c]laude-bridge/dist/index.js' || true");
@@ -6289,14 +6557,21 @@ async function startContainerClaudeServer(
       rm -f /tmp/claude-bridge.log
       umask 077
       printf '%s' ${quoteShell(authToken)} > /tmp/claude-bridge-token
+      ${expectedAgentToolsFingerprint
+        ? `printf '%s' ${quoteShell(expectedAgentToolsFingerprint)} > /tmp/claude-agent-tools-fingerprint`
+        : "rm -f /tmp/claude-agent-tools-fingerprint"}
       source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
       orkestrator_source_runtime_env 2>/dev/null || true
       unset GITHUB_TOKEN GH_TOKEN
       export PORT=${CLAUDE_BRIDGE_PORT}
       export HOSTNAME=0.0.0.0
       export CLAUDE_BRIDGE_TOKEN=${quoteShell(authToken)}
+      ${agentToolConnection
+        ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}
+      export ${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}=${quoteShell(agentToolConnection.token)}`
+        : ""}
       setsid bun /opt/claude-bridge/dist/index.js > /tmp/claude-bridge.log 2>&1 &
-    `, [authToken]);
+    `, [authToken, agentToolConnection?.token]);
     if (!started.wasRunning) {
       await waitForHealth(
         started.hostPort,
@@ -6313,6 +6588,7 @@ async function startContainerClaudeServer(
     const persistedToken = await readPersistedToken();
     if (
       persistedToken
+      && await hasCurrentAgentTools()
       && await checkHttpHealth(
         hostPort,
         "/global/auth-check",
@@ -6335,6 +6611,7 @@ async function startContainerClaudeServer(
   const persistedToken = await readPersistedToken();
   if (
     persistedToken
+    && await hasCurrentAgentTools()
     && await checkHttpHealth(
       started.hostPort,
       "/global/auth-check",
@@ -7466,11 +7743,21 @@ export function createCommandRegistry(
     return { updated, failed };
   });
 
-  register("start_opencode_server", ({ containerId }) => {
+  register("start_opencode_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("opencode", id, () =>
-      startContainerOpenCodeServer(id),
-    );
+    return enqueueContainerBridgeOperation("opencode", id, async () => {
+      const started = await startContainerOpenCodeServer(id);
+      const connection = await resolveContainerAgentToolConnection(context, id);
+      if (connection) {
+        await configureOpenCodeAgentTools(
+          started.hostPort,
+          started.authToken,
+          connection,
+          "/workspace",
+        );
+      }
+      return started;
+    });
   });
   register("stop_opencode_server", ({ containerId }) => {
     const id = asString(containerId, "containerId");
@@ -7482,7 +7769,7 @@ export function createCommandRegistry(
       ).then(() => undefined)
     );
   });
-  register("get_opencode_server_status", async ({ containerId }) => {
+  register("get_opencode_server_status", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const hostPort = await getHostPort(id, OPENCODE_SERVER_PORT);
     const authToken = hostPort
@@ -7495,6 +7782,19 @@ export function createCommandRegistry(
         "/global/health",
         openCodeHealthHeaders(authToken),
       );
+    if (running && context.agentTools) {
+      const start = commands.get("start_opencode_server");
+      const reconciled = await start?.({ containerId: id }, context) as
+        | { hostPort: number; authToken: string }
+        | undefined;
+      if (reconciled) {
+        return {
+          running: true,
+          hostPort: reconciled.hostPort,
+          authToken: reconciled.authToken,
+        };
+      }
+    }
     return {
       running,
       hostPort,
@@ -7525,11 +7825,12 @@ export function createCommandRegistry(
       asOpenCodeModelCatalog(args.models),
     );
   });
-  register("start_claude_server", ({ containerId }) => {
+  register("start_claude_server", ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
-    return enqueueContainerBridgeOperation("claude", id, () =>
-      startContainerClaudeServer(id),
-    );
+    return enqueueContainerBridgeOperation("claude", id, async () => {
+      const connection = await resolveContainerAgentToolConnection(context, id);
+      return startContainerClaudeServer(id, connection);
+    });
   });
   register("stop_claude_server", ({ containerId }) => {
     const id = asString(containerId, "containerId");
@@ -7538,11 +7839,11 @@ export function createCommandRegistry(
       // carries it, which would kill the shell before `rm -f` runs.
       dockerExec(
         id,
-        "pkill -f '[c]laude-bridge/dist/index.js' || true; rm -f /tmp/claude-bridge-token",
+        "pkill -f '[c]laude-bridge/dist/index.js' || true; rm -f /tmp/claude-bridge-token /tmp/claude-agent-tools-fingerprint",
       ).then(() => undefined)
     );
   });
-  register("get_claude_server_status", async ({ containerId }) => {
+  register("get_claude_server_status", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const hostPort = await getHostPort(id, CLAUDE_BRIDGE_PORT);
     const running = hostPort ? await checkHttpHealth(hostPort) : false;
@@ -7559,6 +7860,19 @@ export function createCommandRegistry(
       )
         ? persistedToken
         : "";
+    if (running && authToken && context.agentTools) {
+      const start = commands.get("start_claude_server");
+      const reconciled = await start?.({ containerId: id }, context) as
+        | { hostPort: number; authToken: string }
+        | undefined;
+      if (reconciled) {
+        return {
+          running: true,
+          hostPort: reconciled.hostPort,
+          authToken: reconciled.authToken,
+        };
+      }
+    }
     return {
       running,
       hostPort,
@@ -7622,11 +7936,28 @@ export function createCommandRegistry(
       const maxConcurrentThreads = resolveCodexMaxConcurrentThreads(
         config.global.codexMaxConcurrentThreads,
       );
+      const agentToolConnection = await resolveContainerAgentToolConnection(
+        context,
+        id,
+      );
+      const expectedAgentToolsFingerprint = agentToolConnection
+        ? agentToolConnectionFingerprint(agentToolConnection)
+        : null;
       const readPersistedToken = async (): Promise<string | null> => {
         const persistedToken = (
           await dockerExec(id, "cat /tmp/codex-bridge-token 2>/dev/null || true")
         ).trim();
         return BRIDGE_TOKEN_PATTERN.test(persistedToken) ? persistedToken : null;
+      };
+      const hasCurrentAgentTools = async (): Promise<boolean> => {
+        if (!expectedAgentToolsFingerprint) return true;
+        const persisted = (
+          await dockerExec(
+            id,
+            "cat /tmp/codex-agent-tools-fingerprint 2>/dev/null || true",
+          )
+        ).trim();
+        return persisted === expectedAgentToolsFingerprint;
       };
       const replaceRunningBridge = async (port: number): Promise<void> => {
         await dockerExec(id, "pkill -f '[c]odex-bridge/dist/index.js' || true");
@@ -7640,6 +7971,9 @@ export function createCommandRegistry(
           mkdir -p /tmp/${APP_SLUG}
           umask 077
           printf '%s' ${quoteShell(authToken)} > /tmp/codex-bridge-token
+          ${expectedAgentToolsFingerprint
+            ? `printf '%s' ${quoteShell(expectedAgentToolsFingerprint)} > /tmp/codex-agent-tools-fingerprint`
+            : "rm -f /tmp/codex-agent-tools-fingerprint"}
           source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
           orkestrator_source_runtime_env 2>/dev/null || true
           unset GITHUB_TOKEN GH_TOKEN
@@ -7648,17 +7982,21 @@ export function createCommandRegistry(
           export CWD=/workspace
           export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
           export CODEX_BRIDGE_TOKEN=${quoteShell(authToken)}
+          ${agentToolConnection
+            ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}
+          export ${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}=${quoteShell(agentToolConnection.token)}`
+            : ""}
           export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}
           export ORKESTRATOR_VERSION="${APP_VERSION}"
           setsid bun /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
-        `, [authToken]);
+        `, [authToken, agentToolConnection?.token]);
         return { ...started, authToken };
       };
 
       const hostPort = await getHostPort(id, CODEX_BRIDGE_PORT);
       if (hostPort && await checkHttpHealth(hostPort)) {
         const persistedToken = await readPersistedToken();
-        if (persistedToken) {
+        if (persistedToken && await hasCurrentAgentTools()) {
           return { hostPort, wasRunning: true, authToken: persistedToken };
         }
         // A bridge from before per-process authentication cannot safely serve the
@@ -7673,7 +8011,9 @@ export function createCommandRegistry(
       // bridge arrived late). The fresh token was never written, so return the
       // token that bridge actually holds — or replace the bridge if it has none.
       const persistedToken = await readPersistedToken();
-      if (persistedToken) return { ...started, authToken: persistedToken };
+      if (persistedToken && await hasCurrentAgentTools()) {
+        return { ...started, authToken: persistedToken };
+      }
       await replaceRunningBridge(started.hostPort);
       return startWithFreshToken();
     });
@@ -7685,17 +8025,30 @@ export function createCommandRegistry(
       // carries it, which would kill the shell before `rm -f` runs.
       dockerExec(
         id,
-        "pkill -f '[c]odex-bridge/dist/index.js' || true; rm -f /tmp/codex-bridge-token",
+        "pkill -f '[c]odex-bridge/dist/index.js' || true; rm -f /tmp/codex-bridge-token /tmp/codex-agent-tools-fingerprint",
       ).then(() => undefined)
     );
   });
-  register("get_codex_server_status", async ({ containerId }) => {
+  register("get_codex_server_status", async ({ containerId }, context) => {
     const id = asString(containerId, "containerId");
     const hostPort = await getHostPort(id, CODEX_BRIDGE_PORT);
     const running = hostPort ? await checkHttpHealth(hostPort) : false;
     const authToken = running
       ? (await dockerExec(id, "cat /tmp/codex-bridge-token 2>/dev/null || true")).trim()
       : "";
+    if (running && BRIDGE_TOKEN_PATTERN.test(authToken) && context.agentTools) {
+      const start = commands.get("start_codex_server");
+      const reconciled = await start?.({ containerId: id }, context) as
+        | { hostPort: number; authToken: string }
+        | undefined;
+      if (reconciled) {
+        return {
+          running: true,
+          hostPort: reconciled.hostPort,
+          authToken: reconciled.authToken,
+        };
+      }
+    }
     return {
       running,
       hostPort,
@@ -8769,6 +9122,10 @@ export function createCommandRegistry(
 }
 
 export const __testing = {
+  configureOpenCodeAgentTools,
+  readBoundedOpenCodeResponse,
+  ensureContainerAgentToolsHost,
+  agentToolConnectionFingerprint,
   createExtensionCommandRunner,
   environmentLifecycleErrorMessage,
   scrubLifecycleLogDetail,

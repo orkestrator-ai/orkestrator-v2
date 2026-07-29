@@ -7,6 +7,7 @@ import type { McpServerConfig } from "../types/mcp.js";
 import {
   configToSdkFormat,
   getMcpRuntimeConfig,
+  getOrkestratorAgentMcpServer,
   getMcpServerInfo,
   getMergedMcpServers,
   loadGlobalMcpServers,
@@ -70,6 +71,55 @@ describe("configToSdkFormat", () => {
   });
 });
 
+describe("Orkestrator agent MCP injection", () => {
+  test("builds the private HTTP server for every supported backend host", () => {
+    for (const hostname of ["127.0.0.1", "localhost", "host.docker.internal"]) {
+      expect(getOrkestratorAgentMcpServer({
+        ORKESTRATOR_AGENT_MCP_URL: `http://${hostname}:4567/mcp`,
+        ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+      })).toEqual({
+        type: "http",
+        url: `http://${hostname}:4567/mcp`,
+        headers: { Authorization: "Bearer project-token" },
+      });
+    }
+  });
+
+  test("rejects missing, malformed, remote, or otherwise untrusted endpoints", () => {
+    for (const env of [
+      {},
+      { ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:4567/mcp" },
+      { ORKESTRATOR_AGENT_MCP_TOKEN: "project-token" },
+      {
+        ORKESTRATOR_AGENT_MCP_URL: "not a URL",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+      },
+      {
+        ORKESTRATOR_AGENT_MCP_URL: "https://127.0.0.1:4567/mcp",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+      },
+      {
+        ORKESTRATOR_AGENT_MCP_URL: "http://attacker.example/mcp",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+      },
+      {
+        ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:4567/not-mcp",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+      },
+      {
+        ORKESTRATOR_AGENT_MCP_URL: "http://user@127.0.0.1:4567/mcp",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+      },
+      {
+        ORKESTRATOR_AGENT_MCP_URL: "http://user:password@127.0.0.1:4567/mcp",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+      },
+    ]) {
+      expect(getOrkestratorAgentMcpServer(env)).toBeNull();
+    }
+  });
+});
+
 /**
  * These resolvers read `~/.claude.json`, which belongs to whoever is running
  * the suite — so they are pointed at a scratch home instead. Everything below
@@ -103,7 +153,7 @@ describe("mcp config resolution", () => {
     expect(await getMergedMcpServers(cwd)).toEqual({});
     expect(await getMcpServerInfo(cwd)).toEqual([]);
 
-    const runtime = await getMcpRuntimeConfig(cwd);
+    const runtime = await getMcpRuntimeConfig(cwd, {});
     expect(runtime.servers).toEqual({});
     expect(runtime.names.size).toBe(0);
   });
@@ -203,7 +253,7 @@ describe("mcp config resolution", () => {
         },
       });
 
-      const { servers, names } = await getMcpRuntimeConfig(cwd);
+      const { servers, names } = await getMcpRuntimeConfig(cwd, {});
 
       expect(servers).toEqual({
         stdioServer: { type: "stdio", command: "run-me", args: ["--x"], env: { K: "v" } },
@@ -223,7 +273,7 @@ describe("mcp config resolution", () => {
         },
       });
 
-      const { servers, names } = await getMcpRuntimeConfig(cwd);
+      const { servers, names } = await getMcpRuntimeConfig(cwd, {});
 
       expect(Object.keys(servers)).toEqual(["good"]);
       expect([...names].sort()).toEqual(["good", "weird"]);
@@ -235,13 +285,108 @@ describe("mcp config resolution", () => {
         projects: { [cwd]: { mcpServers: { shared: { command: "from-project" } } } },
       });
 
-      const { servers } = await getMcpRuntimeConfig(cwd);
+      const { servers } = await getMcpRuntimeConfig(cwd, {});
       expect(servers.shared).toEqual({
         type: "stdio",
         command: "from-project",
         args: undefined,
         env: undefined,
       });
+    });
+
+    test("injects the agent server into runtime servers and names", async () => {
+      const { servers, names } = await getMcpRuntimeConfig(cwd, {
+        ORKESTRATOR_AGENT_MCP_URL: "http://host.docker.internal:4567/mcp",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+      });
+
+      expect(servers.orkestrator).toEqual({
+        type: "http",
+        url: "http://host.docker.internal:4567/mcp",
+        headers: { Authorization: "Bearer project-token" },
+      });
+      expect(names).toEqual(new Set(["orkestrator"]));
+    });
+
+    test("trusted agent injection wins a reserved-name collision", async () => {
+      await writeClaudeJson({
+        mcpServers: {
+          orkestrator: {
+            type: "http",
+            url: "https://attacker.example/mcp",
+            headers: { Authorization: "Bearer attacker-token" },
+          },
+        },
+      });
+
+      const { servers, names } = await getMcpRuntimeConfig(cwd, {
+        ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:4567/mcp",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+      });
+
+      expect(servers.orkestrator).toEqual({
+        type: "http",
+        url: "http://127.0.0.1:4567/mcp",
+        headers: { Authorization: "Bearer project-token" },
+      });
+      expect([...names]).toEqual(["orkestrator"]);
+    });
+
+    test("uses its explicit environment instead of ambient agent credentials", async () => {
+      const originalUrl = process.env.ORKESTRATOR_AGENT_MCP_URL;
+      const originalToken = process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
+      process.env.ORKESTRATOR_AGENT_MCP_URL = "http://127.0.0.1:9999/mcp";
+      process.env.ORKESTRATOR_AGENT_MCP_TOKEN = "ambient-token";
+      try {
+        const { servers, names } = await getMcpRuntimeConfig(cwd, {});
+        expect(servers.orkestrator).toBeUndefined();
+        expect(names.has("orkestrator")).toBe(false);
+      } finally {
+        if (originalUrl === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_URL;
+        else process.env.ORKESTRATOR_AGENT_MCP_URL = originalUrl;
+        if (originalToken === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
+        else process.env.ORKESTRATOR_AGENT_MCP_TOKEN = originalToken;
+      }
+    });
+
+    test("uses installed process credentials when no environment is supplied", async () => {
+      const originalUrl = process.env.ORKESTRATOR_AGENT_MCP_URL;
+      const originalToken = process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
+      process.env.ORKESTRATOR_AGENT_MCP_URL = "http://localhost:4567/mcp";
+      process.env.ORKESTRATOR_AGENT_MCP_TOKEN = "process-token";
+      try {
+        const { servers, names } = await getMcpRuntimeConfig(cwd);
+        expect(servers.orkestrator).toEqual({
+          type: "http",
+          url: "http://localhost:4567/mcp",
+          headers: { Authorization: "Bearer process-token" },
+        });
+        expect(names.has("orkestrator")).toBe(true);
+      } finally {
+        if (originalUrl === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_URL;
+        else process.env.ORKESTRATOR_AGENT_MCP_URL = originalUrl;
+        if (originalToken === undefined) delete process.env.ORKESTRATOR_AGENT_MCP_TOKEN;
+        else process.env.ORKESTRATOR_AGENT_MCP_TOKEN = originalToken;
+      }
+    });
+
+    test("ignores an invalid injection without replacing user configuration", async () => {
+      await writeClaudeJson({
+        mcpServers: { orkestrator: { command: "user-server" } },
+      });
+
+      const { servers, names } = await getMcpRuntimeConfig(cwd, {
+        ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:4567/wrong",
+        ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+      });
+
+      expect(servers.orkestrator).toEqual({
+        type: "stdio",
+        command: "user-server",
+        args: undefined,
+        env: undefined,
+      });
+      expect(names.has("orkestrator")).toBe(true);
     });
   });
 

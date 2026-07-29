@@ -34,6 +34,7 @@ async function withDeleteCommand<T>(
   run: (
     invokeDelete: () => Promise<void>,
     storage: StorageService,
+    context: CommandContext,
   ) => Promise<T>,
 ): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-delete-state-"));
@@ -55,13 +56,33 @@ async function withDeleteCommand<T>(
     await command({ environmentId: "e1" }, context);
   };
   try {
-    return await run(invokeDelete, storage);
+    return await run(invokeDelete, storage, context);
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }
 
 describe("delete_environment durable child-state cleanup", () => {
+  test("revokes the environment's project-scoped agent-tools credential", async () => {
+    await withDeleteCommand(
+      async (storage) => storage.addEnvironment(environment()).then(() => undefined),
+      async (invokeDelete, storage, context) => {
+        const revokeEnvironment = mock(() => undefined);
+        context.agentTools = {
+          connection: mock(() => ({
+            url: "http://127.0.0.1:43210/mcp",
+            token: "test-token",
+          })),
+          revokeEnvironment,
+        };
+
+        await invokeDelete();
+        expect(revokeEnvironment).toHaveBeenCalledWith("e1");
+        expect(await storage.getEnvironment("e1")).toBeNull();
+      },
+    );
+  });
+
   test("retains a deleting environment when pipeline cleanup fails", async () => {
     await withDeleteCommand(
       async (storage) => storage.addEnvironment(environment()).then(() => undefined),

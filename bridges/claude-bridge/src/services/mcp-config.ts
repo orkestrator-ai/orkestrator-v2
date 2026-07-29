@@ -49,6 +49,37 @@ type SdkMcpServerConfig = SdkMcpStdioServerConfig | SdkMcpSSEServerConfig | SdkM
  */
 export type SdkMcpServersConfig = Record<string, SdkMcpServerConfig>;
 
+const AGENT_MCP_SERVER_NAME = "orkestrator";
+const AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
+const AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
+
+export function getOrkestratorAgentMcpServer(
+  env: NodeJS.ProcessEnv = process.env,
+): SdkMcpHttpServerConfig | null {
+  const rawUrl = env[AGENT_MCP_URL_ENV]?.trim();
+  const token = env[AGENT_MCP_TOKEN_ENV]?.trim();
+  if (!rawUrl || !token) return null;
+  try {
+    const url = new URL(rawUrl);
+    if (
+      url.protocol !== "http:"
+      || !["127.0.0.1", "localhost", "host.docker.internal"].includes(url.hostname)
+      || url.pathname !== "/mcp"
+      || url.username
+      || url.password
+    ) {
+      return null;
+    }
+    return {
+      type: "http",
+      url: url.toString(),
+      headers: { Authorization: `Bearer ${token}` },
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Load global MCP server configurations from ~/.claude.json
  *
@@ -248,14 +279,29 @@ export async function getMcpServerInfo(cwd: string): Promise<McpServerInfo[]> {
  * turn. It is the only entry point into this module that `sendPrompt` uses;
  * keep the translation in `toSdkServers` so there is exactly one copy of it.
  */
-export async function getMcpRuntimeConfig(cwd: string): Promise<{
+export async function getMcpRuntimeConfig(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{
   servers: SdkMcpServersConfig;
   names: Set<string>;
 }> {
   const configs = await getMergedMcpServers(cwd);
+  const agentServer = getOrkestratorAgentMcpServer(env);
+  const servers = toSdkServers(configs);
+  // Backend-provided credentials are authoritative for this reserved name.
+  // A project-local config must not be able to redirect the trusted ticket
+  // tools (or capture their bearer token) by claiming the same server name.
+  if (agentServer) servers[AGENT_MCP_SERVER_NAME] = agentServer;
 
   // Names come from the merged config, not from `servers`: a server whose
   // config shape we can't translate is still an MCP server as far as tool-name
   // parsing is concerned, and dropping it would misattribute its tools.
-  return { servers: toSdkServers(configs), names: new Set(Object.keys(configs)) };
+  return {
+    servers,
+    names: new Set([
+      ...Object.keys(configs),
+      ...(agentServer ? [AGENT_MCP_SERVER_NAME] : []),
+    ]),
+  };
 }

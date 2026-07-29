@@ -31,9 +31,11 @@
       "name": "@orkestrator/backend",
       "version": "2.3.0",
       "dependencies": {
+        "@modelcontextprotocol/sdk": "1.29.0",
         "@opencode-ai/sdk": "1.18.4",
         "@orkestrator/protocol": "workspace:*",
         "sharp": "^0.35.1",
+        "zod": "4.4.3",
       },
     },
     "apps/desktop": {

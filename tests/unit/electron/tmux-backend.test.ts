@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  agentMcpConfigJson,
+  agentToolConnectionTarget,
   CAPTURE_PANE_CACHE_MS,
   CLAUDE_STATE_POLL_INTERVAL_MS,
   CLAUDE_STATE_READ_TIMEOUT_MS,
@@ -49,6 +52,73 @@ import type { CommandContext } from "../../../apps/backend/src/core/commands";
 const tempDirs: string[] = [];
 /** mkdtemp prefix for the fake tmux runtime; also the guard for its cleanup path. */
 const RUNTIME_TEMP_PREFIX = "ork-tmux-runtime-";
+
+test("Claude tmux agent MCP config uses Claude's mcpServers document shape", () => {
+  expect(JSON.parse(agentMcpConfigJson({
+    url: "http://127.0.0.1:4567/mcp",
+    token: "project-token",
+  }))).toEqual({
+    mcpServers: {
+      orkestrator: {
+        type: "http",
+        url: "http://127.0.0.1:4567/mcp",
+        headers: {
+          Authorization: "Bearer project-token",
+        },
+      },
+    },
+  });
+});
+
+test("Claude's installed parser accepts the generated agent MCP config", async () => {
+  const isolatedHome = await createTempDir("ork-claude-mcp-parser-");
+  const parse = (config: string) => {
+    const result = spawnSync(
+      "claude",
+      [
+        "--mcp-config",
+        config,
+        "--strict-mcp-config",
+        "--print",
+        "",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          HOME: isolatedHome,
+          CLAUDE_CONFIG_DIR: path.join(isolatedHome, ".claude"),
+          ANTHROPIC_API_KEY: "",
+          CLAUDE_CODE_OAUTH_TOKEN: "",
+        },
+      },
+    );
+    if (result.error) throw result.error;
+    return `${result.stdout}\n${result.stderr}`;
+  };
+
+  const rejected = parse(JSON.stringify({
+    orkestrator: {
+      type: "http",
+      url: "http://127.0.0.1:4567/mcp",
+    },
+  }));
+  expect(rejected).toContain("Invalid MCP configuration");
+  expect(rejected).toContain("mcpServers");
+
+  const accepted = parse(agentMcpConfigJson({
+    url: "http://127.0.0.1:4567/mcp",
+    token: "project-token",
+  }));
+  expect(accepted).not.toContain("Invalid MCP configuration");
+  expect(accepted).toContain("Input must be provided");
+});
+
+test("Claude tmux selects the agent tool endpoint for its execution backend", () => {
+  expect(agentToolConnectionTarget("local")).toBe("host");
+  expect(agentToolConnectionTarget("container")).toBe("container");
+});
 
 async function createTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -122,6 +192,10 @@ case "$command" in
     exit 1
     ;;
   new-session)
+    if [ "\${FAKE_TMUX_FAIL_NEW:-}" = "1" ]; then
+      printf '%s\n' 'new session failed' >&2
+      exit 2
+    fi
     mkdir -p "$FAKE_TMUX_ALIVE"
     if [ -n "$session_name" ]; then
       touch "$FAKE_TMUX_ALIVE/$session_name"
@@ -215,7 +289,11 @@ esac
   // `--thinking` and an invalid `--thinking-display` fails on the latter.
   await fs.writeFile(path.join(binDir, "claude"), `#!/bin/sh
 if [ "$1" = "--help" ]; then
-  printf '%s\\n' '--session-id --resume --effort'
+  if [ "\${FAKE_CLAUDE_NO_MCP_CONFIG:-}" = "1" ]; then
+    printf '%s\\n' '--session-id --resume --effort'
+  else
+    printf '%s\\n' '--session-id --resume --effort --mcp-config'
+  fi
   exit 0
 fi
 while [ "$#" -gt 0 ]; do
@@ -252,6 +330,8 @@ exit 0
   const originalTmuxLog = process.env.FAKE_TMUX_LOG;
   const originalTmuxAlive = process.env.FAKE_TMUX_ALIVE;
   const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  const originalFailNew = process.env.FAKE_TMUX_FAIL_NEW;
+  const originalNoMcpConfig = process.env.FAKE_CLAUDE_NO_MCP_CONFIG;
   process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
   process.env.HOME = home;
   process.env.CLAUDE_CONFIG_DIR = path.join(home, ".claude");
@@ -290,6 +370,279 @@ exit 0
     else process.env.FAKE_TMUX_ALIVE = originalTmuxAlive;
     if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+    if (originalFailNew === undefined) delete process.env.FAKE_TMUX_FAIL_NEW;
+    else process.env.FAKE_TMUX_FAIL_NEW = originalFailNew;
+    if (originalNoMcpConfig === undefined) delete process.env.FAKE_CLAUDE_NO_MCP_CONFIG;
+    else process.env.FAKE_CLAUDE_NO_MCP_CONFIG = originalNoMcpConfig;
+  }
+}
+
+async function withFakeContainerTmuxRuntime(run: (runtime: {
+  worktree: string;
+  log: string;
+  alive: string;
+  environment: Environment;
+  runtimeRoot: string;
+}) => Promise<void>): Promise<void> {
+  const root = await createTempDir(`${RUNTIME_TEMP_PREFIX}container-`);
+  const binDir = path.join(root, "bin");
+  const worktree = path.join(root, "workspace");
+  const log = path.join(root, "docker.log");
+  const alive = path.join(root, "tmux-alive");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.mkdir(worktree, { recursive: true });
+  await fs.writeFile(path.join(binDir, "docker"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.FAKE_DOCKER_LOG, \`\${args.join(" ")}\\n\`);
+
+const worktree = process.env.FAKE_CONTAINER_WORKTREE;
+const aliveDir = process.env.FAKE_TMUX_ALIVE;
+
+function mapPath(value) {
+  if (value === "/workspace") return worktree;
+  if (value.startsWith("/workspace/")) {
+    return path.join(worktree, value.slice("/workspace/".length));
+  }
+  return value;
+}
+
+function ensureParent(filePath) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    process.stdin.on("data", (chunk) => chunks.push(chunk));
+    process.stdin.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    process.stdin.on("error", reject);
+  });
+}
+
+async function main() {
+  if (args[0] !== "exec") return;
+  let index = 1;
+  let withStdin = false;
+  while (index < args.length && args[index].startsWith("-")) {
+    if (args[index] === "-i") {
+      withStdin = true;
+      index += 1;
+      continue;
+    }
+    if (args[index] === "-u" || args[index] === "-w") {
+      index += 2;
+      continue;
+    }
+    index += 1;
+  }
+  index += 1; // container id
+  const command = args[index++];
+  const commandArgs = args.slice(index);
+  const stdin = withStdin ? await readStdin() : "";
+  const executable = command ? path.basename(command) : "";
+
+  switch (executable || command) {
+    case "mkdir": {
+      for (const value of commandArgs.filter((entry) => !entry.startsWith("-"))) {
+        fs.mkdirSync(mapPath(value), { recursive: true });
+      }
+      return;
+    }
+    case "rm": {
+      for (const value of commandArgs.filter((entry) => !entry.startsWith("-"))) {
+        fs.rmSync(mapPath(value), { recursive: true, force: true });
+      }
+      return;
+    }
+    case "chmod": {
+      const mode = commandArgs[0];
+      const target = mapPath(commandArgs[1]);
+      if (mode === "+x") {
+        const current = fs.statSync(target).mode & 0o777;
+        fs.chmodSync(target, current | 0o111);
+      } else {
+        fs.chmodSync(target, Number.parseInt(mode, 8));
+      }
+      return;
+    }
+    case "test": {
+      const mode = commandArgs[0];
+      const target = mapPath(commandArgs[1]);
+      try {
+        const stats = fs.statSync(target);
+        if (mode === "-f" && stats.isFile()) return;
+        if (mode === "-x" && (stats.mode & 0o111) !== 0) return;
+      } catch {}
+      process.exitCode = 1;
+      return;
+    }
+    case "cat": {
+      process.stdout.write(fs.readFileSync(mapPath(commandArgs[0]), "utf8"));
+      return;
+    }
+    case "which": {
+      process.stdout.write(\`/usr/bin/\${commandArgs[0]}\\n\`);
+      return;
+    }
+    case "bash": {
+      return;
+    }
+    case "claude": {
+      if (commandArgs[0] === "--help") {
+        process.stdout.write(
+          process.env.FAKE_CLAUDE_NO_MCP_CONFIG === "1"
+            ? "--session-id --resume --effort\\n"
+            : "--session-id --resume --effort --mcp-config\\n",
+        );
+        return;
+      }
+      if (commandArgs[0] === "--version") {
+        process.stdout.write("Claude Code test\\n");
+        return;
+      }
+      for (let i = 0; i < commandArgs.length; i += 1) {
+        if (commandArgs[i] === "--thinking") {
+          const value = commandArgs[i + 1];
+          if (value !== "adaptive" && value !== "off") {
+            process.stderr.write(
+              \`error: option '--thinking <mode>' argument '\${value}' is invalid. Allowed choices are adaptive, off.\\n\`,
+            );
+            process.exitCode = 1;
+            return;
+          }
+          i += 1;
+          continue;
+        }
+        if (commandArgs[i] === "--thinking-display") {
+          const value = commandArgs[i + 1];
+          if (value !== "summarized" && value !== "omitted") {
+            process.stderr.write(
+              \`error: option '--thinking-display <display>' argument '\${value}' is invalid. Allowed choices are summarized, omitted.\\n\`,
+            );
+            process.exitCode = 1;
+            return;
+          }
+          i += 1;
+        }
+      }
+      process.stdout.write("Claude Code test\\n");
+      return;
+    }
+    case "tmux": {
+      const tmuxCommand = commandArgs[0];
+      let sessionName = "";
+      for (let i = 0; i < commandArgs.length; i += 1) {
+        if (commandArgs[i] === "-t" || commandArgs[i] === "-s") {
+          sessionName = commandArgs[i + 1] ?? "";
+          i += 1;
+        }
+      }
+      const sessionPath = path.join(aliveDir, sessionName);
+      if (tmuxCommand === "has-session") {
+        if (sessionName && fs.existsSync(sessionPath)) return;
+        process.exitCode = 1;
+        return;
+      }
+      if (tmuxCommand === "new-session") {
+        fs.mkdirSync(aliveDir, { recursive: true });
+        if (sessionName) fs.writeFileSync(sessionPath, "");
+        return;
+      }
+      if (tmuxCommand === "kill-session") {
+        fs.rmSync(sessionPath, { force: true });
+        return;
+      }
+      return;
+    }
+    case "sh": {
+      const script = commandArgs[1] ?? "";
+      if (script.startsWith("cat > ")) {
+        const destination = script.slice("cat > ".length).trim().replace(/^'/, "").replace(/'$/, "");
+        const mappedDestination = mapPath(destination);
+        ensureParent(mappedDestination);
+        fs.writeFileSync(mappedDestination, stdin);
+        return;
+      }
+      if (script.includes('stat -c %a "$tmp"') && script.includes('mv -f "$tmp"')) {
+        const tmpPath = script.match(/tmp='([^']+)'/)?.[1];
+        const finalPath = script.match(/mv -f "\\$tmp" '([^']+)'/)?.[1];
+        if (!tmpPath || !finalPath) {
+          process.stderr.write("could not parse secure write script\\n");
+          process.exitCode = 1;
+          return;
+        }
+        const mappedTmp = mapPath(tmpPath);
+        const mappedFinal = mapPath(finalPath);
+        ensureParent(mappedTmp);
+        ensureParent(mappedFinal);
+        fs.writeFileSync(mappedTmp, stdin, { mode: 0o600 });
+        fs.chmodSync(mappedTmp, 0o600);
+        fs.renameSync(mappedTmp, mappedFinal);
+        fs.chmodSync(mappedFinal, 0o600);
+        return;
+      }
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+main().catch((error) => {
+  process.stderr.write(String(error.stack || error));
+  process.exitCode = 1;
+});
+`);
+  await fs.chmod(path.join(binDir, "docker"), 0o755);
+
+  const originalPath = process.env.PATH;
+  const originalDockerLog = process.env.FAKE_DOCKER_LOG;
+  const originalTmuxAlive = process.env.FAKE_TMUX_ALIVE;
+  const originalContainerWorktree = process.env.FAKE_CONTAINER_WORKTREE;
+  const originalNoMcpConfig = process.env.FAKE_CLAUDE_NO_MCP_CONFIG;
+  process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+  process.env.FAKE_DOCKER_LOG = log;
+  process.env.FAKE_TMUX_ALIVE = alive;
+  process.env.FAKE_CONTAINER_WORKTREE = worktree;
+  const environmentId = `env-${path.basename(root)}`;
+  if (!environmentId.startsWith(`env-${RUNTIME_TEMP_PREFIX}`)) {
+    throw new Error(`unexpected tmux runtime environment id: ${environmentId}`);
+  }
+  const environment: Environment = {
+    id: environmentId,
+    projectId: "project-1",
+    name: "tmux-container",
+    branch: "main",
+    containerId: "container-testing",
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: new Date(0).toISOString(),
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "containerized",
+    worktreePath: null,
+  };
+  const runtimeRoot = path.join(RUNTIME_ROOT_PREFIX, environmentId);
+
+  try {
+    await run({ worktree, log, alive, environment, runtimeRoot });
+  } finally {
+    await fs.rm(runtimeRoot, { recursive: true, force: true });
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    if (originalDockerLog === undefined) delete process.env.FAKE_DOCKER_LOG;
+    else process.env.FAKE_DOCKER_LOG = originalDockerLog;
+    if (originalTmuxAlive === undefined) delete process.env.FAKE_TMUX_ALIVE;
+    else process.env.FAKE_TMUX_ALIVE = originalTmuxAlive;
+    if (originalContainerWorktree === undefined) delete process.env.FAKE_CONTAINER_WORKTREE;
+    else process.env.FAKE_CONTAINER_WORKTREE = originalContainerWorktree;
+    if (originalNoMcpConfig === undefined) delete process.env.FAKE_CLAUDE_NO_MCP_CONFIG;
+    else process.env.FAKE_CLAUDE_NO_MCP_CONFIG = originalNoMcpConfig;
   }
 }
 
@@ -381,6 +734,311 @@ describe("Electron tmux backend command registration", () => {
     ]) {
       expect(handlers.has(name)).toBe(true);
     }
+  });
+
+  test("writes an owner-only agent MCP config and includes it in a local Claude launch", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot, log }) => {
+      const connectionCalls: Array<{
+        environmentId: string;
+        projectId: string;
+        target: "host" | "container";
+      }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+        agentTools: {
+          connection: (
+            environmentId: string,
+            projectId: string,
+            target: "host" | "container",
+          ) => {
+            connectionCalls.push({ environmentId, projectId, target });
+            return {
+              url: "http://127.0.0.1:4567/mcp",
+              token: "scoped-project-token",
+            };
+          },
+          revokeEnvironment: () => undefined,
+        },
+      };
+
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-agent-mcp", environmentId: environment.id },
+        context,
+      );
+
+      expect(connectionCalls).toEqual([{
+        environmentId: environment.id,
+        projectId: environment.projectId,
+        target: "host",
+      }]);
+      const configPath = path.join(runtimeRoot, "agent-mcp.json");
+      expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
+        mcpServers: {
+          orkestrator: {
+            type: "http",
+            url: "http://127.0.0.1:4567/mcp",
+            headers: { Authorization: "Bearer scoped-project-token" },
+          },
+        },
+      });
+      expect(await fs.readFile(log, "utf8")).toContain(
+        `--mcp-config '${configPath}'`,
+      );
+
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-agent-mcp", environmentId: environment.id },
+        context,
+      );
+      await expect(fs.stat(configPath)).rejects.toThrow();
+    });
+  });
+
+  test("does not create an agent MCP config when Claude lacks the launch flag", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot, log }) => {
+      process.env.FAKE_CLAUDE_NO_MCP_CONFIG = "1";
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+        agentTools: {
+          connection: () => {
+            throw new Error("connection must not be requested");
+          },
+          revokeEnvironment: () => undefined,
+        },
+      };
+
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-no-mcp-flag", environmentId: environment.id },
+        context,
+      );
+
+      await expect(fs.stat(path.join(runtimeRoot, "agent-mcp.json"))).rejects.toThrow();
+      expect(await fs.readFile(log, "utf8")).not.toContain("--mcp-config");
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-no-mcp-flag", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
+  test("skips agent MCP injection if the environment disappears during launch", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot, log }) => {
+      let environmentReads = 0;
+      const context = {
+        storage: {
+          getEnvironment: async () => {
+            environmentReads += 1;
+            return environmentReads < 4 ? environment : undefined;
+          },
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+        agentTools: {
+          connection: () => {
+            throw new Error("connection must not be requested");
+          },
+          revokeEnvironment: () => undefined,
+        },
+      };
+
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-vanished-agent-env", environmentId: environment.id },
+        context,
+      );
+
+      await expect(fs.stat(path.join(runtimeRoot, "agent-mcp.json"))).rejects.toThrow();
+      expect(await fs.readFile(log, "utf8")).not.toContain("--mcp-config");
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-vanished-agent-env", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
+  test("cleans the private temporary file and fails closed when config replacement fails", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot, log }) => {
+      const configPath = path.join(runtimeRoot, "agent-mcp.json");
+      await fs.mkdir(configPath, { recursive: true });
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+        agentTools: {
+          connection: () => ({
+            url: "http://127.0.0.1:4567/mcp",
+            token: "scoped-project-token",
+          }),
+          revokeEnvironment: () => undefined,
+        },
+      };
+
+      await expect(invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-agent-config-write-failure", environmentId: environment.id },
+        context,
+      )).rejects.toThrow();
+
+      expect((await fs.stat(configPath)).isDirectory()).toBe(true);
+      expect(
+        (await fs.readdir(runtimeRoot)).filter((name) =>
+          name.startsWith("agent-mcp.json.") && name.endsWith(".tmp")
+        ),
+      ).toEqual([]);
+      expect(await fs.readFile(log, "utf8")).not.toContain("new-session ");
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-agent-config-write-failure", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
+  test("removes the bearer config when tmux rejects the Claude launch", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      process.env.FAKE_TMUX_FAIL_NEW = "1";
+      const configPath = path.join(runtimeRoot, "agent-mcp.json");
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+        agentTools: {
+          connection: () => ({
+            url: "http://127.0.0.1:4567/mcp",
+            token: "scoped-project-token",
+          }),
+          revokeEnvironment: () => undefined,
+        },
+      };
+
+      await expect(invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-agent-launch-failure", environmentId: environment.id },
+        context,
+      )).rejects.toThrow("tmux new-session failed");
+
+      await expect(fs.stat(configPath)).rejects.toThrow();
+      expect(
+        (await fs.readdir(runtimeRoot)).filter((name) =>
+          name.startsWith("agent-mcp.json.") && name.endsWith(".tmp")
+        ),
+      ).toEqual([]);
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-agent-launch-failure", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
+  test("writes the agent MCP config securely for container-backed Claude sessions", async () => {
+    const handlers = createHandlers();
+
+    await withFakeContainerTmuxRuntime(async ({ environment, runtimeRoot, log, worktree }) => {
+      const connectionCalls: Array<{
+        environmentId: string;
+        projectId: string;
+        target: "host" | "container";
+      }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+        agentTools: {
+          connection: (
+            environmentId: string,
+            projectId: string,
+            target: "host" | "container",
+          ) => {
+            connectionCalls.push({ environmentId, projectId, target });
+            return {
+              url: "http://host.docker.internal:4567/mcp",
+              token: "container-project-token",
+            };
+          },
+          revokeEnvironment: () => undefined,
+        },
+      };
+
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-container-agent-mcp", environmentId: environment.id },
+        context,
+      );
+
+      expect(connectionCalls).toEqual([{
+        environmentId: environment.id,
+        projectId: environment.projectId,
+        target: "container",
+      }]);
+      const configPath = path.join(runtimeRoot, "agent-mcp.json");
+      expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
+        mcpServers: {
+          orkestrator: {
+            type: "http",
+            url: "http://host.docker.internal:4567/mcp",
+            headers: { Authorization: "Bearer container-project-token" },
+          },
+        },
+      });
+      expect(
+        JSON.parse(
+          await fs.readFile(
+            path.join(worktree, ".claude", "settings.local.json"),
+            "utf8",
+          ),
+        ),
+      ).toHaveProperty("hooks");
+
+      const dockerLog = await fs.readFile(log, "utf8");
+      expect(dockerLog).toContain('stat -c %a "$tmp"');
+      expect(dockerLog).toContain(`--mcp-config '${configPath}'`);
+
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-container-agent-mcp", environmentId: environment.id },
+        context,
+      );
+      await expect(fs.stat(configPath)).rejects.toThrow();
+    });
   });
 
   test("keeps missing-session behavior compatible with the backend tmux commands", async () => {

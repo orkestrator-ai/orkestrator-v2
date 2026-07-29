@@ -13,6 +13,7 @@ import {
 } from "./local-server-reaper.js";
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
+import { AgentToolsServer } from "./agent-tools.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 import { BuildPipelineService } from "./build-pipeline-service.js";
@@ -33,6 +34,10 @@ export class OrkestratorBackend {
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private readonly reapPidServers: typeof reapOrphanedLocalServers;
   private readonly reapTmuxRuntimes: typeof reapOrphanedClaudeTmuxRuntimes;
+  private readonly agentTools: Pick<
+    AgentToolsServer,
+    "connection" | "revokeEnvironment" | "start" | "stop"
+  >;
 
   constructor(options: {
     dataDir: string;
@@ -44,10 +49,15 @@ export class OrkestratorBackend {
       localServers?: typeof reapOrphanedLocalServers;
       claudeTmuxRuntimes?: typeof reapOrphanedClaudeTmuxRuntimes;
     };
+    agentTools?: Pick<
+      AgentToolsServer,
+      "connection" | "revokeEnvironment" | "start" | "stop"
+    >;
     environmentLifecycleTasks?: EnvironmentLifecycleTaskTracker;
     environmentLifecycleDrainTimeoutMs?: number;
   }) {
     const storage = new StorageService(options.dataDir);
+    this.agentTools = options.agentTools ?? new AgentToolsServer(storage);
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
     this.environmentLifecycleDrainTimeoutMs =
@@ -65,6 +75,7 @@ export class OrkestratorBackend {
       appRoot: options.appRoot,
       resourceRoot: options.resourceRoot,
       emit: options.emit,
+      agentTools: this.agentTools,
       environmentLifecycleTasks: this.environmentLifecycleTasks,
     } as CommandContext;
     this.context = context;
@@ -91,6 +102,7 @@ export class OrkestratorBackend {
     // than exposing progress that this backend can never complete.
     const lifecycleRecovery =
       await reconcileInterruptedEnvironmentLifecycleTasks(this.context.storage);
+    await this.agentTools.start();
     // No renderer can be alive yet, so every persisted `frontend` activity
     // snapshot belongs to a process that is gone. They cannot be retracted
     // later — the aggregate is a max — so a renderer that quit mid-turn would
@@ -185,28 +197,32 @@ export class OrkestratorBackend {
     shutdownDiffStatsTracking();
     shutdownPrMonitorTracking();
     const attempt = (async () => {
-      const lifecycleDeadline =
-        Date.now() + this.environmentLifecycleDrainTimeoutMs;
-      // Close both admission gates before waiting on any in-flight work.
-      // Starting the pipeline drain immediately also prevents its scheduler
-      // from admitting more backend-owned work during shutdown.
-      closeLocalServerAdmission();
-      const lifecycleDrain = this.environmentLifecycleTasks.beginShutdown(
-        this.environmentLifecycleDrainTimeoutMs,
-      );
-      // Pipeline passes may still be writing snapshots or using a bridge.
-      // Drain them before terminating backend-owned local servers — but never
-      // let a failed drain skip that teardown, or every backend-owned bridge
-      // process outlives the backend as an orphan.
       try {
-        await this.buildPipelines.shutdown();
-      } catch (error) {
-        console.warn("[backend] Failed to drain build pipelines:", error);
+        const lifecycleDeadline =
+          Date.now() + this.environmentLifecycleDrainTimeoutMs;
+        // Close both admission gates before waiting on any in-flight work.
+        // Starting the pipeline drain immediately also prevents its scheduler
+        // from admitting more backend-owned work during shutdown.
+        closeLocalServerAdmission();
+        const lifecycleDrain = this.environmentLifecycleTasks.beginShutdown(
+          this.environmentLifecycleDrainTimeoutMs,
+        );
+        // Pipeline passes may still be writing snapshots or using a bridge.
+        // Drain them before terminating backend-owned local servers — but never
+        // let a failed drain skip that teardown, or every backend-owned bridge
+        // process outlives the backend as an orphan.
+        try {
+          await this.buildPipelines.shutdown();
+        } catch (error) {
+          console.warn("[backend] Failed to drain build pipelines:", error);
+        }
+        await lifecycleDrain;
+        await shutdownLocalServers({
+          operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
+        });
+      } finally {
+        await this.agentTools.stop();
       }
-      await lifecycleDrain;
-      await shutdownLocalServers({
-        operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
-      });
     })();
     this.shutdownPromise = attempt;
     try {

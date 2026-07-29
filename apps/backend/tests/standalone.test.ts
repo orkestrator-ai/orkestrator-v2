@@ -213,10 +213,31 @@ describe("standalone backend service", () => {
         );
         fs.writeFileSync(
           ${JSON.stringify(processMarkerPath)},
-          JSON.stringify({ serverPid: process.pid, descendantPid: descendant.pid }),
+          JSON.stringify({
+            serverPid: process.pid,
+            descendantPid: descendant.pid,
+            agentToolsUrl: process.env.ORKESTRATOR_AGENT_MCP_URL,
+            agentToolsToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN,
+          }),
         );
         http.createServer((request, response) => {
-          response.writeHead(request.url === "/global/health" ? 200 : 404);
+          const pathname = new URL(request.url, "http://127.0.0.1").pathname;
+          if (request.method === "GET" && pathname === "/global/health") {
+            response.writeHead(200);
+            response.end();
+            return;
+          }
+          if (request.method === "POST" && pathname === "/mcp") {
+            request.resume();
+            request.once("end", () => {
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(JSON.stringify({
+                orkestrator: { status: "connected" },
+              }));
+            });
+            return;
+          }
+          response.writeHead(404);
           response.end();
         }).listen(Number(process.argv[2]), "127.0.0.1");
       `;
@@ -263,10 +284,16 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeServerPath)} "$POR
     const processIds = JSON.parse(await readFile(processMarkerPath, "utf8")) as {
       serverPid: number;
       descendantPid: number;
+      agentToolsUrl?: string;
+      agentToolsToken?: string;
     };
     expect(result.pid).toBe(processIds.serverPid);
     expect(isProcessRunning(processIds.serverPid)).toBe(true);
     expect(isProcessRunning(processIds.descendantPid)).toBe(true);
+    expect(processIds.agentToolsUrl).toMatch(
+      /^http:\/\/127\.0\.0\.1:\d+\/mcp$/,
+    );
+    expect(processIds.agentToolsToken).toMatch(/^[A-Za-z0-9_-]{32,128}$/);
 
     started.child.kill("SIGTERM");
     await expect(started.child.exited).resolves.toBe(0);

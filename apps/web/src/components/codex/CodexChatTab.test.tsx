@@ -1936,6 +1936,24 @@ describe("CodexChatTab", () => {
     }
   });
 
+  test("uses the generic message for a non-Error initialization failure", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    mockCreateSession.mockRejectedValueOnce({
+      code: "opaque-create-failure",
+    } as any);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByText("Failed to initialize Codex")).toBeTruthy();
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: /Retry/i })).toBeTruthy();
+    expect(useCodexStore.getState().sessions.has(SESSION_KEY)).toBe(false);
+  });
+
   test("reports local initialization errors without requesting a container log", async () => {
     useCodexStore.setState((state) => ({
       ...state,
@@ -2125,6 +2143,22 @@ describe("CodexChatTab", () => {
 
     expect(await screen.findByText("Codex bridge health check failed")).toBeTruthy();
     expect(mockCheckHealth).toHaveBeenCalledWith(MOCK_CLIENT);
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("reports a rejected cold-start health check before creating a session", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    mockCheckHealth.mockRejectedValueOnce(new Error("health request reset"));
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByText("health request reset")).toBeTruthy();
+    expect(mockCheckHealth).toHaveBeenCalledWith(MOCK_CLIENT);
+    expect(mockGetModels).not.toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
@@ -2364,7 +2398,7 @@ describe("CodexChatTab", () => {
     expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
       "assistant-agent",
       "assistant-later",
-      "assistant-agent:active-agent:agent-1",
+      "assistant-agent:active-agents",
     ]);
 
     const completedMessage: TestCodexMessage = {
@@ -2393,7 +2427,7 @@ describe("CodexChatTab", () => {
     });
   });
 
-  test("pins adjacent streaming subagents individually and regroups them once finished", async () => {
+  test("keeps adjacent streaming subagents grouped while pinned and inline once finished", async () => {
     const activeMessage: TestCodexMessage = {
       id: "assistant-agent-group",
       role: "assistant",
@@ -2424,15 +2458,21 @@ describe("CodexChatTab", () => {
 
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
 
-    // While streaming, each subagent is pinned to the rendered bottom.
+    // While streaming, the subagents share one pinned group at the rendered bottom.
     expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
       "assistant-agent-group",
-      "assistant-agent-group:active-agent:agent-1",
-      "assistant-agent-group:active-agent:agent-2",
+      "assistant-agent-group:active-agents",
     ]);
     expect(lastVirtualizedMessages[0]?.parts.map((part: any) => part.type)).toEqual([
       "text",
       "text",
+    ]);
+    expect(lastVirtualizedMessages[1]?.parts.map((part: any) => part.type)).toEqual([
+      "agent-group",
+    ]);
+    expect(lastVirtualizedMessages[1]?.parts[0].parts.map((part: any) => part.subagentId)).toEqual([
+      "agent-1",
+      "agent-2",
     ]);
 
     const completedMessage: TestCodexMessage = {
@@ -4783,9 +4823,18 @@ describe("CodexChatTab", () => {
     });
     expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBeUndefined();
 
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     const firstRequestId = (
       mockSendPrompt.mock.calls[0]?.[3] as { requestId?: string } | undefined
     )?.requestId;
+    expect(
+      useCodexStore.getState().unconfirmedDispatches.get(SESSION_KEY),
+    ).toMatchObject({
+      requestId: firstRequestId,
+      retryable: true,
+    });
     fireEvent.click(screen.getByTestId("codex-send"));
     await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
     expect(

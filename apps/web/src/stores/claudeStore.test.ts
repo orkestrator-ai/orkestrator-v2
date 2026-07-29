@@ -46,6 +46,7 @@ function resetClaudeStore() {
     promptSuggestions: new Map(),
     dismissedPromptSuggestions: new Map(),
     backgroundTasks: new Map(),
+    backgroundTaskRevisions: new Map(),
   });
 }
 
@@ -280,6 +281,7 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(state.promptSuggestions.has(SESSION_KEY)).toBe(false);
     expect(state.dismissedPromptSuggestions.has(SESSION_KEY)).toBe(false);
     expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
+    expect(state.backgroundTaskRevisions.has(SESSION_KEY)).toBe(false);
     expect(state.pendingQuestions.has("old-question")).toBe(false);
     expect(state.pendingPlanApprovals.has("old-approval")).toBe(false);
     expect(state.selectedModel.get(SESSION_KEY)).toBe("claude-sonnet");
@@ -320,6 +322,10 @@ describe("claudeStore cleanup and queue helpers", () => {
       rateLimits: new Map([
         [targetKey, [{ label: "5h", usedPercent: 10 }]],
         [otherKey, [{ label: "Weekly", usedPercent: 20 }]],
+      ]),
+      backgroundTaskRevisions: new Map([
+        [targetKey, 3],
+        [otherKey, 7],
       ]),
       pendingQuestions: new Map([
         ["question-target", { id: "question-target", sessionId: "sdk-target", questions: [] }],
@@ -362,6 +368,7 @@ describe("claudeStore cleanup and queue helpers", () => {
       "fastMode",
       "contextUsage",
       "rateLimits",
+      "backgroundTaskRevisions",
     ] as const;
     for (const field of sessionKeyedMaps) {
       expect(state[field].has(targetKey), `${field} should remove target`).toBe(false);
@@ -1164,9 +1171,12 @@ describe("claudeStore per-session turn options", () => {
       expect(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)).toEqual({
         "task-1": task,
       });
+      expect(
+        useClaudeStore.getState().backgroundTaskRevisions.get(SESSION_KEY),
+      ).toBe(1);
     });
 
-    test("deletes the key when the bridge reports no tasks", () => {
+    test("deletes the key and advances its revision when the bridge reports no tasks", () => {
       // The bridge is authoritative and reports the whole set each time, so an
       // empty record means "none left" and must not linger as an empty object a
       // selector would treat as a fresh reference on every read.
@@ -1176,6 +1186,22 @@ describe("claudeStore per-session turn options", () => {
       store.setBackgroundTasks(SESSION_KEY, {});
 
       expect(useClaudeStore.getState().backgroundTasks.has(SESSION_KEY)).toBe(false);
+      expect(
+        useClaudeStore.getState().backgroundTaskRevisions.get(SESSION_KEY),
+      ).toBe(2);
+    });
+
+    test("detects an absent to present to absent snapshot sequence", () => {
+      const store = useClaudeStore.getState();
+      expect(store.backgroundTasks.has(SESSION_KEY)).toBe(false);
+      expect(store.backgroundTaskRevisions.has(SESSION_KEY)).toBe(false);
+
+      store.setBackgroundTasks(SESSION_KEY, { "task-1": task });
+      store.setBackgroundTasks(SESSION_KEY, {});
+
+      const state = useClaudeStore.getState();
+      expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
+      expect(state.backgroundTaskRevisions.get(SESSION_KEY)).toBe(2);
     });
 
     test("replaces rather than merges the previous record", () => {
@@ -1322,6 +1348,7 @@ describe("claudeStore per-session turn options", () => {
     expect(state.promptSuggestions.has(SESSION_KEY)).toBe(false);
     expect(state.dismissedPromptSuggestions.has(SESSION_KEY)).toBe(false);
     expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
+    expect(state.backgroundTaskRevisions.has(SESSION_KEY)).toBe(false);
     expect(state.fastMode.has(SESSION_KEY)).toBe(false);
     expect(state.contextUsage.has(SESSION_KEY)).toBe(false);
     expect(state.rateLimits.has(SESSION_KEY)).toBe(false);
@@ -1343,6 +1370,7 @@ describe("claudeStore per-session turn options", () => {
     expect(state.promptSuggestions.get(otherEnvKey)).toBe("Run the tests");
     expect(state.dismissedPromptSuggestions.get(otherEnvKey)).toBe("Already used this one");
     expect(state.backgroundTasks.has(otherEnvKey)).toBe(true);
+    expect(state.backgroundTaskRevisions.get(otherEnvKey)).toBe(1);
     expect(state.fastMode.get(otherEnvKey)).toBe(true);
     expect(state.contextUsage.has(otherEnvKey)).toBe(true);
     expect(state.rateLimits.has(otherEnvKey)).toBe(true);

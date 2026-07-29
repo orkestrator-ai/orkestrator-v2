@@ -21,9 +21,10 @@ function containsActiveWork(parts: NativeMessagePart[]): boolean {
 }
 
 /**
- * Agent launch tools can resolve successfully before the child agent has
- * finished. Prefer live descendant activity over that launch result so the UI
- * does not present an active agent as finished.
+ * Explicit lifecycle is authoritative for providers whose launch tool can
+ * resolve before the child finishes. Otherwise a terminal parent tool state is
+ * authoritative: transcript hydration can retain stale pending descendants
+ * after Codex or OpenCode has reported the agent's final result.
  */
 export function getNativeAgentStatus(
   part: NativeAgentActivityPart,
@@ -41,6 +42,10 @@ export function getNativeAgentStatus(
     return "failed";
   }
 
+  if (toolState === "success") {
+    return "finished";
+  }
+
   const childParts = part.type === "task-group"
     ? part.childTools
     : part.subagentActions ?? [];
@@ -49,7 +54,7 @@ export function getNativeAgentStatus(
     return "active";
   }
 
-  return toolState === "success" ? "finished" : "active";
+  return "active";
 }
 
 export function isNativeAgentActive(part: NativeAgentActivityPart): boolean {

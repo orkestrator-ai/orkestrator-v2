@@ -1417,6 +1417,94 @@ describe("NativeMessage", () => {
     ).toBeTruthy();
   });
 
+  test("normalizes away empty thinking without leaving an activity shell", () => {
+    const message: NativeMessageType = {
+      id: "msg-empty-thinking",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        { type: "thinking", content: "" },
+        { type: "thinking", content: "  \n\t " },
+      ],
+    };
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(screen.queryByRole("button", { name: /thinking/i })).toBeNull();
+    expect(container.querySelector(".border-zinc-700\\/70")).toBeNull();
+  });
+
+  test("renders no control for an empty nested thinking update", () => {
+    const message: NativeMessageType = {
+      id: "msg-empty-nested-thinking",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "subagent",
+          content: "Reviewer",
+          subagentId: "empty-thinking-agent",
+          toolState: "pending",
+          subagentActions: [{ type: "thinking", content: "  \n\t " }],
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+    fireEvent.click(screen.getByRole("button", { name: /reviewer active/i }));
+
+    expect(screen.queryByRole("button", { name: /thinking/i })).toBeNull();
+  });
+
+  test("does not render a shell for an empty tool group", () => {
+    const message: NativeMessageType = {
+      id: "msg-empty-tool-group",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        { type: "text", content: "Before tools" },
+        { type: "tool-group", content: "", parts: [] },
+        { type: "text", content: "After tools" },
+      ],
+    };
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Before tools")).toBeTruthy();
+    expect(screen.getByText("After tools")).toBeTruthy();
+    expect(container.querySelector(".border-zinc-700\\/70")).toBeNull();
+  });
+
+  test("uses Response when the latest task text update is empty", () => {
+    const message: NativeMessageType = {
+      id: "msg-empty-task-text",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "task-group",
+          content: "Agent",
+          task: {
+            type: "tool-invocation",
+            content: "Agent",
+            toolName: "Agent",
+            toolState: "pending",
+          },
+          childTools: [{ type: "text", content: "  \n\t " }],
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Response")).toBeTruthy();
+    expect(screen.queryByText("Waiting for activity.")).toBeNull();
+  });
+
   test("renders transcript-derived subagent groups as collapsible activity stacks", () => {
     const message: NativeMessageType = {
       id: "msg-subagent",

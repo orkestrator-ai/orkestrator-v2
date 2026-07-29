@@ -764,6 +764,32 @@ describe("claude-client", () => {
       expect(parseClaudeBackgroundTasks(null)).toBeUndefined();
     });
 
+    test("accepts every supported background-task lifecycle status", () => {
+      const statuses = [
+        "pending",
+        "running",
+        "paused",
+        "completed",
+        "failed",
+        "killed",
+      ] as const;
+      const tasks = Object.fromEntries(statuses.map((status) => [
+        status,
+        {
+          id: status,
+          status,
+          toolUseId: `tool-${status}`,
+        },
+      ]));
+
+      expect(parseClaudeBackgroundTasks(tasks)).toEqual(tasks);
+    });
+
+    test("accepts empty task snapshots and rejects arrays", () => {
+      expect(parseClaudeBackgroundTasks({})).toEqual({});
+      expect(parseClaudeBackgroundTasks([])).toBeUndefined();
+    });
+
     test("preserves optional background-task fields and drops primitive entries", () => {
       const complete = {
         id: "build",

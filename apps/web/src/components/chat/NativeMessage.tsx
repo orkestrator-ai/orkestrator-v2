@@ -140,13 +140,8 @@ function getAgentExpansionKey(part: NativeAgentActivityPart): string {
 }
 
 function useAgentExpansion(part: NativeAgentActivityPart) {
-  const expansionContext = useContext(AgentExpansionContext);
-  const [localIsOpen, setLocalIsOpen] = useState(false);
+  const expansionContext = useContext(AgentExpansionContext)!;
   const expansionKey = getAgentExpansionKey(part);
-
-  if (!expansionContext) {
-    return [localIsOpen, setLocalIsOpen] as const;
-  }
 
   return [
     expansionContext.expandedKeys.has(expansionKey),
@@ -157,28 +152,22 @@ function useAgentExpansion(part: NativeAgentActivityPart) {
 /**
  * Expansion state for a thinking part.
  *
- * Backed by the shared store when the caller supplies a stable key, so an
- * expanded block survives the virtualized list unmounting it while off-screen.
- * Falls back to component state when no key is available.
+ * Backed by the shared store using the stable key supplied by MessagePart, so
+ * an expanded block survives the virtualized list unmounting it while off-screen.
  */
-function useThinkingExpansion(expansionKey?: string) {
-  const [localIsOpen, setLocalIsOpen] = useState(false);
+function useThinkingExpansion(expansionKey: string) {
   const storedIsOpen = useMessagePartExpansionStore((state) =>
-    expansionKey ? state.expandedKeys.has(expansionKey) : false,
+    state.expandedKeys.has(expansionKey),
   );
   const setStoredExpanded = useMessagePartExpansionStore(
     (state) => state.setExpanded,
   );
   const setExpanded = useCallback(
     (open: boolean) => {
-      if (expansionKey) setStoredExpanded(expansionKey, open);
+      setStoredExpanded(expansionKey, open);
     },
     [expansionKey, setStoredExpanded],
   );
-
-  if (!expansionKey) {
-    return [localIsOpen, setLocalIsOpen] as const;
-  }
 
   return [storedIsOpen, setExpanded] as const;
 }
@@ -189,7 +178,7 @@ function ThinkingPart({
   expansionKey,
 }: {
   content: string;
-  expansionKey?: string;
+  expansionKey: string;
 }) {
   const hasTaskList = useMemo(
     () => TASK_LIST_SYNTAX_PATTERN.test(content),
@@ -1147,7 +1136,7 @@ function SubagentPart({
 }: {
   part: Extract<NativeMessagePart, { type: "subagent" }>;
   containerId?: string;
-  partKey?: string;
+  partKey: string;
 }) {
   const [isOpen, setIsOpen] = useAgentExpansion(part);
   const subagentActions = part.subagentActions ?? [];
@@ -1235,7 +1224,7 @@ function SubagentPart({
                 key={`${part.subagentId || part.content}-subagent-part-${index}-${childPart.type}`}
                 part={childPart}
                 containerId={containerId}
-                partKey={partKey ? `${partKey}/subagent-${index}` : undefined}
+                partKey={`${partKey}/subagent-${index}`}
               />
             ))}
             {subagentActions.length === 0 ? (
@@ -1257,7 +1246,7 @@ function AgentGroupPart({
 }: {
   part: NativeAgentGroupPart;
   containerId?: string;
-  partKey?: string;
+  partKey: string;
 }) {
   const activeCount = part.parts.filter((child) => {
     return getNativeAgentStatus(child) === "active";
@@ -1286,7 +1275,7 @@ function AgentGroupPart({
             key={`agent-group-part-${index}-${child.type}`}
             part={child}
             containerId={containerId}
-            partKey={partKey ? `${partKey}/agent-${index}` : undefined}
+            partKey={`${partKey}/agent-${index}`}
           />
         ))}
       </div>
@@ -1301,7 +1290,7 @@ function ToolGroupPart({
 }: {
   part: NativeToolGroupPart;
   containerId?: string;
-  partKey?: string;
+  partKey: string;
 }) {
   // An empty group would still paint its border and padding.
   if (part.parts.length === 0) {
@@ -1315,7 +1304,7 @@ function ToolGroupPart({
           key={`tool-group-part-${index}-${child.type}`}
           part={child}
           containerId={containerId}
-          partKey={partKey ? `${partKey}/tool-${index}` : undefined}
+          partKey={`${partKey}/tool-${index}`}
         />
       ))}
     </div>
@@ -1329,7 +1318,7 @@ function TaskGroupPart({
 }: {
   part: NativeTaskGroupPart;
   containerId?: string;
-  partKey?: string;
+  partKey: string;
 }) {
   const [isOpen, setIsOpen] = useAgentExpansion(part);
   const toolLabel =
@@ -1474,7 +1463,7 @@ function TaskGroupPart({
                 key={`task-child-${index}-${child.toolUseId ?? child.sourcePartId ?? child.toolName ?? child.type}`}
                 part={child}
                 containerId={containerId}
-                partKey={partKey ? `${partKey}/task-child-${index}` : undefined}
+                partKey={`${partKey}/task-child-${index}`}
               />
             ))}
             {part.childTools.length === 0 ? (
@@ -1502,7 +1491,7 @@ function MessagePart({
   truncateUserPrompt?: boolean;
   containerId?: string;
   /** Stable identity for this part's position, used to persist expansion state. */
-  partKey?: string;
+  partKey: string;
 }) {
   switch (part.type) {
     case "thinking":

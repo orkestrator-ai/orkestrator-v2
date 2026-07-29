@@ -2047,7 +2047,7 @@ describe("NativeMessage agent status and grouping details", () => {
     expect(screen.getByText("Failed").className).toContain("border-red-500/30");
   });
 
-  test("keeps successful launches active while descendant tools are pending", () => {
+  test("keeps successful terminal agents finished despite stale pending descendants", () => {
     render(
       <NativeMessage
         message={makeMessage([
@@ -2087,9 +2087,8 @@ describe("NativeMessage agent status and grouping details", () => {
       />,
     );
 
-    expect(screen.getByText("2 active")).toBeTruthy();
-    expect(screen.getAllByText("Active")).toHaveLength(2);
-    expect(screen.queryByText("Finished")).toBeNull();
+    expect(screen.queryByText(/active$/i)).toBeNull();
+    expect(screen.getAllByText("Finished")).toHaveLength(2);
   });
 
   test("prefers authoritative agent lifecycle over a successful launch tool", () => {
@@ -2108,6 +2107,82 @@ describe("NativeMessage agent status and grouping details", () => {
     expect(screen.getByText("Active")).toBeTruthy();
     expect(screen.queryByText("Finished")).toBeNull();
     expect(screen.getByText("Waiting for activity.")).toBeTruthy();
+  });
+
+  test("renders an authoritative agent failure even when the launch tool succeeded", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "Background reviewer",
+            subagentId: "authoritative-failure",
+            toolState: "success",
+            agentState: "failed",
+            subagentActions: [],
+          },
+          {
+            type: "subagent",
+            content: "Legacy reviewer",
+            subagentId: "legacy-failure",
+            toolState: "failure",
+            subagentActions: [],
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getAllByText("Failed")).toHaveLength(2);
+    expect(screen.queryByText("Finished")).toBeNull();
+    expect(screen.getAllByText("No activity captured.")).toHaveLength(2);
+  });
+
+  test("expands standalone agents whose identity uses fallback fields", () => {
+    const { rerender } = render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "",
+            toolState: "pending",
+            subagentActions: [],
+          },
+        ], { id: "fallback-subagent" })}
+      />,
+    );
+
+    const subagentTrigger = screen.getByRole("button", {
+      name: /subagent active/i,
+    });
+    expect(subagentTrigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(subagentTrigger);
+    expect(subagentTrigger.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(subagentTrigger);
+    expect(subagentTrigger.getAttribute("aria-expanded")).toBe("false");
+
+    rerender(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "task-group",
+            content: "",
+            task: {
+              type: "tool-invocation",
+              content: "",
+              toolState: "pending",
+            },
+            childTools: [],
+          },
+        ], { id: "fallback-task-group" })}
+      />,
+    );
+
+    const taskTrigger = screen.getByRole("button", {
+      name: /subagent active/i,
+    });
+    expect(taskTrigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(taskTrigger);
+    expect(taskTrigger.getAttribute("aria-expanded")).toBe("true");
   });
 
   test("omits the active badge when every grouped agent has finished", () => {

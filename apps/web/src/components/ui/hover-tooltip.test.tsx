@@ -187,10 +187,17 @@ describe("HoverTooltipContent", () => {
 
     expect(screen.getByText("Run command")).toBeTruthy();
 
-    await waitFor(() => {
-      expect(screen.queryByText("Run command")).toBeNull();
-    });
-  });
+    await waitFor(
+      () => {
+        expect(screen.queryByText("Run command")).toBeNull();
+      },
+      {
+        // The close delay is 50ms, but the repository-wide parallel suite can
+        // starve real timers for several seconds while bridge workers are busy.
+        timeout: 10_000,
+      },
+    );
+  }, 15_000);
 
   test("positions bottom center tooltips from the anchor center and side offset", async () => {
     render(<ContextMenuButtonWithHoverTooltip />);

@@ -670,6 +670,8 @@ export function ClaudeChatTab({
 
     const stateBeforeAttempt = useClaudeStore.getState();
     const sessionBeforeAttempt = stateBeforeAttempt.sessions.get(sessionKey);
+    const backgroundTaskRevisionBeforeAttempt =
+      stateBeforeAttempt.backgroundTaskRevisions.get(sessionKey) ?? 0;
     if (
       stateBeforeAttempt.clients.get(environmentId) !== activeClient ||
       sessionBeforeAttempt?.sessionId !== sessionId
@@ -710,6 +712,23 @@ export function ClaudeChatTab({
        */
       if (manual) {
         throw new Error("Claude session changed while refreshing; try again");
+      }
+      return;
+    }
+    if (
+      (stateAfterAttempt.backgroundTaskRevisions.get(sessionKey) ?? 0)
+      !== backgroundTaskRevisionBeforeAttempt
+    ) {
+      /**
+       * Background-task lifecycle is stored independently from the session
+       * object. A live `session.updated` frame can therefore settle a task
+       * without tripping the session reference guard above. Its monotonic
+       * revision also detects absent → present → absent ABA updates that a task
+       * record comparison would miss. Do not let a REST request that started
+       * before those frames resurrect a task as running.
+       */
+      if (manual) {
+        throw new Error("Claude background tasks changed while refreshing; try again");
       }
       return;
     }
@@ -2444,6 +2463,12 @@ export function ClaudeChatTab({
           } else {
             tasksBySession.delete(sessionKey);
           }
+          const backgroundTaskRevisions = new Map(
+            state.backgroundTaskRevisions,
+          );
+          // This transaction replaces the provider identity. Revisions from
+          // the previous session must not become the new session's baseline.
+          backgroundTaskRevisions.delete(sessionKey);
 
           const planMode = new Map(state.planMode);
           planMode.set(
@@ -2460,6 +2485,7 @@ export function ClaudeChatTab({
             promptSuggestions,
             dismissedPromptSuggestions,
             backgroundTasks: tasksBySession,
+            backgroundTaskRevisions,
             planMode,
           };
         });

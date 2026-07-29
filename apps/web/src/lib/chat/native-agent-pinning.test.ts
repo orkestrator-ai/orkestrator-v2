@@ -107,7 +107,7 @@ describe("pinActiveNativeAgentParts", () => {
     ]);
   });
 
-  test("pins successful launches while their descendant tools remain active", () => {
+  test("leaves terminal launches in place despite stale descendant tools", () => {
     const messages: NativeMessage[] = [
       assistantMessage("assistant-1", [
         {
@@ -136,10 +136,10 @@ describe("pinActiveNativeAgentParts", () => {
     const pinned = pinActiveNativeAgentParts(messages);
 
     expect(pinned.map((message) => message.id)).toEqual([
+      "assistant-1",
       "assistant-2",
-      "assistant-1:active-agents",
     ]);
-    expect(pinned[1]?.parts[0]?.type).toBe("task-group");
+    expect(pinned[0]?.parts[0]?.type).toBe("task-group");
   });
 
   test("pins a successful background launch with authoritative active state", () => {
@@ -191,7 +191,7 @@ describe("pinActiveNativeAgentParts", () => {
     ]);
   });
 
-  test("pins successful subagents while their descendant tools remain active", () => {
+  test("leaves terminal subagents in place despite stale descendant tools", () => {
     const messages: NativeMessage[] = [
       assistantMessage("assistant-1", [
         {
@@ -213,9 +213,7 @@ describe("pinActiveNativeAgentParts", () => {
 
     const pinned = pinActiveNativeAgentParts(messages);
 
-    expect(pinned.map((message) => message.id)).toEqual([
-      "assistant-1:active-agents",
-    ]);
+    expect(pinned.map((message) => message.id)).toEqual(["assistant-1"]);
     expect(pinned[0]?.parts[0]?.type).toBe("subagent");
   });
 

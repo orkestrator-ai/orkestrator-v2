@@ -20,6 +20,7 @@ import * as realBackend from "@/lib/backend";
 import * as realMarkdownEditorTab from "@/components/markdown/MarkdownEditorTab";
 import * as realDiffViewerTab from "./DiffViewerTab";
 import * as realMonacoFileEditor from "./MonacoFileEditor";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 const realBackendSnapshot = { ...realBackend };
 const realMarkdownEditorTabSnapshot = { ...realMarkdownEditorTab };
@@ -316,7 +317,7 @@ describe("FileViewerTab component", () => {
       />,
     );
 
-    expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+    expect(await screen.findByTestId("diff-viewer")).toBeTruthy();
     expect(readLocalFileMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "View file" }));
     expect(await screen.findByTestId("markdown-file-editor")).toBeTruthy();
@@ -524,5 +525,254 @@ describe("FileViewerTab component", () => {
     const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
     expect((editor as HTMLTextAreaElement).value).toBe("container text");
     expect(useFileDirtyStore.getState().isDirty("draft-error-tab")).toBe(false);
+  });
+
+  test("offers to save the local buffer after a draft revision conflict", async () => {
+    getFileDraftMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        draftKey: "file:env-conflict:notes.txt",
+        environmentId: "env-conflict",
+        filePath: "notes.txt",
+        content: "other window",
+        originalContent: "container text",
+        updatedAt: "2026-07-29T00:00:00.000Z",
+        revision: 4,
+      });
+    saveFileDraftMock
+      .mockRejectedValueOnce(new Error("revision conflict"))
+      .mockResolvedValueOnce(undefined);
+    render(
+      <FileViewerTab
+        tabId="save-conflict-tab"
+        environmentId="env-conflict"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    fireEvent.change(editor, { target: { value: "my unsaved text" } });
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+    const toastOptions = mockToastError.mock.calls.at(-1)?.[1] as {
+      action?: { label: string; onClick: () => void };
+    };
+    expect(toastOptions.action?.label).toBe("Save mine");
+    toastOptions.action?.onClick();
+
+    await waitFor(() => expect(saveFileDraftMock).toHaveBeenLastCalledWith(
+      "file:env-conflict:notes.txt",
+      "env-conflict",
+      "notes.txt",
+      "my unsaved text",
+      "container text",
+      4,
+    ));
+    expect(useFileDirtyStore.getState().getContent("save-conflict-tab")).toBe(
+      "my unsaved text",
+    );
+  });
+
+  test("offers to finish discarding after a draft deletion conflict", async () => {
+    getFileDraftMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        draftKey: "file:env-discard:notes.txt",
+        environmentId: "env-discard",
+        filePath: "notes.txt",
+        content: "other window",
+        originalContent: "container text",
+        updatedAt: "2026-07-29T00:00:00.000Z",
+        revision: 7,
+      });
+    deleteFileDraftMock
+      .mockRejectedValueOnce(new Error("revision conflict"))
+      .mockResolvedValueOnce(undefined);
+    render(
+      <FileViewerTab
+        tabId="discard-conflict-tab"
+        environmentId="env-discard"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    await screen.findByRole("textbox", { name: "Monaco plaintext" });
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled(), {
+      timeout: 1_500,
+    });
+    const toastOptions = mockToastError.mock.calls.at(-1)?.[1] as {
+      action?: { label: string; onClick: () => void };
+    };
+    expect(toastOptions.action?.label).toBe("Discard saved draft");
+    toastOptions.action?.onClick();
+
+    await waitFor(() => expect(deleteFileDraftMock).toHaveBeenLastCalledWith(
+      "file:env-discard:notes.txt",
+      7,
+    ));
+  });
+
+  test("ignores an older file read after its props change", async () => {
+    let resolveOldRead!: (content: realBackend.FileContent) => void;
+    readContainerFileMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveOldRead = resolve;
+    }));
+    const view = render(
+      <FileViewerTab
+        tabId="stale-read-tab"
+        filePath="old.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledWith(
+      "container-1",
+      "old.txt",
+    ));
+
+    view.rerender(
+      <FileViewerTab
+        tabId="stale-read-tab"
+        filePath="new.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    expect((editor as HTMLTextAreaElement).value).toBe("container text");
+
+    await act(async () => {
+      resolveOldRead({
+        path: "old.txt",
+        content: "stale content",
+        language: "plaintext",
+      });
+      await Promise.resolve();
+    });
+    expect((editor as HTMLTextAreaElement).value).toBe("container text");
+    expect(useFileDirtyStore.getState().getContent("stale-read-tab")).toBe(
+      "container text",
+    );
+  });
+
+  test("ignores an older file-read rejection after its props change", async () => {
+    let rejectOldRead!: (error: Error) => void;
+    const oldRead = new Promise<realBackend.FileContent>((_resolve, reject) => {
+      rejectOldRead = reject;
+    });
+    readContainerFileMock.mockImplementationOnce(() => oldRead);
+    const view = render(
+      <FileViewerTab
+        tabId="stale-read-error-tab"
+        filePath="old.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledWith(
+      "container-1",
+      "old.txt",
+    ));
+
+    view.rerender(
+      <FileViewerTab
+        tabId="stale-read-error-tab"
+        filePath="new.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+
+    await act(async () => {
+      rejectOldRead(new Error("stale read failure"));
+      try {
+        await oldRead;
+      } catch {
+        // FileViewerTab must consume this rejection without replacing newer state.
+      }
+    });
+    expect(screen.queryByText("stale read failure")).toBeNull();
+    expect(screen.queryByText("Failed to load file")).toBeNull();
+    expect((editor as HTMLTextAreaElement).value).toBe("container text");
+  });
+
+  test("does not hydrate a draft that resolves after the file changes", async () => {
+    let resolveOldDraft!: (
+      draft: Awaited<ReturnType<typeof realBackend.getFileDraft>>,
+    ) => void;
+    getFileDraftMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveOldDraft = resolve;
+    }));
+    const view = render(
+      <FileViewerTab
+        tabId="stale-draft-tab"
+        environmentId="env-stale"
+        filePath="old.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    await waitFor(() => expect(getFileDraftMock).toHaveBeenCalledWith(
+      "file:env-stale:old.txt",
+    ));
+
+    view.rerender(
+      <FileViewerTab
+        tabId="stale-draft-tab"
+        environmentId="env-stale"
+        filePath="new.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
+    expect((editor as HTMLTextAreaElement).value).toBe("container text");
+
+    await act(async () => {
+      resolveOldDraft({
+        draftKey: "file:env-stale:old.txt",
+        environmentId: "env-stale",
+        filePath: "old.txt",
+        content: "stale draft",
+        originalContent: "old disk",
+        updatedAt: "2026-07-29T00:00:00.000Z",
+        revision: 3,
+      });
+      await Promise.resolve();
+    });
+    expect((editor as HTMLTextAreaElement).value).toBe("container text");
+    expect(useFileDirtyStore.getState().getContent("stale-draft-tab")).toBe(
+      "container text",
+    );
+  });
+
+  test("ignores a file read that finishes after unmount", async () => {
+    let resolveRead!: (content: realBackend.FileContent) => void;
+    readContainerFileMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRead = resolve;
+    }));
+    const view = render(
+      <FileViewerTab
+        tabId="unmounted-read-tab"
+        filePath="notes.txt"
+        containerId="container-1"
+        isActive
+      />,
+    );
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalled());
+
+    view.unmount();
+    resolveRead({
+      path: "notes.txt",
+      content: "late content",
+      language: "plaintext",
+    });
+    await Promise.resolve();
+
+    expect(useFileDirtyStore.getState().getContent("unmounted-read-tab")).toBeNull();
   });
 });

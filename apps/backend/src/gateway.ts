@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import http, {
   createServer,
   type IncomingHttpHeaders,
@@ -13,7 +13,14 @@ import type { Socket } from "node:net";
 import path from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { pipeline, type Readable, type Transform } from "node:stream";
-import { createBrotliDecompress, createUnzip } from "node:zlib";
+import { promisify } from "node:util";
+import {
+  brotliCompress,
+  constants as zlibConstants,
+  createBrotliDecompress,
+  createUnzip,
+  gzip,
+} from "node:zlib";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import {
   GatewayTokenValidationError,
@@ -103,6 +110,13 @@ const MAX_BROWSER_PREVIEW_BODY_BYTES = 8 * 1024 * 1024;
  */
 const MAX_INVOKE_BODY_BYTES = 48 * 1024 * 1024;
 const KEEPALIVE_MS = 25_000;
+const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
+const REVALIDATED_DOCUMENT_CACHE_CONTROL = "no-cache";
+const STATIC_FALLBACK_BROTLI_QUALITY = 4;
+const STATIC_FALLBACK_GZIP_LEVEL = 6;
+export const MAX_STATIC_FALLBACK_SOURCE_BYTES = 8 * 1024 * 1024;
+const MAX_STATIC_FALLBACK_OUTPUT_BYTES = MAX_STATIC_FALLBACK_SOURCE_BYTES + 64 * 1024;
+export const MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS = 4;
 /**
  * Events whose payload is a raw byte stream rather than authoritative state.
  *
@@ -164,6 +178,23 @@ const METRIC_RESERVED_KEYS: readonly string[] = [
 
 class InvalidRequestBodyError extends Error {}
 class RequestBodyTooLargeError extends Error {}
+
+type StaticCompressionEncoding = "gzip" | "br";
+type StaticContentEncoding = "identity" | StaticCompressionEncoding;
+/**
+ * Why the on-the-fly fallback did or did not produce a coded representation.
+ *
+ * `not-beneficial` means identity genuinely is the best representation of this
+ * asset for this client. `declined` means the server refused to spend the
+ * CPU/memory — the source is over the cap, the compression pool is saturated,
+ * or a codec failed. The distinction matters only when the client refused
+ * identity: `not-beneficial` is a real 406, `declined` is a transient
+ * server-side limit that must not be reported as one.
+ */
+type StaticCompressionOutcome =
+  | { status: "compressed"; encoding: StaticCompressionEncoding; buffer: Buffer }
+  | { status: "not-beneficial" }
+  | { status: "declined" };
 
 type GatewayRouteMetrics = {
   requests: number;
@@ -952,11 +983,17 @@ function mimeType(filePath: string): string {
     case ".html":
       return "text/html; charset=utf-8";
     case ".js":
+    case ".mjs":
       return "text/javascript; charset=utf-8";
     case ".css":
       return "text/css; charset=utf-8";
     case ".json":
+    case ".map":
       return "application/json; charset=utf-8";
+    case ".txt":
+      return "text/plain; charset=utf-8";
+    case ".xml":
+      return "application/xml; charset=utf-8";
     case ".svg":
       return "image/svg+xml";
     case ".png":
@@ -975,6 +1012,315 @@ function mimeType(filePath: string): string {
     default:
       return "application/octet-stream";
   }
+}
+
+const brotliCompressAsync = promisify(brotliCompress);
+const gzipAsync = promisify(gzip);
+
+export function appendVary(existing: string | null, value: string): string {
+  const values = [
+    ...String(existing ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+    ...value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  ];
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of values) {
+    const normalized = entry.toLowerCase();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(entry);
+  }
+  return deduped.join(", ");
+}
+
+function appendResponseVary(response: ServerResponse, value: string): void {
+  response.setHeader("vary", appendVary(headerValueToString(response.getHeader("vary")), value));
+}
+
+function appendHeadersVary(headers: OutgoingHttpHeaders, value: string): void {
+  headers.vary = appendVary(headerValueToString(headers.vary), value);
+}
+
+function isCompressibleStaticContentType(contentType: string): boolean {
+  const normalized = contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return (
+    normalized === "application/javascript"
+    || normalized === "application/json"
+    || normalized === "application/xml"
+    || normalized === "image/svg+xml"
+    || normalized === "text/css"
+    || normalized === "text/html"
+    || normalized === "text/javascript"
+    || normalized === "text/plain"
+    || normalized.endsWith("+json")
+    || normalized.endsWith("+xml")
+  );
+}
+
+function isImmutableHashedAsset(pathname: string, filePath: string): boolean {
+  return pathname.startsWith("/assets/")
+    && /-[A-Za-z0-9_-]{8,}\./.test(path.basename(filePath));
+}
+
+function httpDateFromMtimeMs(mtimeMs: number): string {
+  return new Date(Math.floor(mtimeMs / 1000) * 1000).toUTCString();
+}
+
+function etagForStaticVariant(
+  sourceMtimeMs: number,
+  sourceSize: number,
+  encoding: StaticContentEncoding,
+  variantMtimeMs = sourceMtimeMs,
+  variantSize = sourceSize,
+): string {
+  return `W/"${Math.floor(sourceMtimeMs).toString(16)}-${sourceSize.toString(16)}-${encoding}-${Math.floor(variantMtimeMs).toString(16)}-${variantSize.toString(16)}"`;
+}
+
+function staticEncodingQuality(
+  acceptEncoding: string | null,
+  encoding: StaticContentEncoding,
+): number {
+  if (!acceptEncoding) return encoding === "identity" ? 1 : 0;
+  let specific: number | null = null;
+  let wildcard: number | null = null;
+  let identity: number | null = null;
+  for (const entry of acceptEncoding.split(",")) {
+    const [token, ...parameterEntries] = entry.trim().toLowerCase().split(";");
+    if (!token) continue;
+    let weight = 1;
+    for (const parameter of parameterEntries) {
+      const [name, rawValue] = parameter.split("=", 2);
+      if (name?.trim() !== "q") continue;
+      const normalizedValue = rawValue?.trim() ?? "";
+      weight = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(normalizedValue)
+        ? Number.parseFloat(normalizedValue)
+        : 0;
+    }
+    if (token === encoding) {
+      specific = specific === null ? weight : Math.max(specific, weight);
+    } else if (token === "*") {
+      wildcard = wildcard === null ? weight : Math.max(wildcard, weight);
+    } else if (token === "identity") {
+      identity = identity === null ? weight : Math.max(identity, weight);
+    }
+  }
+  if (specific !== null) return specific;
+  if (encoding === "identity") return identity ?? wildcard ?? 1;
+  return wildcard ?? 0;
+}
+
+function preferredStaticCompressionEncodings(
+  acceptEncoding: string | null,
+): StaticCompressionEncoding[] {
+  const explicitlyPreferredIdentity = acceptEncoding
+    && acceptEncoding
+      .split(",")
+      .some((entry) => entry.trim().toLowerCase().split(";", 1)[0] === "identity")
+    ? staticEncodingQuality(acceptEncoding, "identity")
+    : null;
+  const encodings = [
+    { encoding: "br", quality: staticEncodingQuality(acceptEncoding, "br") },
+    { encoding: "gzip", quality: staticEncodingQuality(acceptEncoding, "gzip") },
+  ] satisfies Array<{ encoding: StaticCompressionEncoding; quality: number }>;
+  const acceptedEncodings = encodings.filter((candidate) => (
+    candidate.quality > 0
+    && (
+      explicitlyPreferredIdentity === null
+      || candidate.quality >= explicitlyPreferredIdentity
+    )
+  ));
+  acceptedEncodings.sort((left, right) => {
+    if (right.quality !== left.quality) return right.quality - left.quality;
+    return left.encoding === "br" ? -1 : 1;
+  });
+  return acceptedEncodings.map((candidate) => candidate.encoding);
+}
+
+function compressedStaticSiblingPath(
+  filePath: string,
+  encoding: StaticCompressionEncoding,
+): string {
+  return `${filePath}.${encoding === "br" ? "br" : "gz"}`;
+}
+
+function ifNoneMatchMatches(
+  header: string | string[] | undefined,
+  etag: string,
+): boolean {
+  const value = Array.isArray(header) ? header.join(",") : header;
+  if (!value) return false;
+  const candidates = value
+    .split(",")
+    .map((entry) => entry.trim());
+  if (candidates.includes("*")) return true;
+  const currentOpaqueTag = weakEntityTagValue(etag);
+  if (currentOpaqueTag === null) return false;
+  return candidates.some(
+    (candidate) => weakEntityTagValue(candidate) === currentOpaqueTag,
+  );
+}
+
+function weakEntityTagValue(value: string): string | null {
+  const candidate = value.startsWith("W/") ? value.slice(2) : value;
+  if (candidate.length < 2 || candidate[0] !== "\"" || candidate.at(-1) !== "\"") {
+    return null;
+  }
+  return candidate;
+}
+
+function ifModifiedSinceMatches(header: string | string[] | undefined, mtimeMs: number): boolean {
+  const value = Array.isArray(header) ? header[0] : header;
+  if (!value) return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return false;
+  return Math.floor(mtimeMs / 1000) * 1000 <= parsed;
+}
+
+async function compressStaticBuffer(
+  source: Buffer,
+  encoding: StaticCompressionEncoding,
+): Promise<Buffer> {
+  if (encoding === "br") {
+    return brotliCompressAsync(source, {
+      maxOutputLength: MAX_STATIC_FALLBACK_OUTPUT_BYTES,
+      params: {
+        [zlibConstants.BROTLI_PARAM_QUALITY]: STATIC_FALLBACK_BROTLI_QUALITY,
+      },
+    });
+  }
+  return gzipAsync(source, {
+    level: STATIC_FALLBACK_GZIP_LEVEL,
+    maxOutputLength: MAX_STATIC_FALLBACK_OUTPUT_BYTES,
+  });
+}
+
+const staticFallbackCompressions = new Map<string, Promise<StaticCompressionOutcome>>();
+
+export async function readStaticFileWithinLimit(
+  filePath: string,
+  expectedMtimeMs: number,
+  expectedSize: number,
+): Promise<Buffer | null> {
+  if (expectedSize < 0 || expectedSize > MAX_STATIC_FALLBACK_SOURCE_BYTES) {
+    return null;
+  }
+
+  try {
+    const handle = await open(filePath, "r");
+    try {
+      const current = await handle.stat();
+      if (
+        !current.isFile()
+        || current.size !== expectedSize
+        || current.mtimeMs !== expectedMtimeMs
+      ) {
+        return null;
+      }
+
+      const source = Buffer.allocUnsafe(expectedSize);
+      let offset = 0;
+      while (offset < source.byteLength) {
+        const { bytesRead } = await handle.read(
+          source,
+          offset,
+          source.byteLength - offset,
+          offset,
+        );
+        if (bytesRead === 0) return null;
+        offset += bytesRead;
+      }
+
+      // Detect growth after fstat without ever allocating or reading more than
+      // the configured source limit plus one probe byte.
+      const probe = Buffer.allocUnsafe(1);
+      const { bytesRead: trailingBytes } = await handle.read(
+        probe,
+        0,
+        1,
+        expectedSize,
+      );
+      return trailingBytes === 0 ? source : null;
+    } finally {
+      await handle.close().catch(() => {});
+    }
+  } catch {
+    // Static compression is optional. Races with asset replacement or a read
+    // failure fall back to identity rather than exposing filesystem details.
+    return null;
+  }
+}
+
+export async function compressStaticFileWithinLimits(
+  filePath: string,
+  sourceMtimeMs: number,
+  sourceSize: number,
+  encodings: StaticCompressionEncoding[],
+  requireEncodedRepresentation: boolean,
+): Promise<StaticCompressionOutcome> {
+  // No encoding the client accepts: identity is the only representation, and
+  // that is a property of the request rather than of this server's budget.
+  if (encodings.length === 0) return { status: "not-beneficial" };
+  if (sourceSize > MAX_STATIC_FALLBACK_SOURCE_BYTES || sourceSize < 0) {
+    return { status: "declined" };
+  }
+
+  const key = [
+    filePath,
+    sourceMtimeMs,
+    sourceSize,
+    encodings.join(","),
+    requireEncodedRepresentation ? "required" : "optional",
+  ].join("\0");
+  const existing = staticFallbackCompressions.get(key);
+  if (existing) return existing;
+  if (!canStartStaticFallbackCompression(staticFallbackCompressions.size)) {
+    return { status: "declined" };
+  }
+
+  const compression = (async (): Promise<StaticCompressionOutcome> => {
+    const source = await readStaticFileWithinLimit(filePath, sourceMtimeMs, sourceSize);
+    if (!source) return { status: "declined" };
+    let declined = false;
+    for (const encoding of encodings) {
+      try {
+        const compressed = await compressStaticBuffer(source, encoding);
+        if (compressed.byteLength > MAX_STATIC_FALLBACK_OUTPUT_BYTES) {
+          // zlib and brotli reject past `maxOutputLength` by throwing, so this
+          // is a backstop. Either way the budget, not the asset, is the reason.
+          declined = true;
+          continue;
+        }
+        if (!requireEncodedRepresentation && compressed.byteLength >= source.byteLength) {
+          continue;
+        }
+        return { status: "compressed", encoding, buffer: compressed };
+      } catch {
+        // Compression is an optimization. A codec failure must not prevent the
+        // identity representation from being served when the client accepts it.
+        declined = true;
+      }
+    }
+    return declined ? { status: "declined" } : { status: "not-beneficial" };
+  })();
+  staticFallbackCompressions.set(key, compression);
+  try {
+    return await compression;
+  } finally {
+    if (staticFallbackCompressions.get(key) === compression) {
+      staticFallbackCompressions.delete(key);
+    }
+  }
+}
+
+export function canStartStaticFallbackCompression(activeCount: number): boolean {
+  return activeCount >= 0
+    && activeCount < MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS;
 }
 
 function jsonResponse(
@@ -1907,7 +2253,7 @@ export class OrkestratorGateway {
     if (!this.isOriginAllowed(request, origin)) return false;
 
     response.setHeader("access-control-allow-origin", origin);
-    response.setHeader("vary", "Origin");
+    appendResponseVary(response, "Origin");
     return true;
   }
 
@@ -1926,7 +2272,10 @@ export class OrkestratorGateway {
       ...(request.headers["access-control-request-private-network"] === "true"
         ? { "access-control-allow-private-network": "true" }
         : {}),
-      vary: "Origin, Access-Control-Request-Private-Network",
+      vary: appendVary(
+        null,
+        "Origin, Access-Control-Request-Private-Network",
+      ),
     });
     response.end();
   }
@@ -1945,7 +2294,10 @@ export class OrkestratorGateway {
       ...(request.headers["access-control-request-private-network"] === "true"
         ? { "access-control-allow-private-network": "true" }
         : {}),
-      vary: "Origin, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
+      vary: appendVary(
+        null,
+        "Origin, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
+      ),
     });
     response.end();
   }
@@ -2004,12 +2356,12 @@ export class OrkestratorGateway {
         const redirectHeaders: OutgoingHttpHeaders = {
           location: `${previewPrefix}${url.pathname}${url.search}`,
           "cache-control": "no-store",
-          vary: "Referer",
+          vary: appendVary(null, "Referer"),
         };
         if (request.headers.origin === "null") {
           redirectHeaders["access-control-allow-origin"] = "null";
           redirectHeaders["access-control-allow-credentials"] = "true";
-          redirectHeaders.vary = "Origin, Referer";
+          appendHeadersVary(redirectHeaders, "Origin");
         }
         response.writeHead(307, redirectHeaders);
         response.end();
@@ -2095,7 +2447,12 @@ export class OrkestratorGateway {
       return;
     }
 
-    await this.serveStatic(request, url, response);
+    await this.serveStatic(
+      request,
+      url,
+      response,
+      compressionModeForListener(this.compression, listenerKind) !== "off",
+    );
   }
 
   private async handleGatewaySettings(
@@ -2502,7 +2859,7 @@ export class OrkestratorGateway {
           if (request.headers.origin === "null") {
             responseHeaders["access-control-allow-origin"] = "null";
             responseHeaders["access-control-allow-credentials"] = "true";
-            responseHeaders.vary = "Origin";
+            appendHeadersVary(responseHeaders, "Origin");
           } else {
             responseHeaders["access-control-allow-origin"] = "*";
           }
@@ -2633,7 +2990,18 @@ export class OrkestratorGateway {
     });
   }
 
-  private async serveStatic(request: IncomingMessage, url: URL, response: ServerResponse): Promise<void> {
+  private async serveStatic(
+    request: IncomingMessage,
+    url: URL,
+    response: ServerResponse,
+    allowCompression: boolean,
+  ): Promise<void> {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      response.writeHead(405, { allow: "GET, HEAD" });
+      response.end();
+      return;
+    }
+
     if (this.rendererDevServerUrl) {
       const target = new URL(this.rendererDevServerUrl);
       target.pathname = url.pathname;
@@ -2667,10 +3035,146 @@ export class OrkestratorGateway {
       return;
     }
 
-    response.writeHead(200, {
-      "content-type": mimeType(filePath),
-      "content-length": fileStat.size,
+    const contentType = mimeType(filePath);
+    const lastModified = httpDateFromMtimeMs(fileStat.mtimeMs);
+    const cacheControl = isImmutableHashedAsset(url.pathname, filePath)
+      ? IMMUTABLE_ASSET_CACHE_CONTROL
+      : REVALIDATED_DOCUMENT_CACHE_CONTROL;
+    const acceptEncoding = headerValueToString(request.headers["accept-encoding"]);
+    const preferredEncodings = allowCompression && isCompressibleStaticContentType(contentType)
+      ? preferredStaticCompressionEncodings(acceptEncoding)
+      : [];
+    const identityQuality = allowCompression
+      ? staticEncodingQuality(acceptEncoding, "identity")
+      : 1;
+    let selectedEncoding: StaticContentEncoding = "identity";
+    let bodyPath = filePath;
+    let bodyLength = fileStat.size;
+    let bodyBuffer: Buffer | null = null;
+    let omitContentLength = false;
+    let variantMtimeMs = fileStat.mtimeMs;
+    let variantSize = fileStat.size;
+
+    for (const encoding of preferredEncodings) {
+      const siblingPath = compressedStaticSiblingPath(filePath, encoding);
+      const siblingStat = await stat(siblingPath).catch(() => null);
+      if (
+        siblingStat?.isFile()
+        && siblingStat.mtimeMs >= fileStat.mtimeMs
+        && siblingStat.size < fileStat.size
+      ) {
+        selectedEncoding = encoding;
+        bodyPath = siblingPath;
+        bodyLength = siblingStat.size;
+        variantMtimeMs = siblingStat.mtimeMs;
+        variantSize = siblingStat.size;
+        break;
+      }
+    }
+
+    if (selectedEncoding === "identity" && request.method !== "HEAD") {
+      const outcome = await compressStaticFileWithinLimits(
+        filePath,
+        fileStat.mtimeMs,
+        fileStat.size,
+        preferredEncodings,
+        identityQuality <= 0,
+      );
+      if (outcome.status === "compressed") {
+        selectedEncoding = outcome.encoding;
+        bodyLength = outcome.buffer.byteLength;
+        bodyBuffer = outcome.buffer;
+      }
+    }
+
+    if (
+      selectedEncoding === "identity"
+      && request.method === "HEAD"
+      && identityQuality <= 0
+      && preferredEncodings[0]
+      && fileStat.size <= MAX_STATIC_FALLBACK_SOURCE_BYTES
+    ) {
+      // Identity is forbidden, so GET necessarily answers with a coded form and
+      // its encoding is known without generating the body. The coded length is
+      // not, and HEAD must not pay that CPU/memory cost to learn it, so the one
+      // field HTTP lets a HEAD omit is omitted. When identity *is* acceptable
+      // the identity metadata below is already accurate for HEAD, so nothing is
+      // withheld and the response stays usable for revalidation and sizing.
+      selectedEncoding = preferredEncodings[0];
+      omitContentLength = true;
+    }
+
+    if (selectedEncoding === "identity" && identityQuality <= 0) {
+      if (preferredEncodings.length === 0) {
+        response.writeHead(406, {
+          "cache-control": "no-store",
+          vary: "Accept-Encoding",
+        });
+        response.end();
+        return;
+      }
+      // A coded representation was both acceptable and requested, but this
+      // server declined to produce one (source over the fallback cap, the
+      // compression pool saturated, or a codec failure). RFC 9110 §12.5.3
+      // permits sending an unacceptable identity representation instead. A 406
+      // here would claim the asset can never be represented acceptably, which
+      // is false, and would make the status depend on unrelated load.
+    }
+
+    const headers: OutgoingHttpHeaders = {
+      "cache-control": cacheControl,
+      "content-type": contentType,
+      "last-modified": lastModified,
+      etag: etagForStaticVariant(
+        fileStat.mtimeMs,
+        fileStat.size,
+        selectedEncoding,
+        variantMtimeMs,
+        variantSize,
+      ),
+    };
+    if (!omitContentLength) headers["content-length"] = bodyLength;
+    appendHeadersVary(headers, "Accept-Encoding");
+    if (selectedEncoding !== "identity") {
+      headers["content-encoding"] = selectedEncoding;
+    }
+
+    if (ifNoneMatchMatches(request.headers["if-none-match"], String(headers.etag))) {
+      response.writeHead(304, headers);
+      response.end();
+      return;
+    }
+    if (
+      request.headers["if-none-match"] === undefined
+      && ifModifiedSinceMatches(request.headers["if-modified-since"], fileStat.mtimeMs)
+    ) {
+      response.writeHead(304, headers);
+      response.end();
+      return;
+    }
+
+    response.writeHead(200, headers);
+    if (request.method === "HEAD") {
+      if (omitContentLength) response.flushHeaders();
+      response.end();
+      return;
+    }
+    if (bodyBuffer) {
+      response.end(bodyBuffer);
+      return;
+    }
+    const bodyStream = createReadStream(bodyPath);
+    bodyStream.on("error", () => {
+      // The framing was committed by writeHead above, so a read failure here
+      // cannot be turned into an error status. Destroying the socket makes the
+      // truncation visible to the client rather than letting it cache a short
+      // body as a complete, immutable asset.
+      bodyStream.destroy();
+      response.destroy();
     });
-    createReadStream(filePath).pipe(response);
+    // pipe() only unpipes on client abort; it leaves the descriptor open until
+    // GC. Close it eagerly so an aborting client cannot exhaust the table.
+    response.on("close", () => bodyStream.destroy());
+    bodyStream.pipe(response);
   }
 }

@@ -1,16 +1,20 @@
-import { useCallback, useRef, useState } from "react";
+import { lazy, useCallback, useRef, useState } from "react";
 import { AlertTriangle, FileText, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import type { SaveFile } from "@/hooks/useFileSave";
-import { MonacoFileEditor } from "@/components/terminal/MonacoFileEditor";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   TiptapMarkdownEditor,
   type TiptapMarkdownEditorHandle,
 } from "./TiptapMarkdownEditor";
 import { assessMarkdownForRichEditing } from "./tiptap-extensions";
+import { LazyLoadBoundary } from "@/components/LazyLoadBoundary";
+
+const LazyMonacoFileEditor = lazy(async () => ({
+  default: (await import("@/components/terminal/MonacoFileEditor")).MonacoFileEditor,
+}));
 
 type MarkdownEditorMode = "rendered" | "raw";
 
@@ -127,12 +131,26 @@ export function MarkdownEditorTab({
       </TabsContent>
 
       <TabsContent value="raw" className="min-h-0">
-        <MonacoFileEditor
-          language={language}
-          value={markdown}
-          onChange={(nextMarkdown) => setContent(tabId, nextMarkdown)}
-          onSave={onSave}
-        />
+        <LazyLoadBoundary
+          loadingFallback={
+            <div className="flex h-full items-center justify-center text-muted-foreground">
+              <span
+                role="status"
+                aria-label="Loading raw editor…"
+                className="flex items-center justify-center"
+              >
+                <Loader2 className="h-6 w-6 animate-spin" />
+              </span>
+            </div>
+          }
+        >
+          <LazyMonacoFileEditor
+            language={language}
+            value={markdown}
+            onChange={(nextMarkdown) => setContent(tabId, nextMarkdown)}
+            onSave={onSave}
+          />
+        </LazyLoadBoundary>
       </TabsContent>
     </Tabs>
   );

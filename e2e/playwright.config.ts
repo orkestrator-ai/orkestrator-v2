@@ -26,7 +26,7 @@ export default defineConfig({
   projects: [
     {
       name: "mobile-chromium",
-      use: { viewport: { width: 390, height: 844 } },
+      use: { viewport: { width: 390, height: 844 }, hasTouch: true },
     },
     {
       name: "desktop-chromium",

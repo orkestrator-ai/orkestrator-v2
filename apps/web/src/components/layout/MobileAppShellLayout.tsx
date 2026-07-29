@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { Menu, Wrench, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 interface MobileAppShellLayoutProps {
@@ -15,6 +16,14 @@ interface MobileAppShellLayoutProps {
   filesPanel: ReactNode;
   children?: ReactNode;
   onTitleBarMouseDown: (event: MouseEvent<HTMLDivElement>) => void;
+}
+
+function usesNativeWindowDragRegion(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    window.orkestratorGateway?.desktop === true ||
+    (Boolean(window.orkestrator) && window.orkestratorGateway?.enabled !== true)
+  );
 }
 
 export function MobileAppShellLayout({
@@ -32,10 +41,14 @@ export function MobileAppShellLayout({
 }: MobileAppShellLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [titleTooltipOpen, setTitleTooltipOpen] = useState(false);
+  const titlePointerTypeRef = useRef<string | null>(null);
+  const titleTooltipWasOpenOnPointerDownRef = useRef(false);
   const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
   const toolsTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreSidebarFocusRef = useRef(false);
   const restoreToolsFocusRef = useRef(false);
+  const titleUsesNativeDragRegion = usesNativeWindowDragRegion();
 
   const closeSidebar = () => {
     restoreSidebarFocusRef.current = true;
@@ -52,7 +65,16 @@ export function MobileAppShellLayout({
     restoreToolsFocusRef.current = false;
     setSidebarOpen(false);
     setToolsOpen(false);
+    setTitleTooltipOpen(false);
+    titlePointerTypeRef.current = null;
+    titleTooltipWasOpenOnPointerDownRef.current = false;
   }, [selectedEnvironmentId, selectedProjectId]);
+
+  useEffect(() => {
+    setTitleTooltipOpen(false);
+    titlePointerTypeRef.current = null;
+    titleTooltipWasOpenOnPointerDownRef.current = false;
+  }, [title]);
 
   useEffect(() => {
     if (!sidebarOpen && restoreSidebarFocusRef.current) {
@@ -101,12 +123,55 @@ export function MobileAppShellLayout({
         >
           <Menu className="h-5 w-5" />
         </Button>
-        <span
-          className="max-w-[calc(100%_-_6.5rem)] truncate text-sm font-medium text-foreground"
-          data-backend-drag-region
-        >
-          {title}
-        </span>
+        <Tooltip open={titleTooltipOpen} onOpenChange={setTitleTooltipOpen}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="absolute left-12 right-[5.5rem] min-w-0 truncate px-1 text-center text-sm font-medium text-foreground"
+              data-backend-drag-region={titleUsesNativeDragRegion ? "" : undefined}
+              style={{
+                WebkitAppRegion: titleUsesNativeDragRegion ? "drag" : "no-drag",
+              } as CSSProperties}
+              onMouseDown={(event) => {
+                if (!titleUsesNativeDragRegion) event.stopPropagation();
+              }}
+              onPointerDown={(event) => {
+                titlePointerTypeRef.current = event.pointerType;
+                titleTooltipWasOpenOnPointerDownRef.current = titleTooltipOpen;
+              }}
+              onPointerCancel={() => {
+                titlePointerTypeRef.current = null;
+                titleTooltipWasOpenOnPointerDownRef.current = false;
+              }}
+              onClick={(event) => {
+                const pointerType = titlePointerTypeRef.current;
+                const wasOpen = titleTooltipWasOpenOnPointerDownRef.current;
+                titlePointerTypeRef.current = null;
+                titleTooltipWasOpenOnPointerDownRef.current = false;
+
+                // Radix intentionally closes tooltips on activation. Touch and
+                // pen do not have a preceding hover, so toggle from the state
+                // captured before Radix's pointer-down close. Mouse and keyboard
+                // activations retain Radix's standard close behavior.
+                if (pointerType === "touch" || pointerType === "pen") {
+                  event.preventDefault();
+                  setTitleTooltipOpen(!wasOpen);
+                }
+              }}
+              aria-label={title}
+              aria-expanded={titleTooltipOpen}
+            >
+              {title}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent
+            side="bottom"
+            sideOffset={6}
+            className="max-w-[calc(100vw-1rem)] break-words text-center"
+          >
+            {title}
+          </TooltipContent>
+        </Tooltip>
         <Button
           ref={toolsTriggerRef}
           variant={toolsOpen ? "secondary" : "ghost"}

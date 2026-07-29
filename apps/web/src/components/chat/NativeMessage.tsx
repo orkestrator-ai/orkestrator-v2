@@ -53,6 +53,7 @@ import {
   type NativeAgentActivityPart,
   type NativeMessage as NativeMessageType,
   type NativeAgentGroupPart,
+  type NativeBackgroundTask,
   type NativeMessagePart,
   type NativeTaskGroupPart,
   type NativeToolGroupPart,
@@ -230,6 +231,51 @@ function ThinkingPart({
   );
 }
 
+function taskCommandFromOutput(output?: string): string | undefined {
+  if (!output) return undefined;
+  try {
+    const parsed = JSON.parse(output) as Record<string, unknown>;
+    const command = stringToolArg(parsed, "command");
+    if (command) return command;
+  } catch {
+    // Older Claude transcripts store the TaskStop result as plain text.
+  }
+
+  const messageMatch = output.match(
+    /Successfully stopped task:\s*\S+\s+\(([\s\S]+)\)\s*$/,
+  );
+  return messageMatch?.[1]?.trim() || undefined;
+}
+
+function backgroundTaskState(
+  task: NativeBackgroundTask | undefined,
+): { label: string; className: string } | undefined {
+  switch (task?.status) {
+    case "pending":
+    case "running":
+      return {
+        label: "running…",
+        className: "text-amber-600 dark:text-amber-300 animate-pulse",
+      };
+    case "paused":
+      return {
+        label: "paused",
+        className: "text-amber-600 dark:text-amber-300",
+      };
+    case "completed":
+      return {
+        label: "completed",
+        className: "text-emerald-600 dark:text-emerald-300",
+      };
+    case "failed":
+      return { label: "failed", className: "text-red-400" };
+    case "killed":
+      return { label: "stopped", className: "text-muted-foreground/80" };
+    default:
+      return undefined;
+  }
+}
+
 /** Render a tool invocation part - expandable to show input/output */
 function ToolPart({
   toolName,
@@ -238,6 +284,7 @@ function ToolPart({
   toolArgs,
   toolOutput,
   toolError,
+  backgroundTask,
 }: {
   toolName?: string;
   toolState?: "success" | "failure" | "pending";
@@ -245,10 +292,24 @@ function ToolPart({
   toolArgs?: Record<string, unknown>;
   toolOutput?: string;
   toolError?: string;
+  backgroundTask?: NativeBackgroundTask;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const displayToolName = getToolDisplayName(toolName);
   const displayToolTitle = getToolTitleDisplayName(toolTitle, toolName);
+  const normalizedToolName = toolName?.toLowerCase();
+  const isTaskStop = normalizedToolName === "taskstop";
+  const isTaskAction =
+    isTaskStop || normalizedToolName === "taskoutput";
+  const isBackgroundLaunch = toolArgs?.run_in_background === true;
+  const taskId =
+    backgroundTask?.id
+    ?? stringToolArg(toolArgs, "task_id", "taskId");
+  const taskDescription =
+    backgroundTask?.description
+    ?? (isBackgroundLaunch
+      ? stringToolArg(toolArgs, "description")
+      : undefined);
 
   const stateColors = {
     success: "text-green-600",
@@ -271,48 +332,112 @@ function ToolPart({
   // Extract display info from toolArgs based on tool type. `generic` marks a
   // fallback preview of raw input, which is not specific enough to justify
   // hiding a descriptive tool title the way a real command or path does.
-  const getDisplayInfo = (): { text: string; generic: boolean } | null => {
+  const getDisplayInfo = (): {
+    text: string;
+    generic: boolean;
+    monospace: boolean;
+  } | null => {
     if (!toolArgs) return null;
+
+    // Background task actions are meaningful only in relation to their task.
+    // Prefer the human-authored launch description, then a command recovered
+    // from TaskStop output, and leave the opaque id as the final fallback.
+    if (isTaskAction) {
+      if (taskDescription) {
+        return {
+          text: toSingleLinePreview(taskDescription),
+          generic: false,
+          monospace: false,
+        };
+      }
+      const resultCommand = taskCommandFromOutput(toolOutput);
+      if (resultCommand) {
+        return {
+          text: toSingleLinePreview(resultCommand),
+          generic: false,
+          monospace: true,
+        };
+      }
+      if (taskId) {
+        return {
+          text: toSingleLinePreview(taskId),
+          generic: false,
+          monospace: true,
+        };
+      }
+    }
+
+    if (isBackgroundLaunch && taskDescription) {
+      return {
+        text: toSingleLinePreview(taskDescription),
+        generic: false,
+        monospace: false,
+      };
+    }
 
     // For shell commands, show the command in the collapsed row.
     const command = toolArgs.command as string | undefined;
     if (command) {
-      return { text: toSingleLinePreview(command), generic: false };
+      return {
+        text: toSingleLinePreview(command),
+        generic: false,
+        monospace: true,
+      };
     }
 
     // For Read tool - show filename
     const filePath = toolArgs.file_path as string | undefined;
     if (filePath) {
       const name = filePath.split("/").pop();
-      return name ? { text: name, generic: false } : null;
+      return name ? { text: name, generic: false, monospace: true } : null;
     }
 
     // For Glob tool - show pattern
     const pattern = toolArgs.pattern as string | undefined;
     if (pattern) {
-      return { text: toSingleLinePreview(pattern), generic: false };
+      return {
+        text: toSingleLinePreview(pattern),
+        generic: false,
+        monospace: true,
+      };
     }
 
     // For Grep tool - show search pattern
     const grepPattern = toolArgs.regex as string | undefined;
     if (grepPattern) {
-      return { text: toSingleLinePreview(grepPattern), generic: false };
+      return {
+        text: toSingleLinePreview(grepPattern),
+        generic: false,
+        monospace: true,
+      };
     }
 
     // For WebFetch tool - show hostname from URL
     const url = toolArgs.url as string | undefined;
     if (url) {
       try {
-        return { text: new URL(url).hostname, generic: false };
+        return {
+          text: new URL(url).hostname,
+          generic: false,
+          monospace: true,
+        };
       } catch {
-        return { text: toSingleLinePreview(url), generic: false };
+        return {
+          text: toSingleLinePreview(url),
+          generic: false,
+          monospace: true,
+        };
       }
     }
 
     // For WebSearch tool - show search query
     const query = toolArgs.query as string | undefined;
     if (query) {
-      return { text: toSingleLinePreview(query), generic: false };
+      return {
+        text: toSingleLinePreview(query),
+        generic: false,
+        monospace: true,
+      };
     }
 
     // Custom tools such as Codex's `exec` carry raw input rather than a
@@ -320,7 +445,11 @@ function ToolPart({
     // even when the bridge cannot safely derive a more specific command.
     const input = toolArgs.input;
     if (typeof input === "string" && input.trim()) {
-      return { text: toSingleLinePreview(input), generic: true };
+      return {
+        text: toSingleLinePreview(input),
+        generic: true,
+        monospace: true,
+      };
     }
 
     return null;
@@ -331,6 +460,25 @@ function ToolPart({
     Boolean(displayToolTitle) &&
     (!displayInfo || displayInfo.generic) &&
     displayToolTitle !== displayToolName;
+  const lifecycleState = backgroundTaskState(backgroundTask);
+  const displayedState = lifecycleState ?? (
+    isTaskStop && toolState
+      ? {
+          label:
+            toolState === "pending"
+              ? "stopping…"
+              : toolState === "success"
+                ? "stopped"
+                : "failure",
+          className: stateColors[toolState],
+        }
+      : toolState
+        ? {
+            label: toolState === "pending" ? "running..." : toolState,
+            className: stateColors[toolState],
+          }
+        : undefined
+  );
 
   // Format the command input for shell-like display
   const formatInput = () => {
@@ -370,8 +518,21 @@ function ToolPart({
         <Wrench className="w-3.5 h-3.5 shrink-0" />
         <span className="font-medium">{displayToolName}</span>
         {displayInfo && (
-          <span className="font-mono text-muted-foreground/80 truncate flex-1 text-left">
+          <span
+            className={cn(
+              "text-muted-foreground/80 truncate flex-1 text-left",
+              displayInfo.monospace && "font-mono",
+            )}
+          >
             {displayInfo.text}
+          </span>
+        )}
+        {isTaskAction && taskId && displayInfo?.text !== taskId && (
+          <span
+            className="max-w-28 shrink-0 truncate font-mono text-[10px] text-muted-foreground/50"
+            title={taskId}
+          >
+            {taskId}
           </span>
         )}
         {shouldShowToolTitle && (
@@ -379,11 +540,11 @@ function ToolPart({
             {displayToolTitle}
           </span>
         )}
-        {toolState && (
+        {displayedState && (
           <span
-            className={cn("ml-auto shrink-0", stateColors[toolState] || "")}
+            className={cn("ml-auto shrink-0", displayedState.className)}
           >
-            {toolState === "pending" ? "running..." : toolState}
+            {displayedState.label}
           </span>
         )}
       </CollapsibleTrigger>
@@ -1542,6 +1703,7 @@ function MessagePart({
           toolArgs={part.toolArgs}
           toolOutput={part.toolOutput}
           toolError={part.toolError}
+          backgroundTask={part.backgroundTask}
         />
       );
     case "tool-result":

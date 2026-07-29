@@ -103,6 +103,7 @@ function toNativeToolInvocationPart(
     parentTaskUseId: part.parentTaskUseId,
     isMcpTool: part.isMcpTool,
     mcpServerName: part.mcpServerName,
+    backgroundTask: part.backgroundTask,
     taskSnapshot: part.taskSnapshot,
   };
 }
@@ -435,43 +436,161 @@ function backgroundTaskAgentState(
   }
 }
 
+function stringArgument(
+  args: Record<string, unknown> | undefined,
+  ...keys: string[]
+): string | undefined {
+  if (!args) return undefined;
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function isBackgroundTaskAction(toolName?: string): boolean {
+  const normalized = toolName?.toLowerCase();
+  return normalized === "taskstop" || normalized === "taskoutput";
+}
+
+function isBackgroundTaskLaunch(part: ClaudeMessagePart): boolean {
+  return (
+    part.type === "tool-invocation"
+    && part.toolArgs?.run_in_background === true
+  );
+}
+
+function backgroundTaskIdFromLaunchOutput(output?: string): string | undefined {
+  if (!output) return undefined;
+
+  const textMatch = output.match(/\bbackground with ID:\s*([^\s.]+)/i);
+  if (textMatch?.[1]) return textMatch[1];
+
+  try {
+    const parsed = JSON.parse(output) as Record<string, unknown>;
+    return stringArgument(parsed, "backgroundTaskId", "task_id", "taskId");
+  } catch {
+    return undefined;
+  }
+}
+
+function sameBackgroundTask(
+  left: ClaudeMessagePart["backgroundTask"],
+  right: ClaudeMessagePart["backgroundTask"],
+): boolean {
+  return (
+    left?.id === right?.id
+    && left?.description === right?.description
+    && left?.status === right?.status
+  );
+}
+
 /**
- * Join Claude's authoritative background-task lifecycle back onto the
- * Task/Agent tool row that launched it.
+ * Join Claude's authoritative background-task lifecycle onto the Task/Agent
+ * or background command that launched it, plus later task action rows.
  *
- * A background Agent tool_result means "launched successfully", not "the
- * child finished". The SDK's task events carry `tool_use_id`, which is the
- * stable correlation key; descriptions are intentionally never guessed.
+ * A background tool_result means "launched successfully", not "the task
+ * finished". SDK events use `tool_use_id` as the stable launch correlation;
+ * persisted Bash results provide a durable task-id fallback after restart.
  */
 export function applyClaudeBackgroundTaskStates(
   messages: ClaudeMessage[],
   backgroundTasks: Record<string, ClaudeBackgroundTask>,
 ): ClaudeMessage[] {
+  const tasksById = new Map<string, ClaudeBackgroundTask>();
   const tasksByToolUseId = new Map<string, ClaudeBackgroundTask>();
   for (const task of Object.values(backgroundTasks)) {
+    tasksById.set(task.id, task);
     if (task.toolUseId) tasksByToolUseId.set(task.toolUseId, task);
   }
-  if (tasksByToolUseId.size === 0) return messages;
+
+  /*
+   * Transcript replay does not persist SDK task lifecycle edges on every
+   * Claude version. Recover the durable task-id → launch-description join from
+   * the Bash tool result so stopped rows remain named after a bridge restart.
+   */
+  const launchesByTaskId = new Map<
+    string,
+    { id: string; description?: string; status?: ClaudeBackgroundTask["status"] }
+  >();
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-invocation") continue;
+      const authoritative = part.toolUseId
+        ? tasksByToolUseId.get(part.toolUseId)
+        : undefined;
+      const recoveredId = isBackgroundTaskLaunch(part)
+        ? backgroundTaskIdFromLaunchOutput(part.toolOutput)
+        : undefined;
+      const taskId = authoritative?.id ?? recoveredId;
+      if (!taskId) continue;
+      launchesByTaskId.set(taskId, {
+        id: taskId,
+        description:
+          authoritative?.description
+          ?? stringArgument(part.toolArgs, "description"),
+        status: authoritative?.status,
+      });
+    }
+  }
 
   let messagesChanged = false;
   const nextMessages = messages.map((message) => {
     let partsChanged = false;
     const parts = message.parts.map((part) => {
+      if (part.type !== "tool-invocation") return part;
+
+      const isAgentTool = isTaskTool(part.toolName);
+      const authoritativeLaunch = part.toolUseId
+        ? tasksByToolUseId.get(part.toolUseId)
+        : undefined;
+
+      let agentState = part.agentState;
+      if (isAgentTool && authoritativeLaunch) {
+        agentState = backgroundTaskAgentState(authoritativeLaunch.status);
+      }
+
+      let backgroundTask = part.backgroundTask;
+      if (!isAgentTool && isBackgroundTaskLaunch(part)) {
+        const recoveredId = backgroundTaskIdFromLaunchOutput(part.toolOutput);
+        const launch =
+          authoritativeLaunch
+          ?? (recoveredId ? tasksById.get(recoveredId) : undefined)
+          ?? (recoveredId ? launchesByTaskId.get(recoveredId) : undefined);
+        if (launch) {
+          backgroundTask = {
+            id: launch.id,
+            description:
+              launch.description
+              ?? stringArgument(part.toolArgs, "description"),
+            status: launch.status,
+          };
+        }
+      } else if (isBackgroundTaskAction(part.toolName)) {
+        const taskId = stringArgument(part.toolArgs, "task_id", "taskId");
+        if (taskId) {
+          const task = tasksById.get(taskId) ?? launchesByTaskId.get(taskId);
+          backgroundTask = {
+            id: taskId,
+            description: task?.description,
+            status: task?.status,
+          };
+        }
+      }
+
       if (
-        part.type !== "tool-invocation"
-        || !isTaskTool(part.toolName)
-        || !part.toolUseId
+        part.agentState === agentState
+        && sameBackgroundTask(part.backgroundTask, backgroundTask)
       ) {
         return part;
       }
 
-      const task = tasksByToolUseId.get(part.toolUseId);
-      if (!task) return part;
-      const agentState = backgroundTaskAgentState(task.status);
-      if (part.agentState === agentState) return part;
-
       partsChanged = true;
-      return { ...part, agentState };
+      return {
+        ...part,
+        ...(agentState === undefined ? {} : { agentState }),
+        ...(backgroundTask === undefined ? {} : { backgroundTask }),
+      };
     });
 
     if (!partsChanged) return message;

@@ -1704,6 +1704,85 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     // Should render generic tool part with tool name
     expect(container.textContent).toContain("Read");
   });
+
+  test("shows a background command's description and authoritative lifecycle state", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: {
+            command: "bun test",
+            description: "Run the full suite",
+            run_in_background: true,
+          },
+          backgroundTask: {
+            id: "bg-suite",
+            description: "Run the full suite",
+            status: "running",
+          },
+        }])}
+      />,
+    );
+
+    const row = screen.getByRole("button", {
+      name: /Run Command Run the full suite running/,
+    });
+    expect(row).toBeTruthy();
+    expect(row.textContent).not.toContain("success");
+  });
+
+  test("shows the task name, id, and stopped state on TaskStop rows", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "TaskStop",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-wait" },
+          toolOutput: JSON.stringify({
+            task_id: "bg-wait",
+            command: "sleep 300; echo waited",
+          }),
+          backgroundTask: {
+            id: "bg-wait",
+            description: "Wait for remaining review thread",
+            status: "killed",
+          },
+        }])}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /TaskStop Wait for remaining review thread bg-wait stopped/,
+    })).toBeTruthy();
+  });
+
+  test("falls back to the stopped command when a TaskStop name was not recovered", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "TaskStop",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-legacy" },
+          toolOutput: JSON.stringify({
+            message: "Successfully stopped task: bg-legacy",
+            task_id: "bg-legacy",
+            command: "sleep 120; echo waited",
+          }),
+        }])}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /TaskStop sleep 120; echo waited bg-legacy stopped/,
+    })).toBeTruthy();
+  });
 });
 
 describe("NativeMessage thinking parts", () => {

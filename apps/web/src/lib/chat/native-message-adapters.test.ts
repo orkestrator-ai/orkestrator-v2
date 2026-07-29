@@ -190,6 +190,124 @@ describe("native message adapters", () => {
     })).toBe(messages);
   });
 
+  test("recovers background task names for launch, output, and stop rows from transcript results", () => {
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-launch",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          toolName: "Bash",
+          toolUseId: "bash-launch",
+          toolState: "success",
+          toolArgs: {
+            command: "sleep 300; echo waited",
+            description: "Wait for remaining review thread",
+            run_in_background: true,
+          },
+          toolOutput:
+            "Command running in background with ID: bg-wait. Output is being written to: /tmp/bg-wait.output.",
+        }],
+      },
+      {
+        id: "assistant-output",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-06-18T12:01:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          toolName: "TaskOutput",
+          toolState: "success",
+          toolArgs: { task_id: "bg-wait" },
+        }],
+      },
+      {
+        id: "assistant-stop",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-06-18T12:02:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-wait" },
+        }],
+      },
+    ];
+
+    const updated = applyClaudeBackgroundTaskStates(messages, {});
+
+    for (const message of updated) {
+      expect(message.parts[0]?.backgroundTask).toEqual({
+        id: "bg-wait",
+        description: "Wait for remaining review thread",
+        status: undefined,
+      });
+    }
+    expect(messages[0]?.parts[0]?.backgroundTask).toBeUndefined();
+  });
+
+  test("uses authoritative lifecycle status and description on background command and stop rows", () => {
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-launch",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          toolName: "Bash",
+          toolUseId: "bash-launch",
+          toolState: "success",
+          toolArgs: {
+            command: "bun test",
+            description: "Old description",
+            run_in_background: true,
+          },
+        }],
+      },
+      {
+        id: "assistant-stop",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-06-18T12:01:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-suite" },
+        }],
+      },
+    ];
+
+    const updated = applyClaudeBackgroundTaskStates(messages, {
+      "bg-suite": {
+        id: "bg-suite",
+        toolUseId: "bash-launch",
+        description: "Run the full suite",
+        status: "killed",
+      },
+    });
+
+    expect(updated[0]?.parts[0]?.backgroundTask).toEqual({
+      id: "bg-suite",
+      description: "Run the full suite",
+      status: "killed",
+    });
+    expect(updated[1]?.parts[0]?.backgroundTask).toEqual({
+      id: "bg-suite",
+      description: "Run the full suite",
+      status: "killed",
+    });
+    expect(normalizeClaudePart(updated[1]!.parts[0]!)?.backgroundTask).toEqual({
+      id: "bg-suite",
+      description: "Run the full suite",
+      status: "killed",
+    });
+  });
+
   test("preserves model attribution through provider-neutral normalization", () => {
     const message: NativeMessage = {
       id: "native-model",

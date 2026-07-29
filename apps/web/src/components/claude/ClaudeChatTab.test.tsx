@@ -4707,6 +4707,55 @@ describe("ClaudeChatTab", () => {
       ).toEqual(["task-1"]);
     });
 
+    test("rehydrates a named terminal TaskStop row after the tab remounts", async () => {
+      const stopMessage: ClaudeMessageType = {
+        id: "assistant-stop-background-task",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-07-26T01:00:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          content: "TaskStop",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-wait" },
+          toolOutput: JSON.stringify({
+            task_id: "bg-wait",
+            command: "sleep 300; echo waited",
+          }),
+        }],
+      };
+      mockGetSessionMessages.mockResolvedValue([stopMessage]);
+      mockGetSession.mockResolvedValue(
+        serverSession({
+          backgroundTasks: {
+            "bg-wait": {
+              id: "bg-wait",
+              description: "Wait for remaining review thread",
+              status: "killed",
+            },
+          },
+        }) as any,
+      );
+
+      const view = render(
+        <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />,
+      );
+      expect(await screen.findByRole("button", {
+        name: /TaskStop Wait for remaining review thread bg-wait stopped/,
+      })).toBeTruthy();
+
+      view.unmount();
+      act(() => {
+        useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {});
+      });
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      expect(await screen.findByRole("button", {
+        name: /TaskStop Wait for remaining review thread bg-wait stopped/,
+      })).toBeTruthy();
+    });
+
     test("rehydrates rate limits without context and later preserves or clears them authoritatively", async () => {
       mockGetSession.mockResolvedValue(
         serverSession({

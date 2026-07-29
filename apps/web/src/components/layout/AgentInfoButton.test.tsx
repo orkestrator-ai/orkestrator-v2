@@ -1956,6 +1956,28 @@ describe("AgentInfoButton session actions", () => {
     open();
     expect(screen.queryByText("Background tasks")).toBeNull();
   });
+
+  test("keeps paused background tasks visible and stoppable", () => {
+    seedClaudeSession();
+    useClaudeStore.setState({
+      backgroundTasks: new Map([[
+        CLAUDE_KEY,
+        {
+          "task-paused": {
+            id: "task-paused",
+            description: "Paused review",
+            status: "paused",
+          },
+        },
+      ]]),
+    } as never);
+
+    render(<AgentInfoButton activeTab={claudeTab()} />);
+    open();
+
+    expect(screen.getByText("Paused review")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Stop/ })).toBeTruthy();
+  });
 });
 
 describe("AgentInfoButton rewind confirmation", () => {

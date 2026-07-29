@@ -1001,36 +1001,24 @@ export function TerminalContainer({
     const currentTabs = currentEnvState
       ? getAllLeaves(currentEnvState.root).flatMap((leaf) => leaf.tabs)
       : [];
+    // A build tab is inserted by the pipeline supervisor as soon as the backend
+    // returns, which is before this environment is running and therefore always
+    // before this effect can run. It is not part of the layout seeded here, so
+    // counting it would suppress the initial layout entirely: no setup tab, no
+    // default terminal, and initialize() — which records the containerId the
+    // terminal session keys derive from — would never run.
+    const seededTabs = currentTabs.filter((tab) => tab.type !== "claude-build");
+    const backendSetupRunning =
+      setupScriptsRunning && !environment?.setupScriptsComplete;
 
-    if (currentTabs.length === 0) {
-      const backendSetupRunning = setupScriptsRunning && !environment?.setupScriptsComplete;
-      console.info("[setup-terminal] initial terminal layout decision", {
-        environmentId,
-        backendSetupRunning,
-        setupScriptsRunning,
-        setupScriptsComplete: environment?.setupScriptsComplete ?? false,
-        setupCommandsResolved,
-        hasDefaultSetupSession: hasBoundSetupSession("default"),
-        isLocalEnvironment,
-        worktreePath: worktreePath ?? null,
-        containerId,
-      });
-      if (backendSetupRunning && !hasBoundSetupSession("default")) {
-        console.info("[setup-terminal] waiting for setup session before adding setup tab", {
-          environmentId,
-          tabId: "default",
-        });
-        void bindBackendSetupSession("default");
-        return;
-      }
-
-      if (backendSetupRunning) {
-        // Setup owns the temporary layout. Mark hydration complete without
-        // restoring an older layout so the setup/default layout can persist.
-        if (hydrationStatus !== "done") finishHydration(environmentId);
-      } else if (hydrationStatus === "pending") {
-        return;
-      } else if (hydrationStatus === undefined) {
+    // Hydration is authoritative even when another surface inserted a tab
+    // before this container mounted (notably a backend-created build tab).
+    // finishHydration reconciles tabs added during the request with the
+    // restored snapshot, so start the restore before using tab count to decide
+    // whether a default terminal needs to be seeded.
+    if (!backendSetupRunning) {
+      if (hydrationStatus === "pending") return;
+      if (hydrationStatus === undefined) {
         beginHydration(environmentId);
         void Promise.allSettled([
           backend.getPaneLayout(environmentId),
@@ -1064,7 +1052,9 @@ export function TerminalContainer({
             }
 
             const latestIsLocal = latestEnvironment.environmentType === "local";
-            const latestContainerId = latestIsLocal ? null : latestEnvironment.containerId;
+            const latestContainerId = latestIsLocal
+              ? null
+              : latestEnvironment.containerId;
             const restored = reconcilePersistedLayout(layoutResult.value, {
               environmentId,
               containerId: latestContainerId,
@@ -1086,6 +1076,34 @@ export function TerminalContainer({
             );
           });
         return;
+      }
+    }
+
+    if (seededTabs.length === 0) {
+      console.info("[setup-terminal] initial terminal layout decision", {
+        environmentId,
+        backendSetupRunning,
+        setupScriptsRunning,
+        setupScriptsComplete: environment?.setupScriptsComplete ?? false,
+        setupCommandsResolved,
+        hasDefaultSetupSession: hasBoundSetupSession("default"),
+        isLocalEnvironment,
+        worktreePath: worktreePath ?? null,
+        containerId,
+      });
+      if (backendSetupRunning && !hasBoundSetupSession("default")) {
+        console.info("[setup-terminal] waiting for setup session before adding setup tab", {
+          environmentId,
+          tabId: "default",
+        });
+        void bindBackendSetupSession("default");
+        return;
+      }
+
+      if (backendSetupRunning) {
+        // Setup owns the temporary layout. Mark hydration complete without
+        // restoring an older layout so the setup/default layout can persist.
+        if (hydrationStatus !== "done") finishHydration(environmentId);
       }
 
       const pendingAttachments = claudeOptions?.initialPromptAttachments ?? [];

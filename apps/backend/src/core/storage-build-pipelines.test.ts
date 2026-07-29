@@ -145,6 +145,29 @@ describe("StorageService build pipelines", () => {
     });
   });
 
+  test("lists every valid pipeline across projects, oldest write first", async () => {
+    await withStorage(async (storage) => {
+      await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot());
+      await storage.saveBuildPipeline("p2", "proj-2", "e2", 1, { id: "p2" });
+
+      const file = path.join(storage.getDataDir(), "build-pipelines.json");
+      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      stored.p1!.updatedAt = "2026-07-29T10:00:00.000Z";
+      stored.p2!.updatedAt = "2026-07-29T09:00:00.000Z";
+      stored.corrupt = { id: "corrupt", revision: "bad" };
+      await fs.writeFile(file, JSON.stringify(stored));
+
+      const listed = await storage.listAllBuildPipelines();
+      expect(listed.map((entry) => [entry.id, entry.projectId])).toEqual([
+        ["p2", "proj-2"],
+        ["p1", "proj-1"],
+      ]);
+    });
+  });
+
   test("deletes by environment and reports what it removed", async () => {
     await withStorage(async (storage) => {
       await storage.saveBuildPipeline("p1", "proj-1", "e1", 1, snapshot());

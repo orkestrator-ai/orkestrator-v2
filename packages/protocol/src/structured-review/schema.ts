@@ -4,7 +4,7 @@ import {
   REVIEW_OVERALL_RISKS,
   REVIEW_SEVERITIES,
   REVIEW_VERDICTS,
-} from "./types";
+} from "./types.js";
 
 export type ReviewJsonSchema = Readonly<Record<string, unknown>>;
 

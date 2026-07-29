@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -30,6 +30,7 @@ async function withCommands<T>(
   options: {
     claudeStatePolls?: ClaudeStatePollManager;
     environment?: Record<string, unknown>;
+    buildPipelines?: CommandContext["buildPipelines"];
   } = {},
 ): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-state-sync-"));
@@ -51,6 +52,7 @@ async function withCommands<T>(
     toolchainBinDir: "",
     emit: () => undefined,
     storage,
+    buildPipelines: options.buildPipelines,
   } as unknown as CommandContext;
 
   const invoke = async (command: string, args: Record<string, unknown>) => {
@@ -367,58 +369,220 @@ describe("agent handoff commands", () => {
 });
 
 describe("build pipeline commands", () => {
-  const snapshot = { id: "p1", phase: "building" };
+  const startInput = {
+    taskId: "task-1",
+    projectId: "proj-1",
+    environmentType: "local",
+    agentType: "codex",
+    taskTitle: "Implement the feature",
+    taskSnapshot: {
+      title: "Implement the feature",
+      description: "Do the work",
+      acceptanceCriteria: "It works",
+      comments: [],
+      images: [],
+    },
+  } as const;
 
-  test("saves, lists and deletes a pipeline", async () => {
+  test("delegates lifecycle operations to the backend supervisor", async () => {
+    const start = mock(async (input: unknown) => ({ operation: "start", input }));
+    const pause = mock(async (id: string) => ({ operation: "pause", id }));
+    const resume = mock(async (id: string) => ({ operation: "resume", id }));
+    const cancel = mock(async (id: string) => ({ operation: "cancel", id }));
+    const retryCompletionComment = mock(async (id: string) => ({
+      operation: "retry",
+      id,
+    }));
+    const remove = mock(async (id: string) => ({ operation: "remove", id }));
+    const sendMessage = mock(async (id: string, text: string) => ({
+      operation: "send",
+      id,
+      text,
+    }));
+    const retryReview = mock(async (id: string) => ({
+      operation: "retry-review",
+      id,
+    }));
+    const supervisor = {
+      start,
+      pause,
+      resume,
+      cancel,
+      retryCompletionComment,
+      remove,
+      sendMessage,
+      retryReview,
+    } as unknown as NonNullable<CommandContext["buildPipelines"]>;
+
+    await withCommands(async (invoke, storage) => {
+      await expect(invoke("start_build_pipeline", startInput))
+        .resolves.toMatchObject({ operation: "start" });
+      await expect(invoke("pause_build_pipeline", { pipelineId: "pipeline-1" }))
+        .resolves.toEqual({ operation: "pause", id: "pipeline-1" });
+      await expect(invoke("resume_build_pipeline", { pipelineId: "pipeline-1" }))
+        .resolves.toEqual({ operation: "resume", id: "pipeline-1" });
+      await expect(invoke("cancel_build_pipeline", { pipelineId: "pipeline-1" }))
+        .resolves.toEqual({ operation: "cancel", id: "pipeline-1" });
+      await expect(invoke("retry_build_pipeline_completion_comment", {
+        pipelineId: "pipeline-1",
+      })).resolves.toEqual({ operation: "retry", id: "pipeline-1" });
+      await expect(invoke("send_build_pipeline_message", {
+        pipelineId: "pipeline-1",
+        text: "also update the README",
+      })).resolves.toEqual({
+        operation: "send",
+        id: "pipeline-1",
+        text: "also update the README",
+      });
+      await expect(invoke("retry_build_pipeline_review", {
+        pipelineId: "pipeline-1",
+      })).resolves.toEqual({ operation: "retry-review", id: "pipeline-1" });
+
+      await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
+        id: "pipeline-1",
+      });
+      await expect(invoke("delete_build_pipeline", { pipelineId: "pipeline-1" }))
+        .resolves.toEqual({ operation: "remove", id: "pipeline-1" });
+      expect(await storage.getBuildPipeline("pipeline-1")).not.toBeNull();
+
+      expect(start).toHaveBeenCalledWith(startInput);
+      expect(pause).toHaveBeenCalledWith("pipeline-1");
+      expect(resume).toHaveBeenCalledWith("pipeline-1");
+      expect(cancel).toHaveBeenCalledWith("pipeline-1");
+      expect(retryCompletionComment).toHaveBeenCalledWith("pipeline-1");
+      expect(remove).toHaveBeenCalledWith("pipeline-1");
+      expect(sendMessage)
+        .toHaveBeenCalledWith("pipeline-1", "also update the README");
+      expect(retryReview).toHaveBeenCalledWith("pipeline-1");
+    }, { buildPipelines: supervisor });
+  });
+
+  test("validates lifecycle arguments before invoking the supervisor", async () => {
+    const start = mock(async () => undefined);
+    const pause = mock(async () => undefined);
+    const supervisor = {
+      start,
+      pause,
+      resume: pause,
+      cancel: pause,
+      retryCompletionComment: pause,
+      remove: pause,
+    } as unknown as NonNullable<CommandContext["buildPipelines"]>;
+
     await withCommands(async (invoke) => {
+      await expect(invoke("start_build_pipeline", {
+        ...startInput,
+        taskSnapshot: { ...startInput.taskSnapshot, images: "not-an-array" },
+      })).rejects.toThrow("Invalid build pipeline start request");
+      await expect(invoke("pause_build_pipeline", { pipelineId: "   " }))
+        .rejects.toThrow("non-blank string");
+      await expect(invoke("resume_build_pipeline", { pipelineId: 7 }))
+        .rejects.toThrow("string");
+      await expect(invoke("cancel_build_pipeline", {}))
+        .rejects.toThrow("string");
+      await expect(invoke("retry_build_pipeline_completion_comment", {
+        pipelineId: "",
+      })).rejects.toThrow("non-blank string");
+      await expect(invoke("delete_build_pipeline", { pipelineId: " " }))
+        .rejects.toThrow("non-blank string");
+      await expect(invoke("get_build_pipeline", { pipelineId: "" }))
+        .rejects.toThrow("non-blank string");
+      await expect(invoke("list_build_pipelines", { projectId: " " }))
+        .rejects.toThrow("non-blank string");
+
+      expect(start).not.toHaveBeenCalled();
+      expect(pause).not.toHaveBeenCalled();
+    }, { buildPipelines: supervisor });
+  });
+
+  test("imports legacy snapshots only through the backend supervisor", async () => {
+    const importLegacy = mock(async (projectId: string, snapshots: unknown[]) => ({
+      importedIds: snapshots.map((_, index) => `${projectId}-${index}`),
+      skipped: 0,
+    }));
+    const snapshots = [{ id: "legacy-1" }, { id: "legacy-2" }];
+    const supervisor = {
+      importLegacy,
+    } as unknown as NonNullable<CommandContext["buildPipelines"]>;
+
+    await withCommands(async (invoke) => {
+      await expect(invoke("import_legacy_build_pipelines", {
+        projectId: "proj-1",
+        snapshots,
+      })).resolves.toEqual({
+        importedIds: ["proj-1-0", "proj-1-1"],
+        skipped: 0,
+      });
+      expect(importLegacy).toHaveBeenCalledWith("proj-1", snapshots);
+
+      await expect(invoke("import_legacy_build_pipelines", {
+        projectId: " ",
+        snapshots,
+      })).rejects.toThrow("non-blank string");
+      await expect(invoke("import_legacy_build_pipelines", {
+        projectId: "proj-1",
+        snapshots: {},
+      })).rejects.toThrow("snapshots to be an array");
+      await expect(invoke("import_legacy_build_pipelines", {
+        projectId: "proj-1",
+        snapshots: Array.from({ length: 101 }, () => ({})),
+      })).rejects.toThrow("limited to 100 snapshots");
+      expect(importLegacy).toHaveBeenCalledTimes(1);
+    }, { buildPipelines: supervisor });
+  });
+
+  test("reports unavailable supervision and keeps deletion recoverable", async () => {
+    await withCommands(async (invoke, storage) => {
+      for (const [command, args] of [
+        ["start_build_pipeline", startInput],
+        ["pause_build_pipeline", { pipelineId: "pipeline-1" }],
+        ["resume_build_pipeline", { pipelineId: "pipeline-1" }],
+        ["cancel_build_pipeline", { pipelineId: "pipeline-1" }],
+        ["retry_build_pipeline_completion_comment", { pipelineId: "pipeline-1" }],
+        ["send_build_pipeline_message", {
+          pipelineId: "pipeline-1",
+          text: "hello",
+        }],
+        ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
+        ["import_legacy_build_pipelines", {
+          projectId: "proj-1",
+          snapshots: [],
+        }],
+      ] as const) {
+        await expect(invoke(command, args))
+          .rejects.toThrow("Build pipeline supervisor is unavailable");
+      }
+
+      await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
+        id: "pipeline-1",
+      });
+      await expect(invoke("delete_build_pipeline", { pipelineId: "pipeline-1" }))
+        .resolves.toBeUndefined();
+      expect(await storage.getBuildPipeline("pipeline-1")).toBeNull();
+    });
+  });
+
+  test("rejects client-authored snapshots while preserving reads and deletion", async () => {
+    await withCommands(async (invoke, storage) => {
       await expect(invoke("save_build_pipeline", {
-        pipelineId: "p1", projectId: "proj-1", environmentId: "e1", version: 1, snapshot,
-      })).resolves.toMatchObject({ id: "p1", revision: 1 });
+        pipelineId: "p1",
+        projectId: "proj-1",
+        environmentId: "e1",
+        version: 1,
+        snapshot: { id: "p1", phase: "building" },
+      })).rejects.toThrow("backend-owned");
+
+      await storage.saveBuildPipeline("p1", "proj-1", "e1", 2, {
+        id: "p1",
+        phase: "building",
+        controller: "backend",
+      });
 
       await expect(invoke("list_build_pipelines", { projectId: "proj-1" }))
         .resolves.toHaveLength(1);
 
       await invoke("delete_build_pipeline", { pipelineId: "p1" });
       await expect(invoke("get_build_pipeline", { pipelineId: "p1" })).resolves.toBeNull();
-    });
-  });
-
-  test("accepts the blank environment id a not-yet-created pipeline carries", async () => {
-    await withCommands(async (invoke) => {
-      await expect(invoke("save_build_pipeline", {
-        pipelineId: "p1", projectId: "proj-1", version: 1, snapshot,
-      })).resolves.toMatchObject({ environmentId: "" });
-    });
-  });
-
-  test("rejects a snapshot that is not an object", async () => {
-    await withCommands(async (invoke) => {
-      await expect(invoke("save_build_pipeline", {
-        pipelineId: "p1", projectId: "proj-1", environmentId: "e1", version: 1,
-        snapshot: "not-an-object",
-      })).rejects.toThrow("must be a JSON object");
-    });
-  });
-
-  test("rejects a non-numeric version", async () => {
-    await withCommands(async (invoke) => {
-      await expect(invoke("save_build_pipeline", {
-        pipelineId: "p1", projectId: "proj-1", environmentId: "e1",
-        version: "one", snapshot,
-      })).rejects.toThrow();
-    });
-  });
-
-  test("forwards the compare-and-swap expectation", async () => {
-    await withCommands(async (invoke) => {
-      await invoke("save_build_pipeline", {
-        pipelineId: "p1", projectId: "proj-1", environmentId: "e1", version: 1, snapshot,
-      });
-
-      await expect(invoke("save_build_pipeline", {
-        pipelineId: "p1", projectId: "proj-1", environmentId: "e1", version: 1, snapshot,
-        expectedRevision: 0,
-      })).rejects.toThrow("revision conflict");
     });
   });
 });

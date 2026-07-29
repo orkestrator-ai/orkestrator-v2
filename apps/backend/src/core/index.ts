@@ -16,6 +16,7 @@ import { StorageService } from "./storage.js";
 import { AgentToolsServer } from "./agent-tools.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
+import { BuildPipelineService } from "./build-pipeline-service.js";
 import {
   ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS,
   EnvironmentLifecycleTaskTracker,
@@ -25,6 +26,7 @@ import {
 export class OrkestratorBackend {
   private readonly commands = createCommandRegistry();
   private readonly context: CommandContext;
+  private readonly buildPipelines: BuildPipelineService;
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private shuttingDown = false;
@@ -67,7 +69,7 @@ export class OrkestratorBackend {
     storage.setResourceChangeListener((change) => {
       options.emit(RESOURCE_CHANGED_EVENT, change);
     });
-    this.context = {
+    const context = {
       storage,
       toolchainBinDir: options.toolchainBinDir,
       appRoot: options.appRoot,
@@ -75,7 +77,17 @@ export class OrkestratorBackend {
       emit: options.emit,
       agentTools: this.agentTools,
       environmentLifecycleTasks: this.environmentLifecycleTasks,
-    };
+    } as CommandContext;
+    this.context = context;
+    this.buildPipelines = new BuildPipelineService(
+      storage,
+      async <T>(command: string, args: Record<string, unknown> = {}) => {
+        const handler = this.commands.get(command);
+        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        return await handler(args, context) as T;
+      },
+    );
+    context.buildPipelines = this.buildPipelines;
     this.reapPidServers =
       options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =
@@ -126,7 +138,6 @@ export class OrkestratorBackend {
         console.warn("[backend] Failed to reap orphaned claude-tmux runtimes:", error);
       },
     );
-
     // The durable deletion tombstone stays in place across a crash so queues,
     // pipelines, and starts remain blocked. Once orphaned processes have been
     // reaped, re-admit the ordinary idempotent delete path; it owns every child
@@ -147,6 +158,13 @@ export class OrkestratorBackend {
         );
       });
     }
+
+    // Start durable pipelines only after stale bridge ownership and interrupted
+    // environment deletion have been reconciled. A doomed pipeline is skipped
+    // without preventing the gateway from becoming available.
+    await this.buildPipelines.init().catch((error) => {
+      console.warn("[backend] Failed to restore build pipelines:", error);
+    });
   }
 
   /**
@@ -182,14 +200,23 @@ export class OrkestratorBackend {
       try {
         const lifecycleDeadline =
           Date.now() + this.environmentLifecycleDrainTimeoutMs;
-        // Both admission gates close together, before either drain begins.
-        // Draining lifecycle work first while local-server starts stayed open
-        // would let a bridge spawn during the very window shutdown exists to
-        // close, and a SIGKILL in that window orphans its process tree.
+        // Close both admission gates before waiting on any in-flight work.
+        // Starting the pipeline drain immediately also prevents its scheduler
+        // from admitting more backend-owned work during shutdown.
         closeLocalServerAdmission();
-        await this.environmentLifecycleTasks.beginShutdown(
+        const lifecycleDrain = this.environmentLifecycleTasks.beginShutdown(
           this.environmentLifecycleDrainTimeoutMs,
         );
+        // Pipeline passes may still be writing snapshots or using a bridge.
+        // Drain them before terminating backend-owned local servers — but never
+        // let a failed drain skip that teardown, or every backend-owned bridge
+        // process outlives the backend as an orphan.
+        try {
+          await this.buildPipelines.shutdown();
+        } catch (error) {
+          console.warn("[backend] Failed to drain build pipelines:", error);
+        }
+        await lifecycleDrain;
         await shutdownLocalServers({
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });

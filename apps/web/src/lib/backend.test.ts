@@ -495,33 +495,65 @@ describe("backend setup wrappers", () => {
     });
   });
 
-  test("forwards revisioned build-pipeline persistence payloads exactly", async () => {
-    const snapshot = { status: "running", taskIndex: 2 };
-
+  test("exposes build-pipeline reads and backend-owned deletion", async () => {
     await backendWrappers.getBuildPipeline("pipeline-1");
     await backendWrappers.listBuildPipelines("project-1");
-    await backendWrappers.saveBuildPipeline(
-      "pipeline-1",
-      "project-1",
-      "env-1",
-      3,
-      snapshot,
-      7,
-    );
     await backendWrappers.deleteBuildPipeline("pipeline-1");
 
     expect(invokeMock.mock.calls).toEqual([
       ["get_build_pipeline", { pipelineId: "pipeline-1" }],
       ["list_build_pipelines", { projectId: "project-1" }],
-      ["save_build_pipeline", {
-        pipelineId: "pipeline-1",
-        projectId: "project-1",
-        environmentId: "env-1",
-        version: 3,
-        snapshot,
-        expectedRevision: 7,
-      }],
       ["delete_build_pipeline", { pipelineId: "pipeline-1" }],
+    ]);
+  });
+
+  test("forwards only explicit backend-owned pipeline controls", async () => {
+    const input = {
+      taskId: "task-1",
+      projectId: "project-1",
+      environmentType: "local" as const,
+      agentType: "codex" as const,
+      taskTitle: "Backend pipeline",
+      taskSnapshot: {
+        title: "Backend pipeline",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      featurePlanId: "feature-1",
+    };
+
+    await backendWrappers.startBuildPipeline(input);
+    await backendWrappers.pauseBuildPipeline("pipeline-1");
+    await backendWrappers.resumeBuildPipeline("pipeline-1");
+    await backendWrappers.cancelBuildPipeline("pipeline-1");
+    await backendWrappers.retryBuildPipelineCompletionComment("pipeline-1");
+    await backendWrappers.sendBuildPipelineMessage("pipeline-1", "ship it");
+    await backendWrappers.retryBuildPipelineReview("pipeline-1");
+    const legacySnapshots = [{ id: "legacy-pipeline" }];
+    await backendWrappers.importLegacyBuildPipelines(
+      "project-1",
+      legacySnapshots,
+    );
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["start_build_pipeline", input],
+      ["pause_build_pipeline", { pipelineId: "pipeline-1" }],
+      ["resume_build_pipeline", { pipelineId: "pipeline-1" }],
+      ["cancel_build_pipeline", { pipelineId: "pipeline-1" }],
+      ["retry_build_pipeline_completion_comment", {
+        pipelineId: "pipeline-1",
+      }],
+      ["send_build_pipeline_message", {
+        pipelineId: "pipeline-1",
+        text: "ship it",
+      }],
+      ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
+      ["import_legacy_build_pipelines", {
+        projectId: "project-1",
+        snapshots: legacySnapshots,
+      }],
     ]);
   });
 

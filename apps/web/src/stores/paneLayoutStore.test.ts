@@ -1638,6 +1638,44 @@ describe("paneLayoutStore environment scoping", () => {
     expect(usePaneLayoutStore.getState().hydration.get("env-a")).toBe("done");
   });
 
+  test("preserves and focuses a tab added before late hydration begins", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize(null, "env-pending-tab");
+    store.addTab("default", {
+      id: "build-pipeline-1",
+      type: "claude-build",
+      buildTabData: {
+        pipelineId: "pipeline-1",
+        environmentId: "env-pending-tab",
+        taskId: "task-1",
+        isLocal: true,
+      },
+    }, "env-pending-tab");
+    // TerminalContainer can mount after the build handoff. Its hydration must
+    // merge, not replace, the tab that was created in that undefined state.
+    store.beginHydration("env-pending-tab");
+
+    store.finishHydration("env-pending-tab", {
+      containerId: null,
+      activePaneId: "restored",
+      root: {
+        kind: "leaf",
+        id: "restored",
+        tabs: [{ id: "restored-tab", type: "plain" }],
+        activeTabId: "restored-tab",
+      },
+    });
+
+    const hydrated = usePaneLayoutStore
+      .getState()
+      .environments.get("env-pending-tab");
+    expect(hydrated?.activePaneId).toBe("restored");
+    expect(hydrated && getAllLeaves(hydrated.root)[0]?.tabs.map((tab) => tab.id))
+      .toEqual(["restored-tab", "build-pipeline-1"]);
+    expect(hydrated && getAllLeaves(hydrated.root)[0]?.activeTabId)
+      .toBe("build-pipeline-1");
+  });
+
   test("updates Codex and OpenCode session ids and ignores unsupported or unchanged updates", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");

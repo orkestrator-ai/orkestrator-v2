@@ -31,8 +31,6 @@ import * as realProjects from "@/components/projects";
 import * as realContexts from "@/contexts";
 import * as realSonnerUi from "@/components/ui/sonner";
 import * as realErrors from "@/components/errors";
-import * as realLinear from "@/components/linear";
-import * as realGitHubCompletionMonitor from "@/components/github/GitHubPipelineCompletionMonitor";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realButton from "@/components/ui/button";
 import * as realPrMonitorService from "@/hooks/usePrMonitorService";
@@ -54,8 +52,6 @@ const realProjectsSnapshot = { ...realProjects };
 const realContextsSnapshot = { ...realContexts };
 const realSonnerUiSnapshot = { ...realSonnerUi };
 const realErrorsSnapshot = { ...realErrors };
-const realLinearSnapshot = { ...realLinear };
-const realGitHubCompletionMonitorSnapshot = { ...realGitHubCompletionMonitor };
 const realAlertDialogSnapshot = { ...realAlertDialog };
 const realButtonSnapshot = { ...realButton };
 const realPrMonitorServiceSnapshot = { ...realPrMonitorService };
@@ -75,8 +71,6 @@ const mockUpdateEnvironment = mock(() => {});
 const mockUseEnvironmentLifecycleService = mock(() => {});
 const mockUseCodexBackgroundSync = mock(() => {});
 const mockExit = mock(async () => {});
-const mockLinearMonitorRender = mock(() => undefined);
-const mockGitHubMonitorRender = mock(() => undefined);
 const mockListen = listen as ReturnType<typeof mock>;
 type AppEventCallback = (event: { payload: any }) => void;
 let appEventCallbacks = new Map<string, AppEventCallback>();
@@ -185,22 +179,6 @@ mock.module("@/components/errors", () => ({
   ErrorDetailsDialog: () => null,
 }));
 
-mock.module("@/components/linear", () => ({
-  ...realLinearSnapshot,
-  LinearPipelineCompletionMonitor: () => {
-    mockLinearMonitorRender();
-    return <div data-testid="linear-completion-monitor" />;
-  },
-}));
-
-mock.module("@/components/github/GitHubPipelineCompletionMonitor", () => ({
-  ...realGitHubCompletionMonitorSnapshot,
-  GitHubPipelineCompletionMonitor: () => {
-    mockGitHubMonitorRender();
-    return <div data-testid="github-completion-monitor" />;
-  },
-}));
-
 mock.module("@/components/ui/alert-dialog", () => ({
   AlertDialog: ({ children, open }: { children: React.ReactNode; open?: boolean }) =>
     open ? <>{children}</> : null,
@@ -286,9 +264,9 @@ const mockListBuildPipelines = mock(async (_projectId: string) => []);
 const appPersistenceLifecycle: string[] = [];
 const mockStopBuildPipelinePersistence = mock(() => undefined);
 const mockStopPromptQueuePersistence = mock(() => undefined);
-const mockMigrateLegacyBuildPipelines = mock(() => {
+const mockMigrateLegacyBuildPipelines = mock(async () => {
   appPersistenceLifecycle.push("migrate-build");
-  return [];
+  return { importedIds: [], skipped: 0 };
 });
 const mockStartBuildPipelinePersistence = mock(() => {
   appPersistenceLifecycle.push("start-build");
@@ -498,8 +476,6 @@ function resetAppMocks() {
   mockSaveLoopedReviewWorkflow.mockClear();
   mockLoopedReviewSupervisorRender.mockClear();
   mockToastError.mockClear();
-  mockLinearMonitorRender.mockClear();
-  mockGitHubMonitorRender.mockClear();
   mockAppUnlisten.mockClear();
   appEventCallbacks = new Map();
   mockListen.mockClear();
@@ -519,11 +495,6 @@ afterAll(() => {
   mock.module("@/contexts", () => realContextsSnapshot);
   mock.module("@/components/ui/sonner", () => realSonnerUiSnapshot);
   mock.module("@/components/errors", () => realErrorsSnapshot);
-  mock.module("@/components/linear", () => realLinearSnapshot);
-  mock.module(
-    "@/components/github/GitHubPipelineCompletionMonitor",
-    () => realGitHubCompletionMonitorSnapshot,
-  );
   mock.module("@/components/ui/alert-dialog", () => realAlertDialogSnapshot);
   mock.module("@/components/ui/button", () => realButtonSnapshot);
   mock.module("@/hooks/usePrMonitorService", () => realPrMonitorServiceSnapshot);
@@ -610,32 +581,6 @@ describe("App background processing mounts", () => {
     expect(screen.getByTestId("terminal-env-background").getAttribute("data-active")).toBe("false");
   });
 
-  test("mounts the Linear completion monitor globally", async () => {
-    resetStores({
-      environments: [],
-      selectedProjectId: null,
-      selectedEnvironmentId: null,
-    });
-
-    render(<App />);
-
-    expect(await screen.findByTestId("linear-completion-monitor")).toBeTruthy();
-    expect(mockLinearMonitorRender).toHaveBeenCalled();
-  });
-
-  test("mounts the GitHub completion monitor globally", async () => {
-    resetStores({
-      environments: [],
-      selectedProjectId: "another-project",
-      selectedEnvironmentId: null,
-    });
-
-    render(<App />);
-
-    expect(await screen.findByTestId("github-completion-monitor")).toBeTruthy();
-    expect(mockGitHubMonitorRender).toHaveBeenCalled();
-  });
-
   test("mounts the looped-review supervisor globally", async () => {
     resetStores({
       environments: [],
@@ -661,15 +606,13 @@ describe("App background processing mounts", () => {
     await waitFor(() => {
       expect(appEventCallbacks.has("resource-changed")).toBe(true);
       expect(appEventCallbacks.has("native-event-stream-connected")).toBe(true);
-      expect(mockStartBuildPipelinePersistence).toHaveBeenCalledTimes(1);
+      expect(mockStartBuildPipelinePersistence).not.toHaveBeenCalled();
       expect(mockStartPromptQueuePersistence).toHaveBeenCalledTimes(1);
     });
-    expect(appPersistenceLifecycle.indexOf("migrate-build"))
-      .toBeLessThan(appPersistenceLifecycle.indexOf("start-build"));
 
     cleanup();
     expect(mockAppUnlisten.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(mockStopBuildPipelinePersistence).toHaveBeenCalledTimes(1);
+    expect(mockStopBuildPipelinePersistence).not.toHaveBeenCalled();
     expect(mockStopPromptQueuePersistence).toHaveBeenCalledTimes(1);
   });
 
@@ -885,7 +828,7 @@ describe("App background processing mounts", () => {
     expect(screen.queryByTestId("terminal-env-sibling")).toBeNull();
   });
 
-  test("keeps an active sibling in the selected project mounted as a hidden background terminal", async () => {
+  test("does not mount an active pipeline sibling because the backend owns advancement", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
@@ -922,6 +865,7 @@ describe("App background processing mounts", () => {
             },
             source: { type: "kanban", taskId: "task-sibling" },
             backendRevision: 1,
+            controller: "backend",
           },
         ],
       ]),
@@ -931,13 +875,10 @@ describe("App background processing mounts", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
-      expect(screen.getByTestId("terminal-env-sibling")).toBeTruthy();
     });
 
-    // Selected environment is foreground; the active sibling stays mounted but
-    // inactive so its pipeline-advancement effects keep running.
     expect(screen.getByTestId("terminal-env-visible").getAttribute("data-active")).toBe("true");
-    expect(screen.getByTestId("terminal-env-sibling").getAttribute("data-active")).toBe("false");
+    expect(screen.queryByTestId("terminal-env-sibling")).toBeNull();
   });
 
   test("keeps off-screen environments with a pending native launch mounted", async () => {

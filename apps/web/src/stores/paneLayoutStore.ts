@@ -103,6 +103,44 @@ function findPaneWithTab(node: PaneNode, tabId: string): PaneLeaf | null {
   return null;
 }
 
+function mergeTabsAddedDuringHydration(
+  current: EnvironmentPaneState | undefined,
+  restored: EnvironmentPaneState,
+): EnvironmentPaneState {
+  if (!current) return restored;
+
+  const restoredTabIds = new Set(
+    getAllLeaves(restored.root).flatMap((leaf) =>
+      leaf.tabs.map((tab) => tab.id)),
+  );
+  const addedTabs = getAllLeaves(current.root)
+    .flatMap((leaf) => leaf.tabs)
+    .filter((tab) => !restoredTabIds.has(tab.id));
+  if (addedTabs.length === 0) return restored;
+
+  const restoredTarget =
+    findLeaf(restored.root, current.activePaneId)
+    ?? findFirstLeaf(restored.root);
+  const currentActiveTabId =
+    findLeaf(current.root, current.activePaneId)?.activeTabId;
+  const activeTabId = currentActiveTabId
+    && addedTabs.some((tab) => tab.id === currentActiveTabId)
+    ? currentActiveTabId
+    : restoredTarget.activeTabId;
+  return {
+    ...restored,
+    root: updateLeaf(restored.root, restoredTarget.id, (leaf) => ({
+      ...leaf,
+      tabs: [...leaf.tabs, ...addedTabs],
+      activeTabId,
+    })),
+    activePaneId:
+      activeTabId === currentActiveTabId
+        ? restoredTarget.id
+        : restored.activePaneId,
+  };
+}
+
 function getDepth(node: PaneNode): number {
   if (isPaneLeaf(node)) return 0;
   return 1 + Math.max(getDepth(node.children[0]), getDepth(node.children[1]));
@@ -492,13 +530,24 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     console.debug("[PaneLayout] Initializing environment:", envId, "with containerId:", containerId);
 
+    const existing = state.environments.get(envId);
+    const existingTabs = existing
+      ? getAllLeaves(existing.root).flatMap((leaf) => leaf.tabs)
+      : [];
     const newEnvs = new Map(state.environments);
-    newEnvs.set(envId, {
-      root: createInitialLayout(),
-      activePaneId: "default",
-      containerId,
-      backendRevision: 0,
-    });
+    // A tab can already be here: the build supervisor inserts its tab as soon
+    // as the backend returns a pipeline, which is before this container mounts.
+    // Replacing the root wholesale would drop it, and nothing re-adds it.
+    // Adopting the existing layout still records the containerId, which is what
+    // the terminal session keys are built from.
+    newEnvs.set(envId, existingTabs.length > 0
+      ? { ...existing!, containerId }
+      : {
+          root: createInitialLayout(),
+          activePaneId: "default",
+          containerId,
+          backendRevision: 0,
+        });
     set({ environments: newEnvs });
   },
 
@@ -557,9 +606,13 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     }
 
     const environments = new Map(state.environments);
-    environments.set(environmentId, restored);
+    const reconciled = mergeTabsAddedDuringHydration(
+      state.environments.get(environmentId),
+      restored,
+    );
+    environments.set(environmentId, reconciled);
     set({ environments, hydration });
-    pruneUnreferencedAgentHandoffs(environmentId, restored.root);
+    pruneUnreferencedAgentHandoffs(environmentId, reconciled.root);
   },
 
   applyAuthoritativeLayout: (environmentId, restored) => {

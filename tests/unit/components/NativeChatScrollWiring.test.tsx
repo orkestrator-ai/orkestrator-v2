@@ -36,7 +36,7 @@ const { ClaudeChatTab } = await import("@/components/claude/ClaudeChatTab");
 const { ClaudeTmuxChatTab } = await import("@/components/claude/ClaudeTmuxChatTab");
 const { CodexChatTab } = await import("@/components/codex/CodexChatTab");
 const { OpenCodeChatTab } = await import("@/components/opencode/OpenCodeChatTab");
-const { CodexBuildChatTab } = await import("@/components/build-pipeline/CodexBuildChatTab");
+const { BuildChatTab } = await import("@/components/build-pipeline/BuildChatTab");
 
 describe("native chat scroll wiring", () => {
   afterAll(() => {
@@ -162,19 +162,14 @@ describe("native chat scroll wiring", () => {
     });
   });
 
-  test("build pipeline passes its environmentId to the Virtuoso scroll hook", () => {
+  test("backend build transcript rendering does not allocate native chat scroll state", () => {
     render(
-      <CodexBuildChatTab
+      <BuildChatTab
         data={{ environmentId: "env-build", pipelineId: "pipeline-1", taskId: "task-1" }}
         isActive={false}
       />,
     );
 
-    expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({
-      isActive: false,
-      persistKey: "build-pipeline-1",
-      environmentId: "env-build",
-      stickToBottomOnActivation: true,
-    });
+    expect(useVirtuosoScrollStateMock).not.toHaveBeenCalled();
   });
 });

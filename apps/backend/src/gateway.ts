@@ -24,9 +24,33 @@ import {
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
+  /**
+   * Whether `command` is in the registry. Metric labels are gated on this so a
+   * rejected, network-supplied name can never be retained — testing the error
+   * message instead would leak any name rejected for some other reason first,
+   * such as during shutdown.
+   */
+  hasCommand?(command: string): boolean;
 };
 
 type NetworkInterfaceMap = NodeJS.Dict<NetworkInterfaceInfo[]>;
+type ListenerKind = "control" | "browser";
+type GatewayRouteKey =
+  | "login"
+  | "logout"
+  | "status"
+  | "gateway-settings"
+  | "web-client-access"
+  | "invoke"
+  | "events"
+  | "metrics"
+  | "client-metrics"
+  | "proxy-loopback"
+  | "browser-loopback"
+  | "static";
+
+export const GATEWAY_COMPRESSION_MODES = ["off", "body", "on"] as const;
+export type GatewayCompressionMode = (typeof GATEWAY_COMPRESSION_MODES)[number];
 
 export interface GatewayStartInfo {
   bindAddress: string;
@@ -53,6 +77,7 @@ export interface OrkestratorGatewayOptions {
   logger?: Pick<Console, "debug" | "error" | "info" | "warn">;
   allowNonTailscaleBind?: boolean;
   allowedOrigins?: string[];
+  compression?: GatewayCompressionMode;
   keepaliveMs?: number;
   webClientControl?: {
     getStatus(): WebClientStatus;
@@ -105,9 +130,742 @@ const SSE_CLIENT_HARD_BUFFER_BYTES = 8 * 1024 * 1024;
 const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const CORS_ALLOWED_HEADERS =
   "Authorization, Content-Type, X-Orkestrator-Codex-Token, X-Orkestrator-Claude-Token, X-Orkestrator-OpenCode-Token";
+const GATEWAY_METRIC_MAP_LIMIT = 128;
+const GATEWAY_METRIC_LABEL_BYTES = 96;
+const GATEWAY_METRIC_TOTAL_LABEL_BYTES = 8 * 1024;
+/**
+ * Command labels are an allowlist, not free text: anything the backend registry
+ * rejects is recorded as `__unknown__`, so the only labels that can ever reach
+ * this map are registered command names. The budget therefore has to clear the
+ * whole registry — a limit below it silently folds legitimate commands into
+ * `__overflow__` in invocation order, which makes the per-command byte and
+ * timing breakdown both incomplete and different on every run.
+ * `tests/unit/electron/gateway.test.ts` pins these against the real registry.
+ */
+export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 512;
+export const GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES = 32 * 1024;
+const GATEWAY_METRIC_SAMPLE_LIMIT = 32;
+const MAX_CLIENT_METRICS_BODY_BYTES = 64 * 1024;
+const METRIC_OVERFLOW_KEY = "__overflow__";
+const METRIC_INVALID_KEY = "__invalid__";
+const METRIC_UNKNOWN_COMMAND_KEY = "__unknown__";
+/**
+ * Keepalive writes are not an event, but a client dropped while flushing one
+ * still needs attributing somewhere. A reserved label keeps that out of the
+ * bucket for a real event that happens to be named `events`.
+ */
+const METRIC_KEEPALIVE_KEY = "__keepalive__";
+const METRIC_RESERVED_KEYS: readonly string[] = [
+  METRIC_OVERFLOW_KEY,
+  METRIC_INVALID_KEY,
+  METRIC_UNKNOWN_COMMAND_KEY,
+  METRIC_KEEPALIVE_KEY,
+];
 
 class InvalidRequestBodyError extends Error {}
 class RequestBodyTooLargeError extends Error {}
+
+type GatewayRouteMetrics = {
+  requests: number;
+  requestBytes: number;
+  responseBytes: number;
+  durationMs: number;
+  statusCodes: Record<string, number>;
+  encodings: Record<string, number>;
+};
+
+type GatewayCommandMetrics = {
+  count: number;
+  requestBytes: number;
+  responseBytes: number;
+  durationMs: number;
+  failures: number;
+};
+
+type GatewayEventMetrics = {
+  frames: number;
+  wireBytes: number;
+  droppedFrames: number;
+  droppedClients: number;
+};
+
+type GatewayStreamMetrics = {
+  open: number;
+  connecting: number;
+  opened: number;
+  closed: number;
+  dropped: number;
+  stalled: number;
+  softDesyncs: number;
+  keepalives: number;
+};
+
+type GatewayCompressionMetrics = {
+  configuredMode: GatewayCompressionMode;
+};
+
+type GatewayClientBootReport = {
+  recordedAt: string;
+  platform: "desktop-browser" | "ios-wkwebview" | "ipad-wkwebview" | "iphone-wkwebview" | "unknown";
+  navigationType: "navigate" | "reload" | "back_forward" | "prerender" | "unknown";
+  httpVersion: string | null;
+  nextHopProtocol: string | null;
+  transferSize: number | null;
+  encodedBodySize: number | null;
+  decodedBodySize: number | null;
+  resourceCount: number | null;
+  resourceTransferSize: number | null;
+  resourceEncodedBodySize: number | null;
+  resourceDecodedBodySize: number | null;
+  jsTransferSize: number | null;
+  jsDecodedBodySize: number | null;
+  cssTransferSize: number | null;
+  cssDecodedBodySize: number | null;
+  domContentLoadedMs: number | null;
+  loadEventMs: number | null;
+  firstPaintMs: number | null;
+  firstContentfulPaintMs: number | null;
+  eventStreamConnectedMs: number | null;
+};
+
+type GatewayRouteSample = {
+  recordedAt: string;
+  route: GatewayRouteKey;
+  listenerKind: ListenerKind;
+  method: string;
+  httpVersion: string;
+  acceptEncoding: string | null;
+  effectiveCompressionMode: GatewayCompressionMode;
+  statusCode: number;
+  requestBytes: number;
+  responseBytes: number;
+  durationMs: number;
+  contentEncoding: string | null;
+  cacheControl: string | null;
+  contentType: string | null;
+};
+
+function isGatewayCompressionMode(value: string): value is GatewayCompressionMode {
+  return GATEWAY_COMPRESSION_MODES.includes(value as GatewayCompressionMode);
+}
+
+export function parseGatewayCompressionMode(
+  value: string | undefined,
+  source = "gateway compression mode",
+): GatewayCompressionMode | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (isGatewayCompressionMode(trimmed)) return trimmed;
+  throw new Error(`Invalid ${source}: ${value}. Expected one of off, body, on.`);
+}
+
+export function resolveGatewayCompressionMode(
+  explicit: GatewayCompressionMode | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): GatewayCompressionMode {
+  return explicit
+    ?? parseGatewayCompressionMode(
+      env.ORKESTRATOR_GATEWAY_COMPRESSION,
+      "ORKESTRATOR_GATEWAY_COMPRESSION",
+    )
+    ?? "off";
+}
+
+export function compressionModeForListener(
+  compression: GatewayCompressionMode,
+  listenerKind: ListenerKind,
+): GatewayCompressionMode {
+  return listenerKind === "control" ? "off" : compression;
+}
+
+function appendBoundedSample<T>(target: T[], sample: T, limit = GATEWAY_METRIC_SAMPLE_LIMIT): void {
+  target.push(sample);
+  if (target.length > limit) target.splice(0, target.length - limit);
+}
+
+/**
+ * A `Map` whose key set is bounded by both entry count and total label bytes.
+ *
+ * The running byte total matters: recomputing it per miss made every emit for
+ * an unseen label walk the whole key set, and `recordEvent` runs once per
+ * connected client per frame.
+ */
+export class BoundedMetricMap<T> {
+  private readonly map = new Map<string, T>();
+  private labelBytes = 0;
+
+  constructor(
+    private readonly limit = GATEWAY_METRIC_MAP_LIMIT,
+    private readonly totalLabelBytes = GATEWAY_METRIC_TOTAL_LABEL_BYTES,
+  ) {}
+
+  /**
+   * Resolves the label this key will actually be recorded under.
+   *
+   * One slot and its bytes are reserved for overflow from the outset, so both
+   * limits stay true after the first overflowing label instead of letting the
+   * overflow bucket become an unaccounted (limit + 1)th entry.
+   */
+  resolveKey(key: string): string {
+    if (this.map.has(key)) return key;
+    const keyBytes = Buffer.byteLength(key);
+    const overflowBytes = Buffer.byteLength(METRIC_OVERFLOW_KEY);
+    if (
+      this.map.size < this.limit - 1
+      && keyBytes <= GATEWAY_METRIC_LABEL_BYTES
+      && this.labelBytes + keyBytes <= this.totalLabelBytes - overflowBytes
+    ) {
+      return key;
+    }
+    return METRIC_OVERFLOW_KEY;
+  }
+
+  get(key: string): T | undefined {
+    return this.map.get(key);
+  }
+
+  set(key: string, value: T): void {
+    if (!this.map.has(key)) this.labelBytes += Buffer.byteLength(key);
+    this.map.set(key, value);
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+
+  get usedLabelBytes(): number {
+    return this.labelBytes;
+  }
+
+  entries(): IterableIterator<[string, T]> {
+    return this.map.entries();
+  }
+}
+
+export function normalizeMetricLabel(value: string): string {
+  if (METRIC_RESERVED_KEYS.includes(value)) return value;
+  const trimmed = value.trim();
+  return (
+    Buffer.byteLength(trimmed) <= GATEWAY_METRIC_LABEL_BYTES
+    && /^[A-Za-z][A-Za-z0-9_.:-]*$/.test(trimmed)
+  )
+    ? trimmed
+    : METRIC_INVALID_KEY;
+}
+
+/**
+ * Truncates to a byte budget without emitting a replacement character.
+ *
+ * The cut is walked back to the start of the partial sequence rather than
+ * decoding and stripping a trailing U+FFFD, because that cannot tell a decode
+ * artifact from a U+FFFD the caller actually sent.
+ */
+export function truncateUtf8(value: string, maxBytes: number): string {
+  const buffer = Buffer.from(value);
+  if (buffer.length <= maxBytes) return value;
+  let end = maxBytes;
+  // If the first dropped byte is a continuation byte (0b10xxxxxx) the cut fell
+  // inside a sequence, so walk back to that sequence's lead byte and drop it
+  // whole. A sequence split this way can never fit, so no refit check is
+  // needed. At most 3 continuation bytes can precede a lead byte.
+  while (end > 0 && (buffer[end]! & 0xc0) === 0x80) end -= 1;
+  return buffer.subarray(0, end).toString("utf8");
+}
+
+export function normalizeContentEncoding(value: string | null): "identity" | "gzip" | "br" | "deflate" | "other" {
+  const encoding = value?.trim().toLowerCase() || "identity";
+  if (encoding === "identity" || encoding === "gzip" || encoding === "br" || encoding === "deflate") {
+    return encoding;
+  }
+  return "other";
+}
+
+export function normalizeHttpMethod(value: string): string {
+  const method = value.trim().toUpperCase();
+  return (
+    method === "DELETE"
+    || method === "GET"
+    || method === "HEAD"
+    || method === "OPTIONS"
+    || method === "PATCH"
+    || method === "POST"
+    || method === "PUT"
+  )
+    ? method
+    : "OTHER";
+}
+
+export function normalizeHttpVersion(value: string): string {
+  const version = value.trim();
+  return version === "1.0" || version === "1.1" || version === "2.0" || version === "3.0"
+    ? version
+    : "other";
+}
+
+/**
+ * `q=0` means "not acceptable" (RFC 9110 §12.5.3), so a token weighted that way
+ * is a refusal and must not be recorded as support. This label exists to decide
+ * whether compression can be turned on for a client, and counting a refusal as
+ * support would err in exactly the direction that breaks one.
+ */
+export function normalizeAcceptEncoding(value: string | null): string | null {
+  if (value === null) return null;
+  const encodings = new Set<string>();
+  for (const entry of value.toLowerCase().split(",")) {
+    const [token, ...parameters] = entry.split(";");
+    const encoding = token?.trim();
+    if (!encoding) continue;
+    const refused = parameters.some((parameter) => {
+      const [name, weight] = parameter.split("=", 2);
+      return name?.trim() === "q" && Number.parseFloat(weight ?? "") === 0;
+    });
+    if (refused) continue;
+    if (encoding === "br" || encoding === "gzip" || encoding === "deflate" || encoding === "identity") {
+      encodings.add(encoding);
+    } else {
+      encodings.add("other");
+    }
+  }
+  return encodings.size > 0 ? [...encodings].sort().join(",") : null;
+}
+
+export function normalizeCacheControl(value: string | null): string | null {
+  if (value === null) return null;
+  const allowed = new Set([
+    "immutable",
+    "max-age",
+    "must-revalidate",
+    "no-cache",
+    "no-store",
+    "no-transform",
+    "private",
+    "proxy-revalidate",
+    "public",
+    "s-maxage",
+    "stale-if-error",
+    "stale-while-revalidate",
+  ]);
+  const directives = new Set<string>();
+  for (const entry of value.toLowerCase().split(",")) {
+    const directive = entry.split("=", 1)[0]?.trim();
+    if (directive && allowed.has(directive)) directives.add(directive);
+    else if (directive) directives.add("other");
+  }
+  return directives.size > 0 ? [...directives].sort().join(",") : null;
+}
+
+export function normalizeContentType(value: string | null): string | null {
+  if (value === null) return null;
+  const mimeType = value.split(";", 1)[0]?.trim().toLowerCase();
+  if (!mimeType) return null;
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("font/")) return "font";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("video/")) return "video";
+  if (
+    mimeType === "application/javascript"
+    || mimeType === "application/json"
+    || mimeType === "application/octet-stream"
+    || mimeType === "text/css"
+    || mimeType === "text/event-stream"
+    || mimeType === "text/html"
+    || mimeType === "text/javascript"
+    || mimeType === "text/plain"
+  ) {
+    return mimeType;
+  }
+  return "other";
+}
+
+export function normalizeNextHopProtocol(value: unknown): string | null {
+  // `stringOrNull` yields null and the optional call then yields undefined, so
+  // this must test falsiness rather than `=== null`: reporting an unavailable
+  // protocol as "other" would make it indistinguishable from one we simply do
+  // not recognise, which is the HTTP/2-vs-1.1 signal being measured. A
+  // `WKWebView` with no navigation entry, and any cross-origin navigation
+  // without `Timing-Allow-Origin`, both take this path.
+  const protocol = stringOrNull(value, 24)?.toLowerCase();
+  if (!protocol) return null;
+  if (
+    protocol === "h2"
+    || protocol === "h3"
+    || protocol === "http/1.0"
+    || protocol === "http/1.1"
+    || protocol === "http/2"
+    || protocol === "http/3"
+    || protocol === "quic"
+  ) {
+    return protocol;
+  }
+  return "other";
+}
+
+function normalizeStatusMetricKey(statusCode: number): string {
+  return Number.isInteger(statusCode) && statusCode >= 100 && statusCode <= 599
+    ? String(statusCode)
+    : "other";
+}
+
+function numberOrNull(value: unknown, max = Number.MAX_SAFE_INTEGER): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= max
+    ? value
+    : null;
+}
+
+function stringOrNull(value: unknown, maxBytes = 64): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? truncateUtf8(trimmed, maxBytes) : null;
+}
+
+function headerValueToString(value: number | string | string[] | undefined): string | null {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.join(", ");
+  if (typeof value === "number") return String(value);
+  return null;
+}
+
+function parseContentLengthHeader(value: string | string[] | undefined): number {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  const parsed = Number.parseInt(candidate ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function measureChunkBytes(
+  chunk: string | Uint8Array | Buffer | undefined,
+  encoding?: BufferEncoding | ((error?: Error | null) => void),
+): number {
+  if (chunk === undefined) return 0;
+  if (typeof chunk === "string") {
+    return Buffer.byteLength(chunk, typeof encoding === "string" ? encoding : undefined);
+  }
+  return chunk.byteLength;
+}
+
+function classifyGatewayRoute(pathname: string): GatewayRouteKey {
+  if (pathname === `${API_PREFIX}/login`) return "login";
+  if (pathname === `${API_PREFIX}/logout`) return "logout";
+  if (pathname === `${API_PREFIX}/status`) return "status";
+  if (pathname === `${API_PREFIX}/gateway-settings`) return "gateway-settings";
+  if (pathname === `${API_PREFIX}/web-client-access`) return "web-client-access";
+  if (pathname === `${API_PREFIX}/invoke`) return "invoke";
+  if (pathname === `${API_PREFIX}/events`) return "events";
+  if (pathname === `${API_PREFIX}/metrics`) return "metrics";
+  if (pathname === `${API_PREFIX}/client-metrics`) return "client-metrics";
+  if (pathname.startsWith(`${API_PREFIX}/proxy/loopback/`)) return "proxy-loopback";
+  if (pathname.startsWith(`${API_PREFIX}/browser/loopback/`)) return "browser-loopback";
+  return "static";
+}
+
+/**
+ * Event names that embed an identifier have unbounded cardinality, so each one
+ * would otherwise consume a label slot per terminal, container or environment
+ * and push genuinely distinct event names into `__overflow__`. Collapse them to
+ * a fixed category the way the terminal families already are.
+ */
+const PER_ENTITY_EVENT_PREFIXES: readonly [prefix: string, label: string][] = [
+  [`${DROPPABLE_EVENT_PREFIX}tmux:`, "terminal-output-tmux"],
+  [DROPPABLE_EVENT_PREFIX, "terminal-output"],
+  ["claude-state-", "claude-state"],
+];
+
+export function normalizeGatewayEventMetricKey(event: string): string {
+  for (const [prefix, label] of PER_ENTITY_EVENT_PREFIXES) {
+    if (event.startsWith(prefix)) return label;
+  }
+  return normalizeMetricLabel(event);
+}
+
+function sanitizeClientBootReport(
+  input: Record<string, unknown>,
+  httpVersion: string,
+): GatewayClientBootReport {
+  const platformValue = stringOrNull(input.platform, 32);
+  const platform = (
+    platformValue === "desktop-browser"
+    || platformValue === "ios-wkwebview"
+    || platformValue === "ipad-wkwebview"
+    || platformValue === "iphone-wkwebview"
+  )
+    ? platformValue
+    : "unknown";
+  const navigationTypeValue = stringOrNull(input.navigationType, 16);
+  const navigationType = (
+    navigationTypeValue === "navigate"
+    || navigationTypeValue === "reload"
+    || navigationTypeValue === "back_forward"
+    || navigationTypeValue === "prerender"
+  )
+    ? navigationTypeValue
+    : "unknown";
+  return {
+    recordedAt: new Date().toISOString(),
+    platform,
+    navigationType,
+    httpVersion: normalizeHttpVersion(httpVersion),
+    nextHopProtocol: normalizeNextHopProtocol(input.nextHopProtocol),
+    transferSize: numberOrNull(input.transferSize),
+    encodedBodySize: numberOrNull(input.encodedBodySize),
+    decodedBodySize: numberOrNull(input.decodedBodySize),
+    resourceCount: numberOrNull(input.resourceCount, 100_000),
+    resourceTransferSize: numberOrNull(input.resourceTransferSize),
+    resourceEncodedBodySize: numberOrNull(input.resourceEncodedBodySize),
+    resourceDecodedBodySize: numberOrNull(input.resourceDecodedBodySize),
+    jsTransferSize: numberOrNull(input.jsTransferSize),
+    jsDecodedBodySize: numberOrNull(input.jsDecodedBodySize),
+    cssTransferSize: numberOrNull(input.cssTransferSize),
+    cssDecodedBodySize: numberOrNull(input.cssDecodedBodySize),
+    domContentLoadedMs: numberOrNull(input.domContentLoadedMs, 600_000),
+    loadEventMs: numberOrNull(input.loadEventMs, 600_000),
+    firstPaintMs: numberOrNull(input.firstPaintMs, 600_000),
+    firstContentfulPaintMs: numberOrNull(input.firstContentfulPaintMs, 600_000),
+    eventStreamConnectedMs: numberOrNull(input.eventStreamConnectedMs, 600_000),
+  };
+}
+
+export class GatewayMetricsStore {
+  private readonly routes = new Map<GatewayRouteKey, GatewayRouteMetrics>();
+  private readonly commands = new BoundedMetricMap<GatewayCommandMetrics>(
+    GATEWAY_COMMAND_METRIC_MAP_LIMIT,
+    GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
+  );
+  private readonly events = new BoundedMetricMap<GatewayEventMetrics>();
+  private readonly recentRouteSamples: GatewayRouteSample[] = [];
+  private readonly recentClientBootReports: GatewayClientBootReport[] = [];
+  private readonly stream: GatewayStreamMetrics = {
+    open: 0,
+    connecting: 0,
+    opened: 0,
+    closed: 0,
+    dropped: 0,
+    stalled: 0,
+    softDesyncs: 0,
+    keepalives: 0,
+  };
+  private readonly compression: GatewayCompressionMetrics;
+
+  constructor(configuredMode: GatewayCompressionMode) {
+    this.compression = { configuredMode };
+  }
+
+  setConfiguredCompressionMode(mode: GatewayCompressionMode): void {
+    this.compression.configuredMode = mode;
+  }
+
+  beginRequest(meta: Omit<GatewayRouteSample, "recordedAt" | "statusCode" | "responseBytes" | "durationMs" | "contentEncoding" | "cacheControl" | "contentType">) {
+    const startedAt = Date.now();
+    let requestBytes = meta.requestBytes;
+    return {
+      setRequestBytes(bytes: number) {
+        requestBytes = bytes;
+      },
+      finish: (response: ServerResponse, responseBytes: number) => {
+        const durationMs = Math.max(0, Date.now() - startedAt);
+        const sample: GatewayRouteSample = {
+          recordedAt: new Date().toISOString(),
+          ...meta,
+          method: normalizeHttpMethod(meta.method),
+          httpVersion: normalizeHttpVersion(meta.httpVersion),
+          acceptEncoding: normalizeAcceptEncoding(meta.acceptEncoding),
+          requestBytes,
+          statusCode: response.statusCode,
+          responseBytes,
+          durationMs,
+          contentEncoding: normalizeContentEncoding(
+            headerValueToString(response.getHeader("content-encoding")),
+          ),
+          cacheControl: normalizeCacheControl(headerValueToString(response.getHeader("cache-control"))),
+          contentType: normalizeContentType(headerValueToString(response.getHeader("content-type"))),
+        };
+        this.recordRoute(sample);
+      },
+    };
+  }
+
+  private routeBucket(route: GatewayRouteKey): GatewayRouteMetrics {
+    let bucket = this.routes.get(route);
+    if (!bucket) {
+      bucket = {
+        requests: 0,
+        requestBytes: 0,
+        responseBytes: 0,
+        durationMs: 0,
+        statusCodes: {},
+        encodings: {},
+      };
+      this.routes.set(route, bucket);
+    }
+    return bucket;
+  }
+
+  private recordRoute(sample: GatewayRouteSample): void {
+    const bucket = this.routeBucket(sample.route);
+    bucket.requests += 1;
+    bucket.requestBytes += sample.requestBytes;
+    bucket.responseBytes += sample.responseBytes;
+    bucket.durationMs += sample.durationMs;
+    const statusCode = normalizeStatusMetricKey(sample.statusCode);
+    bucket.statusCodes[statusCode] = (bucket.statusCodes[statusCode] ?? 0) + 1;
+    const encoding = normalizeContentEncoding(sample.contentEncoding);
+    bucket.encodings[encoding] = (bucket.encodings[encoding] ?? 0) + 1;
+    appendBoundedSample(this.recentRouteSamples, sample);
+  }
+
+  recordInvoke(
+    command: string,
+    requestBytes: number,
+    responseBytes: number,
+    durationMs: number,
+    success: boolean,
+  ): void {
+    const key = this.commands.resolveKey(normalizeMetricLabel(command));
+    const bucket = this.commands.get(key) ?? {
+      count: 0,
+      requestBytes: 0,
+      responseBytes: 0,
+      durationMs: 0,
+      failures: 0,
+    };
+    bucket.count += 1;
+    bucket.requestBytes += requestBytes;
+    bucket.responseBytes += responseBytes;
+    bucket.durationMs += durationMs;
+    if (!success) bucket.failures += 1;
+    this.commands.set(key, bucket);
+  }
+
+  recordEvent(event: string, wireBytes: number): void {
+    const key = this.events.resolveKey(normalizeGatewayEventMetricKey(event));
+    const bucket = this.events.get(key) ?? {
+      frames: 0,
+      wireBytes: 0,
+      droppedFrames: 0,
+      droppedClients: 0,
+    };
+    bucket.frames += 1;
+    bucket.wireBytes += wireBytes;
+    this.events.set(key, bucket);
+  }
+
+  recordDroppedEventFrame(event: string): void {
+    const key = this.events.resolveKey(normalizeGatewayEventMetricKey(event));
+    const bucket = this.events.get(key) ?? {
+      frames: 0,
+      wireBytes: 0,
+      droppedFrames: 0,
+      droppedClients: 0,
+    };
+    bucket.droppedFrames += 1;
+    this.events.set(key, bucket);
+  }
+
+  recordDroppedEventClient(event: string): void {
+    const key = this.events.resolveKey(normalizeGatewayEventMetricKey(event));
+    const bucket = this.events.get(key) ?? {
+      frames: 0,
+      wireBytes: 0,
+      droppedFrames: 0,
+      droppedClients: 0,
+    };
+    bucket.droppedClients += 1;
+    this.events.set(key, bucket);
+  }
+
+  recordStreamConnecting(): void {
+    this.stream.connecting += 1;
+  }
+
+  recordStreamOpened(): void {
+    this.stream.connecting = Math.max(0, this.stream.connecting - 1);
+    this.stream.open += 1;
+    this.stream.opened += 1;
+  }
+
+  /**
+   * A stream that reached `open` already left `connecting` in
+   * `recordStreamOpened`, so this must not decrement it again — that double
+   * count would silently undercount concurrent handshakes.
+   */
+  recordStreamClosed(): void {
+    this.stream.open = Math.max(0, this.stream.open - 1);
+    this.stream.closed += 1;
+  }
+
+  /** Releases the gauge for a handshake that never reached `open`. */
+  recordStreamConnectFailed(): void {
+    this.stream.connecting = Math.max(0, this.stream.connecting - 1);
+  }
+
+  recordStreamDropped(): void {
+    this.stream.dropped += 1;
+  }
+
+  recordStreamStalled(): void {
+    this.stream.stalled += 1;
+  }
+
+  recordSoftDesync(): void {
+    this.stream.softDesyncs += 1;
+  }
+
+  recordKeepalive(): void {
+    this.stream.keepalives += 1;
+  }
+
+  recordClientBootReport(report: GatewayClientBootReport): void {
+    appendBoundedSample(this.recentClientBootReports, report);
+  }
+
+  snapshot() {
+    return {
+      routes: Object.fromEntries([...this.routes.entries()].sort(([left], [right]) => left.localeCompare(right))),
+      commands: Object.fromEntries([...this.commands.entries()].sort(([left], [right]) => left.localeCompare(right))),
+      events: Object.fromEntries([...this.events.entries()].sort(([left], [right]) => left.localeCompare(right))),
+      stream: { ...this.stream },
+      compression: { configuredMode: this.compression.configuredMode },
+      recentRouteSamples: [...this.recentRouteSamples],
+      recentClientBootReports: [...this.recentClientBootReports],
+    };
+  }
+}
+
+type GatewayRequestMetrics = ReturnType<GatewayMetricsStore["beginRequest"]>;
+
+function instrumentGatewayResponse(
+  response: ServerResponse,
+  finish: (responseBytes: number) => void,
+): void {
+  const originalWrite = response.write.bind(response);
+  const originalEnd = response.end.bind(response);
+  let responseBytes = 0;
+  let settled = false;
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    finish(responseBytes);
+  };
+
+  response.write = ((chunk, encoding, callback) => {
+    responseBytes += measureChunkBytes(chunk, encoding);
+    return (originalWrite as (...args: unknown[]) => boolean)(
+      chunk,
+      encoding as unknown,
+      callback as unknown,
+    );
+  }) as typeof response.write;
+
+  response.end = ((chunk, encoding, callback) => {
+    responseBytes += measureChunkBytes(chunk, encoding);
+    return (originalEnd as (...args: unknown[]) => ServerResponse<IncomingMessage>)(
+      chunk,
+      encoding as unknown,
+      callback as unknown,
+    );
+  }) as typeof response.end;
+
+  response.once("finish", settle);
+  response.once("close", settle);
+}
 
 function parsePort(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -225,12 +983,21 @@ function jsonResponse(
   payload: unknown,
   headers: OutgoingHttpHeaders = {},
 ): void {
+  serializedJsonResponse(response, statusCode, JSON.stringify(payload), headers);
+}
+
+function serializedJsonResponse(
+  response: ServerResponse,
+  statusCode: number,
+  payload: string,
+  headers: OutgoingHttpHeaders = {},
+): void {
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
     ...headers,
   });
-  response.end(JSON.stringify(payload));
+  response.end(payload);
 }
 
 function textResponse(response: ServerResponse, statusCode: number, text: string, contentType = "text/plain; charset=utf-8"): void {
@@ -319,7 +1086,10 @@ async function persistGatewayToken(authFile: string, token: string): Promise<voi
   }
 }
 
-async function readRequestBody(request: IncomingMessage, maxBytes = MAX_JSON_BODY_BYTES): Promise<Buffer> {
+async function readRequestBody(
+  request: IncomingMessage,
+  maxBytes = MAX_JSON_BODY_BYTES,
+): Promise<{ body: Buffer; bytes: number }> {
   const chunks: Buffer[] = [];
   let total = 0;
   let tooLarge = false;
@@ -335,15 +1105,15 @@ async function readRequestBody(request: IncomingMessage, maxBytes = MAX_JSON_BOD
   }
 
   if (tooLarge) throw new RequestBodyTooLargeError("Request body is too large");
-  return Buffer.concat(chunks);
+  return { body: Buffer.concat(chunks), bytes: total };
 }
 
 async function readJsonBody(
   request: IncomingMessage,
   maxBytes = MAX_JSON_BODY_BYTES,
-): Promise<Record<string, unknown>> {
-  const body = await readRequestBody(request, maxBytes);
-  if (body.length === 0) return {};
+): Promise<{ body: Record<string, unknown>; bytes: number }> {
+  const { body, bytes } = await readRequestBody(request, maxBytes);
+  if (body.length === 0) return { body: {}, bytes };
   let parsed: unknown;
   try {
     parsed = JSON.parse(body.toString("utf8")) as unknown;
@@ -353,12 +1123,12 @@ async function readJsonBody(
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new InvalidRequestBodyError("Expected JSON object body");
   }
-  return parsed as Record<string, unknown>;
+  return { body: parsed as Record<string, unknown>, bytes };
 }
 
 async function readLoginToken(request: IncomingMessage): Promise<string> {
   const contentType = request.headers["content-type"] ?? "";
-  const body = await readRequestBody(request);
+  const { body } = await readRequestBody(request);
 
   if (contentType.includes("application/json")) {
     const parsed = JSON.parse(body.toString("utf8")) as { token?: unknown };
@@ -727,7 +1497,9 @@ export class OrkestratorGateway {
   private readonly allowNonTailscaleBind: boolean;
   private readonly webClientControl: OrkestratorGatewayOptions["webClientControl"];
   private readonly allowedOrigins: string[];
+  private readonly compression: GatewayCompressionMode;
   private readonly keepaliveMs: number;
+  private readonly metrics: GatewayMetricsStore;
   private servers = new Set<Server>();
   private token = "";
   private authFile = "";
@@ -763,12 +1535,14 @@ export class OrkestratorGateway {
     this.logger = options.logger ?? console;
     this.allowNonTailscaleBind = options.allowNonTailscaleBind ?? false;
     this.webClientControl = options.webClientControl;
+    this.compression = resolveGatewayCompressionMode(options.compression, this.env);
     this.keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
     this.allowedOrigins = (
       options.allowedOrigins ?? parseAllowedOrigins(this.env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS)
     )
       .map((origin) => origin.trim().replace(/\/$/, ""))
       .filter(Boolean);
+    this.metrics = new GatewayMetricsStore(this.compression);
   }
 
   async start(): Promise<GatewayStartInfo | null> {
@@ -874,7 +1648,7 @@ export class OrkestratorGateway {
   private async listen(
     bindAddress: string,
     port: number,
-    listenerKind: "control" | "browser",
+    listenerKind: ListenerKind,
   ): Promise<{ bindAddress: string; port: number; url: string }> {
     const server = createServer((request, response) => {
       this.handle(request, response, listenerKind).catch((error: unknown) => {
@@ -997,7 +1771,7 @@ export class OrkestratorGateway {
       }
 
       if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
-        this.dropBufferedClient(client, client.writableLength);
+        this.dropBufferedClient(client, event, client.writableLength);
         continue;
       }
 
@@ -1017,7 +1791,7 @@ export class OrkestratorGateway {
 
       const projectedBytes = client.writableLength + messageBytes;
       if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
-        this.dropBufferedClient(client, projectedBytes);
+        this.dropBufferedClient(client, event, projectedBytes);
         continue;
       }
       // A desync notice may itself consume the last available soft-limit
@@ -1027,6 +1801,7 @@ export class OrkestratorGateway {
         continue;
       }
       client.write(message);
+      this.metrics.recordEvent(event, messageBytes);
     }
   }
 
@@ -1037,7 +1812,11 @@ export class OrkestratorGateway {
     message: string,
   ): void {
     const sessionId = event.slice(DROPPABLE_EVENT_PREFIX.length);
+    const streamAlreadyStalled = state.desyncedSessions.size > 0;
     state.desyncedSessions.add(sessionId);
+    this.metrics.recordDroppedEventFrame(event);
+    this.metrics.recordSoftDesync();
+    if (!streamAlreadyStalled) this.metrics.recordStreamStalled();
     if (
       !sessionId.startsWith("tmux:")
       || !state.includedPrefixes?.includes(event)
@@ -1054,11 +1833,13 @@ export class OrkestratorGateway {
     frames.set(sessionId, message);
   }
 
-  private dropBufferedClient(client: ServerResponse, projectedBytes: number): void {
+  private dropBufferedClient(client: ServerResponse, event: string, projectedBytes: number): void {
     this.logger.warn(
       `[RemoteGateway] Dropping an event-stream client buffering ${projectedBytes} bytes; it will reconnect and refetch`,
     );
     this.clients.delete(client);
+    this.metrics.recordDroppedEventClient(event);
+    this.metrics.recordStreamDropped();
     client.destroy();
   }
 
@@ -1082,7 +1863,7 @@ export class OrkestratorGateway {
         ?? `data: ${JSON.stringify({ event, payload: { desynced: true } })}\n\n`;
       const projectedBytes = client.writableLength + Buffer.byteLength(recoveryFrame);
       if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
-        this.dropBufferedClient(client, projectedBytes);
+        this.dropBufferedClient(client, event, projectedBytes);
         return false;
       }
       // Retire the session before writing it. A write can emit "drain"
@@ -1096,6 +1877,7 @@ export class OrkestratorGateway {
       }
       state.desyncedSessions.delete(sessionId);
       client.write(recoveryFrame);
+      this.metrics.recordEvent(event, Buffer.byteLength(recoveryFrame));
     }
     return true;
   }
@@ -1171,9 +1953,22 @@ export class OrkestratorGateway {
   private async handle(
     request: IncomingMessage,
     response: ServerResponse,
-    listenerKind: "control" | "browser",
+    listenerKind: ListenerKind,
   ): Promise<void> {
     const url = new URL(request.url ?? "/", "http://orkestrator.local");
+    const route = classifyGatewayRoute(url.pathname);
+    const requestMetrics = this.metrics.beginRequest({
+      route,
+      listenerKind,
+      method: request.method ?? "GET",
+      httpVersion: request.httpVersion || "1.1",
+      acceptEncoding: headerValueToString(request.headers["accept-encoding"]),
+      effectiveCompressionMode: compressionModeForListener(this.compression, listenerKind),
+      requestBytes: parseContentLengthHeader(request.headers["content-length"]),
+    });
+    instrumentGatewayResponse(response, (responseBytes) => {
+      requestMetrics.finish(response, responseBytes);
+    });
     const isBrowserPreviewRequest = url.pathname.startsWith(`${API_PREFIX}/browser/loopback/`);
 
     if (request.method === "OPTIONS" && url.pathname.startsWith(`${API_PREFIX}/`)) {
@@ -1247,7 +2042,7 @@ export class OrkestratorGateway {
     }
 
     if (url.pathname === `${API_PREFIX}/gateway-settings`) {
-      await this.handleGatewaySettings(request, response);
+      await this.handleGatewaySettings(request, response, requestMetrics);
       return;
     }
 
@@ -1256,7 +2051,7 @@ export class OrkestratorGateway {
         jsonResponse(response, 404, { error: "Not found" });
         return;
       }
-      await this.handleWebClientAccess(request, response);
+      await this.handleWebClientAccess(request, response, requestMetrics);
       return;
     }
 
@@ -1271,12 +2066,22 @@ export class OrkestratorGateway {
     }
 
     if (url.pathname === `${API_PREFIX}/invoke`) {
-      await this.handleInvoke(request, response);
+      await this.handleInvoke(request, response, requestMetrics);
       return;
     }
 
     if (url.pathname === `${API_PREFIX}/events`) {
       this.handleEvents(request, response, url);
+      return;
+    }
+
+    if (url.pathname === `${API_PREFIX}/metrics`) {
+      this.handleMetrics(request, response);
+      return;
+    }
+
+    if (url.pathname === `${API_PREFIX}/client-metrics`) {
+      await this.handleClientMetrics(request, response, requestMetrics);
       return;
     }
 
@@ -1293,7 +2098,11 @@ export class OrkestratorGateway {
     await this.serveStatic(request, url, response);
   }
 
-  private async handleGatewaySettings(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  private async handleGatewaySettings(
+    request: IncomingMessage,
+    response: ServerResponse,
+    requestMetrics: GatewayRequestMetrics,
+  ): Promise<void> {
     if (request.method === "GET") {
       jsonResponse(response, 200, await this.getTokenSettings());
       return;
@@ -1306,7 +2115,9 @@ export class OrkestratorGateway {
 
     let body: Record<string, unknown>;
     try {
-      body = await readJsonBody(request);
+      const parsed = await readJsonBody(request);
+      body = parsed.body;
+      requestMetrics.setRequestBytes(parsed.bytes);
     } catch (error) {
       if (error instanceof RequestBodyTooLargeError) {
         jsonResponse(response, 413, { error: error.message });
@@ -1336,7 +2147,11 @@ export class OrkestratorGateway {
     }
   }
 
-  private async handleWebClientAccess(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  private async handleWebClientAccess(
+    request: IncomingMessage,
+    response: ServerResponse,
+    requestMetrics: GatewayRequestMetrics,
+  ): Promise<void> {
     if (!this.webClientControl) {
       jsonResponse(response, 404, { error: "Not found" });
       return;
@@ -1357,7 +2172,9 @@ export class OrkestratorGateway {
 
     let body: Record<string, unknown>;
     try {
-      body = await readJsonBody(request);
+      const parsed = await readJsonBody(request);
+      body = parsed.body;
+      requestMetrics.setRequestBytes(parsed.bytes);
     } catch (error) {
       if (error instanceof RequestBodyTooLargeError) {
         jsonResponse(response, 413, { error: error.message });
@@ -1401,7 +2218,24 @@ export class OrkestratorGateway {
     response.end();
   }
 
-  private async handleInvoke(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  /**
+   * Whether a failed command may be retained as a metric label.
+   *
+   * `hasCommand` is authoritative when the backend provides it. Backends that
+   * do not — only test stubs, in practice — fall back to the registry's error
+   * contract, which is what this check replaced.
+   */
+  private commandIsRegistered(command: string, errorMessage: string): boolean {
+    const hasCommand = this.backend.hasCommand;
+    if (hasCommand) return hasCommand.call(this.backend, command);
+    return !errorMessage.startsWith("Unknown backend command:");
+  }
+
+  private async handleInvoke(
+    request: IncomingMessage,
+    response: ServerResponse,
+    requestMetrics: GatewayRequestMetrics,
+  ): Promise<void> {
     if (request.method !== "POST") {
       response.writeHead(405, { allow: "POST" });
       response.end();
@@ -1409,8 +2243,12 @@ export class OrkestratorGateway {
     }
 
     let body: Record<string, unknown>;
+    let requestBytes = 0;
     try {
-      body = await readJsonBody(request, MAX_INVOKE_BODY_BYTES);
+      const parsed = await readJsonBody(request, MAX_INVOKE_BODY_BYTES);
+      body = parsed.body;
+      requestBytes = parsed.bytes;
+      requestMetrics.setRequestBytes(parsed.bytes);
     } catch (error) {
       // Without these branches an oversized or malformed body escapes to the
       // generic server catch and surfaces as a 500, which reads as a backend
@@ -1434,12 +2272,38 @@ export class OrkestratorGateway {
     const safeArgs = args && typeof args === "object" && !Array.isArray(args)
       ? args as Record<string, unknown>
       : {};
+    const startedAt = Date.now();
 
     try {
       const result = await this.backend.invoke(command, safeArgs);
-      jsonResponse(response, 200, { result });
+      const responseBody = JSON.stringify({ result });
+      this.metrics.recordInvoke(
+        command,
+        requestBytes,
+        Buffer.byteLength(responseBody),
+        Math.max(0, Date.now() - startedAt),
+        true,
+      );
+      serializedJsonResponse(response, 200, responseBody);
     } catch (error) {
-      jsonResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      const responseBody = JSON.stringify({ error: message });
+      // Never retain the rejected, network-supplied value: a syntactically
+      // valid token-like string is just as sensitive as an obviously malformed
+      // label. Gate on registry membership rather than on the error text, so a
+      // name rejected before the registry is even consulted — during shutdown,
+      // say — still cannot become a label.
+      const metricCommand = this.commandIsRegistered(command, message)
+        ? command
+        : METRIC_UNKNOWN_COMMAND_KEY;
+      this.metrics.recordInvoke(
+        metricCommand,
+        requestBytes,
+        Buffer.byteLength(responseBody),
+        Math.max(0, Date.now() - startedAt),
+        false,
+      );
+      serializedJsonResponse(response, 500, responseBody);
     }
   }
 
@@ -1450,13 +2314,22 @@ export class OrkestratorGateway {
       return;
     }
 
-    response.writeHead(200, {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-store, no-transform",
-      connection: "keep-alive",
-      "x-accel-buffering": "no",
-    });
-    response.write(": connected\n\n");
+    this.metrics.recordStreamConnecting();
+    try {
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
+      response.write(": connected\n\n");
+    } catch (error) {
+      // A handshake that never reaches `open` still has to release the gauge,
+      // otherwise `connecting` climbs for the lifetime of the process.
+      this.metrics.recordStreamConnectFailed();
+      throw error;
+    }
+    this.metrics.recordStreamOpened();
     const state: GatewayEventClient = {
       prefixes: parseEventSubscriptionFilter(url.searchParams.get("events")),
       includedPrefixes: parseEventSubscriptionFilter(
@@ -1482,9 +2355,10 @@ export class OrkestratorGateway {
     this.keepalive ??= setInterval(() => {
       for (const client of this.clients.keys()) {
         if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
-          this.dropBufferedClient(client, client.writableLength);
+          this.dropBufferedClient(client, METRIC_KEEPALIVE_KEY, client.writableLength);
           continue;
         }
+        this.metrics.recordKeepalive();
         client.write(": keepalive\n\n");
       }
     }, this.keepaliveMs);
@@ -1492,7 +2366,49 @@ export class OrkestratorGateway {
 
     request.once("close", () => {
       this.clients.delete(response);
+      this.metrics.recordStreamClosed();
     });
+  }
+
+  private handleMetrics(request: IncomingMessage, response: ServerResponse): void {
+    if (request.method !== "GET") {
+      response.writeHead(405, { allow: "GET" });
+      response.end();
+      return;
+    }
+    jsonResponse(response, 200, this.metrics.snapshot());
+  }
+
+  private async handleClientMetrics(
+    request: IncomingMessage,
+    response: ServerResponse,
+    requestMetrics: GatewayRequestMetrics,
+  ): Promise<void> {
+    if (request.method !== "POST") {
+      response.writeHead(405, { allow: "POST" });
+      response.end();
+      return;
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      const parsed = await readJsonBody(request, MAX_CLIENT_METRICS_BODY_BYTES);
+      body = parsed.body;
+      requestMetrics.setRequestBytes(parsed.bytes);
+    } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        jsonResponse(response, 413, { error: error.message });
+        return;
+      }
+      if (error instanceof InvalidRequestBodyError) {
+        jsonResponse(response, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+
+    this.metrics.recordClientBootReport(sanitizeClientBootReport(body, request.httpVersion || "1.1"));
+    jsonResponse(response, 202, { ok: true });
   }
 
   private async handleLoopbackProxy(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {

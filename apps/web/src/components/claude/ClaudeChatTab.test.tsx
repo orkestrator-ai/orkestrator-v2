@@ -3407,7 +3407,7 @@ describe("ClaudeChatTab", () => {
     expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
       "assistant-agent",
       "assistant-later",
-      "assistant-agent:active-agent:agent-1",
+      "assistant-agent:active-agents",
     ]);
 
     const completedMessage: ClaudeMessageType = {
@@ -3487,7 +3487,7 @@ describe("ClaudeChatTab", () => {
     expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
       "assistant-delayed-agent",
       "assistant-delayed-agent:text-block:2",
-      "assistant-delayed-agent:active-agent:agent-delayed-1",
+      "assistant-delayed-agent:active-agents",
     ]);
     expect(
       lastVirtualizedMessages.map((message) =>

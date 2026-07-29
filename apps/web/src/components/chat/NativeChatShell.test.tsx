@@ -10,6 +10,11 @@ import {
 import { createRef } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { VirtuosoHandle } from "react-virtuoso";
+import type {
+  NativeMessage,
+  NativeMessagePart,
+} from "@/lib/chat/native-message-types";
+import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import * as realVirtualizedMessageList from "./VirtualizedMessageList";
 
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
@@ -22,7 +27,7 @@ mock.module("./VirtualizedMessageList", () => ({
       <div>
         {props.emptyState}
         {props.messages.map((message: any, index: number) => (
-          <div key={message.id}>
+          <div key={props.computeItemKey(index, message)}>
             {props.renderMessage(
               index,
               message,
@@ -138,6 +143,74 @@ describe("NativeChatShell", () => {
 
     expect(screen.getByText("Friendly Model")).toBeTruthy();
     expect(resolveModelLabel).toHaveBeenCalledWith("provider/model-id");
+  });
+
+  test("preserves expanded agent state as a pinned row changes membership", () => {
+    const firstAgent: NativeMessagePart = {
+      type: "subagent",
+      content: "Reviewer",
+      subagentId: "agent-1",
+      subagentName: "Reviewer",
+      subagentPrompt: "Inspect the original task details",
+      toolState: "pending",
+      subagentActions: [],
+    };
+    const secondAgent: NativeMessagePart = {
+      type: "subagent",
+      content: "Tester",
+      subagentId: "agent-2",
+      subagentName: "Tester",
+      toolState: "pending",
+      subagentActions: [],
+    };
+    const source: NativeMessage = {
+      id: "assistant-agent-group",
+      role: "assistant",
+      content: "",
+      parts: [firstAgent],
+      createdAt: "2026-07-28T12:00:00.000Z",
+    };
+    const pinnedMessages = (parts: NativeMessagePart[]) =>
+      pinActiveNativeAgentParts([{ ...source, parts }]);
+
+    const view = render(
+      <NativeChatShell
+        {...shellProps()}
+        messages={pinnedMessages([firstAgent])}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
+    expect(screen.getByText("Inspect the original task details")).toBeTruthy();
+
+    view.rerender(
+      <NativeChatShell
+        {...shellProps()}
+        messages={pinnedMessages([firstAgent, secondAgent])}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
+    expect(screen.getByText("Inspect the original task details")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
+    ).toBe("true");
+
+    view.rerender(
+      <NativeChatShell
+        {...shellProps()}
+        messages={pinnedMessages([
+          firstAgent,
+          { ...secondAgent, toolState: "success" },
+        ])}
+      />,
+    );
+
+    expect(screen.queryByRole("region", { name: "2 agents" })).toBeNull();
+    expect(screen.getByText("Inspect the original task details")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
+    ).toBe("true");
   });
 
   test("remeasures pinned clearance when the viewport changes", () => {

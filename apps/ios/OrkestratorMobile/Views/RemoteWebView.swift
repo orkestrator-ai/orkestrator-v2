@@ -16,13 +16,9 @@ struct RemoteWebView: UIViewRepresentable {
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.userContentController.add(context.coordinator, name: Coordinator.messageHandlerName)
-        configuration.userContentController.addUserScript(
-            WKUserScript(
-                source: Coordinator.connectionBridgeScript,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
-            )
-        )
+        for script in Coordinator.userScripts(for: UIDevice.current.userInterfaceIdiom) {
+            configuration.userContentController.addUserScript(script)
+        }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.isOpaque = false
@@ -38,13 +34,7 @@ struct RemoteWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.state = $state
-        if case .retrying = state {
-            context.coordinator.authenticate(connection)
-            return
-        }
-        guard context.coordinator.authenticatedConnection != connection,
-              !context.coordinator.isSwitchingThroughBridge else { return }
-        context.coordinator.authenticate(connection)
+        context.coordinator.synchronizeAuthentication(with: connection)
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -58,6 +48,40 @@ struct RemoteWebView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         static let messageHandlerName = "orkestratorConnections"
+
+        static func clientPlatform(for idiom: UIUserInterfaceIdiom) -> String {
+            switch idiom {
+            case .pad:
+                return "ipad-wkwebview"
+            case .phone:
+                return "iphone-wkwebview"
+            default:
+                return "ios-wkwebview"
+            }
+        }
+
+        static func quotedJavaScriptString(_ value: String) -> String {
+            guard let data = try? JSONEncoder().encode(value),
+                  let json = String(data: data, encoding: .utf8) else {
+                return "\"\""
+            }
+            return json
+        }
+
+        static func userScripts(for idiom: UIUserInterfaceIdiom) -> [WKUserScript] {
+            [
+                WKUserScript(
+                    source: "window.__orkestratorClientPlatform = \(quotedJavaScriptString(clientPlatform(for: idiom)));",
+                    injectionTime: .atDocumentStart,
+                    forMainFrameOnly: true
+                ),
+                WKUserScript(
+                    source: connectionBridgeScript,
+                    injectionTime: .atDocumentStart,
+                    forMainFrameOnly: true
+                ),
+            ]
+        }
         static let connectionBridgeScript = #"""
         (() => {
           const pending = new Map();
@@ -97,18 +121,34 @@ struct RemoteWebView: UIViewRepresentable {
         var isSwitchingThroughBridge = false
         private(set) var requestedConnection: RemoteConnection?
         var authenticationTask: Task<Void, Never>?
+        var javaScriptEvaluator: ((String) async throws -> Any?)?
+        var authenticationStarter: ((RemoteConnection) -> Void)?
+        /// Injected only by tests so the login exchange can be stubbed without
+        /// reaching the network. Nil in production.
+        var loginProtocolClasses: [AnyClass]?
 
         init(model: ConnectionModel, state: Binding<WebViewState>) {
             self.model = model
             self.state = state
         }
 
+        /// The body of `updateUIView`, kept on the coordinator because a
+        /// `UIViewRepresentableContext` cannot be constructed outside SwiftUI.
+        /// `state` has already been rebound by the caller.
+        func synchronizeAuthentication(with connection: RemoteConnection) {
+            if case .retrying = state.wrappedValue {
+                authenticate(connection)
+                return
+            }
+            guard authenticatedConnection != connection,
+                  !isSwitchingThroughBridge else { return }
+            authenticate(connection)
+        }
+
         func authenticate(_ connection: RemoteConnection) {
             guard requestedConnection != connection || state.wrappedValue != .loading else { return }
             authenticationTask?.cancel()
-            requestedConnection = connection
-            authenticatedConnection = nil
-            state.wrappedValue = .loading
+            beginAuthenticationState(for: connection)
             authenticationTask = Task { [weak self, weak webView] in
                 guard let self, let webView else { return }
                 do {
@@ -135,16 +175,24 @@ struct RemoteWebView: UIViewRepresentable {
             }
         }
 
+        func beginAuthenticationState(for connection: RemoteConnection) {
+            requestedConnection = connection
+            authenticatedConnection = nil
+            state.wrappedValue = .loading
+        }
+
         func teardown() {
             authenticationTask?.cancel()
             authenticationTask = nil
             requestedConnection = nil
             authenticatedConnection = nil
             isSwitchingThroughBridge = false
+            javaScriptEvaluator = nil
+            authenticationStarter = nil
             webView = nil
         }
 
-        private func loginCookie(for connection: RemoteConnection) async throws -> HTTPCookie {
+        func loginCookie(for connection: RemoteConnection) async throws -> HTTPCookie {
             let loginURL = connection.address.appending(path: "__orkestrator/login")
             var components = URLComponents()
             components.queryItems = [URLQueryItem(name: "token", value: connection.token)]
@@ -163,6 +211,7 @@ struct RemoteWebView: UIViewRepresentable {
             configuration.httpCookieStorage = nil
             configuration.httpShouldSetCookies = false
             configuration.timeoutIntervalForRequest = 20
+            if let loginProtocolClasses { configuration.protocolClasses = loginProtocolClasses }
             let redirectBlocker = LoginRedirectBlocker()
             let session = URLSession(configuration: configuration, delegate: redirectBlocker, delegateQueue: nil)
             defer { session.finishTasksAndInvalidate() }
@@ -171,19 +220,27 @@ struct RemoteWebView: UIViewRepresentable {
             do {
                 (_, response) = try await session.data(for: request)
             } catch let error as URLError {
-                switch error.code {
-                case .cancelled where Task.isCancelled:
-                    throw CancellationError()
-                case .timedOut:
-                    throw NativeGatewayLoginError.timedOut
-                case .serverCertificateUntrusted, .serverCertificateHasBadDate,
-                     .serverCertificateHasUnknownRoot, .secureConnectionFailed:
-                    throw NativeGatewayLoginError.untrustedConnection
-                default:
-                    throw NativeGatewayLoginError.unreachable
-                }
+                throw Self.loginTransportError(for: error, taskIsCancelled: Task.isCancelled)
             }
 
+            return try Self.loginCookie(from: response, loginURL: loginURL)
+        }
+
+        static func loginTransportError(for error: URLError, taskIsCancelled: Bool) -> Error {
+            switch error.code {
+            case .cancelled where taskIsCancelled:
+                return CancellationError()
+            case .timedOut:
+                return NativeGatewayLoginError.timedOut
+            case .serverCertificateUntrusted, .serverCertificateHasBadDate,
+                 .serverCertificateHasUnknownRoot, .secureConnectionFailed:
+                return NativeGatewayLoginError.untrustedConnection
+            default:
+                return NativeGatewayLoginError.unreachable
+            }
+        }
+
+        static func loginCookie(from response: URLResponse, loginURL: URL) throws -> HTTPCookie {
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw NativeGatewayLoginError.invalidResponse
             }
@@ -213,11 +270,26 @@ struct RemoteWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            guard let requestedConnection,
-                  let url = webView.url,
+            navigationDidFinish(at: webView.url)
+        }
+
+        func navigationDidFinish(at url: URL?) {
+            guard let requestedConnection, let url,
                   Self.sameOrigin(url, requestedConnection.address) else { return }
             authenticatedConnection = requestedConnection
             state.wrappedValue = .ready
+        }
+
+        enum NavigationResponseDisposition: Equatable {
+            case allow
+            case rejectToken
+        }
+
+        static func navigationResponseDisposition(
+            statusCode: Int?,
+            isMainFrame: Bool
+        ) -> NavigationResponseDisposition {
+            statusCode == 401 && isMainFrame ? .rejectToken : .allow
         }
 
         func webView(
@@ -225,14 +297,25 @@ struct RemoteWebView: UIViewRepresentable {
             decidePolicyFor navigationResponse: WKNavigationResponse,
             decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
         ) {
-            if let response = navigationResponse.response as? HTTPURLResponse,
-               response.statusCode == 401,
-               navigationResponse.isForMainFrame {
+            let statusCode = (navigationResponse.response as? HTTPURLResponse)?.statusCode
+            decisionHandler(navigationResponsePolicy(
+                statusCode: statusCode,
+                isMainFrame: navigationResponse.isForMainFrame
+            ))
+        }
+
+        func navigationResponsePolicy(
+            statusCode: Int?,
+            isMainFrame: Bool
+        ) -> WKNavigationResponsePolicy {
+            if Self.navigationResponseDisposition(
+                statusCode: statusCode,
+                isMainFrame: isMainFrame
+            ) == .rejectToken {
                 state.wrappedValue = .failed("The saved gateway token was rejected.")
-                decisionHandler(.cancel)
-                return
+                return .cancel
             }
-            decisionHandler(.allow)
+            return .allow
         }
 
         func webView(
@@ -268,10 +351,17 @@ struct RemoteWebView: UIViewRepresentable {
             handleNavigationError(error)
         }
 
-        private func handleNavigationError(_ error: Error) {
+        func handleNavigationError(_ error: Error) {
+            guard let message = Self.navigationFailureMessage(for: error) else { return }
+            state.wrappedValue = .failed(message)
+        }
+
+        static func navigationFailureMessage(for error: Error) -> String? {
             let nsError = error as NSError
-            guard nsError.code != NSURLErrorCancelled else { return }
-            state.wrappedValue = .failed("The remote app could not be loaded. Check Tailscale and try again.")
+            guard nsError.domain != NSURLErrorDomain || nsError.code != NSURLErrorCancelled else {
+                return nil
+            }
+            return "The remote app could not be loaded. Check Tailscale and try again."
         }
 
         static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
@@ -355,54 +445,62 @@ struct RemoteWebView: UIViewRepresentable {
                   let action = body["action"] as? String else { return }
 
             Task { @MainActor in
-                do {
-                    switch action {
-                    case "list":
-                        try await reply(id: requestID, result: model.connectionListPayload())
-                    case "connect":
-                        guard let address = body["address"] as? String,
-                              let token = body["token"] as? String else {
-                            throw ConnectionBridgeError.invalidInput
-                        }
-                        isSwitchingThroughBridge = true
-                        let result = try await model.connect(address: address, token: token)
-                        try await reply(id: requestID, result: result)
-                        finishBridgeSwitch()
-                    case "use":
-                        guard let connectionID = body["connectionId"] as? String else {
-                            throw ConnectionBridgeError.invalidInput
-                        }
-                        isSwitchingThroughBridge = true
-                        let result = try await model.use(connectionID: connectionID)
-                        try await reply(id: requestID, result: result)
-                        finishBridgeSwitch()
-                    case "forget":
-                        guard let connectionID = body["connectionId"] as? String else {
-                            throw ConnectionBridgeError.invalidInput
-                        }
-                        let result = try model.forget(connectionID: connectionID)
-                        try await reply(id: requestID, result: result)
-                    default:
-                        throw ConnectionBridgeError.unsupportedAction
+                await handleBridgeRequest(id: requestID, action: action, body: body)
+            }
+        }
+
+        func handleBridgeRequest(id requestID: String, action: String, body: [String: Any]) async {
+            do {
+                switch action {
+                case "list":
+                    try await reply(id: requestID, result: model.connectionListPayload())
+                case "connect":
+                    guard let address = body["address"] as? String,
+                          let token = body["token"] as? String else {
+                        throw ConnectionBridgeError.invalidInput
                     }
-                } catch {
-                    isSwitchingThroughBridge = false
-                    await reply(id: requestID, error: error.localizedDescription)
+                    isSwitchingThroughBridge = true
+                    let result = try await model.connect(address: address, token: token)
+                    defer { finishBridgeSwitch() }
+                    try await reply(id: requestID, result: result)
+                case "use":
+                    guard let connectionID = body["connectionId"] as? String else {
+                        throw ConnectionBridgeError.invalidInput
+                    }
+                    isSwitchingThroughBridge = true
+                    let result = try await model.use(connectionID: connectionID)
+                    defer { finishBridgeSwitch() }
+                    try await reply(id: requestID, result: result)
+                case "forget":
+                    guard let connectionID = body["connectionId"] as? String else {
+                        throw ConnectionBridgeError.invalidInput
+                    }
+                    let result = try model.forget(connectionID: connectionID)
+                    try await reply(id: requestID, result: result)
+                default:
+                    throw ConnectionBridgeError.unsupportedAction
                 }
+            } catch {
+                isSwitchingThroughBridge = false
+                await reply(id: requestID, error: error.localizedDescription)
             }
         }
 
         private func finishBridgeSwitch() {
             isSwitchingThroughBridge = false
             if let activeConnection = model.activeConnection {
-                authenticate(activeConnection)
+                if let authenticationStarter {
+                    authenticationStarter(activeConnection)
+                } else {
+                    authenticate(activeConnection)
+                }
             }
         }
 
         private func reply<T: Encodable>(id: String, result: T) async throws {
             let value = try jsonLiteral(result)
             let idLiteral = try jsonLiteral(id)
-            try await webView?.evaluateJavaScript(
+            _ = try await evaluateJavaScript(
                 "window.__orkestratorNativeConnectionReply(\(idLiteral), true, \(value))"
             )
         }
@@ -410,13 +508,25 @@ struct RemoteWebView: UIViewRepresentable {
         private func reply(id: String, error: String) async {
             guard let idLiteral = try? jsonLiteral(id),
                   let errorLiteral = try? jsonLiteral(error) else { return }
-            _ = try? await webView?.evaluateJavaScript(
+            _ = try? await evaluateJavaScript(
                 "window.__orkestratorNativeConnectionReply(\(idLiteral), false, \(errorLiteral))"
             )
         }
 
-        private func jsonLiteral<T: Encodable>(_ value: T) throws -> String {
-            let data = try JSONEncoder().encode(value)
+        private func evaluateJavaScript(_ script: String) async throws -> Any? {
+            if let javaScriptEvaluator {
+                return try await javaScriptEvaluator(script)
+            }
+            return try await webView?.evaluateJavaScript(script)
+        }
+
+        func jsonLiteral<T: Encodable>(_ value: T) throws -> String {
+            let data: Data
+            do {
+                data = try JSONEncoder().encode(value)
+            } catch {
+                throw ConnectionBridgeError.encodingFailed
+            }
             guard let json = String(data: data, encoding: .utf8) else {
                 throw ConnectionBridgeError.encodingFailed
             }
@@ -425,7 +535,7 @@ struct RemoteWebView: UIViewRepresentable {
     }
 }
 
-private final class LoginRedirectBlocker: NSObject, URLSessionTaskDelegate {
+final class LoginRedirectBlocker: NSObject, URLSessionTaskDelegate {
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,

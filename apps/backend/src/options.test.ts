@@ -40,6 +40,7 @@ describe("standalone backend options", () => {
       "--port", "0",
       "--control-host", "127.0.0.1",
       "--control-port", "0",
+      "--compression", "on",
       "--allow-non-tailscale-bind",
       "--allowed-origins", "https://orkestrator.example,https://*.vercel.app",
       "--tailscale-serve",
@@ -59,6 +60,7 @@ describe("standalone backend options", () => {
       port: 0,
       controlHost: "127.0.0.1",
       controlPort: 0,
+      compression: "on",
       allowNonTailscaleBind: true,
       allowedOrigins: ["https://orkestrator.example", "https://*.vercel.app"],
       tailscaleServe: true,
@@ -80,6 +82,7 @@ describe("standalone backend options", () => {
     expect(() => parseOptions(["--control-port", "65536"], {})).toThrow("Invalid --control-port value");
     expect(() => parseOptions(["--control-host", "--port", "1"], {})).toThrow("Missing value for --control-host");
     expect(() => parseOptions(["--allowed-origins", "--port", "1"], {})).toThrow("Missing value for --allowed-origins");
+    expect(() => parseOptions(["--compression", "zip"], {})).toThrow("Invalid --compression");
     expect(() => parseOptions(["--toolchain-bin-dir", "--port", "1"], {})).toThrow("Missing value for --toolchain-bin-dir");
     expect(() => parseOptions(["--tailscale-serve-port", "65536"], {})).toThrow("Invalid --tailscale-serve-port value");
     expect(() => parseOptions(["--tailscale-serve-port", "0"], {})).toThrow("Invalid --tailscale-serve-port value");
@@ -116,17 +119,28 @@ describe("standalone backend options", () => {
 
     expect(parseOptions([
       "--allowed-origins", "https://cli.example",
+      "--compression", "off",
       "--tailscale-serve-port", "9443",
       "--tailscale-bin", "/cli/tailscale",
     ], {
       ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS: "https://env.example",
       ORKESTRATOR_TAILSCALE_SERVE_PORT: "8443",
       ORKESTRATOR_TAILSCALE_BIN: "/env/tailscale",
+      ORKESTRATOR_GATEWAY_COMPRESSION: "body",
     })).toMatchObject({
       allowedOrigins: ["https://cli.example"],
+      compression: "off",
       tailscaleServePort: 9443,
       tailscaleExecutable: "/cli/tailscale",
     });
+  });
+
+  test("accepts compression modes from CLI and environment", () => {
+    expect(parseOptions(["--compression", "body"], {}).compression).toBe("body");
+    expect(parseOptions([], { ORKESTRATOR_GATEWAY_COMPRESSION: "on" }).compression).toBe("on");
+    expect(() => parseOptions([], { ORKESTRATOR_GATEWAY_COMPRESSION: "zip" })).toThrow(
+      "Invalid ORKESTRATOR_GATEWAY_COMPRESSION",
+    );
   });
 
   test("only enables environment-managed Tailscale Serve for the explicit value 1", () => {

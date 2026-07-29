@@ -1,6 +1,6 @@
 # Milestone 0 — Baseline, instrumentation, and rollout controls
 
-Status: Not started
+Status: In progress
 
 Depends on: none
 
@@ -44,38 +44,52 @@ Primary files:
 
 ### Privacy-safe instrumentation
 
-- [ ] Add response byte and encoding counters by route.
-- [ ] Add invoke counters by command without recording arguments or results.
-- [ ] Add stream lifecycle and dropped-client counters.
-- [ ] Add compression timing hooks that later milestones can populate.
-- [ ] Add browser boot milestones and resource transfer-size collection.
-- [ ] Confirm no metric contains prompts, terminal output, file contents,
+- [x] Add response byte and encoding counters by route.
+- [x] Add invoke counters by command without recording arguments or results.
+- [x] Add stream lifecycle and dropped-client counters.
+- [x] Add compression timing hooks that later milestones can populate.
+- [x] Add browser boot milestones and resource transfer-size collection.
+- [x] Confirm no metric contains prompts, terminal output, file contents,
       attachment data, credentials, or tokens.
-- [ ] Bound or sample any in-memory metric labels with unbounded cardinality.
+- [x] Bound or sample any in-memory metric labels with unbounded cardinality.
 
 ### Rollout controls
 
-- [ ] Add `compression?: "off" | "body" | "on"` to gateway options.
-- [ ] Resolve constructor configuration before
+- [x] Add `compression?: "off" | "body" | "on"` to gateway options.
+- [x] Resolve constructor configuration before
       `ORKESTRATOR_GATEWAY_COMPRESSION`.
-- [ ] Add `--compression <mode>` to backend CLI parsing.
-- [ ] Default to a mode that leaves existing behavior unchanged in this
+- [x] Add `--compression <mode>` to backend CLI parsing.
+- [x] Resolve standalone configuration as CLI, then environment, then `off`.
+- [x] Default to a mode that leaves existing behavior unchanged in this
       milestone.
-- [ ] Gate future compression on `listenerKind`, never on the bind address.
-- [ ] Ensure the Electron control listener always remains identity.
-- [ ] Reject invalid configuration values with an actionable error.
-- [ ] Document the option, environment variable, defaults, and rollback modes in
+- [x] Gate future compression on `listenerKind`, never on the bind address.
+- [x] Ensure the Electron control listener always remains identity.
+- [x] Reject invalid configuration values with an actionable error.
+- [x] Document the option, environment variable, defaults, and rollback modes in
       `docs/remote-gateway.md`.
 
 ## Required tests
 
-- [ ] Constructor option overrides the environment variable.
-- [ ] CLI parsing accepts `off`, `body`, and `on`.
-- [ ] Invalid compression modes fail clearly.
-- [ ] The control listener resolves to identity in every mode.
-- [ ] A browser listener bound to loopback under Tailscale Serve is still
+- [x] Constructor option overrides the environment variable.
+- [x] CLI parsing accepts `off`, `body`, and `on`.
+- [x] CLI compression overrides the environment and absent configuration
+      defaults to `off`.
+- [x] Invalid compression modes fail clearly.
+- [x] `off`, `body`, and `on` do not add response compression in this
+      milestone.
+- [x] The control listener resolves to identity in every mode.
+- [x] A browser listener bound to loopback under Tailscale Serve is still
       treated as remote.
-- [ ] Documentation assertions in
+- [x] Both metrics routes require authentication and enforce their documented
+      `GET`/`POST` methods.
+- [x] Client metric reports are allowlisted and bounded, and metric labels do
+      not retain unknown commands or arbitrary response encodings.
+- [x] The command label budget holds the entire backend command registry.
+- [x] Header, protocol, and label normalizers are covered directly, including
+      `q=0` refusals, absent protocols, and UTF-8 truncation boundaries.
+- [x] Stream gauges survive a drop, a close, and a failed handshake without
+      double-counting.
+- [x] Documentation assertions in
       `tests/unit/docs/remote-gateway-docs.test.ts` pass.
 
 ## Manual verification
@@ -103,11 +117,11 @@ bun test tests/unit/docs/remote-gateway-docs.test.ts --parallel
 ## Exit criteria
 
 - [ ] Desktop web and real-device iOS baseline results are recorded below.
-- [ ] Instrumentation covers the agreed success measures without user content.
-- [ ] Compression modes are parsed, documented, and tested.
-- [ ] No production response path has changed encoding yet.
-- [ ] The control listener remains byte-for-byte identity.
-- [ ] Focused tests and typechecks pass.
+- [x] Instrumentation covers the agreed success measures without user content.
+- [x] Compression modes are parsed, documented, and tested.
+- [x] No production response path has changed encoding yet.
+- [x] The control listener remains byte-for-byte identity.
+- [x] Focused tests and typechecks pass.
 
 ## Evidence and decisions
 
@@ -120,4 +134,41 @@ Record:
 - any metric intentionally deferred and why;
 - test command results.
 
-No evidence recorded yet.
+Recorded Tuesday, July 28, 2026:
+
+- Implemented privacy-safe gateway counters and recent bounded samples for
+  routes, commands, event frames, stream lifecycle, and client boot/resource
+  timings in `apps/backend/src/gateway.ts`.
+- Added authenticated `GET /__orkestrator/metrics` and
+  `POST /__orkestrator/client-metrics` endpoints for milestone measurements.
+- Added browser boot/resource reporting in
+  `apps/web/src/lib/native/web-gateway.ts` and explicit `WKWebView` platform
+  tagging in `apps/ios/OrkestratorMobile/Views/RemoteWebView.swift`.
+- Added `compression?: "off" | "body" | "on"` to gateway construction, wired
+  `--compression` and `ORKESTRATOR_GATEWAY_COMPRESSION`, and kept the default
+  at `off` so production response encoding remains unchanged.
+- Metric labels are bounded by route classification, per-entity event-name
+  collapsing, bounded recent samples, and overflow buckets for excess
+  command/event keys. Unknown commands and uncommon response encodings use
+  fixed buckets instead of retaining network-controlled labels.
+- Command labels are gated on backend registry membership rather than on the
+  registry's error text, so a rejected name is never retained even when
+  `invoke` refuses before consulting the registry. The command budget is sized
+  above the registry so no registered command is lost to `__overflow__`.
+- Event names that embed an identifier (`terminal-output-<id>`,
+  `claude-state-<containerId>`) collapse to fixed categories, so per-entity
+  names cannot evict genuine event labels.
+- Event counters are per delivery: `wireBytes` is the bytes actually written,
+  and an emit with no matching subscriber records nothing.
+- `Accept-Encoding` tokens weighted `q=0` are refusals and are not recorded as
+  support, and an unavailable `nextHopProtocol` stays `null` rather than
+  collapsing into `other`.
+- Pending manual work: desktop cold/warm baselines, real iPhone/iPad
+  `WKWebView` baselines, main asset raw/gzip/Brotli measurements, inactive-tab
+  rehydration verification, and final exit-criteria signoff.
+- Automated coverage includes configuration precedence/defaults, all three
+  no-op modes, listener-role semantics, metrics authentication/method handling,
+  input sanitization and bounds, label cardinality, and documentation
+  assertions. The coordinated gateway/docs, backend option/standalone,
+  browser-client, and iOS suites pass, as do the backend, web, and desktop
+  typechecks and both production build targets.

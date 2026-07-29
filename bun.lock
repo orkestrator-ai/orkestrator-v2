@@ -31,6 +31,7 @@
       "name": "@orkestrator/backend",
       "version": "2.3.0",
       "dependencies": {
+        "@opencode-ai/sdk": "1.18.4",
         "@orkestrator/protocol": "workspace:*",
         "sharp": "^0.35.1",
       },

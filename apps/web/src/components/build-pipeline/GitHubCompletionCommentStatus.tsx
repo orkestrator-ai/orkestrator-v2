@@ -4,6 +4,7 @@ import {
   useBuildPipelineStore,
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
+import { retryBuildPipelineCompletionComment } from "@/lib/backend";
 
 interface GitHubCompletionCommentStatusProps {
   pipeline: BuildPipeline;
@@ -17,9 +18,7 @@ interface GitHubCompletionCommentStatusProps {
 export function GitHubCompletionCommentStatus({
   pipeline,
 }: GitHubCompletionCommentStatusProps) {
-  const clearCompletionCommentStatus = useBuildPipelineStore(
-    (state) => state.clearCompletionCommentStatus,
-  );
+  const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
 
   if (
     pipeline.source?.type !== "github"
@@ -44,7 +43,10 @@ export function GitHubCompletionCommentStatus({
         size="sm"
         className="h-7 gap-1.5 text-xs"
         aria-label="Retry GitHub completion comment"
-        onClick={() => clearCompletionCommentStatus(pipeline.id)}
+        onClick={() => {
+          void retryBuildPipelineCompletionComment(pipeline.id)
+            .then((next) => replacePipeline(next));
+        }}
       >
         <RefreshCw className="h-3.5 w-3.5" />
         Retry comment

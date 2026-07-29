@@ -42,7 +42,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
-import { openInBrowser } from "@/lib/backend";
+import {
+  openInBrowser,
+  retryBuildPipelineCompletionComment,
+} from "@/lib/backend";
 import {
   githubIssueDetailKey,
   useGitHubIssuesStore,
@@ -275,8 +278,8 @@ export function GitHubIssueDetailContent({
   const mutationErrors = useGitHubIssuesStore((state) => state.mutationErrors);
 
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
-  const clearCompletionCommentStatus = useBuildPipelineStore(
-    (state) => state.clearCompletionCommentStatus,
+  const replacePipeline = useBuildPipelineStore(
+    (state) => state.replacePipeline,
   );
   const { startBuildFromGitHubIssue, navigateToPipeline } = buildPipeline;
 
@@ -825,9 +828,10 @@ export function GitHubIssueDetailContent({
                       variant="outline"
                       size="sm"
                       aria-label={`Retry completion comment for build ${pipeline.id}`}
-                      onClick={() =>
-                        clearCompletionCommentStatus(pipeline.id)
-                      }
+                      onClick={() => {
+                        void retryBuildPipelineCompletionComment(pipeline.id)
+                          .then((next) => replacePipeline(next));
+                      }}
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
                       Retry comment

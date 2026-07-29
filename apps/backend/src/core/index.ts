@@ -14,10 +14,12 @@ import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
+import { BuildPipelineService } from "./build-pipeline-service.js";
 
 export class OrkestratorBackend {
   private readonly commands = createCommandRegistry();
   private readonly context: CommandContext;
+  private readonly buildPipelines: BuildPipelineService;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
@@ -42,13 +44,23 @@ export class OrkestratorBackend {
     storage.setResourceChangeListener((change) => {
       options.emit(RESOURCE_CHANGED_EVENT, change);
     });
-    this.context = {
+    const context = {
       storage,
       toolchainBinDir: options.toolchainBinDir,
       appRoot: options.appRoot,
       resourceRoot: options.resourceRoot,
       emit: options.emit,
-    };
+    } as CommandContext;
+    this.context = context;
+    this.buildPipelines = new BuildPipelineService(
+      storage,
+      async <T>(command: string, args: Record<string, unknown> = {}) => {
+        const handler = this.commands.get(command);
+        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        return await handler(args, context) as T;
+      },
+    );
+    context.buildPipelines = this.buildPipelines;
     this.reapPidServers =
       options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =
@@ -93,6 +105,9 @@ export class OrkestratorBackend {
         console.warn("[backend] Failed to reap orphaned claude-tmux runtimes:", error);
       },
     );
+    // Start durable pipelines only after stale bridge ownership has been
+    // reconciled; an immediate resume must never race an orphaned process.
+    await this.buildPipelines.init();
   }
 
   async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -113,6 +128,7 @@ export class OrkestratorBackend {
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     shutdownDiffStatsTracking();
     shutdownPrMonitorTracking();
+    this.buildPipelines.shutdown();
     const attempt = shutdownLocalServers();
     this.shutdownPromise = attempt;
     try {

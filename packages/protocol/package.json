@@ -6,6 +6,7 @@
   "exports": {
     "./agent-activity": "./src/agent-activity.ts",
     "./browser-preview": "./src/browser-preview.ts",
+    "./build-pipeline": "./src/build-pipeline.ts",
     "./connections": "./src/connections.ts",
     "./diff-stats": "./src/diff-stats.ts",
     "./gateway-token": "./src/gateway-token.ts",

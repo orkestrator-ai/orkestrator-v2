@@ -7,8 +7,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalContainer } from "@/components/terminal";
 import { KanbanBoard } from "@/components/kanban";
 import { ProjectLauncher } from "@/components/projects";
-import { LinearPipelineCompletionMonitor } from "@/components/linear";
-import { GitHubPipelineCompletionMonitor } from "@/components/github/GitHubPipelineCompletionMonitor";
 import { TerminalProvider } from "@/contexts";
 import {
   getAllLeaves,
@@ -37,8 +35,6 @@ import {
 } from "@/lib/looped-review-persistence";
 import {
   hydrateBuildPipelinesForProject,
-  migrateLegacyBuildPipelines,
-  startBuildPipelinePersistence,
 } from "@/lib/build-pipeline-persistence";
 import {
   hydratePromptQueuesForEnvironment,
@@ -47,7 +43,6 @@ import {
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { LoopedReviewSupervisor } from "@/components/review/LoopedReviewSupervisor";
-import { BuildPipelineSupervisor } from "@/components/build-pipeline/BuildPipelineSupervisor";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
@@ -106,13 +101,6 @@ function App() {
   useEffect(() => startStoreResourceSync(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
   useEffect(() => startLoopedReviewPersistence(), []);
-  useEffect(() => {
-    // Adopt anything a pre-backend build left in localStorage before the mirror
-    // starts, so its seeding pass writes those pipelines to the backend rather
-    // than letting the upgrade drop an in-flight build.
-    migrateLegacyBuildPipelines();
-    return startBuildPipelinePersistence();
-  }, []);
   // One stable source set for the lifetime of the app: the mirror keys its
   // revision bookkeeping off these, so rebuilding them would drop it.
   const promptQueueSources = useMemo(() => createPromptQueueSources(), []);
@@ -273,11 +261,9 @@ function App() {
     openCodeMessageQueue,
   ]);
 
-  // Environments with active background processing that aren't currently visible
-  // in the main content. These must stay mounted so setup completion detection,
-  // native initial prompts, in-flight or queued agent sessions, terminal
-  // listeners, SSE subscriptions, and pipeline advancement effects continue
-  // running even when the user navigates away.
+  // Environments with frontend-owned background concerns that aren't currently
+  // visible. Build pipelines are intentionally absent: the backend supervises
+  // them even when no renderer exists.
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
   const loopedReviews = useLoopedReviewStore((state) => state.workflows);
   const backgroundProcessingEnvironments = useMemo(
@@ -600,7 +586,7 @@ function App() {
     [clearClaudeOptions, config.global.defaultAgent, getEnvironmentById, setClaudeOptions, startEnvironment]
   );
 
-  // Stable no-op callbacks for background pipeline environments (avoids new references each render)
+  // Stable no-op callbacks for hidden frontend-owned background environments.
   const noop = useCallback(() => {}, []);
 
   const handleCreateScriptFromOverlay = useCallback(
@@ -627,9 +613,6 @@ function App() {
       <TerminalProvider>
         <AppShell>
           <LoopedReviewSupervisor />
-          <BuildPipelineSupervisor />
-          <LinearPipelineCompletionMonitor />
-          <GitHubPipelineCompletionMonitor />
           {selectedEnvironment ? (
             <div className="relative h-full bg-background">
               <div className="absolute inset-0 z-10 bg-background">

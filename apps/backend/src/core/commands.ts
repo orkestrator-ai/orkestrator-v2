@@ -119,6 +119,8 @@ import {
   type GitHubIssueStatus,
   type GitHubRepositoryRef,
 } from "./github.js";
+import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
+import type { BuildPipelineService } from "./build-pipeline-service.js";
 
 export type BackendEmit = (event: string, payload: unknown) => void;
 
@@ -128,6 +130,7 @@ export type CommandContext = {
   appRoot: string;
   resourceRoot: string;
   toolchainBinDir?: string;
+  buildPipelines?: BuildPipelineService;
 };
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
@@ -7400,6 +7403,28 @@ export function createCommandRegistry(
     storage.deleteLoopedReviewWorkflow(asString(workflowId, "workflowId")),
   );
 
+  register("start_build_pipeline", (args, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.start(args as unknown as StartBuildPipelineInput);
+  });
+  register("pause_build_pipeline", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.pause(asString(pipelineId, "pipelineId"));
+  });
+  register("resume_build_pipeline", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.resume(asString(pipelineId, "pipelineId"));
+  });
+  register("cancel_build_pipeline", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.cancel(asString(pipelineId, "pipelineId"));
+  });
+  register("retry_build_pipeline_completion_comment", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.retryCompletionComment(
+      asString(pipelineId, "pipelineId"),
+    );
+  });
   register("get_build_pipeline", ({ pipelineId }, { storage }) =>
     storage.getBuildPipeline(asString(pipelineId, "pipelineId")),
   );
@@ -7408,23 +7433,16 @@ export function createCommandRegistry(
   );
   register(
     "save_build_pipeline",
-    ({ pipelineId, projectId, environmentId, version, snapshot, expectedRevision }, { storage }) =>
-      storage.saveBuildPipeline(
-        asString(pipelineId, "pipelineId"),
-        asString(projectId, "projectId"),
-        // A pipeline is stored before its environment exists, so this is the one
-        // identifier here that is legitimately blank.
-        typeof environmentId === "string" ? environmentId : "",
-        asNumber(version, "version"),
-        snapshot,
-        expectedRevision === undefined
-          ? undefined
-          : asNumber(expectedRevision, "expectedRevision"),
-      ),
+    () => {
+      throw new Error("Build pipeline state is backend-owned");
+    },
   );
-  register("delete_build_pipeline", ({ pipelineId }, { storage }) =>
-    storage.deleteBuildPipeline(asString(pipelineId, "pipelineId")),
-  );
+  register("delete_build_pipeline", ({ pipelineId }, context) => {
+    const id = asString(pipelineId, "pipelineId");
+    return context.buildPipelines
+      ? context.buildPipelines.remove(id)
+      : context.storage.deleteBuildPipeline(id);
+  });
 
   register(
     "set_environment_unread",

@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_REVIEW_INSTRUCTION,
   REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN,
-  createAddressIssuesPrompt,
   createReviewPrompt,
 } from "./index";
 
@@ -13,6 +12,5 @@ describe("prompt public exports", () => {
     expect(createReviewPrompt("develop", "Review {{targetBranch}}.")).toContain(
       'User review instruction (JSON string): "Review develop."',
     );
-    expect(createAddressIssuesPrompt()).toContain("Stage only files that clearly belong");
   });
 });

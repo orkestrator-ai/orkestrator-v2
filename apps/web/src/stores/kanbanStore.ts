@@ -10,6 +10,7 @@ import {
   deleteKanbanImage,
   getProjectNotes,
   saveProjectNotes,
+  deleteBuildPipeline,
   type KanbanTask,
   type KanbanStatus,
   type KanbanComment,
@@ -122,6 +123,12 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
 
   clearTaskBuildStatus: async (taskId) => {
     try {
+      const pipelineIds = Array.from(
+        useBuildPipelineStore.getState().pipelines.values(),
+      ).filter((pipeline) => pipeline.taskId === taskId)
+        .map((pipeline) => pipeline.id);
+      await Promise.all(pipelineIds.map((pipelineId) =>
+        deleteBuildPipeline(pipelineId)));
       const updated = await updateKanbanTask(
         taskId,
         undefined,

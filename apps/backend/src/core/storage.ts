@@ -3467,6 +3467,12 @@ export class StorageService {
       .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
   }
 
+  /** Backend supervisors use this to re-arm every active pipeline on startup. */
+  async listAllBuildPipelines(): Promise<PersistedBuildPipeline[]> {
+    return Object.values(await this.loadBuildPipelines())
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  }
+
   async saveBuildPipeline(
     pipelineId: string,
     projectId: string,

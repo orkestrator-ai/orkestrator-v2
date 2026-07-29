@@ -1,9 +1,7 @@
 /**
  * Shared body for code review prompts.
  *
- * Used by both `createReviewPrompt` (Action Bar ⌘R button) and
- * `createBuildReviewPrompt` (automated build pipeline review phase) so
- * the two prompts stay in sync. Each caller adds its own framing
+ * Used by the interactive review workflows. Each caller adds its own framing
  * (role intro, ticket context, etc.) and then appends this body.
  *
  * Output is text/Markdown — designed to render cleanly inside the

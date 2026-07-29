@@ -247,9 +247,9 @@ export interface PersistedLoopedReviewWorkflow {
 /**
  * A build pipeline as the backend stores it.
  *
- * Same division of labour as {@link PersistedLoopedReviewWorkflow}: the backend
- * owns durability and compare-and-swap revisions, the web application owns and
- * runtime-validates the snapshot schema.
+ * Unlike the generic workflow records above, build pipelines are interpreted
+ * and advanced by the backend supervisor. Renderers receive this snapshot as a
+ * read model and cannot write backend-owned records.
  *
  * `environmentId` is blank between a pipeline being created and its environment
  * existing. That window is exactly when a crash used to orphan the pipeline, so

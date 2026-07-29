@@ -367,58 +367,27 @@ describe("agent handoff commands", () => {
 });
 
 describe("build pipeline commands", () => {
-  const snapshot = { id: "p1", phase: "building" };
-
-  test("saves, lists and deletes a pipeline", async () => {
-    await withCommands(async (invoke) => {
+  test("rejects client-authored snapshots while preserving reads and deletion", async () => {
+    await withCommands(async (invoke, storage) => {
       await expect(invoke("save_build_pipeline", {
-        pipelineId: "p1", projectId: "proj-1", environmentId: "e1", version: 1, snapshot,
-      })).resolves.toMatchObject({ id: "p1", revision: 1 });
+        pipelineId: "p1",
+        projectId: "proj-1",
+        environmentId: "e1",
+        version: 1,
+        snapshot: { id: "p1", phase: "building" },
+      })).rejects.toThrow("backend-owned");
+
+      await storage.saveBuildPipeline("p1", "proj-1", "e1", 2, {
+        id: "p1",
+        phase: "building",
+        controller: "backend",
+      });
 
       await expect(invoke("list_build_pipelines", { projectId: "proj-1" }))
         .resolves.toHaveLength(1);
 
       await invoke("delete_build_pipeline", { pipelineId: "p1" });
       await expect(invoke("get_build_pipeline", { pipelineId: "p1" })).resolves.toBeNull();
-    });
-  });
-
-  test("accepts the blank environment id a not-yet-created pipeline carries", async () => {
-    await withCommands(async (invoke) => {
-      await expect(invoke("save_build_pipeline", {
-        pipelineId: "p1", projectId: "proj-1", version: 1, snapshot,
-      })).resolves.toMatchObject({ environmentId: "" });
-    });
-  });
-
-  test("rejects a snapshot that is not an object", async () => {
-    await withCommands(async (invoke) => {
-      await expect(invoke("save_build_pipeline", {
-        pipelineId: "p1", projectId: "proj-1", environmentId: "e1", version: 1,
-        snapshot: "not-an-object",
-      })).rejects.toThrow("must be a JSON object");
-    });
-  });
-
-  test("rejects a non-numeric version", async () => {
-    await withCommands(async (invoke) => {
-      await expect(invoke("save_build_pipeline", {
-        pipelineId: "p1", projectId: "proj-1", environmentId: "e1",
-        version: "one", snapshot,
-      })).rejects.toThrow();
-    });
-  });
-
-  test("forwards the compare-and-swap expectation", async () => {
-    await withCommands(async (invoke) => {
-      await invoke("save_build_pipeline", {
-        pipelineId: "p1", projectId: "proj-1", environmentId: "e1", version: 1, snapshot,
-      });
-
-      await expect(invoke("save_build_pipeline", {
-        pipelineId: "p1", projectId: "proj-1", environmentId: "e1", version: 1, snapshot,
-        expectedRevision: 0,
-      })).rejects.toThrow("revision conflict");
     });
   });
 });

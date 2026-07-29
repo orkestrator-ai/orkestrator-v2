@@ -38,12 +38,20 @@ describe("OrkestratorBackend resource event wiring", () => {
 
     try {
       await backend.init();
-      await backend.invoke("save_build_pipeline", {
-        pipelineId: "pipeline-1",
+      const pipeline = await backend.invoke<{ id: string }>("start_build_pipeline", {
+        taskId: "task-1",
         projectId: "p1",
-        environmentId: "",
-        version: 1,
-        snapshot: { id: "pipeline-1" },
+        existingEnvironmentId: "e1",
+        environmentType: "local",
+        agentType: "codex",
+        taskTitle: "Backend-owned pipeline",
+        taskSnapshot: {
+          title: "Backend-owned pipeline",
+          description: "",
+          acceptanceCriteria: "",
+          comments: [],
+          images: [],
+        },
       });
       await backend.invoke("save_prompt_queue", {
         queueKey: "claude env-e1:tab-1",
@@ -55,7 +63,7 @@ describe("OrkestratorBackend resource event wiring", () => {
         event: RESOURCE_CHANGED_EVENT,
         payload: expect.objectContaining({
           resource: "build-pipeline",
-          id: "pipeline-1",
+          id: pipeline.id,
         }),
       });
       expect(events).toContainEqual({

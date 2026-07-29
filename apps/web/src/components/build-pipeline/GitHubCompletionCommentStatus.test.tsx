@@ -1,31 +1,45 @@
-import { beforeEach, describe, expect, test } from "bun:test";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   useBuildPipelineStore,
   type BuildPipelineSource,
 } from "@/stores/buildPipelineStore";
-import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
+import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
+import * as realBackend from "@/lib/backend";
+
+const realBackendSnapshot = { ...realBackend };
+const retryCompletionCommentMock = mock(async (pipelineId: string) => {
+  const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+  return {
+    ...current,
+    completionCommentStatus: undefined,
+    completionCommentError: undefined,
+    backendRevision: current.backendRevision + 1,
+  };
+});
+mock.module("@/lib/backend", () => ({
+  ...realBackendSnapshot,
+  retryBuildPipelineCompletionComment: retryCompletionCommentMock,
+}));
+const { GitHubCompletionCommentStatus } = await import(
+  "./GitHubCompletionCommentStatus"
+);
+
+afterAll(() => {
+  mock.module("@/lib/backend", () => realBackendSnapshot);
+});
 
 function seedFailedPipeline(source: BuildPipelineSource): string {
-  const id = useBuildPipelineStore.getState().createPipeline({
+  const id = source.type === "github" ? "github-pipeline" : "linear-pipeline";
+  useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
+    id,
     taskId: source.type === "github" ? "github:acme/widget#42" : "linear:ENG-42",
-    projectId: "project-1",
-    environmentType: "local",
-    agentType: "codex",
     taskTitle: "Build source issue",
-    taskSnapshot: {
-      title: "Build source issue",
-      description: "",
-      acceptanceCriteria: "",
-      comments: [],
-      images: [],
-    },
     source,
-  });
-  useBuildPipelineStore.getState().setPhase(id, "complete");
-  useBuildPipelineStore.getState().setCompletionCommentStatus(id, "failed", {
-    error: "GitHub unavailable",
-  });
+    phase: "complete",
+    completionCommentStatus: "failed",
+    completionCommentError: "GitHub unavailable",
+  }));
   return id;
 }
 
@@ -37,7 +51,7 @@ describe("GitHubCompletionCommentStatus", () => {
     });
   });
 
-  test("retries a failed GitHub completion comment from the build UI", () => {
+  test("retries a failed GitHub completion comment from the build UI", async () => {
     const pipelineId = seedFailedPipeline({
       type: "github",
       repositoryOwner: "acme",
@@ -55,9 +69,11 @@ describe("GitHubCompletionCommentStatus", () => {
       screen.getByRole("button", { name: "Retry GitHub completion comment" }),
     );
 
-    const updated = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
-    expect(updated.completionCommentStatus).toBeUndefined();
-    expect(updated.completionCommentError).toBeUndefined();
+    await waitFor(() => {
+      const updated = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+      expect(updated.completionCommentStatus).toBeUndefined();
+      expect(updated.completionCommentError).toBeUndefined();
+    });
   });
 
   test("does not alter the Linear completion UI path", () => {

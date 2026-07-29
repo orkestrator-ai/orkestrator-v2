@@ -56,6 +56,44 @@ codex_path_has_symlink() {
     return 1
 }
 
+# Destination paths are writable container state, so a previous workload can
+# replace the destination root or any component below it with a link between
+# container starts. The root's parents are outside this helper's owned boundary
+# (and standard systems commonly link paths such as /var), so start at the
+# destination root itself.
+codex_destination_path_has_symlink() {
+    local destination_root="$1"
+    local relative_path="$2"
+    local current="$destination_root"
+    local remainder="$relative_path"
+    local component
+
+    if [ -L "$destination_root" ]; then
+        return 0
+    fi
+
+    while [ -n "$remainder" ]; do
+        component="${remainder%%/*}"
+        if [ "$component" = "$remainder" ]; then
+            remainder=""
+        else
+            remainder="${remainder#*/}"
+        fi
+        if [ -z "$component" ] || [ "$component" = "." ]; then
+            continue
+        fi
+        if [ "$component" = ".." ]; then
+            return 0
+        fi
+        current="$current/$component"
+        if [ -L "$current" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 copy_codex_file() {
     local source_root="$1"
     local destination_root="$2"
@@ -64,6 +102,8 @@ copy_codex_file() {
     local destination_path="$destination_root/$relative_path"
     local max_bytes="${CODEX_COPY_MAX_FILE_BYTES:-10485760}"
     local file_bytes
+    local destination_parent
+    local temporary_path
 
     # An allowlisted name must be a real file in the mounted Codex home. Following
     # a link anywhere along the path could turn an allowlisted name into an
@@ -74,6 +114,11 @@ copy_codex_file() {
     fi
 
     if [ ! -f "$source_path" ]; then
+        return 0
+    fi
+
+    if codex_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        log_progress "Warning: Skipping Codex file with symlinked destination: $relative_path"
         return 0
     fi
 
@@ -97,11 +142,25 @@ copy_codex_file() {
         log_progress "Warning: Failed to copy Codex file: $relative_path (destination is a directory)"
         return 0
     fi
-    if ! mkdir -p "$(dirname "$destination_path")" 2>/dev/null; then
+    destination_parent="$(dirname "$destination_path")"
+    if ! mkdir -p "$destination_parent" 2>/dev/null; then
         log_progress "Warning: Failed to create destination for Codex file: $relative_path"
         return 0
     fi
-    if ! cp "$source_path" "$destination_path" 2>/dev/null; then
+    # Recheck after mkdir, then copy to a fresh regular file and rename it into
+    # place. In particular, cp never receives the allowlisted destination leaf,
+    # so it cannot follow an auth.json/config.toml link if one is present.
+    if codex_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        log_progress "Warning: Skipping Codex file with symlinked destination: $relative_path"
+        return 0
+    fi
+    temporary_path="$(mktemp "$destination_parent/.codex-copy.XXXXXX" 2>/dev/null)" || {
+        log_progress "Warning: Failed to create destination for Codex file: $relative_path"
+        return 0
+    }
+    if ! cp "$source_path" "$temporary_path" 2>/dev/null ||
+        ! mv -f "$temporary_path" "$destination_path" 2>/dev/null; then
+        rm -f "$temporary_path" 2>/dev/null || true
         log_progress "Warning: Failed to copy Codex file: $relative_path"
     fi
 }
@@ -114,10 +173,15 @@ copy_codex_directory() {
     local destination_path="$destination_root/$relative_path"
     local max_entries="${CODEX_COPY_MAX_DIRECTORY_ENTRIES:-5000}"
     local max_kib="${CODEX_COPY_MAX_DIRECTORY_KIB:-262144}"
+    local entry_scan
     local entry_marks
     local entry_count
+    local entry_scan_limit
+    local entry_scan_status
+    local find_status
+    local head_status
     local directory_kib
-    local nested_symlinks
+    local found_symlink
 
     # Do not dereference an allowlist link, at any depth. In particular, a host
     # can otherwise make "skills" or the "plugins" parent of "plugins/cache"
@@ -131,6 +195,11 @@ copy_codex_directory() {
         return 0
     fi
 
+    if codex_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        log_progress "Warning: Skipping Codex directory with symlinked destination: $relative_path"
+        return 0
+    fi
+
     case "$max_entries" in
         ''|*[!0-9]*)
             max_entries=5000
@@ -141,29 +210,44 @@ copy_codex_directory() {
             max_kib=262144
             ;;
     esac
-    # One mark per entry rather than one line per entry: a filename containing a
-    # newline would otherwise inflate the count and skip a legitimate directory.
-    # Capturing find directly (not through a pipe) also keeps find's own exit
-    # status, so a partially unreadable tree fails closed instead of being
-    # measured from a truncated listing.
-    entry_marks="$(find -P "$source_path" -exec printf '%.0s.' {} + 2>/dev/null)" || {
-        log_progress "Warning: Failed to inspect Codex directory: $relative_path"
-        return 0
-    }
+    # Read at most max_entries + 1 one-byte marks. head closes the pipe at that
+    # point, so find stops walking a pathological tree instead of scanning and
+    # buffering it in full. PIPESTATUS is appended after a newline because the
+    # marks themselves never contain one. A producer failure is expected once
+    # the cap is exceeded, but otherwise still fails closed.
+    entry_scan_limit=$((max_entries + 1))
+    entry_scan="$(
+        set +e
+        find -P "$source_path" -mindepth 1 -exec printf '%.0s.' {} + 2>/dev/null |
+            head -c "$entry_scan_limit"
+        entry_pipeline_status=("${PIPESTATUS[@]}")
+        printf '\n%s:%s' "${entry_pipeline_status[0]}" "${entry_pipeline_status[1]}"
+    )"
+    entry_scan_status="${entry_scan##*$'\n'}"
+    entry_marks="${entry_scan%$'\n'*}"
+    find_status="${entry_scan_status%%:*}"
+    head_status="${entry_scan_status#*:}"
+    case "$head_status" in
+        0) ;;
+        *)
+            log_progress "Warning: Failed to inspect Codex directory: $relative_path"
+            return 0
+            ;;
+    esac
     entry_count="${#entry_marks}"
-    # The first find result is the source directory itself.
-    if [ "$entry_count" -gt 0 ]; then
-        entry_count=$((entry_count - 1))
-    fi
     if [ "$entry_count" -gt "$max_entries" ]; then
         log_progress "Warning: Skipping oversized Codex directory: $relative_path"
         return 0
     fi
-    nested_symlinks="$(find -P "$source_path" -type l -print 2>/dev/null)" || {
+    if [ "$find_status" -ne 0 ]; then
+        log_progress "Warning: Failed to inspect Codex directory: $relative_path"
+        return 0
+    fi
+    found_symlink="$(find -P "$source_path" -type l -exec printf x \; -quit 2>/dev/null)" || {
         log_progress "Warning: Failed to inspect Codex directory: $relative_path"
         return 0
     }
-    if [ -n "$nested_symlinks" ]; then
+    if [ -n "$found_symlink" ]; then
         log_progress "Warning: Skipping Codex directory containing symlink: $relative_path"
         return 0
     fi
@@ -191,6 +275,18 @@ copy_codex_directory() {
     fi
     if ! mkdir -p "$destination_path" 2>/dev/null; then
         log_progress "Warning: Failed to create destination for Codex directory: $relative_path"
+        return 0
+    fi
+    if codex_destination_path_has_symlink "$destination_root" "$relative_path"; then
+        log_progress "Warning: Skipping Codex directory with symlinked destination: $relative_path"
+        return 0
+    fi
+    found_symlink="$(find -P "$destination_path" -type l -exec printf x \; -quit 2>/dev/null)" || {
+        log_progress "Warning: Failed to inspect Codex directory destination: $relative_path"
+        return 0
+    }
+    if [ -n "$found_symlink" ]; then
+        log_progress "Warning: Skipping Codex directory containing destination symlink: $relative_path"
         return 0
     fi
     if ! cp -R "$source_path/." "$destination_path/" 2>/dev/null; then

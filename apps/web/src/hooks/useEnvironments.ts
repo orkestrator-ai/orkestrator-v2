@@ -146,18 +146,85 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
 let setupSnapshotReconciliation: Promise<void> | null = null;
 let setupSnapshotReconcileRequested = false;
 
-/**
- * Placeholder for "a foreground start already told the user about this failure".
- * The backend persists its own sanitized text for the same event, so the two
- * reports cannot be matched by message; this marker is consumed by whatever
- * persisted message arrives next for that environment.
- */
-const FOREGROUND_REPORTED_LIFECYCLE_ERROR = Symbol("foreground-reported-lifecycle-error");
+interface LifecycleAttemptState {
+  attempt: number;
+  revision: number;
+  pending: boolean;
+}
 
+interface ForegroundLifecycleErrorReport {
+  attempt: number;
+  kind: "foreground";
+}
+
+const lifecycleAttemptStateByEnvironment = new Map<string, LifecycleAttemptState>();
 const reportedLifecycleErrorByEnvironment = new Map<
   string,
-  string | typeof FOREGROUND_REPORTED_LIFECYCLE_ERROR
+  string | ForegroundLifecycleErrorReport
 >();
+
+function beginLifecycleAttempt(environmentId: string): number {
+  const previous = lifecycleAttemptStateByEnvironment.get(environmentId);
+  const attempt = (previous?.attempt ?? 0) + 1;
+  lifecycleAttemptStateByEnvironment.set(environmentId, {
+    attempt,
+    revision: (previous?.revision ?? 0) + 1,
+    pending: true,
+  });
+  // A claim belongs to one specific attempt. In particular, an admission
+  // rejection must never suppress the durable failure from a later retry.
+  reportedLifecycleErrorByEnvironment.delete(environmentId);
+  return attempt;
+}
+
+function finishLifecycleAttemptAdmission(environmentId: string, attempt: number): void {
+  const current = lifecycleAttemptStateByEnvironment.get(environmentId);
+  if (!current || current.attempt !== attempt) return;
+  lifecycleAttemptStateByEnvironment.set(environmentId, {
+    ...current,
+    revision: current.revision + 1,
+    pending: false,
+  });
+}
+
+function lifecycleAttemptRevisions(): Map<string, number> {
+  return new Map(
+    [...lifecycleAttemptStateByEnvironment].map(([environmentId, state]) => [
+      environmentId,
+      state.revision,
+    ]),
+  );
+}
+
+/**
+ * A snapshot requested before (or while admitting) a retry can still carry the
+ * preceding attempt's error. Preserve the retry-owned fields in that case so
+ * the old response cannot resolve setup gates or discard a new launch intent.
+ */
+function preserveLifecycleAttemptState(
+  snapshot: Environment,
+  revisionAtRequest: number | undefined,
+): { environment: Environment; stale: boolean } {
+  const attempt = lifecycleAttemptStateByEnvironment.get(snapshot.id);
+  const current = useEnvironmentStore.getState().getEnvironmentById(snapshot.id);
+  const stale = Boolean(
+    attempt
+    && current
+    && (attempt.pending || attempt.revision !== revisionAtRequest),
+  );
+  if (!stale || !current) {
+    return { environment: snapshot, stale: false };
+  }
+  return {
+    environment: {
+      ...snapshot,
+      status: current.status,
+      lifecycleError: current.lifecycleError ?? null,
+      pendingAgentLaunch: current.pendingAgentLaunch,
+    },
+    stale: true,
+  };
+}
 
 /**
  * Claim the report for an environment's current failure on behalf of a
@@ -165,11 +232,14 @@ const reportedLifecycleErrorByEnvironment = new Map<
  * announces it, which drives a list refetch; without this claim the
  * reconciliation below would toast the identical failure a second time.
  */
-function markLifecycleErrorReportedByForeground(environmentId: string): void {
-  reportedLifecycleErrorByEnvironment.set(
-    environmentId,
-    FOREGROUND_REPORTED_LIFECYCLE_ERROR,
-  );
+function markLifecycleErrorReportedByForeground(
+  environmentId: string,
+  attempt: number,
+): void {
+  reportedLifecycleErrorByEnvironment.set(environmentId, {
+    attempt,
+    kind: "foreground",
+  });
 }
 
 /**
@@ -203,6 +273,11 @@ function reconcileEnvironmentLifecycleErrors(): void {
   for (const environmentId of reportedLifecycleErrorByEnvironment.keys()) {
     if (!liveEnvironmentIds.has(environmentId)) {
       reportedLifecycleErrorByEnvironment.delete(environmentId);
+    }
+  }
+  for (const environmentId of lifecycleAttemptStateByEnvironment.keys()) {
+    if (!liveEnvironmentIds.has(environmentId)) {
+      lifecycleAttemptStateByEnvironment.delete(environmentId);
     }
   }
 
@@ -239,7 +314,12 @@ function reconcileEnvironmentLifecycleErrors(): void {
     }
     // Record before reporting: the toast action re-enters these stores.
     reportedLifecycleErrorByEnvironment.set(environment.id, message);
-    if (reported === FOREGROUND_REPORTED_LIFECYCLE_ERROR) {
+    if (
+      typeof reported !== "string"
+      && reported?.kind === "foreground"
+      && reported.attempt
+        === lifecycleAttemptStateByEnvironment.get(environment.id)?.attempt
+    ) {
       // Same failure the foreground start already toasted, wearing the
       // backend's sanitized wording. Consume the claim instead of repeating it.
       continue;
@@ -294,6 +374,7 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
   );
 
   if (targets.length === 0) return Promise.resolve();
+  const attemptRevisions = lifecycleAttemptRevisions();
 
   setupSnapshotReconciliation = Promise.all(targets.map(async (environment) => {
     try {
@@ -301,10 +382,15 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
       if (!snapshot) return;
 
       const store = useEnvironmentStore.getState();
+      const protectedSnapshot = preserveLifecycleAttemptState(
+        snapshot,
+        attemptRevisions.get(environment.id),
+      );
       const safeSnapshot = withAuthoritativeLifecycleError(
-        preserveCompletedSetupState(environment.id, snapshot),
+        preserveCompletedSetupState(environment.id, protectedSnapshot.environment),
       );
       store.updateEnvironment(environment.id, safeSnapshot);
+      if (protectedSnapshot.stale) return;
 
       // A failed start has no setup plan to read; the reconciliation below
       // resolves its gates once every snapshot has been merged.
@@ -608,6 +694,7 @@ export function useEnvironments(
         setError(null);
       }
       try {
+        const attemptRevisions = lifecycleAttemptRevisions();
         const envs = reconcileStatus
           ? await backend.getEnvironments(pid)
           : await backend.getEnvironmentSnapshots(pid);
@@ -618,7 +705,15 @@ export function useEnvironments(
         // A snapshot requested before or during creation may omit the newly
         // created environment. Do not let it replace newer local state.
         if (snapshotIsCurrent) {
-          mergeEnvironmentsForProject(pid, envs);
+          mergeEnvironmentsForProject(
+            pid,
+            envs.map((environment) =>
+              preserveLifecycleAttemptState(
+                environment,
+                attemptRevisions.get(environment.id),
+              ).environment
+            ),
+          );
           reconcileEnvironmentLifecycleErrors();
         }
         useBuildPipelineStore.getState().reconcilePipelinesForProject(
@@ -735,6 +830,18 @@ export function useEnvironments(
         });
       }
       setError(null);
+      const lifecycleAttempt = beginLifecycleAttempt(environmentId);
+      let lifecycleAttemptFinished = false;
+      const finishAttemptAdmission = () => {
+        if (lifecycleAttemptFinished) return;
+        lifecycleAttemptFinished = true;
+        finishLifecycleAttemptAdmission(environmentId, lifecycleAttempt);
+      };
+
+      // A retry owns fresh setup and launch state. Clear the preceding attempt's
+      // durable error locally before installing the new setup gate; an older
+      // in-flight snapshot is guarded by the attempt revision above.
+      updateEnvironmentInStore(environmentId, { lifecycleError: null });
 
       // Block TerminalContainer init and prevent auto-resolve until the backend
       // returns the authoritative setup command plan.
@@ -752,11 +859,13 @@ export function useEnvironments(
         if (options?.background) {
           console.log("[useEnvironments] Handing environment start to backend...");
           await backend.startEnvironmentInBackground(environmentId);
+          finishAttemptAdmission();
           return [];
         }
 
         console.log("[useEnvironments] Calling backend.startEnvironment...");
         const result = await backend.startEnvironment(environmentId);
+        finishAttemptAdmission();
         console.log("[useEnvironments] backend.startEnvironment completed, refreshing environment...", {
           setupCommands: result.setupCommands,
           setupManagedByBackend: result.setupManagedByBackend,
@@ -827,14 +936,18 @@ export function useEnvironments(
         }
         return result.setupCommands;
       } catch (err) {
+        finishAttemptAdmission();
         // Unblock TerminalContainer on error so it doesn't hang
         setSetupCommandsResolved(environmentId, true);
         console.error("[useEnvironments] Error starting environment:", err);
         const message = getErrorMessage(err, "Failed to start environment");
-        // The backend persisted its own sanitized text for this same failure
-        // before rejecting, and announcing it drives a list refetch. Claim the
-        // report here or that refetch reports the failure all over again.
-        markLifecycleErrorReportedByForeground(environmentId);
+        // Foreground provisioning failures are also persisted by the backend,
+        // so claim that attempt's eventual snapshot to avoid a duplicate toast.
+        // Background rejection is only an admission failure and persists no
+        // lifecycle outcome; claiming it would suppress a later retry's result.
+        if (!options?.background) {
+          markLifecycleErrorReportedByForeground(environmentId, lifecycleAttempt);
+        }
         setError(message);
         updateStatusInStore(environmentId, "error");
         if (!options?.suppressFailureToast) {

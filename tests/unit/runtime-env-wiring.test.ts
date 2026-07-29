@@ -56,6 +56,7 @@ function runShell(
 const CODEX_HELPER_SED =
   "/^log_progress() {/,/^}$/p; " +
   "/^codex_path_has_symlink() {/,/^}$/p; " +
+  "/^codex_destination_path_has_symlink() {/,/^}$/p; " +
   "/^copy_codex_file() {/,/^}$/p; " +
   "/^copy_codex_directory() {/,/^}$/p";
 
@@ -318,6 +319,132 @@ printf "continued"
     });
   });
 
+  test("Codex configuration copy helpers reject destination root, parent, and file symlinks", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const external = join(dir, "external");
+      mkdirSync(join(source, "plugins", "cache"), { recursive: true });
+      mkdirSync(external);
+      writeFileSync(join(source, "auth.json"), "host auth\n");
+      writeFileSync(join(source, "config.toml"), "host root config\n");
+      writeFileSync(join(source, "plugins", "config.toml"), "host config\n");
+      writeFileSync(join(source, "plugins", "cache", "index.json"), "host cache\n");
+
+      const rootLink = join(dir, "destination-root-link");
+      symlinkSync(external, rootLink);
+      const rootResult = runShell(
+        codexCopyHelperHarness(`
+copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
+printf "continued"
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: rootLink,
+        },
+      );
+      expect(rootResult.exitCode).toBe(0);
+      expect(rootResult.stdout).toContain(
+        "Warning: Skipping Codex file with symlinked destination: auth.json",
+      );
+      expect(rootResult.stdout).toEndWith("continued");
+      expect(() => statSync(join(external, "auth.json"))).toThrow();
+
+      const parentDestination = join(dir, "parent-destination");
+      const linkedParentTarget = join(dir, "linked-parent-target");
+      mkdirSync(parentDestination);
+      mkdirSync(linkedParentTarget);
+      symlinkSync(linkedParentTarget, join(parentDestination, "plugins"));
+      const parentResult = runShell(
+        codexCopyHelperHarness(`
+copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" plugins/config.toml
+copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" plugins/cache
+printf "continued"
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: parentDestination,
+        },
+      );
+      expect(parentResult.exitCode).toBe(0);
+      expect(parentResult.stdout).toContain(
+        "Warning: Skipping Codex file with symlinked destination: plugins/config.toml",
+      );
+      expect(parentResult.stdout).toContain(
+        "Warning: Skipping Codex directory with symlinked destination: plugins/cache",
+      );
+      expect(parentResult.stdout).toEndWith("continued");
+      expect(() => statSync(join(linkedParentTarget, "config.toml"))).toThrow();
+      expect(() => statSync(join(linkedParentTarget, "cache"))).toThrow();
+
+      const leafDestination = join(dir, "leaf-destination");
+      const linkedAuthTarget = join(dir, "linked-auth-target");
+      const linkedConfigTarget = join(dir, "linked-config-target");
+      mkdirSync(leafDestination);
+      writeFileSync(linkedAuthTarget, "workload data\n");
+      writeFileSync(linkedConfigTarget, "workload config\n");
+      symlinkSync(linkedAuthTarget, join(leafDestination, "auth.json"));
+      symlinkSync(linkedConfigTarget, join(leafDestination, "config.toml"));
+      const leafResult = runShell(
+        codexCopyHelperHarness(`
+copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
+copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" config.toml
+printf "continued"
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: leafDestination,
+        },
+      );
+      expect(leafResult.exitCode).toBe(0);
+      expect(leafResult.stdout).toContain(
+        "Warning: Skipping Codex file with symlinked destination: auth.json",
+      );
+      expect(leafResult.stdout).toContain(
+        "Warning: Skipping Codex file with symlinked destination: config.toml",
+      );
+      expect(leafResult.stdout).toEndWith("continued");
+      expect(readFileSync(linkedAuthTarget, "utf8")).toBe("workload data\n");
+      expect(readFileSync(linkedConfigTarget, "utf8")).toBe("workload config\n");
+    });
+  });
+
+  test("Codex directory copy rejects symlinks nested inside an existing destination", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const external = join(dir, "external");
+      mkdirSync(join(source, "skills", "review"), { recursive: true });
+      mkdirSync(join(destination, "skills"), { recursive: true });
+      mkdirSync(external);
+      writeFileSync(join(source, "skills", "review", "SKILL.md"), "host skill\n");
+      writeFileSync(join(external, "preserved.txt"), "workload data\n");
+      symlinkSync(external, join(destination, "skills", "review"));
+
+      const result = runShell(
+        codexCopyHelperHarness(`
+copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+printf "continued"
+`),
+        {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: destination,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(
+        "Warning: Skipping Codex directory containing destination symlink: skills",
+      );
+      expect(result.stdout).toEndWith("continued");
+      expect(readFileSync(join(external, "preserved.txt"), "utf8")).toBe("workload data\n");
+      expect(() => statSync(join(external, "SKILL.md"))).toThrow();
+    });
+  });
+
   test("Codex configuration copy helpers enforce file and directory bounds", () => {
     withTempDir((dir) => {
       const source = join(dir, "source");
@@ -348,6 +475,57 @@ printf "continued"
       expect(result.stdout).toContain("Warning: Skipping oversized Codex directory: skills");
       expect(result.stdout).toEndWith("continued");
       expect(() => statSync(join(destination, "config.toml"))).toThrow();
+      expect(() => statSync(join(destination, "skills"))).toThrow();
+    });
+  });
+
+  test("Codex directory entry inspection stops after the configured bound", () => {
+    withTempDir((dir) => {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const fakeBin = join(dir, "fake-bin");
+      const visitLog = join(dir, "visited");
+      const completionMarker = join(dir, "completed");
+      mkdirSync(join(source, "skills"), { recursive: true });
+      mkdirSync(fakeBin);
+      for (let index = 0; index < 1000; index += 1) {
+        writeFileSync(join(source, "skills", `entry-${index.toString().padStart(4, "0")}`), "x");
+      }
+      writeFileSync(
+        join(fakeBin, "find"),
+        `#!/bin/bash
+for entry in "$CODEX_TEST_SOURCE"/skills/*; do
+  if ! /usr/bin/printf '.'; then
+    exit 141
+  fi
+  /usr/bin/printf '%s\\n' "$entry" >> "$CODEX_VISIT_LOG"
+done
+touch "$CODEX_COMPLETION_MARKER"
+`,
+      );
+      chmodSync(join(fakeBin, "find"), 0o755);
+
+      const result = runShell(
+        codexCopyHelperHarness(`
+copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" skills
+printf "continued"
+`),
+        {
+          PATH: `${fakeBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+          CODEX_TEST_SOURCE: source,
+          CODEX_TEST_DESTINATION: destination,
+          CODEX_COPY_MAX_DIRECTORY_ENTRIES: "3",
+          CODEX_VISIT_LOG: visitLog,
+          CODEX_COMPLETION_MARKER: completionMarker,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Warning: Skipping oversized Codex directory: skills");
+      expect(result.stdout).toEndWith("continued");
+      const visitedCount = readFileSync(visitLog, "utf8").trim().split("\n").length;
+      expect(visitedCount).toBeLessThan(1000);
+      expect(() => statSync(completionMarker)).toThrow();
       expect(() => statSync(join(destination, "skills"))).toThrow();
     });
   });
@@ -663,7 +841,7 @@ printf "continued"
         `
 set -e
 log_progress() { :; }
-eval "$(sed -n '/^codex_path_has_symlink() {/,/^}$/p; /^copy_codex_file() {/,/^}$/p; /^copy_codex_directory() {/,/^}$/p' ${shellQuote(entrypoint)})"
+eval "$(sed -n '/^codex_path_has_symlink() {/,/^}$/p; /^codex_destination_path_has_symlink() {/,/^}$/p; /^copy_codex_file() {/,/^}$/p; /^copy_codex_directory() {/,/^}$/p' ${shellQuote(entrypoint)})"
 codex_setup="$(sed -n '/^# Set up Codex configuration$/,/^log_progress "Codex configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/codex-home#\\$CODEX_TEST_SOURCE#g")"
 eval "$codex_setup"
 `,

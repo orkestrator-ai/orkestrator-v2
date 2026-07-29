@@ -3219,6 +3219,23 @@ async function syncStoredEnvironmentStatus(
     return environment;
   }
 
+  // Lifecycle state owned by the backend is authoritative over Docker's
+  // resource state. During an admitted start the container may not have been
+  // persisted yet, and after a failed start Docker may still report a retained
+  // container as created or running. Reconciliation must not turn either case
+  // into a healthy-looking `stopped`/`creating`/`running` environment.
+  //
+  // Explicit lifecycle actions clear `lifecycleError` as they commit, so a
+  // durable failure remains stable across renderer rehydration and backend
+  // restart until the user actually retries or stops the environment.
+  if (
+    environmentStartTasks.has(environment.id)
+    || environment.status === "error"
+    || Boolean(environment.lifecycleError?.trim())
+  ) {
+    return environment;
+  }
+
   if (!environment.containerId) {
     if (environment.status !== "stopped") {
       return storage.updateEnvironment(environment.id, { status: "stopped" });
@@ -3632,6 +3649,7 @@ function clearPendingAgentLaunchUpdates(): Partial<Environment> {
 
 async function failEnvironmentSetup(environmentId: string, error: unknown, context: CommandContext): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
+  const lifecycleError = environmentLifecycleErrorMessage(error);
   const session = environmentSetupSessions.get(environmentId);
   logSetupTerminal("setup failed", {
     environmentId,
@@ -3657,7 +3675,11 @@ async function failEnvironmentSetup(environmentId: string, error: unknown, conte
   try {
     updated = await context.storage.updateEnvironment(
       environmentId,
-      clearPendingAgentLaunchUpdates(),
+      {
+        status: "error",
+        lifecycleError,
+        ...clearPendingAgentLaunchUpdates(),
+      },
     );
   } catch (clearError) {
     console.warn(
@@ -3817,6 +3839,11 @@ async function startEnvironmentOnce(
   const { storage } = context;
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  // Admission checks make the common case fail early. This second check is
+  // required because the start may have waited behind another lifecycle
+  // operation while a durable deletion tombstone was persisted.
+  assertEnvironmentNotDeleting(environment.id);
+  assertEnvironmentDeletionNotRequested(environment, environment.id);
   let unpersistedContainerId: string | null = null;
   // Rolling back a worktree needs the repository it was added to and the branch
   // it created, not just the directory: `git worktree add -b` makes both.
@@ -3923,13 +3950,22 @@ async function startEnvironmentOnce(
   }
 }
 
-function startEnvironmentTask(
+async function admitEnvironmentStartTask(
   environmentId: string,
   context: CommandContext,
   schedulePendingRename: (environmentId: string, context: CommandContext) => void,
-): Promise<EnvironmentSetupStartResult> {
+): Promise<{ task: Promise<EnvironmentSetupStartResult> }> {
+  // Check both before and after the storage read. The first avoids needless I/O
+  // for a delete already admitted in this process; the second closes the
+  // await-sized race and enforces a tombstone recovered from persistent state.
+  assertEnvironmentNotDeleting(environmentId);
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  assertEnvironmentDeletionNotRequested(environment, environmentId);
+  assertEnvironmentNotDeleting(environmentId);
+
   const existing = environmentStartTasks.get(environmentId);
-  if (existing) return existing;
+  if (existing) return { task: existing };
 
   const task = enqueueEnvironmentLifecycleOperation(
     environmentId,
@@ -3942,7 +3978,7 @@ function startEnvironmentTask(
       }
     });
   environmentStartTasks.set(environmentId, task);
-  return task;
+  return { task };
 }
 
 /**
@@ -4627,6 +4663,13 @@ async function startLocalServerUnlocked(
     if (!existsSync(cwd)) throw new Error(`${kind} bridge directory not found: ${cwd}`);
     if (!existsSync(bridgeEntrypoint)) throw new Error(`${kind} bridge entrypoint not found: ${bridgeEntrypoint}`);
   }
+
+  // Shutdown may have started while this already-admitted operation awaited
+  // storage, port allocation, or packaged-path discovery. Recheck at the last
+  // synchronous boundary before credentials are allocated and the child is
+  // registered, so a bounded shutdown drain cannot snapshot an empty map and
+  // then have this operation spawn behind it.
+  assertLocalServerStartAllowed(environmentId);
   const tokens = localBridgeTokens(kind);
   if (tokens) {
     const authToken = randomBytes(32).toString("base64url");
@@ -4952,9 +4995,37 @@ function scheduleMergeCleanupRecovery(
   mergeCleanupRecoveryTasks.set(environmentId, task);
 }
 
-async function waitForLocalServerEnvironmentOperations(): Promise<void> {
-  while (localServerEnvironmentOperations.size > 0) {
-    await Promise.allSettled([...new Set(localServerEnvironmentOperations.values())]);
+async function waitForLocalServerEnvironmentOperations(
+  timeoutMs?: number,
+): Promise<boolean> {
+  const drain = async () => {
+    while (localServerEnvironmentOperations.size > 0) {
+      await Promise.allSettled([
+        ...new Set(localServerEnvironmentOperations.values()),
+      ]);
+    }
+  };
+
+  if (timeoutMs === undefined) {
+    await drain();
+    return true;
+  }
+  if (timeoutMs <= 0) {
+    return localServerEnvironmentOperations.size === 0;
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      drain().then(() => true as const),
+      deadline,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -4971,13 +5042,24 @@ export function closeLocalServerAdmission(): void {
   localServerShutdownRequested = true;
 }
 
-/** Drains every local agent server still owned by this backend process. */
-export async function shutdownLocalServers(): Promise<void> {
+/**
+ * Drains every local agent server still owned by this backend process.
+ *
+ * `operationDrainTimeoutMs` bounds only the queue drain. Once it expires,
+ * shutdown still snapshots and terminates every child already owned by this
+ * process. Admission was closed before the wait, and queued starts re-check that
+ * gate when they run, so skipping a stuck tail cannot admit a new child later.
+ */
+export async function shutdownLocalServers(
+  options: { operationDrainTimeoutMs?: number } = {},
+): Promise<void> {
   if (localServerShutdownPromise) return localServerShutdownPromise;
   localServerShutdownRequested = true;
 
   const attempt = (async () => {
-    await waitForLocalServerEnvironmentOperations();
+    await waitForLocalServerEnvironmentOperations(
+      options.operationDrainTimeoutMs,
+    );
     const owned = [...localServerProcesses.entries()];
     const results = await Promise.allSettled(
       owned.map(([key, child]) => terminateLocalServerChild(key, child)),
@@ -7036,22 +7118,24 @@ export function createCommandRegistry(
   // `admit` refuses synchronously by design, so every lifecycle command is
   // `async`: a caller that reaches the registry directly must see a rejection
   // rather than a throw from the call expression itself.
-  register("start_environment", async ({ environmentId }, context) =>
-    startEnvironmentTask(
+  register("start_environment", async ({ environmentId }, context) => {
+    const { task } = await admitEnvironmentStartTask(
       asString(environmentId, "environmentId"),
       context,
       schedulePendingEnvironmentRename,
-    )
-  );
+    );
+    return task;
+  });
   register("start_environment_background", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
     // Validate before acknowledging the request. Once accepted, the task is
     // backend-owned: a renderer, browser, or reverse proxy can disconnect
     // without cancelling Docker provisioning or losing the durable launch.
-    if (!await context.storage.getEnvironment(id)) {
-      throw new Error(`Environment not found: ${id}`);
-    }
-    const task = startEnvironmentTask(id, context, schedulePendingEnvironmentRename);
+    const { task } = await admitEnvironmentStartTask(
+      id,
+      context,
+      schedulePendingEnvironmentRename,
+    );
     void task.catch((error) => {
       // `startEnvironmentOnce` has already logged the cause; this only records
       // that nobody was awaiting the result, so the rejection is not unhandled.

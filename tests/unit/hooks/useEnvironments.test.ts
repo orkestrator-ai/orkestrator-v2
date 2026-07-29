@@ -795,6 +795,124 @@ describe("useEnvironments", () => {
     );
   });
 
+  test("reports a retry's durable failure after a background admission rejection", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-background-reject-retry",
+      projectId: "project-1",
+      status: "stopped",
+    });
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    let admission = 0;
+    mockStartEnvironmentInBackground.mockImplementation(() => {
+      admission += 1;
+      return admission === 1
+        ? Promise.reject(new Error("background start rejected"))
+        : Promise.resolve();
+    });
+    const { result } = renderHook(() => useEnvironments(null));
+
+    await act(async () => {
+      await expect(
+        result.current.startEnvironment(existingEnv.id, undefined, {
+          background: true,
+          silent: true,
+        }),
+      ).rejects.toThrow("background start rejected");
+    });
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.startEnvironment(existingEnv.id, undefined, {
+        background: true,
+        silent: true,
+      });
+    });
+
+    mockGetEnvironmentSnapshots.mockResolvedValue([
+      {
+        ...existingEnv,
+        status: "error",
+        lifecycleError: "Environment start failed.",
+      },
+    ]);
+    await act(async () => {
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+      await result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+
+    // The admission failure is immediate and the retry's backend-owned failure
+    // is durable. Each outcome is reported once.
+    expect(mockToastError).toHaveBeenCalledTimes(2);
+    expect(useEnvironmentStore.getState().error).toBe("Environment start failed.");
+  });
+
+  test("does not let a pre-retry snapshot restore the prior lifecycle failure", async () => {
+    const environment = createMockEnvironment({
+      id: "env-stale-retry-snapshot",
+      projectId: "project-1",
+      status: "error",
+      lifecycleError: "Environment start failed.",
+      pendingAgentLaunch: true,
+    });
+    const staleSnapshot = createDeferred<Environment[]>();
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupCommandsResolved: new Set([environment.id]),
+    });
+    useClaudeOptionsStore.setState({
+      options: {},
+      pendingNativeLaunches: {
+        [environment.id]: {
+          containerId: null,
+          environmentId: environment.id,
+          targetPaneId: "default",
+          agentType: "claude",
+          launchMode: "native",
+        } as any,
+      },
+    });
+    mockGetEnvironmentSnapshots.mockImplementation(() => staleSnapshot.promise);
+    const { result } = renderHook(() => useEnvironments(null));
+
+    let loadPromise!: Promise<void>;
+    act(() => {
+      loadPromise = result.current.loadEnvironments("project-1", {
+        silent: true,
+        reconcileStatus: false,
+      });
+    });
+    await waitFor(() => expect(mockGetEnvironmentSnapshots).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await result.current.startEnvironment(environment.id, undefined, {
+        background: true,
+        silent: true,
+      });
+    });
+    await act(async () => {
+      staleSnapshot.resolve([environment]);
+      await loadPromise;
+    });
+
+    const state = useEnvironmentStore.getState();
+    expect(state.getEnvironmentById(environment.id)).toMatchObject({
+      status: "creating",
+      lifecycleError: null,
+      pendingAgentLaunch: true,
+    });
+    expect(state.isSetupCommandsResolved(environment.id)).toBe(false);
+    expect(
+      useClaudeOptionsStore.getState().pendingNativeLaunches[environment.id],
+    ).toBeDefined();
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
   test("startEnvironment clears the setup placeholder when there are no setup commands", async () => {
     const existingEnv = createMockEnvironment({
       id: "env-1",

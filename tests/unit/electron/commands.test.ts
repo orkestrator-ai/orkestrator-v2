@@ -2588,6 +2588,10 @@ exit 0
       await expect(setupPromise).rejects.toThrow("Setup script failed");
 
       expect(environment.setupScriptsComplete).toBe(false);
+      expect(environment.status).toBe("error");
+      expect(environment.lifecycleError).toBe(
+        ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript,
+      );
       const failure = emitted.find((entry) =>
         entry.event === "environment-setup-complete"
         && (entry.payload as { success?: boolean }).success === false
@@ -2610,6 +2614,31 @@ exit 0
       expect(
         (failure?.payload as { environment?: Environment }).environment?.initialReasoningEffort,
       ).toBeUndefined();
+
+      // A renderer may have been inactive when the one-shot event fired. The
+      // failure must therefore survive a registry/backend reconstruction and be
+      // available from an authoritative snapshot alone.
+      const restartedRegistry = createCommandRegistry();
+      await expect(restartedRegistry.get("get_environment_snapshots")?.(
+        { projectId: environment.projectId },
+        context,
+      )).resolves.toEqual([
+        expect.objectContaining({
+          id: environment.id,
+          status: "error",
+          lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript,
+        }),
+      ]);
+      await expect(restartedRegistry.get("get_environments")?.(
+        { projectId: environment.projectId },
+        context,
+      )).resolves.toEqual([
+        expect.objectContaining({
+          id: environment.id,
+          status: "error",
+          lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript,
+        }),
+      ]);
     });
   }, ASYNC_TEST_BUDGET_MS);
 
@@ -3916,6 +3945,138 @@ esac
     // merges for an environment that is not being deleted at all.
     expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(false);
   });
+
+  test("rejects starts while deletion is reserved before cleanup settles", async () => {
+    const worktreePath = await createTempDir("ork-start-while-delete-reserved-");
+    const environment = createEnvironment({
+      id: "env-start-while-delete-reserved",
+      environmentType: "local",
+      containerId: null,
+      worktreePath,
+      status: "running",
+      setupScriptsComplete: true,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    let announceTermination!: () => void;
+    let releaseTermination!: (terminated: boolean) => void;
+    const terminationStarted = new Promise<void>((resolve) => {
+      announceTermination = resolve;
+    });
+    const terminationResult = new Promise<boolean>((resolve) => {
+      releaseTermination = resolve;
+    });
+    commandTesting.setLocalServerProcess(
+      `codex:${environment.id}`,
+      createFakeChild(95050),
+    );
+    commandTesting.setTerminateProcessTree(async () => {
+      announceTermination();
+      return terminationResult;
+    });
+
+    const deletion = commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    );
+    await terminationStarted;
+    expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(true);
+
+    await expect(commands.get("start_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow(`Environment is being deleted: ${environment.id}`);
+    await expect(commands.get("start_environment_background")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow(`Environment is being deleted: ${environment.id}`);
+
+    releaseTermination(false);
+    await expect(deletion).rejects.toThrow("Failed to stop all local servers");
+    commandTesting.setTerminateProcessTree(async () => true);
+  });
+
+  test("rejects starts carrying a durable deletion tombstone", async () => {
+    const environment = createEnvironment({
+      id: "env-start-with-delete-tombstone",
+      environmentType: "containerized",
+      containerId: "container-delete-tombstone",
+      status: "stopped",
+      setupScriptsComplete: true,
+      deletionRequestedAt: "2026-07-29T10:00:00.000Z",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("start_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow(`Environment is being deleted: ${environment.id}`);
+    await expect(commands.get("start_environment_background")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow(`Environment is being deleted: ${environment.id}`);
+    expect(updates).toHaveLength(0);
+  });
+
+  test("rechecks a durable deletion tombstone when a queued start executes", async () => {
+    const environment = createEnvironment({
+      id: "env-queued-start-delete-tombstone",
+      environmentType: "containerized",
+      containerId: "container-queued-delete-tombstone",
+      status: "running",
+      setupScriptsComplete: true,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const gateDirectory = await createTempDir("ork-queued-start-delete-tombstone-");
+    const stopStartedPath = path.join(gateDirectory, "stop-started");
+    const releaseStopPath = path.join(gateDirectory, "release-stop");
+    const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "stop" ]; then
+  : > '${stopStartedPath.replaceAll("'", "'\\''")}'
+  while [ ! -f '${releaseStopPath.replaceAll("'", "'\\''")}' ]; do sleep 0.01; done
+  exit 0
+fi
+exit 0
+`, async ({ all }) => {
+        const stop = commands.get("stop_environment")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await waitForCondition(() => existsSync(stopStartedPath), "container stop to begin");
+        await commands.get("start_environment_background")?.(
+          { environmentId: environment.id },
+          context,
+        );
+
+        // This represents deletion intent persisted while the accepted start
+        // was waiting behind an earlier lifecycle operation.
+        environment.deletionRequestedAt = "2026-07-29T11:00:00.000Z";
+        await fs.writeFile(releaseStopPath, "");
+        await expect(stop).resolves.toBeUndefined();
+        await waitForCondition(
+          () => errorLog.mock.calls.some(([message]) =>
+            String(message).includes("background start failed")
+          ),
+          "queued start rejection",
+        );
+
+        const calls = await fs.readFile(all, "utf8");
+        expect(calls.split("\n").filter((line) => line.startsWith("start "))).toHaveLength(0);
+        expect(environment.status).toBe("stopped");
+        expect(environment.deletionRequestedAt).toBe(
+          "2026-07-29T11:00:00.000Z",
+        );
+      });
+    } finally {
+      errorLog.mockRestore();
+    }
+  }, ASYNC_TEST_BUDGET_MS);
 
   test("refuses deletion while local servers are shutting down", async () => {
     const environment = createEnvironment({
@@ -10244,6 +10405,56 @@ exit 0
     )).rejects.toThrow("Backend is shutting down");
   }, ASYNC_TEST_BUDGET_MS);
 
+  test("does not spawn an in-flight local server after the bounded shutdown drain expires", async () => {
+    const worktreePath = await createTempDir(
+      "ork-electron-local-start-shutdown-deadline-",
+    );
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const originalGetEnvironment =
+      context.storage.getEnvironment.bind(context.storage);
+    let releaseLookup!: () => void;
+    let markLookupStarted!: () => void;
+    const lookupGate = new Promise<void>((resolve) => {
+      releaseLookup = resolve;
+    });
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
+    let blocked = false;
+    context.storage.getEnvironment = mock(async (environmentId) => {
+      if (!blocked) {
+        blocked = true;
+        markLookupStarted();
+        await lookupGate;
+      }
+      return originalGetEnvironment(environmentId);
+    });
+    const spawnAttempt = mock(() => {
+      throw new Error("local server spawned after shutdown");
+    });
+    commandTesting.setSpawnLocalServerCommand(
+      spawnAttempt as unknown as typeof spawnCommand,
+    );
+
+    const start = commands.get("start_local_opencode_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<unknown>;
+    await lookupStarted;
+
+    await expect(
+      shutdownLocalServers({ operationDrainTimeoutMs: 10 }),
+    ).resolves.toBeUndefined();
+    releaseLookup();
+
+    await expect(start).rejects.toThrow(
+      "Backend is shutting down; local servers cannot be started",
+    );
+    expect(spawnAttempt).not.toHaveBeenCalled();
+  });
+
   test("deletes an environment only after all three local server kinds exit", async () => {
     const appRoot = await createTempDir("ork-electron-app-delete-all-servers-");
     const toolchainBinDir = await createTempDir("ork-electron-tools-delete-all-servers-");
@@ -13277,6 +13488,127 @@ describe("GitHub issue commands", () => {
 });
 
 describe("environment status and settings commands", () => {
+  test("reports Claude credential availability through the credential status handler", async () => {
+    const { context } = createContext([]);
+    const commands = createCommandRegistry();
+    const hasClaudeCredentials = mock(async () => true);
+    commands.set("has_claude_credentials", hasClaudeCredentials);
+
+    await expect(commands.get("get_credential_status")?.({}, context)).resolves.toEqual({
+      available: true,
+      expiresAt: null,
+    });
+    expect(hasClaudeCredentials).toHaveBeenCalledTimes(1);
+  });
+
+  test("preserves an admitted container start while its container is not yet persisted", async () => {
+    const environment = createEnvironment({
+      id: "env-active-start-status",
+      environmentType: "containerized",
+      containerId: null,
+      status: "stopped",
+      setupScriptsComplete: true,
+      networkAccessMode: "full",
+    });
+    const { context, updates } = createContext(environment);
+    const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
+    const originalImplementation = updateEnvironment.getMockImplementation();
+    let announceCreating!: () => void;
+    let releaseCreating!: () => void;
+    const creatingPersisted = new Promise<void>((resolve) => {
+      announceCreating = resolve;
+    });
+    const creatingRelease = new Promise<void>((resolve) => {
+      releaseCreating = resolve;
+    });
+    updateEnvironment.mockImplementation(async (
+      environmentId: string,
+      update: Record<string, unknown>,
+    ) => {
+      const updated = await originalImplementation!(environmentId, update);
+      if (update.status === "creating") {
+        announceCreating();
+        await creatingRelease;
+      }
+      return updated;
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+      await withFakeDocker(`#!/bin/sh
+case "$1" in
+  create) printf 'container-active-start-status\\n' ;;
+  start|exec) exit 0 ;;
+esac
+`, async () => {
+        await commands.get("start_environment_background")?.(
+          { environmentId: environment.id },
+          context,
+        );
+        await creatingPersisted;
+
+        await expect(commands.get("get_environments")?.(
+          { projectId: environment.projectId },
+          context,
+        )).resolves.toEqual([
+          expect.objectContaining({
+            id: environment.id,
+            status: "creating",
+            containerId: null,
+          }),
+        ]);
+        expect(updatesWithStatus(updates, "stopped")).toHaveLength(0);
+
+        releaseCreating();
+        await waitForCondition(
+          () => environment.status === "running",
+          "active start to finish",
+        );
+      });
+    });
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("preserves a durable lifecycle failure over Docker container state", async () => {
+    const environment = createEnvironment({
+      id: "env-error-status-authoritative",
+      environmentType: "containerized",
+      containerId: "container-error-status",
+      status: "error",
+      lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable,
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  printf 'container-error-status\\trunning\\n'
+  exit 0
+fi
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+exit 1
+`, async ({ all }) => {
+      await expect(commands.get("get_environments")?.(
+        { projectId: environment.projectId },
+        context,
+      )).resolves.toEqual([
+        expect.objectContaining({
+          id: environment.id,
+          status: "error",
+          lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable,
+        }),
+      ]);
+
+      const calls = await fs.readFile(all, "utf8");
+      expect(calls).toContain("ps -a");
+      expect(calls).not.toContain("inspect -f");
+    });
+    expect(updates).toHaveLength(0);
+  });
+
   test("synchronizes individual and all stored environment statuses", async () => {
     const local = createEnvironment({ id: "env-local", environmentType: "local", containerId: null });
     const missingContainer = createEnvironment({

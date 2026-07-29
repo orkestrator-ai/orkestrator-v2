@@ -92,18 +92,37 @@ export class EnvironmentLifecycleTaskTracker {
   }
 }
 
+export interface InterruptedEnvironmentLifecycleReconciliation {
+  /** Every environment whose persisted lifecycle state was reconciled. */
+  reconciledEnvironmentIds: string[];
+  /**
+   * Environments whose durable deletion intent still requires cleanup.
+   *
+   * The composition root can use these ids to re-admit the idempotent deletion
+   * continuation after command admission is ready. Reconciliation deliberately
+   * does not clear the deletion tombstone before that continuation succeeds.
+   */
+  deletionRecoveryEnvironmentIds: string[];
+}
+
 /**
  * A process exit can interrupt a persisted `creating` transition before its
  * matching completion write, or a persisted `deleting` marker before its
- * cleanup. No lifecycle work survives a backend restart and both markers are
- * backed only by in-memory state, so leaving either in place reports progress
- * that can never complete.
+ * cleanup. No lifecycle work survives a backend restart, so creation is moved
+ * to a retryable error and interrupted deletion is returned to the composition
+ * root for re-admission.
+ *
+ * Deletion intent is different from an ordinary progress marker:
+ * `deletionRequestedAt` is a durable tombstone consulted by background writes.
+ * It must remain in place until deletion actually succeeds, including while
+ * restart recovery is waiting to be scheduled.
  */
 export async function reconcileInterruptedEnvironmentLifecycleTasks(
   storage: StorageService,
-): Promise<string[]> {
+): Promise<InterruptedEnvironmentLifecycleReconciliation> {
   const environments = await storage.loadEnvironments();
-  const reconciled: string[] = [];
+  const reconciled = new Set<string>();
+  const deletionRecoveryEnvironmentIds: string[] = [];
 
   for (const environment of environments) {
     if (environment.status === "creating") {
@@ -118,21 +137,29 @@ export async function reconcileInterruptedEnvironmentLifecycleTasks(
           ? {}
           : { lifecycleError: INTERRUPTED_ENVIRONMENT_LIFECYCLE_ERROR }),
       });
-      reconciled.push(environment.id);
-      continue;
+      reconciled.add(environment.id);
     }
 
-    // Deletion is guarded by an in-memory tombstone, so a backend killed
-    // mid-delete leaves a "Deleting…" record nothing else reconciles.
+    // Creation and deletion are intentionally reconciled independently. A
+    // backend can stop after deletion intent is persisted but before an older
+    // `creating` status is replaced; skipping either half would strand the
+    // environment or re-enable background writes to partially deleted state.
     if (environment.lifecycleOperation === "deleting") {
-      await storage.updateEnvironment(environment.id, {
-        lifecycleOperation: null,
-        lifecycleOperationStartedAt: null,
-        deletionRequestedAt: null,
-      });
-      reconciled.push(environment.id);
+      if (!environment.deletionRequestedAt) {
+        // Repair older or partially written records while keeping the value
+        // stable across later restarts.
+        await storage.updateEnvironment(environment.id, {
+          deletionRequestedAt:
+            environment.lifecycleOperationStartedAt ?? new Date().toISOString(),
+        });
+      }
+      deletionRecoveryEnvironmentIds.push(environment.id);
+      reconciled.add(environment.id);
     }
   }
 
-  return reconciled;
+  return {
+    reconciledEnvironmentIds: [...reconciled],
+    deletionRecoveryEnvironmentIds,
+  };
 }

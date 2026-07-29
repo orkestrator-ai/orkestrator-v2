@@ -171,7 +171,10 @@ test("startup reconciliation marks every interrupted creating environment as ret
     });
 
     await expect(reconcileInterruptedEnvironmentLifecycleTasks(storage))
-      .resolves.toEqual(["interrupted-local"]);
+      .resolves.toEqual({
+        reconciledEnvironmentIds: ["interrupted-local"],
+        deletionRecoveryEnvironmentIds: [],
+      });
     await expect(storage.getEnvironment("interrupted-local")).resolves.toMatchObject({
       status: "error",
       lifecycleError: INTERRUPTED_ENVIRONMENT_LIFECYCLE_ERROR,
@@ -213,7 +216,10 @@ test("startup reconciliation keeps a recorded failure instead of replacing it", 
     });
 
     await expect(reconcileInterruptedEnvironmentLifecycleTasks(storage))
-      .resolves.toEqual(["created-container"]);
+      .resolves.toEqual({
+        reconciledEnvironmentIds: ["created-container"],
+        deletionRecoveryEnvironmentIds: [],
+      });
     await expect(storage.getEnvironment("created-container")).resolves.toMatchObject({
       status: "error",
       lifecycleError: "The container runtime is unavailable. Start it and retry.",
@@ -223,7 +229,7 @@ test("startup reconciliation keeps a recorded failure instead of replacing it", 
   }
 });
 
-test("startup reconciliation clears a delete marker no in-memory tombstone backs", async () => {
+test("startup reconciliation preserves deletion intent and exposes it for recovery", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-lifecycle-deleting-"));
   const storage = new StorageService(dataDir);
   try {
@@ -250,13 +256,62 @@ test("startup reconciliation clears a delete marker no in-memory tombstone backs
     });
 
     await expect(reconcileInterruptedEnvironmentLifecycleTasks(storage))
-      .resolves.toEqual(["stranded-delete"]);
+      .resolves.toEqual({
+        reconciledEnvironmentIds: ["stranded-delete"],
+        deletionRecoveryEnvironmentIds: ["stranded-delete"],
+      });
     const reconciled = await storage.getEnvironment("stranded-delete");
-    expect(reconciled?.lifecycleOperation).toBeUndefined();
-    expect(reconciled?.lifecycleOperationStartedAt).toBeUndefined();
-    expect(reconciled?.deletionRequestedAt).toBeUndefined();
-    // A stranded marker is not a failure; the environment keeps its status.
+    expect(reconciled?.lifecycleOperation).toBe("deleting");
+    expect(reconciled?.lifecycleOperationStartedAt).toBe(new Date(0).toISOString());
+    expect(reconciled?.deletionRequestedAt).toBe(new Date(0).toISOString());
+    // Recovery keeps the status and deletion guard until cleanup succeeds.
     expect(reconciled?.status).toBe("stopped");
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("startup reconciliation handles creating and deleting independently while preserving failures", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-lifecycle-combined-"));
+  const storage = new StorageService(dataDir);
+  try {
+    await storage.init();
+    await storage.addEnvironment({
+      id: "creating-delete",
+      projectId: "project",
+      name: "Creating delete",
+      branch: "creating-delete",
+      containerId: "partially-created-container",
+      status: "creating",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      environmentType: "containerized",
+      order: 0,
+    });
+    await storage.updateEnvironment("creating-delete", {
+      lifecycleError: "The container runtime is unavailable. Start it and retry.",
+      lifecycleOperation: "deleting",
+      lifecycleOperationStartedAt: new Date(1).toISOString(),
+      // Simulate a partially persisted older record. Recovery must repair the
+      // durable guard rather than making the environment writable again.
+      deletionRequestedAt: null,
+    });
+
+    await expect(reconcileInterruptedEnvironmentLifecycleTasks(storage))
+      .resolves.toEqual({
+        reconciledEnvironmentIds: ["creating-delete"],
+        deletionRecoveryEnvironmentIds: ["creating-delete"],
+      });
+    await expect(storage.getEnvironment("creating-delete")).resolves.toMatchObject({
+      status: "error",
+      lifecycleError: "The container runtime is unavailable. Start it and retry.",
+      lifecycleOperation: "deleting",
+      lifecycleOperationStartedAt: new Date(1).toISOString(),
+      deletionRequestedAt: new Date(1).toISOString(),
+    });
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

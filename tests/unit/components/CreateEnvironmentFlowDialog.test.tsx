@@ -379,6 +379,36 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
   });
 
+  test("closes without awaiting background provisioning", async () => {
+    const startEnvironment = mock(
+      () => new Promise<void>(() => {
+        // Backend admission intentionally never settles in this test.
+      }),
+    );
+    const onOpenChange = mock(() => {});
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={onOpenChange}
+        projectId="project-1"
+        createEnvironment={mock(async () => ({ id: "env-pending-start" }) as Environment)}
+        updateEnvironment={() => {}}
+        startEnvironment={startEnvironment}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(startEnvironment).toHaveBeenCalledWith(
+        "env-pending-start",
+        "",
+        { background: true, silent: true },
+      );
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+  });
+
   test("closes after creation and contains a rejected background-start admission", async () => {
     const startError = new Error("background admission rejected");
     const startEnvironment = mock(async () => {

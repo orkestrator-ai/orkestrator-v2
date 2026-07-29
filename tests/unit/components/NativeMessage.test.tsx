@@ -1453,7 +1453,7 @@ describe("NativeMessage", () => {
     render(<NativeMessage message={message} />);
 
     expect(screen.getByText("Agent")).toBeTruthy();
-    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByText("Active")).toBeTruthy();
     expect(screen.getByText("1 tool")).toBeTruthy();
     expect(screen.getByText("1 update")).toBeTruthy();
     expect(screen.getByText('rg -n "codex" src')).toBeTruthy();
@@ -1468,7 +1468,7 @@ describe("NativeMessage", () => {
     expect(screen.getByText("matches")).toBeTruthy();
   });
 
-  test("renders success and failure subagent states when no activity was captured", () => {
+  test("renders finished and failed subagent states when no activity was captured", () => {
     const message: NativeMessageType = {
       id: "msg-subagent-empty-states",
       role: "assistant",
@@ -1500,7 +1500,7 @@ describe("NativeMessage", () => {
 
     render(<NativeMessage message={message} />);
 
-    expect(screen.getByText("Success")).toBeTruthy();
+    expect(screen.getByText("Finished")).toBeTruthy();
     expect(screen.getByText("Failed")).toBeTruthy();
     expect(screen.getAllByText("No activity captured.")).toHaveLength(2);
   });
@@ -1680,7 +1680,7 @@ describe("NativeMessage", () => {
 
     render(<NativeMessage message={message} />);
 
-    const trigger = screen.getByRole("button", { name: /Subagent Running/i });
+    const trigger = screen.getByRole("button", { name: /Subagent Active/i });
     expect(screen.getByText("Waiting for activity.")).toBeTruthy();
     expect(screen.getByText("0 tools")).toBeTruthy();
     expect(screen.getByText("0 updates")).toBeTruthy();
@@ -1717,7 +1717,7 @@ describe("NativeMessage", () => {
     };
 
     render(<NativeMessage message={message} />);
-    const trigger = screen.getByRole("button", { name: /Closer Running/i });
+    const trigger = screen.getByRole("button", { name: /Closer Active/i });
 
     fireEvent.click(trigger);
     expect(screen.getByText("Inspect expansion state")).toBeTruthy();

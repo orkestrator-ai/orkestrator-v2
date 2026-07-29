@@ -6683,6 +6683,7 @@ describe("background task reducer", () => {
           type: "system",
           subtype: "task_started",
           task_id: "task-1",
+          tool_use_id: "agent-tool-1",
           description: "Run the suite",
         },
       ],
@@ -6691,6 +6692,7 @@ describe("background task reducer", () => {
 
     expect(session.backgroundTasks?.["task-1"]).toMatchObject({
       id: "task-1",
+      toolUseId: "agent-tool-1",
       description: "Run the suite",
       status: "running",
     });

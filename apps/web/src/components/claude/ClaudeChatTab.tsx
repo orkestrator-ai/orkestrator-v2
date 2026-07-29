@@ -82,6 +82,7 @@ import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
 import {
+  applyClaudeBackgroundTaskStates,
   getClaudeSourceMessageId,
   normalizeClaudeMessagesForDisplay,
 } from "@/lib/chat/native-message-adapters";
@@ -114,6 +115,7 @@ const UNMATCHED_EVENT_WARNING_EXEMPT = new Set([
   "system.compact",
   "system.message",
 ]);
+const EMPTY_BACKGROUND_TASKS = {};
 
 type SessionPendingPrompts = {
   questions: Map<string, ClaudeQuestionRequest>;
@@ -787,11 +789,21 @@ export function ClaudeChatTab({
   // Memoize messages separately to provide stable reference for child components
   // This prevents unnecessary recalculations when other session properties change
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
+  const backgroundTasks = useClaudeStore(
+    useCallback(
+      (state) => state.backgroundTasks.get(sessionKey) ?? EMPTY_BACKGROUND_TASKS,
+      [sessionKey],
+    ),
+  );
+  const lifecycleMessages = useMemo(
+    () => applyClaudeBackgroundTaskStates(sessionMessages, backgroundTasks),
+    [backgroundTasks, sessionMessages],
+  );
   const providerDisplayMessages = useMemo(
     () => pinActiveNativeAgentParts(
-      normalizeClaudeMessagesForDisplay(sessionMessages),
+      normalizeClaudeMessagesForDisplay(lifecycleMessages),
     ),
-    [sessionMessages],
+    [lifecycleMessages],
   );
   const handoff = useAgentHandoff(
     agentHandoffId,

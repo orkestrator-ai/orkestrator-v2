@@ -3440,6 +3440,60 @@ describe("ClaudeChatTab", () => {
     });
   });
 
+  test("rehydrates a successful background-agent launch as active until its task settles", async () => {
+    const backgroundAgent: ClaudeMessageType = {
+      id: "assistant-background-agent",
+      role: "assistant",
+      content: "",
+      parts: [{
+        type: "tool-invocation",
+        content: "Agent",
+        toolName: "Agent",
+        toolUseId: "agent-launch-1",
+        toolState: "success",
+        toolArgs: { description: "Background worker" },
+      }],
+      timestamp: "2026-03-07T12:00:00.000Z",
+    };
+
+    act(() => {
+      useClaudeStore.getState().setSession(SESSION_KEY, {
+        sessionId: "session-1",
+        isLoading: true,
+        messages: [backgroundAgent],
+      });
+      useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+        "child-1": {
+          id: "child-1",
+          toolUseId: "agent-launch-1",
+          status: "running",
+        },
+      });
+    });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
+      "assistant-background-agent:active-agents",
+    ]);
+
+    act(() => {
+      useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {});
+    });
+
+    await waitFor(() => {
+      expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
+        "assistant-background-agent",
+      ]);
+    });
+  });
+
   test("splits delayed Claude text before pinning active agent task groups", () => {
     const delayedMessage: ClaudeMessageType = {
       id: "assistant-delayed-agent",

@@ -57,6 +57,10 @@ import {
   type NativeTaskGroupPart,
   type NativeToolGroupPart,
 } from "@/lib/chat/native-message-types";
+import {
+  getNativeAgentStatus,
+  type NativeAgentStatus,
+} from "@/lib/chat/native-agent-status";
 import { normalizeNativeMessage } from "@/lib/chat/native-message-adapters";
 import { writeText } from "@/lib/native/clipboard";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
@@ -1054,38 +1058,41 @@ function TextPart({
   );
 }
 
-function getSubagentStatusLabel(state: NativeMessagePart["toolState"]): string {
-  switch (state) {
-    case "success":
-      return "Success";
-    case "failure":
+function getSubagentStatusLabel(status: NativeAgentStatus): string {
+  switch (status) {
+    case "finished":
+      return "Finished";
+    case "failed":
       return "Failed";
     default:
-      return "Running";
+      return "Active";
   }
 }
 
-function getSubagentStatusClasses(state: NativeMessagePart["toolState"]): string {
-  switch (state) {
-    case "success":
+function getSubagentStatusClasses(status: NativeAgentStatus): string {
+  switch (status) {
+    case "finished":
       return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
-    case "failure":
+    case "failed":
       return "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300";
     default:
       return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
   }
 }
 
-function isTerminalAgentState(state: NativeMessagePart["toolState"]): boolean {
-  return state === "success" || state === "failure";
+function isTerminalAgentStatus(status: NativeAgentStatus): boolean {
+  return status === "finished" || status === "failed";
 }
 
-function getSubagentPreview(part: NativeMessagePart): string {
+function getSubagentPreview(
+  part: Extract<NativeMessagePart, { type: "subagent" }>,
+  status: NativeAgentStatus,
+): string {
   const actions = part.subagentActions ?? [];
   const latestAction = actions.at(-1);
 
   if (!latestAction) {
-    return isTerminalAgentState(part.toolState)
+    return isTerminalAgentStatus(status)
       ? "No activity captured."
       : "Waiting for activity.";
   }
@@ -1149,8 +1156,9 @@ function SubagentPart({
   const toolCount = part.toolUseCount ?? part.subagentActionCount ?? 0;
   const displayName = part.subagentName || part.subagentRole || part.content || "subagent";
   const displayLabel = buildAgentDisplayLabel(displayName, part.subagentRole);
-  const statusLabel = getSubagentStatusLabel(part.toolState);
-  const preview = useMemo(() => getSubagentPreview(part), [part]);
+  const status = getNativeAgentStatus(part);
+  const statusLabel = getSubagentStatusLabel(status);
+  const preview = useMemo(() => getSubagentPreview(part, status), [part, status]);
   const toolCountLabel = hasExternalUsage
     ? `${toolCount} ${toolCount === 1 ? "tool use" : "tool uses"}`
     : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
@@ -1179,7 +1187,7 @@ function SubagentPart({
               <span
                 className={cn(
                   "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium",
-                  getSubagentStatusClasses(part.toolState),
+                  getSubagentStatusClasses(status),
                 )}
               >
                 {statusLabel}
@@ -1251,9 +1259,8 @@ function AgentGroupPart({
   containerId?: string;
   partKey?: string;
 }) {
-  const runningCount = part.parts.filter((child) => {
-    const state = child.type === "task-group" ? child.task.toolState : child.toolState;
-    return !isTerminalAgentState(state);
+  const activeCount = part.parts.filter((child) => {
+    return getNativeAgentStatus(child) === "active";
   }).length;
 
   return (
@@ -1267,9 +1274,9 @@ function AgentGroupPart({
         <span className="font-normal tabular-nums text-muted-foreground/50">
           {part.parts.length}
         </span>
-        {runningCount > 0 ? (
+        {activeCount > 0 ? (
           <span className="ml-auto font-medium normal-case tracking-normal text-amber-600 dark:text-amber-300">
-            {runningCount} running
+            {activeCount} active
           </span>
         ) : null}
       </div>
@@ -1352,7 +1359,8 @@ function TaskGroupPart({
     explicitName ?? description ?? (genericToolLabel ? "Subagent" : toolLabel);
   const headerDescription = explicitName ? description : undefined;
   const displayLabel = buildAgentDisplayLabel(displayName, role);
-  const statusLabel = getSubagentStatusLabel(part.task.toolState);
+  const status = getNativeAgentStatus(part);
+  const statusLabel = getSubagentStatusLabel(status);
   const childCount = part.childTools.length;
   const capturedToolCount = part.childTools.filter(
     (child) => child.type === "tool-invocation",
@@ -1365,7 +1373,7 @@ function TaskGroupPart({
     const latestChild = part.childTools.at(-1);
     if (!latestChild) {
       return description ?? (
-        isTerminalAgentState(part.task.toolState)
+        isTerminalAgentStatus(status)
           ? "No activity captured."
           : "Waiting for activity."
       );
@@ -1391,7 +1399,7 @@ function TaskGroupPart({
       ) ||
       getToolDisplayName(latestChild.toolName, latestChild.content)
     );
-  }, [description, part.childTools, part.task.toolState]);
+  }, [description, part.childTools, status]);
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
@@ -1420,7 +1428,7 @@ function TaskGroupPart({
               <span
                 className={cn(
                   "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium",
-                  getSubagentStatusClasses(part.task.toolState),
+                  getSubagentStatusClasses(status),
                 )}
               >
                 {statusLabel}

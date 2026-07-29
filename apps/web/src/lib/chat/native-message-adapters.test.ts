@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type { NativeMessage } from "./native-message-types";
 import {
+  applyClaudeBackgroundTaskStates,
   dedupeStreamedNativeParts,
   dropEmptyThinkingParts,
   getClaudeSourceMessageId,
@@ -18,6 +19,69 @@ import {
 } from "./native-message-adapters";
 
 describe("native message adapters", () => {
+  test("joins authoritative Claude background-agent state by tool use id", () => {
+    const messages: ClaudeMessage[] = [{
+      id: "assistant-background-agent",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:00:00.000Z",
+      parts: [{
+        type: "tool-invocation",
+        content: "Agent",
+        toolName: "Agent",
+        toolUseId: "agent-launch",
+        toolState: "success",
+      }],
+    }];
+
+    const active = applyClaudeBackgroundTaskStates(messages, {
+      "child-task": {
+        id: "child-task",
+        toolUseId: "agent-launch",
+        status: "running",
+      },
+    });
+    expect(active[0]?.parts[0]).toMatchObject({
+      toolState: "success",
+      agentState: "active",
+    });
+    expect(messages[0]?.parts[0]?.agentState).toBeUndefined();
+
+    const finished = applyClaudeBackgroundTaskStates(messages, {
+      "child-task": {
+        id: "child-task",
+        toolUseId: "agent-launch",
+        status: "completed",
+      },
+    });
+    expect(finished[0]?.parts[0]).toMatchObject({ agentState: "finished" });
+  });
+
+  test("never correlates Claude background tasks by description", () => {
+    const messages: ClaudeMessage[] = [{
+      id: "assistant-unmatched-agent",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:00:00.000Z",
+      parts: [{
+        type: "tool-invocation",
+        toolName: "Task",
+        toolUseId: "different-tool-use",
+        toolState: "success",
+        toolArgs: { description: "Same description" },
+      }],
+    }];
+
+    expect(applyClaudeBackgroundTaskStates(messages, {
+      task: {
+        id: "task",
+        toolUseId: "actual-tool-use",
+        description: "Same description",
+        status: "running",
+      },
+    })).toBe(messages);
+  });
+
   test("preserves model attribution through provider-neutral normalization", () => {
     const message: NativeMessage = {
       id: "native-model",

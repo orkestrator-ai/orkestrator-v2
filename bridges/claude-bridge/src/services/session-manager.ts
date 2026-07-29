@@ -4623,6 +4623,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         const taskMessage = message as {
           subtype?: string;
           task_id?: string;
+          tool_use_id?: string;
           description?: string;
           summary?: string;
           /** Only on `task_notification`; the terminal edge of a task. */
@@ -4659,6 +4660,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           const previous = session.backgroundTasks?.[taskMessage.task_id];
           const task: BackgroundTaskSnapshot = {
             id: taskMessage.task_id,
+            toolUseId: taskMessage.tool_use_id ?? previous?.toolUseId,
             description:
               taskMessage.patch?.description
               ?? taskMessage.description
@@ -4698,6 +4700,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
                 : "completed";
           const task: BackgroundTaskSnapshot = {
             id: taskMessage.task_id,
+            toolUseId: taskMessage.tool_use_id ?? previous?.toolUseId,
             description:
               previous?.description
               ?? taskMessage.description
@@ -4739,6 +4742,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             const previous = session.backgroundTasks?.[id];
             replacement[id] = {
               id,
+              toolUseId: previous?.toolUseId,
               description: entry.description ?? previous?.description,
               status: LIVE_BACKGROUND_TASK_STATUSES.has(previous?.status ?? "running")
                 ? (previous?.status ?? "running")

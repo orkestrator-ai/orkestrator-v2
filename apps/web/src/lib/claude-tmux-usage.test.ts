@@ -152,6 +152,7 @@ Running 2 Explore agents...
       tokenCount: 20_400,
       tokenCountText: "20.4k tokens",
       agentUsageDisplay: "token-only",
+      agentState: "active",
     });
     expect(updated?.parts[1]).not.toHaveProperty("toolUseCount");
   });
@@ -298,7 +299,7 @@ Running 3 Worker agents...
     });
   });
 
-  test("applies exact token-only matches to completed agents", () => {
+  test("marks exact token-only matches active even after their launch tool succeeds", () => {
     const message: ClaudeMessage = {
       id: "assistant-1",
       role: "assistant",
@@ -335,6 +336,7 @@ Running 3 Worker agents...
       tokenCount: 45_700,
       tokenCountText: "45.7k tokens",
       agentUsageDisplay: "token-only",
+      agentState: "active",
     });
     expect(updated?.parts[0]).not.toHaveProperty("toolUseCount");
   });

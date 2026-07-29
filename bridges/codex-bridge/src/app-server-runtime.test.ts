@@ -1158,6 +1158,29 @@ describe("session lifecycle", () => {
     });
   });
 
+  test("create is idempotent for one stable client tab key", async () => {
+    const h = await harness();
+    const first = h.runtime.createSession({
+      mode: "build",
+      clientSessionKey: "env-1:tab-1",
+    });
+    const duplicate = h.runtime.createSession({
+      mode: "plan",
+      clientSessionKey: "env-1:tab-1",
+    });
+    const otherTab = h.runtime.createSession({
+      mode: "build",
+      clientSessionKey: "env-1:tab-2",
+    });
+
+    expect(duplicate.sessionId).toBe(first.sessionId);
+    expect(otherTab.sessionId).not.toBe(first.sessionId);
+    expect(h.runtime.getRegistry().listSessions()).toHaveLength(2);
+    // The first accepted create owns configuration; a racing duplicate must
+    // not mutate a logical tab before its first prompt.
+    expect(h.runtime.getRegistry().getSession(first.sessionId)?.config.mode).toBe("build");
+  });
+
   test("the first prompt creates the thread and dispatches a turn", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

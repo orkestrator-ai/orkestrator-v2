@@ -121,6 +121,70 @@ describe("item/completed is authoritative", () => {
     expect(turn.items.get("item-1")!.completed).toBe(true);
   });
 
+  test("a raw failed patch remains visible until a structured item supersedes it", () => {
+    const turn = accumulator();
+    turn.onItemStarted({
+      id: "call-patch",
+      type: "dynamic_tool_call",
+      tool: "apply_patch",
+      arguments: "*** Begin Patch",
+      content_items: [],
+      status: "in_progress",
+    });
+
+    expect(turn.onDynamicToolOutput(
+      "call-patch",
+      "apply_patch verification failed: Failed to find expected lines",
+    )).toBe(true);
+    expect(turn.items.get("call-patch")?.item).toMatchObject({
+      type: "dynamic_tool_call",
+      tool: "apply_patch",
+      arguments: "*** Begin Patch",
+      status: "failed",
+      content_items: [{
+        type: "inputText",
+        text: "apply_patch verification failed: Failed to find expected lines",
+      }],
+    });
+
+    turn.onItemCompleted({
+      id: "call-patch",
+      type: "file_change",
+      changes: [{ path: "src/example.ts", kind: "update" }],
+      status: "completed",
+    });
+    expect(turn.itemOrder).toEqual(["call-patch"]);
+    expect(turn.items.get("call-patch")?.item).toMatchObject({
+      type: "file_change",
+      status: "completed",
+    });
+  });
+
+  test("an unrelated raw output cannot create an orphan tool item", () => {
+    const turn = accumulator();
+    expect(turn.onDynamicToolOutput("unknown-call", "output")).toBe(false);
+    expect(turn.itemOrder).toEqual([]);
+  });
+
+  test("raw custom output cannot overwrite another dynamic tool", () => {
+    const turn = accumulator();
+    turn.onItemStarted({
+      id: "exec-1",
+      type: "dynamic_tool_call",
+      tool: "exec_command",
+      arguments: { cmd: "true" },
+      content_items: [],
+      status: "in_progress",
+    });
+
+    expect(turn.onDynamicToolOutput("exec-1", "completed")).toBe(false);
+    expect(turn.items.get("exec-1")?.item).toMatchObject({
+      type: "dynamic_tool_call",
+      tool: "exec_command",
+      status: "in_progress",
+    });
+  });
+
   test("a repeated item/started does not reset streamed text", () => {
     const turn = accumulator();
     turn.onItemStarted(agentMessage("item-1", ""));

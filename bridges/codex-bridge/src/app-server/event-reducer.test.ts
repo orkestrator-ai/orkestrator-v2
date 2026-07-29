@@ -447,6 +447,66 @@ describe("deltas", () => {
     expect(events[0]).toMatchObject({ kind: "item.command.outputDelta", delta: "line\n" });
   });
 
+  test("raw apply_patch calls provide a fallback when no fileChange item exists", () => {
+    expect(reduce("rawResponseItem/completed", {
+      threadId: "t1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "call-patch",
+        name: "apply_patch",
+        input: "*** Begin Patch",
+        status: "completed",
+      },
+    })).toEqual([{
+      kind: "item.started",
+      threadId: "t1",
+      turnId: "turn-1",
+      item: {
+        id: "call-patch",
+        type: "dynamic_tool_call",
+        tool: "apply_patch",
+        arguments: "*** Begin Patch",
+        content_items: [],
+        status: "in_progress",
+      },
+      engineGeneration: 1,
+      handle: "handle-1",
+    }]);
+
+    expect(reduce("rawResponseItem/completed", {
+      threadId: "t1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call_output",
+        call_id: "call-patch",
+        output: "apply_patch verification failed: missing context",
+      },
+    })).toEqual([{
+      kind: "item.dynamic.output",
+      threadId: "t1",
+      turnId: "turn-1",
+      itemId: "call-patch",
+      output: "apply_patch verification failed: missing context",
+      engineGeneration: 1,
+      handle: "handle-1",
+    }]);
+  });
+
+  test("raw non-patch calls are not introduced as duplicate transcript items", () => {
+    expect(reduce("rawResponseItem/completed", {
+      threadId: "t1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "call-exec",
+        name: "exec",
+        input: "tools.exec_command({ cmd: 'git status' })",
+        status: "completed",
+      },
+    })).toEqual([]);
+  });
+
   test("turn diff", () => {
     const events = reduce("turn/diff/updated", {
       threadId: "t1",
@@ -489,6 +549,7 @@ describe("unknown and ignored notifications", () => {
       "item/started",
       "item/completed",
       "item/agentMessage/delta",
+      "rawResponseItem/completed",
       "turn/diff/updated",
       "thread/settings/updated",
       "model/rerouted",

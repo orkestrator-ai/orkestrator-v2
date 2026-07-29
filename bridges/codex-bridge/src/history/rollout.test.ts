@@ -1287,7 +1287,7 @@ describe("rollout public helpers (continued)", () => {
           content: "apply_patch",
           toolName: "apply_patch",
           toolArgs: { input: "*** Begin Patch" },
-          // A custom_tool_call does state its outcome, so that outcome is kept.
+          // This successful patch output agrees with the call record.
           toolState: "success",
           toolTitle: "apply_patch",
           toolOutput: "Patch applied to 1 file",
@@ -1453,6 +1453,39 @@ describe("rollout public helpers (continued)", () => {
       toolState: "failure",
       toolOutput: undefined,
       toolError: "Patch did not apply",
+    });
+  });
+
+  test("a completed apply_patch call is failed when its output reports verification failure", async () => {
+    const hydrated = await hydrateRollout("thread-patch-verification-failed", [
+      sessionMeta("thread-patch-verification-failed"),
+      { type: "turn_context", payload: { turn_id: "turn-1", cwd: "/workspace" } },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "apply_patch",
+          call_id: "call-patch",
+          input: "*** Begin Patch",
+          // Codex records call emission as completed even when application fails.
+          status: "completed",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "call-patch",
+          output: "apply_patch verification failed: Failed to find expected lines",
+        },
+      },
+    ]);
+
+    expect(hydrated.messages[0]?.parts[0]).toMatchObject({
+      toolName: "apply_patch",
+      toolState: "failure",
+      toolOutput: undefined,
+      toolError: "apply_patch verification failed: Failed to find expected lines",
     });
   });
 

@@ -31,6 +31,7 @@ import {
 import {
   applyTranscriptToolOutput,
   normalizeTranscriptToolArgs,
+  resolveTranscriptToolOutputState,
 } from "../subagent-transcript.js";
 
 export interface PersistedSessionIndexEntry {
@@ -763,8 +764,15 @@ function createPersistedToolPart(
 function persistedOutputState(
   payloadType: unknown,
   part: NormalizedPart,
+  output: unknown,
 ): ToolState | null {
-  return payloadType === "custom_tool_call_output" ? (part.toolState ?? null) : null;
+  return payloadType === "custom_tool_call_output"
+    ? resolveTranscriptToolOutputState(
+        part.toolName,
+        output,
+        part.toolState ?? null,
+      )
+    : null;
 }
 
 /**
@@ -938,7 +946,7 @@ export async function hydrateMessagesFromPersistedSession(
         target.message.parts[target.partIndex] = applyTranscriptToolOutput(
           existing,
           payload.output,
-          persistedOutputState(payload.type, existing),
+          persistedOutputState(payload.type, existing, payload.output),
         );
       }
       continue;

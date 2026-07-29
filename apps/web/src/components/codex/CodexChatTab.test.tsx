@@ -1030,6 +1030,10 @@ describe("CodexChatTab", () => {
     await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
 
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    expect(mockCreateSession).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ clientSessionKey: SESSION_KEY }),
+    );
     expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(1);
   });
 

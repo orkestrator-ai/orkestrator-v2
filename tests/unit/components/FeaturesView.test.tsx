@@ -488,18 +488,27 @@ function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
 function seedPipeline(
   { taskId = "task-1", environmentId, failed = false }: { taskId?: string; environmentId?: string; failed?: boolean } = {},
 ): string {
-  const store = useBuildPipelineStore.getState();
-  const id = store.createPipeline({
+  const id = `pipeline-${taskId}`;
+  useBuildPipelineStore.getState().replacePipeline({
+    id,
     taskId,
     projectId: "project-1",
+    environmentId: environmentId ?? "",
     environmentType: "containerized",
     agentType: "codex",
+    phase: failed ? "failed" : "building",
+    sessions: [],
+    currentSessionIndex: -1,
+    iteration: 0,
+    maxIterations: 3,
+    createdAt: NOW,
     taskTitle: "Task",
     taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "", comments: [], images: [] },
     source: { type: "kanban", taskId },
+    ...(failed ? { error: "failed to start environment" } : {}),
+    backendRevision: 1,
+    controller: "backend",
   });
-  if (environmentId) store.setPipelineEnvironment(id, environmentId);
-  if (failed) store.setPipelineError(id, "failed to start environment");
   return id;
 }
 
@@ -4860,7 +4869,7 @@ describe("FeaturesView build action", () => {
       "codex",
       expect.objectContaining({
         existingEnvironmentId: "env-feature",
-        onPipelineLinked: expect.any(Function),
+        featurePlanId: "feature-1",
       }),
     );
     await waitFor(() => {
@@ -5050,7 +5059,7 @@ describe("FeaturesView build action", () => {
       "codex",
       expect.objectContaining({
         existingEnvironmentId: undefined,
-        onPipelineLinked: expect.any(Function),
+        featurePlanId: "feature-1",
       }),
     ));
   });
@@ -5086,7 +5095,7 @@ describe("FeaturesView build action", () => {
       "codex",
       expect.objectContaining({
         existingEnvironmentId: undefined,
-        onPipelineLinked: expect.any(Function),
+        featurePlanId: "feature-1",
       }),
     ));
   });

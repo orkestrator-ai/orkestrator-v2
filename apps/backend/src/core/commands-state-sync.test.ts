@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -30,6 +30,7 @@ async function withCommands<T>(
   options: {
     claudeStatePolls?: ClaudeStatePollManager;
     environment?: Record<string, unknown>;
+    buildPipelines?: CommandContext["buildPipelines"];
   } = {},
 ): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-state-sync-"));
@@ -51,6 +52,7 @@ async function withCommands<T>(
     toolchainBinDir: "",
     emit: () => undefined,
     storage,
+    buildPipelines: options.buildPipelines,
   } as unknown as CommandContext;
 
   const invoke = async (command: string, args: Record<string, unknown>) => {
@@ -367,6 +369,169 @@ describe("agent handoff commands", () => {
 });
 
 describe("build pipeline commands", () => {
+  const startInput = {
+    taskId: "task-1",
+    projectId: "proj-1",
+    environmentType: "local",
+    agentType: "codex",
+    taskTitle: "Implement the feature",
+    taskSnapshot: {
+      title: "Implement the feature",
+      description: "Do the work",
+      acceptanceCriteria: "It works",
+      comments: [],
+      images: [],
+    },
+  } as const;
+
+  test("delegates lifecycle operations to the backend supervisor", async () => {
+    const start = mock(async (input: unknown) => ({ operation: "start", input }));
+    const pause = mock(async (id: string) => ({ operation: "pause", id }));
+    const resume = mock(async (id: string) => ({ operation: "resume", id }));
+    const cancel = mock(async (id: string) => ({ operation: "cancel", id }));
+    const retryCompletionComment = mock(async (id: string) => ({
+      operation: "retry",
+      id,
+    }));
+    const remove = mock(async (id: string) => ({ operation: "remove", id }));
+    const supervisor = {
+      start,
+      pause,
+      resume,
+      cancel,
+      retryCompletionComment,
+      remove,
+    } as unknown as NonNullable<CommandContext["buildPipelines"]>;
+
+    await withCommands(async (invoke, storage) => {
+      await expect(invoke("start_build_pipeline", startInput))
+        .resolves.toMatchObject({ operation: "start" });
+      await expect(invoke("pause_build_pipeline", { pipelineId: "pipeline-1" }))
+        .resolves.toEqual({ operation: "pause", id: "pipeline-1" });
+      await expect(invoke("resume_build_pipeline", { pipelineId: "pipeline-1" }))
+        .resolves.toEqual({ operation: "resume", id: "pipeline-1" });
+      await expect(invoke("cancel_build_pipeline", { pipelineId: "pipeline-1" }))
+        .resolves.toEqual({ operation: "cancel", id: "pipeline-1" });
+      await expect(invoke("retry_build_pipeline_completion_comment", {
+        pipelineId: "pipeline-1",
+      })).resolves.toEqual({ operation: "retry", id: "pipeline-1" });
+
+      await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
+        id: "pipeline-1",
+      });
+      await expect(invoke("delete_build_pipeline", { pipelineId: "pipeline-1" }))
+        .resolves.toEqual({ operation: "remove", id: "pipeline-1" });
+      expect(await storage.getBuildPipeline("pipeline-1")).not.toBeNull();
+
+      expect(start).toHaveBeenCalledWith(startInput);
+      expect(pause).toHaveBeenCalledWith("pipeline-1");
+      expect(resume).toHaveBeenCalledWith("pipeline-1");
+      expect(cancel).toHaveBeenCalledWith("pipeline-1");
+      expect(retryCompletionComment).toHaveBeenCalledWith("pipeline-1");
+      expect(remove).toHaveBeenCalledWith("pipeline-1");
+    }, { buildPipelines: supervisor });
+  });
+
+  test("validates lifecycle arguments before invoking the supervisor", async () => {
+    const start = mock(async () => undefined);
+    const pause = mock(async () => undefined);
+    const supervisor = {
+      start,
+      pause,
+      resume: pause,
+      cancel: pause,
+      retryCompletionComment: pause,
+      remove: pause,
+    } as unknown as NonNullable<CommandContext["buildPipelines"]>;
+
+    await withCommands(async (invoke) => {
+      await expect(invoke("start_build_pipeline", {
+        ...startInput,
+        taskSnapshot: { ...startInput.taskSnapshot, images: "not-an-array" },
+      })).rejects.toThrow("Invalid build pipeline start request");
+      await expect(invoke("pause_build_pipeline", { pipelineId: "   " }))
+        .rejects.toThrow("non-blank string");
+      await expect(invoke("resume_build_pipeline", { pipelineId: 7 }))
+        .rejects.toThrow("string");
+      await expect(invoke("cancel_build_pipeline", {}))
+        .rejects.toThrow("string");
+      await expect(invoke("retry_build_pipeline_completion_comment", {
+        pipelineId: "",
+      })).rejects.toThrow("non-blank string");
+      await expect(invoke("delete_build_pipeline", { pipelineId: " " }))
+        .rejects.toThrow("non-blank string");
+      await expect(invoke("get_build_pipeline", { pipelineId: "" }))
+        .rejects.toThrow("non-blank string");
+      await expect(invoke("list_build_pipelines", { projectId: " " }))
+        .rejects.toThrow("non-blank string");
+
+      expect(start).not.toHaveBeenCalled();
+      expect(pause).not.toHaveBeenCalled();
+    }, { buildPipelines: supervisor });
+  });
+
+  test("imports legacy snapshots only through the backend supervisor", async () => {
+    const importLegacy = mock(async (projectId: string, snapshots: unknown[]) => ({
+      importedIds: snapshots.map((_, index) => `${projectId}-${index}`),
+      skipped: 0,
+    }));
+    const snapshots = [{ id: "legacy-1" }, { id: "legacy-2" }];
+    const supervisor = {
+      importLegacy,
+    } as unknown as NonNullable<CommandContext["buildPipelines"]>;
+
+    await withCommands(async (invoke) => {
+      await expect(invoke("import_legacy_build_pipelines", {
+        projectId: "proj-1",
+        snapshots,
+      })).resolves.toEqual({
+        importedIds: ["proj-1-0", "proj-1-1"],
+        skipped: 0,
+      });
+      expect(importLegacy).toHaveBeenCalledWith("proj-1", snapshots);
+
+      await expect(invoke("import_legacy_build_pipelines", {
+        projectId: " ",
+        snapshots,
+      })).rejects.toThrow("non-blank string");
+      await expect(invoke("import_legacy_build_pipelines", {
+        projectId: "proj-1",
+        snapshots: {},
+      })).rejects.toThrow("snapshots to be an array");
+      await expect(invoke("import_legacy_build_pipelines", {
+        projectId: "proj-1",
+        snapshots: Array.from({ length: 101 }, () => ({})),
+      })).rejects.toThrow("limited to 100 snapshots");
+      expect(importLegacy).toHaveBeenCalledTimes(1);
+    }, { buildPipelines: supervisor });
+  });
+
+  test("reports unavailable supervision and keeps deletion recoverable", async () => {
+    await withCommands(async (invoke, storage) => {
+      for (const [command, args] of [
+        ["start_build_pipeline", startInput],
+        ["pause_build_pipeline", { pipelineId: "pipeline-1" }],
+        ["resume_build_pipeline", { pipelineId: "pipeline-1" }],
+        ["cancel_build_pipeline", { pipelineId: "pipeline-1" }],
+        ["retry_build_pipeline_completion_comment", { pipelineId: "pipeline-1" }],
+        ["import_legacy_build_pipelines", {
+          projectId: "proj-1",
+          snapshots: [],
+        }],
+      ] as const) {
+        await expect(invoke(command, args))
+          .rejects.toThrow("Build pipeline supervisor is unavailable");
+      }
+
+      await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
+        id: "pipeline-1",
+      });
+      await expect(invoke("delete_build_pipeline", { pipelineId: "pipeline-1" }))
+        .resolves.toBeUndefined();
+      expect(await storage.getBuildPipeline("pipeline-1")).toBeNull();
+    });
+  });
+
   test("rejects client-authored snapshots while preserving reads and deletion", async () => {
     await withCommands(async (invoke, storage) => {
       await expect(invoke("save_build_pipeline", {

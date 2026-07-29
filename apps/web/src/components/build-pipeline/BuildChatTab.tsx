@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
+import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
 
 interface BuildChatTabProps {
   data: BuildTabData;
@@ -228,6 +229,7 @@ export function BuildChatTab({ data }: BuildChatTabProps) {
           {pipeline.error}
         </div>
       )}
+      <GitHubCompletionCommentStatus pipeline={pipeline} />
 
       <div className="flex min-h-0 flex-1">
         <ScrollArea className="w-56 shrink-0 border-r">

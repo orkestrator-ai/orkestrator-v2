@@ -120,6 +120,21 @@ async function withService(
     storage: StorageService,
     provider: FakeProvider,
     invocations: Array<{ command: string; args: Record<string, unknown> }>,
+    controls: {
+      detection: {
+        url: string;
+        state: "open" | "merged" | "closed";
+        hasMergeConflicts: boolean;
+      } | null;
+      failCommands: Set<string>;
+      kanbanTasks: Map<string, {
+        id: string;
+        status: string;
+        prUrl?: string;
+        prState?: string;
+        comments: Array<{ text: string }>;
+      }>;
+    },
   ) => Promise<void>,
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-runner-"));
@@ -147,20 +162,79 @@ async function withService(
     command: string;
     args: Record<string, unknown>;
   }> = [];
+  const kanbanTasks = new Map<string, {
+    id: string;
+    status: string;
+    prUrl?: string;
+    prState?: string;
+    comments: Array<{ text: string }>;
+  }>();
+  const controls = {
+    detection: {
+      url: "https://github.com/acme/repo/pull/1",
+      state: "open" as const,
+      hasMergeConflicts: false,
+    } as {
+      url: string;
+      state: "open" | "merged" | "closed";
+      hasMergeConflicts: boolean;
+    } | null,
+    failCommands: new Set<string>(),
+    kanbanTasks,
+  };
   const invoke = async <T>(
     command: string,
     args: Record<string, unknown> = {},
   ): Promise<T> => {
     invocations.push({ command, args });
-    if (command === "detect_pr_local") return null as T;
+    if (controls.failCommands.has(command)) {
+      throw new Error(`${command} failed`);
+    }
+    if (command === "detect_pr_local") {
+      return controls.detection as T;
+    }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
     }
     if (command === "update_environment_agent_settings") {
       return (await storage.getEnvironment("env-1")) as T;
     }
-    if (command === "update_kanban_task") return undefined as T;
+    if (command === "get_kanban_tasks") {
+      return [...kanbanTasks.values()] as T;
+    }
+    if (command === "update_kanban_task") {
+      const taskId = String(args.taskId);
+      const task = kanbanTasks.get(taskId) ?? {
+        id: taskId,
+        status: "backlog",
+        comments: [],
+      };
+      Object.assign(task, args);
+      kanbanTasks.set(taskId, task);
+      return task as T;
+    }
+    if (command === "add_kanban_comment") {
+      const taskId = String(args.taskId);
+      const task = kanbanTasks.get(taskId) ?? {
+        id: taskId,
+        status: "backlog",
+        comments: [],
+      };
+      task.comments.push({ text: String(args.text) });
+      kanbanTasks.set(taskId, task);
+      return undefined as T;
+    }
     if (command === "update_feature_plan") return undefined as T;
+    if (command === "pr_monitor_watch") return undefined as T;
+    if (
+      command === "post_linear_completion_comment"
+      || command === "post_github_completion_comment"
+    ) {
+      return {
+        commentId: "comment-1",
+        postedAt: new Date(1).toISOString(),
+      } as T;
+    }
     throw new Error(`Unexpected command: ${command}`);
   };
   const service = new BuildPipelineService(storage, invoke, {
@@ -168,9 +242,9 @@ async function withService(
     provider: async () => provider,
   });
   try {
-    await run(service, storage, provider, invocations);
+    await run(service, storage, provider, invocations, controls);
   } finally {
-    service.shutdown();
+    await service.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }
@@ -182,6 +256,27 @@ async function pipeline(
   const stored = await storage.getBuildPipeline(id);
   if (!stored) throw new Error("Pipeline disappeared");
   return stored.snapshot as BuildPipeline;
+}
+
+function startInput(
+  overrides: Partial<Parameters<BuildPipelineService["start"]>[0]> = {},
+): Parameters<BuildPipelineService["start"]>[0] {
+  return {
+    taskId: "task-default",
+    projectId: "project-1",
+    environmentType: "local",
+    agentType: "claude",
+    taskTitle: "Backend pipeline",
+    taskSnapshot: {
+      title: "Backend pipeline",
+      description: "Move the runner",
+      acceptanceCriteria: "No renderer orchestration",
+      comments: [],
+      images: [],
+    },
+    existingEnvironmentId: "env-1",
+    ...overrides,
+  };
 }
 
 describe("BuildPipelineService", () => {
@@ -210,7 +305,7 @@ describe("BuildPipelineService", () => {
         environmentId: "env-1",
       });
 
-      for (let pass = 0; pass < 7; pass += 1) {
+      for (let pass = 0; pass < 6; pass += 1) {
         await service.advanceNow(started.id);
       }
 
@@ -427,8 +522,468 @@ describe("BuildPipelineService", () => {
         phase: "starting-environment",
       });
     } finally {
-      service.shutdown();
+      await service.shutdown();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
+  });
+
+  test("rejects missing and cross-project existing environments before persisting", async () => {
+    await withService(async (service, storage) => {
+      await expect(service.start(startInput({
+        existingEnvironmentId: "missing",
+      }))).rejects.toThrow("does not belong to this project");
+      await storage.addEnvironment({
+        id: "foreign-env",
+        projectId: "project-2",
+        name: "foreign",
+        branch: "foreign",
+        containerId: null,
+        status: "running",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "full",
+        order: 0,
+        environmentType: "local",
+        worktreePath: "/tmp/foreign",
+      });
+      await expect(service.start(startInput({
+        existingEnvironmentId: "foreign-env",
+      }))).rejects.toThrow("does not belong to this project");
+      expect(await storage.listBuildPipelines("project-1")).toEqual([]);
+    });
+  });
+
+  test("resume dispatches durable continuation work instead of advancing an aborted stage", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      expect(provider.sent).toHaveLength(1);
+
+      await service.pause(started.id);
+      expect((await pipeline(storage, started.id)).sessions[0]?.status).toBe("idle");
+      await service.resume(started.id);
+      await service.advanceNow(started.id);
+
+      const resumed = await pipeline(storage, started.id);
+      expect(resumed.phase).toBe("building");
+      expect(resumed.sessions[0]?.status).toBe("running");
+      expect(provider.sent).toHaveLength(2);
+      expect(resumed.pendingPromptAttempt).toBeUndefined();
+    });
+  });
+
+  test("persists pause and cancel intent even when abort cannot be confirmed", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      provider.abort = async () => {
+        throw new Error("bridge disconnected");
+      };
+
+      await expect(service.pause(started.id)).rejects.toThrow("bridge disconnected");
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "paused",
+        error: expect.stringContaining("could not be confirmed"),
+      });
+
+      await service.resume(started.id);
+      await expect(service.cancel(started.id)).rejects.toThrow("bridge disconnected");
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: expect.stringContaining("could not be confirmed"),
+      });
+    });
+  });
+
+  test("does not complete until PR detection returns an authoritative result", async () => {
+    await withService(async (service, storage, _provider, invocations, controls) => {
+      controls.detection = null;
+      const started = await service.start(startInput());
+      for (let pass = 0; pass < 6; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+      expect((await pipeline(storage, started.id)).phase).toBe("creating-pr");
+      expect(invocations).toContainEqual({
+        command: "pr_monitor_watch",
+        args: { environmentId: "env-1", mode: "create-pending" },
+      });
+
+      controls.detection = {
+        url: "https://github.com/acme/repo/pull/42",
+        state: "open",
+        hasMergeConflicts: false,
+      };
+      await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).phase).toBe("complete");
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        prUrl: "https://github.com/acme/repo/pull/42",
+        prState: "open",
+        hasMergeConflicts: false,
+      });
+    });
+  });
+
+  test("restores Kanban lifecycle transitions, comments, and PR metadata idempotently", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      const started = await service.start(startInput({
+        taskId: "task-kanban",
+        source: { type: "kanban", taskId: "task-kanban" },
+      }));
+      for (let pass = 0; pass < 6; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+      const task = controls.kanbanTasks.get("task-kanban");
+      expect((await pipeline(storage, started.id)).phase).toBe("complete");
+      expect(task).toMatchObject({
+        status: "review",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open",
+      });
+      expect(task?.comments.map((comment) => comment.text)).toEqual([
+        "🔨 Build started",
+        "✅ Validation complete",
+        "🔗 PR raised: https://github.com/acme/repo/pull/1",
+      ]);
+      await service.advanceNow(started.id);
+      expect(task?.comments).toHaveLength(3);
+    });
+  });
+
+  test("persists terminal comment failures and retries the idempotent command", async () => {
+    await withService(async (service, storage, _provider, invocations, controls) => {
+      controls.failCommands.add("post_github_completion_comment");
+      const started = await service.start(startInput({
+        source: {
+          type: "github",
+          repositoryOwner: "acme",
+          repositoryName: "repo",
+          issueNumber: 7,
+          issueUrl: "https://github.com/acme/repo/issues/7",
+          status: "open",
+        },
+      }));
+      for (let pass = 0; pass < 6; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "complete",
+        completionCommentStatus: "failed",
+        completionCommentError: "post_github_completion_comment failed",
+      });
+
+      controls.failCommands.delete("post_github_completion_comment");
+      const retried = await service.retryCompletionComment(started.id);
+      expect(retried).toMatchObject({
+        completionCommentStatus: "posted",
+        completionCommentId: "comment-1",
+      });
+      expect(invocations.filter((entry) =>
+        entry.command === "post_github_completion_comment")).toHaveLength(2);
+    });
+  });
+
+  test("imports only valid unowned legacy snapshots and never overwrites backend records", async () => {
+    await withService(async (service, storage) => {
+      const legacy = {
+        ...startInput(),
+        id: "legacy-pipeline",
+        environmentId: "env-1",
+        phase: "building",
+        sessions: [],
+        currentSessionIndex: -1,
+        iteration: 0,
+        maxIterations: 3,
+        createdAt: new Date(0).toISOString(),
+        backendRevision: 99,
+      };
+      delete (legacy as { existingEnvironmentId?: string }).existingEnvironmentId;
+      delete (legacy as { namingPrompt?: string }).namingPrompt;
+
+      const first = await service.importLegacy("project-1", [
+        legacy,
+        { id: "malformed" },
+        { ...legacy, id: "foreign", projectId: "project-2" },
+      ]);
+      expect(first).toEqual({ importedIds: ["legacy-pipeline"], skipped: 2 });
+      expect(await pipeline(storage, "legacy-pipeline")).toMatchObject({
+        controller: "backend",
+        backendRevision: 1,
+      });
+      const duplicate = await service.importLegacy("project-1", [legacy]);
+      expect(duplicate).toEqual({ importedIds: [], skipped: 1 });
+    });
+  });
+
+  test("coalesces a timer-style provisioning race without losing the custom name prompt", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-race-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    let service: BuildPipelineService;
+    let createCalls = 0;
+    let observedNamingPrompt: unknown;
+    let buildPipelineEvents = 0;
+    const invoke = async <T>(
+      command: string,
+      args: Record<string, unknown> = {},
+    ): Promise<T> => {
+      if (command !== "create_environment") {
+        throw new Error(`Unexpected command: ${command}`);
+      }
+      createCalls += 1;
+      observedNamingPrompt = args.namingPrompt;
+      const environment = await storage.addEnvironment({
+        id: "created-env",
+        projectId: "project-1",
+        buildPipelineId: String(args.buildPipelineId),
+        name: "created",
+        branch: "created",
+        containerId: null,
+        status: "stopped",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "full",
+        order: 0,
+        environmentType: "local",
+        worktreePath: "/tmp/created",
+      });
+      return environment as T;
+    };
+    service = new BuildPipelineService(storage, invoke, {
+      autoAdvance: false,
+      provider: async () => new FakeProvider(),
+    });
+    storage.setResourceChangeListener((change) => {
+      if (change.resource !== "build-pipeline") return;
+      buildPipelineEvents += 1;
+      if (buildPipelineEvents === 1) {
+        void service.advanceNow(change.id);
+      } else if (buildPipelineEvents === 2) {
+        // The environment association is now visible, but the provisioning
+        // pass has not necessarily released its lock. Model a timer callback
+        // scheduled at precisely that boundary.
+        queueMicrotask(() => {
+          void service.advanceNow(change.id);
+        });
+      }
+    });
+    try {
+      const started = await service.start(startInput({
+        existingEnvironmentId: undefined,
+        namingPrompt: "Use the customer's exact naming context",
+      }));
+      expect(started.environmentId).toBe("created-env");
+      expect(started.sourceLinkedAt).toBeString();
+      expect(started.phase).toBe("starting-environment");
+      expect(createCalls).toBe(1);
+      expect(observedNamingPrompt).toBe("Use the customer's exact naming context");
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("shutdown waits for an in-flight supervisor pass before disposing providers", async () => {
+    await withService(async (service, _storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+
+      let resolveStatus!: (status: ProviderStatus) => void;
+      const statusResult = new Promise<ProviderStatus>((resolve) => {
+        resolveStatus = resolve;
+      });
+      let statusStarted = false;
+      provider.status = () => {
+        statusStarted = true;
+        return statusResult;
+      };
+      let shutdownFinished = false;
+      const advance = service.advanceNow(started.id);
+      while (!statusStarted) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      const shutdown = service.shutdown().then(() => {
+        shutdownFinished = true;
+      });
+      await Promise.resolve();
+      expect(shutdownFinished).toBe(false);
+      resolveStatus("running");
+      await advance;
+      await shutdown;
+      expect(shutdownFinished).toBe(true);
+    });
+  });
+
+  test("coalesces overlapping timer ticks into one in-flight wrapper and one rerun", async () => {
+    await withService(async (service, storage) => {
+      const originalList = storage.listAllBuildPipelines.bind(storage);
+      let releaseFirst!: () => void;
+      const firstList = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let listCalls = 0;
+      storage.listAllBuildPipelines = async () => {
+        listCalls += 1;
+        if (listCalls === 1) await firstList;
+        return originalList();
+      };
+      const scheduler = service as unknown as {
+        requestTick: () => Promise<void>;
+      };
+      const first = scheduler.requestTick();
+      const second = scheduler.requestTick();
+      const third = scheduler.requestTick();
+      expect(second).toBe(first);
+      expect(third).toBe(first);
+      expect(listCalls).toBe(1);
+      releaseFirst();
+      await first;
+      expect(listCalls).toBe(2);
+    });
+  });
+
+  for (const status of ["missing", "error"] as const) {
+    test(`fails durably when provider status is ${status}`, async () => {
+      await withService(async (service, storage, provider) => {
+        const started = await service.start(startInput());
+        await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
+        provider.status = async () => status;
+        await service.advanceNow(started.id);
+        expect(await pipeline(storage, started.id)).toMatchObject({
+          phase: "failed",
+          error: expect.stringContaining(
+            status === "missing" ? "no longer available" : "failed",
+          ),
+        });
+      });
+    });
+  }
+
+  test("rejects malformed structured review output instead of advancing", async () => {
+    await withService(async (service, storage, provider) => {
+      provider.structured = async <T>(
+        _sessionId: string,
+        requestId: string,
+      ): Promise<StructuredOutputResult<T>> => ({
+        ok: true,
+        provider: "claude",
+        requestId,
+        value: { issues: "not-an-array" } as T,
+      });
+      const started = await service.start(startInput());
+      for (let pass = 0; pass < 4; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: expect.any(String),
+      });
+    });
+  });
+
+  test("loops through fix work and stops at the verification iteration bound", async () => {
+    await withService(async (service, storage, provider) => {
+      provider.structured = async <T>(
+        sessionId: string,
+        requestId: string,
+      ): Promise<StructuredOutputResult<T>> => ({
+        ok: true,
+        provider: "claude",
+        requestId,
+        value: (provider.phases.get(sessionId) === "review"
+          ? cleanReview
+          : { complete: false, rationale: "Still failing acceptance checks." }) as T,
+      });
+      const started = await service.start(startInput({ maxIterations: 1 }));
+      for (let pass = 0; pass < 8; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+      const failed = await pipeline(storage, started.id);
+      expect(failed).toMatchObject({
+        phase: "failed",
+        iteration: 1,
+        verificationResult: "fail",
+        error: expect.stringContaining("failed after 1 iterations"),
+      });
+      expect(failed.sessions.map((session) => session.phase)).toEqual([
+        "build",
+        "review",
+        "verify",
+        "fix",
+        "review",
+        "verify",
+      ]);
+    });
+  });
+
+  test("persists a conflicting PR and completes only after resolution is verified", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      controls.detection = {
+        url: "https://github.com/acme/repo/pull/9",
+        state: "open",
+        hasMergeConflicts: true,
+      };
+      const started = await service.start(startInput());
+      for (let pass = 0; pass < 6; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "resolving-conflicts",
+      });
+      controls.detection = {
+        ...controls.detection,
+        hasMergeConflicts: false,
+      };
+      await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).phase).toBe("complete");
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        prUrl: "https://github.com/acme/repo/pull/9",
+        hasMergeConflicts: false,
+      });
+    });
+  });
+
+  test("init retries a terminal comment left in posting state after a crash", async () => {
+    await withService(async (service, storage, _provider, invocations, controls) => {
+      controls.failCommands.add("post_linear_completion_comment");
+      const started = await service.start(startInput({
+        source: {
+          type: "linear",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-1",
+        },
+      }));
+      for (let pass = 0; pass < 6; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+      const record = await storage.getBuildPipeline(started.id);
+      if (!record) throw new Error("Pipeline disappeared");
+      const snapshot = record.snapshot as BuildPipeline;
+      snapshot.completionCommentStatus = "posting";
+      delete snapshot.completionCommentError;
+      await storage.saveBuildPipeline(
+        snapshot.id,
+        snapshot.projectId,
+        snapshot.environmentId,
+        2,
+        snapshot,
+        record.revision,
+      );
+      controls.failCommands.delete("post_linear_completion_comment");
+      await service.init();
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        completionCommentStatus: "posted",
+        completionCommentId: "comment-1",
+      });
+      expect(invocations.filter((entry) =>
+        entry.command === "post_linear_completion_comment")).toHaveLength(2);
+    });
   });
 });

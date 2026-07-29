@@ -35,6 +35,7 @@ import {
 } from "@/lib/looped-review-persistence";
 import {
   hydrateBuildPipelinesForProject,
+  migrateLegacyBuildPipelines,
 } from "@/lib/build-pipeline-persistence";
 import {
   hydratePromptQueuesForEnvironment,
@@ -101,6 +102,13 @@ function App() {
   useEffect(() => startStoreResourceSync(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
   useEffect(() => startLoopedReviewPersistence(), []);
+  useEffect(() => {
+    void migrateLegacyBuildPipelines().catch((error) => {
+      // Keep the legacy key intact so the next launch can retry after a
+      // transient backend failure.
+      console.warn("[App] Failed to migrate legacy build pipelines:", error);
+    });
+  }, []);
   // One stable source set for the lifetime of the app: the mirror keys its
   // revision bookkeeping off these, so rebuilding them would drop it.
   const promptQueueSources = useMemo(() => createPromptQueueSources(), []);

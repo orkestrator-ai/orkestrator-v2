@@ -1,98 +1,54 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { invoke } from "@/lib/native/backend";
 import {
-  createPipelineResumePrompt,
-  getPipelineResumePhase,
-  isSessionCompatibleWithResumePhase,
-} from "../../../apps/web/src/lib/build-pipeline-resume";
-import type {
-  BuildPipeline,
-  PipelineSession,
-  ResumableBuildPhase,
-} from "../../../apps/web/src/stores/buildPipelineStore";
+  getBuildPipeline,
+  resumeBuildPipeline,
+} from "../../../apps/web/src/lib/backend";
 
-function createSession(phase: PipelineSession["phase"]): PipelineSession {
-  return {
-    phase,
-    iteration: 0,
-    sessionKey: "env-1:build",
-    sdkSessionId: "session-1",
-    status: "idle",
-    startedAt: "2026-06-22T00:00:00.000Z",
-    label: "Build Session",
-  };
-}
+const invokeMock = invoke as ReturnType<typeof mock>;
 
-function createPipeline(
-  sessionPhase: PipelineSession["phase"] | null,
-  overrides: Partial<Pick<BuildPipeline, "pausedFromPhase" | "currentSessionIndex">> = {},
-): Pick<BuildPipeline, "pausedFromPhase" | "sessions" | "currentSessionIndex"> {
-  return {
-    pausedFromPhase: overrides.pausedFromPhase,
-    sessions: sessionPhase ? [createSession(sessionPhase)] : [],
-    currentSessionIndex: overrides.currentSessionIndex ?? (sessionPhase ? 0 : -1),
-  };
-}
-
-describe("build-pipeline-resume", () => {
-  test("prefers the phase captured when the pipeline was paused", () => {
-    const pipeline = createPipeline("build", { pausedFromPhase: "verifying" });
-
-    expect(getPipelineResumePhase(pipeline)).toBe("verifying");
+describe("backend-owned build pipeline resume", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
   });
 
-  test.each([
-    ["build", "building"],
-    ["review", "reviewing"],
-    ["verify", "verifying"],
-    ["fix", "fixing"],
-    ["pr", "creating-pr"],
-    ["resolve-conflicts", "resolving-conflicts"],
-  ] as const)("maps %s sessions to %s", (sessionPhase, resumePhase) => {
-    expect(getPipelineResumePhase(createPipeline(sessionPhase))).toBe(resumePhase);
+  test("delegates resume to the authoritative backend state machine", async () => {
+    const resumed = {
+      id: "pipeline-1",
+      phase: "building",
+      controller: "backend",
+      backendRevision: 4,
+    };
+    invokeMock.mockResolvedValueOnce(resumed);
+
+    await expect(resumeBuildPipeline("pipeline-1")).resolves.toBe(resumed);
+    expect(invokeMock).toHaveBeenCalledWith("resume_build_pipeline", {
+      pipelineId: "pipeline-1",
+    });
   });
 
-  test("falls back to setup when there is no current session", () => {
-    expect(getPipelineResumePhase(createPipeline(null))).toBe("waiting-for-setup");
+  test("does not synthesize a client resume snapshot when the backend rejects", async () => {
+    invokeMock.mockRejectedValueOnce(new Error("Pipeline is not paused"));
+
+    await expect(resumeBuildPipeline("pipeline-1")).rejects.toThrow(
+      "Pipeline is not paused",
+    );
+    expect(invokeMock).toHaveBeenCalledTimes(1);
   });
 
-  test("returns actionable prompts for agent-backed phases", () => {
-    const phases: ResumableBuildPhase[] = [
-      "building",
-      "reviewing",
-      "addressing",
-      "verifying",
-      "fixing",
-      "creating-pr",
-      "resolving-conflicts",
-    ];
+  test("reads the authoritative snapshot independently of resume", async () => {
+    const snapshot = {
+      id: "pipeline-1",
+      phase: "paused",
+      pausedFromPhase: "verifying",
+      controller: "backend",
+      backendRevision: 3,
+    };
+    invokeMock.mockResolvedValueOnce(snapshot);
 
-    for (const phase of phases) {
-      expect(createPipelineResumePrompt(phase)).toContain("Resume");
-    }
-  });
-
-  test("does not create prompts for setup-only phases", () => {
-    expect(createPipelineResumePrompt("creating-environment")).toBeNull();
-    expect(createPipelineResumePrompt("starting-environment")).toBeNull();
-    expect(createPipelineResumePrompt("waiting-for-setup")).toBeNull();
-  });
-
-  test.each([
-    ["build", "building", true],
-    ["review", "reviewing", true],
-    ["review", "addressing", true],
-    ["verify", "verifying", true],
-    ["fix", "fixing", true],
-    ["pr", "creating-pr", true],
-    ["resolve-conflicts", "resolving-conflicts", true],
-    ["build", "reviewing", false],
-    ["review", "verifying", false],
-    ["build", "waiting-for-setup", false],
-  ] as const)("checks whether %s can resume %s", (sessionPhase, resumePhase, expected) => {
-    expect(isSessionCompatibleWithResumePhase(createSession(sessionPhase), resumePhase)).toBe(expected);
-  });
-
-  test("does not treat a missing session as compatible with an agent-backed phase", () => {
-    expect(isSessionCompatibleWithResumePhase(undefined, "building")).toBe(false);
+    await expect(getBuildPipeline("pipeline-1")).resolves.toBe(snapshot);
+    expect(invokeMock).toHaveBeenCalledWith("get_build_pipeline", {
+      pipelineId: "pipeline-1",
+    });
   });
 });

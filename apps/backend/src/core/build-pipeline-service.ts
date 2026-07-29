@@ -10,6 +10,7 @@ import type {
 } from "@orkestrator/protocol/build-pipeline";
 import {
   BUILD_PIPELINE_VERSION,
+  isBuildPipeline,
   isActiveBuildPhase,
   isStartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
@@ -65,18 +66,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isPipeline(value: unknown): value is BuildPipeline {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const candidate = value as Partial<BuildPipeline>;
-  return typeof candidate.id === "string"
-    && typeof candidate.taskId === "string"
-    && typeof candidate.projectId === "string"
-    && typeof candidate.environmentId === "string"
-    && Array.isArray(candidate.sessions)
-    && typeof candidate.phase === "string"
-    && typeof candidate.backendRevision === "number";
-}
-
 function sessionForCurrentPhase(pipeline: BuildPipeline): PipelineSession | undefined {
   return pipeline.sessions[pipeline.currentSessionIndex];
 }
@@ -103,10 +92,66 @@ function modelFor(
   return model && model !== "default" ? model : undefined;
 }
 
+function sessionPhaseFor(
+  phase: ResumableBuildPhase,
+): PipelineSessionPhase | null {
+  switch (phase) {
+    case "building":
+      return "build";
+    case "reviewing":
+    case "addressing":
+      return "review";
+    case "verifying":
+      return "verify";
+    case "fixing":
+      return "fix";
+    case "creating-pr":
+      return "pr";
+    case "resolving-conflicts":
+      return "resolve-conflicts";
+    case "creating-environment":
+    case "starting-environment":
+    case "waiting-for-setup":
+      return null;
+  }
+}
+
+function resumePromptFor(phase: ResumableBuildPhase): string | null {
+  switch (phase) {
+    case "building":
+      return "Resume the build pipeline from where you left off. Continue implementing the original ticket, incorporate any messages sent while the pipeline was paused, validate the work as appropriate, and stop when the implementation is ready for review. Do not ask questions; make sensible assumptions.";
+    case "reviewing":
+      return "Resume the build pipeline review from where you left off. Continue reviewing the current changes against the original ticket and target branch, incorporate any messages sent while the pipeline was paused, and finish with the required structured review result. Do not ask questions; make sensible assumptions.";
+    case "addressing":
+      return "Resume addressing the review findings from where you left off. Incorporate any messages sent while the pipeline was paused, make the required code and test changes, and validate the result as appropriate. Do not ask questions; make sensible assumptions.";
+    case "verifying":
+      return "Resume verification from where you left off. Re-check the current codebase against the original ticket, incorporate any messages sent while the pipeline was paused, and respond with only the JSON object required by the verification instructions.";
+    case "fixing":
+      return "Resume fixing the verification failures from where you left off. Incorporate any messages sent while the pipeline was paused, finish the requested fixes, and validate the result as appropriate. Do not ask questions; make sensible assumptions.";
+    case "creating-pr":
+      return "Resume creating the pull request from where you left off. Incorporate any messages sent while the pipeline was paused, push or prepare the branch as needed, and create the PR against the target branch if it is not already created. Do not ask questions; make sensible assumptions.";
+    case "resolving-conflicts":
+      return "Resume resolving PR merge conflicts from where you left off. Incorporate any messages sent while the pipeline was paused, finish the conflict resolution, and validate the result as appropriate. Do not ask questions; make sensible assumptions.";
+    case "creating-environment":
+    case "starting-environment":
+    case "waiting-for-setup":
+      return null;
+  }
+}
+
+type PullRequestDetection = {
+  url: string;
+  state: "open" | "merged" | "closed";
+  hasMergeConflicts: boolean;
+};
+
 export class BuildPipelineService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly locks = new Map<string, Promise<void>>();
   private readonly providers = new Map<string, BuildPipelineProvider>();
+  private readonly provisioningPrompts = new Map<string, string | undefined>();
+  private tickPromise: Promise<void> | null = null;
+  private tickRequested = false;
   private stopped = false;
 
   constructor(
@@ -120,43 +165,82 @@ export class BuildPipelineService {
 
   async init(): Promise<void> {
     this.stopped = false;
+    const terminalReconciliations: Promise<void>[] = [];
     for (const record of await this.storage.listAllBuildPipelines()) {
-      if (!isPipeline(record.snapshot)) continue;
-      const pipeline = record.snapshot;
-      if (pipeline.controller !== "backend") {
-        pipeline.controller = "backend";
-        pipeline.backendRevision = record.revision;
+      if (!record.snapshot || typeof record.snapshot !== "object") continue;
+      const normalized = {
+        ...record.snapshot,
+        controller: "backend" as const,
+        backendRevision: record.revision,
+      };
+      if (!isBuildPipeline(normalized)) continue;
+      const pipeline = normalized;
+      if (
+        (record.snapshot as { controller?: unknown }).controller !== "backend"
+        || (record.snapshot as { backendRevision?: unknown }).backendRevision
+          !== record.revision
+      ) {
         await this.save(pipeline, record.revision);
+      }
+      if (this.needsTerminalReconciliation(pipeline)) {
+        terminalReconciliations.push(this.runLocked(pipeline.id));
       }
     }
     if (this.options.autoAdvance !== false) {
       this.timer ??= setInterval(() => {
-        void this.tick();
+        void this.requestTick();
       }, 1_500);
       this.timer.unref?.();
-      void this.tick();
+      void this.requestTick();
     }
+    await Promise.all(terminalReconciliations);
   }
 
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.tickRequested = false;
+    if (this.tickPromise) {
+      await this.tickPromise;
+    }
+    while (this.locks.size > 0) {
+      await Promise.allSettled([...this.locks.values()]);
+    }
+    await Promise.allSettled([...this.providers.values()].map(async (provider) => {
+      const disposable = provider as BuildPipelineProvider & {
+        dispose?: () => void | Promise<void>;
+      };
+      await disposable.dispose?.();
+    }));
     this.providers.clear();
+    this.provisioningPrompts.clear();
   }
 
   async start(input: StartBuildPipelineInput): Promise<BuildPipeline> {
     if (!isStartBuildPipelineInput(input)) {
       throw new Error("Invalid build pipeline start request");
     }
+    let existingEnvironment: Environment | null = null;
+    const existingEnvironmentId = input.existingEnvironmentId?.trim() ?? "";
+    if (existingEnvironmentId) {
+      existingEnvironment = await this.storage.getEnvironment(existingEnvironmentId);
+      if (
+        !existingEnvironment
+        || existingEnvironment.projectId !== input.projectId
+        || existingEnvironment.deletionRequestedAt
+      ) {
+        throw new Error("The selected build environment does not belong to this project");
+      }
+    }
     const pipeline: BuildPipeline = {
       id: randomUUID(),
       taskId: input.taskId,
       projectId: input.projectId,
-      environmentId: input.existingEnvironmentId?.trim() ?? "",
-      environmentType: input.environmentType,
+      environmentId: existingEnvironmentId,
+      environmentType: existingEnvironment?.environmentType ?? input.environmentType,
       agentType: input.agentType,
-      phase: input.existingEnvironmentId
+      phase: existingEnvironment
         ? "starting-environment"
         : "creating-environment",
       sessions: [],
@@ -171,36 +255,93 @@ export class BuildPipelineService {
       backendRevision: 0,
       controller: "backend",
     };
-    await this.save(pipeline, 0);
-    if (!pipeline.environmentId) {
-      const environment = await this.findLinkedEnvironment(pipeline)
-        ?? await this.invoke<Environment>("create_environment", {
-          projectId: pipeline.projectId,
-          networkAccessMode: pipeline.environmentType === "containerized"
-            ? "restricted"
-            : "full",
-          environmentType: pipeline.environmentType,
-          buildPipelineId: pipeline.id,
-          namingPrompt: input.namingPrompt ?? pipeline.taskTitle,
-        });
-      pipeline.environmentId = environment.id;
-      pipeline.environmentType = environment.environmentType;
-      pipeline.phase = "starting-environment";
-      // Persist the association before configuration. If the backend exits
-      // here, the next supervisor pass resumes this environment instead of
-      // creating a second one.
-      await this.save(pipeline, pipeline.backendRevision);
-    } else {
-      const environment = await this.storage.getEnvironment(pipeline.environmentId);
-      if (!environment || environment.projectId !== pipeline.projectId) {
-        throw new Error("The selected build environment does not belong to this project");
-      }
-      pipeline.environmentType = environment.environmentType;
-      await this.save(pipeline, pipeline.backendRevision);
+    if (!existingEnvironment) {
+      // Installed before the reservation becomes visible to timer ticks.
+      this.provisioningPrompts.set(pipeline.id, input.namingPrompt);
     }
-    await this.ensureSourceLink(pipeline);
+    try {
+      await this.save(pipeline, 0);
+    } catch (error) {
+      this.provisioningPrompts.delete(pipeline.id);
+      throw error;
+    }
+    // Provisioning is performed by the same per-pipeline supervisor lock used
+    // by timer ticks. A tick that observes the just-persisted reservation joins
+    // this pass instead of racing a second create_environment call.
+    // For an existing environment the first pass only commits source linkage;
+    // for a new environment it provisions exactly once. In both cases a timer
+    // tick joins this same lock, so it cannot race the start response's write.
+    await this.runLocked(pipeline.id, input.namingPrompt);
+    let startedRecord = await this.requireRecord(pipeline.id);
+    let started = startedRecord.snapshot as BuildPipeline;
+    if (started.phase === "failed") {
+      throw new Error(started.error ?? "Failed to start build pipeline");
+    }
+    if (!started.sourceLinkedAt) {
+      // A newly provisioned environment is associated in the first pass and
+      // source-linked in this second pass. It must also use runLocked: a timer
+      // can observe the association save before start() resumes, and both
+      // callers must join one CAS write rather than racing ensureSourceLink.
+      await this.runLocked(pipeline.id);
+      startedRecord = await this.requireRecord(pipeline.id);
+      started = startedRecord.snapshot as BuildPipeline;
+      if (started.phase === "failed") {
+        throw new Error(started.error ?? "Failed to link build pipeline source");
+      }
+    }
     if (this.options.autoAdvance !== false) void this.runLocked(pipeline.id);
-    return pipeline;
+    return started;
+  }
+
+  async importLegacy(
+    projectId: string,
+    snapshots: unknown[],
+  ): Promise<{ importedIds: string[]; skipped: number }> {
+    const importedIds: string[] = [];
+    let skipped = 0;
+    if (!projectId.trim() || !Array.isArray(snapshots)) {
+      return { importedIds, skipped: Array.isArray(snapshots) ? snapshots.length : 0 };
+    }
+    for (const snapshot of snapshots) {
+      if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+        skipped += 1;
+        continue;
+      }
+      const normalized = {
+        ...snapshot,
+        controller: "backend",
+        backendRevision: 0,
+      };
+      if (!isBuildPipeline(normalized) || normalized.projectId !== projectId) {
+        skipped += 1;
+        continue;
+      }
+      if (await this.storage.getBuildPipeline(normalized.id)) {
+        skipped += 1;
+        continue;
+      }
+      if (normalized.environmentId) {
+        const environment = await this.storage.getEnvironment(normalized.environmentId);
+        if (
+          !environment
+          || environment.projectId !== projectId
+          || environment.deletionRequestedAt
+          || (
+            environment.buildPipelineId !== undefined
+            && environment.buildPipelineId !== normalized.id
+          )
+        ) {
+          skipped += 1;
+          continue;
+        }
+      }
+      await this.save(normalized, 0);
+      importedIds.push(normalized.id);
+      if (isActiveBuildPhase(normalized.phase) && this.options.autoAdvance !== false) {
+        void this.runLocked(normalized.id);
+      }
+    }
+    return { importedIds, skipped };
   }
 
   /** Immediate supervisor pass, also useful for deterministic backend tests. */
@@ -209,82 +350,174 @@ export class BuildPipelineService {
   }
 
   async pause(pipelineId: string): Promise<BuildPipeline> {
-    return this.mutate(pipelineId, async (pipeline) => {
+    let abortError: unknown;
+    const pipeline = await this.mutate(pipelineId, async (pipeline) => {
       const previous = resumablePhase(pipeline.phase);
       if (!previous) return;
       pipeline.pausedFromPhase = previous;
       pipeline.phase = "paused";
       const session = sessionForCurrentPhase(pipeline);
       if (session?.status === "running") {
-        const provider = await this.provider(pipeline);
-        await provider.abort(session.sdkSessionId);
-        session.status = "idle";
+        try {
+          const provider = await this.provider(pipeline);
+          await provider.abort(session.sdkSessionId);
+          session.status = "idle";
+        } catch (error) {
+          abortError = error;
+          pipeline.error = `Build paused, but stopping the agent could not be confirmed: ${errorMessage(error)}`;
+        }
       }
     });
+    if (abortError) throw abortError;
+    return pipeline;
   }
 
   async resume(pipelineId: string): Promise<BuildPipeline> {
     const pipeline = await this.mutate(pipelineId, (candidate) => {
       if (candidate.phase !== "paused") return;
-      candidate.phase = candidate.pausedFromPhase ?? "building";
+      const phase = candidate.pausedFromPhase ?? "building";
+      candidate.phase = phase;
       delete candidate.pausedFromPhase;
       delete candidate.error;
+      const session = sessionForCurrentPhase(candidate);
+      const prompt = resumePromptFor(phase);
+      if (
+        prompt
+        && session?.status === "idle"
+        && session.phase === sessionPhaseFor(phase)
+      ) {
+        const requestId = randomUUID();
+        const structuredReview = phase === "reviewing" || phase === "verifying";
+        candidate.pendingPromptAttempt = {
+          id: randomUUID(),
+          sessionId: session.sdkSessionId,
+          requestId,
+          phase,
+          prompt,
+          useTaskImages: false,
+          structuredReview,
+          startedAt: new Date().toISOString(),
+        };
+        candidate.activePromptContext = {
+          phase,
+          kind: "prompt-dispatch",
+          sessionId: session.sdkSessionId,
+          requestId,
+          prompt,
+          useTaskImages: false,
+          structuredReview,
+        };
+        session.structuredRequestId = structuredReview ? requestId : undefined;
+        if (phase === "reviewing") {
+          candidate.structuredReviewRequestId = requestId;
+          delete candidate.structuredReview;
+        }
+      }
     });
     void this.runLocked(pipelineId);
     return pipeline;
   }
 
   async cancel(pipelineId: string): Promise<BuildPipeline> {
-    return this.mutate(pipelineId, async (pipeline) => {
+    let abortError: unknown;
+    const pipeline = await this.mutate(pipelineId, async (pipeline) => {
       const session = sessionForCurrentPhase(pipeline);
       if (session?.status === "running" && pipeline.environmentId) {
-        await (await this.provider(pipeline)).abort(session.sdkSessionId);
+        try {
+          await (await this.provider(pipeline)).abort(session.sdkSessionId);
+          session.status = "idle";
+        } catch (error) {
+          abortError = error;
+        }
       }
-      if (session) session.status = "idle";
       pipeline.phase = "failed";
-      pipeline.error = "Build cancelled";
+      pipeline.error = abortError
+        ? `Build cancelled, but stopping the agent could not be confirmed: ${errorMessage(abortError)}`
+        : "Build cancelled";
       delete pipeline.pendingPromptAttempt;
       delete pipeline.activePromptContext;
     });
+    await this.reconcileTerminalState(pipeline);
+    if (abortError) throw abortError;
+    return pipeline;
   }
 
   async remove(pipelineId: string): Promise<void> {
     const record = await this.storage.getBuildPipeline(pipelineId);
     if (
       record
-      && isPipeline(record.snapshot)
+      && isBuildPipeline(record.snapshot)
       && isActiveBuildPhase(record.snapshot.phase)
     ) {
       await this.cancel(pipelineId);
     }
     await this.storage.deleteBuildPipeline(pipelineId);
+    if (record && isBuildPipeline(record.snapshot)) {
+      const providerKey = `${record.snapshot.environmentId}:${record.snapshot.agentType}`;
+      const provider = this.providers.get(providerKey);
+      this.providers.delete(providerKey);
+      await provider?.dispose?.();
+    }
   }
 
   async retryCompletionComment(pipelineId: string): Promise<BuildPipeline> {
-    const pipeline = await this.mutate(pipelineId, (candidate) => {
+    await this.mutate(pipelineId, (candidate) => {
       delete candidate.completionCommentStatus;
       delete candidate.completionCommentError;
     });
-    await this.postCompletionComment(pipeline);
+    await this.runLocked(pipelineId);
+    const record = await this.requireRecord(pipelineId);
+    const pipeline = record.snapshot as BuildPipeline;
+    if (pipeline.completionCommentStatus === "failed") {
+      throw new Error(pipeline.completionCommentError ?? "Failed to post completion comment");
+    }
     return pipeline;
   }
 
-  private async tick(): Promise<void> {
+  private requestTick(): Promise<void> {
+    if (this.tickPromise) {
+      this.tickRequested = true;
+      return this.tickPromise;
+    }
+    const operation = (async () => {
+      do {
+        this.tickRequested = false;
+        await this.tickPass();
+      } while (!this.stopped && this.tickRequested);
+    })().finally(() => {
+      if (this.tickPromise === operation) this.tickPromise = null;
+    });
+    this.tickPromise = operation;
+    return operation;
+  }
+
+  private async tickPass(): Promise<void> {
     if (this.stopped) return;
     const records = await this.storage.listAllBuildPipelines();
     await Promise.all(records.flatMap((record) => {
-      if (!isPipeline(record.snapshot) || !isActiveBuildPhase(record.snapshot.phase)) {
+      if (
+        !isBuildPipeline(record.snapshot)
+        || (
+          !isActiveBuildPhase(record.snapshot.phase)
+          && !this.needsTerminalReconciliation(record.snapshot)
+        )
+      ) {
         return [];
       }
       return [this.runLocked(record.id)];
     }));
   }
 
-  private runLocked(pipelineId: string): Promise<void> {
-    const previous = this.locks.get(pipelineId) ?? Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(() => this.advance(pipelineId))
+  private runLocked(
+    pipelineId: string,
+    namingPrompt?: string,
+  ): Promise<void> {
+    // Timer ticks are level-triggered. If a pass is already running, joining
+    // it is sufficient; appending another promise every 1.5 seconds lets a
+    // stalled provider call grow an unbounded queue.
+    const existing = this.locks.get(pipelineId);
+    if (existing) return existing;
+    const next = this.advance(pipelineId, namingPrompt)
       .catch(async (error) => {
         if (error instanceof ProviderUnavailableError) {
           await this.recordReconnect(pipelineId, error).catch(() => undefined);
@@ -299,11 +532,17 @@ export class BuildPipelineService {
     return next;
   }
 
-  private async advance(pipelineId: string): Promise<void> {
+  private async advance(
+    pipelineId: string,
+    namingPrompt?: string,
+  ): Promise<void> {
     const record = await this.requireRecord(pipelineId);
     const pipeline = record.snapshot as BuildPipeline;
     pipeline.backendRevision = record.revision;
-    if (!isActiveBuildPhase(pipeline.phase)) return;
+    if (!isActiveBuildPhase(pipeline.phase)) {
+      await this.reconcileTerminalState(pipeline);
+      return;
+    }
 
     if (pipeline.environmentId && !pipeline.sourceLinkedAt) {
       await this.ensureSourceLink(pipeline);
@@ -319,12 +558,15 @@ export class BuildPipelineService {
             : "full",
           environmentType: pipeline.environmentType,
           buildPipelineId: pipeline.id,
-          namingPrompt: pipeline.taskTitle,
+          namingPrompt: namingPrompt
+            ?? this.provisioningPrompts.get(pipeline.id)
+            ?? pipeline.taskTitle,
         });
       pipeline.environmentId = environment.id;
       pipeline.environmentType = environment.environmentType;
       pipeline.phase = "starting-environment";
       await this.save(pipeline, record.revision);
+      this.provisioningPrompts.delete(pipeline.id);
       return;
     }
 
@@ -498,9 +740,16 @@ export class BuildPipelineService {
     sessionPhase: PipelineSessionPhase,
     phase: ResumableBuildPhase,
   ): Promise<void> {
+    if (sessionPhase === "build") {
+      await this.updateKanbanLifecycle(pipeline, {
+        status: "in-progress",
+        comment: "🔨 Build started",
+      });
+    }
     const provider = await this.provider(pipeline);
     const label = SESSION_LABELS[sessionPhase];
     const sessionId = await provider.createSession(sessionPhase, label);
+    provider.registerSession?.(sessionId);
     const { prompt, schema, images } = await this.promptFor(pipeline, sessionPhase);
     const requestId = randomUUID();
     const session: PipelineSession = {
@@ -578,6 +827,9 @@ export class BuildPipelineService {
           : [],
         schema,
       });
+      const session = pipeline.sessions.find((candidate) =>
+        candidate.sdkSessionId === attempt.sessionId);
+      if (session) session.status = "running";
       delete pipeline.pendingPromptAttempt;
       await this.save(pipeline, pipeline.backendRevision);
     } catch (error) {
@@ -694,6 +946,9 @@ export class BuildPipelineService {
     pipeline.verificationResult = complete ? "pass" : "fail";
     pipeline.verificationFeedback = rationale;
     if (complete) {
+      await this.updateKanbanLifecycle(pipeline, {
+        comment: "✅ Validation complete",
+      });
       await this.startStage(pipeline, "pr", "creating-pr");
       return;
     }
@@ -720,8 +975,19 @@ export class BuildPipelineService {
   }
 
   private async finishPullRequest(pipeline: BuildPipeline): Promise<void> {
-    const conflicts = await this.hasMergeConflicts(pipeline);
-    if (conflicts) {
+    const detection = await this.detectPullRequest(pipeline);
+    if (!detection) {
+      // PR creation and GitHub indexing are not atomic. Keep the pipeline in
+      // creating-pr and let the durable monitor plus the next supervisor pass
+      // observe it; absence is not evidence that creation succeeded.
+      await this.invoke("pr_monitor_watch", {
+        environmentId: pipeline.environmentId,
+        mode: "create-pending",
+      });
+      return;
+    }
+    await this.persistPullRequest(pipeline, detection);
+    if (detection.hasMergeConflicts) {
       await this.startStage(pipeline, "resolve-conflicts", "resolving-conflicts");
       return;
     }
@@ -729,46 +995,84 @@ export class BuildPipelineService {
   }
 
   private async finishConflictResolution(pipeline: BuildPipeline): Promise<void> {
-    if (await this.hasMergeConflicts(pipeline)) {
+    const detection = await this.detectPullRequest(pipeline);
+    if (!detection) {
+      throw new Error("The pull request could not be found after conflict resolution");
+    }
+    await this.persistPullRequest(pipeline, detection);
+    if (detection.hasMergeConflicts) {
       throw new Error("Merge conflicts could not be fully resolved automatically");
     }
     await this.complete(pipeline);
   }
 
-  private async hasMergeConflicts(pipeline: BuildPipeline): Promise<boolean> {
+  private async detectPullRequest(
+    pipeline: BuildPipeline,
+  ): Promise<PullRequestDetection | null> {
     const environment = await this.storage.getEnvironment(pipeline.environmentId);
-    if (!environment) return false;
+    if (!environment) throw new Error("Build environment no longer exists");
     const result = environment.environmentType === "local"
-      ? await this.invoke<{ hasMergeConflicts: boolean } | null>("detect_pr_local", {
+      ? await this.invoke<PullRequestDetection | null>("detect_pr_local", {
           environmentId: environment.id,
           branch: environment.branch,
         })
       : environment.containerId
-        ? await this.invoke<{ hasMergeConflicts: boolean } | null>("detect_pr", {
+        ? await this.invoke<PullRequestDetection | null>("detect_pr", {
             containerId: environment.containerId,
             branch: environment.branch,
           })
-        : null;
-    return result?.hasMergeConflicts === true;
+        : (() => {
+            throw new Error("Build container is unavailable");
+          })();
+    if (!result) return null;
+    if (
+      typeof result.url !== "string"
+      || !result.url
+      || !["open", "merged", "closed"].includes(result.state)
+      || typeof result.hasMergeConflicts !== "boolean"
+    ) {
+      throw new Error("Pull request detection returned an invalid result");
+    }
+    return result;
+  }
+
+  private async persistPullRequest(
+    pipeline: BuildPipeline,
+    detection: PullRequestDetection,
+  ): Promise<void> {
+    await this.storage.updateEnvironment(pipeline.environmentId, {
+      prUrl: detection.url,
+      prState: detection.state,
+      hasMergeConflicts: detection.hasMergeConflicts,
+    });
+    await this.updateKanbanLifecycle(pipeline, {
+      status: "review",
+      prUrl: detection.url,
+      prState: detection.state,
+      comment: `🔗 PR raised: ${detection.url}`,
+    });
+    await this.invoke("pr_monitor_watch", {
+      environmentId: pipeline.environmentId,
+      mode: "normal",
+    });
   }
 
   private async complete(pipeline: BuildPipeline): Promise<void> {
     pipeline.phase = "complete";
     delete pipeline.error;
     await this.save(pipeline, pipeline.backendRevision);
-    await this.postCompletionComment(pipeline).catch(async (error) => {
-      pipeline.completionCommentStatus = "failed";
-      pipeline.completionCommentError = errorMessage(error);
-      await this.save(pipeline, pipeline.backendRevision);
-    });
+    await this.reconcileTerminalState(pipeline);
   }
 
   private async postCompletionComment(pipeline: BuildPipeline): Promise<void> {
     const source = pipeline.source;
     if (!source || source.type === "kanban") return;
+    if (pipeline.completionCommentStatus === "posted") return;
     pipeline.completionCommentStatus = "posting";
     await this.save(pipeline, pipeline.backendRevision);
-    const body = `✅ Orkestrator build completed for **${pipeline.taskTitle}**.`;
+    const body = pipeline.phase === "complete"
+      ? `✅ Orkestrator build completed for **${pipeline.taskTitle}**.`
+      : `❌ Orkestrator build failed for **${pipeline.taskTitle}**: ${pipeline.error ?? "Unknown error"}`;
     const result = source.type === "linear"
       ? await this.invoke<{ commentId?: string; postedAt?: string }>(
           "post_linear_completion_comment",
@@ -796,6 +1100,90 @@ export class BuildPipelineService {
     await this.save(pipeline, pipeline.backendRevision);
   }
 
+  private needsTerminalReconciliation(pipeline: BuildPipeline): boolean {
+    if (pipeline.phase !== "complete" && pipeline.phase !== "failed") return false;
+    return Boolean(
+      pipeline.source
+      && pipeline.completionCommentStatus !== "posted"
+      && pipeline.completionCommentStatus !== "failed",
+    );
+  }
+
+  private async reconcileTerminalState(pipeline: BuildPipeline): Promise<void> {
+    if (pipeline.phase !== "complete" && pipeline.phase !== "failed") return;
+    if (!pipeline.source) return;
+    if (pipeline.source.type === "kanban") {
+      if (pipeline.completionCommentStatus === "posted") return;
+      try {
+        pipeline.completionCommentStatus = "posting";
+        await this.save(pipeline, pipeline.backendRevision);
+        await this.updateKanbanLifecycle(pipeline, {
+          status: pipeline.phase === "complete" ? "review" : "backlog",
+        });
+        pipeline.completionCommentStatus = "posted";
+        pipeline.completionCommentPostedAt = new Date().toISOString();
+        delete pipeline.completionCommentError;
+        await this.save(pipeline, pipeline.backendRevision);
+      } catch (error) {
+        pipeline.completionCommentStatus = "failed";
+        pipeline.completionCommentError = errorMessage(error);
+        await this.save(pipeline, pipeline.backendRevision);
+      }
+      return;
+    }
+    try {
+      await this.postCompletionComment(pipeline);
+    } catch (error) {
+      pipeline.completionCommentStatus = "failed";
+      pipeline.completionCommentError = errorMessage(error);
+      await this.save(pipeline, pipeline.backendRevision);
+    }
+  }
+
+  private async updateKanbanLifecycle(
+    pipeline: BuildPipeline,
+    updates: {
+      status?: "backlog" | "in-progress" | "review";
+      comment?: string;
+      prUrl?: string;
+      prState?: "open" | "merged" | "closed";
+    },
+  ): Promise<void> {
+    const source = pipeline.source;
+    if (source?.type !== "kanban") return;
+    const tasks = await this.invoke<Array<{
+      id: string;
+      status: string;
+      prUrl?: string;
+      prState?: string;
+      comments: Array<{ text: string }>;
+    }>>("get_kanban_tasks", { projectId: pipeline.projectId });
+    const task = tasks
+      .find((candidate) => candidate.id === source.taskId);
+    if (!task) throw new Error(`Kanban task not found: ${source.taskId}`);
+    if (
+      (updates.status && task.status !== updates.status)
+      || (updates.prUrl && task.prUrl !== updates.prUrl)
+      || (updates.prState && task.prState !== updates.prState)
+    ) {
+      await this.invoke("update_kanban_task", {
+        taskId: task.id,
+        ...(updates.status ? { status: updates.status } : {}),
+        ...(updates.prUrl ? { prUrl: updates.prUrl } : {}),
+        ...(updates.prState ? { prState: updates.prState } : {}),
+      });
+    }
+    if (
+      updates.comment
+      && !task.comments.some((comment) => comment.text === updates.comment)
+    ) {
+      await this.invoke("add_kanban_comment", {
+        taskId: task.id,
+        text: updates.comment,
+      });
+    }
+  }
+
   private async configureEnvironment(pipeline: BuildPipeline): Promise<void> {
     await this.invoke("update_environment_agent_settings", {
       environmentId: pipeline.environmentId,
@@ -809,10 +1197,21 @@ export class BuildPipelineService {
   }
 
   private async provider(pipeline: BuildPipeline): Promise<BuildPipelineProvider> {
-    if (this.options.provider) return this.options.provider(pipeline);
+    if (this.options.provider) {
+      const provider = await this.options.provider(pipeline);
+      for (const session of pipeline.sessions) {
+        provider.registerSession?.(session.sdkSessionId);
+      }
+      return provider;
+    }
     const providerKey = `${pipeline.environmentId}:${pipeline.agentType}`;
     const cached = this.providers.get(providerKey);
-    if (cached) return cached;
+    if (cached) {
+      for (const session of pipeline.sessions) {
+        cached.registerSession?.(session.sdkSessionId);
+      }
+      return cached;
+    }
     const environment = await this.storage.getEnvironment(pipeline.environmentId);
     if (!environment) throw new Error("Build environment no longer exists");
     const config = await this.storage.loadConfig();
@@ -830,6 +1229,9 @@ export class BuildPipelineService {
           ? config.global.codexReasoningEffort
           : undefined),
     });
+    for (const session of pipeline.sessions) {
+      provider.registerSession?.(session.sdkSessionId);
+    }
     this.providers.set(providerKey, provider);
     return provider;
   }
@@ -873,7 +1275,7 @@ export class BuildPipelineService {
 
   private async fail(pipelineId: string, error: unknown): Promise<void> {
     const record = await this.storage.getBuildPipeline(pipelineId);
-    if (!record || !isPipeline(record.snapshot)) return;
+    if (!record || !isBuildPipeline(record.snapshot)) return;
     const pipeline = record.snapshot;
     if (!isActiveBuildPhase(pipeline.phase)) return;
     pipeline.backendRevision = record.revision;
@@ -885,7 +1287,9 @@ export class BuildPipelineService {
     };
     pipeline.phase = "failed";
     delete pipeline.pendingPromptAttempt;
+    this.provisioningPrompts.delete(pipeline.id);
     await this.save(pipeline, record.revision);
+    await this.reconcileTerminalState(pipeline);
   }
 
   private async recordReconnect(
@@ -893,11 +1297,14 @@ export class BuildPipelineService {
     error: ProviderUnavailableError,
   ): Promise<void> {
     const record = await this.storage.getBuildPipeline(pipelineId);
-    if (!record || !isPipeline(record.snapshot)) return;
+    if (!record || !isBuildPipeline(record.snapshot)) return;
     const pipeline = record.snapshot;
     const phase = resumablePhase(pipeline.phase);
     if (!phase) return;
-    this.providers.delete(`${pipeline.environmentId}:${pipeline.agentType}`);
+    const providerKey = `${pipeline.environmentId}:${pipeline.agentType}`;
+    const provider = this.providers.get(providerKey);
+    this.providers.delete(providerKey);
+    await provider?.dispose?.();
     pipeline.backendRevision = record.revision;
     pipeline.reconnectAttempt = {
       id: pipeline.reconnectAttempt?.id ?? randomUUID(),
@@ -934,7 +1341,7 @@ export class BuildPipelineService {
 
   private async requireRecord(pipelineId: string): Promise<PersistedBuildPipeline> {
     const record = await this.storage.getBuildPipeline(pipelineId);
-    if (!record || !isPipeline(record.snapshot)) {
+    if (!record || !isBuildPipeline(record.snapshot)) {
       throw new Error(`Build pipeline not found: ${pipelineId}`);
     }
     return record;

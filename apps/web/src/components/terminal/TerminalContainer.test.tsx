@@ -6,6 +6,7 @@ import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import {
   useLoopedReviewStore,
   type LoopedReviewWorkflow,
@@ -18,6 +19,7 @@ import * as realBackend from "@/lib/backend";
 import * as realSetupCommands from "@/lib/setup-commands";
 import { requestTerminalBrowserTab } from "@/lib/terminal-links";
 import * as realDndKitCore from "@dnd-kit/core";
+import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 
 const realBackendSnapshot = { ...realBackend };
 const realSetupCommandsSnapshot = { ...realSetupCommands };
@@ -266,6 +268,10 @@ describe("TerminalContainer", () => {
       composeDraftImages: new Map(),
     });
     useLoopedReviewStore.setState({ workflows: new Map() });
+    useBuildPipelineStore.setState({
+      pipelines: new Map(),
+      buildEnvironmentIds: new Set(),
+    });
 
     markSetupScriptsCompleteMock.mockClear();
     getSetupCommandsMock.mockReset();
@@ -400,6 +406,76 @@ describe("TerminalContainer", () => {
       });
     });
     expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
+  });
+
+  test("hydrates and preserves a build tab inserted before the container mounts", async () => {
+    const pipeline = buildPipelineFixture({
+      id: "pipeline-pre-mount",
+      environmentId: "env-hidden",
+      environmentType: "containerized",
+    });
+    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    usePaneLayoutStore.getState().initialize(
+      "container-hidden",
+      "env-hidden",
+    );
+    usePaneLayoutStore.getState().addTab("default", {
+      id: "build-pipeline-pre-mount",
+      type: "claude-build",
+      buildTabData: {
+        pipelineId: pipeline.id,
+        environmentId: "env-hidden",
+        taskId: pipeline.taskId,
+        isLocal: false,
+      },
+    }, "env-hidden");
+    expect(
+      usePaneLayoutStore.getState().hydration.get("env-hidden"),
+    ).toBeUndefined();
+    getPaneLayoutMock.mockResolvedValue({
+      version: 1,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [{ id: "restored-tab", type: "plain", displayTitle: "Restored" }],
+        activeTabId: "restored-tab",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
+      expect(
+        usePaneLayoutStore.getState().hydration.get("env-hidden"),
+      ).toBe("done");
+    });
+    const hydrated = usePaneLayoutStore
+      .getState()
+      .environments.get("env-hidden");
+    expect(
+      hydrated && hydrated.root.kind === "leaf"
+        ? hydrated.root.tabs.map((tab) => tab.id)
+        : [],
+    ).toEqual(["restored-tab", "build-pipeline-pre-mount"]);
+    expect(hydrated?.activePaneId).toBe("restored-pane");
+    expect(
+      hydrated?.root.kind === "leaf" ? hydrated.root.activeTabId : null,
+    ).toBe("build-pipeline-pre-mount");
   });
 
   test("rebinds a restored completed setup tab before stale cleanup can replace its PTY", async () => {

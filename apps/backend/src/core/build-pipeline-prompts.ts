@@ -2,6 +2,7 @@ import type {
   BuildPipeline,
   TaskSnapshot,
 } from "@orkestrator/protocol/build-pipeline";
+import { buildReviewBody } from "@orkestrator/protocol/review-workflow";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
 function ticketContext(task: TaskSnapshot): string {
@@ -36,11 +37,16 @@ export function reviewPrompt(
   reviewInstruction?: string,
 ): string {
   return [
-    "Review the committed changes for this ticket:",
+    "You are performing an automated commit and code review workflow for this ticket. Execute the fixed steps in order.",
     ticketContext(pipeline.taskSnapshot),
     notes ? `**Project Notes**:\n${notes}` : "",
-    `Compare the committed branch against origin/${targetBranch}. Inspect correctness, regressions, security, maintainability, and test coverage. Do not modify files.`,
-    reviewInstruction ? `Additional review instruction:\n${reviewInstruction}` : "",
+    buildReviewBody({
+      targetBranch,
+      reviewInstruction,
+      allowClarifyingQuestions: false,
+      outputFormat: "structured",
+    }),
+    "The provider enforces the structured review schema. Do not modify files after the rollback commit created by Step 1.",
     "Begin by running the git commands required to understand the current state.",
   ].filter(Boolean).join("\n\n");
 }

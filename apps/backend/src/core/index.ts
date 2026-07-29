@@ -128,8 +128,12 @@ export class OrkestratorBackend {
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     shutdownDiffStatsTracking();
     shutdownPrMonitorTracking();
-    this.buildPipelines.shutdown();
-    const attempt = shutdownLocalServers();
+    const attempt = (async () => {
+      // Pipeline passes may still be writing snapshots or using a bridge.
+      // Drain them before terminating backend-owned local servers.
+      await this.buildPipelines.shutdown();
+      await shutdownLocalServers();
+    })();
     this.shutdownPromise = attempt;
     try {
       await attempt;

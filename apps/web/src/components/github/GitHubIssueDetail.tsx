@@ -320,6 +320,9 @@ export function GitHubIssueDetailContent({
   const [closeError, setCloseError] = useState<string | null>(null);
   const [startingType, setStartingType] = useState<EnvironmentType | null>(null);
   const [buildError, setBuildError] = useState<string | null>(null);
+  const [retryingCompletionIds, setRetryingCompletionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const displayedIssue = detail ?? summary;
   const editKey = `edit:${projectId}:${issueNumber}`;
@@ -828,13 +831,39 @@ export function GitHubIssueDetailContent({
                       variant="outline"
                       size="sm"
                       aria-label={`Retry completion comment for build ${pipeline.id}`}
-                      onClick={() => {
-                        void retryBuildPipelineCompletionComment(pipeline.id)
-                          .then((next) => replacePipeline(next));
+                      disabled={retryingCompletionIds.has(pipeline.id)}
+                      onClick={async () => {
+                        if (retryingCompletionIds.has(pipeline.id)) return;
+                        setRetryingCompletionIds((current) =>
+                          new Set(current).add(pipeline.id));
+                        try {
+                          replacePipeline(
+                            await retryBuildPipelineCompletionComment(pipeline.id),
+                          );
+                        } catch (error) {
+                          toast.error("Failed to retry GitHub completion comment", {
+                            description: errorMessage(
+                              error,
+                              "The completion comment could not be retried.",
+                            ),
+                          });
+                        } finally {
+                          setRetryingCompletionIds((current) => {
+                            const next = new Set(current);
+                            next.delete(pipeline.id);
+                            return next;
+                          });
+                        }
                       }}
                     >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                      Retry comment
+                      {retryingCompletionIds.has(pipeline.id) ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      )}
+                      {retryingCompletionIds.has(pipeline.id)
+                        ? "Retrying…"
+                        : "Retry comment"}
                     </Button>
                   </div>
                 ))}

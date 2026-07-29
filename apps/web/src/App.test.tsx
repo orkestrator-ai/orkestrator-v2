@@ -264,9 +264,9 @@ const mockListBuildPipelines = mock(async (_projectId: string) => []);
 const appPersistenceLifecycle: string[] = [];
 const mockStopBuildPipelinePersistence = mock(() => undefined);
 const mockStopPromptQueuePersistence = mock(() => undefined);
-const mockMigrateLegacyBuildPipelines = mock(() => {
+const mockMigrateLegacyBuildPipelines = mock(async () => {
   appPersistenceLifecycle.push("migrate-build");
-  return [];
+  return { importedIds: [], skipped: 0 };
 });
 const mockStartBuildPipelinePersistence = mock(() => {
   appPersistenceLifecycle.push("start-build");

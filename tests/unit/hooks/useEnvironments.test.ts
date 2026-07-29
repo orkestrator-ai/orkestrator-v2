@@ -19,6 +19,36 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function seedBuildPipeline(environmentId: string): string {
+  const id = "pipeline-1";
+  useBuildPipelineStore.getState().replacePipeline({
+    id,
+    taskId: "task-1",
+    projectId: "project-1",
+    environmentId,
+    environmentType: "local",
+    agentType: "claude",
+    phase: "building",
+    sessions: [],
+    currentSessionIndex: -1,
+    iteration: 0,
+    maxIterations: 3,
+    createdAt: "2026-07-29T08:00:00.000Z",
+    taskTitle: "Task",
+    taskSnapshot: {
+      title: "Task",
+      description: "",
+      acceptanceCriteria: "",
+      comments: [],
+      images: [],
+    },
+    source: { type: "kanban", taskId: "task-1" },
+    backendRevision: 1,
+    controller: "backend",
+  });
+  return id;
+}
+
 // Mock backend module BEFORE importing the hook
 const mockGetEnvironments = mock<(projectId: string) => Promise<Environment[]>>(() => Promise.resolve([]));
 const mockGetEnvironmentSnapshots = mock<(projectId: string) => Promise<Environment[]>>(() => Promise.resolve([]));
@@ -171,65 +201,10 @@ describe("useEnvironments", () => {
     expect(result.current.environments[0]?.id).toBe("env-1");
   });
 
-  test("reconciles active pipelines against the authoritative environment list", async () => {
-    const existing = createMockEnvironment({
-      id: "env-existing",
-      projectId: "project-1",
-      name: "existing",
-    });
-    mockGetEnvironments.mockResolvedValue([existing]);
-    const pipelineId = useBuildPipelineStore.getState().createPipeline({
-      taskId: "github:acme/widget#42",
-      projectId: "project-1",
-      environmentType: "local",
-      agentType: "claude",
-      taskTitle: "Issue 42",
-      taskSnapshot: {
-        title: "Issue 42",
-        description: "",
-        acceptanceCriteria: "",
-        comments: [],
-        images: [],
-      },
-      source: {
-        type: "github",
-        repositoryOwner: "acme",
-        repositoryName: "widget",
-        issueNumber: 42,
-        issueUrl: "https://github.com/acme/widget/issues/42",
-        status: "Todo",
-      },
-    });
-    useBuildPipelineStore
-      .getState()
-      .setPipelineEnvironment(pipelineId, "env-deleted-elsewhere");
-
-    renderHook(() => useEnvironments("project-1"));
-
-    await waitFor(() => {
-      expect(mockGetEnvironments).toHaveBeenCalledWith("project-1");
-      expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(false);
-    });
-  });
-
-  test("does not remove a newly linked pipeline with a snapshot started before environment creation", async () => {
+  test("does not discard an environment created after a snapshot request began", async () => {
     const snapshot = createDeferred<Environment[]>();
     mockGetEnvironmentSnapshots.mockImplementation(() => snapshot.promise);
     const { result } = renderHook(() => useEnvironments(null));
-    const pipelineId = useBuildPipelineStore.getState().createPipeline({
-      taskId: "github:acme/widget#42",
-      projectId: "project-1",
-      environmentType: "local",
-      agentType: "claude",
-      taskTitle: "Issue 42",
-      taskSnapshot: {
-        title: "Issue 42",
-        description: "",
-        acceptanceCriteria: "",
-        comments: [],
-        images: [],
-      },
-    });
 
     let refreshPromise!: Promise<void>;
     act(() => {
@@ -250,44 +225,25 @@ describe("useEnvironments", () => {
         undefined,
         "local",
         undefined,
-        pipelineId,
+        "pipeline-1",
       );
     });
-    useBuildPipelineStore
-      .getState()
-      .setPipelineEnvironment(pipelineId, environment.id);
 
     await act(async () => {
       snapshot.resolve([]);
       await refreshPromise;
     });
 
-    expect(useBuildPipelineStore.getState().pipelines.get(pipelineId)?.environmentId)
-      .toBe(environment.id);
     expect(useEnvironmentStore.getState().getEnvironmentById(environment.id))
       .toEqual(environment);
   });
 
-  test("does not remove a newly linked pipeline with a snapshot started during environment creation", async () => {
+  test("does not discard an environment when a snapshot runs during creation", async () => {
     const creation = createDeferred<Environment>();
     const snapshot = createDeferred<Environment[]>();
     mockCreateEnvironment.mockImplementation(() => creation.promise);
     mockGetEnvironmentSnapshots.mockImplementation(() => snapshot.promise);
     const { result } = renderHook(() => useEnvironments(null));
-    const pipelineId = useBuildPipelineStore.getState().createPipeline({
-      taskId: "github:acme/widget#43",
-      projectId: "project-1",
-      environmentType: "local",
-      agentType: "claude",
-      taskTitle: "Issue 43",
-      taskSnapshot: {
-        title: "Issue 43",
-        description: "",
-        acceptanceCriteria: "",
-        comments: [],
-        images: [],
-      },
-    });
 
     let creationPromise!: Promise<Environment>;
     act(() => {
@@ -299,7 +255,7 @@ describe("useEnvironments", () => {
         undefined,
         "local",
         undefined,
-        pipelineId,
+        "pipeline-1",
       );
     });
     expect(mockCreateEnvironment).toHaveBeenCalled();
@@ -317,50 +273,20 @@ describe("useEnvironments", () => {
       id: "env-created",
       projectId: "project-1",
       environmentType: "local",
-      buildPipelineId: pipelineId,
+      buildPipelineId: "pipeline-1",
     });
     await act(async () => {
       creation.resolve(environment);
       await creationPromise;
     });
-    useBuildPipelineStore
-      .getState()
-      .setPipelineEnvironment(pipelineId, environment.id);
 
     await act(async () => {
       snapshot.resolve([]);
       await refreshPromise;
     });
 
-    expect(useBuildPipelineStore.getState().pipelines.get(pipelineId)?.environmentId)
-      .toBe(environment.id);
     expect(useEnvironmentStore.getState().getEnvironmentById(environment.id))
       .toEqual(environment);
-  });
-
-  test("removes an abandoned creation reservation during initial rehydration", async () => {
-    const pipelineId = useBuildPipelineStore.getState().createPipeline({
-      taskId: "github:acme/widget#44",
-      projectId: "project-1",
-      environmentType: "local",
-      agentType: "claude",
-      taskTitle: "Issue 44",
-      taskSnapshot: {
-        title: "Issue 44",
-        description: "",
-        acceptanceCriteria: "",
-        comments: [],
-        images: [],
-      },
-    });
-    mockGetEnvironments.mockResolvedValue([]);
-
-    renderHook(() => useEnvironments("project-1"));
-
-    await waitFor(() => {
-      expect(mockGetEnvironments).toHaveBeenCalledWith("project-1");
-      expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(false);
-    });
   });
 
   test("silently refreshes read-only snapshots without changing loading or error state", async () => {
@@ -496,21 +422,7 @@ describe("useEnvironments", () => {
     });
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
-    const pipelineId = useBuildPipelineStore.getState().createPipeline({
-      taskId: "task-1",
-      projectId: "project-1",
-      environmentType: "local",
-      agentType: "claude",
-      taskTitle: "Task",
-      taskSnapshot: {
-        title: "Task",
-        description: "",
-        acceptanceCriteria: "",
-        comments: [],
-        images: [],
-      },
-    });
-    useBuildPipelineStore.getState().setPipelineEnvironment(pipelineId, "env-1");
+    const pipelineId = seedBuildPipeline("env-1");
     const deletedWorkflowId = useLoopedReviewStore.getState().createWorkflow({
       environmentId: "env-1",
       projectId: "project-1",
@@ -589,21 +501,7 @@ describe("useEnvironments", () => {
       error: null,
     });
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
-    const pipelineId = useBuildPipelineStore.getState().createPipeline({
-      taskId: "task-1",
-      projectId: "project-1",
-      environmentType: "local",
-      agentType: "claude",
-      taskTitle: "Task",
-      taskSnapshot: {
-        title: "Task",
-        description: "",
-        acceptanceCriteria: "",
-        comments: [],
-        images: [],
-      },
-    });
-    useBuildPipelineStore.getState().setPipelineEnvironment(pipelineId, "env-1");
+    const pipelineId = seedBuildPipeline("env-1");
     const workflowId = useLoopedReviewStore.getState().createWorkflow({
       environmentId: "env-1",
       projectId: "project-1",
@@ -1738,6 +1636,9 @@ describe("useEnvironments", () => {
     await waitFor(() => expect(mockGetEnvironment).toHaveBeenCalledWith("env-1"));
 
     // After unmount the DOM listeners must be gone.
+    await act(async () => {
+      await reconcileEnvironmentSetupSnapshots();
+    });
     unmount();
     mockGetEnvironment.mockClear();
     await act(async () => {

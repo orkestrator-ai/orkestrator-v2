@@ -1759,6 +1759,13 @@ export async function retryBuildPipelineCompletionComment(
   );
 }
 
+export async function importLegacyBuildPipelines(
+  projectId: string,
+  snapshots: unknown[],
+): Promise<{ importedIds: string[]; skipped: number }> {
+  return invoke("import_legacy_build_pipelines", { projectId, snapshots });
+}
+
 export async function getBuildPipeline<T = unknown>(
   pipelineId: string,
 ): Promise<PersistedBuildPipeline<T> | null> {

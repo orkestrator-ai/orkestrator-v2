@@ -17,6 +17,7 @@
     "./review-artifacts": "./src/review-artifacts.ts",
     "./review-instruction": "./src/review-prompt.ts",
     "./review-prompt": "./src/review-prompt.ts",
+    "./review-workflow": "./src/review-workflow.ts",
     "./structured-review": "./src/structured-review.ts",
     "./structured-output": "./src/structured-output.ts",
     "./task-list": "./src/task-list.ts",

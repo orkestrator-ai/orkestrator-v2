@@ -216,6 +216,8 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const [detailError, setDetailError] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [startingType, setStartingType] = useState<EnvironmentType | null>(null);
+  const [retryingCompletionComment, setRetryingCompletionComment] =
+    useState(false);
   const [commentBody, setCommentBody, clearCommentDraft] = useDurableComposeDraft({
     ownerType: "project",
     ownerId: projectId,
@@ -658,13 +660,34 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => {
-                          void retryBuildPipelineCompletionComment(selectedPipeline.id)
-                            .then((next) => replacePipeline(next));
+                        disabled={retryingCompletionComment}
+                        onClick={async () => {
+                          if (retryingCompletionComment) return;
+                          setRetryingCompletionComment(true);
+                          try {
+                            replacePipeline(
+                              await retryBuildPipelineCompletionComment(
+                                selectedPipeline.id,
+                              ),
+                            );
+                          } catch (error) {
+                            toast.error("Failed to retry Linear completion comment", {
+                              description:
+                                error instanceof Error
+                                  ? error.message
+                                  : String(error),
+                            });
+                          } finally {
+                            setRetryingCompletionComment(false);
+                          }
                         }}
                       >
-                        <RefreshCw className="h-3.5 w-3.5" />
-                        Retry comment
+                        {retryingCompletionComment ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        )}
+                        {retryingCompletionComment ? "Retrying…" : "Retry comment"}
                       </Button>
                     </>
                   )}

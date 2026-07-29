@@ -123,11 +123,15 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
 
   clearTaskBuildStatus: async (taskId) => {
     try {
-      const pipelineIds = Array.from(
+      const task = get().tasks.find((candidate) => candidate.id === taskId);
+      const pipelineIds = new Set(Array.from(
         useBuildPipelineStore.getState().pipelines.values(),
       ).filter((pipeline) => pipeline.taskId === taskId)
-        .map((pipeline) => pipeline.id);
-      await Promise.all(pipelineIds.map((pipelineId) =>
+        .map((pipeline) => pipeline.id));
+      // The task link is persisted by the backend and remains authoritative
+      // when this renderer missed or has not yet hydrated the pipeline snapshot.
+      if (task?.buildPipelineId) pipelineIds.add(task.buildPipelineId);
+      await Promise.all(Array.from(pipelineIds, (pipelineId) =>
         deleteBuildPipeline(pipelineId)));
       const updated = await updateKanbanTask(
         taskId,

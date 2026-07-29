@@ -18,6 +18,7 @@ import type { EnvironmentType } from "@/types";
 import type { GitHubIssueBuildInput } from "@/hooks/useBuildPipeline";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import * as realBackend from "@/lib/backend";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 const realBackendSnapshot = { ...realBackend };
 const openInBrowserMock = mock(async () => undefined);
@@ -166,6 +167,7 @@ describe("GitHubIssueDetail", () => {
     deleteComposeDraftMock.mockReset();
     deleteComposeDraftMock.mockResolvedValue(undefined);
     retryCompletionCommentMock.mockClear();
+    mockToastError.mockClear();
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -574,5 +576,41 @@ describe("GitHubIssueDetail", () => {
           ?.completionCommentStatus,
       ).toBe("failed");
     });
+  });
+
+  test("keeps completion retries single-flight and recovers after rejection", async () => {
+    const pipelineId = seedIssuePipeline("complete", "env-retry");
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      completionCommentStatus: "failed",
+      completionCommentError: "offline",
+      backendRevision: pipeline.backendRevision + 1,
+    });
+    let rejectRetry!: (reason?: unknown) => void;
+    retryCompletionCommentMock.mockImplementationOnce(() =>
+      new Promise((_resolve, reject) => {
+        rejectRetry = reject;
+      }));
+    renderDetail();
+    const button = screen.getByRole("button", {
+      name: `Retry completion comment for build ${pipelineId}`,
+    }) as HTMLButtonElement;
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(retryCompletionCommentMock).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(true);
+
+    rejectRetry(new Error("still offline"));
+    await waitFor(() => expect(button.disabled).toBe(false));
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to retry GitHub completion comment",
+      { description: "still offline" },
+    );
+
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(retryCompletionCommentMock).toHaveBeenCalledTimes(2));
   });
 });

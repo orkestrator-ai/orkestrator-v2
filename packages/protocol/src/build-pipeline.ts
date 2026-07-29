@@ -1,4 +1,7 @@
-import type { StructuredReviewReport } from "./structured-review.js";
+import {
+  isStructuredReviewReport,
+  type StructuredReviewReport,
+} from "./structured-review.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
 
@@ -195,6 +198,16 @@ const SESSION_PHASES = new Set<PipelineSessionPhase>([
   "pr",
   "resolve-conflicts",
 ]);
+const RESUMABLE_PHASES = new Set<ResumableBuildPhase>(
+  Array.from(BUILD_PHASES).filter(
+    (phase): phase is ResumableBuildPhase =>
+      phase !== "paused" && phase !== "complete" && phase !== "failed",
+  ),
+);
+const FAILURE_KINDS = new Set<PipelineFailureKind>([
+  "prompt-dispatch",
+  "stage-transition",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -202,6 +215,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalNonBlankString(value: unknown): value is string | undefined {
+  return value === undefined
+    || (typeof value === "string" && value.length > 0);
+}
+
+function isIsoDate(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
 function isPipelineSession(value: unknown): value is PipelineSession {
@@ -215,9 +241,12 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     && (value.status === "running"
       || value.status === "idle"
       || value.status === "error")
-    && typeof value.startedAt === "string"
+    && isIsoDate(value.startedAt)
     && typeof value.label === "string"
-    && (value.messages === undefined || Array.isArray(value.messages));
+    && (value.messages === undefined || Array.isArray(value.messages))
+    && (value.messageRevision === undefined
+      || isNonNegativeInteger(value.messageRevision))
+    && isOptionalNonBlankString(value.structuredRequestId);
 }
 
 function isTaskSnapshot(value: unknown): value is TaskSnapshot {
@@ -233,6 +262,41 @@ function isTaskSnapshot(value: unknown): value is TaskSnapshot {
       isRecord(image)
       && typeof image.filename === "string"
       && typeof image.data === "string");
+}
+
+function isFailureContext(value: unknown): value is PipelineFailureContext {
+  if (!isRecord(value)) return false;
+  return RESUMABLE_PHASES.has(value.phase as ResumableBuildPhase)
+    && FAILURE_KINDS.has(value.kind as PipelineFailureKind)
+    && isOptionalNonBlankString(value.sessionId)
+    && isOptionalString(value.prompt)
+    && (value.useTaskImages === undefined
+      || typeof value.useTaskImages === "boolean")
+    && isOptionalNonBlankString(value.requestId)
+    && (value.structuredReview === undefined
+      || typeof value.structuredReview === "boolean");
+}
+
+function isReconnectAttempt(value: unknown): value is PipelineReconnectAttempt {
+  if (!isRecord(value) || !isFailureContext(value)) return false;
+  return isNonBlankString(value.id) && isIsoDate(value.startedAt);
+}
+
+function isPromptAttempt(value: unknown): value is PipelinePromptAttempt {
+  if (!isRecord(value)) return false;
+  return isNonBlankString(value.id)
+    && isNonBlankString(value.sessionId)
+    && isNonBlankString(value.requestId)
+    && RESUMABLE_PHASES.has(value.phase as ResumableBuildPhase)
+    && typeof value.prompt === "string"
+    && typeof value.useTaskImages === "boolean"
+    && (value.structuredReview === undefined
+      || typeof value.structuredReview === "boolean")
+    && isIsoDate(value.startedAt);
+}
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 /**
@@ -261,9 +325,38 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     || !Number.isSafeInteger(value.maxIterations)
     || (value.maxIterations as number) < 1
     || !isNonNegativeInteger(value.backendRevision)
-    || typeof value.createdAt !== "string"
+    || !isIsoDate(value.createdAt)
     || typeof value.taskTitle !== "string"
     || !isTaskSnapshot(value.taskSnapshot)
+    || (value.verificationResult !== undefined
+      && value.verificationResult !== "pass"
+      && value.verificationResult !== "fail")
+    || !isOptionalString(value.verificationFeedback)
+    || (value.structuredReview !== undefined
+      && !isStructuredReviewReport(value.structuredReview))
+    || !isOptionalNonBlankString(value.structuredReviewRequestId)
+    || (value.pausedFromPhase !== undefined
+      && !RESUMABLE_PHASES.has(value.pausedFromPhase as ResumableBuildPhase))
+    || !isOptionalString(value.error)
+    || (value.failureContext !== undefined
+      && !isFailureContext(value.failureContext))
+    || (value.reconnectAttempt !== undefined
+      && !isReconnectAttempt(value.reconnectAttempt))
+    || (value.pendingPromptAttempt !== undefined
+      && !isPromptAttempt(value.pendingPromptAttempt))
+    || (value.activePromptContext !== undefined
+      && !isFailureContext(value.activePromptContext))
+    || (value.source !== undefined && !isPipelineSource(value.source))
+    || !isOptionalNonBlankString(value.featurePlanId)
+    || (value.sourceLinkedAt !== undefined && !isIsoDate(value.sourceLinkedAt))
+    || (value.completionCommentStatus !== undefined
+      && value.completionCommentStatus !== "posting"
+      && value.completionCommentStatus !== "posted"
+      && value.completionCommentStatus !== "failed")
+    || !isOptionalString(value.completionCommentError)
+    || !isOptionalNonBlankString(value.completionCommentId)
+    || (value.completionCommentPostedAt !== undefined
+      && !isIsoDate(value.completionCommentPostedAt))
   ) {
     return false;
   }
@@ -283,7 +376,11 @@ function isPipelineSource(value: unknown): value is BuildPipelineSource {
     return typeof value.issueId === "string"
       && value.issueId.length > 0
       && typeof value.issueIdentifier === "string"
-      && value.issueIdentifier.length > 0;
+      && value.issueIdentifier.length > 0
+      && isOptionalString(value.issueUrl)
+      && isOptionalString(value.status)
+      && isOptionalString(value.teamKey)
+      && (value.updatedAt === undefined || isIsoDate(value.updatedAt));
   }
   return value.type === "github"
     && typeof value.repositoryOwner === "string"
@@ -293,7 +390,8 @@ function isPipelineSource(value: unknown): value is BuildPipelineSource {
     && Number.isSafeInteger(value.issueNumber)
     && (value.issueNumber as number) > 0
     && typeof value.issueUrl === "string"
-    && typeof value.status === "string";
+    && typeof value.status === "string"
+    && (value.updatedAt === undefined || isIsoDate(value.updatedAt));
 }
 
 /** Strict gateway guard for starting backend-owned work. */

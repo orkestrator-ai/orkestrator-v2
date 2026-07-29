@@ -1,7 +1,10 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
-import { mockToastSuccess as toastSuccessMock } from "../../../../../tests/mocks/sonner";
+import {
+  mockToastError as toastErrorMock,
+  mockToastSuccess as toastSuccessMock,
+} from "../../../../../tests/mocks/sonner";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import type { LinearConnectionStatus, LinearIssueDetail, LinearIssueListItem } from "@/types/linear";
@@ -177,6 +180,7 @@ describe("LinearTicketsView", () => {
     startBuildFromLinearIssueMock.mockClear();
     navigateToPipelineMock.mockClear();
     toastSuccessMock.mockClear();
+    toastErrorMock.mockClear();
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -635,5 +639,47 @@ describe("LinearTicketsView", () => {
           ?.completionCommentStatus,
       ).toBeUndefined();
     });
+  });
+
+  test("keeps Linear completion retries single-flight and recovers after rejection", async () => {
+    const pipelineId = "linear-completion-retry";
+    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
+      id: pipelineId,
+      taskId: "issue-1",
+      phase: "complete",
+      taskTitle: "ENG-123: Add Linear integration",
+      source: {
+        type: "linear",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-123",
+      },
+      completionCommentStatus: "failed",
+      completionCommentError: "Linear unavailable",
+    }));
+    const pending = deferred<Awaited<
+      ReturnType<typeof retryCompletionCommentMock>
+    >>();
+    retryCompletionCommentMock.mockImplementationOnce(() => pending.promise);
+    renderLinearTicketsView();
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    const button = await screen.findByRole("button", {
+      name: /retry comment/i,
+    }) as HTMLButtonElement;
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(retryCompletionCommentMock).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(true);
+
+    pending.reject(new Error("still offline"));
+    await waitFor(() => expect(button.disabled).toBe(false));
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Failed to retry Linear completion comment",
+      { description: "still offline" },
+    );
+
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(retryCompletionCommentMock).toHaveBeenCalledTimes(2));
   });
 });

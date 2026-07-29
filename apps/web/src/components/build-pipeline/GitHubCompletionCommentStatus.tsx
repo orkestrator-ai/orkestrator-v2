@@ -1,4 +1,6 @@
 import { AlertCircle, RefreshCw } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   useBuildPipelineStore,
@@ -19,6 +21,7 @@ export function GitHubCompletionCommentStatus({
   pipeline,
 }: GitHubCompletionCommentStatusProps) {
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
+  const [retryPending, setRetryPending] = useState(false);
 
   if (
     pipeline.source?.type !== "github"
@@ -43,13 +46,26 @@ export function GitHubCompletionCommentStatus({
         size="sm"
         className="h-7 gap-1.5 text-xs"
         aria-label="Retry GitHub completion comment"
-        onClick={() => {
-          void retryBuildPipelineCompletionComment(pipeline.id)
-            .then((next) => replacePipeline(next));
+        disabled={retryPending}
+        onClick={async () => {
+          if (retryPending) return;
+          setRetryPending(true);
+          try {
+            replacePipeline(
+              await retryBuildPipelineCompletionComment(pipeline.id),
+            );
+          } catch (error) {
+            toast.error("Failed to retry GitHub completion comment", {
+              description:
+                error instanceof Error ? error.message : String(error),
+            });
+          } finally {
+            setRetryPending(false);
+          }
         }}
       >
-        <RefreshCw className="h-3.5 w-3.5" />
-        Retry comment
+        <RefreshCw className={`h-3.5 w-3.5${retryPending ? " animate-spin" : ""}`} />
+        {retryPending ? "Retrying…" : "Retry comment"}
       </Button>
     </div>
   );

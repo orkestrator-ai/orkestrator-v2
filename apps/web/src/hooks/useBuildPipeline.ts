@@ -152,6 +152,29 @@ function findBuildTabInTree(
   return null;
 }
 
+async function waitForPendingPaneHydration(
+  environmentId: string,
+): Promise<void> {
+  const initial = usePaneLayoutStore.getState();
+  if (initial.hydration.get(environmentId) !== "pending") return;
+
+  await new Promise<void>((resolve) => {
+    let unsubscribe = () => {};
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      unsubscribe();
+      resolve();
+    };
+    const timeout = setTimeout(finish, 5_000);
+    unsubscribe = usePaneLayoutStore.subscribe((state) => {
+      if (state.hydration.get(environmentId) !== "pending") finish();
+    });
+  });
+}
+
 async function ensureBuildTab(
   pipeline: Pick<
     BuildPipeline,
@@ -159,9 +182,26 @@ async function ensureBuildTab(
   >,
 ): Promise<void> {
   if (!pipeline.environmentId) return;
+  // A backend-created environment can be selected before its TerminalContainer
+  // has mounted. addTab intentionally ignores unknown environments, so establish
+  // the pane state synchronously before attempting the handoff.
+  usePaneLayoutStore.getState().setActiveEnvironment(pipeline.environmentId);
+  // A pending restore replaces the environment layout as one authoritative
+  // snapshot. Wait for it before finding or adding the build tab.
+  await waitForPendingPaneHydration(pipeline.environmentId);
   const store = usePaneLayoutStore.getState();
   const existing = store.environments.get(pipeline.environmentId);
-  if (existing && findBuildTabInTree(existing.root, pipeline.taskId)) return;
+  const existingTab = existing
+    ? findBuildTabInTree(existing.root, pipeline.taskId)
+    : null;
+  if (existingTab) {
+    store.setActiveTab(
+      existingTab.paneId,
+      existingTab.tabId,
+      pipeline.environmentId,
+    );
+    return;
+  }
   const paneId = existing?.activePaneId ?? "default";
   store.addTab(paneId, {
     id: `build-${pipeline.id}`,

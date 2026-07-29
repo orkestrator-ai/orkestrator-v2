@@ -1846,7 +1846,7 @@ describe("session lifecycle", () => {
     expect(toolPart.toolState).toBe("pending");
   });
 
-  test("raw patch failure is visible once and a structured file change supersedes it", async () => {
+  test("plan updates do not disrupt per-file raw patch fallback or structured replacement", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
@@ -1855,11 +1855,27 @@ describe("session lifecycle", () => {
       attachments: [],
     });
     const child = h.child();
+    child.notify("turn/plan/updated", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      plan: [
+        { step: "Inspect", status: "completed" },
+        { step: "Patch", status: "inProgress" },
+      ],
+    });
     const rawOutput = {
       type: "custom_tool_call_output",
       call_id: "patch-1",
       output: "Failed to read file to update: missing.ts",
     };
+    const rawPatch = `*** Begin Patch
+*** Update File: missing.ts
+@@
+-old
++new
+*** Add File: second.ts
++second
+*** End Patch`;
 
     // Output-before-call cannot invent an item. Repeated call/output delivery
     // must still converge on one fallback rather than duplicating transcript UI.
@@ -1875,7 +1891,7 @@ describe("session lifecycle", () => {
         type: "custom_tool_call",
         call_id: "patch-1",
         name: "apply_patch",
-        input: "*** Begin Patch\n*** Update File: missing.ts\n",
+        input: rawPatch,
         status: "completed",
       },
     });
@@ -1886,7 +1902,7 @@ describe("session lifecycle", () => {
         type: "custom_tool_call",
         call_id: "patch-1",
         name: "apply_patch",
-        input: "*** Begin Patch\n*** Update File: missing.ts\n",
+        input: rawPatch,
         status: "completed",
       },
     });
@@ -1903,11 +1919,21 @@ describe("session lifecycle", () => {
     await h.drain();
 
     let messages = (await h.runtime.getMessages(sessionId))!;
-    expect(messages[1]!.parts).toHaveLength(1);
+    expect(messages[1]!.parts).toHaveLength(3);
     expect(messages[1]!.parts[0]).toMatchObject({
+      toolName: "todo_list",
+      toolState: "success",
+    });
+    expect(messages[1]!.parts[1]).toMatchObject({
       toolName: "apply_patch",
       toolState: "failure",
       toolError: "Failed to read file to update: missing.ts",
+      toolDiff: { filePath: expect.stringContaining("missing.ts") },
+    });
+    expect(messages[1]!.parts[2]).toMatchObject({
+      toolName: "apply_patch",
+      toolState: "failure",
+      toolDiff: { filePath: expect.stringContaining("second.ts") },
     });
 
     child.notify("item/completed", {
@@ -1917,7 +1943,187 @@ describe("session lifecycle", () => {
         id: "patch-1",
         type: "fileChange",
         status: "completed",
-        changes: [{ path: "fixed.ts", kind: { type: "add" } }],
+        changes: [
+          { path: "fixed.ts", kind: { type: "add" } },
+          { path: "second-fixed.ts", kind: { type: "add" } },
+        ],
+      },
+    });
+    await h.drain();
+
+    messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toHaveLength(3);
+    expect(messages[1]!.parts[1]).toMatchObject({
+      toolName: "apply_patch",
+      toolState: "success",
+      toolTitle: "add: fixed.ts",
+      toolOutput: "add: fixed.ts",
+    });
+    expect(messages[1]!.parts[1]!.toolError).toBeUndefined();
+    expect(messages[1]!.parts[2]).toMatchObject({
+      toolTitle: "add: second-fixed.ts",
+      toolOutput: "add: second-fixed.ts",
+    });
+  });
+
+  test("a successful raw patch stays hidden until structured fileChange arrives", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "patch the file",
+      requestId: "req-successful-raw-patch",
+      attachments: [],
+    });
+    const child = h.child();
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "patch-success",
+        name: "apply_patch",
+        input: `*** Begin Patch
+*** Update File: src/example.ts
+@@
+-old
++new
+*** End Patch`,
+        status: "completed",
+      },
+    });
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call_output",
+        call_id: "patch-success",
+        output: "Done!",
+      },
+    });
+    await h.drain();
+
+    let messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toEqual([]);
+
+    child.notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "patch-success",
+        type: "fileChange",
+        status: "completed",
+        changes: [{ path: "src/example.ts", kind: { type: "update" } }],
+      },
+    });
+    await h.drain();
+
+    messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toHaveLength(1);
+    expect(messages[1]!.parts[0]).toMatchObject({
+      toolName: "apply_patch",
+      toolTitle: "update: src/example.ts",
+      toolState: "success",
+    });
+
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "patch-without-structured-item",
+        name: "apply_patch",
+        input: `*** Begin Patch
+*** Add File: src/fallback.ts
++fallback
+*** End Patch`,
+        status: "completed",
+      },
+    });
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call_output",
+        call_id: "patch-without-structured-item",
+        output: "Done!",
+      },
+    });
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toHaveLength(2);
+    expect(messages[1]!.parts[1]).toMatchObject({
+      toolName: "apply_patch",
+      toolTitle: "add: src/fallback.ts",
+      toolState: "success",
+      toolDiff: { filePath: expect.stringContaining("src/fallback.ts") },
+    });
+  });
+
+  test("the streamed patch preview survives the raw call that follows it", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "patch the file",
+      requestId: "req-preview-before-raw",
+      attachments: [],
+    });
+    const child = h.child();
+
+    // app-server streams the in-progress patch while the model writes it.
+    child.notify("item/fileChange/patchUpdated", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "patch-preview",
+      changes: [{ path: "src/example.ts", kind: { type: "update" } }],
+    });
+    await h.drain();
+
+    let messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toHaveLength(1);
+    expect(messages[1]!.parts[0]).toMatchObject({ toolName: "apply_patch" });
+
+    // The raw `custom_tool_call` uses the same call id and lands afterwards. It
+    // is only a recovery candidate, so it must not blank the preview already on
+    // screen — the gap lasts until the patch applies, or until an approval is
+    // answered, which is unbounded.
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        type: "custom_tool_call",
+        call_id: "patch-preview",
+        name: "apply_patch",
+        input: `*** Begin Patch
+*** Update File: src/example.ts
+@@
+-old
++new
+*** End Patch`,
+        status: "completed",
+      },
+    });
+    await h.drain();
+
+    messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toHaveLength(1);
+    expect(messages[1]!.parts[0]).toMatchObject({
+      toolName: "apply_patch",
+      toolTitle: "update: src/example.ts",
+    });
+
+    child.notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "patch-preview",
+        type: "fileChange",
+        status: "completed",
+        changes: [{ path: "src/example.ts", kind: { type: "update" } }],
       },
     });
     await h.drain();
@@ -1927,10 +2133,50 @@ describe("session lifecycle", () => {
     expect(messages[1]!.parts[0]).toMatchObject({
       toolName: "apply_patch",
       toolState: "success",
-      toolTitle: "add: fixed.ts",
-      toolOutput: "add: fixed.ts",
+      toolTitle: "update: src/example.ts",
     });
-    expect(messages[1]!.parts[0]!.toolError).toBeUndefined();
+  });
+
+  test("a raw patch call from a stale turn is dropped rather than applied", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "patch the file",
+      requestId: "req-stale-raw-patch",
+      attachments: [],
+    });
+    const child = h.child();
+
+    // A turn that has already moved on must not have a previous turn's patch
+    // spliced into it; `accepts` is the only thing standing between them.
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-0",
+      item: {
+        type: "custom_tool_call",
+        call_id: "stale-patch",
+        name: "apply_patch",
+        input: "*** Begin Patch\n*** Add File: stale.ts\n+stale\n*** End Patch",
+        status: "completed",
+      },
+    });
+    child.notify("rawResponseItem/completed", {
+      threadId: "thread-1",
+      turnId: "turn-0",
+      item: {
+        type: "custom_tool_call_output",
+        call_id: "stale-patch",
+        output: "Failed to read file to update: stale.ts",
+      },
+    });
+    child.notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages[1]!.parts).toEqual([]);
   });
 
   test("a coalesced publish rejection is contained and reported", async () => {
@@ -3711,6 +3957,87 @@ describe("idle detach and transparent re-attach", () => {
     });
     await h.drain();
 
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, "thread-1.jsonl"),
+      `${[
+        {
+          type: "session_meta",
+          payload: {
+            id: "thread-1",
+            cwd: "/tmp/ws",
+            timestamp: "2026-07-25T12:00:00.000Z",
+          },
+        },
+        {
+          type: "turn_context",
+          payload: { turn_id: "turn-1", cwd: "/tmp/ws" },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "hello" }],
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "update_plan",
+            call_id: "call-plan",
+            arguments: JSON.stringify({
+              plan: [{ step: "Patch both files", status: "in_progress" }],
+            }),
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "call-plan",
+            output: "Plan updated",
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call",
+            name: "apply_patch",
+            call_id: "call-patch",
+            status: "completed",
+            input: `*** Begin Patch
+*** Update File: src/a.ts
+@@
+-a
++A
+*** Add File: src/b.ts
++B
+*** End Patch`,
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call_output",
+            call_id: "call-patch",
+            output: "Done!",
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "done" }],
+          },
+        },
+      ].map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf8",
+    );
+
     clock += 60_000;
     await h.runtime.sweepIdle();
     h.child().requests.length = 0;
@@ -3718,6 +4045,14 @@ describe("idle detach and transparent re-attach", () => {
     // Same session id the UI still holds — this must just work.
     const messages = await h.runtime.getMessages(sessionId);
     expect(messages).not.toBeNull();
+    const patchParts = messages!
+      .flatMap((message) => message.parts)
+      .filter((part) => part.toolName === "apply_patch");
+    expect(patchParts).toHaveLength(2);
+    expect(patchParts.map((part) => part.toolDiff?.filePath)).toEqual([
+      "/tmp/ws/src/a.ts",
+      "/tmp/ws/src/b.ts",
+    ]);
     expect(h.child().requests.some((r) => r.method === "thread/resume")).toBe(true);
     expect(h.runtime.getStorageStats()).toMatchObject({ reattachedThreads: 1 });
   });

@@ -27,6 +27,7 @@ import {
   pruneDiffCache,
   touchBaseline,
 } from "./diff-budget.js";
+import { rawApplyPatchParts } from "./apply-patch.js";
 import type { FileChangeDiffContext, NormalizedPart, ToolDiffMetadata } from "./types.js";
 
 const execFile = promisify(execFileCallback);
@@ -358,17 +359,28 @@ export async function itemToParts(
       const output = capCommandOutput(
         stringifyDynamicToolContent(item.content_items) ?? "",
       ) || undefined;
+      const toolState =
+        item.status === "failed"
+          ? "failure"
+          : item.status === "completed"
+            ? "success"
+            : "pending";
+      if (item.tool.trim().toLowerCase() === "apply_patch") {
+        const patchParts = rawApplyPatchParts(item.arguments, cwd, toolState);
+        if (patchParts.length > 0) {
+          return patchParts.map((part) => ({
+            ...part,
+            toolOutput: item.status === "failed" ? undefined : output,
+            toolError: item.status === "failed" ? output ?? "Tool failed" : undefined,
+          }));
+        }
+      }
       return [{
         type: "tool-invocation",
         content: item.tool,
         toolName: item.tool,
         toolArgs: normalizeTranscriptToolArgs(item.tool, item.arguments),
-        toolState:
-          item.status === "failed"
-            ? "failure"
-            : item.status === "completed"
-              ? "success"
-              : "pending",
+        toolState,
         // Dynamic tools are namespaced by the protocol, so two same-named tools
         // are only distinguishable by it. Mirrors the `mcp_tool_call` title.
         toolTitle: item.namespace ? `${item.namespace}:${item.tool}` : item.tool,

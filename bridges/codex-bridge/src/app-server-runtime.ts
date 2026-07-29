@@ -1451,6 +1451,15 @@ export class AppServerRuntime {
         else this.stateFor(threadId).coalescer.schedule(this.now());
         return;
       }
+      case "item.dynamic.started": {
+        const turn = context.activeTurn;
+        if (!turn || !turn.accepts(event)) return;
+        // This is a recovery candidate, not the authoritative app-server item.
+        // Keep it off the live transcript unless its output fails, a structured
+        // fileChange replaces it, or turn completion renders it as a fallback.
+        turn.onDynamicToolStarted(event.item);
+        return;
+      }
       case "item.text.delta": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;

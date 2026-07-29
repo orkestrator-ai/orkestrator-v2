@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Code2, Globe2, Loader2, RefreshCw, Server, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, Code2, Globe2, Loader2, RefreshCw, Server, ShieldCheck, Smartphone } from "lucide-react";
 import type { BrowserPreviewBounds, BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
 import { Button } from "@/components/ui/button";
+import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { cn } from "@/lib/utils";
 import { resolveBrowserAddress } from "@/lib/browser-address";
 import {
@@ -394,6 +395,39 @@ export function BrowserTab({
   const canGoForward = nativeBrowserPreview
     ? Boolean(nativeState?.canGoForward)
     : historyIndex >= 0 && historyIndex < history.length - 1;
+  const browserPreviewSupported = (() => {
+    try {
+      return isGatewayBrowserPreviewSupported();
+    } catch {
+      // Address resolution reports malformed gateway state in the existing
+      // error surface. Do not let the availability notice mask that error.
+      return true;
+    }
+  })();
+  const isIosClient = window.__orkestratorClientPlatform === "ios-wkwebview"
+    || window.__orkestratorClientPlatform === "ipad-wkwebview"
+    || window.__orkestratorClientPlatform === "iphone-wkwebview";
+
+  if (!browserPreviewSupported) {
+    return (
+      <div className={cn(
+        "@container/browser absolute inset-0 grid min-w-0 place-items-center overflow-hidden bg-background p-6",
+        !isActive && "hidden",
+      )}>
+        <div className="w-full min-w-0 max-w-sm text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-muted/30 shadow-sm">
+            <Smartphone className="h-6 w-6 text-muted-foreground" />
+          </div>
+          <h2 className="text-base font-semibold text-foreground">
+            {isIosClient ? "Browser tabs aren’t supported on iOS" : "Browser tabs aren’t supported here"}
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            Open this browser tab in the Orkestrator desktop app to view the local development server.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={cn("@container/browser absolute inset-0 flex min-w-0 flex-col overflow-hidden bg-background", !isActive && "hidden")}>

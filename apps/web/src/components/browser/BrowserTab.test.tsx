@@ -14,6 +14,7 @@ const happyDOM = (window as unknown as Window & {
 const originalDisableIframePageLoading = happyDOM.settings.disableIframePageLoading;
 const originalHref = window.location.href;
 const originalOrkestrator = window.orkestrator;
+const originalClientPlatform = window.__orkestratorClientPlatform;
 let consoleErrorSpy: ReturnType<typeof spyOn> | undefined;
 
 function setBrowserTab(url = "") {
@@ -101,6 +102,7 @@ describe("BrowserTab", () => {
     await happyDOM.abort();
     happyDOM.setURL(originalHref);
     window.orkestrator = originalOrkestrator;
+    window.__orkestratorClientPlatform = originalClientPlatform;
     delete window.orkestratorGateway;
     consoleErrorSpy?.mockRestore();
     consoleErrorSpy = undefined;
@@ -435,6 +437,30 @@ describe("BrowserTab", () => {
     expect(iframe?.hasAttribute("referrerpolicy")).toBe(false);
   });
 
+  test("shows an unsupported notice instead of a loading preview on iOS", () => {
+    window.__orkestratorClientPlatform = "iphone-wkwebview";
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    setBrowserTab("http://localhost:3000/");
+
+    const { container } = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+
+    expect(screen.getByText("Browser tabs aren’t supported on iOS")).toBeDefined();
+    expect(screen.getByText(/Open this browser tab in the Orkestrator desktop app/)).toBeDefined();
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Browser address" })).toBeNull();
+    expect(container.querySelector(".animate-spin")).toBeNull();
+  });
+
   test("uses an isolated native surface and opens DevTools for that preview in Electron", async () => {
     const state = {
       tabId: "browser-1",
@@ -761,7 +787,7 @@ describe("BrowserTab", () => {
     expect(screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled")).toBe(true);
   });
 
-  test("explains that web-client sessions cannot host previews", () => {
+  test("shows an unsupported notice for remote web-client browser tabs", () => {
     window.orkestratorGateway = {
       enabled: true,
       baseUrl: "https://workstation.tailnet.ts.net/",
@@ -777,9 +803,10 @@ describe("BrowserTab", () => {
     );
 
     expect(container.querySelector("iframe")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Go" }));
-    expect(screen.getByRole("alert").textContent).toContain("desktop app");
+    expect(screen.getByText("Browser tabs aren’t supported here")).toBeDefined();
+    expect(screen.getByText(/Open this browser tab in the Orkestrator desktop app/)).toBeDefined();
+    expect(screen.queryByRole("textbox", { name: "Browser address" })).toBeNull();
+    expect(container.querySelector(".animate-spin")).toBeNull();
   });
 
   test("clears loading state when the iframe reports a load", () => {

@@ -60,6 +60,7 @@ const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const { useFeaturePlanStore } = await import("@/stores/featurePlanStore");
 const { useKanbanStore } = await import("@/stores/kanbanStore");
 const { useLoopedReviewStore } = await import("@/stores/loopedReviewStore");
+const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
 const { useProjectStore } = await import("@/stores/projectStore");
 const { useSessionStore } = await import("@/stores/sessionStore");
 
@@ -113,6 +114,11 @@ beforeEach(() => {
   useFeaturePlanStore.setState({ currentProjectId: null });
   useProjectStore.setState({ projects: [] });
   useLoopedReviewStore.setState({ workflows: new Map() });
+  usePaneLayoutStore.setState({
+    environments: new Map(),
+    hydration: new Map(),
+    activeEnvironmentId: null,
+  });
   detach = startStoreResourceSync();
 });
 
@@ -323,18 +329,129 @@ describe("looped-review binding", () => {
   });
 });
 
-describe("bindings absent by design", () => {
-  test("does not mirror pane layout between windows", async () => {
-    // Which panes a window has open is per-window state that merely happens to
-    // be persisted; mirroring it live would fight the user.
-    const loadTasks = mock(async () => {});
-    useKanbanStore.setState({ currentProjectId: "project-1", loadTasks } as never);
+describe("pane-layout binding", () => {
+  test("shows a tab created by another client without changing local selection", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.addTab("default", {
+      id: "review-3",
+      type: "claude-native",
+      displayTitle: "Review",
+      claudeNativeData: {
+        environmentId: "env-1",
+        isLocal: true,
+        sessionId: "session-3",
+      },
+    }, "env-1");
+    paneStore.beginHydration("env-1");
+    paneStore.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+
+    const getPaneLayout = mock(async () => ({
+      version: 1,
+      environmentId: "env-1",
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "review-3",
+            type: "claude-native",
+            displayTitle: "Review",
+            claudeNativeData: {
+              environmentId: "env-1",
+              sessionId: "session-3",
+              isLocal: true,
+            },
+          },
+          {
+            id: "review-4",
+            type: "claude-native",
+            displayTitle: "Review",
+            claudeNativeData: {
+              environmentId: "env-1",
+              sessionId: "session-4",
+              isLocal: true,
+            },
+          },
+        ],
+        activeTabId: "review-4",
+      },
+      updatedAt: "2026-07-29T08:00:00.000Z",
+      revision: 4,
+    }));
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
     await tick();
 
-    expect(loadTasks).not.toHaveBeenCalled();
-    expect(hydratePromptQueuesForEnvironment).not.toHaveBeenCalled();
+    const pane = usePaneLayoutStore.getState().getPane("default", "env-1");
+    expect(getPaneLayout).toHaveBeenCalledWith("env-1");
+    expect(pane?.tabs.map(({ id }) => id)).toEqual(["review-3", "review-4"]);
+    expect(pane?.activeTabId).toBe("review-3");
+    expect(pane?.tabs[1]?.claudeNativeData?.sessionId).toBe("session-4");
+  });
+
+  test("replays a change that arrives while initial layout hydration is pending", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.beginHydration("env-1");
+
+    const getPaneLayout = mock(async () => ({
+      version: 1,
+      environmentId: "env-1",
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "terminal-1", type: "plain" },
+          {
+            id: "review-mobile",
+            type: "claude-native",
+            claudeNativeData: {
+              environmentId: "env-1",
+              sessionId: "session-mobile",
+              isLocal: true,
+            },
+          },
+        ],
+        activeTabId: "review-mobile",
+      },
+      updatedAt: "2026-07-29T08:00:00.000Z",
+      revision: 2,
+    }));
+    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
+    await tick();
+    expect(getPaneLayout).not.toHaveBeenCalled();
+
+    usePaneLayoutStore.getState().finishHydration("env-1", {
+      containerId: null,
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "terminal-1", type: "plain" }],
+        activeTabId: "terminal-1",
+      },
+    });
+    await tick();
+
+    expect(getPaneLayout).toHaveBeenCalledWith("env-1");
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["terminal-1", "review-mobile"]);
   });
 });
 

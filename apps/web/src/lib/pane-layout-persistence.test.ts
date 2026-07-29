@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PersistedPaneLayout } from "@/types/paneLayout";
 import {
+  adoptPersistedPaneLayout,
   createPersistedPaneLayoutInput,
   flushPaneLayoutNow,
   startPaneLayoutPersistence,
@@ -101,7 +102,7 @@ describe("pane layout persistence", () => {
     stop();
   });
 
-  test("debounces changes and retries a failed snapshot after the next change", async () => {
+  test("debounces changes and retries a failed snapshot after the next shared change", async () => {
     let attempts = 0;
     const save = mock(async (environmentId: string, input: LayoutInput) => {
       attempts += 1;
@@ -118,9 +119,69 @@ describe("pane layout persistence", () => {
     await waitForTimers();
     expect(save).toHaveBeenCalledTimes(1);
 
-    usePaneLayoutStore.getState().setActiveTab("default", "tab-1", "env-1");
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "tab-3", type: "plain" },
+      "env-1",
+    );
     await waitForTimers();
     expect(save).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  test("keeps active pane and tab selection out of the shared snapshot", async () => {
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input)
+    );
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.addTab("default", { id: "tab-1", type: "plain" }, "env-1");
+    store.addTab("default", { id: "tab-2", type: "plain" }, "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+
+    usePaneLayoutStore.getState().setActiveTab("default", "tab-1", "env-1");
+    await waitForTimers();
+
+    expect(save).not.toHaveBeenCalled();
+    const input = createPersistedPaneLayoutInput(
+      usePaneLayoutStore.getState().environments.get("env-1")!,
+    );
+    expect(input.activePaneId).toBe("default");
+    expect((input.root as { activeTabId: string }).activeTabId).toBe("tab-1");
+    stop();
+  });
+
+  test("does not adopt an older snapshot over a queued local tab change", () => {
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input)
+    );
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "new-local-tab", type: "plain" }, "env-1");
+
+    const olderSnapshot = {
+      containerId: "container-1",
+      activePaneId: "default",
+      root: {
+        kind: "leaf" as const,
+        id: "default",
+        tabs: [{ id: "older-tab", type: "plain" as const }],
+        activeTabId: "older-tab",
+      },
+    };
+
+    expect(adoptPersistedPaneLayout("env-1", olderSnapshot)).toBe(false);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).toEqual(["new-local-tab"]);
     stop();
   });
 

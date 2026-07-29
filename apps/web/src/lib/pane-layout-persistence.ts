@@ -52,9 +52,13 @@ function sanitizeTab(tab: TabInfo): TabInfo {
 
 function sanitizeRoot(node: PaneNode): PaneNode {
   if (node.kind === "leaf") {
+    // Selection belongs to this renderer, not to the shared tab registry.
+    // Persist a deterministic placeholder so selecting a tab in one client
+    // neither writes the backend nor changes another client's selection.
     return {
       ...node,
       tabs: node.tabs.map(sanitizeTab),
+      activeTabId: node.tabs[0]?.id ?? null,
     };
   }
   return {
@@ -63,13 +67,19 @@ function sanitizeRoot(node: PaneNode): PaneNode {
   };
 }
 
+function firstLeafId(node: PaneNode): string {
+  return node.kind === "leaf" ? node.id : firstLeafId(node.children[0]);
+}
+
 export function createPersistedPaneLayoutInput(
   state: EnvironmentPaneState,
 ): PersistedPaneLayoutInput {
   return {
     version: PANE_LAYOUT_VERSION,
     containerId: state.containerId,
-    activePaneId: state.activePaneId,
+    // Like activeTabId, activePaneId is required by the version-1 wire shape
+    // but has no cross-client meaning. Keep it canonical on the shared record.
+    activePaneId: firstLeafId(state.root),
     root: sanitizeRoot(state.root),
   };
 }
@@ -78,12 +88,32 @@ type PaneLayoutEnqueue = (
   environmentId: string,
   input: PersistedPaneLayoutInput,
 ) => Promise<void>;
+type PaneLayoutAdopt = (
+  environmentId: string,
+  input: PersistedPaneLayoutInput,
+) => boolean;
 
 /**
  * Set while `startPaneLayoutPersistence` is active so out-of-band writers can
  * join its per-environment write chain instead of racing it.
  */
 let activeEnqueue: PaneLayoutEnqueue | null = null;
+let activeAdopt: PaneLayoutAdopt | null = null;
+
+/**
+ * Records that a store update came from the backend snapshot. This prevents
+ * the persistence subscriber from echoing that same snapshot back as a new
+ * revision.
+ */
+export function adoptPersistedPaneLayout(
+  environmentId: string,
+  state: EnvironmentPaneState,
+): boolean {
+  return activeAdopt?.(
+    environmentId,
+    createPersistedPaneLayoutInput(state),
+  ) ?? true;
+}
 
 /**
  * Persist a layout immediately, ordered against the debounced writer.
@@ -183,6 +213,24 @@ export function startPaneLayoutPersistence(
   window.addEventListener("pagehide", handlePageHide);
   document.addEventListener("visibilitychange", handleVisibilityChange);
   activeEnqueue = enqueueImmediate;
+  const adoptAuthoritative: PaneLayoutAdopt = (environmentId, input) => {
+    // An event for an older save can arrive while this renderer already has a
+    // newer structural mutation queued or in flight. Do not let that self-echo
+    // roll the newer local tab out of the UI; its completed write will announce
+    // another authoritative revision.
+    if (
+      pendingWrites.has(environmentId)
+      || writeChains.has(environmentId)
+    ) {
+      return false;
+    }
+    const serialized = JSON.stringify(input);
+    cancelTimer(environmentId);
+    pendingWrites.delete(environmentId);
+    lastEnqueued.set(environmentId, serialized);
+    return true;
+  };
+  activeAdopt = adoptAuthoritative;
 
   const unsubscribe = usePaneLayoutStore.subscribe((state, previous) => {
     const environmentIds = new Set([
@@ -231,6 +279,7 @@ export function startPaneLayoutPersistence(
   return () => {
     unsubscribe();
     if (activeEnqueue === enqueueImmediate) activeEnqueue = null;
+    if (activeAdopt === adoptAuthoritative) activeAdopt = null;
     window.removeEventListener("pagehide", handlePageHide);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     // Start all pending writes while the renderer/backend connection is still

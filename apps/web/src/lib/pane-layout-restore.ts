@@ -308,3 +308,62 @@ export function reconcilePersistedLayout(
     containerId: context.containerId,
   };
 }
+
+/**
+ * Installs a backend-owned pane/tab snapshot without adopting another
+ * renderer's active pane or active tab.
+ */
+export function preserveClientPaneSelection(
+  authoritative: EnvironmentPaneState,
+  current: EnvironmentPaneState,
+): EnvironmentPaneState {
+  const currentLeaves = new Map<string, PaneLeaf>();
+  const collectCurrentLeaves = (node: PaneNode): void => {
+    if (node.kind === "leaf") {
+      currentLeaves.set(node.id, node);
+      return;
+    }
+    node.children.forEach(collectCurrentLeaves);
+  };
+  collectCurrentLeaves(current.root);
+
+  const preserveLeafSelection = (node: PaneNode): PaneNode => {
+    if (node.kind === "leaf") {
+      const currentActiveTabId = currentLeaves.get(node.id)?.activeTabId;
+      return {
+        ...node,
+        activeTabId:
+          currentActiveTabId
+          && node.tabs.some((tab) => tab.id === currentActiveTabId)
+            ? currentActiveTabId
+            : node.activeTabId,
+      };
+    }
+    return {
+      ...node,
+      children: [
+        preserveLeafSelection(node.children[0]),
+        preserveLeafSelection(node.children[1]),
+      ],
+    };
+  };
+
+  const root = preserveLeafSelection(authoritative.root);
+  const authoritativePaneIds = new Set<string>();
+  const collectPaneIds = (node: PaneNode): void => {
+    if (node.kind === "leaf") {
+      authoritativePaneIds.add(node.id);
+      return;
+    }
+    node.children.forEach(collectPaneIds);
+  };
+  collectPaneIds(root);
+
+  return {
+    ...authoritative,
+    root,
+    activePaneId: authoritativePaneIds.has(current.activePaneId)
+      ? current.activePaneId
+      : authoritative.activePaneId,
+  };
+}

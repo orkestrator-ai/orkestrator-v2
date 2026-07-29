@@ -158,6 +158,10 @@ interface PaneLayoutState {
   reset: (environmentId?: string) => void;
   beginHydration: (environmentId: string) => void;
   finishHydration: (environmentId: string, restored?: EnvironmentPaneState) => void;
+  applyAuthoritativeLayout: (
+    environmentId: string,
+    restored: EnvironmentPaneState,
+  ) => void;
 
   // Tab management
   addTab: (paneId: string, tab: TabInfo, environmentId?: string) => void;
@@ -484,6 +488,21 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const environments = new Map(state.environments);
     environments.set(environmentId, restored);
     set({ environments, hydration });
+    pruneUnreferencedAgentHandoffs(environmentId, restored.root);
+  },
+
+  applyAuthoritativeLayout: (environmentId, restored) => {
+    const state = get();
+    if (
+      state.hydration.get(environmentId) !== "done"
+      || !state.environments.has(environmentId)
+    ) {
+      return;
+    }
+
+    const environments = new Map(state.environments);
+    environments.set(environmentId, restored);
+    set({ environments });
     pruneUnreferencedAgentHandoffs(environmentId, restored.root);
   },
 

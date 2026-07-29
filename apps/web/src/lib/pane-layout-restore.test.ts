@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { reconcilePersistedLayout } from "./pane-layout-restore";
+import {
+  preserveClientPaneSelection,
+  reconcilePersistedLayout,
+} from "./pane-layout-restore";
 import type { PersistedPaneLayout } from "@/types/paneLayout";
 
 function saved(root: unknown, overrides: Partial<PersistedPaneLayout> = {}): PersistedPaneLayout {
@@ -451,5 +454,40 @@ describe("reconcilePersistedLayout", () => {
       tabs: [{ id: "future", type: "future-tab" }],
       activeTabId: "future",
     }), context)).toBeNull();
+  });
+});
+
+describe("preserveClientPaneSelection", () => {
+  test("adds backend tabs without changing the client's active tab", () => {
+    const current = {
+      containerId: "container-1",
+      activePaneId: "pane",
+      root: {
+        kind: "leaf" as const,
+        id: "pane",
+        tabs: [{ id: "review-3", type: "claude-native" as const }],
+        activeTabId: "review-3",
+      },
+    };
+    const authoritative = {
+      containerId: "container-1",
+      activePaneId: "pane",
+      root: {
+        kind: "leaf" as const,
+        id: "pane",
+        tabs: [
+          { id: "review-3", type: "claude-native" as const },
+          { id: "review-4", type: "claude-native" as const },
+        ],
+        activeTabId: "review-4",
+      },
+    };
+
+    const reconciled = preserveClientPaneSelection(authoritative, current);
+
+    expect(reconciled.root).toMatchObject({
+      tabs: [{ id: "review-3" }, { id: "review-4" }],
+      activeTabId: "review-3",
+    });
   });
 });

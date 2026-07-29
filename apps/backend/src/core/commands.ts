@@ -8270,28 +8270,49 @@ export function createCommandRegistry(
     storage.listPromptQueues(asString(environmentId, "environmentId")),
   );
   register(
-    "save_prompt_queue",
-    ({ queueKey, environmentId, messages, expectedRevision }, { storage }) =>
-      storage.savePromptQueue(
+    "enqueue_prompt_queue_message",
+    ({ queueKey, environmentId, message }, { storage }) =>
+      storage.enqueuePromptQueueMessage(
         asString(queueKey, "queueKey"),
         asString(environmentId, "environmentId"),
-        // Passed through unvalidated so storage rejects a malformed payload.
-        // Coercing to [] here would turn a bad request into a queue deletion
-        // that also bumps the revision every other client compares against.
-        messages as unknown[],
-        expectedRevision === undefined
-          ? undefined
-          : asNumber(expectedRevision, "expectedRevision"),
+        message,
+      ),
+  );
+  register(
+    "requeue_prompt_queue_message",
+    ({ queueKey, environmentId, message }, { storage }) =>
+      storage.requeuePromptQueueMessage(
+        asString(queueKey, "queueKey"),
+        asString(environmentId, "environmentId"),
+        message,
+      ),
+  );
+  register(
+    "remove_prompt_queue_message",
+    ({ queueKey, environmentId, messageId }, { storage }) =>
+      storage.removePromptQueueMessage(
+        asString(queueKey, "queueKey"),
+        asString(environmentId, "environmentId"),
+        asString(messageId, "messageId"),
+      ),
+  );
+  register(
+    "move_prompt_queue_message",
+    ({ queueKey, environmentId, messageId, direction }, { storage }) =>
+      storage.movePromptQueueMessage(
+        asString(queueKey, "queueKey"),
+        asString(environmentId, "environmentId"),
+        asString(messageId, "messageId"),
+        asString(direction, "direction") as "up" | "down",
       ),
   );
   register(
     "claim_prompt_queue_head",
-    ({ queueKey, environmentId, expectedMessageId, candidateMessages }, { storage }) =>
+    ({ queueKey, environmentId, expectedMessageId }, { storage }) =>
       storage.claimPromptQueueHead(
         asString(queueKey, "queueKey"),
         asString(environmentId, "environmentId"),
         asString(expectedMessageId, "expectedMessageId"),
-        candidateMessages as unknown[],
       ),
   );
   register("get_compose_draft", ({ draftKey }, { storage }) =>

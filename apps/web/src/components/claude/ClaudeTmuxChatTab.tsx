@@ -116,7 +116,13 @@ import {
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
-import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
+import {
+  claimAgentPromptQueueHead,
+  enqueueAgentPrompt,
+  moveAgentPrompt,
+  removeAgentPrompt,
+  requeueAgentPrompt,
+} from "@/lib/prompt-queue-sources";
 import {
   getClaudeModelCatalog,
   renameEnvironmentFromPrompt,
@@ -363,7 +369,6 @@ export function ClaudeTmuxChatTab({
   const removePendingElicitation = useClaudeTmuxStore((s) => s.removePendingElicitation);
   const replacePendingHooks = useClaudeTmuxStore((s) => s.replacePendingHooks);
   const setTabBusy = useClaudeTmuxStore((s) => s.setBusy);
-  const addToQueue = useClaudeTmuxStore((s) => s.addToQueue);
   const clearTabInitialPrompt = usePaneLayoutStore((s) => s.clearTabInitialPrompt);
   const clearTabInitialAgentOptions = usePaneLayoutStore((s) => s.clearTabInitialAgentOptions);
   const setConfig = useConfigStore((s) => s.setConfig);
@@ -409,6 +414,7 @@ export function ClaudeTmuxChatTab({
   const startedRef = useRef(false);
   const permissionModeEventVersionRef = useRef(0);
   const isProcessingQueueRef = useRef(false);
+  const processQueueRef = useRef<() => void>(() => {});
   const submitPromptRef = useRef<
     ((
       text: string,
@@ -484,6 +490,12 @@ export function ClaudeTmuxChatTab({
   const queueLength = useClaudeTmuxStore(
     useCallback(
       (state) => state.messageQueue.get(storeKey)?.length ?? 0,
+      [storeKey],
+    ),
+  );
+  const queueHeadId = useClaudeTmuxStore(
+    useCallback(
+      (state) => state.messageQueue.get(storeKey)?.[0]?.id,
       [storeKey],
     ),
   );
@@ -1006,14 +1018,14 @@ export function ClaudeTmuxChatTab({
   submitPromptRef.current = submitPrompt;
 
   const handleQueue = useCallback(
-    (text: string, attachments: TmuxAttachment[]) => {
-      addToQueue(storeKey, {
+    async (text: string, attachments: TmuxAttachment[]) => {
+      await enqueueAgentPrompt<TmuxQueuedMessage>("claude-tmux", storeKey, {
         id: createUuid(),
         text,
         attachments,
       });
     },
-    [addToQueue, storeKey],
+    [storeKey],
   );
 
   const processQueue = useCallback(() => {
@@ -1038,17 +1050,21 @@ export function ClaudeTmuxChatTab({
     }
 
     isProcessingQueueRef.current = true;
+    const headBeforeClaimId = tmuxState.getQueuedMessages(storeKey)[0]?.id;
+    let claimedMessage: TmuxQueuedMessage | null = null;
     void claimAgentPromptQueueHead<TmuxQueuedMessage>("claude-tmux", storeKey)
       .then((nextMessage) => {
         if (!nextMessage) return;
+        claimedMessage = nextMessage;
         return submitPromptRef.current?.(
           nextMessage.text,
           nextMessage.attachments,
           false,
         );
       })
-      .then((sent) => {
-        if (sent === false) {
+      .then(async (sent) => {
+        if (sent === false && claimedMessage) {
+          await requeueAgentPrompt("claude-tmux", storeKey, claimedMessage);
           setError((current) => current ?? "Failed to send queued prompt");
         }
       })
@@ -1062,6 +1078,12 @@ export function ClaudeTmuxChatTab({
       })
       .finally(() => {
         isProcessingQueueRef.current = false;
+        const headAfterClaimId = useClaudeTmuxStore
+          .getState()
+          .getQueuedMessages(storeKey)[0]?.id;
+        if (!claimedMessage && headAfterClaimId !== headBeforeClaimId) {
+          processQueueRef.current();
+        }
       });
   }, [
     backendHydrated,
@@ -1075,19 +1097,29 @@ export function ClaudeTmuxChatTab({
   ]);
 
   useEffect(() => {
+    processQueueRef.current = processQueue;
+  }, [processQueue]);
+
+  useEffect(() => {
     if (queueLength > 0 && !isQueueBlockedByDraft) {
       processQueue();
     }
-  }, [isQueueBlockedByDraft, processQueue, queueLength, isThinking]);
+  }, [isQueueBlockedByDraft, processQueue, queueHeadId, queueLength, isThinking]);
 
-  const promoteNextQueuedPromptToDraft = useCallback(() => {
+  const promoteNextQueuedPromptToDraft = useCallback(async () => {
     const store = useClaudeTmuxStore.getState();
     const hasCurrentDraft =
       store.getDraftText(storeKey).trim().length > 0 ||
       store.getAttachments(storeKey).length > 0;
     if (hasCurrentDraft) return;
 
-    const nextMessage = store.removeFromQueue(storeKey);
+    const head = store.getQueuedMessages(storeKey)[0];
+    if (!head) return;
+    const nextMessage = await removeAgentPrompt<TmuxQueuedMessage>(
+      "claude-tmux",
+      storeKey,
+      head.id,
+    );
     if (!nextMessage) return;
 
     store.setDraftText(storeKey, nextMessage.text);
@@ -1107,7 +1139,9 @@ export function ClaudeTmuxChatTab({
     setError(null);
     try {
       await interruptSession(tabId, environmentId);
-      promoteNextQueuedPromptToDraft();
+      await promoteNextQueuedPromptToDraft().catch((error) => {
+        console.error("[ClaudeTmuxChatTab] Failed to promote queued prompt:", error);
+      });
       setTabBusy(storeKey, false);
     } catch (e) {
       setError(String(e));
@@ -2458,7 +2492,7 @@ interface TmuxComposeBarProps {
   submitting: boolean;
   autoFocus?: boolean;
   onSubmit: (text: string, attachments: TmuxAttachment[]) => Promise<boolean> | boolean | void;
-  onQueue?: (text: string, attachments: TmuxAttachment[]) => void;
+  onQueue?: (text: string, attachments: TmuxAttachment[]) => Promise<void> | void;
   queueLength?: number;
   showAddressAll?: boolean;
   onAddressAll?: () => void;
@@ -2536,8 +2570,6 @@ function TmuxComposeBar({
   const addAttachmentToStore = useClaudeTmuxStore((state) => state.addAttachment);
   const removeAttachmentFromStore = useClaudeTmuxStore((state) => state.removeAttachment);
   const clearAttachments = useClaudeTmuxStore((state) => state.clearAttachments);
-  const removeQueueItem = useClaudeTmuxStore((state) => state.removeQueueItem);
-  const moveQueueItem = useClaudeTmuxStore((state) => state.moveQueueItem);
   const modelObj = useMemo(
     () => getTmuxModel(selectedModel, models),
     [selectedModel, models],
@@ -2695,7 +2727,7 @@ function TmuxComposeBar({
     if (!serializedText && attachments.length === 0) return;
 
     if (busy) {
-      onQueue?.(serializedText, attachments);
+      await onQueue?.(serializedText, attachments);
       setValue(sessionKey, "");
       setFileMentions(sessionKey, []);
       clearAttachments(sessionKey);
@@ -2711,13 +2743,18 @@ function TmuxComposeBar({
   };
 
   const handleQueuedMessageClick = useCallback(
-    (message: TmuxQueuedMessage) => {
+    async (message: TmuxQueuedMessage) => {
       if (value.trim() || attachments.length > 0) return;
-      removeQueueItem(sessionKey, message.id);
-      setValue(sessionKey, message.text);
+      const removed = await removeAgentPrompt<TmuxQueuedMessage>(
+        "claude-tmux",
+        sessionKey,
+        message.id,
+      );
+      if (!removed) return;
+      setValue(sessionKey, removed.text);
       setFileMentions(sessionKey, []);
       clearAttachments(sessionKey);
-      for (const attachment of message.attachments) {
+      for (const attachment of removed.attachments) {
         addAttachmentToStore(sessionKey, attachment);
       }
       setQueueDialogOpen(false);
@@ -2726,7 +2763,6 @@ function TmuxComposeBar({
       addAttachmentToStore,
       attachments.length,
       clearAttachments,
-      removeQueueItem,
       sessionKey,
       setFileMentions,
       setValue,
@@ -2735,17 +2771,24 @@ function TmuxComposeBar({
   );
 
   const handleMoveQueuedMessage = useCallback(
-    (fromIndex: number, toIndex: number) => {
-      moveQueueItem(sessionKey, fromIndex, toIndex);
+    async (fromIndex: number, toIndex: number) => {
+      const message = queuedMessages[fromIndex];
+      if (!message || Math.abs(toIndex - fromIndex) !== 1) return;
+      await moveAgentPrompt(
+        "claude-tmux",
+        sessionKey,
+        message.id,
+        toIndex < fromIndex ? "up" : "down",
+      );
     },
-    [moveQueueItem, sessionKey],
+    [queuedMessages, sessionKey],
   );
 
   const handleRemoveQueuedMessage = useCallback(
-    (messageId: string) => {
-      removeQueueItem(sessionKey, messageId);
+    async (messageId: string) => {
+      await removeAgentPrompt("claude-tmux", sessionKey, messageId);
     },
-    [removeQueueItem, sessionKey],
+    [sessionKey],
   );
 
   return (

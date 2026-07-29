@@ -72,18 +72,64 @@ describe("StorageService prompt queues", () => {
       const second = new StorageService(storage.getDataDir());
       await second.init();
       const candidate = [{ id: "m1", text: "first" }, { id: "m2", text: "second" }];
+      await storage.enqueuePromptQueueMessage(KEY, "e1", candidate[0]);
+      await storage.enqueuePromptQueueMessage(KEY, "e1", candidate[1]);
 
       const [first, other] = await Promise.all([
-        storage.claimPromptQueueHead(KEY, "e1", "m1", candidate),
-        second.claimPromptQueueHead(KEY, "e1", "m1", candidate),
+        storage.claimPromptQueueHead(KEY, "e1", "m1"),
+        second.claimPromptQueueHead(KEY, "e1", "m1"),
       ]);
 
       expect([first.claimed, other.claimed].filter(Boolean)).toHaveLength(1);
       expect([first.claimed, other.claimed].filter(Boolean)[0]).toEqual(candidate[0]);
       expect(await storage.getPromptQueue(KEY)).toMatchObject({
         messages: [candidate[1]],
-        revision: 1,
+        revision: 3,
       });
+    });
+  });
+
+  test("preserves concurrent appends from different clients", async () => {
+    await withStorage(async (storage) => {
+      const second = new StorageService(storage.getDataDir());
+      await second.init();
+
+      await Promise.all([
+        storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1", text: "first" }),
+        second.enqueuePromptQueueMessage(KEY, "e1", { id: "m2", text: "second" }),
+      ]);
+
+      const queue = await storage.getPromptQueue(KEY);
+      expect(queue?.messages).toHaveLength(2);
+      expect(new Set(
+        queue?.messages.map((message) =>
+          typeof message === "object" && message !== null
+            ? (message as { id?: string }).id
+            : undefined
+        ),
+      )).toEqual(new Set(["m1", "m2"]));
+    });
+  });
+
+  test("atomically removes, requeues, and moves messages by ID", async () => {
+    await withStorage(async (storage) => {
+      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
+      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m2" });
+      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m3" });
+
+      await expect(storage.movePromptQueueMessage(KEY, "e1", "m3", "up"))
+        .resolves.toMatchObject({
+          messages: [{ id: "m1" }, { id: "m3" }, { id: "m2" }],
+        });
+      await expect(storage.removePromptQueueMessage(KEY, "e1", "m3"))
+        .resolves.toMatchObject({
+          removed: { id: "m3" },
+          queue: { messages: [{ id: "m1" }, { id: "m2" }] },
+        });
+      await expect(storage.requeuePromptQueueMessage(KEY, "e1", { id: "m3" }))
+        .resolves.toMatchObject({
+          messages: [{ id: "m3" }, { id: "m1" }, { id: "m2" }],
+        });
     });
   });
 
@@ -94,7 +140,6 @@ describe("StorageService prompt queues", () => {
         KEY,
         "e1",
         "m1",
-        [{ id: "m1" }],
       );
       expect(result.claimed).toBeNull();
       expect(result.queue).toMatchObject({ messages: [{ id: "m2" }], revision: 1 });
@@ -102,20 +147,17 @@ describe("StorageService prompt queues", () => {
     });
   });
 
-  test("validates claim candidates and environment ownership", async () => {
+  test("validates claim environment ownership", async () => {
     await withStorage(async (storage) => {
       await expect(
-        storage.claimPromptQueueHead(KEY, "e1", "m1", "bad" as unknown as unknown[]),
-      ).rejects.toThrow("must be an array");
-      await expect(
-        storage.claimPromptQueueHead(KEY, "missing", "m1", [{ id: "m1" }]),
+        storage.claimPromptQueueHead(KEY, "missing", "m1"),
       ).rejects.toThrow("environment not found");
 
       await storage.updateEnvironment("e1", {
         deletionRequestedAt: new Date().toISOString(),
       });
       await expect(
-        storage.claimPromptQueueHead(KEY, "e1", "m1", [{ id: "m1" }]),
+        storage.claimPromptQueueHead(KEY, "e1", "m1"),
       ).rejects.toThrow("being deleted");
     });
   });
@@ -245,20 +287,18 @@ describe("StorageService prompt queues", () => {
       await expect(storage.listPromptQueues("")).rejects.toThrow("must not be blank");
       await expect(storage.deletePromptQueuesByEnvironment(""))
         .rejects.toThrow("must not be blank");
-      await expect(storage.claimPromptQueueHead("", "e1", "m1", []))
+      await expect(storage.claimPromptQueueHead("", "e1", "m1"))
         .rejects.toThrow("must not be blank");
-      await expect(storage.claimPromptQueueHead(KEY, "", "m1", []))
+      await expect(storage.claimPromptQueueHead(KEY, "", "m1"))
         .rejects.toThrow("must not be blank");
-      await expect(storage.claimPromptQueueHead(KEY, "e1", "", []))
+      await expect(storage.claimPromptQueueHead(KEY, "e1", ""))
         .rejects.toThrow("must not be blank");
     });
   });
 
-  test("returns no claim when a new candidate queue has no matching object head", async () => {
+  test("returns no claim when the authoritative queue does not exist", async () => {
     await withStorage(async (storage) => {
-      await expect(storage.claimPromptQueueHead(KEY, "e1", "m1", []))
-        .resolves.toEqual({ claimed: null, queue: null });
-      await expect(storage.claimPromptQueueHead(KEY, "e1", "m1", ["not-an-object"]))
+      await expect(storage.claimPromptQueueHead(KEY, "e1", "m1"))
         .resolves.toEqual({ claimed: null, queue: null });
       expect(await storage.getPromptQueue(KEY)).toBeNull();
     });

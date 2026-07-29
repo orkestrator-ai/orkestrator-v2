@@ -79,7 +79,12 @@ import type { ClaudeNativeData } from "@/types/paneLayout";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
-import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
+import {
+  claimAgentPromptQueueHead,
+  enqueueAgentPrompt,
+  removeAgentPrompt,
+  requeueAgentPrompt,
+} from "@/lib/prompt-queue-sources";
 import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
 import {
   applyClaudeBackgroundTaskStates,
@@ -289,7 +294,6 @@ export function ClaudeChatTab({
   const getSessionKeyBySdkSessionId = useClaudeStore(
     (state) => state.getSessionKeyBySdkSessionId,
   );
-  const addToQueue = useClaudeStore((state) => state.addToQueue);
   // Pending-request maps stay map-level subscriptions: the filtered views below
   // need to react to any entry for this session appearing or disappearing.
   const pendingQuestionsMap = useClaudeStore((state) => state.pendingQuestions);
@@ -878,6 +882,9 @@ export function ClaudeChatTab({
   // Queue length for this session - use selector to only re-render when this specific queue changes
   const queueLength = useClaudeStore(
     useCallback((state) => state.messageQueue.get(sessionKey)?.length ?? 0, [sessionKey])
+  );
+  const queueHeadId = useClaudeStore(
+    useCallback((state) => state.messageQueue.get(sessionKey)?.[0]?.id, [sessionKey])
   );
   const isQueueBlockedByDraft = useClaudeStore(
     useCallback(
@@ -2180,8 +2187,8 @@ export function ClaudeChatTab({
 
   // Handle adding a message to the queue when Claude is busy
   const handleQueue = useCallback(
-    (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => {
-      addToQueue(sessionKey, {
+    async (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => {
+      await enqueueAgentPrompt<QueuedMessage>("claude", sessionKey, {
         id: createUuid(),
         text,
         attachments,
@@ -2190,17 +2197,23 @@ export function ClaudeChatTab({
         fastModeEnabled,
       });
     },
-    [sessionKey, addToQueue]
+    [sessionKey]
   );
 
-  const promoteNextQueuedPromptToDraft = useCallback(() => {
+  const promoteNextQueuedPromptToDraft = useCallback(async () => {
     const store = useClaudeStore.getState();
     const hasCurrentDraft =
       store.getDraftText(sessionKey).trim().length > 0 ||
       store.getAttachments(sessionKey).length > 0;
     if (hasCurrentDraft) return;
 
-    const nextMessage = store.removeFromQueue(sessionKey);
+    const head = store.getQueuedMessages(sessionKey)[0];
+    if (!head) return;
+    const nextMessage = await removeAgentPrompt<QueuedMessage>(
+      "claude",
+      sessionKey,
+      head.id,
+    );
     if (!nextMessage) return;
 
     store.setDraftText(sessionKey, nextMessage.text);
@@ -2218,7 +2231,9 @@ export function ClaudeChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    promoteNextQueuedPromptToDraft();
+    await promoteNextQueuedPromptToDraft().catch((error) => {
+      console.error("[ClaudeChatTab] Failed to promote queued prompt:", error);
+    });
     setSessionLoading(sessionKey, false);
 
     const success = await abortSession(client, session.sessionId);
@@ -2338,9 +2353,11 @@ export function ClaudeChatTab({
       && connectionState === "connected"
       && !!client,
     queueLength,
+    queueHeadId,
     isLoading: session?.isLoading ?? false,
     blockedByDraft: isQueueBlockedByDraft,
     claimHead: () => claimAgentPromptQueueHead<QueuedMessage>("claude", sessionKey),
+    requeue: (entry) => requeueAgentPrompt("claude", sessionKey, entry),
     send: (entry) =>
       handleSendRef.current?.(
         entry.text,

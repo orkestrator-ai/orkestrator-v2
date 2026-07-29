@@ -205,6 +205,21 @@ mock.module("@/lib/claude-client", () => ({
   SessionNotFoundError: MockSessionNotFoundError,
 }));
 
+let mockQueueRevision = 1;
+const queueSessionKey = (queueKey: string) =>
+  queueKey.slice(queueKey.indexOf("\u0000") + 1);
+const queueSnapshot = (
+  queueKey: string,
+  environmentId: string,
+  messages: Array<{ id: string }>,
+) => ({
+  queueKey,
+  environmentId,
+  messages,
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  revision: mockQueueRevision++,
+});
+
 mock.module("@/lib/backend", () => ({
   claimPromptQueueHead: mock(async (
     queueKey: string,
@@ -213,14 +228,41 @@ mock.module("@/lib/backend", () => ({
     candidateMessages: Array<{ id: string }>,
   ) => ({
     claimed: candidateMessages[0] ?? null,
-    queue: {
+    queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
+  })),
+  enqueuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    queueSnapshot(queueKey, environmentId, [
+      ...useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+      message,
+    ])),
+  requeuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    {
+      const current = useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+      return queueSnapshot(
+        queueKey,
+        environmentId,
+        current.some((candidate) => candidate.id === message.id)
+          ? current
+          : [message, ...current],
+      );
+    }),
+  removePromptQueueMessage: mock(async (queueKey, environmentId, messageId) => {
+    const current = useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+    return {
+      removed: current.find((message) => message.id === messageId) ?? null,
+      queue: queueSnapshot(
+        queueKey,
+        environmentId,
+        current.filter((message) => message.id !== messageId),
+      ),
+    };
+  }),
+  movePromptQueueMessage: mock(async (queueKey, environmentId) =>
+    queueSnapshot(
       queueKey,
       environmentId,
-      messages: candidateMessages.slice(1),
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      revision: 1,
-    },
-  })),
+      useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+    )),
   getAgentHandoff: mockGetAgentHandoff,
   startClaudeServer: mockStartClaudeServer,
   getClaudeServerStatus: mockGetClaudeServerStatus,

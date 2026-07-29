@@ -158,14 +158,22 @@ const mockClaimPromptQueueHead = mock(async (
   candidateMessages: Array<{ id: string }>,
 ) => ({
   claimed: candidateMessages[0] ?? null,
-  queue: {
-    queueKey,
-    environmentId,
-    messages: candidateMessages.slice(1),
-    updatedAt: "2026-01-01T00:00:00.000Z",
-    revision: 1,
-  },
+  queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
 }));
+let mockQueueRevision = 1;
+const queueSessionKey = (queueKey: string) =>
+  queueKey.slice(queueKey.indexOf("\u0000") + 1);
+const queueSnapshot = (
+  queueKey: string,
+  environmentId: string,
+  messages: Array<{ id: string }>,
+) => ({
+  queueKey,
+  environmentId,
+  messages,
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  revision: mockQueueRevision++,
+});
 const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
 
 const openCodeClientModuleFactory = () => ({
@@ -198,6 +206,40 @@ mock.module("@/lib/opencode-client", openCodeClientModuleFactory);
 
 mock.module("@/lib/backend", () => ({
   claimPromptQueueHead: mockClaimPromptQueueHead,
+  enqueuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    queueSnapshot(queueKey, environmentId, [
+      ...useOpenCodeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+      message,
+    ])),
+  requeuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    {
+      const current = useOpenCodeStore.getState()
+        .getQueuedMessages(queueSessionKey(queueKey));
+      return queueSnapshot(
+        queueKey,
+        environmentId,
+        current.some((candidate) => candidate.id === message.id)
+          ? current
+          : [message, ...current],
+      );
+    }),
+  removePromptQueueMessage: mock(async (queueKey, environmentId, messageId) => {
+    const current = useOpenCodeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+    return {
+      removed: current.find((message) => message.id === messageId) ?? null,
+      queue: queueSnapshot(
+        queueKey,
+        environmentId,
+        current.filter((message) => message.id !== messageId),
+      ),
+    };
+  }),
+  movePromptQueueMessage: mock(async (queueKey, environmentId) =>
+    queueSnapshot(
+      queueKey,
+      environmentId,
+      useOpenCodeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+    )),
   getAgentHandoff: mockGetAgentHandoff,
   startOpenCodeServer: mockStartOpenCodeServer,
   getOpenCodeServerStatus: mockGetOpenCodeServerStatus,
@@ -699,13 +741,7 @@ describe("OpenCodeChatTab", () => {
       candidateMessages,
     ) => ({
       claimed: candidateMessages[0] ?? null,
-      queue: {
-        queueKey,
-        environmentId,
-        messages: candidateMessages.slice(1),
-        updatedAt: "2026-01-01T00:00:00.000Z",
-        revision: 1,
-      },
+      queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
     }));
     composeText = "Rename the environment";
     composeAttachments = [];

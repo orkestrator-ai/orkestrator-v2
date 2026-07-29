@@ -203,6 +203,20 @@ const mockUpdateGlobalConfig = mock(async (config: any) => ({
 }));
 const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
 const claimedPromptHeads = new Set<string>();
+let mockQueueRevision = 1;
+const queueSnapshot = (
+  queueKey: string,
+  environmentId: string,
+  messages: Array<{ id: string }>,
+) => ({
+  queueKey,
+  environmentId,
+  messages,
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  revision: mockQueueRevision++,
+});
+const queueSessionKey = (queueKey: string) =>
+  queueKey.slice(queueKey.indexOf("\u0000") + 1);
 const mockClaimPromptQueueHead = mock(async (
   queueKey: string,
   environmentId: string,
@@ -214,13 +228,7 @@ const mockClaimPromptQueueHead = mock(async (
   if (!alreadyClaimed) claimedPromptHeads.add(claimKey);
   return {
     claimed: alreadyClaimed ? null : (candidateMessages[0] ?? null),
-    queue: {
-      queueKey,
-      environmentId,
-      messages: candidateMessages.slice(1),
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      revision: 1,
-    },
+    queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
   };
 });
 
@@ -230,6 +238,39 @@ const mockClaimPromptQueueHead = mock(async (
 
 mock.module("@/lib/backend", () => ({
   claimPromptQueueHead: mockClaimPromptQueueHead,
+  enqueuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    queueSnapshot(queueKey, environmentId, [
+      ...useCodexStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+      message,
+    ])),
+  requeuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    {
+      const current = useCodexStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+      return queueSnapshot(
+        queueKey,
+        environmentId,
+        current.some((candidate) => candidate.id === message.id)
+          ? current
+          : [message, ...current],
+      );
+    }),
+  removePromptQueueMessage: mock(async (queueKey, environmentId, messageId) => {
+    const current = useCodexStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+    return {
+      removed: current.find((message) => message.id === messageId) ?? null,
+      queue: queueSnapshot(
+        queueKey,
+        environmentId,
+        current.filter((message) => message.id !== messageId),
+      ),
+    };
+  }),
+  movePromptQueueMessage: mock(async (queueKey, environmentId) =>
+    queueSnapshot(
+      queueKey,
+      environmentId,
+      useCodexStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+    )),
   getAgentHandoff: mockGetAgentHandoff,
   getCodexServerLog: mockGetCodexServerLog,
   getCodexServerStatus: mockGetCodexServerStatus,

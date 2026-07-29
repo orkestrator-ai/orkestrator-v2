@@ -372,7 +372,6 @@ describe("StorageService resource change announcements", () => {
         "claude env-e1:tab-1",
         "e1",
         "m1",
-        [{ id: "m1" }],
       );
       expect(changes.at(-1)).toMatchObject({
         resource: "prompt-queue",

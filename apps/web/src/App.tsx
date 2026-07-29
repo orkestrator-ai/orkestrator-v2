@@ -38,10 +38,7 @@ import {
   hydrateBuildPipelinesForProject,
   migrateLegacyBuildPipelines,
 } from "@/lib/build-pipeline-persistence";
-import {
-  hydratePromptQueuesForEnvironment,
-  startPromptQueuePersistence,
-} from "@/lib/prompt-queue-persistence";
+import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistence";
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { LoopedReviewSupervisor } from "@/components/review/LoopedReviewSupervisor";
@@ -113,13 +110,8 @@ function App() {
       console.warn("[App] Failed to migrate legacy build pipelines:", error);
     });
   }, []);
-  // One stable source set for the lifetime of the app: the mirror keys its
-  // revision bookkeeping off these, so rebuilding them would drop it.
+  // Renderer stores are projections of backend-owned queues.
   const promptQueueSources = useMemo(() => createPromptQueueSources(), []);
-  useEffect(
-    () => startPromptQueuePersistence(promptQueueSources),
-    [promptQueueSources],
-  );
   useEffect(() => {
     for (const environment of environments) {
       void hydratePromptQueuesForEnvironment(environment.id, promptQueueSources)

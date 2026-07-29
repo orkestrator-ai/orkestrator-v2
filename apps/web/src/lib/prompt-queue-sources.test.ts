@@ -62,8 +62,7 @@ describe("store adapters", () => {
 
         const after = source.getQueues();
         expect(after.get("session-key")).toEqual([{ id: "a" }]);
-        // The mirror detects change by map identity, so an in-place mutation
-        // would leave every subscriber blind to the write.
+        // Zustand selectors detect the projection change by map identity.
         expect(after).not.toBe(before);
       });
 
@@ -77,19 +76,6 @@ describe("store adapters", () => {
         expect(source.getQueues()).toBe(applied);
       });
 
-      test("subscribe notifies on a queue write and stops after unsubscribe", () => {
-        const source = createPromptQueueSources().find((entry) => entry.agent === agent)!;
-        let notifications = 0;
-        const unsubscribe = source.subscribe(() => { notifications += 1; });
-
-        source.setQueue("session-key", [{ id: "a" }]);
-        expect(notifications).toBeGreaterThan(0);
-
-        unsubscribe();
-        const after = notifications;
-        source.setQueue("session-key", [{ id: "a" }, { id: "b" }]);
-        expect(notifications).toBe(after);
-      });
     });
   }
 });
@@ -104,7 +90,7 @@ describe("environmentIdFor", () => {
 
   test("returns null for a key carrying no recoverable environment", () => {
     // An unscoped queue could never be cleaned up when its environment goes,
-    // so the mirror must be able to recognise one and decline to persist it.
+    // so the adapter must be able to recognise one and decline to scope it.
     for (const source of createPromptQueueSources()) {
       expect(source.environmentIdFor("nonsense")).toBeNull();
     }

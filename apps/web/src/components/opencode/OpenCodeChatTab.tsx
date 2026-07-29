@@ -26,7 +26,12 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
-import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
+import {
+  claimAgentPromptQueueHead,
+  enqueueAgentPrompt,
+  removeAgentPrompt,
+  requeueAgentPrompt,
+} from "@/lib/prompt-queue-sources";
 import {
   checkClientHealth,
   createClient,
@@ -325,7 +330,6 @@ export function OpenCodeChatTab({
   const setContextUsage = useOpenCodeStore((state) => state.setContextUsage);
   const setSessionTitle = useOpenCodeStore((state) => state.setSessionTitle);
   const setRuntimeHealth = useOpenCodeStore((state) => state.setRuntimeHealth);
-  const addToQueue = useOpenCodeStore((state) => state.addToQueue);
   const addPendingPermission = useOpenCodeStore((state) => state.addPendingPermission);
   const addPendingQuestion = useOpenCodeStore((state) => state.addPendingQuestion);
   const removePendingPermission = useOpenCodeStore(
@@ -548,6 +552,12 @@ export function OpenCodeChatTab({
   const queueLength = useOpenCodeStore(
     useCallback(
       (state) => state.messageQueue.get(sessionKey)?.length ?? 0,
+      [sessionKey],
+    ),
+  );
+  const queueHeadId = useOpenCodeStore(
+    useCallback(
+      (state) => state.messageQueue.get(sessionKey)?.[0]?.id,
       [sessionKey],
     ),
   );
@@ -1452,6 +1462,7 @@ export function OpenCodeChatTab({
     handoffPending,
     isLocal,
     queueLength,
+    queueHeadId,
     syncPendingRequests,
     getSelectedModel,
     getSelectedVariant,
@@ -2223,8 +2234,8 @@ export function OpenCodeChatTab({
   handleSendRef.current = handleSend;
 
   const handleQueue = useCallback(
-    (text: string, attachments: OpenCodeAttachment[]) => {
-      addToQueue(sessionKey, {
+    async (text: string, attachments: OpenCodeAttachment[]) => {
+      await enqueueAgentPrompt<OpenCodeQueuedMessage>("opencode", sessionKey, {
         id: createUuid(),
         text,
         attachments,
@@ -2238,7 +2249,6 @@ export function OpenCodeChatTab({
       });
     },
     [
-      addToQueue,
       sessionKey,
       getSelectedModel,
       getSelectedVariant,
@@ -2260,6 +2270,7 @@ export function OpenCodeChatTab({
     blockedByDraft: isQueueBlockedByDraft,
     claimHead: () =>
       claimAgentPromptQueueHead<OpenCodeQueuedMessage>("opencode", sessionKey),
+    requeue: (entry) => requeueAgentPrompt("opencode", sessionKey, entry),
     send: (entry) =>
       handleSendRef.current?.(entry.text, entry.attachments, {
         model: entry.model,
@@ -2361,14 +2372,20 @@ export function OpenCodeChatTab({
     updateTabNativeSessionId,
   ]);
 
-  const promoteNextQueuedPromptToDraft = useCallback(() => {
+  const promoteNextQueuedPromptToDraft = useCallback(async () => {
     const store = useOpenCodeStore.getState();
     const hasCurrentDraft =
       store.getDraftText(sessionKey).trim().length > 0 ||
       store.getAttachments(sessionKey).length > 0;
     if (hasCurrentDraft) return;
 
-    const nextMessage = store.removeFromQueue(sessionKey);
+    const head = store.getQueuedMessages(sessionKey)[0];
+    if (!head) return;
+    const nextMessage = await removeAgentPrompt<OpenCodeQueuedMessage>(
+      "opencode",
+      sessionKey,
+      head.id,
+    );
     if (!nextMessage) return;
 
     store.setDraftText(sessionKey, nextMessage.text);
@@ -2388,7 +2405,9 @@ export function OpenCodeChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    promoteNextQueuedPromptToDraft();
+    await promoteNextQueuedPromptToDraft().catch((error) => {
+      console.error("[OpenCodeChatTab] Failed to promote queued prompt:", error);
+    });
     setSessionLoading(sessionKey, false);
 
     const success = await abortSession(client, session.sessionId);

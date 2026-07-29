@@ -1847,17 +1847,56 @@ export async function listPromptQueues<T = unknown>(
   return invoke<Array<PersistedPromptQueue<T>>>("list_prompt_queues", { environmentId });
 }
 
-export async function savePromptQueue<T>(
+export async function enqueuePromptQueueMessage<T>(
   queueKey: string,
   environmentId: string,
-  messages: T[],
-  expectedRevision?: number,
+  message: T,
 ): Promise<PersistedPromptQueue<T>> {
-  return invoke<PersistedPromptQueue<T>>("save_prompt_queue", {
+  return invoke<PersistedPromptQueue<T>>("enqueue_prompt_queue_message", {
     queueKey,
     environmentId,
-    messages,
-    ...(expectedRevision === undefined ? {} : { expectedRevision }),
+    message,
+  });
+}
+
+export async function requeuePromptQueueMessage<T>(
+  queueKey: string,
+  environmentId: string,
+  message: T,
+): Promise<PersistedPromptQueue<T>> {
+  return invoke<PersistedPromptQueue<T>>("requeue_prompt_queue_message", {
+    queueKey,
+    environmentId,
+    message,
+  });
+}
+
+export async function removePromptQueueMessage<T>(
+  queueKey: string,
+  environmentId: string,
+  messageId: string,
+): Promise<{
+  removed: T | null;
+  queue: PersistedPromptQueue<T> | null;
+}> {
+  return invoke("remove_prompt_queue_message", {
+    queueKey,
+    environmentId,
+    messageId,
+  });
+}
+
+export async function movePromptQueueMessage<T>(
+  queueKey: string,
+  environmentId: string,
+  messageId: string,
+  direction: "up" | "down",
+): Promise<PersistedPromptQueue<T> | null> {
+  return invoke<PersistedPromptQueue<T> | null>("move_prompt_queue_message", {
+    queueKey,
+    environmentId,
+    messageId,
+    direction,
   });
 }
 
@@ -1865,7 +1904,6 @@ export async function claimPromptQueueHead<T>(
   queueKey: string,
   environmentId: string,
   expectedMessageId: string,
-  candidateMessages: T[],
 ): Promise<{
   claimed: T | null;
   queue: PersistedPromptQueue<T> | null;
@@ -1874,7 +1912,6 @@ export async function claimPromptQueueHead<T>(
     queueKey,
     environmentId,
     expectedMessageId,
-    candidateMessages,
   });
 }
 

@@ -53,10 +53,10 @@ describe("OrkestratorBackend resource event wiring", () => {
           images: [],
         },
       });
-      await backend.invoke("save_prompt_queue", {
+      await backend.invoke("enqueue_prompt_queue_message", {
         queueKey: "claude env-e1:tab-1",
         environmentId: "e1",
-        messages: [{ id: "m1" }],
+        message: { id: "m1" },
       });
 
       expect(events).toContainEqual({

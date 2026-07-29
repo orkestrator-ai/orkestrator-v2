@@ -73,14 +73,22 @@ const claimPromptQueueHeadMock = mock(async (
   candidateMessages: Array<{ id: string }>,
 ) => ({
   claimed: candidateMessages[0] ?? null,
-  queue: {
-    queueKey,
-    environmentId,
-    messages: candidateMessages.slice(1),
-    updatedAt: "2026-01-01T00:00:00.000Z",
-    revision: 1,
-  },
+  queue: promptQueueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
 }));
+let promptQueueRevision = 1;
+const promptQueueSessionKey = (queueKey: string) =>
+  queueKey.slice(queueKey.indexOf("\u0000") + 1);
+const promptQueueSnapshot = (
+  queueKey: string,
+  environmentId: string,
+  messages: Array<{ id: string }>,
+) => ({
+  queueKey,
+  environmentId,
+  messages,
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  revision: promptQueueRevision++,
+});
 
 const startSessionMock = mock(async () => ({
   tab_id: "tab-1",
@@ -193,6 +201,51 @@ mock.module("@/components/claude/ClaudeTmuxInteractiveTerminal", () => ({
 
 mock.module("@/lib/backend", () => ({
   claimPromptQueueHead: claimPromptQueueHeadMock,
+  enqueuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    promptQueueSnapshot(queueKey, environmentId, [
+      ...useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
+      message,
+    ])),
+  requeuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    {
+      const current = useClaudeTmuxStore.getState()
+        .getQueuedMessages(promptQueueSessionKey(queueKey));
+      return promptQueueSnapshot(
+        queueKey,
+        environmentId,
+        current.some((candidate) => candidate.id === message.id)
+          ? current
+          : [message, ...current],
+      );
+    }),
+  removePromptQueueMessage: mock(async (queueKey, environmentId, messageId) => {
+    const current = useClaudeTmuxStore.getState()
+      .getQueuedMessages(promptQueueSessionKey(queueKey));
+    return {
+      removed: current.find((message) => message.id === messageId) ?? null,
+      queue: promptQueueSnapshot(
+        queueKey,
+        environmentId,
+        current.filter((message) => message.id !== messageId),
+      ),
+    };
+  }),
+  movePromptQueueMessage: mock(async (
+    queueKey,
+    environmentId,
+    messageId,
+    direction,
+  ) => {
+    const messages = [
+      ...useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
+    ];
+    const index = messages.findIndex((message) => message.id === messageId);
+    const target = direction === "up" ? index - 1 : index + 1;
+    if (index >= 0 && target >= 0 && target < messages.length) {
+      [messages[index], messages[target]] = [messages[target]!, messages[index]!];
+    }
+    return promptQueueSnapshot(queueKey, environmentId, messages);
+  }),
   getFileTree: getFileTreeMock,
   getLocalFileTree: getLocalFileTreeMock,
   writeContainerFile: writeContainerFileMock,
@@ -447,13 +500,11 @@ describe("ClaudeTmuxChatTab", () => {
       candidateMessages: Array<{ id: string }>,
     ) => ({
       claimed: candidateMessages[0] ?? null,
-      queue: {
+      queue: promptQueueSnapshot(
         queueKey,
         environmentId,
-        messages: candidateMessages.slice(1),
-        updatedAt: "2026-01-01T00:00:00.000Z",
-        revision: 1,
-      },
+        candidateMessages.slice(1),
+      ),
     }));
     startSessionMock.mockClear();
     getStatusMock.mockClear();
@@ -4619,7 +4670,7 @@ Running 1 Explore agent...
     });
   });
 
-  test("removes a failed queued tmux prompt and reports the send error", async () => {
+  test("requeues a failed queued tmux prompt and reports the send error", async () => {
     submitMock.mockImplementationOnce(async () => {
       throw new Error("tmux unavailable");
     });
@@ -4644,7 +4695,9 @@ Running 1 Explore agent...
     );
 
     expect(await screen.findByText("Error: tmux unavailable")).toBeTruthy();
-    expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toEqual([]);
+    expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toEqual([
+      { id: "queue-fail", text: "will fail", attachments: [] },
+    ]);
     expect(useClaudeTmuxStore.getState().getTab(stateKey).busy).toBe(false);
   });
 

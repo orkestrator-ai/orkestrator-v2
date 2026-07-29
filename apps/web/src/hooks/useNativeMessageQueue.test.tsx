@@ -53,6 +53,7 @@ function Harness({
   claimHead?: () => Promise<Queued | null>;
 }) {
   const queueLength = store((s) => s.messageQueue.get(SESSION_KEY)?.length ?? 0);
+  const queueHeadId = store((s) => s.messageQueue.get(SESSION_KEY)?.[0]?.id);
   const isLoading = store((s) => s.sessions.get(SESSION_KEY)?.isLoading ?? false);
 
   useNativeMessageQueue<Queued>({
@@ -61,6 +62,7 @@ function Harness({
     store,
     canDrain,
     queueLength,
+    queueHeadId,
     isLoading,
     blockedByDraft,
     // The production claim goes through the backend queue mirror; the test
@@ -68,6 +70,9 @@ function Harness({
     claimHead:
       claimHead
       ?? (async () => store.getState().removeFromQueue(SESSION_KEY) ?? null),
+    requeue: async (entry) => {
+      store.getState().requeueToFront(SESSION_KEY, entry);
+    },
     send,
     onError,
   });
@@ -310,6 +315,31 @@ describe("useNativeMessageQueue", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(claimHead).toHaveBeenCalledTimes(1);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  test("retries a denied stale claim when the authoritative head changed", async () => {
+    const store = createStore([{ id: "stale", text: "stale" }]);
+    const send = mock(async () => {});
+    let attempts = 0;
+    const claimHead = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        store.setState({
+          messageQueue: new Map([
+            [SESSION_KEY, [{ id: "current", text: "current" }]],
+          ]),
+        });
+        return null;
+      }
+      return store.getState().removeFromQueue(SESSION_KEY) ?? null;
+    });
+
+    render(<Harness store={store} send={send} claimHead={claimHead} />);
+
+    await waitFor(() => {
+      expect(send).toHaveBeenCalledWith({ id: "current", text: "current" });
+      expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([]);
+    });
   });
 
   test("does not re-enter from the settle path while a new turn is running", async () => {

@@ -55,6 +55,7 @@ import type {
   OpenCodeSlashCommand,
 } from "@/lib/opencode-client";
 import type { FileCandidate, FileMention } from "@/types";
+import { moveAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
 
 interface OpenCodeComposeBarProps {
   environmentId: string;
@@ -165,8 +166,6 @@ export function OpenCodeComposeBar({
   const setSelectedModel = useOpenCodeStore((state) => state.setSelectedModel);
   const setSelectedVariant = useOpenCodeStore((state) => state.setSelectedVariant);
   const setSelectedMode = useOpenCodeStore((state) => state.setSelectedMode);
-  const removeQueueItem = useOpenCodeStore((state) => state.removeQueueItem);
-  const moveQueueItem = useOpenCodeStore((state) => state.moveQueueItem);
 
   // Use session key so tab-scoped state (draft, attachments, mode) is isolated per tab
   const sessionKey = createSessionKey(environmentId, tabId);
@@ -450,12 +449,19 @@ export function OpenCodeComposeBar({
     removeAttachment(sessionKey, id);
   };
 
-  const handleRemoveQueuedMessage = (messageId: string) => {
-    removeQueueItem(sessionKey, messageId);
+  const handleRemoveQueuedMessage = async (messageId: string) => {
+    await removeAgentPrompt("opencode", sessionKey, messageId);
   };
 
-  const handleMoveQueuedMessage = (fromIndex: number, toIndex: number) => {
-    moveQueueItem(sessionKey, fromIndex, toIndex);
+  const handleMoveQueuedMessage = async (fromIndex: number, toIndex: number) => {
+    const message = queuedMessages[fromIndex];
+    if (!message || Math.abs(toIndex - fromIndex) !== 1) return;
+    await moveAgentPrompt(
+      "opencode",
+      sessionKey,
+      message.id,
+      toIndex < fromIndex ? "up" : "down",
+    );
   };
 
   /**
@@ -463,20 +469,25 @@ export function OpenCodeComposeBar({
    * options it was queued with.
    */
   const handleQueuedMessageClick = useCallback(
-    (message: OpenCodeQueuedMessage) => {
+    async (message: OpenCodeQueuedMessage) => {
+      const removed = await removeAgentPrompt<OpenCodeQueuedMessage>(
+        "opencode",
+        sessionKey,
+        message.id,
+      );
+      if (!removed) return;
       const store = useOpenCodeStore.getState();
-      store.setDraftText(sessionKey, message.text);
+      store.setDraftText(sessionKey, removed.text);
       store.setDraftMentions(sessionKey, []);
       store.clearAttachments(sessionKey);
-      for (const attachment of message.attachments) {
+      for (const attachment of removed.attachments) {
         store.addAttachment(sessionKey, attachment);
       }
-      if (message.model) {
-        store.setSelectedModel(sessionKey, message.model);
+      if (removed.model) {
+        store.setSelectedModel(sessionKey, removed.model);
       }
-      store.setSelectedVariant(sessionKey, message.variant);
-      store.setSelectedMode(sessionKey, message.mode);
-      store.removeQueueItem(sessionKey, message.id);
+      store.setSelectedVariant(sessionKey, removed.variant);
+      store.setSelectedMode(sessionKey, removed.mode);
       setQueueDialogOpen(false);
       inputRef.current?.focus();
     },

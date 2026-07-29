@@ -1,19 +1,18 @@
 import { useCallback, useEffect, useRef } from "react";
 
 /** The slice of a native chat store the drain needs. */
-interface QueueStoreState<TQueued> {
+interface QueueStoreState<TQueued extends { id: string }> {
   draftText: Map<string, string>;
   attachments: Map<string, unknown[]>;
   sessions: Map<string, { isLoading: boolean }>;
   messageQueue: Map<string, TQueued[]>;
-  requeueToFront: (sessionKey: string, message: TQueued) => void;
 }
 
-interface QueueStore<TQueued> {
+interface QueueStore<TQueued extends { id: string }> {
   getState: () => QueueStoreState<TQueued>;
 }
 
-interface UseNativeMessageQueueOptions<TQueued> {
+interface UseNativeMessageQueueOptions<TQueued extends { id: string }> {
   agentLabel: string;
   sessionKey: string;
   store: QueueStore<TQueued>;
@@ -21,6 +20,8 @@ interface UseNativeMessageQueueOptions<TQueued> {
   canDrain: boolean;
   /** Drives the effect — re-runs when work arrives. */
   queueLength: number;
+  /** Re-drives a denied stale claim even when the queue length stayed equal. */
+  queueHeadId?: string;
   /** Drives the effect — re-runs when the running turn settles. */
   isLoading: boolean;
   /**
@@ -33,12 +34,13 @@ interface UseNativeMessageQueueOptions<TQueued> {
   blockedByDraft: boolean;
   /**
    * Claims the next queued prompt, resolving null when there is nothing to
-   * send. The claim is arbitrated by the backend queue mirror (see
-   * prompt-queue-persistence): the store is only the optimistic front, and two
-   * clients must not both take the same head, so the head is not removed
-   * locally — it is claimed through this callback.
+   * send. The claim is arbitrated by the authoritative backend queue; the
+   * store is only a read projection, and two clients must not both take the
+   * same head, so it is claimed through this callback.
    */
   claimHead: () => Promise<TQueued | null>;
+  /** Restores a claimed entry through the authoritative backend queue. */
+  requeue: (entry: TQueued) => Promise<void>;
   /**
    * Dispatch one entry. Returning undefined means the sender was not ready; the
    * entry is put back at the head of the queue and the drain stops without
@@ -59,15 +61,17 @@ interface UseNativeMessageQueueOptions<TQueued> {
  * `queueMicrotask` with no queue-length or loading check. This is Codex's
  * version, which was the correct one, generalised.
  */
-export function useNativeMessageQueue<TQueued>({
+export function useNativeMessageQueue<TQueued extends { id: string }>({
   agentLabel,
   sessionKey,
   store,
   canDrain,
   queueLength,
+  queueHeadId,
   isLoading,
   blockedByDraft,
   claimHead,
+  requeue,
   send,
   onError,
 }: UseNativeMessageQueueOptions<TQueued>): void {
@@ -76,9 +80,11 @@ export function useNativeMessageQueue<TQueued>({
   // Held in refs so `process` stays stable and the effect below does not
   // re-enter simply because the caller re-rendered.
   const claimHeadRef = useRef(claimHead);
+  const requeueRef = useRef(requeue);
   const sendRef = useRef(send);
   const onErrorRef = useRef(onError);
   claimHeadRef.current = claimHead;
+  requeueRef.current = requeue;
   sendRef.current = send;
   onErrorRef.current = onError;
 
@@ -104,18 +110,25 @@ export function useNativeMessageQueue<TQueued>({
     // Set before the asynchronous claim begins so a second render cannot start
     // a competing claim for this client.
     isProcessingRef.current = true;
+    const headBeforeClaimId = state.messageQueue.get(sessionKey)?.[0]?.id;
     /**
      * Whether this pass actually consumed an entry — dispatched it, or failed
      * trying. Only then may the re-drive below fire.
      *
-     * A denied claim (the backend gave the head to another client), a failed
-     * claim, and a requeue all leave the queue exactly as it was, so re-driving
-     * on those would immediately re-attempt the same entry and spin.
+     * A failed claim and a requeue leave the same head in place, so re-driving
+     * would immediately retry and spin. A denied stale claim is re-driven only
+     * when the returned authoritative snapshot changed the head.
      */
     let consumedEntry = false;
+    let authoritativeHeadChanged = false;
     claimHeadRef.current()
       .then((entry) => {
-        if (!entry) return;
+        if (!entry) {
+          authoritativeHeadChanged =
+            store.getState().messageQueue.get(sessionKey)?.[0]?.id
+            !== headBeforeClaimId;
+          return;
+        }
 
         let sendPromise: Promise<unknown> | undefined;
         try {
@@ -134,8 +147,7 @@ export function useNativeMessageQueue<TQueued>({
           // user's prompt silently. Put it back and wait to be re-driven by a
           // dependency change — re-driving from here would re-claim the entry
           // the sender just refused.
-          store.getState().requeueToFront(sessionKey, entry);
-          return;
+          return requeueRef.current(entry);
         }
         consumedEntry = true;
         return sendPromise.catch((error) => {
@@ -161,7 +173,7 @@ export function useNativeMessageQueue<TQueued>({
          */
         const settled = store.getState();
         if (
-          consumedEntry
+          (consumedEntry || authoritativeHeadChanged)
           && (settled.messageQueue.get(sessionKey)?.length ?? 0) > 0
           && settled.sessions.get(sessionKey)?.isLoading !== true
         ) {
@@ -181,5 +193,5 @@ export function useNativeMessageQueue<TQueued>({
     // `isLoading` and `blockedByDraft` are dependencies rather than reads: the
     // drain must re-run when the running turn settles or the draft clears, not
     // only when the queue changes.
-  }, [process, queueLength, isLoading, blockedByDraft]);
+  }, [process, queueLength, queueHeadId, isLoading, blockedByDraft]);
 }

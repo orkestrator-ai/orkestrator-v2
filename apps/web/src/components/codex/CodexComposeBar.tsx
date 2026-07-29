@@ -34,6 +34,7 @@ import type {
 } from "@/lib/codex-client";
 import type { CodexAttachment, CodexQueuedMessage } from "@/stores/codexStore";
 import type { FileCandidate, FileMention } from "@/types";
+import { moveAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
 
 const EMPTY_ATTACHMENTS: CodexAttachment[] = [];
 const EMPTY_MENTIONS: FileMention[] = [];
@@ -137,8 +138,6 @@ export function CodexComposeBar({
   const addAttachment = useCodexStore((state) => state.addAttachment);
   const removeAttachment = useCodexStore((state) => state.removeAttachment);
   const clearAttachments = useCodexStore((state) => state.clearAttachments);
-  const removeQueueItem = useCodexStore((state) => state.removeQueueItem);
-  const moveQueueItem = useCodexStore((state) => state.moveQueueItem);
 
   const worktreePath = useEnvironmentStore(
     (state) => state.getEnvironmentById(environmentId)?.worktreePath,
@@ -311,7 +310,13 @@ export function CodexComposeBar({
   });
 
   const handleQueuedMessageClick = useCallback(
-    (message: CodexQueuedMessage) => {
+    async (message: CodexQueuedMessage) => {
+      const removed = await removeAgentPrompt<CodexQueuedMessage>(
+        "codex",
+        sessionKey,
+        message.id,
+      );
+      if (!removed) return;
       setDraftText(sessionKey, message.text);
       setDraftMentions(sessionKey, []);
       clearAttachments(sessionKey);
@@ -321,7 +326,6 @@ export function CodexComposeBar({
       if (message.fastMode !== fastModeEnabled) {
         onFastModeChange(message.fastMode);
       }
-      removeQueueItem(sessionKey, message.id);
       setQueueDialogOpen(false);
       inputRef.current?.focus();
     },
@@ -330,7 +334,6 @@ export function CodexComposeBar({
       clearAttachments,
       fastModeEnabled,
       onFastModeChange,
-      removeQueueItem,
       sessionKey,
       setDraftMentions,
       setDraftText,
@@ -338,17 +341,24 @@ export function CodexComposeBar({
   );
 
   const handleMoveQueuedMessage = useCallback(
-    (fromIndex: number, toIndex: number) => {
-      moveQueueItem(sessionKey, fromIndex, toIndex);
+    async (fromIndex: number, toIndex: number) => {
+      const message = queuedMessages[fromIndex];
+      if (!message || Math.abs(toIndex - fromIndex) !== 1) return;
+      await moveAgentPrompt(
+        "codex",
+        sessionKey,
+        message.id,
+        toIndex < fromIndex ? "up" : "down",
+      );
     },
-    [moveQueueItem, sessionKey],
+    [queuedMessages, sessionKey],
   );
 
   const handleRemoveQueuedMessage = useCallback(
-    (messageId: string) => {
-      removeQueueItem(sessionKey, messageId);
+    async (messageId: string) => {
+      await removeAgentPrompt("codex", sessionKey, messageId);
     },
-    [removeQueueItem, sessionKey],
+    [sessionKey],
   );
 
   const sendDisabled =

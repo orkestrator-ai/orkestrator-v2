@@ -572,38 +572,56 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
-  test("forwards prompt-queue persistence and atomic claim payloads exactly", async () => {
-    const messages = [{ id: "message-1", text: "Ship it" }];
+  test("forwards backend-owned prompt-queue mutations exactly", async () => {
+    const message = { id: "message-1", text: "Ship it" };
 
     await backendWrappers.getPromptQueue("codex\u0000env-1:tab-1");
     await backendWrappers.listPromptQueues("env-1");
-    await backendWrappers.savePromptQueue(
+    await backendWrappers.enqueuePromptQueueMessage(
       "codex\u0000env-1:tab-1",
       "env-1",
-      messages,
-      4,
+      message,
+    );
+    await backendWrappers.movePromptQueueMessage(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      "message-1",
+      "up",
+    );
+    await backendWrappers.removePromptQueueMessage(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      "message-1",
     );
     await backendWrappers.claimPromptQueueHead(
       "codex\u0000env-1:tab-1",
       "env-1",
       "message-1",
-      messages,
     );
 
     expect(invokeMock.mock.calls).toEqual([
       ["get_prompt_queue", { queueKey: "codex\u0000env-1:tab-1" }],
       ["list_prompt_queues", { environmentId: "env-1" }],
-      ["save_prompt_queue", {
+      ["enqueue_prompt_queue_message", {
         queueKey: "codex\u0000env-1:tab-1",
         environmentId: "env-1",
-        messages,
-        expectedRevision: 4,
+        message,
+      }],
+      ["move_prompt_queue_message", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        messageId: "message-1",
+        direction: "up",
+      }],
+      ["remove_prompt_queue_message", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        messageId: "message-1",
       }],
       ["claim_prompt_queue_head", {
         queueKey: "codex\u0000env-1:tab-1",
         environmentId: "env-1",
         expectedMessageId: "message-1",
-        candidateMessages: messages,
       }],
     ]);
   });

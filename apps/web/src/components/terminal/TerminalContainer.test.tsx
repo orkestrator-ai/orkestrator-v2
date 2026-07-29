@@ -1682,6 +1682,82 @@ describe("TerminalContainer", () => {
     expect(markSetupScriptsCompleteMock).toHaveBeenCalledWith("env-hidden");
   });
 
+  test("does not reconstruct a second text-only Codex tab while the live create flow stages images", async () => {
+    let resolveAttachmentWrite: ((savedPath: string) => void) | undefined;
+    writeLocalFileMock.mockImplementationOnce(
+      async () => new Promise<string>((resolve) => {
+        resolveAttachmentWrite = resolve;
+      }),
+    );
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+              defaultAgent: "codex",
+              codexMode: "native",
+              initialPrompt: "Inspect this screenshot",
+              pendingAgentLaunch: true,
+            }
+          : env
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+    }));
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "codex",
+          initialPrompt: "Inspect this screenshot",
+          initialPromptAttachments: [
+            {
+              id: "img-1",
+              name: "race.png",
+              previewUrl: "data:image/png;base64,UkFDRQ==",
+              base64Data: "UkFDRQ==",
+            },
+          ],
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(writeLocalFileMock).toHaveBeenCalledTimes(1));
+    expect(
+      useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden"),
+    ).toBeUndefined();
+
+    await act(async () => {
+      resolveAttachmentWrite?.(
+        "/tmp/env-hidden-worktree/.orkestrator/initial-prompt/race.png",
+      );
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      const codexTabs = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .filter((tab) => tab.type === "codex-native");
+      expect(codexTabs).toHaveLength(1);
+      expect(codexTabs[0]?.initialPrompt).toContain(
+        "/tmp/env-hidden-worktree/.orkestrator/initial-prompt/race.png",
+      );
+    });
+  });
+
   test("creates a Claude tmux tab for ready local environments when Claude native backend is tmux", async () => {
     useConfigStore.setState((state) => ({
       ...state,

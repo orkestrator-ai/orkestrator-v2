@@ -848,6 +848,14 @@ export function TerminalContainer({
       return;
     }
 
+    // The uninterrupted create flow still owns this launch while its transient
+    // options exist. In particular, it may be staging initial-prompt images and
+    // rewriting the prompt with their workspace paths. Reconstructing the
+    // backend intent at the same time queues the older text-only prompt; once
+    // staging finishes, both paths create an agent tab. A renderer reload has no
+    // transient options, so durable recovery continues through the branch below.
+    if (claudeOptions?.launchAgent) return;
+
     if (!isEnvironmentRunning || pendingNativeLaunch) return;
 
     const agentType = environment.defaultAgent ?? config.global.defaultAgent ?? "claude";
@@ -875,6 +883,7 @@ export function TerminalContainer({
   }, [
     claudeMode,
     claudeNativeBackend,
+    claudeOptions?.launchAgent,
     codexMode,
     config.global.defaultAgent,
     containerId,

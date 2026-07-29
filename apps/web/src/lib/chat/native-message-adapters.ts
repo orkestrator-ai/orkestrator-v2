@@ -448,9 +448,32 @@ function stringArgument(
   return undefined;
 }
 
-function isBackgroundTaskAction(toolName?: string): boolean {
-  const normalized = toolName?.toLowerCase();
-  return normalized === "taskstop" || normalized === "taskoutput";
+function normalizeToolName(toolName?: string): string | undefined {
+  return typeof toolName === "string" ? toolName.trim().toLowerCase() : undefined;
+}
+
+/*
+ * Providers spell these tools in either casing convention, exactly as the task
+ * todo tools do (`todo-tool.ts`). The argument lookups already accept both
+ * `task_id` and `taskId`, so the tool-name check must not be the strict half.
+ */
+const BACKGROUND_TASK_STOP_TOOL_NAMES = new Set(["taskstop", "task_stop"]);
+const BACKGROUND_TASK_ACTION_TOOL_NAMES = new Set([
+  ...BACKGROUND_TASK_STOP_TOOL_NAMES,
+  "taskoutput",
+  "task_output",
+]);
+
+/** True for the tool that stops a background task, in any supported spelling. */
+export function isBackgroundTaskStopTool(toolName?: string): boolean {
+  const normalized = normalizeToolName(toolName);
+  return normalized !== undefined && BACKGROUND_TASK_STOP_TOOL_NAMES.has(normalized);
+}
+
+/** True for any tool that acts on an existing background task by id. */
+export function isBackgroundTaskActionTool(toolName?: string): boolean {
+  const normalized = normalizeToolName(toolName);
+  return normalized !== undefined && BACKGROUND_TASK_ACTION_TOOL_NAMES.has(normalized);
 }
 
 function isBackgroundTaskLaunch(part: ClaudeMessagePart): boolean {
@@ -460,10 +483,22 @@ function isBackgroundTaskLaunch(part: ClaudeMessagePart): boolean {
   );
 }
 
+/*
+ * Claude emits three different notes when a command ends up in the background,
+ * and all three carry the same durable id:
+ *   "Command running in background with ID: <id>. …"
+ *   "Command was manually backgrounded by user with ID: <id>"
+ *   "…timeout and was moved to the background (ID: <id>). …"
+ * Matching only the first would leave Ctrl+B and timeout-backgrounded commands
+ * unnamed and unlabelled after a transcript rehydration.
+ */
+const LAUNCH_TASK_ID_PATTERN =
+  /\bbackground(?:ed by user)?\s*(?:with ID:|\(ID:)\s*([^\s.)]+)/i;
+
 function backgroundTaskIdFromLaunchOutput(output?: string): string | undefined {
   if (!output) return undefined;
 
-  const textMatch = output.match(/\bbackground with ID:\s*([^\s.]+)/i);
+  const textMatch = output.match(LAUNCH_TASK_ID_PATTERN);
   if (textMatch?.[1]) return textMatch[1];
 
   try {
@@ -534,6 +569,14 @@ export function applyClaudeBackgroundTaskStates(
     }
   }
 
+  /*
+   * Nothing to join: no authoritative snapshot and no launch recoverable from
+   * the transcript. Bail before the rewrite so the common case (a session with
+   * no background work at all) stays allocation-free — this memo recomputes on
+   * every streamed message update.
+   */
+  if (tasksById.size === 0 && launchesByTaskId.size === 0) return messages;
+
   let messagesChanged = false;
   const nextMessages = messages.map((message) => {
     let partsChanged = false;
@@ -566,14 +609,22 @@ export function applyClaudeBackgroundTaskStates(
             status: launch.status,
           };
         }
-      } else if (isBackgroundTaskAction(part.toolName)) {
+      } else if (isBackgroundTaskActionTool(part.toolName)) {
         const taskId = stringArgument(part.toolArgs, "task_id", "taskId");
-        if (taskId) {
-          const task = tasksById.get(taskId) ?? launchesByTaskId.get(taskId);
+        const task = taskId
+          ? tasksById.get(taskId) ?? launchesByTaskId.get(taskId)
+          : undefined;
+        /*
+         * Only decorate a row whose task we actually resolved. An id with no
+         * launch and no snapshot behind it adds nothing the renderer cannot
+         * read straight off `toolArgs`, and decorating it would churn a new
+         * part object on every pass.
+         */
+        if (taskId && task) {
           backgroundTask = {
             id: taskId,
-            description: task?.description,
-            status: task?.status,
+            description: task.description,
+            status: task.status,
           };
         }
       }

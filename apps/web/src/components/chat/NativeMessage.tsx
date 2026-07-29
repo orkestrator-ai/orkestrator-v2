@@ -62,7 +62,11 @@ import {
   getNativeAgentStatus,
   type NativeAgentStatus,
 } from "@/lib/chat/native-agent-status";
-import { normalizeNativeMessage } from "@/lib/chat/native-message-adapters";
+import {
+  isBackgroundTaskActionTool,
+  isBackgroundTaskStopTool,
+  normalizeNativeMessage,
+} from "@/lib/chat/native-message-adapters";
 import { writeText } from "@/lib/native/clipboard";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 
@@ -297,10 +301,8 @@ function ToolPart({
   const [isOpen, setIsOpen] = useState(false);
   const displayToolName = getToolDisplayName(toolName);
   const displayToolTitle = getToolTitleDisplayName(toolTitle, toolName);
-  const normalizedToolName = toolName?.toLowerCase();
-  const isTaskStop = normalizedToolName === "taskstop";
-  const isTaskAction =
-    isTaskStop || normalizedToolName === "taskoutput";
+  const isTaskStop = isBackgroundTaskStopTool(toolName);
+  const isTaskAction = isBackgroundTaskActionTool(toolName);
   const isBackgroundLaunch = toolArgs?.run_in_background === true;
   const taskId =
     backgroundTask?.id
@@ -461,24 +463,26 @@ function ToolPart({
     (!displayInfo || displayInfo.generic) &&
     displayToolTitle !== displayToolName;
   const lifecycleState = backgroundTaskState(backgroundTask);
-  const displayedState = lifecycleState ?? (
-    isTaskStop && toolState
-      ? {
-          label:
-            toolState === "pending"
-              ? "stopping…"
-              : toolState === "success"
-                ? "stopped"
-                : "failure",
-          className: stateColors[toolState],
-        }
-      : toolState
-        ? {
-            label: toolState === "pending" ? "running..." : toolState,
-            className: stateColors[toolState],
-          }
-        : undefined
-  );
+  const toolResultState = toolState
+    ? {
+        label:
+          toolState === "failure"
+            ? "failure"
+            : isTaskStop
+              ? (toolState === "pending" ? "stopping…" : "stopped")
+              : (toolState === "pending" ? "running..." : toolState),
+        className: stateColors[toolState],
+      }
+    : undefined;
+  /*
+   * A failed tool result outranks the task's lifecycle badge. Stopping a task
+   * that already finished is rejected by the tool ("Task <id> is not running"),
+   * and the task itself is still `completed` — so deferring to the lifecycle
+   * here would paint a green "completed" over an action that failed.
+   */
+  const displayedState = toolState === "failure"
+    ? toolResultState
+    : lifecycleState ?? toolResultState;
 
   // Format the command input for shell-like display
   const formatInput = () => {

@@ -308,6 +308,305 @@ describe("native message adapters", () => {
     });
   });
 
+  const backgroundLaunchNotes = [
+    [
+      "started in the background",
+      "Command running in background with ID: bg-wait. Output is being written to: /tmp/bg-wait.output.",
+    ],
+    [
+      "manually backgrounded by the user",
+      "Command was manually backgrounded by user with ID: bg-wait. Output is being written to: /tmp/bg-wait.output",
+    ],
+    [
+      "moved to the background after a timeout",
+      "Command did not complete within its 120s timeout and was moved to the background (ID: bg-wait). Output is being written to: /tmp/bg-wait.output.",
+    ],
+  ] as const;
+
+  test.each(backgroundLaunchNotes)(
+    "recovers the task id from a command %s",
+    (_label, toolOutput) => {
+      const messages: ClaudeMessage[] = [
+        {
+          id: "assistant-launch",
+          role: "assistant",
+          content: "",
+          timestamp: "2026-06-18T12:00:00.000Z",
+          parts: [{
+            type: "tool-invocation",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: {
+              command: "sleep 300; echo waited",
+              description: "Wait for remaining review thread",
+              run_in_background: true,
+            },
+            toolOutput,
+          }],
+        },
+        {
+          id: "assistant-stop",
+          role: "assistant",
+          content: "",
+          timestamp: "2026-06-18T12:02:00.000Z",
+          parts: [{
+            type: "tool-invocation",
+            toolName: "TaskStop",
+            toolState: "success",
+            toolArgs: { task_id: "bg-wait" },
+          }],
+        },
+      ];
+
+      const updated = applyClaudeBackgroundTaskStates(messages, {});
+
+      for (const message of updated) {
+        expect(message.parts[0]?.backgroundTask).toEqual({
+          id: "bg-wait",
+          description: "Wait for remaining review thread",
+          status: undefined,
+        });
+      }
+    },
+  );
+
+  test.each(["backgroundTaskId", "task_id", "taskId"] as const)(
+    "recovers the task id from a structured launch result carrying %s",
+    (idField) => {
+      const messages: ClaudeMessage[] = [{
+        id: "assistant-launch",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: {
+            command: "bun test",
+            description: "Run the full suite",
+            run_in_background: true,
+          },
+          toolOutput: JSON.stringify({ [idField]: "bg-suite" }),
+        }],
+      }];
+
+      expect(
+        applyClaudeBackgroundTaskStates(messages, {})[0]?.parts[0]?.backgroundTask,
+      ).toEqual({
+        id: "bg-suite",
+        description: "Run the full suite",
+        status: undefined,
+      });
+    },
+  );
+
+  test("reapplying the same lifecycle leaves every message and part identical", () => {
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-launch",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          toolName: "Bash",
+          toolUseId: "bash-launch",
+          toolState: "success",
+          toolArgs: {
+            command: "bun test",
+            description: "Run the full suite",
+            run_in_background: true,
+          },
+        }],
+      },
+      {
+        id: "assistant-stop",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-06-18T12:01:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-suite" },
+        }],
+      },
+    ];
+    const tasks = {
+      "bg-suite": {
+        id: "bg-suite",
+        toolUseId: "bash-launch",
+        description: "Run the full suite",
+        status: "killed",
+      },
+    } as const;
+
+    // The join must converge: the memo that calls this re-runs on every
+    // streamed update, so a second pass that keeps producing new objects would
+    // re-render the whole transcript forever.
+    const once = applyClaudeBackgroundTaskStates(messages, tasks);
+    const twice = applyClaudeBackgroundTaskStates(once, tasks);
+
+    expect(twice).toBe(once);
+    expect(twice[0]).toBe(once[0]!);
+    expect(twice[0]?.parts[0]).toBe(once[0]!.parts[0]!);
+    expect(twice[1]?.parts[0]).toBe(once[1]!.parts[0]!);
+  });
+
+  test("leaves a transcript untouched when there is no background work to join", () => {
+    const messages: ClaudeMessage[] = [{
+      id: "assistant-plain",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "Bash",
+          toolUseId: "bash-foreground",
+          toolState: "success",
+          toolArgs: { command: "bun test", description: "Run the full suite" },
+        },
+        {
+          // A launch whose id was never persisted stays undecorated rather
+          // than inventing an identity from the description.
+          type: "tool-invocation",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: {
+            command: "sleep 300",
+            description: "Wait a while",
+            run_in_background: true,
+          },
+          toolOutput: "Command completed with no id in the result.",
+        },
+        {
+          // A stop for a task with no launch and no snapshot behind it.
+          type: "tool-invocation",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-unknown" },
+        },
+      ],
+    }];
+
+    expect(applyClaudeBackgroundTaskStates(messages, {})).toBe(messages);
+  });
+
+  test("does not decorate a task action whose id matches no known task", () => {
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-launch",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: {
+            command: "bun test",
+            description: "Run the full suite",
+            run_in_background: true,
+          },
+          toolOutput: "Command running in background with ID: bg-suite.",
+        }],
+      },
+      {
+        id: "assistant-stop",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-06-18T12:01:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-other" },
+        }],
+      },
+    ];
+
+    const updated = applyClaudeBackgroundTaskStates(messages, {});
+
+    expect(updated[0]?.parts[0]?.backgroundTask).toEqual({
+      id: "bg-suite",
+      description: "Run the full suite",
+      status: undefined,
+    });
+    expect(updated[1]?.parts[0]?.backgroundTask).toBeUndefined();
+    expect(updated[1]).toBe(messages[1]!);
+  });
+
+  test.each([
+    ["TaskStop", "task_id"],
+    ["taskstop", "taskId"],
+    ["task_stop", "task_id"],
+    [" TaskOutput ", "taskId"],
+    ["task_output", "task_id"],
+  ] as const)(
+    "joins a %s row addressed by %s",
+    (toolName, idKey) => {
+      const messages: ClaudeMessage[] = [{
+        id: "assistant-action",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-06-18T12:01:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          toolName,
+          toolState: "success",
+          toolArgs: { [idKey]: "bg-suite" },
+        }],
+      }];
+
+      const updated = applyClaudeBackgroundTaskStates(messages, {
+        "bg-suite": {
+          id: "bg-suite",
+          description: "Run the full suite",
+          status: "running",
+        },
+      });
+
+      expect(updated[0]?.parts[0]?.backgroundTask).toEqual({
+        id: "bg-suite",
+        description: "Run the full suite",
+        status: "running",
+      });
+    },
+  );
+
+  test("treats a backgrounded Agent launch as an agent, not a background command", () => {
+    const messages: ClaudeMessage[] = [{
+      id: "assistant-agent-launch",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:00:00.000Z",
+      parts: [{
+        type: "tool-invocation",
+        toolName: "Agent",
+        toolUseId: "agent-launch",
+        toolState: "success",
+        toolArgs: {
+          description: "Review the diff",
+          run_in_background: true,
+        },
+      }],
+    }];
+
+    const updated = applyClaudeBackgroundTaskStates(messages, {
+      "child-task": {
+        id: "child-task",
+        toolUseId: "agent-launch",
+        description: "Review the diff",
+        status: "running",
+      },
+    });
+
+    expect(updated[0]?.parts[0]?.agentState).toBe("active");
+    expect(updated[0]?.parts[0]?.backgroundTask).toBeUndefined();
+  });
+
   test("preserves model attribution through provider-neutral normalization", () => {
     const message: NativeMessage = {
       id: "native-model",

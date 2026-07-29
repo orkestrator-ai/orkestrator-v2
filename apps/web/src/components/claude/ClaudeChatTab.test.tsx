@@ -5006,6 +5006,47 @@ describe("ClaudeChatTab", () => {
       expect(state.promptSuggestions.get(SESSION_KEY)).toBe("Add tests for the new branch");
       expect(Object.keys(state.backgroundTasks.get(SESSION_KEY) ?? {})).toEqual(["task-1"]);
     });
+
+    test("keeps running tasks when a snapshot dropped every one of them", async () => {
+      /*
+       * A REST snapshot that arrives empty *because* every task was rejected is
+       * a malformed payload, not an authoritative "no tasks left" — matching
+       * the session.updated guard. Writing it would remove the Stop controls
+       * for tasks that are still running.
+       */
+      useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+        "task-1": { id: "task-1", description: "Run the suite", status: "running" },
+      });
+      mockGetSession.mockResolvedValue(
+        serverSession({
+          backgroundTasks: {},
+          invalidMetadataFields: ["backgroundTasks.task-1"],
+        }) as any,
+      );
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() =>
+        expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)?.usedTokens).toBe(1_000),
+      );
+      expect(
+        Object.keys(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY) ?? {}),
+      ).toEqual(["task-1"]);
+    });
+
+    test("adopts an authoritatively empty background-task snapshot", async () => {
+      useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+        "task-1": { id: "task-1", description: "Run the suite", status: "running" },
+      });
+      mockGetSession.mockResolvedValue(serverSession({ backgroundTasks: {} }) as any);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() =>
+        expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)?.usedTokens).toBe(1_000),
+      );
+      expect(
+        Object.keys(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY) ?? {}),
+      ).toEqual([]);
+    });
   });
 
   describe("session.updated frames", () => {

@@ -1957,7 +1957,7 @@ describe("AgentInfoButton session actions", () => {
     expect(screen.queryByText("Background tasks")).toBeNull();
   });
 
-  test("keeps paused background tasks visible and stoppable", () => {
+  test("keeps paused background tasks visible and stoppable", async () => {
     seedClaudeSession();
     useClaudeStore.setState({
       backgroundTasks: new Map([[
@@ -1976,8 +1976,36 @@ describe("AgentInfoButton session actions", () => {
     open();
 
     expect(screen.getByText("Paused review")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Stop/ })).toBeTruthy();
+
+    mockStopClaudeBackgroundTask.mockImplementation(async () => true);
+    fireEvent.click(screen.getByRole("button", { name: /Stop/ }));
+    await waitFor(() =>
+      expect(mockStopClaudeBackgroundTask).toHaveBeenCalledWith(
+        CLAUDE_CLIENT,
+        "claude-session-1",
+        "task-paused",
+      ),
+    );
   });
+
+  test.each(["completed", "failed", "killed"] as const)(
+    "hides the background-task section when every task is %s",
+    (status) => {
+      seedClaudeSession();
+      useClaudeStore.setState({
+        backgroundTasks: new Map([[
+          CLAUDE_KEY,
+          { "task-2": { id: "task-2", description: "Settled", status } },
+        ]]),
+      } as never);
+
+      render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
+
+      expect(screen.queryByText("Background tasks")).toBeNull();
+      expect(screen.queryByText("Settled")).toBeNull();
+    },
+  );
 });
 
 describe("AgentInfoButton rewind confirmation", () => {

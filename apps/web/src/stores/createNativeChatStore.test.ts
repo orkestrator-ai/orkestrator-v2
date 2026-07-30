@@ -52,6 +52,7 @@ function resetStore(store: typeof useTestStore | typeof useMergedStore) {
     serverStatus: new Map(),
     clients: new Map(),
     sessions: new Map(),
+    sessionLoadingRevisions: new Map(),
     attachments: new Map(),
     draftText: new Map(),
     draftMentions: new Map(),
@@ -207,6 +208,47 @@ describe("createNativeChatStoreSlice", () => {
     expect(useTestStore.getState().sessions.has(sessionKey)).toBe(false);
     // Sibling tabs of the same environment survive.
     expect(store.getSession("env-env-1:tab-2")?.sessionId).toBe("session-2");
+  });
+
+  test("advances loading revisions for repeated lifecycle writes but not transcript writes", () => {
+    const store = useTestStore.getState();
+    const sessionKey = "env-env-1:tab-1";
+
+    store.setSession(sessionKey, {
+      sessionId: "session-1",
+      messages: [],
+      isLoading: false,
+    });
+    const afterSession = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+
+    store.setSessionLoading(sessionKey, true);
+    const afterRunning = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+    store.setSessionLoading(sessionKey, true);
+    const afterRepeatedRunning = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+    store.upsertMessage(sessionKey, { id: "m-1", content: "streaming" });
+    const afterTranscript = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+    store.setSessionLoading(sessionKey, false);
+    const afterIdle = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+    store.setSessionLoading(sessionKey, false);
+
+    expect(afterSession).toBe(1);
+    expect(afterRunning).toBe(2);
+    expect(afterRepeatedRunning).toBe(3);
+    expect(afterTranscript).toBe(afterRepeatedRunning);
+    expect(afterIdle).toBe(4);
+    expect(
+      useTestStore.getState().sessionLoadingRevisions.get(sessionKey),
+    ).toBe(5);
   });
 
   test("setClient with null deletes the client entry", () => {

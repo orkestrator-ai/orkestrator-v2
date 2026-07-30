@@ -22,6 +22,7 @@ function resetClaudeStore() {
     clients: new Map(),
     eventSubscriptions: new Map(),
     sessions: new Map(),
+    sessionLoadingRevisions: new Map(),
     attachments: new Map(),
     draftText: new Map(),
     draftMentions: new Map(),
@@ -208,6 +209,12 @@ describe("claudeStore cleanup and queue helpers", () => {
 
     expect(store.getSession(sessionKeyA)).toBeUndefined();
     expect(store.getSession(sessionKeyB)?.sessionId).toBe("session-b");
+    expect(
+      useClaudeStore.getState().sessionLoadingRevisions.has(sessionKeyA),
+    ).toBe(false);
+    expect(
+      useClaudeStore.getState().sessionLoadingRevisions.has(sessionKeyB),
+    ).toBe(true);
     expect(store.getSelectedModel(sessionKeyA)).toBeUndefined();
     expect(store.getSelectedModel(sessionKeyB)).toBe("opus");
     expect(store.isComposingFor(sessionKeyA)).toBe(false);
@@ -307,6 +314,10 @@ describe("claudeStore cleanup and queue helpers", () => {
         [targetKey, targetSession],
         [otherKey, otherSession],
       ]),
+      sessionLoadingRevisions: new Map([
+        [targetKey, 3],
+        [otherKey, 7],
+      ]),
       attachments: new Map([[targetKey, []], [otherKey, []]]),
       draftText: new Map([[targetKey, "target"], [otherKey, "other"]]),
       draftMentions: new Map([[targetKey, []], [otherKey, []]]),
@@ -358,6 +369,7 @@ describe("claudeStore cleanup and queue helpers", () => {
     const state = useClaudeStore.getState();
     const sessionKeyedMaps = [
       "sessions",
+      "sessionLoadingRevisions",
       "attachments",
       "draftText",
       "draftMentions",

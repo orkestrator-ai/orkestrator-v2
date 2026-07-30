@@ -28,6 +28,7 @@ function resetCodexStore() {
     serverStatus: new Map(),
     clients: new Map(),
     sessions: new Map(),
+    sessionLoadingRevisions: new Map(),
     slashCommands: new Map(),
     attachments: new Map(),
     draftText: new Map(),
@@ -465,6 +466,10 @@ describe("codexStore session cleanup", () => {
         [targetKey, { sessionId: "bridge-target", messages: [], isLoading: false }],
         [otherKey, { sessionId: "bridge-other", messages: [], isLoading: false }],
       ]),
+      sessionLoadingRevisions: new Map([
+        [targetKey, 3],
+        [otherKey, 7],
+      ]),
       attachments: new Map([[targetKey, []], [otherKey, []]]),
       draftText: new Map([[targetKey, "target"], [otherKey, "other"]]),
       draftMentions: new Map([[targetKey, []], [otherKey, []]]),
@@ -525,6 +530,7 @@ describe("codexStore session cleanup", () => {
     const state = useCodexStore.getState();
     const sessionKeyedMaps = [
       "sessions",
+      "sessionLoadingRevisions",
       "attachments",
       "draftText",
       "draftMentions",
@@ -616,6 +622,12 @@ describe("codexStore cleanup and queue helpers", () => {
 
     expect(store.getSession(sessionKeyA)).toBeUndefined();
     expect(store.getSession(sessionKeyB)?.sessionId).toBe("session-b");
+    expect(
+      useCodexStore.getState().sessionLoadingRevisions.has(sessionKeyA),
+    ).toBe(false);
+    expect(
+      useCodexStore.getState().sessionLoadingRevisions.has(sessionKeyB),
+    ).toBe(true);
     expect(store.getDraftText(sessionKeyA)).toBe("");
     expect(store.getAttachments(sessionKeyA)).toEqual([]);
     expect(store.getQueueLength(sessionKeyA)).toBe(0);

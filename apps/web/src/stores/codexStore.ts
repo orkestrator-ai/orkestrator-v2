@@ -248,6 +248,7 @@ function isSameContextUsage(
  */
 const CODEX_SESSION_KEYED_MAPS = [
   "sessions",
+  "sessionLoadingRevisions",
   "attachments",
   "draftText",
   "draftMentions",

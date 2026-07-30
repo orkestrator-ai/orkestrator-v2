@@ -285,6 +285,7 @@ interface ClaudeState
  */
 const CLAUDE_SESSION_KEYED_MAPS = [
   "sessions",
+  "sessionLoadingRevisions",
   "attachments",
   "draftText",
   "draftMentions",
@@ -526,7 +527,14 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
     set((state) => {
       const previousSessionId = state.sessions.get(sessionKey)?.sessionId;
       const sessions = new Map(state.sessions);
+      const sessionLoadingRevisions = new Map(
+        state.sessionLoadingRevisions,
+      );
       sessions.set(sessionKey, session);
+      sessionLoadingRevisions.set(
+        sessionKey,
+        (state.sessionLoadingRevisions.get(sessionKey) ?? 0) + 1,
+      );
 
       const withoutSessionKey = <T>(values: Map<string, T>) => {
         const next = new Map(values);
@@ -551,6 +559,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
 
       return {
         sessions,
+        sessionLoadingRevisions,
         contextUsage: withoutSessionKey(state.contextUsage),
         rateLimits: withoutSessionKey(state.rateLimits),
         promptSuggestions: withoutSessionKey(state.promptSuggestions),

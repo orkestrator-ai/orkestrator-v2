@@ -1077,21 +1077,20 @@ export function ClaudeChatTab({
             // If SSE events were missed while this tab was inactive (e.g. due to
             // an EventSource error killing the subscription), messages and loading
             // state can be stale.
+            const loadingRevisionBeforeSnapshot =
+              useClaudeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0;
             const serverSession = await getSession(existingClient, existingSessionId);
             if (!isCurrentFastReconnect() || !serverSession) return;
             const messages = await getSessionMessages(existingClient, existingSessionId);
             if (!isCurrentFastReconnect()) return;
 
             /*
-             * A live frame may change this session while the two REST reads are
-             * in flight. In that case its loading edge is newer than the
-             * snapshot, so do not let an older `running` response re-lock a
-             * turn that has since gone idle (or an older `idle` response unlock
-             * a new turn).
+             * Transcript and metadata frames also replace the session object,
+             * while a repeated lifecycle edge may preserve it. The dedicated
+             * monotonic revision changes for every lifecycle/identity write
+             * but not transcript or metadata writes, so an older REST status
+             * cannot overwrite a newer live one.
              */
-            const sessionSnapshotStillCurrent =
-              useClaudeStore.getState().sessions.get(sessionKey) === existingSession;
-
             // Only apply fetched messages if they are more complete than what
             // the store currently has (SSE may have already delivered newer data).
             applyServerSessionMetadata(sessionKey, serverSession);
@@ -1105,7 +1104,10 @@ export function ClaudeChatTab({
              * turns started while this tab was unmounted can leave the stored
              * flag idle even though the bridge is actively producing tools.
              */
-            if (sessionSnapshotStillCurrent) {
+            if (
+              (useClaudeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0)
+                === loadingRevisionBeforeSnapshot
+            ) {
               setSessionLoading(sessionKey, serverSession.status === "running");
             }
 

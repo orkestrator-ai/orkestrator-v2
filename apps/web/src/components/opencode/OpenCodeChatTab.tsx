@@ -251,8 +251,6 @@ export function OpenCodeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
-  const [stopInProgress, setStopInProgress] = useState(false);
-  const stopPromotionPendingRef = useRef(false);
   const automaticInitRetryCountRef = useRef(0);
   const automaticInitRetryWindowStartedAtRef = useRef<number | null>(null);
   const setupPendingObservedForInitRetryRef = useRef(false);
@@ -1050,6 +1048,8 @@ export function OpenCodeChatTab({
           // is stale — invalidate both sequences, not just the manual one.
           const reconnectSequence = ++manualRefreshSequenceRef.current;
           backgroundRefreshSequenceRef.current += 1;
+          const loadingRevisionBeforeSnapshot =
+            useOpenCodeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0;
           void Promise.all([
             getSessionMessages(existingClient, existingSession.sessionId, {
               throwOnError: true,
@@ -1075,15 +1075,23 @@ export function OpenCodeChatTab({
             const currentSession = currentState.sessions.get(sessionKey);
             if (
               currentState.clients.get(environmentId) !== existingClient ||
-              currentSession?.sessionId !== existingSession.sessionId ||
-              currentSession !== existingSession
+              currentSession?.sessionId !== existingSession.sessionId
             ) {
               return;
             }
             // An empty reconnect response must not erase a transcript that
             // received a live update after this request started.
-            if (messages.length > 0) setMessages(sessionKey, messages);
-            if (status) setSessionLoading(sessionKey, status !== "idle");
+            if (currentSession === existingSession && messages.length > 0) {
+              setMessages(sessionKey, messages);
+            }
+            if (
+              status
+              && (
+                useOpenCodeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0
+              ) === loadingRevisionBeforeSnapshot
+            ) {
+              setSessionLoading(sessionKey, status !== "idle");
+            }
           }).catch((error) => {
             console.warn("[OpenCodeChatTab] Fast reconnect rehydration failed:", error);
           });
@@ -2430,10 +2438,6 @@ export function OpenCodeChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    // Prevent queue draining immediately, then interrupt the live request
-    // before starting the durable queue-to-draft transfer.
-    stopPromotionPendingRef.current = true;
-    setStopInProgress(true);
     const success = await abortSession(client, session.sessionId);
     if (success) {
       // Leave a marker in the transcript. Without it an interrupted turn is
@@ -2451,10 +2455,6 @@ export function OpenCodeChatTab({
     } else {
       console.error("[OpenCodeChatTab] Failed to abort session");
     }
-    stopPromotionPendingRef.current = false;
-    if (useOpenCodeStore.getState().sessions.get(sessionKey)?.isLoading !== true) {
-      setStopInProgress(false);
-    }
   }, [
     addMessage,
     client,
@@ -2462,16 +2462,6 @@ export function OpenCodeChatTab({
     sessionKey,
     promoteNextQueuedPromptToDraft,
   ]);
-
-  useEffect(() => {
-    if (
-      stopInProgress
-      && !stopPromotionPendingRef.current
-      && session?.isLoading === false
-    ) {
-      setStopInProgress(false);
-    }
-  }, [session?.isLoading, stopInProgress]);
 
   useEscapeToStop({
     isActive,

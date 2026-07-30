@@ -1886,6 +1886,50 @@ describe("CodexChatTab", () => {
     expect(screen.queryByText("Connection Failed")).toBeNull();
   });
 
+  test("surfaces a generic health-wrapper start failure without spending a retry", async () => {
+    /*
+     * The backend wraps *every* bridge child failure in this wording, permanent
+     * ones included, and appends the child's log. Retrying it would delay the
+     * real error by the full backoff while the same broken child is restarted.
+     */
+    const retryTimers = installAcceleratedConnectionRetryTimers({ hold: true });
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      createdAt: new Date().toISOString(),
+    });
+    mockGetCodexServerStatus.mockResolvedValue({
+      running: false,
+      hostPort: 9999,
+      authToken: "stale-status-token",
+    });
+    mockStartCodexServer.mockRejectedValue(
+      new Error(
+        "Server on port 9999 did not become healthy\nbridge dependency is temporarily unavailable",
+      ),
+    );
+
+    try {
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      // The terminal error reaches the user on the first failure, not after the
+      // backoff has been spent.
+      expect(await screen.findByText(/did not become healthy/)).toBeTruthy();
+
+      // Release anything the retry path might have queued, then confirm the
+      // start command was never re-issued.
+      for (const callback of retryTimers.callbacks) callback();
+      await retryTimers.settle();
+      expect(mockStartCodexServer).toHaveBeenCalledTimes(1);
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    } finally {
+      retryTimers.restore();
+    }
+  });
+
   test("automatically retries when the bridge start command races container startup", async () => {
     const retryTimers = installAcceleratedConnectionRetryTimers({ hold: true });
     useCodexStore.setState((state) => ({

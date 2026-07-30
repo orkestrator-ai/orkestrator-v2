@@ -2022,6 +2022,36 @@ describe("OpenCodeChatTab", () => {
       expect(screen.queryByText("Connection Failed")).toBeNull();
     });
 
+    test("surfaces a generic health-wrapper start failure without spending a retry", async () => {
+      /*
+       * `did not become healthy` is the backend's wording for every bridge child
+       * failure, permanent ones included, and it arrives with the child's log
+       * appended — here a log line that would otherwise read as transient.
+       * Inferring retryability from it would hide the real error behind the
+       * full backoff while the same broken child is restarted four times.
+       */
+      const retryCallbacks = captureWindowTimers(new Set([500, 1_000, 2_000, 4_000]));
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date().toISOString(),
+      });
+      mockGetOpenCodeServerStatus.mockResolvedValue({
+        running: false,
+        hostPort: null,
+      } as any);
+      mockStartOpenCodeServer.mockRejectedValue(
+        new Error(
+          "Server on port 9999 did not become healthy\nbridge dependency is temporarily unavailable",
+        ),
+      );
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      expect(await screen.findByText(/did not become healthy/)).toBeTruthy();
+      expect(retryCallbacks).toHaveLength(0);
+      expect(mockStartOpenCodeServer).toHaveBeenCalledTimes(1);
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
     test("automatically retries when the container bridge start races container startup", async () => {
       const retryCallbacks = captureWindowTimers(new Set([500]));
       useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {

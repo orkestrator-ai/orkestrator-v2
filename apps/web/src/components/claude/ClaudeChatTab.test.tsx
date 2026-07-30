@@ -637,7 +637,15 @@ function installRetryTimeoutQueue() {
     ...args: unknown[]
   ) => {
     const delay = timeout ?? 0;
-    if (!retryDelays.has(delay)) {
+    // Match the connection-retry timer specifically, not merely a timer whose
+    // delay happens to collide with the backoff schedule. Unrelated 500ms/1s
+    // timers exist in the tab, and capturing one would read as "a retry was
+    // scheduled" in a test asserting that none was.
+    if (
+      !retryDelays.has(delay)
+      || typeof handler !== "function"
+      || !String(handler).includes("setInitAttempt")
+    ) {
       return ORIGINAL_SET_TIMEOUT(handler, delay, ...args);
     }
     timers.push({
@@ -4928,6 +4936,35 @@ describe("ClaudeChatTab", () => {
         { timeout: 1_500 },
       );
       expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+
+    test("surfaces a generic health-wrapper start failure without spending a retry", async () => {
+      /*
+       * The backend uses this wording for every bridge child failure, permanent
+       * ones included, and appends the child's log — here a log line that would
+       * otherwise read as transient. Retrying on the wrapper would restart the
+       * same broken child four times before showing the user anything.
+       */
+      const retryTimers = installRetryTimeoutQueue();
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date().toISOString(),
+      });
+      mockGetClaudeServerStatus.mockResolvedValue({
+        running: false,
+        hostPort: 9999,
+      });
+      mockStartClaudeServer.mockRejectedValue(
+        new Error(
+          "Server on port 9999 did not become healthy\nbridge dependency is temporarily unavailable",
+        ),
+      );
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      expect(await screen.findByText(/did not become healthy/)).toBeTruthy();
+      expect(retryTimers.timers).toHaveLength(0);
+      expect(mockStartClaudeServer).toHaveBeenCalledTimes(1);
+      expect(mockCreateSession).not.toHaveBeenCalled();
     });
 
     test("automatically retries when the bridge start command races container startup", async () => {

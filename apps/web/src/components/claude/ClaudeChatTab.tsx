@@ -17,6 +17,7 @@ import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { TURN_STOPPED_BY_USER } from "@/lib/chat/client-only-messages";
 import {useClaudeStore} from "@/stores/claudeStore";
+import { shouldReconnectEventSubscription } from "@/stores/createNativeChatStore";
 import { useConfigStore } from "@/stores/configStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
@@ -1420,16 +1421,14 @@ export function ClaudeChatTab({
               });
               const newSession = { sessionId: ensured.providerSessionId };
               if (!mounted) return;
-              if (newSession) {
-                seedInitialFastMode();
-                tabSessionIdRef.current = newSession.sessionId;
-                updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
-                replaceSessionIdentity(sessionKey, {
-                  sessionId: newSession.sessionId,
-                  messages: [],
-                  isLoading: false,
-                });
-              }
+              seedInitialFastMode();
+              tabSessionIdRef.current = newSession.sessionId;
+              updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
+              replaceSessionIdentity(sessionKey, {
+                sessionId: newSession.sessionId,
+                messages: [],
+                isLoading: false,
+              });
             } else if (existingSessionFromStore) {
               console.warn("[ClaudeChatTab] Failed to refresh messages on reconnect:", err);
               // Keep existing messages from store if refresh fails
@@ -1633,7 +1632,7 @@ export function ClaudeChatTab({
       try {
         console.debug("[ClaudeChatTab] Starting shared event subscription", { environmentId });
         const eventStream = subscribeToEvents(bridgeClient, abortController.signal);
-        setEventStream(environmentId, eventStream);
+        setEventStream(environmentId, eventStream, abortController);
 
         const lastReloadTimeBySession = new Map<string, number>();
         const DEBOUNCE_MS = 200;
@@ -2120,7 +2119,7 @@ export function ClaudeChatTab({
           console.error("[ClaudeChatTab] Event subscription error:", error);
         }
       } finally {
-        setEventStream(environmentId, null);
+        setEventStream(environmentId, null, abortController);
 
         // Auto-reconnect SSE if the connection dropped unexpectedly (not explicitly aborted).
         // Uses exponential backoff capped at 60s, with a maximum retry count.
@@ -2133,8 +2132,15 @@ export function ClaudeChatTab({
             sseReconnectAttemptsRef.current = attempt + 1;
             console.debug("[ClaudeChatTab] SSE dropped, reconnect attempt", attempt + 1, "in", reconnectDelay, "ms for", environmentId);
             setTimeout(() => {
-              const currentClient = useClaudeStore.getState().clients.get(environmentId);
-              if (currentClient && !hasActiveEventSubscription(environmentId)) {
+              const currentState = useClaudeStore.getState();
+              const currentClient = currentState.clients.get(environmentId);
+              if (
+                currentClient
+                && shouldReconnectEventSubscription(
+                  currentState.eventSubscriptions.get(environmentId),
+                  abortController,
+                )
+              ) {
                 console.debug("[ClaudeChatTab] Reconnecting SSE for", environmentId);
                 startSharedEventSubscriptionRef.current?.(currentClient);
               }

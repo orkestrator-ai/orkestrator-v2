@@ -20,6 +20,7 @@ import {
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { shouldReconnectEventSubscription } from "@/stores/createNativeChatStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -1589,7 +1590,7 @@ export function OpenCodeChatTab({
         }
 
         // Store stream reference in the store for cleanup
-        setEventStream(environmentId, eventStream);
+        setEventStream(environmentId, eventStream, abortController);
 
         const DEBOUNCE_MS = 200; // Debounce all message fetches
 
@@ -2090,7 +2091,7 @@ export function OpenCodeChatTab({
         pendingReloads.clear();
         reloadGenerationByKey.clear();
         // Clear the stream reference when loop ends
-        setEventStream(environmentId, null);
+        setEventStream(environmentId, null, abortController);
 
         // Auto-reconnect SSE if the connection dropped unexpectedly (not explicitly aborted).
         // Uses exponential backoff capped at 60s, with a maximum retry count.
@@ -2105,13 +2106,12 @@ export function OpenCodeChatTab({
             setTimeout(() => {
               const currentState = useOpenCodeStore.getState();
               const currentClient = currentState.clients.get(environmentId);
-              const currentSubscription = currentState.eventSubscriptions.get(
-                environmentId,
-              );
               if (
                 currentClient
-                && currentSubscription?.abortController === abortController
-                && !currentSubscription.isActive
+                && shouldReconnectEventSubscription(
+                  currentState.eventSubscriptions.get(environmentId),
+                  abortController,
+                )
               ) {
                 console.debug("[OpenCodeChatTab] Reconnecting SSE for", environmentId);
                 startSharedEventSubscriptionRef.current?.(currentClient);

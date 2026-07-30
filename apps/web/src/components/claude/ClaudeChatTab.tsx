@@ -325,8 +325,12 @@ export function ClaudeChatTab({
         );
         setModelCatalog(catalog);
         // The create-environment picker has no environment id yet, so keep a
-        // host-level projection alongside the authoritative scoped snapshot.
-        setModels(catalog.models);
+        // host-level projection alongside a discovered or last-known-good
+        // scoped snapshot. A bundled fallback is environment-local recovery,
+        // not evidence that the host's last-known-good catalog is obsolete.
+        if (catalog.source !== "fallback") {
+          setModels(catalog.models);
+        }
         return catalog.models;
       } catch (error) {
         console.debug(

@@ -279,6 +279,15 @@ function fallbackEffort(options: ClaudeEffortLevel[]): ClaudeEffortLevel {
 }
 
 /**
+ * Latest tmux catalog request per environment.
+ *
+ * Discovery belongs to the backend/environment lifecycle, not the mounted tab.
+ * Keeping the generation outside React lets a successful request finish after
+ * unmount while preventing an older response from replacing a newer refresh.
+ */
+const claudeCatalogRequestGenerations = new Map<string, number>();
+
+/**
  * Prefer the live model list the Claude bridge fetched from the Agent SDK
  * (shared via the claude store) over the static fallback. The "default"
  * sentinel is guaranteed to be present either way.
@@ -778,29 +787,37 @@ export function ClaudeTmuxChatTab({
   // native tab has ever mounted for this environment.
   useEffect(() => {
     if (!backendHydrated) return;
-    let cancelled = false;
+    const requestGeneration =
+      (claudeCatalogRequestGenerations.get(environmentId) ?? 0) + 1;
+    claudeCatalogRequestGenerations.set(environmentId, requestGeneration);
 
     void getClaudeModelCatalog(environmentId, refreshRequestId > 0)
       .then((catalog) => {
-        if (!cancelled) {
-          setModelCatalog(catalog);
-          // New-environment controls are host-scoped and cannot read an
-          // environment-specific catalogue.
+        if (
+          claudeCatalogRequestGenerations.get(environmentId)
+          !== requestGeneration
+        ) {
+          return;
+        }
+        setModelCatalog(catalog);
+        // New-environment controls are host-scoped and cannot read an
+        // environment-specific catalogue. A fallback response is useful for
+        // this environment only and must not replace the host last-known-good.
+        if (catalog.source !== "fallback") {
           setModels(catalog.models);
         }
       })
       .catch((catalogError) => {
-        if (!cancelled) {
+        if (
+          claudeCatalogRequestGenerations.get(environmentId)
+          === requestGeneration
+        ) {
           console.debug(
             "[ClaudeTmuxChatTab] Claude model catalog unavailable; using bundled fallback",
             catalogError,
           );
         }
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, [
     backendHydrated,
     environmentId,

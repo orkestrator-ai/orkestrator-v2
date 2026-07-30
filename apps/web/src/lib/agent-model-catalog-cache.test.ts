@@ -58,6 +58,67 @@ describe("hydrateAgentModelCatalogCache", () => {
     expect(useCodexStore.getState().models).toEqual(CODEX_MODELS);
   });
 
+  test("hydrates an available agent without disturbing the absent agent", async () => {
+    const claudeModels: ClaudeModel[] = [{
+      id: "claude-only",
+      name: "Claude Only",
+    }];
+    invokeMock.mockResolvedValue({
+      schemaVersion: 1,
+      claude: {
+        updatedAt: "2026-07-30T10:00:00.000Z",
+        models: claudeModels,
+      },
+    });
+
+    await hydrateAgentModelCatalogCache();
+
+    expect(useClaudeStore.getState().models).toEqual(claudeModels);
+    expect(useCodexStore.getState().models).toEqual(CODEX_MODELS);
+  });
+
+  test("treats explicit empty catalogues as missing cached data", async () => {
+    const existingClaude: ClaudeModel[] = [{
+      id: "claude-existing",
+      name: "Claude Existing",
+    }];
+    const existingCodex: CodexModel[] = [{
+      id: "gpt-existing",
+      name: "GPT Existing",
+    }];
+    useClaudeStore.setState({ models: existingClaude });
+    useCodexStore.setState({ models: existingCodex });
+    invokeMock.mockResolvedValue({
+      schemaVersion: 1,
+      claude: {
+        updatedAt: "2026-07-30T10:00:00.000Z",
+        models: [],
+      },
+      codex: {
+        updatedAt: "2026-07-30T10:00:00.000Z",
+        models: [],
+      },
+    });
+
+    await hydrateAgentModelCatalogCache();
+
+    expect(useClaudeStore.getState().models).toBe(existingClaude);
+    expect(useCodexStore.getState().models).toBe(existingCodex);
+  });
+
+  test("propagates a backend read failure without changing either store", async () => {
+    const existingClaude = useClaudeStore.getState().models;
+    const existingCodex = useCodexStore.getState().models;
+    invokeMock.mockRejectedValue(new Error("cache unavailable"));
+
+    await expect(hydrateAgentModelCatalogCache()).rejects.toThrow(
+      "cache unavailable",
+    );
+
+    expect(useClaudeStore.getState().models).toBe(existingClaude);
+    expect(useCodexStore.getState().models).toBe(existingCodex);
+  });
+
   test("does not let a late disk read overwrite newer live catalogues", async () => {
     const cacheRead = deferred<{
       schemaVersion: 1;

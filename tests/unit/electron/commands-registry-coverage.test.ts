@@ -370,6 +370,138 @@ describe("direct backend command registry coverage", () => {
     expect(log).toContain("pkill -f '[c]odex-bridge/dist/index.js'");
   });
 
+  test("validates and delegates host agent model catalogue writes", async () => {
+    const cachedAgents = { schemaVersion: 1 as const };
+    const cacheAgentModelCatalog = mock(async () => cachedAgents);
+    const context = contextWithStorage({ cacheAgentModelCatalog });
+    const claudeModels = [{
+      id: "claude-opus-latest",
+      name: "Claude Opus Latest",
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "high"],
+    }];
+
+    await expect(
+      invoke(
+        "cache_agent_model_catalog",
+        { agent: "claude", models: claudeModels },
+        context,
+      ),
+    ).resolves.toEqual(cachedAgents);
+    expect(cacheAgentModelCatalog).toHaveBeenCalledWith("claude", claudeModels);
+
+    await expect(
+      invoke(
+        "cache_agent_model_catalog",
+        { agent: "unsupported", models: claudeModels },
+        context,
+      ),
+    ).rejects.toThrow("Expected agent to be claude or codex");
+    await expect(
+      invoke(
+        "cache_agent_model_catalog",
+        { agent: "claude", models: [] },
+        context,
+      ),
+    ).rejects.toThrow("empty model catalog");
+    await expect(
+      invoke(
+        "cache_agent_model_catalog",
+        { agent: "claude", models: [{ id: "claude-opus-latest" }] },
+        context,
+      ),
+    ).rejects.toThrow("without an id or name");
+    await expect(
+      invoke(
+        "cache_agent_model_catalog",
+        {
+          agent: "codex",
+          models: [{
+            id: "gpt-latest",
+            name: "GPT Latest",
+            reasoningOptions: [{ effort: "impossible", label: "Invalid" }],
+          }],
+        },
+        context,
+      ),
+    ).rejects.toThrow("supported reasoning effort");
+    await expect(
+      invoke(
+        "cache_agent_model_catalog",
+        {
+          agent: "codex",
+          models: [{
+            id: "gpt-latest",
+            name: "GPT Latest",
+            reasoningEfforts: ["medium", "impossible"],
+          }],
+        },
+        context,
+      ),
+    ).rejects.toThrow("supported reasoning effort");
+    await expect(
+      invoke(
+        "cache_agent_model_catalog",
+        {
+          agent: "codex",
+          models: [{
+            id: "gpt-latest",
+            name: "GPT Latest",
+            defaultReasoningEffort: "impossible",
+          }],
+        },
+        context,
+      ),
+    ).rejects.toThrow("supported reasoning effort");
+    await expect(
+      invoke(
+        "cache_agent_model_catalog",
+        {
+          agent: "claude",
+          models: [{
+            id: "claude-opus-latest",
+            name: "Claude Opus Latest",
+            description: 42,
+          }],
+        },
+        context,
+      ),
+    ).resolves.toEqual(cachedAgents);
+    expect(cacheAgentModelCatalog).toHaveBeenLastCalledWith("claude", [
+      expect.objectContaining({
+        id: "claude-opus-latest",
+        name: "Claude Opus Latest",
+        description: undefined,
+      }),
+    ]);
+    await expect(
+      invoke(
+        "cache_agent_model_catalog",
+        {
+          agent: "codex",
+          models: [{ id: "gpt-latest", name: "GPT Latest", unexpected: true }],
+        },
+        context,
+      ),
+    ).rejects.toThrow(/[Uu]nexpected/);
+    await expect(
+      invoke(
+        "cache_agent_model_catalog",
+        { agent: "codex", models: [] },
+        context,
+      ),
+    ).rejects.toThrow("at least one model");
+    await expect(
+      invoke(
+        "cache_agent_model_catalog",
+        { agent: "claude", models: claudeModels, extra: true },
+        context,
+      ),
+    ).rejects.toThrow(/[Uu]nexpected/);
+
+    expect(cacheAgentModelCatalog).toHaveBeenCalledTimes(2);
+  });
+
   test("launches validated browser URLs and returns both DNS resolution outcomes", async () => {
     const context = contextWithStorage({});
     await expect(

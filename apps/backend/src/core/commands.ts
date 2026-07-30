@@ -6966,8 +6966,15 @@ async function refreshClaudeModelCatalog(
     cliVersion: catalog.cliVersion,
     stale: catalog.source !== "sdk",
   };
+  await context.storage.updateEnvironment(environmentId, {
+    claudeModelCatalog: snapshot,
+  });
+  context.emit("claude-model-catalog-updated", snapshot);
   if (catalog.source === "sdk") {
-    await context.storage.cacheAgentModelCatalog("claude", catalog.models)
+    // This host-level cache improves the next launch, but it is not part of the
+    // authoritative per-environment refresh. Do not hold a successful response
+    // or event behind storage lock contention or an unrelated cache failure.
+    void context.storage.cacheAgentModelCatalog("claude", catalog.models)
       .catch((error) => {
         console.warn(
           "[ElectronBackend] Failed to persist the Claude model catalogue:",
@@ -6975,10 +6982,6 @@ async function refreshClaudeModelCatalog(
         );
       });
   }
-  await context.storage.updateEnvironment(environmentId, {
-    claudeModelCatalog: snapshot,
-  });
-  context.emit("claude-model-catalog-updated", snapshot);
   return snapshot;
 }
 

@@ -269,7 +269,11 @@ describe("usage and limits", () => {
     const events = reduce("account/rateLimits/updated", {
       rateLimits: {
         limitName: "Five hour",
-        primary: { usedPercent: 60, resetsAt: 1_800_000_000 },
+        primary: {
+          usedPercent: 60,
+          resetsAt: 1_800_000_000,
+          windowDurationMins: 300,
+        },
         secondary: { usedPercent: 20, resetsAt: null },
         credits: { balance: "12.50", hasCredits: true, unlimited: false },
       },
@@ -288,6 +292,7 @@ describe("usage and limits", () => {
           // Codex reports epoch *seconds*; pinning the exact ISO string is what
           // makes dropping or inverting the ×1000 a test failure.
           resetsAt: "2027-01-15T08:00:00.000Z",
+          windowMinutes: 300,
         },
         { slot: "secondary", label: "Secondary", usedPercent: 20 },
       ],
@@ -326,6 +331,47 @@ describe("usage and limits", () => {
     ).toBeUndefined();
   });
 
+  test("an invalid window duration is ignored", () => {
+    for (const windowDurationMins of [
+      -1,
+      "10080",
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ]) {
+      const events = reduce("account/rateLimits/updated", {
+        rateLimits: { secondary: { usedPercent: 10, windowDurationMins } },
+      });
+      expect(
+        (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
+          .rateLimits[0]?.windowMinutes,
+      ).toBeUndefined();
+    }
+  });
+
+  test("zero is preserved as a valid window duration", () => {
+    const events = reduce("account/rateLimits/updated", {
+      rateLimits: { secondary: { usedPercent: 10, windowDurationMins: 0 } },
+    });
+    expect(
+      (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
+        .rateLimits[0]?.windowMinutes,
+    ).toBe(0);
+  });
+
+  test("a duration-only sparse window carries no fabricated usage percentage", () => {
+    const events = reduce("account/rateLimits/updated", {
+      rateLimits: { secondary: { windowDurationMins: 10_080 } },
+    });
+    const window = (
+      events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>
+    ).rateLimits[0];
+
+    expect(window).toMatchObject({ slot: "secondary", windowMinutes: 10_080 });
+    expect(window?.usedPercent).toBeUndefined();
+    expect(window?.resetsAt).toBeUndefined();
+  });
+
   test("a missing or malformed rateLimits payload emits nothing", () => {
     expect(reduce("account/rateLimits/updated", undefined)).toEqual([]);
     expect(reduce("account/rateLimits/updated", {})).toEqual([]);
@@ -342,12 +388,16 @@ describe("usage and limits", () => {
     });
   });
 
-  test("a non-string or empty limitName falls back to \"Primary\"", () => {
+  test("a non-string or empty limitName is omitted from a sparse primary update", () => {
     for (const limitName of [undefined, null, "", 7, {}]) {
       const events = reduce("account/rateLimits/updated", {
         rateLimits: { limitName, primary: { usedPercent: 5 } },
       });
-      expect(events[0]).toMatchObject({ rateLimits: [{ slot: "primary", label: "Primary" }] });
+      const window = (
+        events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>
+      ).rateLimits[0];
+      expect(window).toEqual({ slot: "primary", usedPercent: 5 });
+      expect(window && "label" in window).toBe(false);
     }
   });
 
@@ -355,9 +405,13 @@ describe("usage and limits", () => {
     const events = reduce("account/rateLimits/updated", {
       rateLimits: { limitName: "Weekly", secondary: { usedPercent: 5 } },
     });
-    expect(events[0]).toMatchObject({
-      rateLimits: [{ slot: "secondary", label: "Secondary" }],
-    });
+    expect(
+      (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
+        .rateLimits,
+    ).toEqual([
+      { slot: "primary", label: "Weekly" },
+      { slot: "secondary", label: "Secondary", usedPercent: 5 },
+    ]);
   });
 
   test("a secondary-only snapshot carries only the secondary window", () => {
@@ -1024,6 +1078,87 @@ describe("historical turn rehydration", () => {
       "thread-1",
     );
     expect(unsupportedItemTypes).toEqual(["contextCompaction", "somethingNew"]);
+  });
+
+  test("skips malformed turns and turns without a usable id", () => {
+    const { events } = reduceHistoricalTurns(
+      [
+        null,
+        "not a turn",
+        [],
+        {},
+        { id: "" },
+        { id: 7, status: "completed" },
+        { id: "turn-valid", status: "completed", items: [] },
+      ],
+      1,
+      "thread-1",
+    );
+
+    expect(events).toEqual([
+      {
+        kind: "turn.started",
+        threadId: "thread-1",
+        turnId: "turn-valid",
+        engineGeneration: 1,
+      },
+      {
+        kind: "turn.completed",
+        threadId: "thread-1",
+        turnId: "turn-valid",
+        status: "completed",
+        engineGeneration: 1,
+      },
+    ]);
+  });
+
+  test("failed historical turns retain their structured error", () => {
+    const { events } = reduceHistoricalTurns(
+      [{
+        id: "turn-failed",
+        status: "failed",
+        items: [],
+        error: {
+          message: "provider failed",
+          codexErrorInfo: "usageLimitExceeded",
+          additionalDetails: "retry later",
+        },
+      }],
+      3,
+      "thread-1",
+    );
+
+    expect(events[1]).toEqual({
+      kind: "turn.completed",
+      threadId: "thread-1",
+      turnId: "turn-failed",
+      status: "failed",
+      error: {
+        message: "provider failed",
+        code: "usageLimitExceeded",
+        details: "retry later",
+      },
+      engineGeneration: 3,
+    });
+  });
+
+  test("propagates an optional handle to every historical event", () => {
+    const turns = [{
+      id: "turn-1",
+      status: "completed",
+      items: [{ id: "a1", type: "agentMessage", text: "answer" }],
+    }];
+    const withHandle = reduceHistoricalTurns(
+      turns,
+      1,
+      "thread-1",
+      "handle-1",
+    ).events;
+    const withoutHandle = reduceHistoricalTurns(turns, 1, "thread-1").events;
+
+    expect(withHandle).toHaveLength(3);
+    expect(withHandle.every((event) => event.handle === "handle-1")).toBe(true);
+    expect(withoutHandle.every((event) => !("handle" in event))).toBe(true);
   });
 
   test("non-array history is handled", () => {

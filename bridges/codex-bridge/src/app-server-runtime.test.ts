@@ -14,6 +14,7 @@ import {
   MAX_PENDING_EVENTS_PER_TURN,
   MAX_PENDING_TURNS,
   MAX_RECOVERED_CONTEXT_CHARS,
+  mergeRateLimitWindows,
   messageSnapshotIntervalMs,
   normalizedMessageSnapshotChars,
   type RuntimeSseEvent,
@@ -30,7 +31,11 @@ import {
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
 import { persistSessionTitle } from "./session-titles.js";
 import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollout.js";
-import type { EngineEvent } from "./engine/types.js";
+import type {
+  EngineEvent,
+  EngineRateLimitWindow,
+  EngineRateLimitWindowUpdate,
+} from "./engine/types.js";
 
 /**
  * Returned by a handler to model a request app-server never answers — the exact
@@ -141,6 +146,73 @@ test("snapshot sizing is bounded and tolerates cyclic metadata", () => {
     parts: [],
     createdAt: "2026-01-01T00:00:00.000Z",
   })).toBe(1024 * 1024);
+});
+
+describe("mergeRateLimitWindows", () => {
+  const primary: EngineRateLimitWindow = {
+    slot: "primary",
+    label: "Five hour",
+    usedPercent: 60,
+    resetsAt: "2026-07-30T20:00:00.000Z",
+    windowMinutes: 300,
+  };
+
+  test("returns the retained snapshot unchanged for an empty update", () => {
+    const retained = [primary];
+
+    expect(mergeRateLimitWindows(retained, [])).toBe(retained);
+  });
+
+  test("adds a new slot and restores stable primary-first ordering", () => {
+    const secondary: EngineRateLimitWindow = {
+      slot: "secondary",
+      label: "Weekly",
+      usedPercent: 20,
+    };
+
+    expect(mergeRateLimitWindows([secondary], [primary])).toEqual([
+      primary,
+      secondary,
+    ]);
+  });
+
+  test("preserves omitted fields while updating the fields that are present", () => {
+    const sparseUpdate: EngineRateLimitWindowUpdate = {
+      slot: "primary",
+      usedPercent: 65,
+    };
+
+    expect(mergeRateLimitWindows([primary], [sparseUpdate])).toEqual([{
+      ...primary,
+      usedPercent: 65,
+    }]);
+  });
+
+  test("uses a slot fallback only until an explicit provider label is observed", () => {
+    const unlabeled: EngineRateLimitWindowUpdate = {
+      slot: "primary",
+      usedPercent: 10,
+    };
+    const initial = mergeRateLimitWindows([], [unlabeled]);
+    expect(initial).toEqual([{
+      slot: "primary",
+      label: "Primary",
+      usedPercent: 10,
+    }]);
+
+    expect(mergeRateLimitWindows([primary], [unlabeled])).toEqual([{
+      ...primary,
+      usedPercent: 10,
+    }]);
+
+    expect(mergeRateLimitWindows([primary], [{
+      slot: "primary",
+      label: "New plan name",
+    }])).toEqual([{
+      ...primary,
+      label: "New plan name",
+    }]);
+  });
 });
 
 /** Scripted app-server child, driven by a per-method handler map. */
@@ -5659,6 +5731,37 @@ describe("slash commands", () => {
     expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
   });
 
+  test("custom prompt commands are matched case-insensitively and expanded before dispatch", async () => {
+    const promptsDir = join(codexHome, "prompts");
+    mkdirSync(promptsDir, { recursive: true });
+    writeFileSync(
+      join(promptsDir, "review.md"),
+      [
+        "---",
+        "description: Review a target",
+        "argument_hint: <target>",
+        "---",
+        "Review $ARGUMENTS and report concrete findings.",
+      ].join("\n"),
+    );
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "/ReViEw src/parser.ts",
+      requestId: "req-custom-prompt",
+      attachments: [],
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    const turnStart = h.child().requests.find((request) => request.method === "turn/start");
+    expect(JSON.stringify(turnStart?.params.input))
+      .toContain("Review src/parser.ts and report concrete findings.");
+    expect(JSON.stringify(turnStart?.params.input)).not.toContain("/ReViEw");
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(messages?.[0]?.content).toBe("/ReViEw src/parser.ts");
+  });
+
   test("/help is answered locally without reaching Codex", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
@@ -7533,7 +7636,11 @@ describe("usage and account rate limits", () => {
     h.child().notify("account/rateLimits/updated", {
       rateLimits: {
         limitName: "Five hour",
-        primary: { usedPercent: 60 },
+        primary: {
+          usedPercent: 60,
+          resetsAt: 1_800_000_000,
+          windowDurationMins: 300,
+        },
         secondary: { usedPercent: 20 },
         credits: { balance: "12.50", hasCredits: true },
       },
@@ -7542,25 +7649,52 @@ describe("usage and account rate limits", () => {
 
     expect(h.runtime.getStatus(sessionId)?.contextUsage).toMatchObject({
       rateLimits: [
-        { slot: "primary", label: "Five hour", usedPercent: 60 },
+        {
+          slot: "primary",
+          label: "Five hour",
+          usedPercent: 60,
+          resetsAt: new Date(1_800_000_000 * 1_000).toISOString(),
+          windowMinutes: 300,
+        },
         { slot: "secondary", usedPercent: 20 },
       ],
       credits: { balance: "12.50", hasCredits: true },
     });
 
-    // Secondary only, and no credits at all.
+    // A genuinely secondary-only update, with no primary or credits at all.
     h.child().notify("account/rateLimits/updated", {
-      rateLimits: { secondary: { usedPercent: 35 } },
+      rateLimits: {
+        secondary: { usedPercent: 35 },
+      },
     });
     await h.drain();
 
     expect(h.runtime.getStatus(sessionId)?.contextUsage).toMatchObject({
       rateLimits: [
-        { slot: "primary", label: "Five hour", usedPercent: 60 },
+        {
+          slot: "primary",
+          label: "Five hour",
+          usedPercent: 60,
+          resetsAt: new Date(1_800_000_000 * 1_000).toISOString(),
+          windowMinutes: 300,
+        },
         { slot: "secondary", usedPercent: 35 },
       ],
       // Absent metadata does not clear a previously observed value.
       credits: { balance: "12.50", hasCredits: true },
+    });
+
+    h.child().notify("account/rateLimits/updated", {
+      rateLimits: { limitName: "Renamed plan" },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)?.contextUsage?.rateLimits?.[0]).toEqual({
+      slot: "primary",
+      label: "Renamed plan",
+      usedPercent: 60,
+      resetsAt: new Date(1_800_000_000 * 1_000).toISOString(),
+      windowMinutes: 300,
     });
   });
 
@@ -7612,6 +7746,43 @@ describe("usage and account rate limits", () => {
 
     await h.runtime.deleteSession(sessionId);
     expect(usageByThread.size).toBe(0);
+  });
+
+  test("rate-limit updates fan out context usage to every session for the thread", async () => {
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-shared") }),
+    });
+    const first = await h.runtime.resumeSession({ threadId: "thread-shared", mode: "build" });
+    const second = await h.runtime.resumeSession({ threadId: "thread-shared", mode: "build" });
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+
+    h.child().notify("thread/tokenUsage/updated", {
+      threadId: "thread-shared",
+      turnId: "turn-1",
+      tokenUsage: { last: { totalTokens: 10 }, modelContextWindow: 100 },
+    });
+    await h.drain();
+    h.events.length = 0;
+
+    h.child().notify("account/rateLimits/updated", {
+      rateLimits: { primary: { usedPercent: 60 } },
+    });
+    await h.drain();
+
+    const notified = h.events
+      .filter(
+        (event) =>
+          event.type === "session.updated"
+          && event.data?.contextUsage !== undefined,
+      )
+      .map((event) => event.sessionId)
+      .sort();
+    expect(notified).toEqual([first!.sessionId, second!.sessionId].sort());
+    expect(h.runtime.getStatus(first!.sessionId)?.contextUsage?.rateLimits)
+      .toEqual([{ slot: "primary", label: "Primary", usedPercent: 60 }]);
+    expect(h.runtime.getStatus(second!.sessionId)?.contextUsage?.rateLimits)
+      .toEqual([{ slot: "primary", label: "Primary", usedPercent: 60 }]);
   });
 
   test("a thread with no live sessions is skipped by the rate-limit fan-out", async () => {

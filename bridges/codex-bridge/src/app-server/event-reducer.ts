@@ -17,7 +17,7 @@ import type {
   EngineError,
   EngineEvent,
   EngineGeneration,
-  EngineRateLimitWindow,
+  EngineRateLimitWindowUpdate,
 } from "../engine/types.js";
 
 export interface ReduceResult {
@@ -38,6 +38,11 @@ function str(value: unknown): string | undefined {
 
 function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function nonNegativeNum(value: unknown): number | undefined {
+  const parsed = num(value);
+  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
 }
 
 /**
@@ -244,19 +249,30 @@ export function reduceNotification(
     case "account/rateLimits/updated": {
       if (!isRecord(params) || !isRecord(params.rateLimits)) return { events: [] };
       const snapshot = params.rateLimits;
-      const windows: EngineRateLimitWindow[] = [];
+      const windows: EngineRateLimitWindowUpdate[] = [];
+      const limitName =
+        typeof snapshot.limitName === "string" && snapshot.limitName.length > 0
+          ? snapshot.limitName
+          : undefined;
+      if (!isRecord(snapshot.primary) && limitName !== undefined) {
+        windows.push({ slot: "primary", label: limitName });
+      }
       for (const [key, label] of [["primary", "Primary"], ["secondary", "Secondary"]] as const) {
         const window = isRecord(snapshot[key]) ? snapshot[key] : undefined;
         if (!window) continue;
         const resetsAt = epochSecondsToIso(window.resetsAt);
+        const usedPercent = num(window.usedPercent);
+        const windowMinutes = nonNegativeNum(window.windowDurationMins);
         windows.push({
           slot: key,
-          label: typeof snapshot.limitName === "string" && snapshot.limitName.length > 0
-            && key === "primary"
-            ? snapshot.limitName
-            : label,
-          usedPercent: num(window.usedPercent),
+          ...(key === "secondary"
+            ? { label }
+            : limitName !== undefined
+            ? { label: limitName }
+            : {}),
+          ...(usedPercent !== undefined ? { usedPercent } : {}),
           ...(resetsAt !== undefined ? { resetsAt } : {}),
+          ...(windowMinutes !== undefined ? { windowMinutes } : {}),
         });
       }
       const rawCredits = isRecord(snapshot.credits) ? snapshot.credits : null;

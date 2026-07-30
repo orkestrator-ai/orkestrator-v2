@@ -2,10 +2,13 @@ import { describe, expect, test } from "bun:test";
 
 import {
   MAX_SNAPSHOT_ITEMS,
+  TASK_SNAPSHOT_STATUSES,
   TaskRegistry,
   isTaskListTool,
+  parseTaskSnapshotStatus,
   taskToolKind,
 } from "./task-list";
+import type { TaskSnapshotStatus } from "./task-list";
 
 // All tool output strings below are verbatim captures from the real
 // TaskCreate/TaskUpdate/TaskGet/TaskList tools, not invented shapes, except
@@ -435,6 +438,57 @@ describe("isTaskListTool", () => {
   test("rejects other tools", () => {
     for (const name of ["Task", "TodoWrite", "Read", undefined]) {
       expect(isTaskListTool(name)).toBe(false);
+    }
+  });
+});
+
+describe("TASK_SNAPSHOT_STATUSES", () => {
+  test("holds every member of the status union, and nothing else", () => {
+    // The list is exported so consumers outside this module validate against it
+    // instead of hand-copying it. That only helps if it stays exhaustive, and
+    // nothing about adding a member to `TaskSnapshotStatus` forces this list to
+    // grow — so the exhaustive switch below is what fails the build if it does
+    // not. Adding a status makes `unreachable` stop type-checking.
+    const seen = new Set(TASK_SNAPSHOT_STATUSES);
+    const witness = (status: TaskSnapshotStatus): boolean => {
+      switch (status) {
+        case "pending":
+        case "in_progress":
+        case "completed":
+          return seen.has(status);
+        default: {
+          const unreachable: never = status;
+          return unreachable;
+        }
+      }
+    };
+
+    expect(["pending", "in_progress", "completed"].every(
+      (status) => witness(status as TaskSnapshotStatus),
+    )).toBe(true);
+    expect(TASK_SNAPSHOT_STATUSES).toHaveLength(seen.size);
+    expect(seen.size).toBe(3);
+  });
+});
+
+describe("parseTaskSnapshotStatus", () => {
+  test("accepts the spellings the tools actually emit", () => {
+    for (const [input, expected] of [
+      ["pending", "pending"],
+      ["in_progress", "in_progress"],
+      // `[in progress]` and `[in-progress]` appear in real TaskList output.
+      ["in progress", "in_progress"],
+      ["in-progress", "in_progress"],
+      ["  In Progress  ", "in_progress"],
+      ["COMPLETED", "completed"],
+    ] as const) {
+      expect(parseTaskSnapshotStatus(input)).toBe(expected);
+    }
+  });
+
+  test("returns undefined for anything outside the union", () => {
+    for (const input of ["blocked", "", "in__progress", 1, null, undefined, {}]) {
+      expect(parseTaskSnapshotStatus(input)).toBeUndefined();
     }
   });
 });

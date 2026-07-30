@@ -283,15 +283,18 @@ mock.module("@/components/build-pipeline/BuildChatTab", () => ({
   BuildChatTab: ({
     data,
     isActive,
+    ownsGlobalShortcuts,
   }: {
     data: { pipelineId: string; environmentId: string };
     isActive: boolean;
+    ownsGlobalShortcuts?: boolean;
   }) => buildChatTabFailure ? (() => { throw buildChatTabFailure; })() : (
     <div
       data-testid="build-chat-tab"
       data-pipeline-id={data.pipelineId}
       data-environment-id={data.environmentId}
       data-active={String(isActive)}
+      data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
     />
   ),
 }));
@@ -717,6 +720,52 @@ describe("PaneLeafContainer", () => {
         environmentId: "env-hidden",
         active: "true",
       },
+    });
+  });
+
+  test("gives the build tab the keyboard only while its pane holds focus", async () => {
+    const pane = {
+      kind: "leaf" as const,
+      id: "pane-build",
+      tabs: [{
+        id: "tab-build",
+        type: "claude-build" as const,
+        buildTabData: {
+          pipelineId: "pipeline-1",
+          environmentId: "env-visible",
+          taskId: "task-1",
+        },
+      }],
+      activeTabId: "tab-build",
+    };
+    usePaneLayoutStore.setState((state) => {
+      const environments = new Map(state.environments);
+      environments.set("env-visible", {
+        root: pane,
+        activePaneId: "another-pane",
+        containerId: "container-visible",
+      });
+      return { environments };
+    });
+
+    const view = render(
+      <PaneLeafContainer
+        pane={pane}
+        environmentId="env-visible"
+        containerId="container-visible"
+        isActive
+      />,
+    );
+
+    // The build transcript's find bar listens on the document, so a pane that
+    // is merely visible must not claim Cmd+F from the focused one.
+    const buildTab = await screen.findByTestId("build-chat-tab");
+    expect(buildTab.getAttribute("data-active")).toBe("true");
+    expect(buildTab.getAttribute("data-owns-global-shortcuts")).toBe("false");
+
+    fireEvent.click(view.container.firstElementChild as HTMLElement);
+    await waitFor(() => {
+      expect(buildTab.getAttribute("data-owns-global-shortcuts")).toBe("true");
     });
   });
 

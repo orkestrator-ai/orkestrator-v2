@@ -16,7 +16,10 @@ import type {
   BuildPipeline,
   PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
-import { MAX_PIPELINE_USER_MESSAGES } from "@orkestrator/protocol/build-pipeline";
+import {
+  MAX_PIPELINE_USER_MESSAGES,
+  VERIFICATION_VERDICT_SCHEMA,
+} from "@orkestrator/protocol/build-pipeline";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type {
   JsonSchema,
@@ -102,6 +105,7 @@ class ScriptedProvider implements BuildPipelineProvider {
     sessionId: string;
     prompt: string;
     requestId: string;
+    schema?: JsonSchema;
   }> = [];
   readonly registered: string[] = [];
   disposed = 0;
@@ -133,7 +137,12 @@ class ScriptedProvider implements BuildPipelineProvider {
   ): Promise<void> {
     const error = this.sendErrors.shift();
     if (error) throw error;
-    this.sent.push({ sessionId, prompt, requestId: options.requestId });
+    this.sent.push({
+      sessionId,
+      prompt,
+      requestId: options.requestId,
+      schema: options.schema,
+    });
     this.running.delete(sessionId);
   }
 
@@ -449,6 +458,32 @@ describe("BuildPipelineService prompt dispatch", () => {
       expect(failed.error).toContain("rejected the prompt");
     });
   });
+
+  test("retries verification with the same schema after a lost response", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const built = await startBuilding(service, storage);
+      await service.advanceNow(built.id);
+      expect((await snapshot(storage, built.id)).phase).toBe("reviewing");
+
+      provider.sendErrors = [new ProviderUnavailableError("response lost")];
+      await service.advanceNow(built.id);
+
+      const pending = await snapshot(storage, built.id);
+      expect(pending.phase).toBe("verifying");
+      expect(pending.pendingPromptAttempt?.phase).toBe("verifying");
+      const requestId = pending.pendingPromptAttempt!.requestId;
+
+      await service.advanceNow(built.id);
+
+      const retried = provider.sent.find((entry) =>
+        entry.requestId === requestId
+      );
+      expect(retried?.schema).toBe(VERIFICATION_VERDICT_SCHEMA);
+      expect(
+        (await snapshot(storage, built.id)).pendingPromptAttempt,
+      ).toBeUndefined();
+    });
+  });
 });
 
 describe("BuildPipelineService structured results", () => {
@@ -506,6 +541,41 @@ describe("BuildPipelineService structured results", () => {
       ).toBe(true);
     });
   });
+
+  for (
+    const [description, value] of [
+      ["is missing the rationale field", { complete: true }],
+      [
+        "contains fields with the wrong types",
+        { complete: "yes", rationale: 7 },
+      ],
+    ] as const
+  ) {
+    test(`fails when a verification verdict ${description}`, async () => {
+      await withService(async ({ service, storage, provider }) => {
+        const built = await startBuilding(service, storage);
+        await service.advanceNow(built.id);
+        await service.advanceNow(built.id);
+        const verifying = await snapshot(storage, built.id);
+        expect(verifying.phase).toBe("verifying");
+
+        provider.structuredResult = {
+          ok: true,
+          provider: "claude",
+          requestId: verifying.sessions.at(-1)!.structuredRequestId!,
+          value,
+        };
+        await service.advanceNow(built.id);
+
+        const failed = await snapshot(storage, built.id);
+        expect(failed.phase).toBe("failed");
+        expect(failed.error).toContain(
+          "Verification returned malformed structured output",
+        );
+        expect(failed.verificationResult).toBeUndefined();
+      });
+    });
+  }
 });
 
 describe("BuildPipelineService addressing stage", () => {
@@ -982,6 +1052,7 @@ describe("BuildPipelineService provider lifecycle", () => {
 
       await service.remove(second.id);
       expect(await storage.getBuildPipeline(second.id)).toBeNull();
+      expect(provider.disposed).toBe(1);
     });
   });
 

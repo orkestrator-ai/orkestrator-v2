@@ -19,6 +19,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import { structuredReviewVerdictSummary } from "@/lib/review/structured-review-summary";
 import { cn } from "@/lib/utils";
 
@@ -40,17 +41,19 @@ function location(file: string, line: number | null): string {
  * the largest thing in a transcript, and a build pipeline appends one to a
  * stage that already scrolls.
  */
-function CollapsibleSection({
+function CollapsibleSectionFrame({
   title,
   icon,
   children,
+  isOpen,
+  setIsOpen,
 }: {
   title: string;
   icon?: React.ReactNode;
   children: React.ReactNode;
+  isOpen: boolean;
+  setIsOpen: (open: boolean) => void;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
-
   return (
     <Collapsible
       open={isOpen}
@@ -74,12 +77,53 @@ function CollapsibleSection({
   );
 }
 
+function LocalCollapsibleSection(
+  props: Omit<
+    React.ComponentProps<typeof CollapsibleSectionFrame>,
+    "isOpen" | "setIsOpen"
+  >,
+) {
+  const [isOpen, setIsOpen] = useState(false);
+  return (
+    <CollapsibleSectionFrame
+      {...props}
+      isOpen={isOpen}
+      setIsOpen={setIsOpen}
+    />
+  );
+}
+
+function PersistedCollapsibleSection({
+  expansionKey,
+  ...props
+}: Omit<
+  React.ComponentProps<typeof CollapsibleSectionFrame>,
+  "isOpen" | "setIsOpen"
+> & {
+  expansionKey: string;
+}) {
+  const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
+  return (
+    <CollapsibleSectionFrame
+      {...props}
+      isOpen={isOpen}
+      setIsOpen={setIsOpen}
+    />
+  );
+}
+
 /**
  * Whether sections render collapsed. Carried in context so every section reads
  * one stable value: a wrapper component recreated per render would remount the
  * sections and throw away whatever the user had expanded.
  */
-const CollapsibleSectionsContext = createContext(false);
+interface CollapsibleSectionsContextValue {
+  collapsible: boolean;
+  sectionExpansionKey?: string;
+}
+
+const CollapsibleSectionsContext =
+  createContext<CollapsibleSectionsContextValue>({ collapsible: false });
 
 function Section({
   title,
@@ -90,13 +134,25 @@ function Section({
   icon?: React.ReactNode;
   children: React.ReactNode;
 }) {
-  const collapsible = useContext(CollapsibleSectionsContext);
+  const { collapsible, sectionExpansionKey } =
+    useContext(CollapsibleSectionsContext);
 
   if (collapsible) {
+    if (sectionExpansionKey) {
+      return (
+        <PersistedCollapsibleSection
+          title={title}
+          icon={icon}
+          expansionKey={`${sectionExpansionKey}/${encodeURIComponent(title)}`}
+        >
+          {children}
+        </PersistedCollapsibleSection>
+      );
+    }
     return (
-      <CollapsibleSection title={title} icon={icon}>
+      <LocalCollapsibleSection title={title} icon={icon}>
         {children}
-      </CollapsibleSection>
+      </LocalCollapsibleSection>
     );
   }
 
@@ -142,6 +198,12 @@ export interface StructuredReviewReportViewProps {
   /** Render every section collapsed behind a disclosure. */
   collapsibleSections?: boolean;
   /**
+   * Stable prefix for section expansion state. Transcript callers provide this
+   * so virtualized unmounts do not reset subsections; standalone reports omit
+   * it and keep their transient local state.
+   */
+  sectionExpansionKey?: string;
+  /**
    * Offer the raw report JSON. Off inside a transcript, where the surrounding
    * messages are prose and a JSON dump reads as a rendering failure.
    */
@@ -156,7 +218,12 @@ export interface StructuredReviewReportViewProps {
 
 export function StructuredReviewReportView(props: StructuredReviewReportViewProps) {
   return (
-    <CollapsibleSectionsContext.Provider value={props.collapsibleSections ?? false}>
+    <CollapsibleSectionsContext.Provider
+      value={{
+        collapsible: props.collapsibleSections ?? false,
+        sectionExpansionKey: props.sectionExpansionKey,
+      }}
+    >
       <ReportArticle {...props} />
     </CollapsibleSectionsContext.Provider>
   );

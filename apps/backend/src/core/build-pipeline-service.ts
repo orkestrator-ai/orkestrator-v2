@@ -14,6 +14,7 @@ import {
   isBuildPipeline,
   isActiveBuildPhase,
   isStartBuildPipelineInput,
+  isVerificationVerdict,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
   VERIFICATION_VERDICT_SCHEMA,
@@ -1253,10 +1254,12 @@ export class BuildPipelineService {
     }
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
-    const complete = result.value?.complete === true;
-    const rationale = typeof result.value?.rationale === "string"
-      ? result.value.rationale
-      : "Verification returned no rationale.";
+    if (!isVerificationVerdict(result.value)) {
+      throw new Error(
+        "Verification returned malformed structured output: expected exactly a boolean complete field and a string rationale field",
+      );
+    }
+    const { complete, rationale } = result.value;
     pipeline.verificationResult = complete ? "pass" : "fail";
     pipeline.verificationFeedback = rationale;
     if (complete) {
@@ -1540,13 +1543,6 @@ export class BuildPipelineService {
   }
 
   private async provider(pipeline: BuildPipeline): Promise<BuildPipelineProvider> {
-    if (this.options.provider) {
-      const provider = await this.options.provider(pipeline);
-      for (const session of pipeline.sessions) {
-        provider.registerSession?.(session.sdkSessionId);
-      }
-      return provider;
-    }
     const providerKey = `${pipeline.environmentId}:${pipeline.agentType}`;
     const cached = this.providers.get(providerKey);
     if (cached) {
@@ -1554,6 +1550,14 @@ export class BuildPipelineService {
         cached.registerSession?.(session.sdkSessionId);
       }
       return cached;
+    }
+    if (this.options.provider) {
+      const provider = await this.options.provider(pipeline);
+      for (const session of pipeline.sessions) {
+        provider.registerSession?.(session.sdkSessionId);
+      }
+      this.providers.set(providerKey, provider);
+      return provider;
     }
     const environment = await this.storage.getEnvironment(pipeline.environmentId);
     if (!environment) throw new Error("Build environment no longer exists");

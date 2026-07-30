@@ -20,10 +20,18 @@ import { structuredReviewVerdictSummary } from "@/lib/review/structured-review-s
 
 export type JsonContainer = Record<string, unknown> | unknown[];
 
-export type JsonPayload =
+export type JsonPayload = (
   | { kind: "structured-review"; report: StructuredReviewReport }
   | { kind: "verification"; verdict: VerificationVerdict }
-  | { kind: "json"; value: JsonContainer };
+  | { kind: "json"; value: JsonContainer }
+) & {
+  /**
+   * The exact bounded JSON document the agent wrote, excluding only an outer
+   * Markdown fence. Parsed values cannot preserve duplicate keys, escapes, or
+   * numeric notation, so the raw disclosure must render this source directly.
+   */
+  source: string;
+};
 
 /**
  * Above this, the parse is not worth paying on every render of every text part.
@@ -95,10 +103,14 @@ export function parseJsonPayload(content: string): JsonPayload | null {
     allowLegacyTestResults: true,
   });
   if (report.success) {
-    return { kind: "structured-review", report: report.data };
+    return {
+      kind: "structured-review",
+      report: report.data,
+      source: detected.source,
+    };
   }
   if (isVerificationVerdict(value)) {
-    return { kind: "verification", verdict: value };
+    return { kind: "verification", verdict: value, source: detected.source };
   }
   // A fenced block of arbitrary JSON was written as code and stays code.
   // Markdown renders it verbatim, whereas the labelled tree humanizes keys and
@@ -106,7 +118,11 @@ export function parseJsonPayload(content: string): JsonPayload | null {
   // recognized contracts — which have renderers that say more than the source
   // does — are worth folding out of a code block.
   if (detected.fenced) return null;
-  return { kind: "json", value: value as JsonContainer };
+  return {
+    kind: "json",
+    value: value as JsonContainer,
+    source: detected.source,
+  };
 }
 
 function isAcronym(word: string): boolean {

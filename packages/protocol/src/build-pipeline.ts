@@ -49,19 +49,6 @@ export type PipelineSessionPhase =
   | "resolve-conflicts";
 
 /**
- * The verification turn's answer: did the committed branch meet the ticket?
- *
- * Shared rather than declared at the point of use so the supervisor that
- * enforces the schema and the transcript that renders the answer cannot drift
- * apart — a renderer guessing at the shape would silently fall back to raw JSON
- * the day a field is added.
- */
-export interface VerificationVerdict {
-  complete: boolean;
-  rationale: string;
-}
-
-/**
  * The one declaration both the schema and the guard are built from.
  *
  * Sharing the *schema object* alone would not have prevented drift: a guard
@@ -72,9 +59,24 @@ export interface VerificationVerdict {
 const VERIFICATION_VERDICT_FIELDS = {
   complete: "boolean",
   rationale: "string",
-} as const satisfies Record<keyof VerificationVerdict, "boolean" | "string">;
+} as const satisfies Record<string, "boolean" | "string">;
 
 type VerificationVerdictField = keyof typeof VERIFICATION_VERDICT_FIELDS;
+type VerificationVerdictFieldType<T extends "boolean" | "string"> =
+  T extends "boolean" ? boolean : string;
+
+/**
+ * The verification turn's answer: did the committed branch meet the ticket?
+ *
+ * Shared rather than declared at the point of use so the supervisor that
+ * enforces the schema and the transcript that renders the answer cannot drift
+ * apart — a renderer guessing at the shape would silently fall back to raw JSON
+ * the day a field is added.
+ */
+export type VerificationVerdict = {
+  -readonly [Field in VerificationVerdictField]:
+    VerificationVerdictFieldType<(typeof VERIFICATION_VERDICT_FIELDS)[Field]>;
+};
 
 const VERIFICATION_VERDICT_FIELD_ENTRIES = Object.entries(
   VERIFICATION_VERDICT_FIELDS,
@@ -85,16 +87,23 @@ const VERIFICATION_VERDICT_FIELD_ENTRIES = Object.entries(
  * constrains the turn; a consumer mutating it would change what the model is
  * asked for everywhere at once.
  */
-export const VERIFICATION_VERDICT_SCHEMA: Record<string, unknown> = Object.freeze({
-  type: "object",
-  additionalProperties: false,
-  required: VERIFICATION_VERDICT_FIELD_ENTRIES.map(([field]) => field),
-  properties: Object.fromEntries(
+const VERIFICATION_VERDICT_REQUIRED = Object.freeze(
+  VERIFICATION_VERDICT_FIELD_ENTRIES.map(([field]) => field),
+);
+const VERIFICATION_VERDICT_PROPERTIES = Object.freeze(
+  Object.fromEntries(
     VERIFICATION_VERDICT_FIELD_ENTRIES.map(([field, type]) => [
       field,
       Object.freeze({ type }),
     ]),
   ),
+);
+
+export const VERIFICATION_VERDICT_SCHEMA: Record<string, unknown> = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: VERIFICATION_VERDICT_REQUIRED,
+  properties: VERIFICATION_VERDICT_PROPERTIES,
 });
 
 /**

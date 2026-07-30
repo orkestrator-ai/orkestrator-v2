@@ -177,9 +177,11 @@ describe("JsonPayloadPart", () => {
   test("keeps the exact document reachable behind a raw disclosure", () => {
     // The tree humanizes keys, so it cannot show what the agent actually
     // wrote. Nothing may be unreachable without leaving the transcript.
+    const source =
+      '{"stageName":"verify","duplicate":1,"duplicate":2,"exponent":1e3}';
     render(
       <JsonPayloadPart
-        payload={payloadOf('{"stageName":"verify"}')}
+        payload={payloadOf(source)}
         expansionKey="payload"
       />,
     );
@@ -188,7 +190,26 @@ describe("JsonPayloadPart", () => {
     expect(document.body.textContent).not.toContain('"stageName"');
 
     fireEvent.click(screen.getByText("Raw JSON"));
-    expect(document.body.textContent).toContain('"stageName": "verify"');
+    expect(
+      screen.getByText((_, element) =>
+        element?.tagName === "PRE" && element.textContent === source
+      ),
+    ).toBeTruthy();
+  });
+
+  test("opens a deeply nested bounded payload without pretty-print amplification", () => {
+    const source = `${"[".repeat(5_000)}0${"]".repeat(5_000)}`;
+    const payload = payloadOf(source);
+    const view = render(
+      <JsonPayloadPart payload={payload} expansionKey="deep-payload" />,
+    );
+
+    fireEvent.click(screen.getByText("JSON list"));
+    expect(screen.getByText("Raw JSON")).toBeTruthy();
+    expect(view.container.querySelector("pre")).toBeNull();
+
+    fireEvent.click(screen.getByText("Raw JSON"));
+    expect(view.container.querySelector("pre")?.textContent).toBe(source);
   });
 });
 
@@ -229,6 +250,43 @@ describe("JsonPayloadPart expansion persistence", () => {
     );
 
     expect(screen.getByText("Pending.")).toBeTruthy();
+  });
+
+  test("an opened raw disclosure survives the same unmount", () => {
+    const source = '{"stageName":"verify"}';
+    const payload = payloadOf(source);
+    const view = render(
+      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
+    );
+
+    fireEvent.click(screen.getByText("JSON payload"));
+    fireEvent.click(screen.getByText("Raw JSON"));
+    expect(view.container.querySelector("pre")?.textContent).toBe(source);
+
+    view.unmount();
+    const remounted = render(
+      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
+    );
+    expect(remounted.container.querySelector("pre")?.textContent).toBe(source);
+  });
+
+  test("an opened structured-review section survives the same unmount", () => {
+    const payload = payloadOf(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT));
+    const view = render(
+      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
+    );
+
+    fireEvent.click(screen.getByText("Structured review report"));
+    fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
+    expect(screen.getByText(TEST_STRUCTURED_REVIEW_REPORT.whatChanged.overview))
+      .toBeTruthy();
+
+    view.unmount();
+    render(
+      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
+    );
+    expect(screen.getByText(TEST_STRUCTURED_REVIEW_REPORT.whatChanged.overview))
+      .toBeTruthy();
   });
 
   test("two payloads with different keys expand independently", () => {
@@ -318,6 +376,23 @@ describe("NativeMessage JSON payload handling", () => {
     expect(screen.queryByText("JSON payload")).toBeNull();
     expect(document.body.textContent).toContain('{"a":1}');
   });
+
+  test("shows legacy user JSON from message.content as written", () => {
+    render(
+      <NativeMessage
+        message={{
+          id: "user-legacy",
+          role: "user",
+          content: '{"complete":true,"rationale":"Keep raw."}',
+          createdAt: "2026-07-30T10:00:00.000Z",
+          parts: [],
+        }}
+      />,
+    );
+
+    expect(screen.queryByText("Verification passed")).toBeNull();
+    expect(document.body.textContent).toContain('"rationale"');
+  });
 });
 
 describe("NativeMessage find-index alignment", () => {
@@ -379,6 +454,27 @@ describe("NativeMessage find-index alignment", () => {
     // The three "verify" occurrences inside the folded document are not
     // counted, so the prose match keeps the ordinal the DOM will produce.
     expect(searchText.match(/verify/g) ?? []).toHaveLength(1);
+  });
+
+  test("an expanded payload still exposes only its trigger to find", () => {
+    const message = {
+      id: "assistant-expanded",
+      role: "assistant" as const,
+      content: "",
+      createdAt: "2026-07-30T10:00:00.000Z",
+      parts: [
+        { type: "text" as const, content: '{"verify":"verify"}' },
+        { type: "text" as const, content: "Then verify the branch." },
+      ],
+    };
+    const view = render(<NativeMessage message={message} />);
+
+    fireEvent.click(screen.getByText("JSON payload"));
+
+    const searchText = getNativeMessageSearchText(message);
+    expect(searchText).toBe(renderedSearchText(view.container));
+    expect(searchText.match(/verify/g) ?? []).toHaveLength(1);
+    expect(document.body.textContent).toContain("verify");
   });
 
   test("a user's own JSON message is still indexed as written", () => {

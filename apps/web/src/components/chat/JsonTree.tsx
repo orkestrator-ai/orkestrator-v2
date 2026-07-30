@@ -62,6 +62,17 @@ function TruncationNote({ hidden }: { hidden: number }) {
   );
 }
 
+function objectBranchExpansionKey(prefix: string, key: string): string {
+  // JSON string escaping is total for JavaScript strings, including lone
+  // surrogate code units that encodeURIComponent rejects. The typed array
+  // segment also keeps object keys distinct from array indices and path slashes.
+  return `${prefix}/${JSON.stringify(["key", key])}`;
+}
+
+function arrayBranchExpansionKey(prefix: string, index: number): string {
+  return `${prefix}/${JSON.stringify(["index", index])}`;
+}
+
 function Branch({
   label,
   value,
@@ -133,7 +144,7 @@ function ObjectFields({
                 // Keyed by the document key rather than by position, so
                 // re-rendering a payload whose fields moved keeps the reader's
                 // open branches attached to the same data.
-                expansionKey={`${expansionKey}/${key}`}
+                expansionKey={objectBranchExpansionKey(expansionKey, key)}
               />
             );
           }
@@ -207,7 +218,7 @@ function ArrayItems({
                 label={label ? `${index + 1}. ${label}` : `Item ${index + 1}`}
                 value={item}
                 depth={depth}
-                expansionKey={`${expansionKey}/${index}`}
+                expansionKey={arrayBranchExpansionKey(expansionKey, index)}
               />
             );
           })}
@@ -230,13 +241,15 @@ export function JsonTree({
   /** Prefix for the keys this subtree's disclosures persist their state under. */
   expansionKey: string;
 }) {
-  // A payload nested past the render depth is shown as source rather than
-  // silently stopped: the reader must still be able to see all of it.
+  // Do not re-serialize the remaining value here. Pretty-print indentation can
+  // expand a small, deeply nested document quadratically and exhaust the
+  // renderer. The payload-level Raw JSON disclosure retains the exact bounded
+  // source for readers who need the rest of the document.
   if (depth >= MAX_JSON_RENDER_DEPTH) {
     return (
-      <pre className="max-h-64 overflow-auto rounded-md border border-border/50 bg-background/60 p-2 text-xs text-foreground/80">
-        {JSON.stringify(value, null, 2)}
-      </pre>
+      <p className="text-xs italic text-muted-foreground/70">
+        Maximum nesting depth reached — open Raw JSON for the full payload.
+      </p>
     );
   }
   if (Array.isArray(value)) {

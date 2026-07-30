@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { marked } from "marked";
 import {
   getNativeMessageSearchText,
   markdownToAgentSearchText,
@@ -83,6 +84,20 @@ describe("getNativeMessageSearchText", () => {
       parts: [{ type: "text", content: "**different**" }],
     })).toBe("error content");
   });
+
+  test("falls back to the original source when Markdown parsing throws", () => {
+    const failingParser = (() => {
+      throw new Error("parser extension failed");
+    }) as unknown as typeof marked;
+    const parseSpy = spyOn(marked, "parse")
+      .mockImplementationOnce(failingParser);
+    try {
+      expect(markdownToAgentSearchText("source **text**"))
+        .toBe("source **text**");
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
 });
 
 describe("getNativeMessageSearchText for folded JSON payloads", () => {
@@ -150,6 +165,15 @@ describe("getNativeMessageSearchText for folded JSON payloads", () => {
       ...base,
       content: '{"complete":false,"rationale":"Unmet."}',
     })).toBe("Verification failedUnmet.");
+  });
+
+  test("keeps legacy user JSON from message.content indexed as written", () => {
+    expect(getNativeMessageSearchText({
+      ...base,
+      id: "user-legacy",
+      role: "user",
+      content: '{"complete":true,"rationale":"Keep raw."}',
+    })).toContain('"rationale"');
   });
 
   test("keeps a prose sibling part indexed alongside a folded one", () => {

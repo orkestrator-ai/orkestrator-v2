@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { StructuredReviewReportView } from "./StructuredReviewReportView";
 
 afterEach(cleanup);
+beforeEach(() => {
+  useMessagePartExpansionStore.getState().reset();
+});
 
 const report: StructuredReviewReport = {
   reviewScope: {
@@ -253,6 +257,29 @@ describe("StructuredReviewReportView", () => {
         report={{ ...report }}
         collapsibleSections
         className="changed"
+      />,
+    );
+
+    expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
+  });
+
+  test("keeps a persisted section open across a full unmount", () => {
+    const view = render(
+      <StructuredReviewReportView
+        report={report}
+        collapsibleSections
+        sectionExpansionKey="review-1/section"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
+    expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
+
+    view.unmount();
+    render(
+      <StructuredReviewReportView
+        report={report}
+        collapsibleSections
+        sectionExpansionKey="review-1/section"
       />,
     );
 

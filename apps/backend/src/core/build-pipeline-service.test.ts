@@ -6,6 +6,9 @@ import type {
   BuildPipeline,
   PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
+import {
+  VERIFICATION_VERDICT_SCHEMA,
+} from "@orkestrator/protocol/build-pipeline";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type {
   JsonSchema,
@@ -67,7 +70,11 @@ const cleanReview: StructuredReviewReport = {
 class FakeProvider implements BuildPipelineProvider {
   readonly agent = "claude" as const;
   readonly phases = new Map<string, PipelineSessionPhase>();
-  readonly sent: Array<{ sessionId: string; requestId: string }> = [];
+  readonly sent: Array<{
+    sessionId: string;
+    requestId: string;
+    schema?: JsonSchema;
+  }> = [];
   private counter = 0;
 
   async createSession(phase: PipelineSessionPhase): Promise<string> {
@@ -81,7 +88,11 @@ class FakeProvider implements BuildPipelineProvider {
     _prompt: string,
     options: { requestId: string; schema?: JsonSchema },
   ): Promise<void> {
-    this.sent.push({ sessionId, requestId: options.requestId });
+    this.sent.push({
+      sessionId,
+      requestId: options.requestId,
+      schema: options.schema,
+    });
   }
 
   async status(_sessionId: string): Promise<ProviderStatus> {
@@ -622,6 +633,10 @@ describe("BuildPipelineService", () => {
       expect(completed.sessions.every((session) =>
         Array.isArray(session.messages))).toBe(true);
       expect(provider.sent).toHaveLength(4);
+      const verificationDispatch = provider.sent.find((entry) =>
+        provider.phases.get(entry.sessionId) === "verify"
+      );
+      expect(verificationDispatch?.schema).toBe(VERIFICATION_VERDICT_SCHEMA);
       expect(completed.verificationResult).toBe("pass");
     });
   });

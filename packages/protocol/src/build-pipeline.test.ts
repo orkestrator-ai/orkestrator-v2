@@ -52,6 +52,103 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline({ ...snapshot(), currentSessionIndex: 0 })).toBe(false);
   });
 
+  test("rejects every malformed top-level snapshot field", () => {
+    const session = {
+      phase: "build" as const,
+      iteration: 0,
+      sessionKey: "build-0",
+      sdkSessionId: "session-1",
+      status: "running" as const,
+      startedAt: "2026-07-29T00:00:00.000Z",
+      label: "Build",
+    };
+    const withSession: BuildPipeline = {
+      ...snapshot(),
+      sessions: [session],
+      currentSessionIndex: 0,
+    };
+    const invalid: Array<[string, unknown]> = [
+      ["non-record", null],
+      ["array", []],
+      ["controller", { ...snapshot(), controller: "client" }],
+      ["id type", { ...snapshot(), id: 1 }],
+      ["taskId type", { ...snapshot(), taskId: 1 }],
+      ["projectId type", { ...snapshot(), projectId: 1 }],
+      ["environmentId type", { ...snapshot(), environmentId: 1 }],
+      ["environmentType", { ...snapshot(), environmentType: "remote" }],
+      ["agentType", { ...snapshot(), agentType: "unknown" }],
+      ["phase", { ...snapshot(), phase: "unknown" }],
+      ["sessions type", { ...snapshot(), sessions: {} }],
+      ["session item", { ...snapshot(), sessions: [{}] }],
+      ["negative iteration", { ...snapshot(), iteration: -1 }],
+      ["fractional iteration", { ...snapshot(), iteration: 0.5 }],
+      ["fractional maxIterations", { ...snapshot(), maxIterations: 1.5 }],
+      [
+        "unsafe maxIterations",
+        { ...snapshot(), maxIterations: Number.MAX_SAFE_INTEGER + 1 },
+      ],
+      ["negative backendRevision", { ...snapshot(), backendRevision: -1 }],
+      [
+        "fractional backendRevision",
+        { ...snapshot(), backendRevision: 0.5 },
+      ],
+      ["taskTitle type", { ...snapshot(), taskTitle: 1 }],
+      ["taskSnapshot", { ...snapshot(), taskSnapshot: {} }],
+      ["verificationFeedback", { ...snapshot(), verificationFeedback: 1 }],
+      ["structuredReview", { ...snapshot(), structuredReview: {} }],
+      [
+        "structuredReviewRequestId",
+        { ...snapshot(), structuredReviewRequestId: "" },
+      ],
+      ["pausedFromPhase", { ...snapshot(), pausedFromPhase: "paused" }],
+      ["error", { ...snapshot(), error: 1 }],
+      ["failureContext", { ...snapshot(), failureContext: {} }],
+      ["reconnectAttempt", { ...snapshot(), reconnectAttempt: {} }],
+      ["pendingPromptAttempt", { ...snapshot(), pendingPromptAttempt: {} }],
+      ["activePromptContext", { ...snapshot(), activePromptContext: {} }],
+      ["pendingUserMessages", { ...snapshot(), pendingUserMessages: {} }],
+      ["reviewRetryRequested", { ...snapshot(), reviewRetryRequested: 1 }],
+      ["source", { ...snapshot(), source: { type: "unknown" } }],
+      ["featurePlanId", { ...snapshot(), featurePlanId: "" }],
+      ["admissionKey", { ...snapshot(), admissionKey: "" }],
+      ["sourceLinkedAt", { ...snapshot(), sourceLinkedAt: "invalid" }],
+      [
+        "completionCommentStatus",
+        { ...snapshot(), completionCommentStatus: "unknown" },
+      ],
+      [
+        "completionCommentError",
+        { ...snapshot(), completionCommentError: 1 },
+      ],
+      [
+        "completionCommentId",
+        { ...snapshot(), completionCommentId: "" },
+      ],
+      [
+        "completionCommentPostedAt",
+        { ...snapshot(), completionCommentPostedAt: "invalid" },
+      ],
+      [
+        "fractional currentSessionIndex",
+        { ...snapshot(), currentSessionIndex: -0.5 },
+      ],
+      [
+        "negative index with sessions",
+        { ...withSession, currentSessionIndex: -1 },
+      ],
+      [
+        "out-of-range index with sessions",
+        { ...withSession, currentSessionIndex: 1 },
+      ],
+    ];
+
+    for (const [field, value] of invalid) {
+      if (isBuildPipeline(value)) {
+        throw new Error(`Accepted malformed snapshot field: ${field}`);
+      }
+    }
+  });
+
   test("validates every persisted optional state branch", () => {
     const valid = {
       ...snapshot(),
@@ -463,13 +560,49 @@ describe("verification verdict contract", () => {
     expect(isVerificationVerdict({ ...sample, extra: 1 })).toBe(false);
   });
 
-  test("the schema cannot be mutated by a consumer", () => {
+  test("the schema and all nested containers cannot be mutated by a consumer", () => {
     // The supervisor hands this object straight to the provider, so a mutation
     // here would change what every future turn is constrained to.
+    const required = VERIFICATION_VERDICT_SCHEMA.required as string[];
+    const properties = VERIFICATION_VERDICT_SCHEMA.properties as Record<
+      string,
+      { type: string }
+    >;
+
     expect(Object.isFrozen(VERIFICATION_VERDICT_SCHEMA)).toBe(true);
+    expect(Object.isFrozen(required)).toBe(true);
+    expect(Object.isFrozen(properties)).toBe(true);
+    expect(Object.isFrozen(properties.complete)).toBe(true);
+    expect(Object.isFrozen(properties.rationale)).toBe(true);
+
     expect(() => {
       (VERIFICATION_VERDICT_SCHEMA as { type: string }).type = "array";
     }).toThrow();
+    expect(() => {
+      required.push("extra");
+    }).toThrow();
+    expect(() => {
+      required.pop();
+    }).toThrow();
+    expect(() => {
+      properties.extra = { type: "number" };
+    }).toThrow();
+    expect(() => {
+      delete properties.complete;
+    }).toThrow();
+    expect(() => {
+      properties.complete.type = "string";
+    }).toThrow();
+
     expect(VERIFICATION_VERDICT_SCHEMA.type).toBe("object");
+    expect(VERIFICATION_VERDICT_SCHEMA).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: ["complete", "rationale"],
+      properties: {
+        complete: { type: "boolean" },
+        rationale: { type: "string" },
+      },
+    });
   });
 });

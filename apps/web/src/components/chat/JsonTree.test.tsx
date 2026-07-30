@@ -85,9 +85,9 @@ describe("JsonTree arrays", () => {
 });
 
 describe("JsonTree bounds", () => {
-  test("shows the source for a branch past the render depth", () => {
-    // Rendering deeper costs more than the JSON is worth reading, but the
-    // reader must still be able to see all of it.
+  test("stops safely at the render depth without re-serializing the branch", () => {
+    // The payload-level raw disclosure holds the bounded original source.
+    // Re-stringifying a deeply nested parsed value here can expand quadratically.
     render(
       <JsonTree
         value={{ deep: "value" }}
@@ -96,7 +96,8 @@ describe("JsonTree bounds", () => {
       />,
     );
 
-    expect(screen.getByText(/"deep": "value"/)).toBeTruthy();
+    expect(screen.getByText(/Maximum nesting depth reached/)).toBeTruthy();
+    expect(screen.queryByText(/"deep": "value"/)).toBeNull();
   });
 
   test("renders one level below the depth cap as structure", () => {
@@ -177,5 +178,35 @@ describe("JsonTree expansion persistence", () => {
 
     // Distinct prefixes, so opening one must not open the other.
     expect(screen.getAllByText("no")).toHaveLength(1);
+  });
+
+  test("keeps delimiter-bearing object keys distinct from nested paths", () => {
+    render(
+      <JsonTree
+        value={{
+          "a/b": { direct: "open" },
+          a: { b: { nested: "closed" } },
+        }}
+        expansionKey="msg/tree"
+      />,
+    );
+
+    fireEvent.click(screen.getByText("A/b"));
+    expect(screen.getByText("open")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("A"));
+    expect(screen.getByText("B")).toBeTruthy();
+    expect(screen.queryByText("closed")).toBeNull();
+  });
+
+  test("accepts valid JSON keys containing lone UTF-16 surrogates", () => {
+    expect(() =>
+      render(
+        <JsonTree
+          value={{ ["\ud800"]: { value: "reachable" } }}
+          expansionKey="msg/tree"
+        />,
+      )
+    ).not.toThrow();
   });
 });

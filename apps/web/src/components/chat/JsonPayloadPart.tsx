@@ -63,10 +63,10 @@ function borderClass(payload: JsonPayload): string {
  * render depth — has to remain reachable without leaving the transcript.
  */
 function RawJsonDisclosure({
-  value,
+  source,
   expansionKey,
 }: {
-  value: unknown;
+  source: string;
   expansionKey: string;
 }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
@@ -84,7 +84,7 @@ function RawJsonDisclosure({
       </CollapsibleTrigger>
       <CollapsibleContent>
         <pre className="mt-1 max-h-80 overflow-auto rounded-md border border-border/50 bg-background/60 p-2 text-xs text-foreground/80">
-          {JSON.stringify(value, null, 2)}
+          {source}
         </pre>
       </CollapsibleContent>
     </Collapsible>
@@ -114,7 +114,10 @@ export function JsonPayloadPart({
         borderClass(payload),
       )}
     >
-      <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-muted/40">
+      <CollapsibleTrigger
+        data-agent-chat-search-content="true"
+        className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-muted/40"
+      >
         <ChevronRight
           className={cn(
             "size-3.5 shrink-0 text-muted-foreground transition-transform",
@@ -141,6 +144,7 @@ export function JsonPayloadPart({
               className="border-0 bg-transparent p-0 shadow-none @sm:p-0"
               report={payload.report}
               collapsibleSections
+              sectionExpansionKey={`${expansionKey}/report-section`}
               showRawJson={false}
               showHeading={false}
             />
@@ -155,7 +159,7 @@ export function JsonPayloadPart({
                 expansionKey={`${expansionKey}/tree`}
               />
               <RawJsonDisclosure
-                value={payload.value}
+                source={payload.source}
                 expansionKey={`${expansionKey}/raw`}
               />
             </>

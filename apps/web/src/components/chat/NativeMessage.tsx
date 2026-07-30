@@ -1180,7 +1180,7 @@ function TextPart({
           never be highlighted and shift every sibling part's occurrence
           numbering. See `getNativeMessageSearchText`.
         */}
-        <div data-agent-chat-search-content="true">
+        <div>
           <JsonPayloadPart payload={jsonPayload} expansionKey={expansionKey} />
         </div>
         {showCopy ? (

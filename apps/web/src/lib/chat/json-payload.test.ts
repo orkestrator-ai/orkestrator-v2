@@ -142,6 +142,7 @@ describe("parseJsonPayload", () => {
     expect(payload).toEqual({
       kind: "verification",
       verdict: { complete: true, rationale: "Working tree is clean." },
+      source: '{"complete":true,"rationale":"Working tree is clean."}',
     });
   });
 
@@ -161,7 +162,29 @@ describe("parseJsonPayload", () => {
     expect(payload).toEqual({
       kind: "json",
       value: { status: "ok", items: [1] },
+      source: '{"status":"ok","items":[1]}',
     });
+  });
+
+  test("retains the exact source instead of reconstructing it from parsed data", () => {
+    const source =
+      '{"duplicate":1,"duplicate":2,"exponent":1e3,"escaped":"\\u0041"}';
+    const payload = parseJsonPayload(source);
+
+    expect(payload?.kind).toBe("json");
+    expect(payload?.source).toBe(source);
+    if (payload?.kind !== "json") throw new Error("unreachable");
+    expect(payload.value).toEqual({
+      duplicate: 2,
+      exponent: 1000,
+      escaped: "A",
+    });
+  });
+
+  test("retains the document inside a recognized Markdown fence", () => {
+    const source = '{"complete":true,"rationale":"Clean."}';
+    expect(parseJsonPayload(`\`\`\`json\n${source}\n\`\`\``)?.source)
+      .toBe(source);
   });
 
   test("leaves a fenced block of unrecognized JSON to the markdown renderer", () => {

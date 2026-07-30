@@ -1720,6 +1720,34 @@ export function settlePreparedBodyResponse(
     });
 }
 
+export function settleRewrittenProxyBodyResponse(
+  response: ServerResponse,
+  statusCode: number,
+  headers: OutgoingHttpHeaders,
+  preparation: Promise<PreparedBody>,
+  isSettled: () => boolean,
+  finish: () => void,
+  fail: (error: Error) => void,
+): void {
+  void preparation
+    .then((prepared) => {
+      if (isSettled() || response.destroyed) return;
+      headers["content-length"] = prepared.body.byteLength;
+      if (prepared.variesByEncoding) appendHeadersVary(headers, "Accept-Encoding");
+      if (prepared.encoding === "identity") {
+        delete headers["content-encoding"];
+      } else {
+        headers["content-encoding"] = prepared.encoding;
+      }
+      response.writeHead(statusCode, headers);
+      response.end(prepared.body);
+      finish();
+    })
+    .catch((error: unknown) => {
+      fail(error instanceof Error ? error : new Error(String(error)));
+    });
+}
+
 function bodyResponse(
   response: ServerResponse,
   statusCode: number,
@@ -2865,7 +2893,12 @@ export class OrkestratorGateway {
     let replay:
       | ReturnType<GatewayEventReplay["since"]>
       | null = null;
-    let connectedCursor = this.eventReplay.latestCursor;
+    // An invalid cursor is not safe to echo as an SSE id, and advancing to the
+    // latest revision here could make a disconnect before reconcile-required
+    // permanently skip the snapshot recovery signal.
+    let connectedCursor: string | null = cursor.kind === "invalid"
+      ? null
+      : this.eventReplay.latestCursor;
     let replayStatus: "fresh" | "caught-up" | "replayed" | "reconcile" = "fresh";
     let reconcileReason: "invalid-cursor" | "prior-generation" | "cursor-expired" | null = null;
     let requestedRevision: number | null = null;
@@ -3533,11 +3566,15 @@ export class OrkestratorGateway {
     this.clients.set(client, state);
     client.write(": connected\n\n");
     const explicitSince = url.searchParams.get("since");
-    const rawCursor = explicitSince !== null
-      ? explicitSince
-      : Array.isArray(request.headers["last-event-id"])
-        ? request.headers["last-event-id"][0]
-        : request.headers["last-event-id"];
+    const lastEventId = Array.isArray(request.headers["last-event-id"])
+      ? request.headers["last-event-id"][0]
+      : request.headers["last-event-id"];
+    // A native EventSource reuses its original URL while advancing
+    // Last-Event-ID on automatic retries. Prefer that newer browser-owned
+    // cursor; direct-fetch clients still fall back to the explicit query.
+    const rawCursor = typeof lastEventId === "string" && lastEventId.trim().length > 0
+      ? lastEventId
+      : explicitSince;
     const isTerminalOnly = state.prefixes === null
       && state.includedPrefixes?.every((prefix) => prefix.startsWith(DROPPABLE_EVENT_PREFIX))
       && state.excludedPrefixes?.some((prefix) => DROPPABLE_EVENT_PREFIX.startsWith(prefix));
@@ -3845,25 +3882,19 @@ export class OrkestratorGateway {
             bodySettled = true;
             delete responseHeaders["content-encoding"];
             stripTransformedRepresentationHeaders(responseHeaders);
-            void prepareCompressedBody(
-              rewritten,
-              contentType,
-              compressionContext,
-            ).then((prepared) => {
-              if (settled || response.destroyed) return;
-              responseHeaders["content-length"] = prepared.body.byteLength;
-              if (prepared.variesByEncoding) appendHeadersVary(responseHeaders, "Accept-Encoding");
-              if (prepared.encoding === "identity") {
-                delete responseHeaders["content-encoding"];
-              } else {
-                responseHeaders["content-encoding"] = prepared.encoding;
-              }
-              response.writeHead(proxyResponse.statusCode ?? 502, responseHeaders);
-              response.end(prepared.body);
-              finish();
-            }).catch((error: unknown) => {
-              fail(error instanceof Error ? error : new Error(String(error)));
-            });
+            settleRewrittenProxyBodyResponse(
+              response,
+              proxyResponse.statusCode ?? 502,
+              responseHeaders,
+              prepareCompressedBody(
+                rewritten,
+                contentType,
+                compressionContext,
+              ),
+              () => settled,
+              finish,
+              fail,
+            );
           });
           proxyResponse.once("error", (error) => abortBody(error));
           proxyResponse.once("aborted", () => abortBody(new Error("Browser preview response was aborted")));

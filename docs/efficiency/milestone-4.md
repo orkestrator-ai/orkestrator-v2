@@ -79,7 +79,7 @@ Primary areas:
 - [x] Invalid cursor and prior generation reconcile.
 - [x] Replay ring count and byte bounds hold during a burst.
 - [x] Event emitted between subscribe and replay calculation is not lost.
-- [ ] Disconnect during handshake does not skip replay on reconnect.
+- [x] Disconnect during handshake does not skip replay on reconnect.
 - [x] Connected frame echoes the client cursor.
 - [x] Terminal output does not enter the main replay ring.
 - [ ] Resource manifest returns stable revisions for unchanged state.
@@ -148,6 +148,10 @@ Record:
   lets native `EventSource` use `Last-Event-ID`. A retained replay does not emit
   the renderer's broad-resync signal; fresh, invalid, expired, and
   prior-generation paths still do.
+- When an automatic `EventSource` retry supplies both its original `since`
+  query and a newer `Last-Event-ID`, the browser-owned header wins. An invalid
+  cursor never receives a replacement SSE id until `reconcile-required`, so a
+  disconnect between handshake frames cannot skip required hydration.
 - The 60-second resource safety sweep remains enabled. Revision manifests,
   conditional snapshots, targeted hydration, equivalence soak, and iOS manual
   verification are the next slice.
@@ -155,6 +159,8 @@ Record:
 - Passing focused checks:
   - `bun run --cwd apps/backend typecheck`
   - `bun run --cwd apps/web typecheck`
-  - `bun test tests/unit/electron/gateway.test.ts --parallel` (130 tests)
+  - `bun test tests/unit/electron/gateway.test.ts --parallel` (139 tests)
+  - `bun test --cwd apps/backend src/gateway-event-replay.test.ts --parallel`
+    (28 tests)
   - `bun test src/lib/native/web-gateway.test.ts src/lib/resource-sync.test.ts --parallel`
-    from `apps/web` (80 tests)
+    from `apps/web` (86 tests)

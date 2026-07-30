@@ -78,6 +78,7 @@ import {
   rewriteBrowserPreviewBody,
   selectTailscaleBindAddress,
   settlePreparedBodyResponse,
+  settleRewrittenProxyBodyResponse,
   shouldAbandonBufferedProxyBody,
   stripCodedContentHeaders,
   stripTransformedRepresentationHeaders,
@@ -854,6 +855,34 @@ describe("remote gateway", () => {
     expect(destroyedWriteHead).not.toHaveBeenCalled();
     expect(destroyedEnd).not.toHaveBeenCalled();
     expect(destroyedResponse.destroy).not.toHaveBeenCalled();
+  });
+
+  test("fails rewritten proxy responses when asynchronous body preparation rejects", async () => {
+    const writeHead = mock(() => undefined);
+    const end = mock(() => undefined);
+    const finish = mock(() => undefined);
+    const fail = mock(() => undefined);
+    const response = {
+      destroyed: false,
+      writeHead,
+      end,
+    } as unknown as ServerResponse;
+
+    settleRewrittenProxyBodyResponse(
+      response,
+      200,
+      { "content-type": "text/html" },
+      Promise.reject("preview preparation failed"),
+      () => false,
+      finish,
+      fail,
+    );
+    await waitUntil(() => fail.mock.calls.length === 1, "Rejected preview preparation did not fail");
+
+    expect(fail.mock.calls[0]?.[0]).toEqual(new Error("preview preparation failed"));
+    expect(writeHead).not.toHaveBeenCalled();
+    expect(end).not.toHaveBeenCalled();
+    expect(finish).not.toHaveBeenCalled();
   });
 
   test("keeps small dynamic bodies identity while allowing static compression on browser listeners", async () => {
@@ -2938,6 +2967,57 @@ describe("remote gateway", () => {
     terminal.close();
   });
 
+  test("advances scoped replay cursors across omitted global revisions", async () => {
+    const { gateway, info } = await startGateway();
+    const initial = await openEventStream(gateway, info, "?events=menu-");
+    const cursor = frameId(eventFrames(initial.received(), "gateway.connected")[0]!);
+    if (!cursor) throw new Error("Scoped cursor missing");
+    initial.response.destroy();
+    initial.close();
+    await waitUntil(() => eventClients(gateway).size === 0, "Initial scoped stream did not close");
+
+    gateway.emit("environment-renamed", { id: "omitted" });
+    const omittedCursor = (
+      gateway as unknown as { eventReplay: GatewayEventReplay }
+    ).eventReplay.latestCursor;
+    gateway.emit("menu-zoom", "in");
+
+    const replayed = await openEventStream(
+      gateway,
+      info,
+      `?events=menu-&since=${encodeURIComponent(cursor)}`,
+    );
+    await waitUntil(
+      () => replayed.received().includes('"event":"menu-zoom"'),
+      "Scoped replay did not deliver its matching event",
+    );
+    const cursorFrames = eventFrames(replayed.received(), "gateway.cursor");
+    expect(cursorFrames).toHaveLength(1);
+    expect(frameId(cursorFrames[0]!)).toBe(omittedCursor);
+    expect(replayed.received()).not.toContain("environment-renamed");
+    expect(eventFrames(replayed.received(), "menu-zoom")).toHaveLength(1);
+    replayed.close();
+  });
+
+  test("terminal-only streams ignore gateway replay cursors and control frames", async () => {
+    const { gateway, info } = await startGateway();
+    const terminal = await openEventStream(
+      gateway,
+      info,
+      "?excludeEvents=terminal-output-&includeEvents=terminal-output-one&since=not-a-cursor",
+      { "Last-Event-ID": "also-not-a-cursor" },
+    );
+    gateway.emit("terminal-output-one", { bytesBase64: "b25l" });
+    await waitUntil(
+      () => terminal.received().includes("terminal-output-one"),
+      "Terminal-only stream did not receive output",
+    );
+    expect(terminal.received()).not.toContain("gateway.connected");
+    expect(terminal.received()).not.toContain("gateway.reconcile-required");
+    expect(terminal.received()).not.toContain("gateway.cursor");
+    terminal.close();
+  });
+
   test("replays a retained authoritative gap and echoes the client cursor", async () => {
     const { gateway, info } = await startGateway();
     const initial = await openEventStream(gateway, info);
@@ -2992,6 +3072,9 @@ describe("remote gateway", () => {
     await waitUntil(() => eventClients(gateway).size === 0, "Header stream did not close");
 
     const invalid = await openEventStream(gateway, info, "?since=not-a-cursor");
+    const invalidConnected = eventFrames(invalid.received(), "gateway.connected")[0];
+    expect(invalidConnected).toBeDefined();
+    expect(frameId(invalidConnected!)).toBeNull();
     expect(eventFrames(invalid.received(), "gateway.reconcile-required")).toHaveLength(1);
     expect(invalid.received()).toContain('"reason":"invalid-cursor"');
     invalid.response.destroy();
@@ -3006,6 +3089,71 @@ describe("remote gateway", () => {
     expect(eventFrames(prior.received(), "gateway.reconcile-required")).toHaveLength(1);
     expect(prior.received()).toContain('"reason":"prior-generation"');
     prior.close();
+  });
+
+  test("prefers a newer Last-Event-ID over a stale explicit since cursor", async () => {
+    const { gateway, info } = await startGateway();
+    const initial = await openEventStream(gateway, info);
+    const initialCursor = frameId(eventFrames(initial.received(), "gateway.connected")[0]!);
+    if (!initialCursor) throw new Error("Initial cursor missing");
+    initial.response.destroy();
+    initial.close();
+    await waitUntil(() => eventClients(gateway).size === 0, "Initial stream did not close");
+
+    gateway.emit("environment-renamed", { id: "already-delivered" });
+    const newerCursor = (
+      gateway as unknown as { eventReplay: GatewayEventReplay }
+    ).eventReplay.latestCursor;
+    gateway.emit("environment-setup-complete", { id: "still-missing" });
+
+    const resumed = await openEventStream(
+      gateway,
+      info,
+      `?since=${encodeURIComponent(initialCursor)}`,
+      { "Last-Event-ID": newerCursor },
+    );
+    await waitUntil(
+      () => resumed.received().includes('"id":"still-missing"'),
+      "Newer header cursor did not resume the remaining gap",
+    );
+    expect(frameId(eventFrames(resumed.received(), "gateway.connected")[0]!)).toBe(newerCursor);
+    expect(resumed.received()).not.toContain('"id":"already-delivered"');
+    expect(eventFrames(resumed.received(), "environment-setup-complete")).toHaveLength(1);
+    resumed.close();
+  });
+
+  test("reports caught-up and future same-generation cursors explicitly", async () => {
+    const { gateway, info } = await startGateway();
+    const initial = await openEventStream(gateway, info);
+    const cursor = frameId(eventFrames(initial.received(), "gateway.connected")[0]!);
+    if (!cursor) throw new Error("Initial cursor missing");
+    initial.response.destroy();
+    initial.close();
+    await waitUntil(() => eventClients(gateway).size === 0, "Initial stream did not close");
+
+    const caughtUp = await openEventStream(
+      gateway,
+      info,
+      `?since=${encodeURIComponent(cursor)}`,
+    );
+    expect(caughtUp.received()).toContain('"status":"caught-up"');
+    expect(eventFrames(caughtUp.received(), "gateway.reconcile-required")).toHaveLength(0);
+    caughtUp.response.destroy();
+    caughtUp.close();
+    await waitUntil(() => eventClients(gateway).size === 0, "Caught-up stream did not close");
+
+    const separator = cursor.lastIndexOf(":");
+    const futureCursor = `${cursor.slice(0, separator)}:${Number(cursor.slice(separator + 1)) + 1}`;
+    const future = await openEventStream(
+      gateway,
+      info,
+      `?since=${encodeURIComponent(futureCursor)}`,
+    );
+    expect(frameId(eventFrames(future.received(), "gateway.connected")[0]!)).toBe(futureCursor);
+    expect(future.received()).toContain('"status":"reconcile"');
+    expect(future.received()).toContain('"reason":"cursor-expired"');
+    expect(frameId(eventFrames(future.received(), "gateway.reconcile-required")[0]!)).toBe(cursor);
+    future.close();
   });
 
   test("emits one reconciliation path when the requested gap has expired", async () => {
@@ -3143,6 +3291,238 @@ describe("remote gateway", () => {
     const latestBeforeTerminal = replay.latestRevision;
     gateway.emit("terminal-output-session", { text: "bytes" });
     expect(replay.latestRevision).toBe(latestBeforeTerminal);
+    replay.releaseRetained();
+  });
+
+  test("does not advance an invalid cursor before reconciliation is delivered", () => {
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir: "/tmp",
+      rendererRoot: "/tmp",
+      logger: createLogger(),
+    });
+    const replay = (
+      gateway as unknown as { eventReplay: GatewayEventReplay }
+    ).eventReplay;
+    gateway.emit("environment-renamed", { id: "missed" });
+    const writes: string[] = [];
+    const state = {
+      prefixes: null,
+      includedPrefixes: null,
+      excludedPrefixes: ["terminal-output-"],
+      desyncedSessions: new Set<string>(),
+      handshake: { events: [], bytes: 0 },
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, typeof state> }
+    ).clients;
+    const client = {
+      writableLength: 0,
+      write: mock((message: string) => {
+        writes.push(message);
+        if (message.includes('"event":"gateway.connected"')) clients.delete(client);
+        return true;
+      }),
+      destroy: mock(() => undefined),
+    };
+    clients.set(client, state);
+    (
+      gateway as unknown as {
+        initializeEventReplay(
+          client: object,
+          state: typeof state,
+          cursor: ReturnType<typeof parseGatewayCursor>,
+        ): void;
+      }
+    ).initializeEventReplay(client, state, parseGatewayCursor("not-a-cursor"));
+
+    const connected = eventFrames(writes.join(""), "gateway.connected")[0];
+    expect(connected).toBeDefined();
+    expect(frameId(connected!)).toBeNull();
+    expect(eventFrames(writes.join(""), "gateway.reconcile-required")).toHaveLength(0);
+
+    const retryWrites: string[] = [];
+    const retryState = {
+      ...state,
+      handshake: { events: [], bytes: 0 },
+    };
+    const retryClient = {
+      writableLength: 0,
+      write: mock((message: string) => {
+        retryWrites.push(message);
+        return true;
+      }),
+      destroy: mock(() => undefined),
+    };
+    clients.set(retryClient, retryState);
+    (
+      gateway as unknown as {
+        initializeEventReplay(
+          client: object,
+          state: typeof retryState,
+          cursor: ReturnType<typeof parseGatewayCursor>,
+        ): void;
+      }
+    ).initializeEventReplay(retryClient, retryState, parseGatewayCursor("not-a-cursor"));
+    expect(eventFrames(retryWrites.join(""), "gateway.reconcile-required")).toHaveLength(1);
+    replay.releaseRetained();
+  });
+
+  test("buffers terminal output emitted during an authoritative replay handshake", () => {
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir: "/tmp",
+      rendererRoot: "/tmp",
+      logger: createLogger(),
+    });
+    const replay = (
+      gateway as unknown as { eventReplay: GatewayEventReplay }
+    ).eventReplay;
+    const cursor = replay.latestCursor;
+    const writes: string[] = [];
+    const client = {
+      writableLength: 0,
+      write: mock((message: string) => {
+        writes.push(message);
+        if (message.includes('"event":"gateway.connected"')) {
+          gateway.emit("terminal-output-session", { bytesBase64: "dGVybWluYWw=" });
+        }
+        return true;
+      }),
+      destroy: mock(() => undefined),
+    };
+    const state = {
+      prefixes: null,
+      includedPrefixes: null,
+      excludedPrefixes: null,
+      desyncedSessions: new Set<string>(),
+      handshake: { events: [], bytes: 0 },
+    };
+    const clients = (
+      gateway as unknown as { clients: Map<object, typeof state> }
+    ).clients;
+    clients.set(client, state);
+    (
+      gateway as unknown as {
+        initializeEventReplay(
+          client: object,
+          state: typeof state,
+          cursor: ReturnType<typeof parseGatewayCursor>,
+        ): void;
+      }
+    ).initializeEventReplay(client, state, parseGatewayCursor(cursor));
+
+    expect(eventFrames(writes.join(""), "terminal-output-session")).toHaveLength(1);
+    expect(replay.latestRevision).toBe(0);
+    expect(state.handshake).toBeNull();
+    replay.releaseRetained();
+  });
+
+  test("enforces the replay-handshake byte limit at its exact boundary", () => {
+    const run = (byteAdjustment: number) => {
+      const gateway = new OrkestratorGateway({
+        backend: { invoke: mock(async () => null) },
+        dataDir: "/tmp",
+        rendererRoot: "/tmp",
+        logger: createLogger(),
+      });
+      const replay = (
+        gateway as unknown as { eventReplay: GatewayEventReplay }
+      ).eventReplay;
+      const event = "environment-renamed";
+      const payload = { id: "one" };
+      const message = `id: ${replay.generation}:1\ndata: ${JSON.stringify({ event, payload })}\n\n`;
+      (
+        gateway as unknown as { replayHandshakeMaxBytes: number }
+      ).replayHandshakeMaxBytes = Buffer.byteLength(message) + byteAdjustment;
+      const writes: string[] = [];
+      const client = {
+        writableLength: 0,
+        write: mock((value: string) => {
+          writes.push(value);
+          if (value.includes('"event":"gateway.connected"')) gateway.emit(event, payload);
+          return true;
+        }),
+        destroy: mock(() => undefined),
+      };
+      const state = {
+        prefixes: null,
+        includedPrefixes: null,
+        excludedPrefixes: ["terminal-output-"],
+        desyncedSessions: new Set<string>(),
+        handshake: { events: [], bytes: 0 },
+      };
+      const clients = (
+        gateway as unknown as { clients: Map<object, typeof state> }
+      ).clients;
+      clients.set(client, state);
+      (
+        gateway as unknown as {
+          initializeEventReplay(
+            client: object,
+            state: typeof state,
+            cursor: ReturnType<typeof parseGatewayCursor>,
+          ): void;
+        }
+      ).initializeEventReplay(client, state, parseGatewayCursor(`${replay.generation}:0`));
+      replay.releaseRetained();
+      return { client, clients, writes };
+    };
+
+    const exact = run(0);
+    expect(exact.client.destroy).not.toHaveBeenCalled();
+    expect(eventFrames(exact.writes.join(""), "environment-renamed")).toHaveLength(1);
+    expect(exact.clients.has(exact.client)).toBe(true);
+
+    const overflow = run(-1);
+    expect(overflow.client.destroy).toHaveBeenCalledTimes(1);
+    expect(eventFrames(overflow.writes.join(""), "environment-renamed")).toHaveLength(0);
+    expect(overflow.clients.has(overflow.client)).toBe(false);
+  });
+
+  test("disconnects replay and filtered control frames at the hard buffer limit", () => {
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir: "/tmp",
+      rendererRoot: "/tmp",
+      logger: createLogger(),
+    });
+    const replay = (
+      gateway as unknown as { eventReplay: GatewayEventReplay }
+    ).eventReplay;
+    const frame = replay.append("environment-renamed", { id: "one" });
+    const clients = (
+      gateway as unknown as { clients: Map<object, unknown> }
+    ).clients;
+
+    for (const prefixes of [null, ["menu-"]] as const) {
+      const client = {
+        writableLength: 8 * 1024 * 1024,
+        write: mock(() => true),
+        destroy: mock(() => undefined),
+      };
+      const state = {
+        prefixes,
+        includedPrefixes: null,
+        excludedPrefixes: null,
+        desyncedSessions: new Set<string>(),
+        handshake: null,
+      };
+      clients.set(client, state);
+      const written = (
+        gateway as unknown as {
+          writeReplayFrame(
+            client: object,
+            state: typeof state,
+            frame: typeof frame,
+          ): boolean;
+        }
+      ).writeReplayFrame(client, state, frame);
+      expect(written).toBe(false);
+      expect(client.write).not.toHaveBeenCalled();
+      expect(client.destroy).toHaveBeenCalledTimes(1);
+      expect(clients.has(client)).toBe(false);
+    }
     replay.releaseRetained();
   });
 

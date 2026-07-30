@@ -422,6 +422,46 @@ describe("startResourceSync", () => {
     expect(resync).toHaveBeenCalledTimes(1);
   });
 
+  test("accepts a contiguous retained replay without a broad resync", async () => {
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+    startResourceSync();
+    await tick(10);
+    resync.mockClear();
+
+    const resource = listenCalls.find(({ event }) => event === "resource-changed");
+    resource?.handler({ payload: change({ revision: 10 }) });
+    resource?.handler({ payload: change({ revision: 11 }) });
+
+    expect(resync).not.toHaveBeenCalled();
+  });
+
+  test("broadly resyncs on a fresh or unrecoverable transport signal after replayed changes", async () => {
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+    startResourceSync();
+    await tick(10);
+    resync.mockClear();
+
+    const resource = listenCalls.find(({ event }) => event === "resource-changed");
+    const connected = listenCalls.find(
+      ({ event }) => event === "native-event-stream-connected",
+    );
+    connected?.handler({ payload: undefined });
+    resync.mockClear();
+
+    // Caught-up and replayed gateway handshakes are intentionally absent from
+    // this transport-level signal, so their contiguous events do not refetch.
+    resource?.handler({ payload: change({ revision: 20 }) });
+    resource?.handler({ payload: change({ revision: 21 }) });
+    expect(resync).not.toHaveBeenCalled();
+
+    // The web gateway emits this signal for a fresh stream or explicit replay
+    // miss. Either case must invalidate all resource snapshots.
+    connected?.handler({ payload: undefined });
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
   test("requests a resync when the backend sequence resets", async () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);

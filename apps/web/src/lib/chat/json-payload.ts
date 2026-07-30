@@ -13,9 +13,10 @@ import {
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import {
-  isStructuredReviewReport,
+  safeParseStructuredReviewReport,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
+import { structuredReviewVerdictSummary } from "@/lib/review/structured-review-summary";
 
 export type JsonContainer = Record<string, unknown> | unknown[];
 
@@ -39,16 +40,27 @@ export const MAX_JSON_RENDER_ENTRIES = 100;
 
 const JSON_FENCE = /^```(?:json[5c]?)?[ \t]*\r?\n([\s\S]*?)\r?\n?```$/i;
 
+export interface JsonPayloadSource {
+  source: string;
+  /** The document was written as a fenced code block rather than bare. */
+  fenced: boolean;
+}
+
 /**
  * The JSON source inside `content`, or null if the block is not one document.
  *
  * A message that merely *contains* JSON — prose around a snippet — is left to
  * Markdown, which already renders fenced code sensibly. Only a block that is
  * entirely one document is a payload the agent meant as data.
+ *
+ * Whether it was fenced is reported rather than discarded: an agent that fenced
+ * its JSON asked for it to be read as source, which decides whether an
+ * unrecognized document is worth folding at all.
  */
-export function jsonPayloadSource(content: string): string | null {
+export function jsonPayloadSource(content: string): JsonPayloadSource | null {
   const trimmed = content.trim();
-  const candidate = (JSON_FENCE.exec(trimmed)?.[1] ?? trimmed).trim();
+  const fencedBody = JSON_FENCE.exec(trimmed)?.[1];
+  const candidate = (fencedBody ?? trimmed).trim();
   if (candidate.length === 0 || candidate.length > MAX_JSON_PAYLOAD_LENGTH) {
     return null;
   }
@@ -56,16 +68,17 @@ export function jsonPayloadSource(content: string): string | null {
   const last = candidate.at(-1);
   const balanced = (first === "{" && last === "}")
     || (first === "[" && last === "]");
-  return balanced ? candidate : null;
+  if (!balanced) return null;
+  return { source: candidate, fenced: fencedBody !== undefined };
 }
 
 export function parseJsonPayload(content: string): JsonPayload | null {
-  const source = jsonPayloadSource(content);
-  if (source === null) return null;
+  const detected = jsonPayloadSource(content);
+  if (detected === null) return null;
 
   let value: unknown;
   try {
-    value = JSON.parse(source);
+    value = JSON.parse(detected.source);
   } catch {
     return null;
   }
@@ -73,14 +86,26 @@ export function parseJsonPayload(content: string): JsonPayload | null {
   // structure to fold out, so both fall back to text.
   if (value === null || typeof value !== "object") return null;
 
-  // The legacy allowance matches every other reader of a persisted report: a
-  // pipeline recorded before `testResults.notRun` existed must still render.
-  if (isStructuredReviewReport(value, { allowLegacyTestResults: true })) {
-    return { kind: "structured-review", report: value };
+  // Parsed rather than merely tested, so the report carried out of here is the
+  // normalized one. The legacy allowance matches every other reader of a
+  // persisted report — a pipeline recorded before `testResults.notRun` existed
+  // must still render — and it materializes that field, which a bare type
+  // guard would have validated against a copy and then thrown away.
+  const report = safeParseStructuredReviewReport(value, {
+    allowLegacyTestResults: true,
+  });
+  if (report.success) {
+    return { kind: "structured-review", report: report.data };
   }
   if (isVerificationVerdict(value)) {
     return { kind: "verification", verdict: value };
   }
+  // A fenced block of arbitrary JSON was written as code and stays code.
+  // Markdown renders it verbatim, whereas the labelled tree humanizes keys and
+  // so cannot show the document the agent actually wrote. Only the two
+  // recognized contracts — which have renderers that say more than the source
+  // does — are worth folding out of a code block.
+  if (detected.fenced) return null;
   return { kind: "json", value: value as JsonContainer };
 }
 
@@ -128,6 +153,53 @@ export function describeJsonValue(value: unknown): string {
     return plural(Object.keys(value).length, "field");
   }
   return "";
+}
+
+/** The name a collapsed payload goes by. */
+export function jsonPayloadTitle(payload: JsonPayload): string {
+  switch (payload.kind) {
+    case "structured-review":
+      return "Structured review report";
+    case "verification":
+      // The outcome is the title: a verdict the reader has to open to learn is
+      // no better than the raw JSON it replaced.
+      return payload.verdict.complete
+        ? "Verification passed"
+        : "Verification failed";
+    default:
+      return Array.isArray(payload.value) ? "JSON list" : "JSON payload";
+  }
+}
+
+/** The single flattened line a collapsed payload shows beside its title. */
+export function jsonPayloadSummary(payload: JsonPayload): string {
+  switch (payload.kind) {
+    case "structured-review":
+      return structuredReviewVerdictSummary(payload.report);
+    case "verification":
+      return payload.verdict.rationale.trim().replace(/\s+/g, " ");
+    default:
+      return describeJsonValue(payload.value);
+  }
+}
+
+/**
+ * What a folded payload contributes to the transcript's find index.
+ *
+ * Find derives its match list from the message model but draws its highlights
+ * from mounted DOM text, and a closed disclosure has unmounted everything
+ * below its trigger. Indexing the raw document would therefore count matches
+ * that can never be highlighted — and, worse, shift the occurrence numbering
+ * of every sibling part in the same message. So the index gets exactly the
+ * text the collapsed row renders, in the order it renders it.
+ *
+ * Concatenated with no separator because that is what the DOM holds: the
+ * trigger's title and summary are adjacent elements, and JSX drops the
+ * whitespace between them. `JsonPayloadPart` has a test asserting its rendered
+ * search text equals this string, so the two cannot drift apart silently.
+ */
+export function jsonPayloadSearchText(payload: JsonPayload): string {
+  return `${jsonPayloadTitle(payload)}${jsonPayloadSummary(payload)}`;
 }
 
 export function isEmptyJsonContainer(value: unknown): boolean {

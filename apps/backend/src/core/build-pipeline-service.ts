@@ -50,7 +50,8 @@ type CommandInvoker = <T>(
 ) => Promise<T>;
 
 // The transcript renderer recognizes a verification answer by the same contract
-// the turn is constrained to, so both read this one definition.
+// the turn is constrained to, and the protocol package derives both that schema
+// and its type guard from one field list, so neither can drift from the other.
 const VERIFICATION_SCHEMA: JsonSchema = VERIFICATION_VERDICT_SCHEMA;
 
 const SESSION_LABELS: Record<PipelineSessionPhase, string> = {

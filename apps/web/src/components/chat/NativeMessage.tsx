@@ -70,7 +70,7 @@ import {
   normalizeNativeMessage,
 } from "@/lib/chat/native-message-adapters";
 import { writeText } from "@/lib/native/clipboard";
-import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
+import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 
 /** Custom link component that opens URLs in the system browser */
 function ExternalLink({
@@ -156,29 +156,6 @@ function useAgentExpansion(part: NativeAgentActivityPart) {
   ] as const;
 }
 
-/**
- * Expansion state for a thinking part.
- *
- * Backed by the shared store using the stable key supplied by MessagePart, so
- * an expanded block survives the virtualized list unmounting it while off-screen.
- */
-function useThinkingExpansion(expansionKey: string) {
-  const storedIsOpen = useMessagePartExpansionStore((state) =>
-    state.expandedKeys.has(expansionKey),
-  );
-  const setStoredExpanded = useMessagePartExpansionStore(
-    (state) => state.setExpanded,
-  );
-  const setExpanded = useCallback(
-    (open: boolean) => {
-      setStoredExpanded(expansionKey, open);
-    },
-    [expansionKey, setStoredExpanded],
-  );
-
-  return [storedIsOpen, setExpanded] as const;
-}
-
 /** Render a thinking/reasoning part inline - expandable to show the full text */
 function ThinkingPart({
   content,
@@ -191,7 +168,10 @@ function ThinkingPart({
     () => TASK_LIST_SYNTAX_PATTERN.test(content),
     [content],
   );
-  const [isOpen, setIsOpen] = useThinkingExpansion(expansionKey);
+  // Backed by the shared store using the stable key supplied by MessagePart,
+  // so an expanded block survives the virtualized list unmounting it while
+  // off-screen.
+  const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
   // The collapsed row is a single line, so flatten whitespace for the preview.
   const preview = useMemo(
     () => (hasTaskList ? "task list" : content.trim().replace(/\s+/g, " ")),
@@ -1164,6 +1144,7 @@ function TextPart({
   showCopy = true,
   truncateUserPrompt = false,
   renderJsonPayload = true,
+  expansionKey,
 }: {
   content: string;
   showCopy?: boolean;
@@ -1173,6 +1154,8 @@ function TextPart({
    * user's own messages, which are shown back as written.
    */
   renderJsonPayload?: boolean;
+  /** Stable identity used to persist the folded payload's expansion state. */
+  expansionKey: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const lineCount = useMemo(
@@ -1190,11 +1173,15 @@ function TextPart({
     return (
       <div className="group py-1.5">
         {/*
-          The raw document stays the search source, so the block is still found
-          by an in-transcript find; only the highlight needs it expanded.
+          Find draws its highlights from mounted DOM text, and a closed
+          disclosure has unmounted everything below its trigger. So the find
+          index is fed `jsonPayloadSearchText` — the collapsed row's own text —
+          rather than the raw document, which would count matches that could
+          never be highlighted and shift every sibling part's occurrence
+          numbering. See `getNativeMessageSearchText`.
         */}
         <div data-agent-chat-search-content="true">
-          <JsonPayloadPart payload={jsonPayload} />
+          <JsonPayloadPart payload={jsonPayload} expansionKey={expansionKey} />
         </div>
         {showCopy ? (
           <MessageCopyButton
@@ -1704,6 +1691,7 @@ function MessagePart({
           showCopy={showTextCopy}
           truncateUserPrompt={truncateUserPrompt}
           renderJsonPayload={renderJsonPayload}
+          expansionKey={`${partKey}/json`}
         />
       );
     case "tool-invocation":
@@ -1923,6 +1911,7 @@ export const NativeMessage = memo(function NativeMessage({
             showCopy={false}
             truncateUserPrompt={isUser}
             renderJsonPayload={!isUser}
+            expansionKey={`${message.id}-content/json`}
           />
         )}
       </MessageShell>

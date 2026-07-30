@@ -4,7 +4,6 @@
  * for, so a large payload occupies one row until the reader wants more.
  */
 
-import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   Collapsible,
@@ -19,6 +18,7 @@ import {
   MAX_JSON_RENDER_DEPTH,
   MAX_JSON_RENDER_ENTRIES,
 } from "@/lib/chat/json-payload";
+import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import { cn } from "@/lib/utils";
 
 function isContainer(value: unknown): value is Record<string, unknown> | unknown[] {
@@ -57,7 +57,7 @@ function EmptyValue({ value }: { value: unknown }) {
 function TruncationNote({ hidden }: { hidden: number }) {
   return (
     <p className="pt-1 text-xs italic text-muted-foreground/70">
-      {hidden} more not shown — use the copy action for the full payload.
+      {hidden} more not shown — open Raw JSON for the full payload.
     </p>
   );
 }
@@ -66,12 +66,14 @@ function Branch({
   label,
   value,
   depth,
+  expansionKey,
 }: {
   label: string;
   value: unknown;
   depth: number;
+  expansionKey: string;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -91,7 +93,7 @@ function Branch({
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="ml-1.5 border-l border-border/40 pl-3">
-          <JsonTree value={value} depth={depth} />
+          <JsonTree value={value} depth={depth} expansionKey={expansionKey} />
         </div>
       </CollapsibleContent>
     </Collapsible>
@@ -101,9 +103,11 @@ function Branch({
 function ObjectFields({
   value,
   depth,
+  expansionKey,
 }: {
   value: Record<string, unknown>;
   depth: number;
+  expansionKey: string;
 }) {
   const entries = Object.entries(value);
   const shown = entries.slice(0, MAX_JSON_RENDER_ENTRIES);
@@ -121,7 +125,16 @@ function ObjectFields({
           const label = humanizeJsonKey(key);
           if (isContainer(child) && !isEmptyJsonContainer(child)) {
             return (
-              <Branch key={key} label={label} value={child} depth={depth} />
+              <Branch
+                key={key}
+                label={label}
+                value={child}
+                depth={depth}
+                // Keyed by the document key rather than by position, so
+                // re-rendering a payload whose fields moved keeps the reader's
+                // open branches attached to the same data.
+                expansionKey={`${expansionKey}/${key}`}
+              />
             );
           }
           return (
@@ -145,7 +158,15 @@ function ObjectFields({
   );
 }
 
-function ArrayItems({ value, depth }: { value: unknown[]; depth: number }) {
+function ArrayItems({
+  value,
+  depth,
+  expansionKey,
+}: {
+  value: unknown[];
+  depth: number;
+  expansionKey: string;
+}) {
   const shown = value.slice(0, MAX_JSON_RENDER_ENTRIES);
   const allScalar = shown.every((item) => !isContainer(item));
 
@@ -186,6 +207,7 @@ function ArrayItems({ value, depth }: { value: unknown[]; depth: number }) {
                 label={label ? `${index + 1}. ${label}` : `Item ${index + 1}`}
                 value={item}
                 depth={depth}
+                expansionKey={`${expansionKey}/${index}`}
               />
             );
           })}
@@ -201,9 +223,12 @@ function ArrayItems({ value, depth }: { value: unknown[]; depth: number }) {
 export function JsonTree({
   value,
   depth = 0,
+  expansionKey,
 }: {
   value: unknown;
   depth?: number;
+  /** Prefix for the keys this subtree's disclosures persist their state under. */
+  expansionKey: string;
 }) {
   // A payload nested past the render depth is shown as source rather than
   // silently stopped: the reader must still be able to see all of it.
@@ -215,13 +240,16 @@ export function JsonTree({
     );
   }
   if (Array.isArray(value)) {
-    return <ArrayItems value={value} depth={depth + 1} />;
+    return (
+      <ArrayItems value={value} depth={depth + 1} expansionKey={expansionKey} />
+    );
   }
   if (isContainer(value)) {
     return (
       <ObjectFields
         value={value as Record<string, unknown>}
         depth={depth + 1}
+        expansionKey={expansionKey}
       />
     );
   }

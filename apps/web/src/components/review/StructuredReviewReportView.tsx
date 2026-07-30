@@ -19,7 +19,11 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import { structuredReviewVerdictSummary } from "@/lib/review/structured-review-summary";
 import { cn } from "@/lib/utils";
+
+// Re-exported for the callers that already reach for it here.
+export { structuredReviewVerdictSummary };
 
 const severityStyles: Record<ReviewIssue["severity"], string> = {
   P0: "border-red-500/40 bg-red-500/8 text-red-300",
@@ -29,22 +33,6 @@ const severityStyles: Record<ReviewIssue["severity"], string> = {
 
 function location(file: string, line: number | null): string {
   return line ? `${file}:${line}` : file;
-}
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
-/** One line of substance for a report whose sections are all collapsed. */
-export function structuredReviewVerdictSummary(
-  report: StructuredReviewReport,
-): string {
-  return [
-    `Ready: ${report.verdict.ready}`,
-    plural(report.issues.length, "issue"),
-    plural(report.testCoverageGaps.length, "coverage gap"),
-    `${report.riskProfile.overallRisk} risk`,
-  ].join(" · ");
 }
 
 /**

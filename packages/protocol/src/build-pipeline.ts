@@ -61,19 +61,46 @@ export interface VerificationVerdict {
   rationale: string;
 }
 
-export const VERIFICATION_VERDICT_SCHEMA: Record<string, unknown> = {
-  type: "object",
-  additionalProperties: false,
-  required: ["complete", "rationale"],
-  properties: {
-    complete: { type: "boolean" },
-    rationale: { type: "string" },
-  },
-};
+/**
+ * The one declaration both the schema and the guard are built from.
+ *
+ * Sharing the *schema object* alone would not have prevented drift: a guard
+ * that hardcoded its own field list would still fall silently out of step the
+ * day a field is added here. Deriving both from this map is what makes the
+ * contract single-sourced.
+ */
+const VERIFICATION_VERDICT_FIELDS = {
+  complete: "boolean",
+  rationale: "string",
+} as const satisfies Record<keyof VerificationVerdict, "boolean" | "string">;
+
+type VerificationVerdictField = keyof typeof VERIFICATION_VERDICT_FIELDS;
+
+const VERIFICATION_VERDICT_FIELD_ENTRIES = Object.entries(
+  VERIFICATION_VERDICT_FIELDS,
+) as [VerificationVerdictField, "boolean" | "string"][];
 
 /**
- * Exactly the two contract fields, so an unrelated payload that happens to
- * carry a `complete` flag is not mistaken for a verification verdict.
+ * Frozen because the supervisor hands this exact object to the provider that
+ * constrains the turn; a consumer mutating it would change what the model is
+ * asked for everywhere at once.
+ */
+export const VERIFICATION_VERDICT_SCHEMA: Record<string, unknown> = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: VERIFICATION_VERDICT_FIELD_ENTRIES.map(([field]) => field),
+  properties: Object.fromEntries(
+    VERIFICATION_VERDICT_FIELD_ENTRIES.map(([field, type]) => [
+      field,
+      Object.freeze({ type }),
+    ]),
+  ),
+});
+
+/**
+ * Exactly the contract fields and nothing else, so an unrelated payload that
+ * happens to carry a `complete` flag is not mistaken for a verification
+ * verdict. The key count mirrors the schema's `additionalProperties: false`.
  */
 export function isVerificationVerdict(
   value: unknown,
@@ -82,10 +109,12 @@ export function isVerificationVerdict(
     return false;
   }
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record);
-  return keys.length === 2
-    && typeof record.complete === "boolean"
-    && typeof record.rationale === "string";
+  if (Object.keys(record).length !== VERIFICATION_VERDICT_FIELD_ENTRIES.length) {
+    return false;
+  }
+  return VERIFICATION_VERDICT_FIELD_ENTRIES.every(
+    ([field, type]) => typeof record[field] === type,
+  );
 }
 
 export interface PipelineSession {

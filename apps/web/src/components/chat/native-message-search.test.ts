@@ -84,3 +84,86 @@ describe("getNativeMessageSearchText", () => {
     })).toBe("error content");
   });
 });
+
+describe("getNativeMessageSearchText for folded JSON payloads", () => {
+  const base: NativeMessage = {
+    id: "assistant-1",
+    role: "assistant",
+    content: "",
+    createdAt: "2025-01-01T00:00:00.000Z",
+    parts: [],
+  };
+
+  test("indexes a folded verdict by its collapsed row, not its source", () => {
+    // NativeMessage folds this into a closed disclosure, which unmounts
+    // everything below its trigger. Indexing the raw document would report
+    // matches that find can count but can never highlight.
+    const text = getNativeMessageSearchText({
+      ...base,
+      parts: [{
+        type: "text",
+        content: '{"complete":true,"rationale":"Tree clean."}',
+      }],
+    });
+
+    expect(text).toBe("Verification passedTree clean.");
+    expect(text).not.toContain('"rationale"');
+  });
+
+  test("indexes a folded generic payload by its title and count", () => {
+    expect(getNativeMessageSearchText({
+      ...base,
+      parts: [{ type: "text", content: '{"stageName":"verify"}' }],
+    })).toBe("JSON payload1 field");
+  });
+
+  test("leaves an unfolded fenced block fully indexed", () => {
+    // A fenced block of unrecognized JSON stays a code block, so every
+    // character of it is still mounted and still findable.
+    const text = getNativeMessageSearchText({
+      ...base,
+      parts: [{
+        type: "text",
+        content: '```json\n{"compilerOptions":{"strict":true}}\n```',
+      }],
+    });
+
+    expect(text).toContain("compilerOptions");
+  });
+
+  test("indexes a user's own JSON as written, because it is shown as written", () => {
+    const text = getNativeMessageSearchText({
+      ...base,
+      id: "user-1",
+      role: "user",
+      parts: [{
+        type: "text",
+        content: '{"complete":true,"rationale":"Tree clean."}',
+      }],
+    });
+
+    expect(text).toContain('"rationale"');
+  });
+
+  test("folds a JSON-only legacy message that has no text parts", () => {
+    expect(getNativeMessageSearchText({
+      ...base,
+      content: '{"complete":false,"rationale":"Unmet."}',
+    })).toBe("Verification failedUnmet.");
+  });
+
+  test("keeps a prose sibling part indexed alongside a folded one", () => {
+    // The folded part contributes only its collapsed row, so the prose part's
+    // occurrences keep the ordinals the DOM will actually produce for them.
+    const text = getNativeMessageSearchText({
+      ...base,
+      parts: [
+        { type: "text", content: '{"verify":"verify"}' },
+        { type: "text", content: "Then verify the branch." },
+      ],
+    });
+
+    expect(text.match(/verify/g) ?? []).toHaveLength(1);
+    expect(text).toContain("Then verify the branch.");
+  });
+});

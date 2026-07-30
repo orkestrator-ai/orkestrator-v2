@@ -7,7 +7,6 @@
  * report's own renderer; anything else gets the generic labelled tree.
  */
 
-import { useState } from "react";
 import {
   Braces,
   CheckCircle2,
@@ -20,40 +19,15 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import {
-  StructuredReviewReportView,
-  structuredReviewVerdictSummary,
-} from "@/components/review/StructuredReviewReportView";
-import { describeJsonValue, type JsonPayload } from "@/lib/chat/json-payload";
+  jsonPayloadSummary,
+  jsonPayloadTitle,
+  type JsonPayload,
+} from "@/lib/chat/json-payload";
+import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import { cn } from "@/lib/utils";
 import { JsonTree } from "./JsonTree";
-
-function payloadTitle(payload: JsonPayload): string {
-  switch (payload.kind) {
-    case "structured-review":
-      return "Structured review report";
-    case "verification":
-      // The outcome is the title: a verdict the reader has to open to learn is
-      // no better than the raw JSON it replaced.
-      return payload.verdict.complete
-        ? "Verification passed"
-        : "Verification failed";
-    default:
-      return Array.isArray(payload.value) ? "JSON list" : "JSON payload";
-  }
-}
-
-/** The single flattened line a collapsed payload shows beside its title. */
-function payloadSummary(payload: JsonPayload): string {
-  switch (payload.kind) {
-    case "structured-review":
-      return structuredReviewVerdictSummary(payload.report);
-    case "verification":
-      return payload.verdict.rationale.trim().replace(/\s+/g, " ");
-    default:
-      return describeJsonValue(payload.value);
-  }
-}
 
 function PayloadIcon({ payload }: { payload: JsonPayload }) {
   switch (payload.kind) {
@@ -81,8 +55,55 @@ function borderClass(payload: JsonPayload): string {
   }
 }
 
-export function JsonPayloadPart({ payload }: { payload: JsonPayload }) {
-  const [isOpen, setIsOpen] = useState(false);
+/**
+ * The exact document, one disclosure below the tree.
+ *
+ * The tree humanizes keys, so it cannot show what the agent actually wrote.
+ * Anything the tree summarizes — a truncated container, a branch past the
+ * render depth — has to remain reachable without leaving the transcript.
+ */
+function RawJsonDisclosure({
+  value,
+  expansionKey,
+}: {
+  value: unknown;
+  expansionKey: string;
+}) {
+  const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
+
+  return (
+    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="mt-2">
+      <CollapsibleTrigger className="flex cursor-pointer items-center gap-1.5 rounded-md py-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
+        <ChevronRight
+          className={cn(
+            "size-3 shrink-0 transition-transform",
+            isOpen && "rotate-90",
+          )}
+        />
+        Raw JSON
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <pre className="mt-1 max-h-80 overflow-auto rounded-md border border-border/50 bg-background/60 p-2 text-xs text-foreground/80">
+          {JSON.stringify(value, null, 2)}
+        </pre>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+export function JsonPayloadPart({
+  payload,
+  expansionKey,
+}: {
+  payload: JsonPayload;
+  /**
+   * Stable identity for this payload's position in the transcript. Expansion
+   * is stored against it so the virtualized list unmounting the row while it
+   * is off-screen does not collapse what the reader opened.
+   */
+  expansionKey: string;
+}) {
+  const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
 
   return (
     <Collapsible
@@ -101,11 +122,16 @@ export function JsonPayloadPart({ payload }: { payload: JsonPayload }) {
           )}
         />
         <PayloadIcon payload={payload} />
+        {/*
+          Adjacent with no whitespace between them: `jsonPayloadSearchText`
+          concatenates the same two strings so the find index matches this row
+          exactly. A test asserts the two stay equal.
+        */}
         <span className="shrink-0 text-xs font-medium text-foreground/90">
-          {payloadTitle(payload)}
+          {jsonPayloadTitle(payload)}
         </span>
         <span className="min-w-0 truncate text-xs text-muted-foreground">
-          {payloadSummary(payload)}
+          {jsonPayloadSummary(payload)}
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
@@ -123,7 +149,16 @@ export function JsonPayloadPart({ payload }: { payload: JsonPayload }) {
               {payload.verdict.rationale}
             </p>
           ) : (
-            <JsonTree value={payload.value} />
+            <>
+              <JsonTree
+                value={payload.value}
+                expansionKey={`${expansionKey}/tree`}
+              />
+              <RawJsonDisclosure
+                value={payload.value}
+                expansionKey={`${expansionKey}/raw`}
+              />
+            </>
           )}
         </div>
       </CollapsibleContent>

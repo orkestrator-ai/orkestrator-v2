@@ -435,4 +435,41 @@ describe("verification verdict contract", () => {
       },
     });
   });
+
+  // The guard and the schema are derived from one field map, and these tests
+  // fail if that ever stops being true. A guard with its own hardcoded field
+  // list would keep passing the assertion above while silently refusing every
+  // verdict the supervisor now asks for.
+  test("the guard requires exactly the fields the schema declares", () => {
+    const properties = VERIFICATION_VERDICT_SCHEMA.properties as Record<
+      string,
+      { type: string }
+    >;
+    const fields = Object.keys(properties);
+    const sample: Record<string, unknown> = {};
+    for (const [field, { type }] of Object.entries(properties)) {
+      sample[field] = type === "boolean" ? true : "text";
+    }
+
+    expect(isVerificationVerdict(sample)).toBe(true);
+    expect(VERIFICATION_VERDICT_SCHEMA.required).toEqual(fields);
+
+    // Dropping any one declared field, or adding one the schema does not
+    // declare, must fail the guard.
+    for (const field of fields) {
+      const { [field]: _omitted, ...missingOne } = sample;
+      expect(isVerificationVerdict(missingOne)).toBe(false);
+    }
+    expect(isVerificationVerdict({ ...sample, extra: 1 })).toBe(false);
+  });
+
+  test("the schema cannot be mutated by a consumer", () => {
+    // The supervisor hands this object straight to the provider, so a mutation
+    // here would change what every future turn is constrained to.
+    expect(Object.isFrozen(VERIFICATION_VERDICT_SCHEMA)).toBe(true);
+    expect(() => {
+      (VERIFICATION_VERDICT_SCHEMA as { type: string }).type = "array";
+    }).toThrow();
+    expect(VERIFICATION_VERDICT_SCHEMA.type).toBe("object");
+  });
 });

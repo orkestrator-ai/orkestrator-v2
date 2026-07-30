@@ -205,6 +205,39 @@ describe("StructuredReviewReportView", () => {
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
   });
 
+  test("drops its own title and verdict line when the caller already names it", () => {
+    // A transcript fold-out shows both on its trigger, so the card opening
+    // onto a duplicate of the row just clicked is what this suppresses.
+    render(
+      <StructuredReviewReportView
+        report={report}
+        collapsibleSections
+        showRawJson={false}
+        showHeading={false}
+      />,
+    );
+
+    expect(screen.queryByRole("heading", { name: "Structured review report" }))
+      .toBeNull();
+    expect(screen.queryByText(/^Ready: /)).toBeNull();
+    // The article stays named for assistive technology even with no visible
+    // heading, and the sections themselves are untouched.
+    expect(screen.getByLabelText("Structured review report")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /What Changed/ })).toBeTruthy();
+  });
+
+  test("still offers the raw inspector when only the heading is suppressed", () => {
+    render(
+      <StructuredReviewReportView report={report} showHeading={false} />,
+    );
+
+    expect(screen.queryByRole("heading", { name: "Structured review report" }))
+      .toBeNull();
+    expect(screen.getByText("Validated JSON Schema")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Inspect raw JSON/ }))
+      .toBeTruthy();
+  });
+
   test("keeps an expanded section open across a re-render of the report", () => {
     const { rerender } = render(
       <StructuredReviewReportView report={report} collapsibleSections />,

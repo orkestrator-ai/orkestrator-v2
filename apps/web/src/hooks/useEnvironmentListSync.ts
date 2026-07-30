@@ -77,10 +77,14 @@ export function useEnvironmentListSync(
       );
     };
 
-    // An environment announcement carries the environment id, not its project.
-    // A newly created environment is unknown to this client, so its project
-    // cannot be derived — refresh the whole visible set instead.
-    const unsubscribe = onResourceChanged("environment", () => {
+    const unsubscribe = onResourceChanged("environment", (change) => {
+      if (change.projectId) {
+        if (projectIdsRef.current.includes(change.projectId)) {
+          void refreshProjectOnce(change.projectId);
+        }
+        return;
+      }
+      // Rolling-upgrade fallback for older backends without project attribution.
       void refreshAll();
     });
     // The periodic safety net is provided by resource-sync itself: its

@@ -45,7 +45,9 @@ const retryReviewMock = mock(async (pipelineId: string) => ({
   phase: "reviewing" as const,
   backendRevision: 13,
 }));
-const getBuildPipelineMock = mock(async (_pipelineId: string) => null as unknown);
+const getBuildPipelineConditionalMock = mock(
+  async (_pipelineId: string) => null as unknown,
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -54,7 +56,7 @@ mock.module("@/lib/backend", () => ({
   cancelBuildPipeline: cancelBuildPipelineMock,
   sendBuildPipelineMessage: sendMessageMock,
   retryBuildPipelineReview: retryReviewMock,
-  getBuildPipeline: getBuildPipelineMock,
+  getBuildPipelineConditional: getBuildPipelineConditionalMock,
 }));
 
 const { BuildChatTab } = await import("./BuildChatTab");
@@ -124,8 +126,8 @@ describe("BuildChatTab backend projection", () => {
     cancelBuildPipelineMock.mockClear();
     sendMessageMock.mockClear();
     retryReviewMock.mockClear();
-    getBuildPipelineMock.mockClear();
-    getBuildPipelineMock.mockImplementation(async () => null);
+    getBuildPipelineConditionalMock.mockClear();
+    getBuildPipelineConditionalMock.mockImplementation(async () => null);
     useBuildPipelineStore.setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set([pipeline.environmentId]),
@@ -284,8 +286,8 @@ describe("BuildChatTab backend projection", () => {
 describe("BuildChatTab rehydration", () => {
   beforeEach(() => {
     cleanup();
-    getBuildPipelineMock.mockClear();
-    getBuildPipelineMock.mockImplementation(async () => null);
+    getBuildPipelineConditionalMock.mockClear();
+    getBuildPipelineConditionalMock.mockImplementation(async () => null);
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -296,7 +298,7 @@ describe("BuildChatTab rehydration", () => {
     // App hydrates pipelines once per project. If that never ran for this
     // project or failed, the tab would otherwise sit on its loading state
     // forever with no way back — the rehydrate-on-mount invariant.
-    getBuildPipelineMock.mockImplementation(async () => ({
+    getBuildPipelineConditionalMock.mockImplementation(async () => ({
       version: 2,
       id: pipeline.id,
       projectId: pipeline.projectId,
@@ -317,7 +319,11 @@ describe("BuildChatTab rehydration", () => {
     await waitFor(() => {
       expect(screen.getByText("Backend-owned build")).toBeTruthy();
     });
-    expect(getBuildPipelineMock).toHaveBeenCalledWith(pipeline.id);
+    expect(getBuildPipelineConditionalMock).toHaveBeenCalledWith(
+      pipeline.id,
+      undefined,
+      undefined,
+    );
   });
 
   test("does not refetch in a loop when the pipeline genuinely does not exist", async () => {
@@ -328,9 +334,11 @@ describe("BuildChatTab rehydration", () => {
       isLocal: true,
     }} />);
 
-    await waitFor(() => expect(getBuildPipelineMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1)
+    );
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(getBuildPipelineMock).toHaveBeenCalledTimes(1);
+    expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Loading build pipeline…")).toBeTruthy();
   });
 
@@ -348,7 +356,7 @@ describe("BuildChatTab rehydration", () => {
     }} />);
 
     expect(screen.getByText("Backend-owned build")).toBeTruthy();
-    expect(getBuildPipelineMock).not.toHaveBeenCalled();
+    expect(getBuildPipelineConditionalMock).not.toHaveBeenCalled();
   });
 });
 

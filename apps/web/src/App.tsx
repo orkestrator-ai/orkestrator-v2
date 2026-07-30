@@ -45,7 +45,7 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
-import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, syncAllEnvironmentsWithDocker } from "@/lib/backend";
+import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, getEnvironment, syncAllEnvironmentsWithDocker } from "@/lib/backend";
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
 import { useCodexBackgroundSync } from "@/hooks/useCodexBackgroundSync";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
@@ -606,13 +606,25 @@ function App() {
       const existingOptions = useClaudeOptionsStore.getState().getOptions(environmentId);
 
       if (launchPrompt) {
+        // List hydration deliberately excludes attachment bodies. Read the
+        // targeted record only for the one launch that needs them.
+        const detailedEnvironment = existingOptions?.initialPromptAttachments
+          ? environment
+          : await getEnvironment(environmentId).catch(() => environment ?? null);
+        const storedAttachments = detailedEnvironment?.initialPromptAttachments?.map(
+          (attachment) => ({
+            ...attachment,
+            previewUrl: attachment.previewUrl
+              ?? `data:image/png;base64,${attachment.base64Data}`,
+          }),
+        );
         setClaudeOptions(environmentId, {
           launchAgent: true,
           agentType: existingOptions?.agentType ?? environment?.defaultAgent ?? config.global.defaultAgent ?? "claude",
           initialPrompt: launchPrompt,
           initialPromptAttachments:
             existingOptions?.initialPromptAttachments
-            ?? environment?.initialPromptAttachments,
+            ?? storedAttachments,
         });
       } else if (existingOptions?.initialPrompt?.trim()) {
         clearClaudeOptions(environmentId);

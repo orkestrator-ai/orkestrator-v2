@@ -2314,10 +2314,13 @@ describe("remote gateway", () => {
     );
 
     pinBufferedBytes(stream.response, 2 * 1024 * 1024);
-    gateway.emit(event, { bytesBase64: pane });
+    gateway.emit(event, { text: pane, full: true });
     expect(stream.received()).not.toContain(pane);
     releaseBufferedBytes(stream.response);
-    gateway.emit(event, { bytesBase64: randomBytes(256).toString("base64") });
+    gateway.emit(event, {
+      text: randomBytes(256).toString("base64"),
+      full: false,
+    });
     await waitUntil(
       () => stream.received().includes(pane),
       "Compressed stream did not recover its retained tmux repaint",
@@ -2668,10 +2671,12 @@ describe("remote gateway", () => {
     clients.set(client, state);
 
     gateway.emit("terminal-output-tmux:env:tab:one", {
-      bytesBase64: Buffer.from("old pane").toString("base64"),
+      text: "old pane",
+      full: true,
     });
     gateway.emit("terminal-output-tmux:env:tab:one", {
-      bytesBase64: Buffer.from("latest pane").toString("base64"),
+      text: "latest pane",
+      full: true,
     });
     gateway.emit("environment-changed", { id: "env" });
     expect(writes).toEqual([]);
@@ -2685,10 +2690,31 @@ describe("remote gateway", () => {
 
     expect(flushed).toBe(true);
     expect(writes).toHaveLength(1);
-    expect(writes[0]).toContain(Buffer.from("latest pane").toString("base64"));
-    expect(writes[0]).not.toContain(Buffer.from("old pane").toString("base64"));
+    expect(writes[0]).toContain("latest pane");
+    expect(writes[0]).not.toContain("old pane");
     expect(writes[0]).not.toContain('"desynced":true');
     expect(state.desyncedSessions.size).toBe(0);
+
+    // A later refused line patch invalidates any retained full frame because
+    // replaying that frame alone would still omit the patch.
+    client.writableLength = 1024 * 1024;
+    gateway.emit("terminal-output-tmux:env:tab:one", {
+      text: "recovery base",
+      full: true,
+    });
+    gateway.emit("terminal-output-tmux:env:tab:one", {
+      text: "\u001b[2;1H\u001b[2Kpatch",
+      full: false,
+    });
+    client.writableLength = 0;
+    expect((
+      gateway as unknown as {
+        flushDesyncNotices(client: object, state: typeof state): boolean;
+      }
+    ).flushDesyncNotices(client, state)).toBe(true);
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toContain('"desynced":true');
+    expect(writes[1]).not.toContain("recovery base");
   });
 
   test("retains one latest repaint per session for a multiplexed terminal stream", async () => {
@@ -2728,16 +2754,20 @@ describe("remote gateway", () => {
     clients.set(client, state);
 
     gateway.emit("terminal-output-tmux:env:tab:one", {
-      bytesBase64: Buffer.from("one old").toString("base64"),
+      text: "one old",
+      full: true,
     });
     gateway.emit("terminal-output-tmux:env:tab:two", {
-      bytesBase64: Buffer.from("two old").toString("base64"),
+      text: "two old",
+      full: true,
     });
     gateway.emit("terminal-output-tmux:env:tab:one", {
-      bytesBase64: Buffer.from("one latest").toString("base64"),
+      text: "one latest",
+      full: true,
     });
     gateway.emit("terminal-output-tmux:env:tab:two", {
-      bytesBase64: Buffer.from("two latest").toString("base64"),
+      text: "two latest",
+      full: true,
     });
     expect(writes).toEqual([]);
     expect(state.desyncedSessions).toEqual(
@@ -2756,8 +2786,8 @@ describe("remote gateway", () => {
     // single frame for whichever session lagged last.
     expect(writes).toHaveLength(2);
     const combined = writes.join("");
-    expect(combined).toContain(Buffer.from("one latest").toString("base64"));
-    expect(combined).toContain(Buffer.from("two latest").toString("base64"));
+    expect(combined).toContain("one latest");
+    expect(combined).toContain("two latest");
     expect(combined).not.toContain(Buffer.from("one old").toString("base64"));
     expect(combined).not.toContain(Buffer.from("two old").toString("base64"));
     expect(combined).not.toContain('"desynced":true');

@@ -20,6 +20,26 @@ const mockGetLocalGitStatus = mock<(worktreePath: string, targetBranch?: string,
 );
 const mockGetFileTree = mock<(containerId: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
 const mockGetLocalFileTree = mock<(worktreePath: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
+const snapshot = <T,>(value: T): realBackend.ConditionalSnapshot<T> => ({
+  unchanged: false,
+  digest: JSON.stringify(value),
+  value,
+});
+const mockGetGitStatusSnapshot = mock(
+  async (containerId: string, targetBranch?: string) =>
+    snapshot(await mockGetGitStatus(containerId, targetBranch, true)),
+);
+const mockGetLocalGitStatusSnapshot = mock(
+  async (worktreePath: string, targetBranch?: string) =>
+    snapshot(await mockGetLocalGitStatus(worktreePath, targetBranch, true)),
+);
+const mockGetFileTreeSnapshot = mock(
+  async (containerId: string) => snapshot(await mockGetFileTree(containerId)),
+);
+const mockGetLocalFileTreeSnapshot = mock(
+  async (worktreePath: string) =>
+    snapshot(await mockGetLocalFileTree(worktreePath)),
+);
 const mockRevertContainerFile = mock<(environmentId: string, filePath: string, targetBranch: string) => Promise<string>>(
   (_environmentId, filePath) => Promise.resolve(filePath),
 );
@@ -39,6 +59,10 @@ mock.module("@/lib/backend", () => ({
   getLocalGitStatus: mockGetLocalGitStatus,
   getFileTree: mockGetFileTree,
   getLocalFileTree: mockGetLocalFileTree,
+  getGitStatusSnapshot: mockGetGitStatusSnapshot,
+  getLocalGitStatusSnapshot: mockGetLocalGitStatusSnapshot,
+  getFileTreeSnapshot: mockGetFileTreeSnapshot,
+  getLocalFileTreeSnapshot: mockGetLocalFileTreeSnapshot,
   revertContainerFile: mockRevertContainerFile,
   deleteContainerFile: mockDeleteContainerFile,
   revertLocalFile: mockRevertLocalFile,
@@ -139,6 +163,10 @@ describe("useFilesPanel", () => {
     mockGetLocalGitStatus.mockClear();
     mockGetFileTree.mockClear();
     mockGetLocalFileTree.mockClear();
+    mockGetGitStatusSnapshot.mockClear();
+    mockGetLocalGitStatusSnapshot.mockClear();
+    mockGetFileTreeSnapshot.mockClear();
+    mockGetLocalFileTreeSnapshot.mockClear();
     mockRevertContainerFile.mockClear();
     mockDeleteContainerFile.mockClear();
     mockRevertLocalFile.mockClear();

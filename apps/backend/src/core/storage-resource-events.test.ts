@@ -79,7 +79,11 @@ describe("StorageService resource change announcements", () => {
     await withStorage(async (storage, changes) => {
       await storage.addProject(project("p1"));
       await storage.addEnvironment(environment("e1", "p1"));
-      expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
+      expect(changes.at(-1)).toMatchObject({
+        resource: "environment",
+        id: "e1",
+        projectId: "p1",
+      });
 
       await storage.updateEnvironment("e1", { status: "running" });
       expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });

@@ -119,20 +119,12 @@ export interface Environment {
   environmentType: EnvironmentType;
   /** Path to git worktree (only for local environments) */
   worktreePath?: string;
-  /** PID of the opencode serve process (only for local environments) */
-  opencodePid?: number;
-  /** PID of the claude-bridge process (only for local environments) */
-  claudeBridgePid?: number;
-  /** PID of the codex-bridge process (only for local environments) */
-  codexBridgePid?: number;
   /** Host port for opencode server (local mode) */
   localOpencodePort?: number;
   /** Host port for claude-bridge server (local mode) */
   localClaudePort?: number;
   /** Host port for codex-bridge server (local mode) */
   localCodexPort?: number;
-  /** Last backend-owned Claude model catalog for this environment. */
-  claudeModelCatalog?: ClaudeModelCatalogSnapshot;
 
   // === Agent settings overrides ===
   /** Per-environment default agent override (undefined = use global config) */
@@ -188,14 +180,13 @@ export interface Environment {
     startedAt?: string;
     error?: string;
   };
-  /** Prompt awaiting a backend-owned rename after the environment starts. */
-  pendingRenamePrompt?: string;
 }
 
 export interface InitialPromptImageAttachment {
   id: string;
   name: string;
-  previewUrl: string;
+  /** Reconstructed from `base64Data` only while a preview is displayed. */
+  previewUrl?: string;
   base64Data: string;
 }
 

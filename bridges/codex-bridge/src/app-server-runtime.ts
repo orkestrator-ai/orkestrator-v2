@@ -60,6 +60,7 @@ import { getTranscriptCacheStats } from "./transcript-cache.js";
 import {
   createMessageId,
   createSessionId,
+  type MessagePatchEventData,
   type NormalizedMessage,
   type NormalizedPart,
 } from "./messages/types.js";
@@ -103,6 +104,7 @@ export interface RuntimeSseEvent {
     | "session.warning"
     | "session.title-updated"
     | "message.updated"
+    | "message.patched"
     | "session.structured-output"
     /** Codex is blocked on a human decision. */
     | "session.approval-requested"
@@ -146,6 +148,12 @@ interface ThreadRuntimeState {
   lastPublishedSnapshotChars: number;
   /** Assistant message currently being streamed into. */
   assistantMessageId?: string;
+  /** Last parts successfully published for the active assistant message. */
+  publishedMessageId?: string;
+  publishedParts: NormalizedPart[];
+  publishedModelId?: string;
+  /** Serializes transcript-dependent events without blocking app-server stdout. */
+  orderedEventTail: Promise<void>;
   /**
    * Events that arrived before the turn they belong to was registered.
    *
@@ -171,6 +179,23 @@ export function messageSnapshotIntervalMs(snapshotChars: number): number {
   if (snapshotChars >= VERY_LARGE_MESSAGE_CHARS) return 500;
   if (snapshotChars >= LARGE_MESSAGE_CHARS) return 250;
   return 100;
+}
+
+/**
+ * Completed tool parts are retained by `TurnRenderState`, so identity is an
+ * exact and allocation-free equality check for the expensive case. Streaming
+ * text/reasoning is rebuilt from deltas and only carries its content.
+ */
+function isSamePublishedPart(
+  published: NormalizedPart | undefined,
+  next: NormalizedPart,
+): boolean {
+  if (published === next) return true;
+  if (!published || published.type !== next.type) return false;
+  if (next.type === "text" || next.type === "thinking") {
+    return published.content === next.content;
+  }
+  return false;
 }
 
 /**
@@ -558,12 +583,19 @@ export class AppServerRuntime {
     if (sessionIds.length === 0) return false;
 
     this.pendingApprovals.set(enriched.approvalId, { request: enriched });
-    for (const sessionId of sessionIds) {
-      this.options.emit({
-        type: "session.approval-requested",
-        sessionId,
-        data: { approval: enriched },
-      });
+    const publish = () => {
+      for (const sessionId of sessionIds) {
+        this.options.emit({
+          type: "session.approval-requested",
+          sessionId,
+          data: { approval: enriched },
+        });
+      }
+    };
+    if (enriched.threadId) {
+      this.enqueueAfterMessageFlush(enriched.threadId, publish);
+    } else {
+      publish();
     }
     return true;
   }
@@ -577,12 +609,19 @@ export class AppServerRuntime {
     // Ownership follows the canonical thread, including tabs attached after the
     // request arrived.
     const sessionIds = this.sessionIdsForApproval(request);
-    for (const sessionId of sessionIds) {
-      this.options.emit({
-        type: "session.approval-resolved",
-        sessionId,
-        data: { approvalId: request.approvalId, decision, resolution },
-      });
+    const publish = () => {
+      for (const sessionId of sessionIds) {
+        this.options.emit({
+          type: "session.approval-resolved",
+          sessionId,
+          data: { approvalId: request.approvalId, decision, resolution },
+        });
+      }
+    };
+    if (request.threadId) {
+      this.enqueueAfterMessageFlush(request.threadId, publish);
+    } else {
+      publish();
     }
   }
 
@@ -657,13 +696,15 @@ export class AppServerRuntime {
     const sessionIds = this.sessionIdsForThread(request.threadId);
     if (sessionIds.length === 0) return false;
     this.pendingInteractions.set(request.interactionId, { request });
-    for (const sessionId of sessionIds) {
-      this.options.emit({
-        type: "session.interaction-requested",
-        sessionId,
-        data: { interaction: request },
-      });
-    }
+    this.enqueueAfterMessageFlush(request.threadId, () => {
+      for (const sessionId of sessionIds) {
+        this.options.emit({
+          type: "session.interaction-requested",
+          sessionId,
+          data: { interaction: request },
+        });
+      }
+    });
     return true;
   }
 
@@ -673,13 +714,15 @@ export class AppServerRuntime {
     resolution: InteractionResolution,
   ): void {
     this.pendingInteractions.delete(request.interactionId);
-    for (const sessionId of this.sessionIdsForThread(request.threadId)) {
-      this.options.emit({
-        type: "session.interaction-resolved",
-        sessionId,
-        data: { interactionId: request.interactionId, action: answer.action, resolution },
-      });
-    }
+    this.enqueueAfterMessageFlush(request.threadId, () => {
+      for (const sessionId of this.sessionIdsForThread(request.threadId)) {
+        this.options.emit({
+          type: "session.interaction-resolved",
+          sessionId,
+          data: { interactionId: request.interactionId, action: answer.action, resolution },
+        });
+      }
+    });
   }
 
   private sessionIdsForThread(threadId: string): string[] {
@@ -1237,6 +1280,8 @@ export class AppServerRuntime {
       state = {
         render: createTurnRenderState(),
         pendingEvents: new Map(),
+        publishedParts: [],
+        orderedEventTail: Promise.resolve(),
         lastPublishedSnapshotChars: 0,
         coalescer: new UpdateCoalescer({
           intervalMs:
@@ -1499,17 +1544,19 @@ export class AppServerRuntime {
         // Recorded but not terminal: app-server can report a retryable error and
         // still complete the turn.
         if (turn) turn.onError(event.error);
-        for (const sessionId of context.bridgeSessionIds) {
-          this.options.emit({
-            type: "session.warning",
-            sessionId,
-            data: {
-              error: event.error.message,
-              code: event.error.code,
-              willRetry: event.willRetry,
-            },
-          });
-        }
+        this.enqueueAfterMessageFlush(threadId, () => {
+          for (const sessionId of context.bridgeSessionIds) {
+            this.options.emit({
+              type: "session.warning",
+              sessionId,
+              data: {
+                error: event.error.message,
+                code: event.error.code,
+                willRetry: event.willRetry,
+              },
+            });
+          }
+        });
         return;
       }
       case "turn.completed": {
@@ -1586,6 +1633,12 @@ export class AppServerRuntime {
     }
     if (!target || target.modelId === model) return;
     target.modelId = model;
+    target.revision = (target.revision ?? 0) + 1;
+    const state = this.threadState.get(context.threadId);
+    if (state?.publishedMessageId === target.id) {
+      state.publishedModelId = model;
+      state.publishedParts = target.parts.slice();
+    }
     this.bumpMessageRevision(context);
     for (const sessionId of context.bridgeSessionIds) {
       this.options.emit({
@@ -1866,6 +1919,7 @@ export class AppServerRuntime {
       );
     }
 
+    await state.orderedEventTail;
     await state.coalescer.flushNow();
 
     if (structuredResult) {
@@ -1924,7 +1978,22 @@ export class AppServerRuntime {
     return work;
   }
 
-  /** Re-renders the streaming assistant message and pushes a full snapshot. */
+  /**
+   * Queue an event behind the latest coalesced transcript frame. The returned
+   * chain is deliberately not awaited by notification handlers: app-server's
+   * stdout loop must remain independent from rendering and SSE delivery.
+   */
+  private enqueueAfterMessageFlush(threadId: string, publish: () => void): void {
+    const state = this.stateFor(threadId);
+    state.orderedEventTail = state.orderedEventTail
+      .then(() => state.coalescer.flushNow())
+      .then(publish)
+      .catch((error) => {
+        console.error("[codex-bridge] Failed to publish ordered event:", error);
+      });
+  }
+
+  /** Re-renders the streaming assistant message and publishes a sparse update. */
   private async publishAssistantMessage(threadId: string): Promise<void> {
     const context = this.registry.getThread(threadId);
     const state = this.threadState.get(threadId);
@@ -1944,10 +2013,50 @@ export class AppServerRuntime {
     message.parts = rendered.parts;
     message.content = rendered.content;
     state.lastPublishedSnapshotChars = normalizedMessageSnapshotChars(message);
-    this.bumpMessageRevision(context);
 
+    if (
+      state.publishedMessageId !== message.id
+      || state.publishedModelId !== message.modelId
+    ) {
+      state.publishedMessageId = message.id;
+      state.publishedParts = message.parts.slice();
+      state.publishedModelId = message.modelId;
+      message.revision = (message.revision ?? 0) + 1;
+      this.bumpMessageRevision(context);
+      for (const sessionId of context.bridgeSessionIds) {
+        this.options.emit({ type: "message.updated", sessionId, data: { message } });
+      }
+      return;
+    }
+
+    const changedParts: { index: number; part: NormalizedPart }[] = [];
+    for (let index = 0; index < message.parts.length; index += 1) {
+      const part = message.parts[index];
+      if (part && !isSamePublishedPart(state.publishedParts[index], part)) {
+        changedParts.push({ index, part });
+      }
+    }
+    if (
+      changedParts.length === 0
+      && message.parts.length === state.publishedParts.length
+    ) {
+      return;
+    }
+
+    state.publishedParts = message.parts.slice();
+    message.revision = (message.revision ?? 0) + 1;
+    this.bumpMessageRevision(context);
+    const patch = {
+      messageId: message.id,
+      partCount: message.parts.length,
+      changedParts,
+      content: message.content,
+      createdAt: message.createdAt,
+      turnId: message.turnId,
+      revision: message.revision,
+    } satisfies MessagePatchEventData;
     for (const sessionId of context.bridgeSessionIds) {
-      this.options.emit({ type: "message.updated", sessionId, data: { message } });
+      this.options.emit({ type: "message.patched", sessionId, data: patch });
     }
   }
 
@@ -1955,12 +2064,21 @@ export class AppServerRuntime {
     // Every phase transition passes through here, so it is also where a drain
     // waiting on this thread finds out that it may be finished.
     this.notifyThreadActivity();
-    for (const sessionId of context.bridgeSessionIds) {
-      this.options.emit({
-        type: "session.updated",
-        sessionId,
-        data: { status: phaseToExternalStatus(context.phase), phase: context.phase },
-      });
+    const status = phaseToExternalStatus(context.phase);
+    const phase = context.phase;
+    const publish = () => {
+      for (const sessionId of context.bridgeSessionIds) {
+        this.options.emit({
+          type: "session.updated",
+          sessionId,
+          data: { status, phase },
+        });
+      }
+    };
+    if (context.activeTurn && this.threadState.has(context.threadId)) {
+      this.enqueueAfterMessageFlush(context.threadId, publish);
+    } else {
+      publish();
     }
   }
 
@@ -2426,8 +2544,13 @@ export class AppServerRuntime {
       content: "",
       parts: [],
       createdAt: new Date(this.now()).toISOString(),
+      revision: 1,
       ...(context.modelId ? { modelId: context.modelId } : {}),
     };
+    const streamingState = this.stateFor(context.threadId);
+    streamingState.publishedMessageId = assistantMessage.id;
+    streamingState.publishedParts = [];
+    streamingState.publishedModelId = assistantMessage.modelId;
     context.messages.push(assistantMessage);
     this.bumpMessageRevision(context);
     for (const id of context.bridgeSessionIds) {
@@ -2456,9 +2579,8 @@ export class AppServerRuntime {
       context.activeTurn = accumulator;
       context.dispatchInFlight = false;
       this.registry.setPhase(context, "running");
-      const state = this.stateFor(context.threadId);
-      state.render = beginTurnRenderState(state.render);
-      state.assistantMessageId = assistantMessage.id;
+      streamingState.render = beginTurnRenderState(streamingState.render);
+      streamingState.assistantMessageId = assistantMessage.id;
       this.emitStatus(context);
       this.drainPendingEvents(context, review.turnId);
       return { outcome: "accepted", turnId: review.turnId };
@@ -2982,9 +3104,14 @@ export class AppServerRuntime {
       content: "",
       parts: [],
       createdAt: new Date(this.now()).toISOString(),
+      revision: 1,
       ...(confirmedModelForTurn ? { modelId: confirmedModelForTurn } : {}),
       ...(isPlanReview ? { planReview: true } : {}),
     };
+    const streamingState = this.stateFor(context.threadId);
+    streamingState.publishedMessageId = assistantMessage.id;
+    streamingState.publishedParts = [];
+    streamingState.publishedModelId = assistantMessage.modelId;
     context.messages.push(assistantMessage);
     this.bumpMessageRevision(context);
 
@@ -3051,9 +3178,8 @@ export class AppServerRuntime {
       context.engineGeneration = turn.engineGeneration;
       context.dispatchInFlight = false;
       this.registry.setPhase(context, "running");
-      const state = this.stateFor(context.threadId);
-      state.render = beginTurnRenderState(state.render);
-      state.assistantMessageId = assistantMessage.id;
+      streamingState.render = beginTurnRenderState(streamingState.render);
+      streamingState.assistantMessageId = assistantMessage.id;
 
       // The turn is registered now, so anything that arrived while `turn/start`
       // was still in flight can be applied. A fast turn may already have

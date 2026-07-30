@@ -29,6 +29,7 @@ import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   type CodexConversationMode,
   type CodexMessage,
+  type CodexMessagePatch,
   type CodexPromptAcceptedResponse,
   type CodexPromptAttachment,
   type CodexPromptSendOutcome,
@@ -368,6 +369,7 @@ export function CodexChatTab({
   const removeMessage = useCodexStore((state) => state.removeMessage);
   const setMessages = useCodexStore((state) => state.setMessages);
   const upsertMessage = useCodexStore((state) => state.upsertMessage);
+  const patchMessage = useCodexStore((state) => state.patchMessage);
   const setSessionLoading = useCodexStore((state) => state.setSessionLoading);
   const setSessionError = useCodexStore((state) => state.setSessionError);
   const setSessionTitle = useCodexStore((state) => state.setSessionTitle);
@@ -2332,6 +2334,14 @@ export function CodexChatTab({
               continue;
             }
 
+            if (event.type === "message.patched") {
+              const patch = event.data as unknown as CodexMessagePatch;
+              if (!patchMessage(sessionKey, patch)) {
+                await refreshMessages(client, session.sessionId);
+              }
+              continue;
+            }
+
             if (event.type === "session.updated") {
               // Validate exactly like the HTTP path does. A bare cast here let a
               // malformed frame reach `usage.percentUsed.toFixed(...)` in the
@@ -2489,6 +2499,7 @@ export function CodexChatTab({
     setSessionPhase,
     setSessionTitle,
     upsertMessage,
+    patchMessage,
   ]);
 
   // Watchdog poll for stalled turns. Mirrors the SSE gate above so it also

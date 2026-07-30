@@ -37,6 +37,10 @@ describe("StorageService environment attachment privacy", () => {
           base64Data: secret,
         }],
       });
+      const storedAttachment = (await storage.getEnvironment(environment.id))
+        ?.initialPromptAttachments?.[0];
+      expect(storedAttachment?.base64Data).toBe(secret);
+      expect(storedAttachment?.previewUrl).toBeUndefined();
       // Rotate a copy containing the attachment before clearing it.
       await storage.updateEnvironment(environment.id, { name: "renamed" });
       expect((await backupContents(dataDir)).some(

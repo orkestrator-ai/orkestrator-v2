@@ -218,7 +218,7 @@ function isInitialPromptImageAttachment(
   return isRecord(value)
     && isNonBlankString(value.id)
     && isNonBlankString(value.name)
-    && typeof value.previewUrl === "string"
+    && (value.previewUrl === undefined || typeof value.previewUrl === "string")
     && isNonBlankString(value.base64Data);
 }
 
@@ -1181,12 +1181,12 @@ export class StorageService {
    * a client that refetches in response is guaranteed to observe the new value
    * rather than race the write it was told about.
    */
-  private announce(resource: ResourceKind, id: string): void {
+  private announce(resource: ResourceKind, id: string, projectId?: string): void {
     const listener = this.changeListener;
     if (!listener) return;
     this.changeRevision += 1;
     try {
-      listener({ resource, id, revision: this.changeRevision });
+      listener({ resource, id, revision: this.changeRevision, ...(projectId ? { projectId } : {}) });
     } catch (error) {
       // A broken client transport must never fail the mutation that succeeded.
       console.error("[Storage] Resource change listener threw:", error);
@@ -1848,7 +1848,7 @@ export class StorageService {
         Math.max(-1, ...environments.filter((item) => item.projectId === environment.projectId).map((item) => item.order)) + 1;
       environments.push(environment);
       await this.saveEnvironments(environments);
-      this.announce("environment", environment.id);
+      this.announce("environment", environment.id, environment.projectId);
       return environment;
     });
   }
@@ -1856,6 +1856,7 @@ export class StorageService {
   async removeEnvironment(environmentId: string): Promise<void> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
+      const removed = environments.find((environment) => environment.id === environmentId);
       const filtered = environments.filter((environment) => environment.id !== environmentId);
       if (filtered.length === environments.length) {
         // A previous attempt may have committed the primary removal and then
@@ -1867,7 +1868,7 @@ export class StorageService {
       }
       await this.saveEnvironments(filtered);
       await this.scrubEnvironmentBackups(environmentId, true);
-      this.announce("environment", environmentId);
+      this.announce("environment", environmentId, removed?.projectId);
     });
   }
 
@@ -2012,7 +2013,9 @@ export class StorageService {
           if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
             throw new Error("Initial prompt attachments exceed the 32 MB limit");
           }
-          environment.initialPromptAttachments = updates.initialPromptAttachments;
+          environment.initialPromptAttachments = updates.initialPromptAttachments.map(
+            ({ previewUrl: _previewUrl, ...attachment }) => attachment,
+          );
         } else {
           throw new Error("Initial prompt attachments are malformed");
         }
@@ -2075,7 +2078,7 @@ export class StorageService {
       if ("initialPromptAttachments" in updates) {
         await this.scrubEnvironmentBackups(environmentId, false);
       }
-      this.announce("environment", environmentId);
+      this.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -2107,7 +2110,7 @@ export class StorageService {
       }
       environment.startupAgentSession = undefined;
       await this.saveEnvironments(environments);
-      this.announce("environment", environmentId);
+      this.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -2135,7 +2138,7 @@ export class StorageService {
       // Activity timestamps churn constantly and are reconstructed from live
       // observation anyway; rotating five backups for each refresh is waste.
       await this.saveEnvironments(environments, { backup: false });
-      this.announce("environment", environmentId);
+      this.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -2266,7 +2269,7 @@ export class StorageService {
       // the returned record from this call's response, so it does not need
       // the broadcast; genuine state transitions still announce below.
       if (agentActivityStructureFingerprint(environment) !== structureBefore) {
-        this.announce("environment", environmentId);
+        this.announce("environment", environmentId, environment.projectId);
       }
       return environment;
     });
@@ -2319,7 +2322,11 @@ export class StorageService {
       if (changed.length === 0) return changed;
       await this.saveEnvironments(environments, { backup: false });
       for (const environmentId of changed) {
-        this.announce("environment", environmentId);
+        this.announce(
+          "environment",
+          environmentId,
+          environments.find((environment) => environment.id === environmentId)?.projectId,
+        );
       }
       return changed;
     });
@@ -2359,7 +2366,11 @@ export class StorageService {
       if (changed.length === 0) return changed;
       await this.saveEnvironments(environments, { backup: false });
       for (const environmentId of changed) {
-        this.announce("environment", environmentId);
+        this.announce(
+          "environment",
+          environmentId,
+          environments.find((environment) => environment.id === environmentId)?.projectId,
+        );
       }
       return changed;
     });
@@ -2390,7 +2401,7 @@ export class StorageService {
       environment.lastActivityAt = normalizedActivityAt;
       environment.hasUnreadWork = true;
       await this.saveEnvironments(environments);
-      this.announce("environment", environmentId);
+      this.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -2423,7 +2434,7 @@ export class StorageService {
 
       environment.hasUnreadWork = unread;
       await this.saveEnvironments(environments);
-      this.announce("environment", environmentId);
+      this.announce("environment", environmentId, environment.projectId);
       return environment;
     });
   }
@@ -2446,7 +2457,9 @@ export class StorageService {
       const reordered = environments
         .filter((environment) => environment.projectId === projectId)
         .sort((a, b) => a.order - b.order);
-      for (const environment of reordered) this.announce("environment", environment.id);
+      for (const environment of reordered) {
+        this.announce("environment", environment.id, environment.projectId);
+      }
       return reordered;
     });
   }

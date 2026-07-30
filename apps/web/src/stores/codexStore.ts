@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import {
+  applyCodexMessagePatch,
   CODEX_MODELS,
   DEFAULT_CODEX_MODEL,
   type CodexApproval,
@@ -7,6 +8,7 @@ import {
   type CodexConversationMode,
   type CodexInteraction,
   type CodexMessage,
+  type CodexMessagePatch,
   type CodexModel,
   type CodexReasoningEffort,
   type CodexSessionPhase,
@@ -85,6 +87,7 @@ type CodexChatSlice = NativeChatStoreSlice<
 >;
 
 interface CodexState extends CodexChatSlice {
+  patchMessage: (sessionKey: string, patch: CodexMessagePatch) => boolean;
   // Agent-specific state
   models: CodexModel[];
   slashCommands: Map<string, CodexSlashCommand[]>;
@@ -271,6 +274,27 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
     CodexAttachment,
     CodexQueuedMessage
   >({ mergeMessages: mergeNativeMessagesPreservingClientOnly })(set, get, api),
+
+  patchMessage: (sessionKey, patch) => {
+    if (!patch?.messageId) return false;
+    let applied = false;
+    set((state) => {
+      const session = state.sessions.get(sessionKey);
+      if (!session) return state;
+      const index = session.messages.findIndex((message) => message.id === patch.messageId);
+      const target = index < 0 ? undefined : session.messages[index];
+      if (!target) return state;
+      const patched = applyCodexMessagePatch(target, patch);
+      if (!patched) return state;
+      const messages = session.messages.slice();
+      messages[index] = patched;
+      const sessions = new Map(state.sessions);
+      sessions.set(sessionKey, { ...session, messages });
+      applied = true;
+      return { sessions };
+    });
+    return applied;
+  },
 
   // Agent-specific state
   models: CODEX_MODELS,

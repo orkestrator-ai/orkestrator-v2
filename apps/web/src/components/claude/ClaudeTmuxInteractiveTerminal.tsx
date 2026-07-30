@@ -254,10 +254,20 @@ export function ClaudeTmuxInteractiveTerminal({
         }
 
         sessionIdRef.current = sessionId;
+        let recoveryInFlight = false;
         activeUnlisten = await listen<TerminalOutputPayload>(
           `terminal-output-${sessionId}`,
           (event) => {
             const bytes = decodeTerminalOutputPayload(event.payload);
+            if (bytes === null) {
+              if (!recoveryInFlight) {
+                recoveryInFlight = true;
+                void startInteractiveTerminal(sessionId).finally(() => {
+                  recoveryInFlight = false;
+                });
+              }
+              return;
+            }
             if (bytes?.length) terminal.write(bytes);
           },
           { signal: listenAbortController.signal },

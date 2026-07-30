@@ -1,6 +1,6 @@
 # Milestone 3 — Repeated payload and polling reduction
 
-Status: Not started
+Status: Implemented; manual verification pending
 
 Depends on: Milestone 2
 
@@ -149,4 +149,38 @@ Record:
 - compatibility-removal target release;
 - test command results.
 
-No evidence recorded yet.
+Implementation and automated verification completed on 2026-07-30.
+
+- Representative ASCII terminal frames, including the JSON envelope:
+  - 256 KiB: base64 `349,574` bytes; plain UTF-8 `262,183` bytes
+    (`87,391` bytes / `25%` smaller).
+  - 1 MiB: base64 `1,398,150` bytes; plain UTF-8 `1,048,615` bytes
+    (`349,535` bytes / `25%` smaller).
+- Representative 80x24 tmux capture:
+  - full repaint: `1,973` bytes;
+  - one changed-line patch: `91` bytes (`95.39%` smaller).
+- Terminal delta retention is bounded to 1,024 chunks and 2 MiB of UTF-8
+  bytes. Tests cover a delta hit, count-bound expiry, generation mismatch, and
+  snapshot/live ordering.
+- Codex tests cover the initial full frame, successor patches, duplicate/gap
+  rejection, authoritative reconciliation, ordering before approval,
+  interaction, warning, and idle, plus completed large-tool-part identity.
+- Environment projection tests cover attachment bodies, model catalogs,
+  activity observations, renderer leases, backend PIDs, rename prompts, and
+  expired launch-only fields. Stored attachment previews are reconstructed
+  client-side from the single durable base64 body.
+- Conditional build, file-tree, and Git-change reads retain their legacy full
+  response when no cursor/digest is supplied. Stable clients receive
+  `unchanged` responses or bounded build-message tails.
+- Base64 terminal decoding and complete Codex message/REST recovery remain for
+  one compatibility release. A removal version has not been selected.
+- Verification:
+  - backend, web, desktop, Codex bridge, and protocol typechecks passed;
+  - `bun run test` passed all workspace, root, bridge, and protocol groups;
+  - the pinned Codex protocol artifacts matched;
+  - iOS simulator: 40 tests, 0 failures.
+
+No pre-change live-device baseline was captured in this workspace. The manual
+disconnect, full-screen tmux, inactive-environment, constrained-link, and
+real-device measurements above remain required before changing this milestone
+to `Complete`.

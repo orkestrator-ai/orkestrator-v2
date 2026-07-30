@@ -119,12 +119,24 @@ export async function getEnvironment(environmentId: string): Promise<Environment
   return invoke<Environment | null>("get_environment", { environmentId });
 }
 
+export type EnvironmentActivityUpdate = Pick<
+  Environment,
+  | "id"
+  | "lastActivityAt"
+  | "hasUnreadWork"
+  | "agentActivityState"
+  | "agentActivityUpdatedAt"
+>;
+
 /** Persist the latest prompt/completion activity for activity-based sorting. */
 export async function recordEnvironmentActivity(
   environmentId: string,
   occurredAt: string,
-): Promise<Environment> {
-  return invoke<Environment>("record_environment_activity", { environmentId, occurredAt });
+): Promise<EnvironmentActivityUpdate> {
+  return invoke<EnvironmentActivityUpdate>(
+    "record_environment_activity",
+    { environmentId, occurredAt },
+  );
 }
 
 /** Persist the aggregate agent state for cross-frontend synchronization. */
@@ -133,8 +145,8 @@ export async function setEnvironmentAgentActivity(
   state: AgentActivityState,
   occurredAt: string,
   observerId: string,
-): Promise<Environment> {
-  return invoke<Environment>("set_environment_agent_activity", {
+): Promise<EnvironmentActivityUpdate> {
+  return invoke<EnvironmentActivityUpdate>("set_environment_agent_activity", {
     environmentId,
     state,
     occurredAt,
@@ -146,8 +158,11 @@ export async function setEnvironmentAgentActivity(
 export async function recordEnvironmentCompletion(
   environmentId: string,
   occurredAt: string,
-): Promise<Environment> {
-  return invoke<Environment>("record_environment_completion", { environmentId, occurredAt });
+): Promise<EnvironmentActivityUpdate> {
+  return invoke<EnvironmentActivityUpdate>(
+    "record_environment_completion",
+    { environmentId, occurredAt },
+  );
 }
 
 export async function createEnvironment(
@@ -304,6 +319,8 @@ export async function getTerminalOutputBuffer(sessionId: string): Promise<string
 }
 
 export interface TerminalOutputSnapshot {
+  mode?: "full" | "delta";
+  reason?: "expired" | "generation-changed";
   output: string;
   revision: number;
   generation: number;
@@ -311,15 +328,21 @@ export interface TerminalOutputSnapshot {
 }
 
 export interface TerminalOutputEvent {
-  bytesBase64: string;
+  text: string;
   revision: number;
   generation: number;
 }
 
 export async function getTerminalOutputSnapshot(
   sessionId: string,
+  cursor?: { revision: number; generation: number },
 ): Promise<TerminalOutputSnapshot> {
-  const value = await invoke<unknown>("get_terminal_output_snapshot", { sessionId });
+  const value = await invoke<unknown>("get_terminal_output_snapshot", {
+    sessionId,
+    ...(cursor
+      ? { sinceRevision: cursor.revision, sinceGeneration: cursor.generation }
+      : {}),
+  });
   if (
     typeof value !== "object" ||
     value === null ||
@@ -336,6 +359,8 @@ export async function getTerminalOutputSnapshot(
     throw new Error("Backend returned an invalid terminal output snapshot");
   }
   return {
+    mode: (value as { mode?: "full" | "delta" }).mode,
+    reason: (value as { reason?: "expired" | "generation-changed" }).reason,
     output: (value as { output: string }).output,
     revision: (value as { revision: number }).revision,
     generation: (value as { generation: number }).generation,
@@ -1271,6 +1296,12 @@ export interface FileContent {
   language: string;
 }
 
+export interface ConditionalSnapshot<T> {
+  unchanged: boolean;
+  digest: string;
+  value?: T;
+}
+
 /** Get git changes comparing current state against a target branch */
 export async function getGitStatus(
   containerId: string,
@@ -1284,9 +1315,29 @@ export async function getGitStatus(
   });
 }
 
+export async function getGitStatusSnapshot(
+  containerId: string,
+  targetBranch: string,
+  knownDigest?: string,
+): Promise<ConditionalSnapshot<GitFileChange[]>> {
+  return invoke("get_git_status", {
+    containerId,
+    targetBranch,
+    includeUncommitted: true,
+    knownDigest: knownDigest ?? "",
+  });
+}
+
 /** Get workspace file tree from a container */
 export async function getFileTree(containerId: string): Promise<FileNode[]> {
   return invoke<FileNode[]>("get_file_tree", { containerId });
+}
+
+export async function getFileTreeSnapshot(
+  containerId: string,
+  knownDigest?: string,
+): Promise<ConditionalSnapshot<FileNode[]>> {
+  return invoke("get_file_tree", { containerId, knownDigest: knownDigest ?? "" });
 }
 
 /** Read a file from inside a container */
@@ -1361,6 +1412,19 @@ export async function getLocalGitStatus(
   });
 }
 
+export async function getLocalGitStatusSnapshot(
+  worktreePath: string,
+  targetBranch: string,
+  knownDigest?: string,
+): Promise<ConditionalSnapshot<GitFileChange[]>> {
+  return invoke("get_local_git_status", {
+    worktreePath,
+    targetBranch,
+    includeUncommitted: true,
+    knownDigest: knownDigest ?? "",
+  });
+}
+
 /**
  * Authoritative diff-stat snapshot for every environment the backend tracks.
  *
@@ -1402,6 +1466,16 @@ export async function prMonitorRefresh(environmentId: string): Promise<void> {
 /** Get file tree from a local environment (worktree path) */
 export async function getLocalFileTree(worktreePath: string): Promise<FileNode[]> {
   return invoke<FileNode[]>("get_local_file_tree", { worktreePath });
+}
+
+export async function getLocalFileTreeSnapshot(
+  worktreePath: string,
+  knownDigest?: string,
+): Promise<ConditionalSnapshot<FileNode[]>> {
+  return invoke("get_local_file_tree", {
+    worktreePath,
+    knownDigest: knownDigest ?? "",
+  });
 }
 
 /** Read a file from a local environment (worktree path) */
@@ -1922,10 +1996,42 @@ export async function getBuildPipeline<T = unknown>(
   return invoke<PersistedBuildPipeline<T> | null>("get_build_pipeline", { pipelineId });
 }
 
+export type ConditionalBuildPipeline<T> =
+  | { unchanged: true; revision: number }
+  | {
+      unchanged: false;
+      record: PersistedBuildPipeline<T>;
+      messagePatches: Array<{
+        sessionKey: string;
+        baseRevision?: number;
+        baseCount?: number;
+        startIndex: number;
+        revision: number;
+        messages: unknown[];
+      }>;
+    }
+  | PersistedBuildPipeline<T>
+  | null;
+
+export async function getBuildPipelineConditional<T = unknown>(
+  pipelineId: string,
+  knownRevision?: number,
+  knownSessions?: Record<string, { revision: number; count: number }>,
+): Promise<ConditionalBuildPipeline<T>> {
+  return invoke("get_build_pipeline", { pipelineId, knownRevision, knownSessions });
+}
+
 export async function listBuildPipelines<T = unknown>(
   projectId: string,
 ): Promise<Array<PersistedBuildPipeline<T>>> {
   return invoke<Array<PersistedBuildPipeline<T>>>("list_build_pipelines", { projectId });
+}
+
+export async function listBuildPipelinesConditional<T = unknown>(
+  projectId: string,
+  knownRevisions: Record<string, number>,
+): Promise<{ ids: string[]; records: Array<PersistedBuildPipeline<T>> }> {
+  return invoke("list_build_pipelines", { projectId, knownRevisions });
 }
 
 export async function deleteBuildPipeline(pipelineId: string): Promise<void> {

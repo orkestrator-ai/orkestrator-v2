@@ -95,7 +95,8 @@ export interface OpenCodeModelCatalogSnapshot {
 export interface InitialPromptImageAttachment {
   id: string;
   name: string;
-  previewUrl: string;
+  /** Ephemeral renderer preview; omitted from durable storage. */
+  previewUrl?: string;
   base64Data: string;
 }
 
@@ -218,6 +219,19 @@ export interface Environment {
   /** Prompt awaiting a backend-owned rename after the environment starts. */
   pendingRenamePrompt?: string;
 }
+
+/** Stable renderer-facing projection used by environment list commands. */
+export type ClientEnvironment = Omit<
+  Environment,
+  | "agentActivitySources"
+  | "frontendAgentActivityObservers"
+  | "initialPromptAttachments"
+  | "claudeModelCatalog"
+  | "opencodePid"
+  | "claudeBridgePid"
+  | "codexBridgePid"
+  | "pendingRenamePrompt"
+>;
 
 export type SessionType = "plain" | "claude" | "opencode" | "codex" | "root";
 export type SessionStatus = "connected" | "disconnected";

@@ -35,6 +35,31 @@ interface DiffViewerTabProps {
   onSwitchToFileView?: () => void;
 }
 
+const diffBaseCache = new Map<string, Promise<backend.FileContent | null>>();
+const MAX_DIFF_BASE_CACHE_ENTRIES = 128;
+
+function cachedImmutableDiffBase(
+  key: string,
+  comparisonRef: string,
+  load: () => Promise<backend.FileContent | null>,
+): Promise<backend.FileContent | null> {
+  // Branches move; only commit-addressed bases are safe across tab remounts.
+  if (!/^[0-9a-f]{7,64}$/i.test(comparisonRef)) return load();
+  const existing = diffBaseCache.get(key);
+  if (existing) return existing;
+  const pending = load().catch((error) => {
+    diffBaseCache.delete(key);
+    throw error;
+  });
+  diffBaseCache.set(key, pending);
+  while (diffBaseCache.size > MAX_DIFF_BASE_CACHE_ENTRIES) {
+    const oldest = diffBaseCache.keys().next().value;
+    if (oldest === undefined) break;
+    diffBaseCache.delete(oldest);
+  }
+  return pending;
+}
+
 type DiffMode = "side-by-side" | "inline";
 
 /** Viewports narrower than this get the touch-oriented single-column layout. */
@@ -242,9 +267,17 @@ export function DiffViewerTab({
         if (!isNewFile) {
           let originalResult: backend.FileContent | null;
           if (isLocalEnvironment && worktreePath) {
-            originalResult = await backend.readLocalFileAtBranch(worktreePath, filePath, baseBranch);
+            originalResult = await cachedImmutableDiffBase(
+              `local\0${worktreePath}\0${baseBranch}\0${filePath}`,
+              baseBranch,
+              () => backend.readLocalFileAtBranch(worktreePath, filePath, baseBranch),
+            );
           } else if (containerId) {
-            originalResult = await backend.readFileAtBranch(containerId, filePath, baseBranch);
+            originalResult = await cachedImmutableDiffBase(
+              `container\0${containerId}\0${baseBranch}\0${filePath}`,
+              baseBranch,
+              () => backend.readFileAtBranch(containerId, filePath, baseBranch),
+            );
           } else {
             throw new Error("No container ID or worktree path available");
           }

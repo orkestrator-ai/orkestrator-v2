@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   agentMcpConfigJson,
   agentToolConnectionTarget,
+  buildTmuxPaneUpdate,
   CAPTURE_PANE_CACHE_MS,
   CLAUDE_STATE_POLL_INTERVAL_MS,
   CLAUDE_STATE_READ_TIMEOUT_MS,
@@ -2007,15 +2008,11 @@ exit 0
       expect(emitted.some((item) => item.event === "claude-tmux:event")).toBe(true);
       const terminalOutput = emitted.find((item) => item.event === `terminal-output-${terminalSessionId}`);
       expect(terminalOutput).toBeDefined();
-      // Pins the wire shape, not just the event name. The renderer decodes
-      // base64; handed the older `{ bytes: number[] }` payload it writes nothing
-      // and the terminal simply stays blank, so an assertion on the event alone
-      // lets a revert break every tmux terminal with a green suite.
+      // Pins the current plain UTF-8 shape and exact-repaint marker.
       const terminalPayload = terminalOutput!.payload as Record<string, unknown>;
-      expect(Object.keys(terminalPayload)).toEqual(["bytesBase64"]);
-      expect(typeof terminalPayload.bytesBase64).toBe("string");
-      expect(Buffer.from(terminalPayload.bytesBase64 as string, "base64").toString("utf8"))
-        .toBe("\u001b[H\u001b[2Jbypass permissions on");
+      expect(Object.keys(terminalPayload)).toEqual(["text", "full"]);
+      expect(terminalPayload.full).toBe(true);
+      expect(terminalPayload.text).toBe("\u001b[H\u001b[2Jbypass permissions on");
     });
   });
 
@@ -3808,6 +3805,35 @@ describe("TranscriptTail incremental reads", () => {
 });
 
 describe("interactive tmux terminal snapshots", () => {
+  test("emits line patches and falls back for resize-shaped redraws", () => {
+    expect(buildTmuxPaneUpdate("one\ntwo\nthree", "one\nTWO\nthree")).toEqual({
+      text: "\u001b[2;1H\u001b[2KTWO",
+      full: false,
+    });
+    expect(buildTmuxPaneUpdate(
+      "one\ntwo\nthree",
+      "one\n\u001b[31mTWO\u001b[0m\nthree",
+    )).toEqual({
+      text: "\u001b[2;1H\u001b[2K\u001b[31mTWO\u001b[0m",
+      full: false,
+    });
+    expect(buildTmuxPaneUpdate("one\ntwo", "one\ntwo\nthree")).toEqual({
+      text: "\u001b[H\u001b[2Jone\r\ntwo\r\nthree",
+      full: true,
+    });
+    expect(buildTmuxPaneUpdate("one\ntwo", "\n")).toEqual({
+      text: "\u001b[H\u001b[2J\r\n",
+      full: true,
+    });
+    expect(buildTmuxPaneUpdate("same", "same")).toEqual({
+      text: "",
+      full: false,
+    });
+    expect(buildTmuxPaneUpdate("same", "same", true)).toEqual({
+      text: "\u001b[H\u001b[2Jsame",
+      full: true,
+    });
+  });
   function createInteractiveHarness(captures: Array<string | Promise<string>>) {
     const scheduled: Array<{ callback: () => void; delayMs: number; timer: object }> = [];
     const cancelled = new Set<unknown>();

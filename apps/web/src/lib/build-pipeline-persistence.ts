@@ -92,7 +92,7 @@ function toSnapshot(
 /** Installs one authoritative backend read model into the renderer cache. */
 export async function hydrateBuildPipeline(
   pipelineId: string,
-  load: PipelineLoader = backend.getBuildPipeline,
+  load?: PipelineLoader,
 ): Promise<BuildPipeline | null> {
   const generation = nextHydrationGeneration();
   setBoundedGeneration(
@@ -101,7 +101,83 @@ export async function hydrateBuildPipeline(
     generation,
     MAX_PIPELINE_HYDRATION_MARKERS,
   );
-  const persisted = await load(pipelineId);
+  const localBefore = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+  const loaded = load
+    ? await load(pipelineId)
+    : await backend.getBuildPipelineConditional<BuildPipeline>(
+        pipelineId,
+        localBefore?.backendRevision,
+        localBefore
+          ? Object.fromEntries(localBefore.sessions.map((session) => [
+              session.sessionKey,
+              {
+                revision: session.messageRevision ?? 0,
+                count: session.messages?.length ?? 0,
+              },
+            ]))
+          : undefined,
+      );
+  if (
+    loaded
+    && "unchanged" in loaded
+    && loaded.unchanged
+  ) {
+    return useBuildPipelineStore.getState().pipelines.get(pipelineId) ?? null;
+  }
+  let persisted: PersistedBuildPipeline<BuildPipeline> | null;
+  if (
+    loaded
+    && "unchanged" in loaded
+    && loaded.unchanged === false
+  ) {
+    const snapshot = loaded.record.snapshot;
+    const localSessions = new Map(
+      localBefore?.sessions.map((session) => [session.sessionKey, session]) ?? [],
+    );
+    const patches = new Map(
+      loaded.messagePatches.map((patch) => [patch.sessionKey, patch]),
+    );
+    const invalidPatch = loaded.messagePatches.some((patch) => {
+      if (patch.startIndex === 0) return false;
+      const local = localSessions.get(patch.sessionKey);
+      return !local
+        || patch.baseRevision !== (local.messageRevision ?? 0)
+        || patch.baseCount !== (local.messages?.length ?? 0)
+        || patch.startIndex < 0
+        || patch.startIndex > (local.messages?.length ?? 0);
+    });
+    if (invalidPatch) {
+      persisted = await backend.getBuildPipeline<BuildPipeline>(pipelineId);
+    } else {
+      persisted = {
+        ...loaded.record,
+        snapshot: {
+          ...snapshot,
+          sessions: snapshot.sessions.map((session) => {
+            const patch = patches.get(session.sessionKey);
+            const local = localSessions.get(session.sessionKey);
+            if (!patch) return { ...session, messages: local?.messages };
+            const canApply = local
+              && patch.baseRevision === (local.messageRevision ?? 0)
+              && patch.baseCount === (local.messages?.length ?? 0)
+              && patch.startIndex >= 0
+              && patch.startIndex <= (local.messages?.length ?? 0);
+            const messages = canApply
+              ? [
+                  ...(local.messages ?? []).slice(0, patch.startIndex),
+                  ...patch.messages,
+                ]
+              : patch.startIndex === 0
+                ? patch.messages
+                : undefined;
+            return { ...session, messages, messageRevision: patch.revision };
+          }),
+        },
+      };
+    }
+  } else {
+    persisted = loaded as PersistedBuildPipeline<BuildPipeline> | null;
+  }
   if (pipelineHydrationGenerations.get(pipelineId) !== generation) {
     return useBuildPipelineStore.getState().pipelines.get(pipelineId) ?? null;
   }
@@ -133,7 +209,7 @@ export async function hydrateBuildPipeline(
 /** Replaces the project projection with backend snapshots. */
 export async function hydrateBuildPipelinesForProject(
   projectId: string,
-  list: PipelineListLoader = backend.listBuildPipelines,
+  list?: PipelineListLoader,
 ): Promise<BuildPipeline[]> {
   const generation = nextHydrationGeneration();
   setBoundedGeneration(
@@ -142,7 +218,20 @@ export async function hydrateBuildPipelinesForProject(
     generation,
     MAX_PROJECT_HYDRATION_MARKERS,
   );
-  const persisted = await list(projectId);
+  const localBefore = Array.from(useBuildPipelineStore.getState().pipelines.values())
+    .filter((pipeline) => pipeline.projectId === projectId);
+  const conditional = list
+    ? null
+    : await backend.listBuildPipelinesConditional<BuildPipeline>(
+        projectId,
+        Object.fromEntries(localBefore.map((pipeline) => [
+          pipeline.id,
+          pipeline.backendRevision,
+        ])),
+      );
+  const persisted = list
+    ? await list(projectId)
+    : conditional!.records;
   if (projectHydrationGenerations.get(projectId) !== generation) {
     return Array.from(useBuildPipelineStore.getState().pipelines.values())
       .filter((pipeline) => pipeline.projectId === projectId);
@@ -163,6 +252,14 @@ export async function hydrateBuildPipelinesForProject(
       restored.push(snapshot);
     } else {
       restored.push(local);
+    }
+  }
+  if (conditional) {
+    const liveIds = new Set(conditional.ids);
+    for (const local of localBefore) {
+      if (liveIds.has(local.id) && !restored.some((entry) => entry.id === local.id)) {
+        restored.push(local);
+      }
     }
   }
   return restored;

@@ -1759,6 +1759,14 @@ describe("session lifecycle", () => {
     await h.runtime.prompt(sessionId, { prompt: "hello", requestId: "req-1", attachments: [] });
     const promptRevision = h.runtime.getStatus(sessionId)!.messageRevision;
     expect(promptRevision).toBe(1);
+    const initialAssistantUpdates = h.events.filter(
+      (event) => event.type === "message.updated"
+        && (event.data?.message as { role?: unknown } | undefined)?.role === "assistant",
+    );
+    expect(initialAssistantUpdates).toHaveLength(1);
+    expect(
+      (initialAssistantUpdates[0]!.data?.message as { revision?: number }).revision,
+    ).toBe(1);
 
     const child = h.child();
     child.notify("turn/started", { threadId: "thread-1", turn: { id: "turn-1" } });
@@ -1781,6 +1789,11 @@ describe("session lifecycle", () => {
     expect(messages[0]!.content).toBe("hello");
     // Streaming text is visible before completion.
     expect(messages[1]!.content).toBe("Hi there");
+    expect(h.events.some((event) => event.type === "message.patched")).toBe(true);
+    expect(h.events.filter(
+      (event) => event.type === "message.updated"
+        && (event.data?.message as { role?: unknown } | undefined)?.role === "assistant",
+    )).toHaveLength(1);
 
     const streamingRevision = h.runtime.getStatus(sessionId)!.messageRevision;
     expect(streamingRevision).toBeGreaterThan(promptRevision);
@@ -1811,6 +1824,8 @@ describe("session lifecycle", () => {
     expect(h.runtime.getStatus(sessionId)!.messageRevision).toBeGreaterThan(streamingRevision);
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
     expect(h.events.some((event) => event.type === "session.idle")).toBe(true);
+    expect(h.events.findLastIndex((event) => event.type === "message.patched"))
+      .toBeLessThan(h.events.findLastIndex((event) => event.type === "session.idle"));
   });
 
   test("command output streams while the command is in progress", async () => {
@@ -2297,6 +2312,27 @@ describe("session lifecycle", () => {
         aggregatedOutput: output,
       },
     });
+    await h.drain();
+    const completedToolPatchCount = h.events.length;
+    h.child().notify("item/agentMessage/delta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "message-after-large-tool",
+      delta: "Done",
+    });
+    await h.drain();
+    const laterPatches = h.events
+      .slice(completedToolPatchCount)
+      .filter((event) => event.type === "message.patched");
+    expect(laterPatches).not.toHaveLength(0);
+    for (const patch of laterPatches) {
+      expect(
+        (patch.data as {
+          changedParts?: Array<{ index: number }>;
+        }).changedParts?.some(({ index }) => index === 0),
+      ).toBe(false);
+    }
+
     h.child().notify("turn/completed", {
       threadId: "thread-1",
       turn: { id: "turn-1", status: "completed" },
@@ -3732,7 +3768,9 @@ describe("crash recovery", () => {
     const status = h.runtime.getStatus(sessionId)!;
     expect(status.phase).not.toBe("recovering");
     expect(status.status).toBe("idle");
-    expect(status.messageRevision).toBeGreaterThan(revisionBeforeRecovery);
+    // Recovery changed only execution state in this fixture. Sparse transcript
+    // publishing must not invent a message revision when no part changed.
+    expect(status.messageRevision).toBe(revisionBeforeRecovery);
 
     // And the session must accept work again.
     const next = await h.runtime.prompt(sessionId, {
@@ -5407,13 +5445,24 @@ describe("interactive approvals", () => {
    * real threadId bound to a real bridge session.
    */
   async function withPendingApproval(
-    options: { approvalParams?: Record<string, unknown> } = {},
+    options: {
+      approvalParams?: Record<string, unknown>;
+      withPendingMessageDelta?: boolean;
+    } = {},
   ) {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
     await h.drain();
 
+    if (options.withPendingMessageDelta) {
+      h.child().notify("item/agentMessage/delta", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "message-before-approval",
+        delta: "Before approval",
+      });
+    }
     h.child().stdout.pushMessage({
       jsonrpc: "2.0",
       id: 9001,
@@ -5434,12 +5483,18 @@ describe("interactive approvals", () => {
   }
 
   test("emits approval-requested to the owning session and lists it", async () => {
-    const { h, sessionId } = await withPendingApproval();
+    const { h, sessionId } = await withPendingApproval({
+      withPendingMessageDelta: true,
+    });
 
     const requested = h.events.filter((event) => event.type === "session.approval-requested");
     expect(requested).toHaveLength(1);
     expect(requested[0]!.sessionId).toBe(sessionId);
     expect((requested[0]!.data!.approval as { command?: string }).command).toBe("rm -rf build");
+    expect(h.events.findLastIndex((event) => event.type === "message.patched"))
+      .toBeLessThan(
+        h.events.findIndex((event) => event.type === "session.approval-requested"),
+      );
 
     // The rehydration path: a remounting tab must be able to ask rather than
     // relying on having seen the SSE frame.
@@ -5715,6 +5770,12 @@ describe("interactive approvals", () => {
       threadId: "thread-1",
       mode: "build",
     });
+    h.child().notify("item/agentMessage/delta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "message-before-warning",
+      delta: "Before warning",
+    });
     h.child().notify("error", {
       threadId: "thread-1",
       turnId: "turn-1",
@@ -5728,6 +5789,8 @@ describe("interactive approvals", () => {
 
     const warnings = h.events.filter((event) => event.type === "session.warning");
     expect(warnings).toHaveLength(2);
+    expect(h.events.findLastIndex((event) => event.type === "message.patched"))
+      .toBeLessThan(h.events.findIndex((event) => event.type === "session.warning"));
     expect(warnings.map((event) => event.sessionId).sort())
       .toEqual([first.sessionId, second!.sessionId].sort());
     for (const warning of warnings) {
@@ -6856,10 +6919,33 @@ describe("interactions", () => {
   }
 
   test("presents a question to every tab on the thread and serves it for rehydration", async () => {
-    const { h, sessionId } = await askingSession();
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-1",
+      attachments: [],
+    });
+    h.child().notify("item/agentMessage/delta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "message-before-question",
+      delta: "Before question",
+    });
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 7001,
+      method: "item/tool/requestUserInput",
+      params: QUESTION_PARAMS,
+    });
+    await h.drain();
 
     const requested = h.events.filter((event) => event.type === "session.interaction-requested");
     expect(requested).toHaveLength(1);
+    expect(h.events.findLastIndex((event) => event.type === "message.patched"))
+      .toBeLessThan(
+        h.events.findIndex((event) => event.type === "session.interaction-requested"),
+      );
     // The authoritative rehydration path: a tab that was unmounted for the SSE
     // frame must still be able to ask.
     const listed = h.runtime.listInteractions(sessionId);

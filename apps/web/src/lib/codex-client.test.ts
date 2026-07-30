@@ -4,6 +4,7 @@ import {
   CodexForkError,
   DEFAULT_CODEX_MODEL,
   abortSession,
+  applyCodexMessagePatch,
   checkHealth,
   classifyCodexPromptOutcome,
   compactCodexSession,
@@ -61,6 +62,56 @@ function restoreFetch() {
 
 afterEach(() => {
   delete window.orkestratorGateway;
+});
+
+describe("applyCodexMessagePatch", () => {
+  const message = {
+    id: "assistant-1",
+    role: "assistant" as const,
+    content: "old",
+    parts: [{ type: "text" as const, content: "old" }],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    revision: 3,
+  };
+
+  test("applies the immediate indexed successor", () => {
+    expect(applyCodexMessagePatch(message, {
+      messageId: message.id,
+      partCount: 2,
+      changedParts: [
+        { index: 0, part: { type: "text", content: "new" } },
+        { index: 1, part: { type: "thinking", content: "why" } },
+      ],
+      content: "new",
+      createdAt: message.createdAt,
+      revision: 4,
+    })).toMatchObject({
+      content: "new",
+      revision: 4,
+      parts: [
+        { type: "text", content: "new" },
+        { type: "thinking", content: "why" },
+      ],
+    });
+  });
+
+  test("rejects gaps, duplicates, and sparse growth", () => {
+    const base = {
+      messageId: message.id,
+      partCount: 1,
+      changedParts: [],
+      content: "old",
+      createdAt: message.createdAt,
+    };
+    expect(applyCodexMessagePatch(message, { ...base, revision: 3 })).toBeNull();
+    expect(applyCodexMessagePatch(message, { ...base, revision: 5 })).toBeNull();
+    expect(applyCodexMessagePatch(message, {
+      ...base,
+      partCount: 3,
+      changedParts: [{ index: 2, part: { type: "text", content: "late" } }],
+      revision: 4,
+    })).toBeNull();
+  });
 });
 
 describe("codex-client createClient", () => {
@@ -1336,6 +1387,7 @@ describe("codex-client event cursor", () => {
       "bridge.cursor",
       "connected",
       "keepalive",
+      "message.patched",
       "message.updated",
       "session.approval-requested",
       "session.approval-resolved",

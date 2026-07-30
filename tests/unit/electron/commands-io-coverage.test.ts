@@ -170,7 +170,7 @@ describe("backend command I/O coverage", () => {
       {
         event: `terminal-output-${sessionId}`,
         payload: {
-          bytesBase64: Buffer.from("ready\r\n").toString("base64"),
+          text: "ready\r\n",
           revision: 1,
           generation: 1,
         },

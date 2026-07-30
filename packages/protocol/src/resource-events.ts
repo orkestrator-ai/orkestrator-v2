@@ -40,6 +40,8 @@ export interface ResourceChange {
    * Clients refetch the collection rather than trying to patch it.
    */
   id: string;
+  /** Owning project when the resource is project-scoped. */
+  projectId?: string;
   /**
    * Monotonic per-backend sequence number. Strictly increasing across every
    * resource kind, so a client can order changes and detect that it missed a
@@ -65,6 +67,9 @@ export function isResourceChange(value: unknown): value is ResourceChange {
     isResourceKind(candidate.resource)
     && typeof candidate.id === "string"
     && candidate.id.length > 0
+    && (candidate.projectId === undefined || (
+      typeof candidate.projectId === "string" && candidate.projectId.length > 0
+    ))
     && typeof candidate.revision === "number"
     && Number.isSafeInteger(candidate.revision)
     && candidate.revision > 0

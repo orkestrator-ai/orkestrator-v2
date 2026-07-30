@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { OrkestratorBackend } from "./index.js";
-import type { Environment } from "./models.js";
+import type { ClientEnvironment, Environment } from "./models.js";
 
 /**
  * A `frontend` activity snapshot is only meaningful while the renderer that
@@ -74,16 +74,23 @@ describe("OrkestratorBackend agent activity boot reset", () => {
           },
         },
       },
-    ], async (backend) => {
+    ], async (backend, dataDir) => {
       await backend.init();
 
-      const [environment] = await backend.invoke<Environment[]>(
+      const [environment] = await backend.invoke<ClientEnvironment[]>(
         "get_environment_snapshots",
         { projectId: "p1" },
       );
       expect(environment).toMatchObject({
         id: "e1",
         agentActivityState: "idle",
+      });
+      expect(environment).not.toHaveProperty("agentActivitySources");
+      expect(environment).not.toHaveProperty("frontendAgentActivityObservers");
+      const [persisted] = JSON.parse(
+        await fs.readFile(path.join(dataDir, "environments.json"), "utf8"),
+      ) as Environment[];
+      expect(persisted).toMatchObject({
         agentActivitySources: {},
         frontendAgentActivityObservers: {},
       });
@@ -110,20 +117,26 @@ describe("OrkestratorBackend agent activity boot reset", () => {
           "claude-terminal": { state: "waiting", updatedAt: terminalAt },
         },
       },
-    ], async (backend) => {
+    ], async (backend, dataDir) => {
       await backend.init();
 
-      const [environment] = await backend.invoke<Environment[]>(
+      const [environment] = await backend.invoke<ClientEnvironment[]>(
         "get_environment_snapshots",
         { projectId: "p1" },
       );
       expect(environment).toMatchObject({
         agentActivityState: "waiting",
+      });
+      expect(environment).not.toHaveProperty("agentActivitySources");
+      const [persisted] = JSON.parse(
+        await fs.readFile(path.join(dataDir, "environments.json"), "utf8"),
+      ) as Environment[];
+      expect(persisted).toMatchObject({
         agentActivitySources: {
           "claude-terminal": { state: "waiting", updatedAt: terminalAt },
         },
       });
-      expect(environment!.agentActivitySources)
+      expect(persisted!.agentActivitySources)
         .not.toHaveProperty("frontend");
     });
   });

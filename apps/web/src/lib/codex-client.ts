@@ -138,8 +138,60 @@ export interface CodexMessage {
   modelId?: string;
   planReview?: boolean;
   turnId?: string;
+  /** Monotonic per-message revision for sparse streaming patches. */
+  revision?: number;
 }
 
+export interface CodexMessagePatch {
+  messageId: string;
+  partCount: number;
+  changedParts: { index: number; part: NativeMessagePart }[];
+  content: string;
+  createdAt: string;
+  turnId?: string;
+  revision: number;
+}
+
+export function applyCodexMessagePatch(
+  message: CodexMessage,
+  patch: CodexMessagePatch,
+): CodexMessage | null {
+  if (!patch || typeof patch !== "object" || !Array.isArray(patch.changedParts)) return null;
+  if (!Number.isInteger(patch.partCount) || patch.partCount < 0) return null;
+  const baseRevision = message.revision;
+  if (!Number.isInteger(baseRevision) || patch.revision !== (baseRevision as number) + 1) {
+    return null;
+  }
+
+  const parts = message.parts.slice();
+  for (const change of patch.changedParts) {
+    if (
+      !change
+      || !Number.isInteger(change.index)
+      || change.index < 0
+      || change.index >= patch.partCount
+      || !change.part
+      || typeof change.part !== "object"
+    ) {
+      return null;
+    }
+    parts[change.index] = change.part;
+  }
+  parts.length = patch.partCount;
+  for (let index = 0; index < parts.length; index += 1) {
+    if (!parts[index]) return null;
+  }
+  return {
+    ...message,
+    parts,
+    content: typeof patch.content === "string" ? patch.content : message.content,
+    createdAt: typeof patch.createdAt === "string" && patch.createdAt
+      ? patch.createdAt
+      : message.createdAt,
+    turnId: typeof patch.turnId === "string" ? patch.turnId : message.turnId,
+    revision: patch.revision,
+  };
+}
 
 export interface CodexSession {
   sessionId: string;
@@ -194,6 +246,7 @@ export interface CodexEvent {
     | "session.title-updated"
     | "session.structured-output"
     | "message.updated"
+    | "message.patched"
     | "session.approval-requested"
     | "session.approval-resolved"
     | "session.interaction-requested"
@@ -1580,6 +1633,7 @@ export function subscribeToEvents(
           "session.title-updated",
           "session.structured-output",
           "message.updated",
+          "message.patched",
           "session.approval-requested",
           "session.approval-resolved",
           // Named SSE events are only delivered to an explicit listener, so a

@@ -256,8 +256,8 @@ function pathDirname(kind: BackendKind, filePath: string): string {
   return kind === "container" ? path.posix.dirname(filePath) : path.dirname(filePath);
 }
 
-function bytesPayload(text: string): { bytesBase64: string } {
-  return { bytesBase64: Buffer.from(text, "utf8").toString("base64") };
+function bytesPayload(text: string, full = false): { text: string; full: boolean } {
+  return { text, full };
 }
 
 function countNewlines(buffer: Buffer): number {
@@ -2589,6 +2589,47 @@ export const INTERACTIVE_SNAPSHOT_MIN_MS = 250;
 /** Cadence a pane backs off to while nothing at all changes. */
 export const INTERACTIVE_SNAPSHOT_MAX_MS = 1_000;
 
+export interface TmuxPaneUpdate {
+  text: string;
+  full: boolean;
+}
+
+/** Build a bounded ANSI line patch, falling back to an exact pane repaint. */
+export function buildTmuxPaneUpdate(
+  previous: string | undefined,
+  next: string,
+  force = false,
+): TmuxPaneUpdate {
+  const full = (): TmuxPaneUpdate => ({
+    text: `\x1b[H\x1b[2J${next.replaceAll("\n", "\r\n")}`,
+    full: true,
+  });
+  if (force || previous === undefined) return full();
+  const before = previous.split("\n");
+  const after = next.split("\n");
+  if (before.length !== after.length) return full();
+
+  const changed: number[] = [];
+  for (let index = 0; index < after.length; index += 1) {
+    if (before[index] !== after[index]) changed.push(index);
+  }
+  if (changed.length === 0) return { text: "", full: false };
+  // Clear-heavy transitions and widespread redraws are both smaller and safer
+  // as a full pane, especially around alternate-screen applications.
+  if (
+    changed.length * 2 >= after.length
+    || after.every((line) => line.trim().length === 0)
+  ) {
+    return full();
+  }
+  return {
+    text: changed
+      .map((index) => `\x1b[${index + 1};1H\x1b[2K${after[index] ?? ""}`)
+      .join(""),
+    full: false,
+  };
+}
+
 type InteractiveTerminalSession = {
   id: string;
   tmux: TmuxSession;
@@ -2645,6 +2686,8 @@ export class InteractiveTmuxTerminalManager {
     terminal.cols = cols;
     terminal.rows = rows;
     await terminal.tmux.resize(cols, rows);
+    // Wrapping changed, so line addresses from the previous capture are stale.
+    terminal.lastSnapshot = undefined;
   }
 
   detach(id: string): void {
@@ -2713,8 +2756,14 @@ export class InteractiveTmuxTerminalManager {
     }
     // Any change snaps the cadence back: output usually arrives in bursts.
     terminal.intervalMs = INTERACTIVE_SNAPSHOT_MIN_MS;
+    const update = buildTmuxPaneUpdate(terminal.lastSnapshot, snapshot, force);
     terminal.lastSnapshot = snapshot;
-    context.emit(`terminal-output-${terminal.id}`, bytesPayload(`\x1b[H\x1b[2J${snapshot.replaceAll("\n", "\r\n")}`));
+    if (update.text) {
+      context.emit(
+        `terminal-output-${terminal.id}`,
+        bytesPayload(update.text, update.full),
+      );
+    }
   }
 }
 

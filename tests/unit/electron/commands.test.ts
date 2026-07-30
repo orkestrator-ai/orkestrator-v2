@@ -1807,14 +1807,66 @@ printf '%s\\n' '{}' > "$out"
       status: "running",
       containerId: "container-existing",
       environmentType: "containerized",
+      opencodePid: 40,
+      claudeBridgePid: 41,
+      codexBridgePid: 42,
+      claudeModelCatalog: {
+        environmentId: "env-1",
+        models: [],
+        source: "sdk",
+        fetchedAt: new Date().toISOString(),
+        stale: false,
+      },
+      agentActivitySources: {
+        frontend: {
+          state: "working",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+      frontendAgentActivityObservers: {
+        observer: {
+          state: "working",
+          updatedAt: new Date().toISOString(),
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      },
+      pendingRenamePrompt: "private launch instruction",
+      pendingAgentLaunch: false,
+      initialAgentModel: "launch-only-model",
+      initialReasoningEffort: "high",
+      initialPromptAttachments: [{
+        id: "image-1",
+        name: "private.png",
+        base64Data: "cHJpdmF0ZQ==",
+      }],
     });
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await expect(commands.get("get_environment_snapshots")?.(
+    const snapshots = await commands.get("get_environment_snapshots")?.(
       { projectId: environment.projectId },
       context,
-    )).resolves.toEqual([environment]);
+    ) as Array<Record<string, unknown>>;
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({
+      id: environment.id,
+      projectId: environment.projectId,
+      status: "running",
+    });
+    for (const field of [
+      "opencodePid",
+      "claudeBridgePid",
+      "codexBridgePid",
+      "claudeModelCatalog",
+      "agentActivitySources",
+      "frontendAgentActivityObservers",
+      "pendingRenamePrompt",
+      "initialAgentModel",
+      "initialReasoningEffort",
+      "initialPromptAttachments",
+    ]) {
+      expect(snapshots[0]).not.toHaveProperty(field);
+    }
     expect(updates).toHaveLength(0);
   });
 
@@ -1825,22 +1877,39 @@ printf '%s\\n' '{}' > "$out"
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await expect(commands.get("record_environment_activity")?.(
+    const activityUpdate = await commands.get("record_environment_activity")?.(
       { environmentId: environment.id, occurredAt: "2026-07-23T10:00:00.000Z" },
       context,
-    )).resolves.toMatchObject({ lastActivityAt: "2026-07-23T10:00:00.000Z" });
+    ) as Record<string, unknown>;
+    expect(activityUpdate).toMatchObject({
+      id: environment.id,
+      lastActivityAt: "2026-07-23T10:00:00.000Z",
+    });
+    expect(Object.keys(activityUpdate).sort()).toEqual([
+      "agentActivityState",
+      "agentActivityUpdatedAt",
+      "hasUnreadWork",
+      "id",
+      "lastActivityAt",
+    ]);
     expect(updates).toEqual([{ lastActivityAt: "2026-07-23T10:00:00.000Z" }]);
 
     await expect(commands.get("record_environment_activity")?.(
       { environmentId: environment.id, occurredAt: "2026-07-21T10:00:00.000Z" },
       context,
-    )).resolves.toBe(environment);
+    )).resolves.toMatchObject({
+      id: environment.id,
+      lastActivityAt: "2026-07-23T10:00:00.000Z",
+    });
     expect(updates).toHaveLength(1);
 
     await expect(commands.get("record_environment_activity")?.(
       { environmentId: environment.id, occurredAt: "2026-07-23T10:00:00.000Z" },
       context,
-    )).resolves.toBe(environment);
+    )).resolves.toMatchObject({
+      id: environment.id,
+      lastActivityAt: "2026-07-23T10:00:00.000Z",
+    });
     expect(updates).toHaveLength(1);
 
     await expect(commands.get("record_environment_activity")?.(
@@ -1982,27 +2051,32 @@ exit 0
       expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain("flock");
       const setupOutput = emitted
         .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
-        .map((entry) => Buffer.from(
-          (entry.payload as { bytesBase64: string }).bytesBase64,
-          "base64",
-        ).toString("utf8"))
+        .map((entry) => (entry.payload as { text: string }).text)
         .join("");
       expect(setupOutput).toContain("[orkestrator] Starting environment setup");
       expect(setupOutput).toContain("/usr/local/bin/workspace-setup.sh");
-      expect(emitted).toContainEqual({
-        event: "environment-setup-started",
-        payload: {
-          environment_id: environment.id,
-          session_id: `${environment.id}:setup`,
-          environment,
+      const setupStarted = emitted
+        .filter((entry) => entry.event === "environment-setup-started")
+        .at(-1)?.payload;
+      expect(setupStarted).toMatchObject({
+        environment_id: environment.id,
+        session_id: `${environment.id}:setup`,
+        environment: {
+          id: environment.id,
+          setupScriptsComplete: false,
+          createdFromCommit: environment.createdFromCommit,
         },
       });
-      expect(emitted).toContainEqual({
-        event: "environment-setup-complete",
-        payload: {
-          environment_id: environment.id,
-          success: true,
-          environment: updated,
+      const setupComplete = emitted.find(
+        (entry) => entry.event === "environment-setup-complete",
+      )?.payload;
+      expect(setupComplete).toMatchObject({
+        environment_id: environment.id,
+        success: true,
+        environment: {
+          id: updated.id,
+          setupScriptsComplete: true,
+          createdFromCommit: updated.createdFromCommit,
         },
       });
     });
@@ -2940,6 +3014,65 @@ exit 0
       await commands.get("get_terminal_output_snapshot")?.({ sessionId }, context),
     ).toEqual({ output: "", revision: 0, generation: 0, truncated: false });
     expect(commandTesting.retainedTerminalOutputBufferCount()).toBe(0);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("returns terminal deltas and falls back across output generations", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-delta-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-delta",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const sessionId = terminalSessionResult(
+      await commands.get("create_local_terminal_session")?.(
+        { environmentId: environment.id, cols: 80, rows: 24 },
+        context,
+      ),
+    ).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    await waitForPtyProcessCount(1);
+    ptyProcesses[0]?.emitData("first");
+    ptyProcesses[0]?.emitData(" second");
+
+    expect(commands.get("get_terminal_output_snapshot")?.({
+      sessionId,
+      sinceRevision: 1,
+      sinceGeneration: 1,
+    }, context)).toEqual({
+      mode: "delta",
+      output: " second",
+      revision: 2,
+      generation: 1,
+      truncated: false,
+    });
+    expect(commands.get("get_terminal_output_snapshot")?.({
+      sessionId,
+      sinceRevision: 1,
+      sinceGeneration: 0,
+    }, context)).toMatchObject({
+      mode: "full",
+      reason: "generation-changed",
+      output: "first second",
+      revision: 2,
+      generation: 1,
+    });
+    for (let index = 0; index < 1_025; index += 1) {
+      ptyProcesses[0]?.emitData("x");
+    }
+    expect(commands.get("get_terminal_output_snapshot")?.({
+      sessionId,
+      sinceRevision: 2,
+      sinceGeneration: 1,
+    }, context)).toMatchObject({
+      mode: "full",
+      reason: "expired",
+      revision: 1_027,
+      generation: 1,
+    });
   }, ASYNC_TEST_BUDGET_MS);
 
   test("expires an exited terminal snapshot through the production timer path", async () => {
@@ -7014,10 +7147,7 @@ exit 0
 
       const setupOutput = emitted
         .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
-        .map((entry) => Buffer.from(
-          (entry.payload as { bytesBase64: string }).bytesBase64,
-          "base64",
-        ).toString("utf8"))
+        .map((entry) => (entry.payload as { text: string }).text)
         .join("");
       // Preparation performs the clone, so its announcement and output have to
       // reach the terminal before the setup commands are even known.
@@ -12071,7 +12201,7 @@ exit 0
       {
         event: `terminal-output-${sessionId}`,
         payload: {
-          bytesBase64: Buffer.from("ready\r\n", "utf8").toString("base64"),
+          text: "ready\r\n",
           revision: 1,
           generation: 1,
         },
@@ -12143,9 +12273,7 @@ exit 0
         {
           event: `terminal-output-${firstSessionId}`,
           payload: {
-            bytesBase64: Buffer.from(
-              "dev server listening on 3000\r\n",
-            ).toString("base64"),
+            text: "dev server listening on 3000\r\n",
             revision: 1,
             generation: 1,
           },
@@ -12153,7 +12281,7 @@ exit 0
         {
           event: `terminal-output-${firstSessionId}`,
           payload: {
-            bytesBase64: Buffer.from("second chunk\r\n").toString("base64"),
+            text: "second chunk\r\n",
             revision: 2,
             generation: 1,
           },
@@ -14161,6 +14289,58 @@ exit 0
       environmentId: "missing",
       domains: [],
     }, context)).rejects.toThrow("Environment not found: missing");
+  });
+});
+
+test("build pipeline point reads omit unchanged transcripts and return tail patches", async () => {
+  const environment = createEnvironment();
+  const { context } = createContext(environment);
+  const record = {
+    version: 2,
+    id: "pipeline-1",
+    projectId: environment.projectId,
+    environmentId: environment.id,
+    revision: 8,
+    updatedAt: new Date().toISOString(),
+    snapshot: {
+      id: "pipeline-1",
+      sessions: [{
+        sessionKey: "session-1",
+        messageRevision: 3,
+        messages: [{ id: "m1" }, { id: "m2-old" }, { id: "m3" }],
+      }],
+    },
+  };
+  context.storage.getBuildPipeline = mock(async () => record);
+  const commands = createCommandRegistry();
+
+  expect(await commands.get("get_build_pipeline")?.({
+    pipelineId: record.id,
+    knownRevision: 8,
+  }, context)).toEqual({ unchanged: true, revision: 8 });
+
+  expect(await commands.get("get_build_pipeline")?.({
+    pipelineId: record.id,
+    knownRevision: 7,
+    knownSessions: {
+      "session-1": { revision: 2, count: 2 },
+    },
+  }, context)).toMatchObject({
+    unchanged: false,
+    record: {
+      revision: 8,
+      snapshot: {
+        sessions: [{ sessionKey: "session-1", messageRevision: 3 }],
+      },
+    },
+    messagePatches: [{
+      sessionKey: "session-1",
+      baseRevision: 2,
+      baseCount: 2,
+      startIndex: 1,
+      revision: 3,
+      messages: [{ id: "m2-old" }, { id: "m3" }],
+    }],
   });
 });
 

@@ -188,6 +188,7 @@ const mockStartLocalCodexServer = mock(async () => ({
   pid: 1234,
   authToken: "local-start-token",
 }));
+const mockCacheAgentModelCatalog = mock(async () => ({ schemaVersion: 1 as const }));
 const mockGetModels = mock(async () => ({
   models: MOCK_MODELS,
   source: "fallback" as const,
@@ -286,6 +287,7 @@ const mockTransferPromptQueueMessageToComposeDraft = mock(
 // safe defaults (isAtBottom: true) when no viewport is found in happy-dom.
 
 mock.module("@/lib/backend", () => ({
+  cacheAgentModelCatalog: mockCacheAgentModelCatalog,
   claimPromptQueueHead: mockClaimPromptQueueHead,
   acknowledgePromptQueueClaim: mock(async (queueKey, environmentId, claimToken) => {
     mockOutstandingQueueClaims.delete(claimToken);
@@ -1024,6 +1026,7 @@ describe("CodexChatTab", () => {
       pid: 1234,
       authToken: "local-start-token",
     });
+    mockCacheAgentModelCatalog.mockClear();
     mockGetModels.mockReset();
     mockGetModels.mockResolvedValue({
       models: MOCK_MODELS,
@@ -2219,6 +2222,10 @@ describe("CodexChatTab", () => {
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
 
     await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+    expect(mockCacheAgentModelCatalog).toHaveBeenCalledWith(
+      "codex",
+      authoritativeModels,
+    );
     expect(useCodexStore.getState().models).toEqual(authoritativeModels);
     expect(useCodexStore.getState().selectedMode.get(SESSION_KEY)).toBe("build");
     expect(mockCreateSession.mock.calls.at(-1)?.[1]).toMatchObject({

@@ -279,9 +279,22 @@ describe("direct backend command registry coverage", () => {
       ...cached,
       models,
     }));
+    const cachedAgents = {
+      schemaVersion: 1 as const,
+      codex: {
+        updatedAt: "2026-07-29T00:00:00.000Z",
+        models: [{ id: "gpt-cached", name: "GPT Cached" }],
+      },
+    };
+    const getAgentModelCatalogCache = mock(async () => cachedAgents);
+    const cacheAgentModelCatalog = mock(async (_agent: string, _models: unknown[]) =>
+      cachedAgents
+    );
     const context = contextWithStorage({
       getOpenCodeModelCatalog,
       cacheOpenCodeModelCatalog,
+      getAgentModelCatalogCache,
+      cacheAgentModelCatalog,
     });
 
     for (const bridge of ["opencode", "claude", "codex"]) {
@@ -326,6 +339,30 @@ describe("direct backend command registry coverage", () => {
     ).resolves.toEqual({ ...cached, models });
     expect(getOpenCodeModelCatalog).toHaveBeenCalledWith("project-1");
     expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-1", models);
+    await expect(
+      invoke("get_agent_model_catalog_cache", {}, context),
+    ).resolves.toEqual(cachedAgents);
+    await expect(
+      invoke(
+        "cache_agent_model_catalog",
+        {
+          agent: "codex",
+          models: [{
+            id: "gpt-cached",
+            name: "GPT Cached",
+            reasoningEfforts: ["medium", "ultra"],
+            defaultReasoningEffort: "medium",
+          }],
+        },
+        context,
+      ),
+    ).resolves.toEqual(cachedAgents);
+    expect(cacheAgentModelCatalog).toHaveBeenCalledWith("codex", [{
+      id: "gpt-cached",
+      name: "GPT Cached",
+      reasoningEfforts: ["medium", "ultra"],
+      defaultReasoningEffort: "medium",
+    }]);
 
     const log = await commandLogContents();
     expect(log).toContain("pkill -f '[o]pencode serve'");

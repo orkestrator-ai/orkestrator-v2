@@ -17,6 +17,8 @@ import {
   type ClaudeEffortLevel,
   type ClaudeModelCatalogEntry,
   type ClaudeModelCatalogSnapshot,
+  type CodexModelCatalogEntry,
+  type CodexReasoningEffort,
   type EnvironmentStatus,
   type EnvironmentType,
   type OpenCodeModelCatalogEntry,
@@ -1136,6 +1138,98 @@ function asOpenCodeModelCatalog(value: unknown): OpenCodeModelCatalogEntry[] {
     );
   }
   return models;
+}
+
+const CODEX_MODEL_REASONING_EFFORTS = new Set<CodexReasoningEffort>([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]);
+
+function asCodexReasoningEffort(
+  value: unknown,
+  name: string,
+): CodexReasoningEffort {
+  const effort = asNonBlankString(value, name) as CodexReasoningEffort;
+  if (!CODEX_MODEL_REASONING_EFFORTS.has(effort)) {
+    throw new Error(`Expected ${name} to be a supported reasoning effort`);
+  }
+  return effort;
+}
+
+function asCachedCodexModels(value: unknown): CodexModelCatalogEntry[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("Codex model catalogue must contain at least one model.");
+  }
+  return value.map((candidate, index) => {
+    const name = `models[${index}]`;
+    const model = asRecord(candidate, name);
+    assertOnlyKeys(
+      model,
+      [
+        "id",
+        "name",
+        "description",
+        "reasoningEfforts",
+        "reasoningOptions",
+        "defaultReasoningEffort",
+      ],
+      name,
+    );
+    const reasoningEfforts = model.reasoningEfforts === undefined
+      ? undefined
+      : Array.isArray(model.reasoningEfforts)
+        ? model.reasoningEfforts.map((effort, effortIndex) =>
+            asCodexReasoningEffort(effort, `${name}.reasoningEfforts[${effortIndex}]`)
+          )
+        : (() => {
+            throw new Error(`Expected ${name}.reasoningEfforts to be an array`);
+          })();
+    const reasoningOptions = model.reasoningOptions === undefined
+      ? undefined
+      : Array.isArray(model.reasoningOptions)
+        ? model.reasoningOptions.map((candidateOption, optionIndex) => {
+            const optionName = `${name}.reasoningOptions[${optionIndex}]`;
+            const option = asRecord(candidateOption, optionName);
+            assertOnlyKeys(option, ["effort", "label", "description"], optionName);
+            return {
+              effort: asCodexReasoningEffort(option.effort, `${optionName}.effort`),
+              label: asNonBlankString(option.label, `${optionName}.label`),
+              ...(option.description === undefined
+                ? {}
+                : {
+                    description: asNonBlankString(
+                      option.description,
+                      `${optionName}.description`,
+                    ),
+                  }),
+            };
+          })
+        : (() => {
+            throw new Error(`Expected ${name}.reasoningOptions to be an array`);
+          })();
+    return {
+      id: asNonBlankString(model.id, `${name}.id`),
+      name: asNonBlankString(model.name, `${name}.name`),
+      ...(model.description === undefined
+        ? {}
+        : { description: asNonBlankString(model.description, `${name}.description`) }),
+      ...(reasoningEfforts ? { reasoningEfforts } : {}),
+      ...(reasoningOptions ? { reasoningOptions } : {}),
+      ...(model.defaultReasoningEffort === undefined
+        ? {}
+        : {
+            defaultReasoningEffort: asCodexReasoningEffort(
+              model.defaultReasoningEffort,
+              `${name}.defaultReasoningEffort`,
+            ),
+          }),
+    };
+  });
 }
 
 function asFeaturePlanRole(value: unknown): "user" | "assistant" | "system" {
@@ -6872,6 +6966,15 @@ async function refreshClaudeModelCatalog(
     cliVersion: catalog.cliVersion,
     stale: catalog.source !== "sdk",
   };
+  if (catalog.source === "sdk") {
+    await context.storage.cacheAgentModelCatalog("claude", catalog.models)
+      .catch((error) => {
+        console.warn(
+          "[ElectronBackend] Failed to persist the Claude model catalogue:",
+          conciseError(error),
+        );
+      });
+  }
   await context.storage.updateEnvironment(environmentId, {
     claudeModelCatalog: snapshot,
   });
@@ -6930,6 +7033,25 @@ export function createCommandRegistry(
   });
 
   register("get_config", async (_args, { storage }) => redactAppConfig(await storage.loadConfig()));
+  register("get_agent_model_catalog_cache", (_args, { storage }) =>
+    storage.getAgentModelCatalogCache()
+  );
+  register("cache_agent_model_catalog", (args, { storage }) => {
+    assertOnlyKeys(args, ["agent", "models"], "arguments");
+    const agent = asNonBlankString(args.agent, "agent");
+    if (agent === "claude") {
+      const catalog = parseClaudeBridgeModelCatalog({
+        models: args.models,
+        source: "sdk",
+        fetchedAt: new Date().toISOString(),
+      });
+      return storage.cacheAgentModelCatalog("claude", catalog.models);
+    }
+    if (agent === "codex") {
+      return storage.cacheAgentModelCatalog("codex", asCachedCodexModels(args.models));
+    }
+    throw new Error("Expected agent to be claude or codex");
+  });
   register("save_config", async ({ config }, context) => {
     const { storage } = context;
     const candidate = asRecord(config, "config") as unknown as AppConfig;

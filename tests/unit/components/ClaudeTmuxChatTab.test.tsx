@@ -4001,6 +4001,7 @@ Running 1 Explore agent...
       expect(useClaudeStore.getState().getModels("env-1")[0]?.id).toBe(
         "claude-opus-5",
       );
+      expect(useClaudeStore.getState().models[0]?.id).toBe("claude-opus-5");
     });
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default/ }));

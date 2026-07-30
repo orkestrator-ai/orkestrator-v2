@@ -390,6 +390,7 @@ export function ClaudeTmuxChatTab({
   const sdkModels = useClaudeStore(
     (s) => s.modelCatalogs.get(environmentId)?.models ?? s.models,
   );
+  const setModels = useClaudeStore((s) => s.setModels);
   const setModelCatalog = useClaudeStore((s) => s.setModelCatalog);
   const availableModels = useMemo(() => tmuxModelList(sdkModels), [sdkModels]);
   const resolveModelLabel = useCallback(
@@ -781,7 +782,12 @@ export function ClaudeTmuxChatTab({
 
     void getClaudeModelCatalog(environmentId, refreshRequestId > 0)
       .then((catalog) => {
-        if (!cancelled) setModelCatalog(catalog);
+        if (!cancelled) {
+          setModelCatalog(catalog);
+          // New-environment controls are host-scoped and cannot read an
+          // environment-specific catalogue.
+          setModels(catalog.models);
+        }
       })
       .catch((catalogError) => {
         if (!cancelled) {
@@ -795,7 +801,13 @@ export function ClaudeTmuxChatTab({
     return () => {
       cancelled = true;
     };
-  }, [backendHydrated, environmentId, refreshRequestId, setModelCatalog]);
+  }, [
+    backendHydrated,
+    environmentId,
+    refreshRequestId,
+    setModelCatalog,
+    setModels,
+  ]);
 
   // 1. Subscribe to backend events (one listener for the whole tab).
   useEffect(() => {

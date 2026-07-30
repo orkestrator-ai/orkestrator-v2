@@ -324,6 +324,9 @@ export function ClaudeChatTab({
           forceRefresh,
         );
         setModelCatalog(catalog);
+        // The create-environment picker has no environment id yet, so keep a
+        // host-level projection alongside the authoritative scoped snapshot.
+        setModels(catalog.models);
         return catalog.models;
       } catch (error) {
         console.debug(

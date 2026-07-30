@@ -62,6 +62,7 @@ import type {
 import type {
   ReviewPreparationResult,
 } from "@/lib/looped-review-prompts";
+import type { CodexModel } from "@/lib/codex-client";
 
 /** PR detection result containing URL, state, and merge conflict status */
 export interface PrDetectionResult {
@@ -373,6 +374,34 @@ export async function resizeTerminal(
 
 export async function getConfig(): Promise<AppConfig> {
   return invoke<AppConfig>("get_config");
+}
+
+export interface AgentModelCatalogCache {
+  schemaVersion: 1;
+  claude?: {
+    updatedAt: string;
+    models: ClaudeModelCatalogSnapshot["models"];
+  };
+  codex?: {
+    updatedAt: string;
+    models: CodexModel[];
+  };
+}
+
+/** Load the host-wide last-known-good catalogues before any bridge starts. */
+export async function getAgentModelCatalogCache(): Promise<AgentModelCatalogCache> {
+  return invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache");
+}
+
+/** Persist an authoritative catalogue for the next application launch. */
+export async function cacheAgentModelCatalog(
+  agent: "claude" | "codex",
+  models: ClaudeModelCatalogSnapshot["models"] | CodexModel[],
+): Promise<AgentModelCatalogCache> {
+  return invoke<AgentModelCatalogCache>("cache_agent_model_catalog", {
+    agent,
+    models,
+  });
 }
 
 export async function saveConfig(config: AppConfig): Promise<void> {

@@ -8,7 +8,11 @@ import {
   defaultRepositoryConfig,
   StorageService,
 } from "./storage.js";
-import type { AppConfig } from "./models.js";
+import type {
+  AppConfig,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+} from "./models.js";
 import { MAX_CODEX_CONCURRENT_THREADS } from "./constants.js";
 
 async function withTemporaryStorage<T>(
@@ -823,6 +827,65 @@ describe("OpenCode model catalogue cache", () => {
 
       expect(await first.getOpenCodeModelCatalog("project-a")).not.toBeNull();
       expect(await first.getOpenCodeModelCatalog("project-b")).not.toBeNull();
+    });
+  });
+});
+
+describe("host agent model catalogue cache", () => {
+  test("round-trips Claude and Codex catalogues across storage instances", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const claudeModels: ClaudeModelCatalogEntry[] = [{
+        id: "claude-opus-latest",
+        name: "Claude Opus Latest",
+        description: "Most capable",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      }];
+      const codexModels: CodexModelCatalogEntry[] = [{
+        id: "gpt-latest",
+        name: "GPT Latest",
+        description: "Latest coding model",
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "ultra"],
+        defaultReasoningEffort: "medium",
+      }];
+
+      await storage.cacheAgentModelCatalog("claude", claudeModels);
+      await storage.cacheAgentModelCatalog("codex", codexModels);
+
+      const reopened = new StorageService(dataDir);
+      await reopened.init();
+      expect(await reopened.getAgentModelCatalogCache()).toMatchObject({
+        schemaVersion: 1,
+        claude: { models: claudeModels },
+        codex: { models: codexModels },
+      });
+    });
+  });
+
+  test("does not rewrite an unchanged catalogue and ignores malformed persisted entries", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const models = [{ id: "gpt-latest", name: "GPT Latest" }];
+      const first = await storage.cacheAgentModelCatalog("codex", models);
+      const second = await storage.cacheAgentModelCatalog("codex", models);
+      expect(second.codex?.updatedAt).toBe(first.codex?.updatedAt);
+
+      await fs.writeFile(
+        path.join(dataDir, "agent-model-catalog.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          claude: {
+            updatedAt: "not-a-date",
+            models: [{ id: "", name: "Broken" }],
+          },
+          codex: {
+            updatedAt: new Date().toISOString(),
+            models: [{ id: "gpt-broken", name: "Broken", reasoningEfforts: ["impossible"] }],
+          },
+        }),
+      );
+      expect(await storage.getAgentModelCatalogCache()).toEqual({
+        schemaVersion: 1,
+      });
     });
   });
 });

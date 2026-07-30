@@ -28,6 +28,7 @@ import {
   PromptRejectedError,
   ProviderUnavailableError,
   type BuildPipelineProvider,
+  type ProviderExecutionMode,
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
 
@@ -102,6 +103,7 @@ class ScriptedProvider implements BuildPipelineProvider {
     sessionId: string;
     prompt: string;
     requestId: string;
+    mode?: ProviderExecutionMode;
   }> = [];
   readonly registered: string[] = [];
   disposed = 0;
@@ -129,11 +131,20 @@ class ScriptedProvider implements BuildPipelineProvider {
   async send(
     sessionId: string,
     prompt: string,
-    options: { requestId: string; schema?: JsonSchema },
+    options: {
+      requestId: string;
+      schema?: JsonSchema;
+      mode?: ProviderExecutionMode;
+    },
   ): Promise<void> {
     const error = this.sendErrors.shift();
     if (error) throw error;
-    this.sent.push({ sessionId, prompt, requestId: options.requestId });
+    this.sent.push({
+      sessionId,
+      prompt,
+      requestId: options.requestId,
+      mode: options.mode,
+    });
     this.running.delete(sessionId);
   }
 
@@ -533,7 +544,10 @@ describe("BuildPipelineService addressing stage", () => {
       expect(addressing.sessions).toHaveLength(reviewing.sessions.length);
       const addressPrompt = provider.sent.at(-1)!;
       expect(addressPrompt.sessionId).toBe(reviewSessionId);
-      expect(addressPrompt.prompt).toContain("Off-by-one in the range check");
+      expect(addressPrompt.prompt).toBe(
+        "Address all the above issues and coverage gaps, making sensible assumptions and without asking questions.",
+      );
+      expect(addressPrompt.mode).toBe("build");
 
       provider.structuredResult = "absent";
       await service.advanceNow(built.id);
@@ -563,7 +577,9 @@ describe("BuildPipelineService addressing stage", () => {
       await service.advanceNow(built.id);
       const dispatched = await snapshot(storage, built.id);
       expect(dispatched.pendingPromptAttempt).toBeUndefined();
-      expect(provider.sent.at(-1)?.prompt).toContain("Off-by-one");
+      expect(provider.sent.at(-1)?.prompt).toBe(
+        "Address all the above issues and coverage gaps, making sensible assumptions and without asking questions.",
+      );
     });
   });
 

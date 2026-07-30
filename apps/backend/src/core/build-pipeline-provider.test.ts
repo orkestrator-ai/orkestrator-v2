@@ -777,6 +777,45 @@ describe("HTTP build pipeline provider (codex)", () => {
     expect(body.effort).toBeUndefined();
   });
 
+  test("switches an idle codex review session to build mode before addressing", async () => {
+    const { provider, requests } = httpProvider((url, init) => {
+      if (url.endsWith("/config") && init.method !== "POST") {
+        return Response.json({
+          model: "gpt-5-codex",
+          modelReasoningEffort: "high",
+          mode: "plan",
+          fastMode: false,
+          durable: true,
+        });
+      }
+      if (url.endsWith("/config")) {
+        return Response.json({ status: "updated", durable: true });
+      }
+      return new Response(null, { status: 204 });
+    }, codexConnection);
+
+    await provider.send("review-1", "Address the findings", {
+      requestId: "request-address",
+      mode: "build",
+    });
+
+    expect(requests.map((request) => request.url)).toEqual([
+      "http://codex.test/session/review-1/config",
+      "http://codex.test/session/review-1/config",
+      "http://codex.test/session/review-1/prompt",
+    ]);
+    expect(JSON.parse(String(requests[1]!.init.body))).toEqual({
+      model: "gpt-5-codex",
+      modelReasoningEffort: "high",
+      mode: "build",
+      fastMode: false,
+    });
+    expect(JSON.parse(String(requests[2]!.init.body))).toMatchObject({
+      prompt: "Address the findings",
+      requestId: "request-address",
+    });
+  });
+
   test.each([
     ["shot.png", "image/png"],
     ["shot.jpg", "image/jpeg"],

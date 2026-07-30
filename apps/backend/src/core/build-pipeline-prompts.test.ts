@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
   addressPrompt,
   buildPrompt,
@@ -104,18 +103,10 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Do not print secrets, tokens, credentials");
   });
 
-  test("addressPrompt includes only validated issues and coverage gaps", () => {
-    const report = {
-      issues: [{ title: "Persist failures", evidence: "save was skipped" }],
-      testCoverageGaps: [{ file: "service.ts", untestedBehavior: "abort failure" }],
-      reviewSummary: "unrelated summary",
-    } as unknown as StructuredReviewReport;
-    const prompt = addressPrompt(report);
-
-    expect(prompt).toContain("Persist failures");
-    expect(prompt).toContain("abort failure");
-    expect(prompt).not.toContain("unrelated summary");
-    expect(prompt).toContain("<structured-review-findings>");
+  test("addressPrompt submits the stable continuation instruction", () => {
+    expect(addressPrompt()).toBe(
+      "Address all the above issues and coverage gaps, making sensible assumptions and without asking questions.",
+    );
   });
 
   test("verificationPrompt requires read-only JSON verification", () => {

@@ -3,7 +3,9 @@ import type {
   TaskSnapshot,
 } from "@orkestrator/protocol/build-pipeline";
 import { buildReviewBody } from "@orkestrator/protocol/review-workflow";
-import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+
+const ADDRESS_REVIEW_FINDINGS_PROMPT =
+  "Address all the above issues and coverage gaps, making sensible assumptions and without asking questions.";
 
 function ticketContext(task: TaskSnapshot): string {
   return [
@@ -51,14 +53,8 @@ export function reviewPrompt(
   ].filter(Boolean).join("\n\n");
 }
 
-export function addressPrompt(report: StructuredReviewReport): string {
-  return `Address every issue and test-coverage gap in this validated report:
-
-<structured-review-findings>
-${JSON.stringify({ issues: report.issues, testCoverageGaps: report.testCoverageGaps }, null, 2)}
-</structured-review-findings>
-
-Run the relevant validation. Stage only related safe files and commit every relevant fix before finishing. Do not ask questions.`;
+export function addressPrompt(): string {
+  return ADDRESS_REVIEW_FINDINGS_PROMPT;
 }
 
 export function verificationPrompt(

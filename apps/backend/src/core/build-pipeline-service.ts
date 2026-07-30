@@ -30,6 +30,7 @@ import {
   ProviderUnavailableError,
   type BridgeConnection,
   type BuildPipelineProvider,
+  type ProviderExecutionMode,
 } from "./build-pipeline-provider.js";
 import { stagePromptImages } from "./prompt-attachments.js";
 import {
@@ -154,6 +155,12 @@ function sessionPhaseFor(
     case "waiting-for-setup":
       return null;
   }
+}
+
+function executionModeOverrideForPhase(
+  phase: ResumableBuildPhase,
+): ProviderExecutionMode | undefined {
+  return phase === "addressing" ? "build" : undefined;
 }
 
 function resumePromptFor(phase: ResumableBuildPhase): string | null {
@@ -1136,6 +1143,7 @@ export class BuildPipelineService {
           ? pipeline.taskSnapshot.images
           : [],
         schema,
+        mode: executionModeOverrideForPhase(attempt.phase),
       });
       const session = pipeline.sessions.find((candidate) =>
         candidate.sdkSessionId === attempt.sessionId);
@@ -1213,7 +1221,7 @@ export class BuildPipelineService {
     pipeline.structuredReview = report;
     if (report.issues.length || report.testCoverageGaps.length) {
       pipeline.phase = "addressing";
-      const prompt = addressPrompt(report);
+      const prompt = addressPrompt();
       const request = randomUUID();
       pipeline.pendingPromptAttempt = {
         id: randomUUID(),

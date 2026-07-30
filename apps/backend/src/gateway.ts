@@ -29,6 +29,12 @@ import {
   getGatewayTokenValidationError,
   normalizeGatewayToken,
 } from "@orkestrator/protocol/gateway-token";
+import {
+  GatewayEventReplay,
+  parseGatewayCursor,
+  type GatewayCursorParseResult,
+  type GatewayReplayFrame,
+} from "./gateway-event-replay.js";
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
@@ -88,6 +94,13 @@ export interface OrkestratorGatewayOptions {
   compression?: GatewayCompressionMode;
   keepaliveMs?: number;
   proxyBodyIdleTimeoutMs?: number;
+  eventReplay?: {
+    frameCapacity?: number;
+    maxBytes?: number;
+    idleRetentionMs?: number;
+    handshakeFrameCapacity?: number;
+    handshakeMaxBytes?: number;
+  };
   webClientControl?: {
     getStatus(): WebClientStatus;
     setEnabled(enabled: boolean): Promise<WebClientStatus>;
@@ -166,6 +179,12 @@ const SSE_CLIENT_SOFT_BUFFER_BYTES = 1024 * 1024;
  * silently skipped state event is not.
  */
 const SSE_CLIENT_HARD_BUFFER_BYTES = 8 * 1024 * 1024;
+/** Bounds events that arrive after subscription but before replay has drained. */
+export const DEFAULT_GATEWAY_REPLAY_HANDSHAKE_FRAME_CAPACITY = 2_048;
+export const DEFAULT_GATEWAY_REPLAY_HANDSHAKE_MAX_BYTES = 8 * 1024 * 1024;
+const GATEWAY_CONNECTED_EVENT = "gateway.connected";
+const GATEWAY_RECONCILE_REQUIRED_EVENT = "gateway.reconcile-required";
+const GATEWAY_CURSOR_EVENT = "gateway.cursor";
 const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const CORS_ALLOWED_HEADERS =
   "Authorization, Content-Type, X-Orkestrator-Codex-Token, X-Orkestrator-Claude-Token, X-Orkestrator-OpenCode-Token";
@@ -2355,6 +2374,26 @@ type GatewayEventClient = {
   excludedPrefixes: string[] | null;
   /** Sessions whose frames were dropped for this client since its last notice. */
   desyncedSessions: Set<string>;
+  /**
+   * Non-null from subscription until replay and its concurrent arrivals drain.
+   * `emit()` appends here instead of writing live, preventing a later event from
+   * overtaking the retained gap.
+   */
+  handshake?: GatewayReplayHandshake | null;
+};
+
+type BufferedGatewayEvent = {
+  event: string;
+  payload: unknown;
+  message: string;
+  messageBytes: number;
+  droppable: boolean;
+  revision: number | null;
+};
+
+type GatewayReplayHandshake = {
+  events: BufferedGatewayEvent[];
+  bytes: number;
 };
 
 /** Parses the opt-in `?events=` subscription filter. Empty/absent means all. */
@@ -2400,6 +2439,9 @@ export class OrkestratorGateway {
   private readonly compression: GatewayCompressionMode;
   private readonly keepaliveMs: number;
   private readonly proxyBodyIdleTimeoutMs: number;
+  private readonly eventReplay: GatewayEventReplay;
+  private readonly replayHandshakeFrameCapacity: number;
+  private readonly replayHandshakeMaxBytes: number;
   private readonly metrics: GatewayMetricsStore;
   private servers = new Set<Server>();
   private token = "";
@@ -2439,6 +2481,20 @@ export class OrkestratorGateway {
     this.compression = resolveGatewayCompressionMode(options.compression, this.env);
     this.keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
     this.proxyBodyIdleTimeoutMs = options.proxyBodyIdleTimeoutMs ?? BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS;
+    this.eventReplay = new GatewayEventReplay(
+      randomBytes(16).toString("hex"),
+      options.eventReplay,
+    );
+    this.replayHandshakeFrameCapacity = Math.max(
+      1,
+      options.eventReplay?.handshakeFrameCapacity
+        ?? DEFAULT_GATEWAY_REPLAY_HANDSHAKE_FRAME_CAPACITY,
+    );
+    this.replayHandshakeMaxBytes = Math.max(
+      0,
+      options.eventReplay?.handshakeMaxBytes
+        ?? DEFAULT_GATEWAY_REPLAY_HANDSHAKE_MAX_BYTES,
+    );
     this.allowedOrigins = (
       options.allowedOrigins ?? parseAllowedOrigins(this.env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS)
     )
@@ -2635,6 +2691,7 @@ export class OrkestratorGateway {
       client.destroy();
     }
     this.clients.clear();
+    this.eventReplay.releaseRetained();
     for (const proxyRequest of this.proxyRequests) {
       proxyRequest.destroy(new Error("Remote gateway stopped"));
     }
@@ -2656,10 +2713,14 @@ export class OrkestratorGateway {
   }
 
   emit(event: string, payload: unknown): void {
-    if (this.clients.size === 0) return;
     const droppable = event.startsWith(DROPPABLE_EVENT_PREFIX);
-    let message: string | null = null;
-    let messageBytes = 0;
+    // Authoritative state is revisioned and retained even while no renderer is
+    // mounted. Terminal bytes have their own generation/revision snapshot
+    // protocol and must never consume this replay ring.
+    const replayFrame = droppable ? null : this.eventReplay.append(event, payload);
+    if (this.clients.size === 0) return;
+    let message = replayFrame?.message ?? null;
+    let messageBytes = replayFrame?.encodedBytes ?? 0;
     for (const [client, state] of this.clients) {
       if (!eventMatchesSubscription(
         event,
@@ -2672,39 +2733,217 @@ export class OrkestratorGateway {
         messageBytes = Buffer.byteLength(message);
       }
 
-      if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
-        this.dropBufferedClient(client, event, client.writableLength);
+      if (state.handshake) {
+        const projectedFrames = state.handshake.events.length + 1;
+        const projectedBytes = state.handshake.bytes + messageBytes;
+        if (
+          projectedFrames > this.replayHandshakeFrameCapacity
+          || projectedBytes > this.replayHandshakeMaxBytes
+        ) {
+          this.dropBufferedClient(client, event, projectedBytes);
+          continue;
+        }
+        state.handshake.events.push({
+          event,
+          payload,
+          message,
+          messageBytes,
+          droppable,
+          revision: replayFrame?.revision ?? null,
+        });
+        state.handshake.bytes = projectedBytes;
         continue;
       }
 
-      if (
-        droppable
-        && client.writableLength + messageBytes > SSE_CLIENT_SOFT_BUFFER_BYTES
-      ) {
-        this.markTerminalFrameDropped(client, state, event, message, payload);
-        continue;
-      }
-      if (
-        state.desyncedSessions.size > 0
-        && !this.flushDesyncNotices(client, state)
-      ) {
-        continue;
-      }
-
-      const projectedBytes = client.writableLength + messageBytes;
-      if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
-        this.dropBufferedClient(client, event, projectedBytes);
-        continue;
-      }
-      // A desync notice may itself consume the last available soft-limit
-      // space. Re-check droppable frames after flushing it.
-      if (droppable && projectedBytes > SSE_CLIENT_SOFT_BUFFER_BYTES) {
-        this.markTerminalFrameDropped(client, state, event, message, payload);
-        continue;
-      }
-      client.write(message);
-      this.metrics.recordEvent(event, messageBytes);
+      this.writeEventToClient(
+        client,
+        state,
+        event,
+        payload,
+        message,
+        messageBytes,
+        droppable,
+      );
     }
+  }
+
+  private writeEventToClient(
+    client: EventClientWriter,
+    state: GatewayEventClient,
+    event: string,
+    payload: unknown,
+    message: string,
+    messageBytes: number,
+    droppable: boolean,
+  ): boolean {
+    if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
+      this.dropBufferedClient(client, event, client.writableLength);
+      return false;
+    }
+
+    if (
+      droppable
+      && client.writableLength + messageBytes > SSE_CLIENT_SOFT_BUFFER_BYTES
+    ) {
+      this.markTerminalFrameDropped(client, state, event, message, payload);
+      return true;
+    }
+    if (
+      state.desyncedSessions.size > 0
+      && !this.flushDesyncNotices(client, state)
+    ) {
+      return false;
+    }
+
+    const projectedBytes = client.writableLength + messageBytes;
+    if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
+      this.dropBufferedClient(client, event, projectedBytes);
+      return false;
+    }
+    // A desync notice may itself consume the last available soft-limit
+    // space. Re-check droppable frames after flushing it.
+    if (droppable && projectedBytes > SSE_CLIENT_SOFT_BUFFER_BYTES) {
+      this.markTerminalFrameDropped(client, state, event, message, payload);
+      return true;
+    }
+    client.write(message);
+    this.metrics.recordEvent(event, messageBytes);
+    return true;
+  }
+
+  private writeControlFrame(
+    client: EventClientWriter,
+    event: string,
+    cursor: string | null,
+    payload: unknown,
+  ): boolean {
+    const message = `${cursor ? `id: ${cursor}\n` : ""}data: ${JSON.stringify({
+      event,
+      payload,
+    })}\n\n`;
+    const projectedBytes = client.writableLength + Buffer.byteLength(message);
+    if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
+      this.dropBufferedClient(client, event, projectedBytes);
+      return false;
+    }
+    client.write(message);
+    return true;
+  }
+
+  private writeReplayFrame(
+    client: EventClientWriter,
+    state: GatewayEventClient,
+    frame: GatewayReplayFrame,
+  ): boolean {
+    if (eventMatchesSubscription(
+      frame.event,
+      state.prefixes,
+      state.includedPrefixes,
+      state.excludedPrefixes,
+    )) {
+      return this.writeEventToClient(
+        client,
+        state,
+        frame.event,
+        undefined,
+        frame.message,
+        frame.encodedBytes,
+        false,
+      );
+    }
+    // A scoped stream still has to advance through global revisions it omitted,
+    // otherwise every reconnect would request the same irrelevant frames.
+    return this.writeControlFrame(client, GATEWAY_CURSOR_EVENT, frame.cursor, null);
+  }
+
+  private initializeEventReplay(
+    client: EventClientWriter,
+    state: GatewayEventClient,
+    cursor: GatewayCursorParseResult,
+  ): void {
+    const latestAtSubscribe = this.eventReplay.latestRevision;
+    let replay:
+      | ReturnType<GatewayEventReplay["since"]>
+      | null = null;
+    let connectedCursor = this.eventReplay.latestCursor;
+    let replayStatus: "fresh" | "caught-up" | "replayed" | "reconcile" = "fresh";
+    let reconcileReason: "invalid-cursor" | "prior-generation" | "cursor-expired" | null = null;
+    let requestedRevision: number | null = null;
+
+    if (cursor.kind === "invalid") {
+      replayStatus = "reconcile";
+      reconcileReason = "invalid-cursor";
+    } else if (cursor.kind === "valid") {
+      connectedCursor = cursor.raw;
+      requestedRevision = cursor.revision;
+      if (cursor.generation !== this.eventReplay.generation) {
+        replayStatus = "reconcile";
+        reconcileReason = "prior-generation";
+      } else {
+        replay = this.eventReplay.since(cursor.revision);
+        if (!replay.complete) {
+          replayStatus = "reconcile";
+          reconcileReason = "cursor-expired";
+        } else {
+          replayStatus = replay.frames.length > 0 ? "replayed" : "caught-up";
+        }
+      }
+    }
+
+    if (!this.writeControlFrame(client, GATEWAY_CONNECTED_EVENT, connectedCursor, {
+      generation: this.eventReplay.generation,
+      revision: latestAtSubscribe,
+      status: replayStatus,
+      replayed: replay?.complete ? replay.frames.length : 0,
+    })) return;
+    if (!this.clients.has(client)) return;
+
+    let highestSent = cursor.kind === "valid" ? cursor.revision : latestAtSubscribe;
+    if (reconcileReason) {
+      const currentCursor = this.eventReplay.latestCursor;
+      if (!this.writeControlFrame(
+        client,
+        GATEWAY_RECONCILE_REQUIRED_EVENT,
+        currentCursor,
+        {
+          reason: reconcileReason,
+          requestedCursor: cursor.kind === "absent" ? null : cursor.raw,
+          requestedRevision,
+          oldestAvailableRevision: this.eventReplay.oldestRevision,
+          latestRevision: this.eventReplay.latestRevision,
+          generation: this.eventReplay.generation,
+        },
+      )) return;
+      if (!this.clients.has(client)) return;
+      highestSent = this.eventReplay.latestRevision;
+    } else if (replay) {
+      for (const frame of replay.frames) {
+        if (!this.clients.has(client)) return;
+        if (!this.writeReplayFrame(client, state, frame)) return;
+        highestSent = Math.max(highestSent, frame.revision);
+      }
+    }
+
+    // Stay in buffered mode until the dynamic end of the array. A write can
+    // synchronously cause another backend event, and that later event must not
+    // overtake an earlier buffered one.
+    let index = 0;
+    while (state.handshake && index < state.handshake.events.length) {
+      const buffered = state.handshake.events[index]!;
+      index += 1;
+      if (buffered.revision !== null && buffered.revision <= highestSent) continue;
+      if (!this.writeEventToClient(
+        client,
+        state,
+        buffered.event,
+        buffered.payload,
+        buffered.message,
+        buffered.messageBytes,
+        buffered.droppable,
+      )) return;
+      if (buffered.revision !== null) highestSent = buffered.revision;
+    }
+    state.handshake = null;
   }
 
   private markTerminalFrameDropped(
@@ -3272,14 +3511,12 @@ export class OrkestratorGateway {
         // waiting for the first application event.
         client.write(": compression-priming\n\n");
       }
-      client.write(": connected\n\n");
     } catch (error) {
       // A handshake that never reaches `open` still has to release the gauge,
       // otherwise `connecting` climbs for the lifetime of the process.
       this.metrics.recordStreamConnectFailed();
       throw error;
     }
-    this.metrics.recordStreamOpened();
     const state: GatewayEventClient = {
       prefixes: parseEventSubscriptionFilter(url.searchParams.get("events")),
       includedPrefixes: parseEventSubscriptionFilter(
@@ -3289,8 +3526,29 @@ export class OrkestratorGateway {
         url.searchParams.get("excludeEvents"),
       ),
       desyncedSessions: new Set(),
+      handshake: { events: [], bytes: 0 },
     };
+    // Subscribe before inspecting the ring. `emit()` buffers into this state
+    // until replay drains, closing the replay/live race.
     this.clients.set(client, state);
+    client.write(": connected\n\n");
+    const explicitSince = url.searchParams.get("since");
+    const rawCursor = explicitSince !== null
+      ? explicitSince
+      : Array.isArray(request.headers["last-event-id"])
+        ? request.headers["last-event-id"][0]
+        : request.headers["last-event-id"];
+    const isTerminalOnly = state.prefixes === null
+      && state.includedPrefixes?.every((prefix) => prefix.startsWith(DROPPABLE_EVENT_PREFIX))
+      && state.excludedPrefixes?.some((prefix) => DROPPABLE_EVENT_PREFIX.startsWith(prefix));
+    if (isTerminalOnly) {
+      // Terminal streams use their own revisioned snapshot protocol. They are
+      // deliberately absent from the authoritative gateway replay sequence.
+      state.handshake = null;
+    } else {
+      this.initializeEventReplay(client, state, parseGatewayCursor(rawCursor));
+    }
+    this.metrics.recordStreamOpened();
     // A client only ever falls behind after a write was refused, so "drained"
     // is the earliest safe moment to tell it what it missed — waiting for the
     // next event would leave a quiet session desynced indefinitely.

@@ -11,6 +11,9 @@ import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 const GATEWAY_PREFIX = "/__orkestrator";
 const EVENT_RECONNECT_DELAY_MS = 2_000;
 const TERMINAL_OUTPUT_EVENT_PREFIX = "terminal-output-";
+const GATEWAY_CONNECTED_EVENT = "gateway.connected";
+const GATEWAY_RECONCILE_REQUIRED_EVENT = "gateway.reconcile-required";
+const GATEWAY_CURSOR_EVENT = "gateway.cursor";
 /**
  * `EventSource.CLOSED`, spelled as the spec's fixed numeric value rather than
  * read off the constructor: a same-origin browser may have replaced the global,
@@ -55,13 +58,19 @@ function normalizedBaseUrl(value: string | undefined): string | undefined {
   return value?.trim().replace(/\/+$/, "") || undefined;
 }
 
-function parseEventBlock(block: string): string | null {
+function parseEventBlock(block: string): { data: string | null; id: string | null } {
+  const idLine = block
+    .split(/\r?\n/)
+    .findLast((line) => line.startsWith("id:"));
   const data = block
     .split(/\r?\n/)
     .filter((line) => line.startsWith("data:"))
     .map((line) => line.slice(5).trimStart())
     .join("\n");
-  return data || null;
+  return {
+    data: data || null,
+    id: idLine ? idLine.slice(3).trimStart() : null,
+  };
 }
 
 export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
@@ -74,6 +83,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let bootMetricsLoadObserved = typeof document === "undefined" || document.readyState === "complete";
   let bootMetricsReported = false;
   let bootMetricsEventStreamConnectedMs: number | null = null;
+  let mainEventCursor: string | null = null;
+  let mainConnectionAnnounced = false;
   type TerminalEventStream = {
     event: string;
     /**
@@ -130,7 +141,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
    * so a remote tab looking at one environment no longer downloads output from
    * every terminal in every other environment.
    */
-  const eventStreamPath = (terminalEvents?: string | readonly string[]) => {
+  const eventStreamPath = (
+    terminalEvents?: string | readonly string[],
+    since?: string | null,
+  ) => {
     const params = new URLSearchParams({
       excludeEvents: TERMINAL_OUTPUT_EVENT_PREFIX,
     });
@@ -140,6 +154,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         : terminalEvents.join(",");
       if (included) params.set("includeEvents", included);
     }
+    if (!terminalEvents && since) params.set("since", since);
     return `${GATEWAY_PREFIX}/events?${params.toString()}`;
   };
 
@@ -149,7 +164,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const hasMainEventListeners = (): boolean =>
     [...listeners.keys()].some((event) => !isTerminalOutputEvent(event));
 
-  const dispatchMessage = (data: string) => {
+  const dispatchMessage = (
+    data: string,
+    options: { mainStream?: boolean; lastEventId?: string | null } = {},
+  ) => {
     let parsed: { event?: unknown; payload?: unknown };
     try {
       parsed = JSON.parse(data) as { event?: unknown; payload?: unknown };
@@ -157,6 +175,27 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       return;
     }
     if (typeof parsed.event !== "string") return;
+    if (options.mainStream && options.lastEventId) {
+      mainEventCursor = options.lastEventId;
+    }
+    if (parsed.event === GATEWAY_CONNECTED_EVENT) {
+      const status = parsed.payload
+        && typeof parsed.payload === "object"
+        && "status" in parsed.payload
+        ? (parsed.payload as { status?: unknown }).status
+        : null;
+      if (status === "fresh" && !mainConnectionAnnounced) {
+        mainConnectionAnnounced = true;
+        announceEventStreamConnected();
+      }
+      return;
+    }
+    if (parsed.event === GATEWAY_RECONCILE_REQUIRED_EVENT) {
+      mainConnectionAnnounced = true;
+      announceEventStreamConnected();
+      return;
+    }
+    if (parsed.event === GATEWAY_CURSOR_EVENT) return;
     // Transport-level events are synthesized locally and share this listener
     // map, so a server frame must never be able to impersonate one.
     if (parsed.event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) return;
@@ -277,6 +316,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const consumeFetchEventStream = async (
     response: Response,
     controller: AbortController,
+    mainStream = false,
   ): Promise<void> => {
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
@@ -286,9 +326,14 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       buffer += decoder.decode(value, { stream: !done });
       let boundary = /\r?\n\r?\n/.exec(buffer);
       while (boundary) {
-        const data = parseEventBlock(buffer.slice(0, boundary.index));
+        const frame = parseEventBlock(buffer.slice(0, boundary.index));
         buffer = buffer.slice(boundary.index + boundary[0].length);
-        if (data) dispatchMessage(data);
+        if (frame.data) {
+          dispatchMessage(frame.data, {
+            mainStream,
+            lastEventId: frame.id,
+          });
+        }
         boundary = /\r?\n\r?\n/.exec(buffer);
       }
       if (done) break;
@@ -311,7 +356,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
     void (async () => {
       try {
-        const response = await fetch(apiUrl(eventStreamPath()), {
+        const response = await fetch(apiUrl(eventStreamPath(undefined, mainEventCursor)), {
           credentials,
           headers: requestHeaders(),
           signal: controller.signal,
@@ -323,9 +368,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           bootMetricsEventStreamConnectedMs = performance.now();
           maybeSendBootMetrics();
         }
-        announceEventStreamConnected();
-
-        await consumeFetchEventStream(response, controller);
+        await consumeFetchEventStream(response, controller, true);
       } catch (error) {
         if (!controller.signal.aborted) {
           console.warn("[RemoteGateway] Event stream disconnected", error);
@@ -345,7 +388,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       return;
     }
 
-    eventSource = new EventSource(apiUrl(eventStreamPath()), {
+    eventSource = new EventSource(apiUrl(eventStreamPath(undefined, mainEventCursor)), {
       withCredentials: true,
     });
     eventSource.onopen = () => {
@@ -353,9 +396,11 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         bootMetricsEventStreamConnectedMs = performance.now();
         maybeSendBootMetrics();
       }
-      announceEventStreamConnected();
     };
-    eventSource.onmessage = (message) => dispatchMessage(message.data);
+    eventSource.onmessage = (message) => dispatchMessage(message.data, {
+      mainStream: true,
+      lastEventId: message.lastEventId,
+    });
     eventSource.onerror = () => {
       console.warn("[RemoteGateway] Event stream disconnected");
     };

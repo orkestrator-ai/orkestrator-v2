@@ -204,8 +204,9 @@ export function startResourceSync(): () => void {
   });
 
   attach(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
-    // The gateway has no replay buffer. Reset sequence tracking and refetch
-    // every active authoritative cache before accepting incremental updates.
+    // The web gateway raises this only for a fresh stream or an explicit
+    // replay miss/generation change. Retained reconnect gaps are delivered
+    // without this notification, so they do not trigger a broad refetch.
     const isReconnect = connectionAnnounced;
     lastRevision = null;
     connectionAnnounced = true;

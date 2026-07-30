@@ -36,6 +36,17 @@ const EVENT_SOURCE_CONNECTING = 0;
 const EVENT_SOURCE_OPEN = 1;
 const EVENT_SOURCE_CLOSED = 2;
 
+function gatewayControlFrame(
+  event: "gateway.connected" | "gateway.reconcile-required",
+  statusOrReason: string,
+  id = "12345678:0",
+): string {
+  const payload = event === "gateway.connected"
+    ? { status: statusOrReason, generation: "12345678", revision: 0 }
+    : { reason: statusOrReason, generation: "12345678", latestRevision: 0 };
+  return `id: ${id}\ndata: ${JSON.stringify({ event, payload })}\n\n`;
+}
+
 class MockEventSource {
   static instances: MockEventSource[] = [];
   onopen: ((event?: Event) => void) | null = null;
@@ -774,6 +785,7 @@ describe("web gateway browser API", () => {
       if (attempt === 1) return new Response(null, { status: 503 });
       return new Response(new ReadableStream({
         start(controller) {
+          controller.enqueue(encoder.encode(gatewayControlFrame("gateway.connected", "fresh")));
           controller.enqueue(encoder.encode('data: {"event":"changed","payload":"reconnected"}\n\n'));
         },
       }), { status: 200 });
@@ -806,7 +818,7 @@ describe("web gateway browser API", () => {
     }
   });
 
-  test("announces every browser EventSource connection", () => {
+  test("announces a fresh browser stream but not a replayed reconnect", () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi();
     const connected = mock(() => undefined);
@@ -818,15 +830,34 @@ describe("web gateway browser API", () => {
     if (!source) throw new Error("EventSource was not created");
 
     source.onopen?.();
+    source.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({
+        event: "gateway.connected",
+        payload: { status: "fresh" },
+      }),
+      lastEventId: "12345678:0",
+    }));
     source.onopen?.();
+    source.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({
+        event: "gateway.connected",
+        payload: { status: "caught-up" },
+      }),
+      lastEventId: "12345678:0",
+    }));
 
-    expect(connected).toHaveBeenCalledTimes(2);
+    expect(connected).toHaveBeenCalledTimes(1);
     unsubscribe();
   });
 
   test("notifies listeners when a direct gateway stream connects", async () => {
+    const encoder = new TextEncoder();
     globalThis.fetch = mock(async () =>
-      new Response(new ReadableStream({ start() {} }), { status: 200 })
+      new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(gatewayControlFrame("gateway.connected", "fresh")));
+        },
+      }), { status: 200 })
     ) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
@@ -841,18 +872,34 @@ describe("web gateway browser API", () => {
     });
   });
 
-  test("re-notifies connected listeners on each successful direct reconnect, not on failed attempts", async () => {
+  test("reconciles only fresh streams and explicit replay misses across direct reconnects", async () => {
+    const encoder = new TextEncoder();
     const warning = mock(() => undefined);
     const originalWarn = console.warn;
     console.warn = warning;
     let attempt = 0;
     const attemptsAtConnect: number[] = [];
-    globalThis.fetch = mock(async () => {
+    const requestUrls: string[] = [];
+    globalThis.fetch = mock(async (input) => {
+      requestUrls.push(String(input));
       attempt += 1;
-      // Fail the first attempt, then succeed and immediately end the stream so
-      // the reconnect loop runs again.
       if (attempt === 1) return new Response(null, { status: 503 });
-      return new Response(new ReadableStream({ start(controller) { controller.close(); } }), { status: 200 });
+      return new Response(new ReadableStream({
+        start(controller) {
+          if (attempt === 2) {
+            controller.enqueue(encoder.encode(gatewayControlFrame("gateway.connected", "fresh")));
+            controller.close();
+          } else if (attempt === 3) {
+            controller.enqueue(encoder.encode(gatewayControlFrame("gateway.connected", "caught-up")));
+            controller.close();
+          } else {
+            controller.enqueue(encoder.encode(gatewayControlFrame("gateway.connected", "reconcile")));
+            controller.enqueue(encoder.encode(
+              gatewayControlFrame("gateway.reconcile-required", "cursor-expired"),
+            ));
+          }
+        },
+      }), { status: 200 });
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
@@ -874,7 +921,9 @@ describe("web gateway browser API", () => {
       // The 503 attempt throws before the connected event is dispatched, so the
       // first notification belongs to attempt 2 and never to attempt 1.
       expect(attemptsAtConnect[0]).toBe(2);
-      expect(attemptsAtConnect[1]).toBe(3);
+      expect(attemptsAtConnect[1]).toBe(4);
+      expect(new URL(requestUrls[2]!).searchParams.get("since")).toBe("12345678:0");
+      expect(new URL(requestUrls[3]!).searchParams.get("since")).toBe("12345678:0");
     } finally {
       console.warn = originalWarn;
     }
@@ -885,6 +934,9 @@ describe("web gateway browser API", () => {
     globalThis.fetch = mock(async () =>
       new Response(new ReadableStream({
         start(controller) {
+          controller.enqueue(encoder.encode(
+            gatewayControlFrame("gateway.connected", "fresh"),
+          ));
           controller.enqueue(encoder.encode(
             `data: {"event":"${NATIVE_EVENT_STREAM_CONNECTED_EVENT}","payload":"spoofed"}\n\n`,
           ));
@@ -1091,6 +1143,13 @@ describe("web gateway browser API", () => {
       connectedCallback,
     );
     source.onopen?.({} as Event);
+    source.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({
+        event: "gateway.connected",
+        payload: { status: "fresh" },
+      }),
+      lastEventId: "12345678:0",
+    }));
     expect(connectedCallback).toHaveBeenCalledTimes(1);
 
     source.onmessage?.({

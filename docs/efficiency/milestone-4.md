@@ -1,6 +1,6 @@
 # Milestone 4 — Gateway replay and revision-aware synchronization
 
-Status: Not started
+Status: In progress — gateway replay transport implemented
 
 Depends on: Milestone 3
 
@@ -26,29 +26,29 @@ Primary areas:
 
 ### Gateway event identity
 
-- [ ] Create a gateway generation identifier.
-- [ ] Assign a monotonically increasing revision to every authoritative
+- [x] Create a gateway generation identifier.
+- [x] Assign a monotonically increasing revision to every authoritative
       non-terminal event within that generation.
-- [ ] Emit the revision as the SSE `id`.
-- [ ] Accept `Last-Event-ID`.
-- [ ] Accept an explicit `since` query for clients that cannot set the header.
-- [ ] Validate cursor syntax and generation.
-- [ ] Keep terminal byte events out of the main authoritative replay ring.
+- [x] Emit the revision as the SSE `id`.
+- [x] Accept `Last-Event-ID`.
+- [x] Accept an explicit `since` query for clients that cannot set the header.
+- [x] Validate cursor syntax and generation.
+- [x] Keep terminal byte events out of the main authoritative replay ring.
 
 ### Bounded replay
 
-- [ ] Bound the ring by frame count.
-- [ ] Bound the ring by encoded bytes.
-- [ ] Release retained payloads according to a documented idle policy.
-- [ ] Subscribe before calculating replay.
-- [ ] Buffer events emitted during replay calculation.
-- [ ] Flush replayed frames, then only buffered frames newer than the replay
+- [x] Bound the ring by frame count.
+- [x] Bound the ring by encoded bytes.
+- [x] Release retained payloads according to a documented idle policy.
+- [x] Subscribe before calculating replay.
+- [x] Buffer events emitted during replay calculation.
+- [x] Flush replayed frames, then only buffered frames newer than the replay
       range.
-- [ ] Echo the client's cursor on the connected frame.
-- [ ] Never anchor the connected frame at the latest revision before replay.
-- [ ] Emit `reconcile-required` for an expired, invalid, or prior-generation
+- [x] Echo the client's cursor on the connected frame.
+- [x] Never anchor the connected frame at the latest revision before replay.
+- [x] Emit `reconcile-required` for an expired, invalid, or prior-generation
       cursor.
-- [ ] Preserve bounded slow-consumer behavior during handshake and replay.
+- [x] Preserve bounded slow-consumer behavior during handshake and replay.
 
 ### Revision manifest and conditional hydration
 
@@ -74,18 +74,18 @@ Primary areas:
 
 ## Required tests
 
-- [ ] Replay a short valid gap without snapshot hydration.
-- [ ] Expired cursor produces exactly one reconciliation path.
-- [ ] Invalid cursor and prior generation reconcile.
-- [ ] Replay ring count and byte bounds hold during a burst.
-- [ ] Event emitted between subscribe and replay calculation is not lost.
+- [x] Replay a short valid gap without snapshot hydration.
+- [x] Expired cursor produces exactly one reconciliation path.
+- [x] Invalid cursor and prior generation reconcile.
+- [x] Replay ring count and byte bounds hold during a burst.
+- [x] Event emitted between subscribe and replay calculation is not lost.
 - [ ] Disconnect during handshake does not skip replay on reconnect.
-- [ ] Connected frame echoes the client cursor.
-- [ ] Terminal output does not enter the main replay ring.
+- [x] Connected frame echoes the client cursor.
+- [x] Terminal output does not enter the main replay ring.
 - [ ] Resource manifest returns stable revisions for unchanged state.
 - [ ] Conditional snapshot returns unchanged without its body.
 - [ ] Backend restart invalidates old cursors and converges.
-- [ ] Slow clients cannot make handshake buffers unbounded.
+- [x] Slow clients cannot make handshake buffers unbounded.
 
 ## Manual verification
 
@@ -110,10 +110,10 @@ bun run test
 
 ## Exit criteria
 
-- [ ] Replay succeeds for retained gaps without broad hydration.
-- [ ] Expired and prior-generation cursors reconcile explicitly.
-- [ ] Replay and handshake memory are bounded.
-- [ ] Subscribe-before-replay races are covered.
+- [x] Replay succeeds for retained gaps without broad hydration.
+- [x] Expired and prior-generation cursors reconcile explicitly.
+- [x] Replay and handshake memory are bounded.
+- [x] Subscribe-before-replay races are covered.
 - [ ] Stable clients use manifest checks instead of broad snapshot transfer.
 - [ ] Inactive/background clients converge every authoritative resource.
 - [ ] An explicit full reconciliation remains available.
@@ -131,4 +131,30 @@ Record:
 - final manifest interval;
 - test command results.
 
-No evidence recorded yet.
+### 2026-07-30 — gateway replay transport slice
+
+- Gateway generations are random 128-bit hexadecimal identifiers. Cursors use
+  `<generation>:<revision>` and are validated before they can be echoed as an
+  SSE `id`.
+- The authoritative ring retains at most 2,048 frames or 8 MiB of encoded SSE,
+  whichever is reached first. It releases retained payloads after five minutes
+  without an authoritative event while preserving the issued revision.
+- The per-connection replay-handshake buffer is independently capped at 2,048
+  frames and 8 MiB. Overflow disconnects the client so its next request follows
+  replay or explicit reconciliation rather than silently dropping state.
+- Terminal output stays on its existing generation/revision snapshot path and
+  is not retained in the gateway ring.
+- The browser adapter carries the last cursor on direct-fetch reconnects and
+  lets native `EventSource` use `Last-Event-ID`. A retained replay does not emit
+  the renderer's broad-resync signal; fresh, invalid, expired, and
+  prior-generation paths still do.
+- The 60-second resource safety sweep remains enabled. Revision manifests,
+  conditional snapshots, targeted hydration, equivalence soak, and iOS manual
+  verification are the next slice.
+- Baseline/after transfer evidence has not yet been recorded for this milestone.
+- Passing focused checks:
+  - `bun run --cwd apps/backend typecheck`
+  - `bun run --cwd apps/web typecheck`
+  - `bun test tests/unit/electron/gateway.test.ts --parallel` (130 tests)
+  - `bun test src/lib/native/web-gateway.test.ts src/lib/resource-sync.test.ts --parallel`
+    from `apps/web` (80 tests)

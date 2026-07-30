@@ -57,6 +57,12 @@ import type {
   OpenCodeSlashCommand,
 } from "@/lib/opencode-client";
 import type { FileCandidate, FileMention } from "@/types";
+import {
+  moveAgentPrompt,
+  removeAgentPrompt,
+  transferAgentPromptToComposeDraft,
+} from "@/lib/prompt-queue-sources";
+import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 
 interface OpenCodeComposeBarProps {
   environmentId: string;
@@ -167,8 +173,6 @@ export function OpenCodeComposeBar({
   const setSelectedModel = useOpenCodeStore((state) => state.setSelectedModel);
   const setSelectedVariant = useOpenCodeStore((state) => state.setSelectedVariant);
   const setSelectedMode = useOpenCodeStore((state) => state.setSelectedMode);
-  const removeQueueItem = useOpenCodeStore((state) => state.removeQueueItem);
-  const moveQueueItem = useOpenCodeStore((state) => state.moveQueueItem);
 
   // Use session key so tab-scoped state (draft, attachments, mode) is isolated per tab
   const sessionKey = createSessionKey(environmentId, tabId);
@@ -453,12 +457,19 @@ export function OpenCodeComposeBar({
     removeAttachment(sessionKey, id);
   };
 
-  const handleRemoveQueuedMessage = (messageId: string) => {
-    removeQueueItem(sessionKey, messageId);
+  const handleRemoveQueuedMessage = async (messageId: string) => {
+    await removeAgentPrompt("opencode", sessionKey, messageId);
   };
 
-  const handleMoveQueuedMessage = (fromIndex: number, toIndex: number) => {
-    moveQueueItem(sessionKey, fromIndex, toIndex);
+  const handleMoveQueuedMessage = async (fromIndex: number, toIndex: number) => {
+    const message = queuedMessages[fromIndex];
+    if (!message || Math.abs(toIndex - fromIndex) !== 1) return;
+    await moveAgentPrompt(
+      "opencode",
+      sessionKey,
+      message.id,
+      toIndex < fromIndex ? "up" : "down",
+    );
   };
 
   /**
@@ -466,24 +477,35 @@ export function OpenCodeComposeBar({
    * options it was queued with.
    */
   const handleQueuedMessageClick = useCallback(
-    (message: OpenCodeQueuedMessage) => {
+    async (message: OpenCodeQueuedMessage) => {
+      // Editing loads the prompt into the composer, so anything already there
+      // would be destroyed. Refusing with a reason beats the silent overwrite
+      // this used to do and beats the backend's opaque rejection downstream.
+      if (text.trim().length > 0 || attachments.length > 0) {
+        throw composerOccupiedError();
+      }
+      const removed = await transferAgentPromptToComposeDraft<OpenCodeQueuedMessage>(
+        "opencode",
+        sessionKey,
+        message.id,
+      );
+      if (!removed) return;
       const store = useOpenCodeStore.getState();
-      store.setDraftText(sessionKey, message.text);
+      store.setDraftText(sessionKey, removed.text);
       store.setDraftMentions(sessionKey, []);
       store.clearAttachments(sessionKey);
-      for (const attachment of message.attachments) {
+      for (const attachment of removed.attachments) {
         store.addAttachment(sessionKey, attachment);
       }
-      if (message.model) {
-        store.setSelectedModel(sessionKey, message.model);
+      if (removed.model) {
+        store.setSelectedModel(sessionKey, removed.model);
       }
-      store.setSelectedVariant(sessionKey, message.variant);
-      store.setSelectedMode(sessionKey, message.mode);
-      store.removeQueueItem(sessionKey, message.id);
+      store.setSelectedVariant(sessionKey, removed.variant);
+      store.setSelectedMode(sessionKey, removed.mode);
       setQueueDialogOpen(false);
       inputRef.current?.focus();
     },
-    [sessionKey],
+    [attachments, sessionKey, text],
   );
 
   const handleModeChange = (mode: string) => {

@@ -1591,9 +1591,15 @@ describe("HierarchicalSidebar", () => {
     fireEvent.contextMenu(projectButton);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Repository Settings" }));
 
+    expect(
+      screen.getByRole("status", { name: "Loading repository settings…" }),
+    ).toBeTruthy();
+    // The dialog is a lazily imported chunk now, so resolving it is a real
+    // async boundary rather than a render tick. The default 1s waitFor is not
+    // enough headroom for that under a loaded parallel suite.
     await waitFor(() => {
       expect(screen.queryByLabelText("Name") || screen.queryByTestId("settings-layout")).toBeTruthy();
-    });
+    }, { timeout: 3_000 });
   });
 
   test("forwards project changes through the project hook contract", async () => {

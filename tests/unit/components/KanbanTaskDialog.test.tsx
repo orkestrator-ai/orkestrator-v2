@@ -486,7 +486,11 @@ describe("KanbanTaskDialog", () => {
         "project",
         "project-1",
         expect.objectContaining({ title: "Task worth recovering" }),
-        1,
+        // 0 because hydration found no stored draft, and hydration is now
+        // ordered ahead of this save. It used to assert 1: the save ran before
+        // hydration published, so it inherited the revision a *previous* mount
+        // of the same key had left in the shared cursor.
+        0,
       );
     });
     expect(deleteComposeDraftMock).not.toHaveBeenCalled();

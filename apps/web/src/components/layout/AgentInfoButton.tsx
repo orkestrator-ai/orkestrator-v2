@@ -1679,7 +1679,10 @@ export function AgentInfoButton({
                 && claudeClient
                 && currentSessionId
                 && Object.values(claudeTasks).some(
-                  (task) => task.status === "running" || task.status === "pending",
+                  (task) =>
+                    task.status === "running"
+                    || task.status === "pending"
+                    || task.status === "paused",
                 )
                 ? (
                   <div className="space-y-2 border-t border-border/60 pt-4">
@@ -1687,7 +1690,12 @@ export function AgentInfoButton({
                       Background tasks
                     </div>
                     {Object.values(claudeTasks)
-                      .filter((task) => task.status === "running" || task.status === "pending")
+                      .filter(
+                        (task) =>
+                          task.status === "running"
+                          || task.status === "pending"
+                          || task.status === "paused",
+                      )
                       .map((task) => (
                         <div key={task.id} className="flex items-center justify-between gap-3 text-xs">
                           <span className="min-w-0 truncate">

@@ -572,22 +572,55 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
-  test("forwards prompt-queue persistence and atomic claim payloads exactly", async () => {
-    const messages = [{ id: "message-1", text: "Ship it" }];
+  test("forwards backend-owned prompt-queue mutations exactly", async () => {
+    const message = { id: "message-1", text: "Ship it" };
 
     await backendWrappers.getPromptQueue("codex\u0000env-1:tab-1");
     await backendWrappers.listPromptQueues("env-1");
-    await backendWrappers.savePromptQueue(
+    await backendWrappers.enqueuePromptQueueMessage(
       "codex\u0000env-1:tab-1",
       "env-1",
-      messages,
-      4,
+      message,
+    );
+    await backendWrappers.requeuePromptQueueMessage(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      message,
+    );
+    await backendWrappers.movePromptQueueMessage(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      "message-1",
+      "up",
+    );
+    await backendWrappers.removePromptQueueMessage(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      "message-1",
     );
     await backendWrappers.claimPromptQueueHead(
       "codex\u0000env-1:tab-1",
       "env-1",
       "message-1",
-      messages,
+    );
+    await backendWrappers.acknowledgePromptQueueClaim(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      "claim-1",
+    );
+    await backendWrappers.rejectPromptQueueClaim(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      "claim-2",
+    );
+    await backendWrappers.transferPromptQueueMessageToComposeDraft(
+      "codex\u0000env-1:tab-1",
+      "env-1",
+      "message-1",
+      "codex:env-1:env-1%3Atab-1",
+      "environment",
+      "env-1",
+      4,
     );
     await backendWrappers.retryPromptQueueDispatch(
       "codex\u0000env-1:tab-1",
@@ -596,22 +629,76 @@ describe("backend setup wrappers", () => {
     expect(invokeMock.mock.calls).toEqual([
       ["get_prompt_queue", { queueKey: "codex\u0000env-1:tab-1" }],
       ["list_prompt_queues", { environmentId: "env-1" }],
-      ["save_prompt_queue", {
+      ["enqueue_prompt_queue_message", {
         queueKey: "codex\u0000env-1:tab-1",
         environmentId: "env-1",
-        messages,
-        expectedRevision: 4,
+        message,
+      }],
+      ["requeue_prompt_queue_message", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        message,
+      }],
+      ["move_prompt_queue_message", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        messageId: "message-1",
+        direction: "up",
+      }],
+      ["remove_prompt_queue_message", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        messageId: "message-1",
       }],
       ["claim_prompt_queue_head", {
         queueKey: "codex\u0000env-1:tab-1",
         environmentId: "env-1",
         expectedMessageId: "message-1",
-        candidateMessages: messages,
+      }],
+      ["acknowledge_prompt_queue_claim", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        claimToken: "claim-1",
+      }],
+      ["reject_prompt_queue_claim", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        claimToken: "claim-2",
+      }],
+      ["transfer_prompt_queue_message_to_compose_draft", {
+        queueKey: "codex\u0000env-1:tab-1",
+        environmentId: "env-1",
+        messageId: "message-1",
+        draftKey: "codex:env-1:env-1%3Atab-1",
+        ownerType: "environment",
+        ownerId: "env-1",
+        expectedDraftRevision: 4,
       }],
       ["retry_prompt_queue_dispatch", {
         queueKey: "codex\u0000env-1:tab-1",
       }],
     ]);
+  });
+
+  test("omits the expected draft revision entirely when the caller has none", async () => {
+    /**
+     * Sending `expectedDraftRevision: undefined` would be indistinguishable
+     * from 0 after JSON serialization, and 0 asserts "no draft exists yet" —
+     * turning an unconditional transfer into one that fails against any
+     * existing draft.
+     */
+    await backendWrappers.transferPromptQueueMessageToComposeDraft(
+      "codex env-1:tab-1",
+      "env-1",
+      "message-1",
+      "codex:env-1:env-1%3Atab-1",
+      "environment",
+      "env-1",
+    );
+
+    const [command, payload] = invokeMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(command).toBe("transfer_prompt_queue_message_to_compose_draft");
+    expect("expectedDraftRevision" in payload).toBe(false);
   });
 
   test("forwards draft compare-and-swap revisions exactly", async () => {

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@/lib/native/events";
 import { exit } from "@/lib/native/process";
+import { getCurrentWindow } from "@/lib/native/window";
 import { toast } from "sonner";
 import { AppShell } from "@/components/layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -38,13 +39,9 @@ import {
   hydrateBuildPipelinesForProject,
   migrateLegacyBuildPipelines,
 } from "@/lib/build-pipeline-persistence";
-import {
-  hydratePromptQueuesForEnvironment,
-  startPromptQueuePersistence,
-} from "@/lib/prompt-queue-persistence";
+import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistence";
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
-import { LoopedReviewSupervisor } from "@/components/review/LoopedReviewSupervisor";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
@@ -65,6 +62,11 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
+import { LazyLoadBoundary } from "@/components/LazyLoadBoundary";
+
+const LazyLoopedReviewSupervisor = lazy(async () => ({
+  default: (await import("@/components/review/LoopedReviewSupervisor")).LoopedReviewSupervisor,
+}));
 
 function App() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
@@ -113,13 +115,8 @@ function App() {
       console.warn("[App] Failed to migrate legacy build pipelines:", error);
     });
   }, []);
-  // One stable source set for the lifetime of the app: the mirror keys its
-  // revision bookkeeping off these, so rebuilding them would drop it.
+  // Renderer stores are projections of backend-owned queues.
   const promptQueueSources = useMemo(() => createPromptQueueSources(), []);
-  useEffect(
-    () => startPromptQueuePersistence(promptQueueSources),
-    [promptQueueSources],
-  );
   useEffect(() => {
     for (const environment of environments) {
       void hydratePromptQueuesForEnvironment(environment.id, promptQueueSources)
@@ -224,6 +221,9 @@ function App() {
   const claudeTmuxMessageQueue = useClaudeTmuxStore((state) => state.messageQueue);
   const codexMessageQueue = useCodexStore((state) => state.messageQueue);
   const openCodeMessageQueue = useOpenCodeStore((state) => state.messageQueue);
+  const loopedReviewWorkflowCount = useLoopedReviewStore(
+    (state) => state.workflows.size,
+  );
   const loadingNativeSessionEnvironmentIds = useMemo(() => {
     const environmentIds = new Set<string>();
     const sessionMaps = [claudeSessions, codexSessions, openCodeSessions];
@@ -454,9 +454,36 @@ function App() {
     }
   };
 
-  // Apply zoom level to the document
+  // Prefer Chromium's real page zoom in Electron. Unlike CSS `zoom`, native page
+  // zoom changes the layout viewport as well as the painted pixels, so the app
+  // renders at the device pixel ratio rather than being upscaled. Browser
+  // clients fall back to CSS `zoom`, which sizes correctly as long as the shell
+  // measures itself against its container instead of viewport units.
   useEffect(() => {
-    document.documentElement.style.zoom = `${zoomLevel}%`;
+    let active = true;
+    const rootStyle = document.documentElement.style;
+    const applyCssFallback = () => {
+      rootStyle.zoom = `${zoomLevel}%`;
+    };
+
+    void getCurrentWindow()
+      .setZoomFactor(zoomLevel / 100)
+      .then((appliedNatively) => {
+        if (!active) return;
+        // Clear any fallback left over from a client that could not zoom
+        // natively; leaving it set would compound with the native factor.
+        if (appliedNatively) rootStyle.zoom = "";
+        else applyCssFallback();
+      })
+      .catch((error) => {
+        if (!active) return;
+        console.warn("[App] Failed to apply native zoom; using CSS fallback:", error);
+        applyCssFallback();
+      });
+
+    return () => {
+      active = false;
+    };
   }, [zoomLevel]);
 
   // Surface Claude credential refresh/push failures as a non-blocking toast.
@@ -630,7 +657,11 @@ function App() {
     <TooltipProvider>
       <TerminalProvider>
         <AppShell>
-          <LoopedReviewSupervisor />
+          {loopedReviewWorkflowCount > 0 && (
+            <LazyLoadBoundary>
+              <LazyLoopedReviewSupervisor />
+            </LazyLoadBoundary>
+          )}
           {selectedEnvironment ? (
             <div className="relative h-full bg-background">
               <div className="absolute inset-0 z-10 bg-background">

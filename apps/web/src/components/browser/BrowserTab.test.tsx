@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
@@ -14,8 +14,12 @@ const happyDOM = (window as unknown as Window & {
 const originalDisableIframePageLoading = happyDOM.settings.disableIframePageLoading;
 const originalHref = window.location.href;
 const originalOrkestrator = window.orkestrator;
+const originalRequestAnimationFrame = window.requestAnimationFrame;
+const originalCancelAnimationFrame = window.cancelAnimationFrame;
 const originalClientPlatform = window.__orkestratorClientPlatform;
 let consoleErrorSpy: ReturnType<typeof spyOn> | undefined;
+let nextAnimationFrameId = 0;
+const pendingAnimationFrames = new Set<number>();
 
 function setBrowserTab(url = "") {
   usePaneLayoutStore.setState({
@@ -86,14 +90,40 @@ function installNativePreview(overrides: Record<string, unknown> = {}) {
   } as never;
   return {
     browserPreview,
-    emitState: (next: BrowserPreviewState) => stateListener?.(next),
-    focusAddress: (tabId: string) => focusAddressListener?.(tabId),
+    emitState: (next: BrowserPreviewState) => {
+      act(() => stateListener?.(next));
+    },
+    focusAddress: (tabId: string) => {
+      act(() => focusAddressListener?.(tabId));
+    },
     unsubscribe,
   };
 }
 
 describe("BrowserTab", () => {
+  beforeAll(() => {
+    // Native preview attachment is intentionally deferred to the next frame in
+    // production. Drive that boundary with microtasks here so this file does
+    // not depend on wall-clock frame delivery while the parallel suite is
+    // competing for the event loop.
+    window.requestAnimationFrame = (callback: FrameRequestCallback) => {
+      const id = ++nextAnimationFrameId;
+      pendingAnimationFrames.add(id);
+      queueMicrotask(() => {
+        if (!pendingAnimationFrames.delete(id)) return;
+        callback(performance.now());
+      });
+      return id;
+    };
+    window.cancelAnimationFrame = (id: number) => {
+      pendingAnimationFrames.delete(id);
+    };
+  });
+
   afterAll(() => {
+    pendingAnimationFrames.clear();
+    window.requestAnimationFrame = originalRequestAnimationFrame;
+    window.cancelAnimationFrame = originalCancelAnimationFrame;
     happyDOM.settings.disableIframePageLoading = originalDisableIframePageLoading;
   });
 
@@ -1124,9 +1154,12 @@ describe("BrowserTab", () => {
     await Promise.resolve();
     expect(native.browserPreview.reload).not.toHaveBeenCalled();
 
-    pendingAttaches.get("http://localhost:4000/")?.(
-      previewState({ url: "http://localhost:4000/" }),
-    );
+    await act(async () => {
+      pendingAttaches.get("http://localhost:4000/")?.(
+        previewState({ url: "http://localhost:4000/" }),
+      );
+      await Promise.resolve();
+    });
     await waitFor(() => {
       expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
         "http://localhost:4000/",
@@ -1137,10 +1170,12 @@ describe("BrowserTab", () => {
       ).toBe(false);
     });
 
-    pendingAttaches.get("http://localhost:3000/")?.(
-      previewState({ error: "stale attach error" }),
-    );
-    await Promise.resolve();
+    await act(async () => {
+      pendingAttaches.get("http://localhost:3000/")?.(
+        previewState({ error: "stale attach error" }),
+      );
+      await Promise.resolve();
+    });
     expect(screen.queryByText("stale attach error")).toBeNull();
   });
 

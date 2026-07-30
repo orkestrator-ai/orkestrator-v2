@@ -19,6 +19,20 @@ export interface NativeToolDiffMetadata {
 
 export type NativeToolState = "success" | "failure" | "pending";
 export type NativeAgentState = "active" | "finished" | "failed";
+export type NativeBackgroundTaskStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "killed"
+  | "paused";
+
+export interface NativeBackgroundTask {
+  id: string;
+  description?: string;
+  /** Absent when recovered from transcript tool results rather than a snapshot. */
+  status?: NativeBackgroundTaskStatus;
+}
 
 /**
  * A point-in-time view of the agent's task list.
@@ -61,6 +75,8 @@ export interface NativeBasePart {
   parentTaskUseId?: string;
   isMcpTool?: boolean;
   mcpServerName?: string;
+  /** Background task represented or acted on by this tool row. */
+  backgroundTask?: NativeBackgroundTask;
   /** Task list state immediately after this tool call, for task tools. */
   taskSnapshot?: TaskListSnapshot;
   subagentId?: string;

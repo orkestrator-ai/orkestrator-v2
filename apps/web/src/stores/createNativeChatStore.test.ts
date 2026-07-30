@@ -12,6 +12,7 @@ import {
   type NativeEventSubscriptionSlice,
   type NativeEventSubscriptionState,
 } from "./createNativeChatStore";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
 type TestMessage = { id: string; content: string };
 type TestAttachment = { id: string; name: string };
@@ -63,38 +64,37 @@ describe("createNativeChatStoreSlice", () => {
     resetStore(useMergedStore);
   });
 
-  test("returns FIFO queue items and leaves the remaining queue intact", () => {
+  test("reports the projected queue in order", () => {
     const store = useTestStore.getState();
 
-    store.addToQueue("env-env-1:tab-1", { id: "q-1", text: "first" });
-    store.addToQueue("env-env-1:tab-1", { id: "q-2", text: "second" });
+    seedQueuedPrompt(store, "env-env-1:tab-1", { id: "q-1", text: "first" });
+    seedQueuedPrompt(store, "env-env-1:tab-1", { id: "q-2", text: "second" });
 
     expect(store.getQueueLength("env-env-1:tab-1")).toBe(2);
-    expect(store.removeFromQueue("env-env-1:tab-1")).toEqual({
-      id: "q-1",
-      text: "first",
-    });
     expect(store.getQueuedMessages("env-env-1:tab-1")).toEqual([
+      { id: "q-1", text: "first" },
       { id: "q-2", text: "second" },
     ]);
   });
 
-  test("requeueToFront restores an entry ahead of the rest of the queue", () => {
+  test("setQueueProjection replaces one session's queue without touching another", () => {
     /**
-     * The drain dequeues before it knows the sender is ready, so an entry it
-     * cannot dispatch goes back where it came from. Appending would silently
-     * reorder the user's prompts.
+     * The projection is overwritten wholesale from an authoritative backend
+     * snapshot, so a replacement must not leak across sessions the way an
+     * in-place edit of the shared map would.
      */
     const store = useTestStore.getState();
 
-    store.addToQueue("env-env-1:tab-1", { id: "q-1", text: "first" });
-    store.addToQueue("env-env-1:tab-1", { id: "q-2", text: "second" });
-    const taken = store.removeFromQueue("env-env-1:tab-1")!;
-    store.requeueToFront("env-env-1:tab-1", taken);
+    seedQueuedPrompt(store, "env-env-1:tab-1", { id: "q-1", text: "first" });
+    seedQueuedPrompt(store, "env-env-1:tab-2", { id: "other", text: "elsewhere" });
+
+    store.setQueueProjection("env-env-1:tab-1", [{ id: "q-9", text: "authoritative" }]);
 
     expect(store.getQueuedMessages("env-env-1:tab-1")).toEqual([
-      { id: "q-1", text: "first" },
-      { id: "q-2", text: "second" },
+      { id: "q-9", text: "authoritative" },
+    ]);
+    expect(store.getQueuedMessages("env-env-1:tab-2")).toEqual([
+      { id: "other", text: "elsewhere" },
     ]);
   });
 
@@ -274,69 +274,6 @@ describe("createNativeChatStoreSlice", () => {
     expect(store.getAttachments(sessionKey)).toEqual([
       { id: "att-1", name: "diagram.png" },
     ]);
-  });
-
-  test("removeQueueItem keeps the state object when the message id is absent", () => {
-    const store = useTestStore.getState();
-    const sessionKey = "env-env-1:tab-1";
-
-    store.addToQueue(sessionKey, { id: "q-1", text: "first" });
-
-    const before = useTestStore.getState();
-    store.removeQueueItem(sessionKey, "not-here");
-
-    expect(useTestStore.getState()).toBe(before);
-    expect(store.getQueuedMessages(sessionKey)).toEqual([
-      { id: "q-1", text: "first" },
-    ]);
-  });
-
-  test("moveQueueItem reorders the queue", () => {
-    const store = useTestStore.getState();
-    const sessionKey = "env-env-1:tab-1";
-
-    store.addToQueue(sessionKey, { id: "q-1", text: "first" });
-    store.addToQueue(sessionKey, { id: "q-2", text: "second" });
-    store.addToQueue(sessionKey, { id: "q-3", text: "third" });
-
-    store.moveQueueItem(sessionKey, 0, 2);
-
-    expect(store.getQueuedMessages(sessionKey)).toEqual([
-      { id: "q-2", text: "second" },
-      { id: "q-3", text: "third" },
-      { id: "q-1", text: "first" },
-    ]);
-  });
-
-  test("moveQueueItem ignores out-of-range, identical, and empty-queue moves", () => {
-    const store = useTestStore.getState();
-    const sessionKey = "env-env-1:tab-1";
-
-    store.addToQueue(sessionKey, { id: "q-1", text: "first" });
-    store.addToQueue(sessionKey, { id: "q-2", text: "second" });
-
-    const before = useTestStore.getState();
-    store.moveQueueItem(sessionKey, -1, 1); // negative fromIndex
-    store.moveQueueItem(sessionKey, 0, -1); // negative toIndex
-    store.moveQueueItem(sessionKey, 2, 0); // fromIndex >= length
-    store.moveQueueItem(sessionKey, 0, 2); // toIndex >= length
-    store.moveQueueItem(sessionKey, 1, 1); // fromIndex === toIndex
-    store.moveQueueItem("env-env-1:tab-empty", 0, 1); // empty queue
-
-    expect(useTestStore.getState()).toBe(before);
-    expect(store.getQueuedMessages(sessionKey)).toEqual([
-      { id: "q-1", text: "first" },
-      { id: "q-2", text: "second" },
-    ]);
-  });
-
-  test("removeFromQueue returns undefined and keeps the state on an empty queue", () => {
-    const store = useTestStore.getState();
-
-    const before = useTestStore.getState();
-
-    expect(store.removeFromQueue("env-env-1:tab-empty")).toBeUndefined();
-    expect(useTestStore.getState()).toBe(before);
   });
 
   test("empty attachment, mention, and queue getters return stable references", () => {

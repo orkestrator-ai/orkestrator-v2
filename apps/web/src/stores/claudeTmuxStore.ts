@@ -47,14 +47,32 @@ function findScopedTabState(
   tabs: Map<string, TmuxTabState>,
   tabId: string,
 ): TmuxTabState | null {
+  const key = findScopedTabStateKey(tabs, tabId);
+  return key ? tabs.get(key) ?? null : null;
+}
+
+function findScopedTabStateKey(
+  tabs: Map<string, TmuxTabState>,
+  tabId: string,
+): string | null {
   const suffix = `:tab:${tabId}`;
-  let found: TmuxTabState | null = null;
-  for (const [key, value] of tabs) {
+  let found: string | null = null;
+  for (const key of tabs.keys()) {
     if (!key.endsWith(suffix)) continue;
     if (found) return null;
-    found = value;
+    found = key;
   }
   return found;
+}
+
+function resolveStateKey(
+  tabs: Map<string, TmuxTabState>,
+  tabId: string,
+): string {
+  if (tabs.has(tabId) || getEnvironmentIdFromClaudeTmuxStateKey(tabId)) {
+    return tabId;
+  }
+  return findScopedTabStateKey(tabs, tabId) ?? tabId;
 }
 
 /** A blocking PreToolUse hook event awaiting the user's decision. */
@@ -234,11 +252,15 @@ interface ClaudeTmuxState {
   // component's DEFAULT_EFFORT so there is a single source for it.
   setEffortLevel: (tabId: string, effort: ClaudeEffortLevel) => void;
 
-  addToQueue: (tabId: string, message: TmuxQueuedMessage) => void;
-  removeFromQueue: (tabId: string) => TmuxQueuedMessage | undefined;
-  removeQueueItem: (tabId: string, messageId: string) => void;
-  moveQueueItem: (tabId: string, fromIndex: number, toIndex: number) => void;
-  clearQueue: (tabId: string) => void;
+  /**
+   * Overwrite this tab's local view of the backend-owned queue.
+   *
+   * `messageQueue` is a projection, not the queue — see the identically named
+   * member of the native chat stores. Append/remove/reorder helpers used to
+   * live here; they are gone so a caller cannot mutate a queue without telling
+   * the backend, only to have the next hydrate silently revert it.
+   */
+  setQueueProjection: (tabId: string, messages: TmuxQueuedMessage[]) => void;
   getQueueLength: (tabId: string) => number;
   getQueuedMessages: (tabId: string) => TmuxQueuedMessage[];
 
@@ -255,8 +277,9 @@ function patchTab(
   patch: (s: TmuxTabState) => TmuxTabState,
 ): { tabs: Map<string, TmuxTabState> } {
   const next = new Map(state.tabs);
-  const current = next.get(tabId) ?? emptyTabState();
-  next.set(tabId, patch(current));
+  const stateKey = resolveStateKey(state.tabs, tabId);
+  const current = next.get(stateKey) ?? emptyTabState();
+  next.set(stateKey, patch(current));
   return { tabs: next };
 }
 
@@ -294,20 +317,21 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     ),
 
   resetTab: (tabId) => {
+    const stateKey = resolveStateKey(get().tabs, tabId);
     // The tab's pending prompts are dropped below, so their in-progress input
     // drafts must not resurface if an event id is ever seen again.
-    const sweptDraftKeys = tabPromptDraftKeys(get().tabs.get(tabId));
+    const sweptDraftKeys = tabPromptDraftKeys(get().tabs.get(stateKey));
     set((state) => {
       const attachments = new Map(state.attachments);
       const draftText = new Map(state.draftText);
       const draftMentions = new Map(state.draftMentions);
       const messageQueue = new Map(state.messageQueue);
-      attachments.delete(tabId);
-      draftText.delete(tabId);
-      draftMentions.delete(tabId);
-      messageQueue.delete(tabId);
+      attachments.delete(stateKey);
+      draftText.delete(stateKey);
+      draftMentions.delete(stateKey);
+      messageQueue.delete(stateKey);
       return {
-        ...patchTab(state, tabId, () => emptyTabState()),
+        ...patchTab(state, stateKey, () => emptyTabState()),
         attachments,
         draftText,
         draftMentions,
@@ -490,135 +514,161 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
 
   addAttachment: (tabId, attachment) =>
     set((state) => {
-      const current = state.attachments.get(tabId) ?? [];
+      const stateKey = resolveStateKey(state.tabs, tabId);
+      const current = state.attachments.get(stateKey) ?? [];
       const next = new Map(state.attachments);
-      next.set(tabId, [...current, attachment]);
+      next.set(stateKey, [...current, attachment]);
       return { attachments: next };
     }),
 
   removeAttachment: (tabId, attachmentId) =>
     set((state) => {
-      const current = state.attachments.get(tabId) ?? [];
+      const stateKey = resolveStateKey(state.tabs, tabId);
+      const current = state.attachments.get(stateKey) ?? [];
       const filtered = current.filter((a) => a.id !== attachmentId);
       if (filtered.length === current.length) return state;
       const next = new Map(state.attachments);
-      next.set(tabId, filtered);
+      next.set(stateKey, filtered);
       return { attachments: next };
     }),
 
   clearAttachments: (tabId) =>
     set((state) => {
+      const stateKey = resolveStateKey(state.tabs, tabId);
       const next = new Map(state.attachments);
-      next.set(tabId, []);
+      next.set(stateKey, []);
       return { attachments: next };
     }),
 
-  getAttachments: (tabId) => get().attachments.get(tabId) ?? EMPTY_ATTACHMENTS,
+  getAttachments: (tabId) => {
+    const state = get();
+    return state.attachments.get(resolveStateKey(state.tabs, tabId)) ?? EMPTY_ATTACHMENTS;
+  },
 
   setDraftText: (tabId, text) =>
     set((state) => {
+      const stateKey = resolveStateKey(state.tabs, tabId);
       const next = new Map(state.draftText);
       if (text.length > 0) {
-        next.set(tabId, text);
+        next.set(stateKey, text);
       } else {
-        next.delete(tabId);
+        next.delete(stateKey);
       }
       return { draftText: next };
     }),
 
-  getDraftText: (tabId) => get().draftText.get(tabId) ?? "",
+  getDraftText: (tabId) => {
+    const state = get();
+    return state.draftText.get(resolveStateKey(state.tabs, tabId)) ?? "";
+  },
 
   setDraftMentions: (tabId, mentions) =>
     set((state) => {
+      const stateKey = resolveStateKey(state.tabs, tabId);
       const next = new Map(state.draftMentions);
       if (mentions.length > 0) {
-        next.set(tabId, mentions);
+        next.set(stateKey, mentions);
       } else {
-        next.delete(tabId);
+        next.delete(stateKey);
       }
       return { draftMentions: next };
     }),
 
   setEffortLevel: (tabId, effort) =>
     set((state) => {
+      const stateKey = resolveStateKey(state.tabs, tabId);
       const next = new Map(state.effortLevels);
-      next.set(tabId, effort);
+      next.set(stateKey, effort);
       return { effortLevels: next };
     }),
 
-  getDraftMentions: (tabId) =>
-    get().draftMentions.get(tabId) ?? EMPTY_MENTIONS,
-
-  addToQueue: (tabId, message) =>
-    set((state) => {
-      const current = state.messageQueue.get(tabId) ?? [];
-      const next = new Map(state.messageQueue);
-      next.set(tabId, [...current, message]);
-      return { messageQueue: next };
-    }),
-
-  removeFromQueue: (tabId) => {
-    let removed: TmuxQueuedMessage | undefined;
-    set((state) => {
-      const current = state.messageQueue.get(tabId) ?? [];
-      if (current.length === 0) return state;
-      const [first, ...rest] = current;
-      removed = first;
-      const next = new Map(state.messageQueue);
-      next.set(tabId, rest);
-      return { messageQueue: next };
-    });
-    return removed;
+  getDraftMentions: (tabId) => {
+    const state = get();
+    return state.draftMentions.get(resolveStateKey(state.tabs, tabId)) ?? EMPTY_MENTIONS;
   },
 
-  removeQueueItem: (tabId, messageId) =>
+  setQueueProjection: (tabId, messages) =>
     set((state) => {
-      const current = state.messageQueue.get(tabId) ?? [];
-      const filtered = current.filter((m) => m.id !== messageId);
-      if (filtered.length === current.length) return state;
+      const stateKey = resolveStateKey(state.tabs, tabId);
       const next = new Map(state.messageQueue);
-      next.set(tabId, filtered);
+      next.set(stateKey, messages);
       return { messageQueue: next };
     }),
 
-  moveQueueItem: (tabId, fromIndex, toIndex) =>
-    set((state) => {
-      const current = state.messageQueue.get(tabId) ?? [];
-      if (
-        fromIndex < 0 ||
-        toIndex < 0 ||
-        fromIndex >= current.length ||
-        toIndex >= current.length ||
-        fromIndex === toIndex
-      ) {
-        return state;
-      }
-      const reordered = [...current];
-      const [moved] = reordered.splice(fromIndex, 1);
-      if (!moved) return state;
-      reordered.splice(toIndex, 0, moved);
-      const next = new Map(state.messageQueue);
-      next.set(tabId, reordered);
-      return { messageQueue: next };
-    }),
+  getQueueLength: (tabId) => {
+    const state = get();
+    return state.messageQueue.get(resolveStateKey(state.tabs, tabId))?.length ?? 0;
+  },
 
-  clearQueue: (tabId) =>
-    set((state) => {
-      const next = new Map(state.messageQueue);
-      next.set(tabId, []);
-      return { messageQueue: next };
-    }),
-
-  getQueueLength: (tabId) => get().messageQueue.get(tabId)?.length ?? 0,
-
-  getQueuedMessages: (tabId) =>
-    get().messageQueue.get(tabId) ?? EMPTY_QUEUE,
+  getQueuedMessages: (tabId) => {
+    const state = get();
+    return state.messageQueue.get(resolveStateKey(state.tabs, tabId)) ?? EMPTY_QUEUE;
+  },
 
   getTab: (tabId) =>
     findScopedTabState(get().tabs, tabId) ??
     get().tabs.get(tabId) ??
     emptyTabState(),
 }));
+
+/**
+ * Move state persisted by older releases under a bare tab id to the
+ * environment-scoped key used by current queue and draft APIs.
+ *
+ * This is intentionally an atomic store mutation: the tab state and every
+ * compose-related map must switch keys together, otherwise a render between
+ * individual moves can make a draft or queued prompt appear to disappear.
+ * Existing scoped values win because they may already contain a newer backend
+ * snapshot.
+ */
+export function migrateLegacyClaudeTmuxState(
+  legacyTabId: string,
+  scopedStateKey: string,
+  environmentId: string,
+): boolean {
+  if (legacyTabId === scopedStateKey) return false;
+
+  let migrated = false;
+  useClaudeTmuxStore.setState((state) => {
+    const legacyTab = state.tabs.get(legacyTabId);
+    if (
+      !legacyTab ||
+      (legacyTab.environmentId && legacyTab.environmentId !== environmentId)
+    ) {
+      return state;
+    }
+
+    const tabs = new Map(state.tabs);
+    if (!tabs.has(scopedStateKey)) {
+      tabs.set(scopedStateKey, {
+        ...legacyTab,
+        environmentId,
+      });
+    }
+    tabs.delete(legacyTabId);
+
+    const moveValue = <T>(source: Map<string, T>): Map<string, T> => {
+      if (!source.has(legacyTabId)) return source;
+      const next = new Map(source);
+      if (!next.has(scopedStateKey)) {
+        next.set(scopedStateKey, next.get(legacyTabId)!);
+      }
+      next.delete(legacyTabId);
+      return next;
+    };
+
+    migrated = true;
+    return {
+      tabs,
+      attachments: moveValue(state.attachments),
+      draftText: moveValue(state.draftText),
+      draftMentions: moveValue(state.draftMentions),
+      messageQueue: moveValue(state.messageQueue),
+      effortLevels: moveValue(state.effortLevels),
+    };
+  });
+  return migrated;
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 

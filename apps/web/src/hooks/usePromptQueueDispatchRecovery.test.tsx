@@ -53,7 +53,6 @@ function recordingSource(agent: string): PromptQueueSource {
     agent,
     getQueues: () => new Map(),
     setQueue: () => {},
-    subscribe: () => () => {},
     environmentIdFor: () => "abc123",
   };
 }

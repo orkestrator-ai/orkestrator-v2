@@ -53,6 +53,8 @@ interface Window {
     };
     window: {
       startDragging(): Promise<void>;
+      /** Electron only. Browser gateway implementations return false. */
+      setZoomFactor?(factor: number): Promise<boolean>;
     };
     browserPreview?: {
       attach(input: import("@orkestrator/protocol/browser-preview").BrowserPreviewAttachInput): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;

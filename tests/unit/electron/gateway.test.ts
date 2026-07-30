@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import {
   createServer,
   request as httpRequest,
@@ -8,17 +8,22 @@ import {
 } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { gzipSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
+  appendVary,
   BoundedMetricMap,
   compressionModeForListener,
   eventMatchesSubscription,
   GATEWAY_COMMAND_METRIC_MAP_LIMIT,
   GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
   GatewayMetricsStore,
+  canStartStaticFallbackCompression,
+  compressStaticFileWithinLimits,
   isTailscaleAddress,
   loadOrCreateGatewayToken,
+  MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS,
+  MAX_STATIC_FALLBACK_SOURCE_BYTES,
   normalizeAcceptEncoding,
   normalizeCacheControl,
   normalizeContentEncoding,
@@ -30,6 +35,7 @@ import {
   normalizeNextHopProtocol,
   OrkestratorGateway,
   parseEventSubscriptionFilter,
+  readStaticFileWithinLimit,
   resolveGatewayCompressionMode,
   rewriteBrowserPreviewBody,
   selectTailscaleBindAddress,
@@ -44,7 +50,13 @@ const auxiliaryServers: Server[] = [];
 async function requestUrl(
   url: string,
   options: { method?: string; headers?: Record<string, string>; body?: string } = {},
-): Promise<{ status: number; body: string; headers: IncomingHttpHeaders; json: () => unknown }> {
+): Promise<{
+  status: number;
+  body: string;
+  rawBody: Buffer;
+  headers: IncomingHttpHeaders;
+  json: () => unknown;
+}> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const request = httpRequest({
@@ -59,10 +71,12 @@ async function requestUrl(
       response.on("aborted", () => reject(new Error("Response aborted")));
       response.on("error", reject);
       response.on("end", () => {
-        const body = Buffer.concat(chunks).toString("utf8");
+        const rawBody = Buffer.concat(chunks);
+        const body = rawBody.toString("utf8");
         resolve({
           status: response.statusCode ?? 0,
           body,
+          rawBody,
           headers: response.headers,
           json: () => JSON.parse(body) as unknown,
         });
@@ -72,6 +86,17 @@ async function requestUrl(
     if (options.body) request.write(options.body);
     request.end();
   });
+}
+
+function decodeResponseBody(response: {
+  headers: IncomingHttpHeaders;
+  rawBody: Buffer;
+  body: string;
+}): string {
+  const encoding = response.headers["content-encoding"];
+  if (encoding === "br") return brotliDecompressSync(response.rawBody).toString("utf8");
+  if (encoding === "gzip") return gunzipSync(response.rawBody).toString("utf8");
+  return response.body;
 }
 
 type GatewayMetricsSnapshot = {
@@ -155,6 +180,31 @@ async function createRendererRoot(dataDir: string, index = "<div id=\"root\"></d
   await mkdir(rendererRoot);
   await writeFile(path.join(rendererRoot, "index.html"), index);
   return rendererRoot;
+}
+
+async function writeRendererAsset(
+  rendererRoot: string,
+  relativePath: string,
+  contents: string | Buffer,
+): Promise<string> {
+  const filePath = path.join(rendererRoot, relativePath);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, contents);
+  return filePath;
+}
+
+async function writeCompressedSibling(
+  filePath: string,
+  encoding: "br" | "gzip",
+  body: string,
+): Promise<string> {
+  const buffer = Buffer.from(body, "utf8");
+  const siblingPath = `${filePath}.${encoding === "br" ? "br" : "gz"}`;
+  await writeFile(
+    siblingPath,
+    encoding === "br" ? brotliCompressSync(buffer) : gzipSync(buffer),
+  );
+  return siblingPath;
 }
 
 async function closeServer(server: Server): Promise<void> {
@@ -298,12 +348,16 @@ describe("remote gateway", () => {
     expect(compressionModeForListener("on", "browser")).toBe("on");
   });
 
-  test("leaves every response uncompressed in all three modes", async () => {
-    // The milestone documents `off`, `body` and `on` as no-op rollout controls.
-    // Asserting that in prose is not the same as proving no response path adds
-    // an encoding, which is what makes `off` a real rollback lever.
+  test("keeps non-static bodies uncompressed while allowing static compression on browser listeners", async () => {
     for (const compression of ["off", "body", "on"] as const) {
+      const dataDir = await createTempDir(`ork-static-compression-${compression}-`);
+      const rendererRoot = await createRendererRoot(
+        dataDir,
+        "<div id=\"root\">".concat("content ".repeat(256), "</div>"),
+      );
       const { info } = await startGateway({
+        dataDir,
+        rendererRoot,
         compression,
         backend: { invoke: mock(async () => ({ ok: true })) },
       });
@@ -318,19 +372,741 @@ describe("remote gateway", () => {
           headers: { ...acceptsEverything, "content-type": "application/json" },
           body: JSON.stringify({ command: "noop" }),
         }),
-        await requestUrl(info.url, { headers: acceptsEverything }),
       ];
 
       for (const response of responses) {
         expect(response.status).toBeLessThan(400);
         expect(response.headers["content-encoding"]).toBeUndefined();
       }
-      // The recorded label agrees: nothing was encoded on any route.
+
+      const staticResponse = await requestUrl(info.url, { headers: acceptsEverything });
+      expect(staticResponse.status).toBe(200);
+      if (compression === "off") {
+        expect(staticResponse.headers["content-encoding"]).toBeUndefined();
+      } else {
+        expect(["br", "gzip"]).toContain(staticResponse.headers["content-encoding"]);
+        expect(decodeResponseBody(staticResponse)).toContain("root");
+      }
+
       const metrics = await readGatewayMetrics(info);
-      const encodings = Object.values(metrics.routes).flatMap((route) => Object.keys(route.encodings));
-      expect([...new Set(encodings)]).toEqual(["identity"]);
+      expect(metrics.routes.invoke?.encodings.identity).toBeGreaterThan(0);
+      expect(metrics.routes.status?.encodings.identity).toBeGreaterThan(0);
       expect(metrics.compression.configuredMode).toBe(compression);
     }
+  });
+
+  test("prefers Brotli, then gzip, then identity for static sibling assets", async () => {
+    const dataDir = await createTempDir("ork-static-siblings-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const assetPath = await writeRendererAsset(
+      rendererRoot,
+      "assets/app-12345678.js",
+      "console.log('identity');".repeat(256),
+    );
+    await writeCompressedSibling(assetPath, "br", "brotli sibling");
+    await writeCompressedSibling(assetPath, "gzip", "gzip sibling");
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const authorization = { authorization: `Bearer ${info.token}` };
+
+    const brotli = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: { ...authorization, "accept-encoding": "br, gzip" },
+    });
+    expect(brotli.headers["content-encoding"]).toBe("br");
+    expect(decodeResponseBody(brotli)).toBe("brotli sibling");
+
+    const gzip = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: { ...authorization, "accept-encoding": "gzip" },
+    });
+    expect(gzip.headers["content-encoding"]).toBe("gzip");
+    expect(decodeResponseBody(gzip)).toBe("gzip sibling");
+
+    const identity = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: { ...authorization, "accept-encoding": "br;q=0, gzip;q=0, identity" },
+    });
+    expect(identity.headers["content-encoding"]).toBeUndefined();
+    expect(identity.body).toBe("console.log('identity');".repeat(256));
+  });
+
+  test("honors Accept-Encoding qualities, wildcards, and explicit exclusions", async () => {
+    const dataDir = await createTempDir("ork-static-negotiation-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const assetPath = await writeRendererAsset(
+      rendererRoot,
+      "assets/app-12345678.js",
+      "console.log('identity');".repeat(256),
+    );
+    await writeCompressedSibling(assetPath, "br", "brotli sibling");
+    await writeCompressedSibling(assetPath, "gzip", "gzip sibling");
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const authorization = { authorization: `Bearer ${info.token}` };
+    const cases = [
+      { acceptEncoding: "br;q=0.5, gzip;q=1", expected: "gzip" },
+      { acceptEncoding: "br;q=1, gzip;q=0.5", expected: "br" },
+      { acceptEncoding: "*;q=1", expected: "br" },
+      { acceptEncoding: "br;q=0, *;q=1", expected: "gzip" },
+      { acceptEncoding: "br;q=invalid, gzip;q=1", expected: "gzip" },
+      { acceptEncoding: "br;q=0, gzip;q=0, identity", expected: "identity" },
+      { acceptEncoding: "br;q=0.4, gzip;q=0.5, identity;q=0.8", expected: "identity" },
+      { acceptEncoding: "*;q=0, identity;q=1", expected: "identity" },
+    ] as const;
+
+    for (const { acceptEncoding, expected } of cases) {
+      const response = await requestUrl(`${info.url}assets/app-12345678.js`, {
+        headers: { ...authorization, "accept-encoding": acceptEncoding },
+      });
+      expect(response.status, acceptEncoding).toBe(200);
+      expect(response.headers["content-encoding"] ?? "identity", acceptEncoding).toBe(expected);
+    }
+
+    for (const acceptEncoding of [
+      "br;q=0, gzip;q=0, identity;q=0",
+      "*;q=0",
+    ]) {
+      const response = await requestUrl(`${info.url}assets/app-12345678.js`, {
+        headers: { ...authorization, "accept-encoding": acceptEncoding },
+      });
+      expect(response.status, acceptEncoding).toBe(406);
+      expect(response.rawBody.byteLength, acceptEncoding).toBe(0);
+      expect(response.headers.vary, acceptEncoding).toBe("Accept-Encoding");
+    }
+  });
+
+  test("rejects stale compressed siblings and falls back to fresh on-the-fly compression", async () => {
+    const dataDir = await createTempDir("ork-static-stale-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const assetPath = await writeRendererAsset(
+      rendererRoot,
+      "assets/app-12345678.js",
+      "console.log('source body');".repeat(256),
+    );
+    const staleSibling = await writeCompressedSibling(assetPath, "br", "stale sibling");
+    const sourceStat = await stat(assetPath);
+    const staleDate = new Date(sourceStat.mtimeMs - 60_000);
+    await utimes(staleSibling, staleDate, staleDate);
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const response = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        "accept-encoding": "br",
+      },
+    });
+
+    expect(response.headers["content-encoding"]).toBe("br");
+    expect(decodeResponseBody(response)).toBe("console.log('source body');".repeat(256));
+  });
+
+  test("uses encoding-specific ETags and returns 304 for matching If-None-Match", async () => {
+    const dataDir = await createTempDir("ork-static-etag-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const assetPath = await writeRendererAsset(
+      rendererRoot,
+      "assets/app-12345678.js",
+      "console.log('etag');",
+    );
+    await writeCompressedSibling(assetPath, "br", "brotli sibling");
+    await writeCompressedSibling(assetPath, "gzip", "gzip sibling");
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const authorization = { authorization: `Bearer ${info.token}` };
+    const brotli = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: { ...authorization, "accept-encoding": "br" },
+    });
+    const gzip = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: { ...authorization, "accept-encoding": "gzip" },
+    });
+
+    expect(brotli.headers.etag).toBeTruthy();
+    expect(gzip.headers.etag).toBeTruthy();
+    expect(brotli.headers.etag).not.toBe(gzip.headers.etag);
+    const brotliStrongEquivalent = String(brotli.headers.etag).replace(/^W\//, "");
+
+    const notModified = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: {
+        ...authorization,
+        "accept-encoding": "br",
+        "if-none-match": String(brotli.headers.etag),
+      },
+    });
+    expect(notModified.status).toBe(304);
+    expect(notModified.rawBody.byteLength).toBe(0);
+    expect(notModified.headers.etag).toBe(brotli.headers.etag);
+
+    const weakNotModified = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: {
+        ...authorization,
+        "accept-encoding": "br",
+        "if-none-match": `"unrelated", ${brotliStrongEquivalent}`,
+      },
+    });
+    expect(weakNotModified.status).toBe(304);
+    expect(weakNotModified.rawBody.byteLength).toBe(0);
+
+    const weakHeadNotModified = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      method: "HEAD",
+      headers: {
+        ...authorization,
+        "accept-encoding": "br",
+        "if-none-match": brotliStrongEquivalent,
+      },
+    });
+    expect(weakHeadNotModified.status).toBe(304);
+    expect(weakHeadNotModified.rawBody.byteLength).toBe(0);
+
+    const wildcardNotModified = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: {
+        ...authorization,
+        "accept-encoding": "br",
+        "if-none-match": "*",
+      },
+    });
+    expect(wildcardNotModified.status).toBe(304);
+    expect(wildcardNotModified.rawBody.byteLength).toBe(0);
+
+    const mismatch = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: {
+        ...authorization,
+        "accept-encoding": "br",
+        "if-none-match": String(gzip.headers.etag),
+      },
+    });
+    expect(mismatch.status).toBe(200);
+
+    const malformed = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: {
+        ...authorization,
+        "accept-encoding": "br",
+        "if-none-match": `W/not-quoted`,
+      },
+    });
+    expect(malformed.status).toBe(200);
+  });
+
+  test("revalidates Last-Modified, serves immutable hashed assets, and keeps the SPA fallback no-cache", async () => {
+    const dataDir = await createTempDir("ork-static-cache-");
+    const rendererRoot = await createRendererRoot(dataDir, "<!doctype html><div id='root'>index</div>");
+    await writeRendererAsset(
+      rendererRoot,
+      "assets/app-12345678.js",
+      "console.log('cache');",
+    );
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "off" });
+    const authorization = { authorization: `Bearer ${info.token}` };
+
+    const assetResponse = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: authorization,
+    });
+    expect(assetResponse.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+
+    const spaResponse = await requestUrl(`${info.url}dashboard`, {
+      headers: authorization,
+    });
+    expect(spaResponse.headers["cache-control"]).toBe("no-cache");
+    expect(spaResponse.body).toContain("index");
+    expect(spaResponse.headers["last-modified"]).toBeTruthy();
+
+    const notModified = await requestUrl(`${info.url}dashboard`, {
+      headers: {
+        ...authorization,
+        "if-modified-since": String(spaResponse.headers["last-modified"]),
+      },
+    });
+    expect(notModified.status).toBe(304);
+    expect(notModified.rawBody.byteLength).toBe(0);
+  });
+
+  test("returns HEAD with GET headers and no body", async () => {
+    const dataDir = await createTempDir("ork-static-head-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const assetPath = await writeRendererAsset(
+      rendererRoot,
+      "assets/app-12345678.js",
+      "console.log('head');".repeat(256),
+    );
+    await writeCompressedSibling(assetPath, "gzip", "gzip sibling");
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const headers = {
+      authorization: `Bearer ${info.token}`,
+      "accept-encoding": "gzip",
+    };
+    const getResponse = await requestUrl(`${info.url}assets/app-12345678.js`, { headers });
+    const headResponse = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      method: "HEAD",
+      headers,
+    });
+
+    expect(headResponse.status).toBe(200);
+    expect(headResponse.rawBody.byteLength).toBe(0);
+    expect(headResponse.headers["content-encoding"]).toBe(getResponse.headers["content-encoding"]);
+    expect(headResponse.headers["content-length"]).toBe(getResponse.headers["content-length"]);
+    expect(headResponse.headers.etag).toBe(getResponse.headers.etag);
+    expect(headResponse.headers["last-modified"]).toBe(getResponse.headers["last-modified"]);
+  });
+
+  test("negotiates HEAD without running on-the-fly compression when no sibling exists", async () => {
+    const dataDir = await createTempDir("ork-static-head-fallback-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    await writeRendererAsset(
+      rendererRoot,
+      "assets/app-12345678.js",
+      "console.log('head fallback');".repeat(256),
+    );
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const response = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      method: "HEAD",
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        "accept-encoding": "gzip, identity;q=0",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.rawBody.byteLength).toBe(0);
+    expect(response.headers["content-encoding"]).toBe("gzip");
+    // Identity is forbidden, so GET must answer with the coded form. Its
+    // encoding is known without compressing; only its length is withheld.
+    expect(response.headers["content-length"]).toBeUndefined();
+    expect(response.headers.etag).toBeTruthy();
+
+    const getResponse = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        "accept-encoding": "gzip, identity;q=0",
+      },
+    });
+    expect(getResponse.status).toBe(response.status);
+    expect(getResponse.headers["content-encoding"]).toBe("gzip");
+    expect(getResponse.headers.etag).toBe(String(response.headers.etag));
+  });
+
+  test("merges Vary values without clobbering Origin", () => {
+    expect(appendVary("Origin", "Accept-Encoding")).toBe("Origin, Accept-Encoding");
+    expect(appendVary("origin, accept-encoding", "Accept-Encoding")).toBe("origin, accept-encoding");
+  });
+
+  test("rejects traversal even when compressed sibling lookup is enabled", async () => {
+    const dataDir = await createTempDir("ork-static-traversal-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    await writeFile(path.join(dataDir, "secret.txt"), "do not serve");
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const response = await requestUrl(`${info.url}%2e%2e%2fsecret.txt`, {
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        "accept-encoding": "br, gzip",
+      },
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  test("compresses static assets on the fly when no precompressed siblings exist", async () => {
+    const dataDir = await createTempDir("ork-static-fallback-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    await writeRendererAsset(
+      rendererRoot,
+      "assets/app-12345678.js",
+      "console.log('fallback');".repeat(200),
+    );
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const response = await requestUrl(`${info.url}assets/app-12345678.js`, {
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        "accept-encoding": "br, gzip",
+      },
+    });
+
+    expect(["br", "gzip"]).toContain(response.headers["content-encoding"]);
+    expect(decodeResponseBody(response)).toContain("fallback");
+  });
+
+  test("uses gzip-only fallback and leaves non-beneficial content as identity", async () => {
+    const dataDir = await createTempDir("ork-static-fallback-selection-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    await writeRendererAsset(
+      rendererRoot,
+      "assets/compressible-12345678.js",
+      "console.log('gzip fallback');".repeat(200),
+    );
+    await writeRendererAsset(rendererRoot, "assets/tiny-12345678.txt", "x");
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const authorization = { authorization: `Bearer ${info.token}` };
+    const gzip = await requestUrl(`${info.url}assets/compressible-12345678.js`, {
+      headers: { ...authorization, "accept-encoding": "gzip" },
+    });
+    expect(gzip.status).toBe(200);
+    expect(gzip.headers["content-encoding"]).toBe("gzip");
+    expect(decodeResponseBody(gzip)).toContain("gzip fallback");
+
+    const identity = await requestUrl(`${info.url}assets/tiny-12345678.txt`, {
+      headers: { ...authorization, "accept-encoding": "br, gzip" },
+    });
+    expect(identity.status).toBe(200);
+    expect(identity.headers["content-encoding"]).toBeUndefined();
+    expect(identity.body).toBe("x");
+
+    // Identity is acceptable here, so the identity metadata HEAD reports is
+    // already accurate and nothing is withheld: the response stays usable for
+    // revalidation and for discovering the resource size.
+    const tinyHead = await requestUrl(`${info.url}assets/tiny-12345678.txt`, {
+      method: "HEAD",
+      headers: { ...authorization, "accept-encoding": "br, gzip" },
+    });
+    expect(tinyHead.status).toBe(200);
+    expect(tinyHead.headers["content-encoding"]).toBeUndefined();
+    expect(tinyHead.headers["content-length"]).toBe("1");
+    expect(tinyHead.headers.etag).toBe(String(identity.headers.etag));
+    expect(tinyHead.rawBody.byteLength).toBe(0);
+
+    const tinyHeadRevalidated = await requestUrl(`${info.url}assets/tiny-12345678.txt`, {
+      headers: {
+        ...authorization,
+        "accept-encoding": "br, gzip",
+        "if-none-match": String(tinyHead.headers.etag),
+      },
+    });
+    expect(tinyHeadRevalidated.status).toBe(304);
+    expect(tinyHeadRevalidated.rawBody.byteLength).toBe(0);
+
+    const wildcardHead = await requestUrl(`${info.url}assets/tiny-12345678.txt`, {
+      method: "HEAD",
+      headers: {
+        ...authorization,
+        "accept-encoding": "br, gzip",
+        "if-none-match": "*",
+      },
+    });
+    expect(wildcardHead.status).toBe(304);
+    expect(wildcardHead.rawBody.byteLength).toBe(0);
+
+    const unacceptable = await requestUrl(`${info.url}assets/tiny-12345678.txt`, {
+      headers: {
+        ...authorization,
+        "accept-encoding": "br, gzip, identity;q=0",
+      },
+    });
+    expect(unacceptable.status).toBe(200);
+    expect(["br", "gzip"]).toContain(unacceptable.headers["content-encoding"]);
+    expect(decodeResponseBody(unacceptable)).toBe("x");
+  });
+
+  test("bounds on-the-fly compression source bytes and serves oversized assets as identity", async () => {
+    const dataDir = await createTempDir("ork-static-fallback-bound-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const source = Buffer.alloc(MAX_STATIC_FALLBACK_SOURCE_BYTES + 1, 0x61);
+    await writeRendererAsset(rendererRoot, "assets/large-12345678.js", source);
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const response = await requestUrl(`${info.url}assets/large-12345678.js`, {
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        "accept-encoding": "br, gzip",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-encoding"]).toBeUndefined();
+    expect(response.rawBody.byteLength).toBe(source.byteLength);
+  });
+
+  test("serves identity when a coded form was acceptable but the server declined it", async () => {
+    const dataDir = await createTempDir("ork-static-declined-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const source = Buffer.alloc(MAX_STATIC_FALLBACK_SOURCE_BYTES + 1, 0x61);
+    await writeRendererAsset(rendererRoot, "assets/large-12345678.js", source);
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const authorization = { authorization: `Bearer ${info.token}` };
+    // The client refused identity and br/gzip were both acceptable, so a 406
+    // would be a lie: the asset is representable, this server just will not
+    // spend 8MB+ of CPU and memory doing it.
+    const response = await requestUrl(`${info.url}assets/large-12345678.js`, {
+      headers: { ...authorization, "accept-encoding": "br, gzip, identity;q=0" },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers["content-encoding"]).toBeUndefined();
+    expect(response.rawBody.byteLength).toBe(source.byteLength);
+
+    const head = await requestUrl(`${info.url}assets/large-12345678.js`, {
+      method: "HEAD",
+      headers: { ...authorization, "accept-encoding": "br, gzip, identity;q=0" },
+    });
+    expect(head.status).toBe(response.status);
+    expect(head.headers["content-encoding"]).toBeUndefined();
+    expect(head.headers["content-length"]).toBe(String(source.byteLength));
+
+    // Only a request that accepts *nothing* is a real 406.
+    const unrepresentable = await requestUrl(`${info.url}assets/large-12345678.js`, {
+      headers: { ...authorization, "accept-encoding": "identity;q=0" },
+    });
+    expect(unrepresentable.status).toBe(406);
+  });
+
+  test("keeps serving identity to identity-refusing clients while the compression pool is saturated", async () => {
+    const dataDir = await createTempDir("ork-static-declined-saturated-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const assetCount = MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS * 3;
+    for (let index = 0; index < assetCount; index += 1) {
+      await writeRendererAsset(
+        rendererRoot,
+        `assets/saturate-${String(index).padStart(8, "0")}.js`,
+        `console.log('saturate-${index}');`.repeat(75_000),
+      );
+    }
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const responses = await Promise.all(
+      Array.from({ length: assetCount }, (_, index) => (
+        requestUrl(`${info.url}assets/saturate-${String(index).padStart(8, "0")}.js`, {
+          headers: {
+            authorization: `Bearer ${info.token}`,
+            "accept-encoding": "br, gzip, identity;q=0",
+          },
+        })
+      )),
+    );
+
+    // Admission is bounded, so some of these are certainly declined. None may
+    // become a 406: the status must not depend on unrelated concurrent load.
+    expect(responses.map((response) => response.status)).toEqual(
+      Array.from({ length: assetCount }, () => 200),
+    );
+    for (const response of responses) {
+      expect(decodeResponseBody(response)).toContain("saturate-");
+    }
+  });
+
+  test("classifies fallback compression outcomes as compressed, not-beneficial, or declined", async () => {
+    const root = await createTempDir("ork-static-outcome-");
+    const compressiblePath = path.join(root, "app.js");
+    await writeFile(compressiblePath, "console.log('outcome');".repeat(256));
+    const compressibleStat = await stat(compressiblePath);
+    const incompressiblePath = path.join(root, "tiny.txt");
+    await writeFile(incompressiblePath, "x");
+    const incompressibleStat = await stat(incompressiblePath);
+
+    expect(await compressStaticFileWithinLimits(
+      compressiblePath,
+      compressibleStat.mtimeMs,
+      compressibleStat.size,
+      ["br", "gzip"],
+      false,
+    )).toMatchObject({ status: "compressed", encoding: "br" });
+
+    // No encoding the client accepts is a property of the request, not of this
+    // server's budget, so it must not be reported as a decline.
+    expect(await compressStaticFileWithinLimits(
+      compressiblePath,
+      compressibleStat.mtimeMs,
+      compressibleStat.size,
+      [],
+      false,
+    )).toEqual({ status: "not-beneficial" });
+
+    expect(await compressStaticFileWithinLimits(
+      incompressiblePath,
+      incompressibleStat.mtimeMs,
+      incompressibleStat.size,
+      ["br", "gzip"],
+      false,
+    )).toEqual({ status: "not-beneficial" });
+
+    // Over the source cap, and a read that cannot be satisfied, are both
+    // server-side declines rather than statements about the representation.
+    expect(await compressStaticFileWithinLimits(
+      compressiblePath,
+      compressibleStat.mtimeMs,
+      MAX_STATIC_FALLBACK_SOURCE_BYTES + 1,
+      ["br"],
+      false,
+    )).toEqual({ status: "declined" });
+
+    expect(await compressStaticFileWithinLimits(
+      path.join(root, "missing.js"),
+      compressibleStat.mtimeMs,
+      compressibleStat.size,
+      ["br"],
+      true,
+    )).toEqual({ status: "declined" });
+
+    // A forbidden identity forces a coded form even when it is larger.
+    const forced = await compressStaticFileWithinLimits(
+      incompressiblePath,
+      incompressibleStat.mtimeMs,
+      incompressibleStat.size,
+      ["gzip"],
+      true,
+    );
+    expect(forced).toMatchObject({ status: "compressed", encoding: "gzip" });
+  });
+
+  test("does not crash the gateway when a validated asset becomes unreadable mid-response", async () => {
+    if (process.getuid?.() === 0) return;
+    const dataDir = await createTempDir("ork-static-stream-error-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    // A .png is not compressible, so this reaches the streaming path directly
+    // rather than being buffered by the on-the-fly fallback.
+    const assetPath = await writeRendererAsset(
+      rendererRoot,
+      "assets/broken-12345678.png",
+      Buffer.alloc(4096, 0x7f),
+    );
+    await writeRendererAsset(rendererRoot, "assets/intact-12345678.png", Buffer.alloc(64, 0x01));
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const authorization = { authorization: `Bearer ${info.token}` };
+    // stat() still succeeds (it only needs the directory), so the handler
+    // commits 200 headers and only then discovers it cannot read the body.
+    await chmod(assetPath, 0o000);
+    const outcome = await requestUrl(`${info.url}assets/broken-12345678.png`, {
+      headers: authorization,
+    }).catch((error: unknown) => error);
+    // Whether the client surfaces this as a transport error or as a truncated
+    // read is its own business. What must never happen is a complete-looking
+    // 4096-byte payload the client would cache as the immutable asset.
+    if (!(outcome instanceof Error)) {
+      expect(outcome.rawBody.byteLength).toBeLessThan(4096);
+    }
+
+    // The unreadable read must not have taken the process or the listener with
+    // it: an unhandled stream 'error' event would have crashed the gateway.
+    const intact = await requestUrl(`${info.url}assets/intact-12345678.png`, {
+      headers: authorization,
+    });
+    expect(intact.status).toBe(200);
+    expect(intact.rawBody.byteLength).toBe(64);
+    await chmod(assetPath, 0o600);
+  });
+
+  test("reads fallback sources through a stat-verified bounded file handle", async () => {
+    const root = await createTempDir("ork-static-bounded-read-");
+    const filePath = path.join(root, "asset.js");
+    await writeFile(filePath, "small source");
+    const originalStat = await stat(filePath);
+
+    expect(
+      await readStaticFileWithinLimit(
+        filePath,
+        originalStat.mtimeMs,
+        originalStat.size,
+      ),
+    ).toEqual(Buffer.from("small source"));
+
+    await writeFile(filePath, Buffer.alloc(1024 * 1024, 0x61));
+    expect(
+      await readStaticFileWithinLimit(
+        filePath,
+        originalStat.mtimeMs,
+        originalStat.size,
+      ),
+    ).toBeNull();
+    expect(
+      await readStaticFileWithinLimit(
+        filePath,
+        originalStat.mtimeMs,
+        MAX_STATIC_FALLBACK_SOURCE_BYTES + 1,
+      ),
+    ).toBeNull();
+    expect(
+      await readStaticFileWithinLimit(
+        path.join(root, "missing.js"),
+        originalStat.mtimeMs,
+        originalStat.size,
+      ),
+    ).toBeNull();
+  });
+
+  test("bounds concurrent on-the-fly compression admission without failing requests", async () => {
+    expect(canStartStaticFallbackCompression(
+      MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS - 1,
+    )).toBe(true);
+    expect(canStartStaticFallbackCompression(
+      MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS,
+    )).toBe(false);
+    expect(canStartStaticFallbackCompression(
+      MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS + 1,
+    )).toBe(false);
+
+    const dataDir = await createTempDir("ork-static-fallback-concurrency-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const assetCount = MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS + 1;
+    for (let index = 0; index < assetCount; index += 1) {
+      await writeRendererAsset(
+        rendererRoot,
+        `assets/concurrent-${String(index).padStart(8, "0")}.js`,
+        `console.log('concurrent-${index}');`.repeat(75_000),
+      );
+    }
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    const responses = await Promise.all(
+      Array.from({ length: assetCount }, (_, index) => (
+        requestUrl(`${info.url}assets/concurrent-${String(index).padStart(8, "0")}.js`, {
+          headers: {
+            authorization: `Bearer ${info.token}`,
+            "accept-encoding": "br",
+          },
+        })
+      )),
+    );
+
+    expect(responses.every((response) => response.status === 200)).toBe(true);
+    expect(responses.every((response) => (
+      response.headers["content-encoding"] === "br"
+      || response.headers["content-encoding"] === undefined
+    ))).toBe(true);
+  });
+
+  test("serves precompressed build-script file types with aligned MIME types", async () => {
+    const dataDir = await createTempDir("ork-static-mime-compression-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const cases = [
+      { extension: "mjs", contentType: "text/javascript; charset=utf-8" },
+      { extension: "map", contentType: "application/json; charset=utf-8" },
+      { extension: "txt", contentType: "text/plain; charset=utf-8" },
+      { extension: "xml", contentType: "application/xml; charset=utf-8" },
+    ] as const;
+    for (const { extension } of cases) {
+      await writeRendererAsset(
+        rendererRoot,
+        `assets/file-12345678.${extension}`,
+        `content-${extension}-`.repeat(256),
+      );
+    }
+
+    const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
+    for (const { extension, contentType } of cases) {
+      const response = await requestUrl(`${info.url}assets/file-12345678.${extension}`, {
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "accept-encoding": "br",
+        },
+      });
+      expect(response.status, extension).toBe(200);
+      expect(response.headers["content-type"], extension).toBe(contentType);
+      expect(response.headers["content-encoding"], extension).toBe("br");
+      expect(decodeResponseBody(response), extension).toContain(`content-${extension}`);
+    }
+  });
+
+  test("rejects unsupported methods on static resources", async () => {
+    const { info } = await startGateway();
+    const response = await requestUrl(info.url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${info.token}` },
+      body: "not a static request",
+    });
+
+    expect(response.status).toBe(405);
+    expect(response.headers.allow).toBe("GET, HEAD");
+    expect(response.rawBody.byteLength).toBe(0);
   });
 
   test("tracks stream gauges without double-counting a handshake", () => {

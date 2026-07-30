@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useLayoutEffect, useState } from "react";
+import { lazy, memo, useCallback, useRef, useLayoutEffect, useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
 import { usePaneLayoutStore, useEnvironmentStore, useConfigStore } from "@/stores";
@@ -6,16 +6,38 @@ import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createTabbarDroppableId } from "@/types/paneLayout";
 import { cn } from "@/lib/utils";
-import { FileViewerTab } from "@/components/terminal/FileViewerTab";
-import { OpenCodeChatTab } from "@/components/opencode";
-import { ClaudeChatTab } from "@/components/claude/ClaudeChatTab";
-import { ClaudeTmuxChatTab } from "@/components/claude/ClaudeTmuxChatTab";
-import { CodexChatTab } from "@/components/codex";
-import { BuildChatTab } from "@/components/build-pipeline";
-import { LoopedReviewTab } from "@/components/review/LoopedReviewTab";
-import { BrowserTab } from "@/components/browser/BrowserTab";
 import { DraggableTabBar } from "./DraggableTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
+import {
+  LazyLoadBoundary,
+  LazyLoadInlineErrorFallback,
+  type LazyLoadErrorDetails,
+} from "@/components/LazyLoadBoundary";
+
+const LazyFileViewerTab = lazy(async () => ({
+  default: (await import("@/components/terminal/FileViewerTab")).FileViewerTab,
+}));
+const LazyOpenCodeChatTab = lazy(async () => ({
+  default: (await import("@/components/opencode")).OpenCodeChatTab,
+}));
+const LazyClaudeChatTab = lazy(async () => ({
+  default: (await import("@/components/claude/ClaudeChatTab")).ClaudeChatTab,
+}));
+const LazyClaudeTmuxChatTab = lazy(async () => ({
+  default: (await import("@/components/claude/ClaudeTmuxChatTab")).ClaudeTmuxChatTab,
+}));
+const LazyCodexChatTab = lazy(async () => ({
+  default: (await import("@/components/codex")).CodexChatTab,
+}));
+const LazyBuildChatTab = lazy(async () => ({
+  default: (await import("@/components/build-pipeline/BuildChatTab")).BuildChatTab,
+}));
+const LazyLoopedReviewTab = lazy(async () => ({
+  default: (await import("@/components/review/LoopedReviewTab")).LoopedReviewTab,
+}));
+const LazyBrowserTab = lazy(async () => ({
+  default: (await import("@/components/browser/BrowserTab")).BrowserTab,
+}));
 
 interface PaneLeafContainerProps {
   pane: PaneLeaf;
@@ -115,6 +137,24 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
 
   // Check if this pane is focused (active in the layout)
   const isPaneFocused = activePaneId === pane.id;
+  const renderTabFallback = useCallback((isVisible: boolean) => (
+    <div
+      className={cn(
+        "absolute inset-0 flex items-center justify-center bg-background/80 text-muted-foreground",
+        isVisible ? "z-10 pointer-events-auto" : "hidden",
+      )}
+    >
+      Loading tab...
+    </div>
+  ), []);
+  // A tab that is not on screen must not blank the whole application when its
+  // chunk fails, so the failure surface is scoped exactly like the loading one.
+  const renderTabError = useCallback(
+    (isVisible: boolean) => (details: LazyLoadErrorDetails) => (
+      <LazyLoadInlineErrorFallback {...details} isVisible={isVisible} />
+    ),
+    [],
+  );
 
   return (
     <div
@@ -151,34 +191,44 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
           // File viewer tabs
           if (tab.type === "file" && tab.fileData) {
             return (
-              <FileViewerTab
+              <LazyLoadBoundary
                 key={tab.id}
-                tabId={tab.id}
-                environmentId={environmentId}
-                filePath={tab.fileData.filePath}
-                containerId={tab.fileData.containerId}
-                worktreePath={tab.fileData.worktreePath}
-                isLocalEnvironment={tab.fileData.isLocalEnvironment}
-                isActive={isTabActive && isActive}
-                language={tab.fileData.language}
-                isDiff={tab.fileData.isDiff}
-                gitStatus={tab.fileData.gitStatus}
-                baseBranch={tab.fileData.isDiff ? comparisonRef : tab.fileData.baseBranch}
-              />
+                loadingFallback={renderTabFallback(isTabActive && isActive)}
+                renderError={renderTabError(isTabActive && isActive)}
+              >
+                <LazyFileViewerTab
+                  tabId={tab.id}
+                  environmentId={environmentId}
+                  filePath={tab.fileData.filePath}
+                  containerId={tab.fileData.containerId}
+                  worktreePath={tab.fileData.worktreePath}
+                  isLocalEnvironment={tab.fileData.isLocalEnvironment}
+                  isActive={isTabActive && isActive}
+                  language={tab.fileData.language}
+                  isDiff={tab.fileData.isDiff}
+                  gitStatus={tab.fileData.gitStatus}
+                  baseBranch={tab.fileData.isDiff ? comparisonRef : tab.fileData.baseBranch}
+                />
+              </LazyLoadBoundary>
             );
           }
 
           // Backend-local browser preview tabs
           if (tab.type === "browser" && tab.browserData) {
             return (
-              <BrowserTab
+              <LazyLoadBoundary
                 key={tab.id}
-                tabId={tab.id}
-                environmentId={environmentId}
-                data={tab.browserData}
-                isActive={isTabActive && isActive}
-                refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
-              />
+                loadingFallback={renderTabFallback(isTabActive && isActive)}
+                renderError={renderTabError(isTabActive && isActive)}
+              >
+                <LazyBrowserTab
+                  tabId={tab.id}
+                  environmentId={environmentId}
+                  data={tab.browserData}
+                  isActive={isTabActive && isActive}
+                  refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
+                />
+              </LazyLoadBoundary>
             );
           }
 
@@ -192,19 +242,24 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
                 )}
               >
-                <OpenCodeChatTab
-                  tabId={tab.id}
-                  data={tab.openCodeNativeData}
-                  isActive={isTabActive && isActive}
-                  ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
-                  initialPrompt={tab.initialPrompt}
-                  isReviewTab={tab.isReviewTab}
-                  initialAgentModel={tab.initialAgentModel}
-                  initialReasoningEffort={tab.initialReasoningEffort}
-                  agentHandoffId={tab.agentHandoffId}
-                  consumedAgentHandoffId={tab.consumedAgentHandoffId}
-                  refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
-                />
+                <LazyLoadBoundary
+                  loadingFallback={renderTabFallback(isTabActive && isActive)}
+                  renderError={renderTabError(isTabActive && isActive)}
+                >
+                  <LazyOpenCodeChatTab
+                    tabId={tab.id}
+                    data={tab.openCodeNativeData}
+                    isActive={isTabActive && isActive}
+                    ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
+                    initialPrompt={tab.initialPrompt}
+                    isReviewTab={tab.isReviewTab}
+                    initialAgentModel={tab.initialAgentModel}
+                    initialReasoningEffort={tab.initialReasoningEffort}
+                    agentHandoffId={tab.agentHandoffId}
+                    consumedAgentHandoffId={tab.consumedAgentHandoffId}
+                    refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
+                  />
+                </LazyLoadBoundary>
               </div>
             );
           }
@@ -219,19 +274,24 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
                 )}
               >
-                <ClaudeChatTab
-                  tabId={tab.id}
-                  data={tab.claudeNativeData}
-                  isActive={isTabActive && isActive}
-                  ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
-                  initialPrompt={tab.initialPrompt}
-                  isReviewTab={tab.isReviewTab}
-                  initialAgentModel={tab.initialAgentModel}
-                  initialReasoningEffort={tab.initialReasoningEffort}
-                  agentHandoffId={tab.agentHandoffId}
-                  consumedAgentHandoffId={tab.consumedAgentHandoffId}
-                  refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
-                />
+                <LazyLoadBoundary
+                  loadingFallback={renderTabFallback(isTabActive && isActive)}
+                  renderError={renderTabError(isTabActive && isActive)}
+                >
+                  <LazyClaudeChatTab
+                    tabId={tab.id}
+                    data={tab.claudeNativeData}
+                    isActive={isTabActive && isActive}
+                    ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
+                    initialPrompt={tab.initialPrompt}
+                    isReviewTab={tab.isReviewTab}
+                    initialAgentModel={tab.initialAgentModel}
+                    initialReasoningEffort={tab.initialReasoningEffort}
+                    agentHandoffId={tab.agentHandoffId}
+                    consumedAgentHandoffId={tab.consumedAgentHandoffId}
+                    refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
+                  />
+                </LazyLoadBoundary>
               </div>
             );
           }
@@ -246,17 +306,22 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
                 )}
               >
-                <ClaudeTmuxChatTab
-                  tabId={tab.id}
-                  data={tab.claudeTmuxData}
-                  isActive={isTabActive && isActive}
-                  ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
-                  initialPrompt={tab.initialPrompt}
-                  isReviewTab={tab.isReviewTab}
-                  initialAgentModel={tab.initialAgentModel}
-                  initialReasoningEffort={tab.initialReasoningEffort}
-                  refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
-                />
+                <LazyLoadBoundary
+                  loadingFallback={renderTabFallback(isTabActive && isActive)}
+                  renderError={renderTabError(isTabActive && isActive)}
+                >
+                  <LazyClaudeTmuxChatTab
+                    tabId={tab.id}
+                    data={tab.claudeTmuxData}
+                    isActive={isTabActive && isActive}
+                    ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
+                    initialPrompt={tab.initialPrompt}
+                    isReviewTab={tab.isReviewTab}
+                    initialAgentModel={tab.initialAgentModel}
+                    initialReasoningEffort={tab.initialReasoningEffort}
+                    refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
+                  />
+                </LazyLoadBoundary>
               </div>
             );
           }
@@ -271,19 +336,24 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
                 )}
               >
-                <CodexChatTab
-                  tabId={tab.id}
-                  data={tab.codexNativeData}
-                  isActive={isTabActive && isActive}
-                  ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
-                  initialPrompt={tab.initialPrompt}
-                  isReviewTab={tab.isReviewTab}
-                  initialAgentModel={tab.initialAgentModel}
-                  initialReasoningEffort={tab.initialReasoningEffort}
-                  agentHandoffId={tab.agentHandoffId}
-                  consumedAgentHandoffId={tab.consumedAgentHandoffId}
-                  refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
-                />
+                <LazyLoadBoundary
+                  loadingFallback={renderTabFallback(isTabActive && isActive)}
+                  renderError={renderTabError(isTabActive && isActive)}
+                >
+                  <LazyCodexChatTab
+                    tabId={tab.id}
+                    data={tab.codexNativeData}
+                    isActive={isTabActive && isActive}
+                    ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
+                    initialPrompt={tab.initialPrompt}
+                    isReviewTab={tab.isReviewTab}
+                    initialAgentModel={tab.initialAgentModel}
+                    initialReasoningEffort={tab.initialReasoningEffort}
+                    agentHandoffId={tab.agentHandoffId}
+                    consumedAgentHandoffId={tab.consumedAgentHandoffId}
+                    refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
+                  />
+                </LazyLoadBoundary>
               </div>
             );
           }
@@ -298,10 +368,15 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
                 )}
               >
-                <BuildChatTab
-                  data={tab.buildTabData}
-                  isActive={isTabActive && isActive}
-                />
+                <LazyLoadBoundary
+                  loadingFallback={renderTabFallback(isTabActive && isActive)}
+                  renderError={renderTabError(isTabActive && isActive)}
+                >
+                  <LazyBuildChatTab
+                    data={tab.buildTabData}
+                    isActive={isTabActive && isActive}
+                  />
+                </LazyLoadBoundary>
               </div>
             );
           }
@@ -315,10 +390,15 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
-                <LoopedReviewTab
-                  data={tab.loopedReviewTabData}
-                  isActive={isTabActive && isActive}
-                />
+                <LazyLoadBoundary
+                  loadingFallback={renderTabFallback(isTabActive && isActive)}
+                  renderError={renderTabError(isTabActive && isActive)}
+                >
+                  <LazyLoopedReviewTab
+                    data={tab.loopedReviewTabData}
+                    isActive={isTabActive && isActive}
+                  />
+                </LazyLoadBoundary>
               </div>
             );
           }

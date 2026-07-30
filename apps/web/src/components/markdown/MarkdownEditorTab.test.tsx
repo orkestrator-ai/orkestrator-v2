@@ -84,7 +84,12 @@ describe("MarkdownEditorTab", () => {
     expect(useFileDirtyStore.getState().isDirty(TAB_ID)).toBe(false);
     expect(rawTab.getAttribute("data-state")).toBe("active");
     expect(
-      (screen.getByRole("textbox", { name: "Raw Markdown source" }) as HTMLTextAreaElement).value,
+      screen.getByRole("status", { name: "Loading raw editor…" }),
+    ).toBeTruthy();
+    expect(
+      (await screen.findByRole("textbox", {
+        name: "Raw Markdown source",
+      }) as HTMLTextAreaElement).value,
     ).toBe(ORIGINAL_MARKDOWN);
   });
 
@@ -133,7 +138,7 @@ describe("MarkdownEditorTab", () => {
 
     await screen.findByRole("heading", { name: "Original heading" });
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
-    const rawEditor = screen.getByRole("textbox", { name: "Raw Markdown source" });
+    const rawEditor = await screen.findByRole("textbox", { name: "Raw Markdown source" });
     fireEvent.change(rawEditor, { target: { value: "# Ready to save" } });
     fireEvent.keyDown(rawEditor, { key: "s", ctrlKey: true });
 
@@ -166,7 +171,7 @@ describe("MarkdownEditorTab", () => {
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
 
     expect(
-      (screen.getByRole("textbox", {
+      (await screen.findByRole("textbox", {
         name: "Raw Markdown source",
       }) as HTMLTextAreaElement).value,
     ).toBe("Changed while rendered");
@@ -234,7 +239,7 @@ describe("MarkdownEditorTab", () => {
       />,
     );
 
-    fireEvent.change(screen.getByRole("textbox", { name: "Raw Markdown source" }), {
+    fireEvent.change(await screen.findByRole("textbox", { name: "Raw Markdown source" }), {
       target: { value: "# Safe again" },
     });
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Rendered" }), {

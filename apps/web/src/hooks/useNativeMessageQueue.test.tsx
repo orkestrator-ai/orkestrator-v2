@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { useRef } from "react";
 import { create } from "zustand";
-import { useNativeMessageQueue } from "./useNativeMessageQueue";
+import {
+  useNativeMessageQueue,
+  type QueueDispatchOutcome,
+} from "./useNativeMessageQueue";
 
 type Queued = { id: string; text: string };
 
@@ -44,15 +48,21 @@ function Harness({
   canDrain = true,
   blockedByDraft = false,
   claimHead,
+  acknowledgeClaim = async () => {},
+  rejectClaim,
 }: {
   store: ReturnType<typeof createStore>;
-  send: (entry: Queued) => Promise<unknown> | undefined;
+  send: (entry: Queued) => Promise<QueueDispatchOutcome | void> | undefined;
   onError?: (error: unknown, entry: Queued) => void;
   canDrain?: boolean;
   blockedByDraft?: boolean;
-  claimHead?: () => Promise<Queued | null>;
+  claimHead?: () => Promise<{ entry: Queued; claimToken: string } | null>;
+  acknowledgeClaim?: (claimToken: string) => Promise<void>;
+  rejectClaim?: (claimToken: string) => Promise<void>;
 }) {
+  const claimedEntriesRef = useRef(new Map<string, Queued>());
   const queueLength = store((s) => s.messageQueue.get(SESSION_KEY)?.length ?? 0);
+  const queueHeadId = store((s) => s.messageQueue.get(SESSION_KEY)?.[0]?.id);
   const isLoading = store((s) => s.sessions.get(SESSION_KEY)?.isLoading ?? false);
 
   useNativeMessageQueue<Queued>({
@@ -61,13 +71,27 @@ function Harness({
     store,
     canDrain,
     queueLength,
+    queueHeadId,
     isLoading,
     blockedByDraft,
     // The production claim goes through the backend queue mirror; the test
     // double claims from the local store the same way a granted claim resolves.
     claimHead:
       claimHead
-      ?? (async () => store.getState().removeFromQueue(SESSION_KEY) ?? null),
+      ?? (async () => {
+        const entry = store.getState().removeFromQueue(SESSION_KEY);
+        if (!entry) return null;
+        const claimToken = `claim-${entry.id}`;
+        claimedEntriesRef.current.set(claimToken, entry);
+        return { entry, claimToken };
+      }),
+    acknowledgeClaim,
+    rejectClaim: rejectClaim ?? (async (claimToken) => {
+      const entry = claimedEntriesRef.current.get(claimToken);
+      if (!entry) return;
+      claimedEntriesRef.current.delete(claimToken);
+      store.getState().requeueToFront(SESSION_KEY, entry);
+    }),
     send,
     onError,
   });
@@ -93,6 +117,117 @@ describe("useNativeMessageQueue", () => {
     expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([
       { id: "q-1", text: "first" },
     ]);
+  });
+
+  test("acknowledges an accepted dispatch with its durable claim token", async () => {
+    const store = createStore([{ id: "q-1", text: "first" }]);
+    const acknowledgeClaim = mock(async () => {});
+
+    render(
+      <Harness
+        store={store}
+        send={async (): Promise<QueueDispatchOutcome> => "accepted"}
+        acknowledgeClaim={acknowledgeClaim}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(acknowledgeClaim).toHaveBeenCalledWith("claim-q-1"),
+    );
+    expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([]);
+  });
+
+  test("retains an ambiguous dispatch claim instead of risking loss or duplication", async () => {
+    const store = createStore([
+      { id: "q-1", text: "first" },
+      { id: "q-2", text: "second" },
+    ]);
+    const acknowledgeClaim = mock(async () => {});
+    const rejectClaim = mock(async () => {});
+    const send = mock(async () => "unknown" as const);
+
+    render(
+      <Harness
+        store={store}
+        send={send}
+        acknowledgeClaim={acknowledgeClaim}
+        rejectClaim={rejectClaim}
+      />,
+    );
+
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(acknowledgeClaim).not.toHaveBeenCalled();
+    expect(rejectClaim).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([
+      { id: "q-2", text: "second" },
+    ]);
+  });
+
+  test("retries a failed reject and reports that the prompt is awaiting recovery", async () => {
+    const entry = { id: "q-1", text: "first" };
+    const store = createStore([entry]);
+    const onError = mock(() => {});
+    let attempts = 0;
+    const rejectClaim = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("backend unavailable");
+      store.getState().requeueToFront(SESSION_KEY, entry);
+    });
+
+    render(
+      <Harness
+        store={store}
+        send={() => undefined}
+        rejectClaim={rejectClaim}
+        onError={onError}
+      />,
+    );
+
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(String((onError.mock.calls[0] as unknown[])[0])).toContain(
+      "could not yet be restored to the queue",
+    );
+    await waitFor(
+      () => {
+        expect(rejectClaim).toHaveBeenCalledTimes(2);
+        expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([entry]);
+      },
+      { timeout: 1_000 },
+    );
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  test("retries a failed acknowledgement without dispatching the prompt twice", async () => {
+    const store = createStore([{ id: "q-1", text: "first" }]);
+    const onError = mock(() => {});
+    const send = mock(async () => "accepted" as const);
+    let attempts = 0;
+    const acknowledgeClaim = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("backend unavailable");
+    });
+
+    render(
+      <Harness
+        store={store}
+        send={send}
+        acknowledgeClaim={acknowledgeClaim}
+        onError={onError}
+      />,
+    );
+
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(String((onError.mock.calls[0] as unknown[])[0])).toContain(
+      "queue claim could not be acknowledged",
+    );
+    await waitFor(
+      () => expect(acknowledgeClaim).toHaveBeenCalledTimes(2),
+      { timeout: 1_000 },
+    );
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
   });
 
   test("drains queued prompts one at a time and in order", async () => {
@@ -146,7 +281,7 @@ describe("useNativeMessageQueue", () => {
     await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
   });
 
-  test("reports a rejected send through onError without stalling the queue", async () => {
+  test("reports a rejected send and restores it ahead of later work", async () => {
     const store = createStore([
       { id: "q-1", text: "first" },
       { id: "q-2", text: "second" },
@@ -159,10 +294,15 @@ describe("useNativeMessageQueue", () => {
     render(<Harness store={store} send={send} onError={onError} />);
 
     await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
-    // The failure must not strand the rest of the queue.
+    // A definitive failure nacks the durable claim. It must not skip ahead and
+    // send later prompts out of order.
     await waitFor(() =>
-      expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([]),
+      expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([
+        { id: "q-1", text: "first" },
+        { id: "q-2", text: "second" },
+      ]),
     );
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   test("does not drain while the composer holds a draft", async () => {
@@ -243,7 +383,7 @@ describe("useNativeMessageQueue", () => {
     expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([]);
   });
 
-  test("treats a synchronous send throw like a rejection and keeps draining", async () => {
+  test("treats a synchronous send throw like a rejection and restores the head", async () => {
     /**
      * `send`'s contract allows a non-async implementation. A synchronous throw
      * escaping `process()` would leave the re-entrancy flag stuck at true,
@@ -254,10 +394,8 @@ describe("useNativeMessageQueue", () => {
       { id: "q-2", text: "second" },
     ]);
     const onError = mock(() => {});
-    const sent: string[] = [];
-    const send = mock((entry: Queued): Promise<unknown> | undefined => {
+    const send = mock((entry: Queued): Promise<void> | undefined => {
       if (entry.id === "q-1") throw new Error("sync boom");
-      sent.push(entry.text);
       return Promise.resolve();
     });
 
@@ -265,8 +403,11 @@ describe("useNativeMessageQueue", () => {
 
     await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
     expect((onError.mock.calls[0] as unknown[])[1]).toEqual({ id: "q-1", text: "first" });
-    // The throw must not wedge the queue — the second entry still goes out.
-    await waitFor(() => expect(sent).toEqual(["second"]));
+    await waitFor(() => expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([
+      { id: "q-1", text: "first" },
+      { id: "q-2", text: "second" },
+    ]));
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   test("retries after a failed claim without losing queued work", async () => {
@@ -276,7 +417,8 @@ describe("useNativeMessageQueue", () => {
     const claimHead = mock(async () => {
       claimAttempts += 1;
       if (claimAttempts === 1) throw new Error("backend unreachable");
-      return store.getState().removeFromQueue(SESSION_KEY) ?? null;
+      const entry = store.getState().removeFromQueue(SESSION_KEY);
+      return entry ? { entry, claimToken: `claim-${entry.id}` } : null;
     });
 
     const view = render(<Harness store={store} send={send} claimHead={claimHead} />);
@@ -312,6 +454,32 @@ describe("useNativeMessageQueue", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  test("retries a denied stale claim when the authoritative head changed", async () => {
+    const store = createStore([{ id: "stale", text: "stale" }]);
+    const send = mock(async () => {});
+    let attempts = 0;
+    const claimHead = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        store.setState({
+          messageQueue: new Map([
+            [SESSION_KEY, [{ id: "current", text: "current" }]],
+          ]),
+        });
+        return null;
+      }
+      const entry = store.getState().removeFromQueue(SESSION_KEY);
+      return entry ? { entry, claimToken: `claim-${entry.id}` } : null;
+    });
+
+    render(<Harness store={store} send={send} claimHead={claimHead} />);
+
+    await waitFor(() => {
+      expect(send).toHaveBeenCalledWith({ id: "current", text: "current" });
+      expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([]);
+    });
+  });
+
   test("does not re-enter from the settle path while a new turn is running", async () => {
     /**
      * The finally-block re-drive exists for a queue stranded with an idle
@@ -339,5 +507,95 @@ describe("useNativeMessageQueue", () => {
 
     store.setState({ sessions: new Map([[SESSION_KEY, { isLoading: false }]]) });
     await waitFor(() => expect(sent).toEqual(["first", "second"]));
+  });
+
+  test("stops retrying settlement once the tab unmounts", async () => {
+    /**
+     * The claim is durable and the backend lease re-heads it. An unmounted tab
+     * that kept retrying would be doing recovery work for a UI nobody is
+     * watching, and it can no longer report the outcome.
+     */
+    const store = createStore([{ id: "q-1", text: "first" }]);
+    const rejectClaim = mock(async () => {
+      throw new Error("backend unavailable");
+    });
+
+    const view = render(
+      <Harness store={store} send={() => undefined} rejectClaim={rejectClaim} />,
+    );
+
+    await waitFor(() => expect(rejectClaim).toHaveBeenCalledTimes(1));
+    view.unmount();
+
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(rejectClaim).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not report the same settlement failure on every retry", async () => {
+    /**
+     * The first failure is worth telling the user about. Repeating it once per
+     * backoff step would bury the transcript in duplicates of a message that
+     * has not changed.
+     */
+    const store = createStore([{ id: "q-1", text: "first" }]);
+    const onError = mock(() => {});
+    const acknowledgeClaim = mock(async () => {
+      throw new Error("backend unavailable");
+    });
+
+    render(
+      <Harness
+        store={store}
+        send={async (): Promise<QueueDispatchOutcome> => "accepted"}
+        acknowledgeClaim={acknowledgeClaim}
+        onError={onError}
+      />,
+    );
+
+    await waitFor(
+      () => expect(acknowledgeClaim.mock.calls.length).toBeGreaterThanOrEqual(3),
+      { timeout: 3_000 },
+    );
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  test("a failed acknowledgement does not strand the rest of the queue", async () => {
+    /**
+     * The retry raises the drain guard while it runs. If it ever failed to
+     * lower it — or gave up without re-driving — the prompts behind an
+     * already-dispatched head would sit there with nothing left to wake them.
+     */
+    const store = createStore([
+      { id: "q-1", text: "first" },
+      { id: "q-2", text: "second" },
+    ]);
+    const sent: string[] = [];
+    const send = mock(async (entry: Queued): Promise<QueueDispatchOutcome> => {
+      sent.push(entry.text);
+      return "accepted";
+    });
+    let attempts = 0;
+    const acknowledgeClaim = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("backend unavailable");
+    });
+
+    render(
+      <Harness
+        store={store}
+        send={send}
+        acknowledgeClaim={acknowledgeClaim}
+        onError={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(sent).toEqual(["first", "second"]), {
+      timeout: 2_000,
+    });
+    await waitFor(
+      () => expect(acknowledgeClaim.mock.calls.length).toBeGreaterThanOrEqual(2),
+      { timeout: 2_000 },
+    );
+    expect(store.getState().messageQueue.get(SESSION_KEY)).toEqual([]);
   });
 });

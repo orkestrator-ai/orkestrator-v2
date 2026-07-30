@@ -21,6 +21,7 @@ import * as realResumeSessionDialog from "./ResumeSessionDialog";
 // The SSE and metadata paths run payloads through the real helpers, so the
 // module mock hands back the genuine module and overrides only what it must.
 import * as realClaudeClient from "@/lib/claude-client";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
 const realClaudeClientSnapshot = { ...realClaudeClient };
 const mockForkClaudeSession = mock<
@@ -257,10 +258,112 @@ mock.module("@/lib/claude-client", () => ({
   SessionNotFoundError: MockSessionNotFoundError,
 }));
 
+let mockQueueRevision = 1;
+const mockOutstandingQueueClaims = new Map<string, { id: string }>();
+const queueSessionKey = (queueKey: string) =>
+  queueKey.slice(queueKey.indexOf("\u0000") + 1);
+const queueSnapshot = (
+  queueKey: string,
+  environmentId: string,
+  messages: Array<{ id: string }>,
+) => ({
+  queueKey,
+  environmentId,
+  messages,
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  revision: mockQueueRevision++,
+});
+const mockRemovePromptQueueMessage = mock(
+  async (queueKey: string, environmentId: string, messageId: string) => {
+    const current = useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+    return {
+      removed: current.find((message) => message.id === messageId) ?? null,
+      queue: queueSnapshot(
+        queueKey,
+        environmentId,
+        current.filter((message) => message.id !== messageId),
+      ),
+    };
+  },
+);
+const mockTransferPromptQueueMessageToComposeDraft = mock(
+  async (
+    queueKey: string,
+    environmentId: string,
+    messageId: string,
+    draftKey: string,
+    ownerType: "environment" | "project",
+    ownerId: string,
+  ) => {
+    const result = await mockRemovePromptQueueMessage(queueKey, environmentId, messageId);
+    return {
+      ...result,
+      draft: result.removed
+        ? {
+            draftKey,
+            ownerType,
+            ownerId,
+            value: { text: "", mentions: [], attachments: [] },
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            revision: 1,
+          }
+        : null,
+    };
+  },
+);
+const mockAcknowledgePromptQueueClaim = mock(
+  async (queueKey: string, environmentId: string, claimToken: string) => {
+    mockOutstandingQueueClaims.delete(claimToken);
+    return queueSnapshot(
+      queueKey,
+      environmentId,
+      useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+    );
+  },
+);
+const mockRejectPromptQueueClaim = mock(
+  async (queueKey: string, environmentId: string, claimToken: string) => {
+    const claimed = mockOutstandingQueueClaims.get(claimToken);
+    mockOutstandingQueueClaims.delete(claimToken);
+    const current = useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+    return queueSnapshot(
+      queueKey,
+      environmentId,
+      claimed ? [claimed, ...current] : current,
+    );
+  },
+);
+
 mock.module("@/lib/backend", () => ({
   adoptNativeAgentSession: mockAdoptNativeAgentSession,
   ensureNativeAgentSession: mockEnsureNativeAgentSession,
   claimPromptQueueHead: mockClaimPromptQueueHead,
+  acknowledgePromptQueueClaim: mockAcknowledgePromptQueueClaim,
+  rejectPromptQueueClaim: mockRejectPromptQueueClaim,
+  enqueuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    queueSnapshot(queueKey, environmentId, [
+      ...useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+      message,
+    ])),
+  requeuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    {
+      const current = useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+      return queueSnapshot(
+        queueKey,
+        environmentId,
+        current.some((candidate) => candidate.id === message.id)
+          ? current
+          : [message, ...current],
+      );
+    }),
+  removePromptQueueMessage: mockRemovePromptQueueMessage,
+  transferPromptQueueMessageToComposeDraft: mockTransferPromptQueueMessageToComposeDraft,
+  movePromptQueueMessage: mock(async (queueKey, environmentId) =>
+    queueSnapshot(
+      queueKey,
+      environmentId,
+      useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+    )),
   getAgentHandoff: mockGetAgentHandoff,
   startClaudeServer: mockStartClaudeServer,
   getClaudeServerStatus: mockGetClaudeServerStatus,
@@ -591,6 +694,9 @@ describe("ClaudeChatTab", () => {
     claimedPromptHeads.clear();
     mockClaimPromptQueueHead.mockClear();
     mockAdoptNativeAgentSession.mockClear();
+    mockOutstandingQueueClaims.clear();
+    mockAcknowledgePromptQueueClaim.mockClear();
+    mockRejectPromptQueueClaim.mockClear();
     mockIsAtBottom = true;
     mockScrollToBottom.mockClear();
     // `mockClear` only drops call history. Without restoring the factory too, a
@@ -626,6 +732,39 @@ describe("ClaudeChatTab", () => {
     mockGetStructuredOutput.mockResolvedValue(null);
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => true);
+    mockRemovePromptQueueMessage.mockReset();
+    mockRemovePromptQueueMessage.mockImplementation(
+      async (queueKey, environmentId, messageId) => {
+        const current = useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+        return {
+          removed: current.find((message) => message.id === messageId) ?? null,
+          queue: queueSnapshot(
+            queueKey,
+            environmentId,
+            current.filter((message) => message.id !== messageId),
+          ),
+        };
+      },
+    );
+    mockTransferPromptQueueMessageToComposeDraft.mockReset();
+    mockTransferPromptQueueMessageToComposeDraft.mockImplementation(
+      async (queueKey, environmentId, messageId, draftKey, ownerType, ownerId) => {
+        const result = await mockRemovePromptQueueMessage(queueKey, environmentId, messageId);
+        return {
+          ...result,
+          draft: result.removed
+            ? {
+                draftKey,
+                ownerType,
+                ownerId,
+                value: { text: "", mentions: [], attachments: [] },
+                updatedAt: "2026-01-01T00:00:00.000Z",
+                revision: 1,
+              }
+            : null,
+        };
+      },
+    );
     mockUpdateSessionPreferences.mockReset();
     mockUpdateSessionPreferences.mockResolvedValue(undefined);
     mockSubscribeToEvents.mockReset();
@@ -3846,7 +3985,7 @@ describe("ClaudeChatTab", () => {
 
   test("does not drain queued prompts while a draft exists", async () => {
     useClaudeStore.getState().setDraftText(SESSION_KEY, "Keep this Claude draft");
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued behind Claude draft",
       attachments: [],
@@ -3883,7 +4022,7 @@ describe("ClaudeChatTab", () => {
       previewUrl: "data:image/png;base64,staged",
       name: "staged.png",
     });
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued behind Claude attachment",
       attachments: [],
@@ -3914,7 +4053,7 @@ describe("ClaudeChatTab", () => {
     ]);
   });
 
-  test("stop immediately clears loading and promotes the next queued prompt to draft", async () => {
+  test("stop aborts before promoting the queue and stays locked until the turn settles", async () => {
     const queuedAttachment = {
       id: "queued-attachment",
       type: "image" as const,
@@ -3924,7 +4063,7 @@ describe("ClaudeChatTab", () => {
     };
 
     useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued Claude prompt",
       attachments: [queuedAttachment],
@@ -3932,7 +4071,7 @@ describe("ClaudeChatTab", () => {
       planModeEnabled: false,
       fastModeEnabled: false,
     });
-    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
       id: "queue-2",
       text: "Second queued Claude prompt",
       attachments: [],
@@ -3961,28 +4100,39 @@ describe("ClaudeChatTab", () => {
 
     await waitFor(() => {
       const state = useClaudeStore.getState();
-      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+      expect(state.draftText.get(SESSION_KEY) ?? "").toBe("");
+      expect(state.messageQueue.get(SESSION_KEY)?.map((message) => message.text)).toEqual([
+        "Queued Claude prompt",
+        "Second queued Claude prompt",
+      ]);
+    });
+
+    resolveAbort?.(true);
+
+    await waitFor(() => {
+      const state = useClaudeStore.getState();
+      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(true);
       expect(state.draftText.get(SESSION_KEY)).toBe("Queued Claude prompt");
       expect(state.messageQueue.get(SESSION_KEY)?.map((message) => message.text)).toEqual([
         "Second queued Claude prompt",
       ]);
-      // The head must be claimed through the backend, not just dropped locally:
-      // stopping the turn is what makes the provider report idle, so the backend
-      // drain would otherwise dispatch the prompt the user now holds.
-      expect(mockClaimPromptQueueHead).toHaveBeenCalledWith(
+      // The queue-to-draft transfer is one backend mutation, so the supervisor
+      // cannot dispatch the prompt between removing it and restoring its draft.
+      expect(mockTransferPromptQueueMessageToComposeDraft).toHaveBeenCalledWith(
         "claude\u0000env-env-1:tab-1",
         "env-1",
         "queue-1",
-        expect.arrayContaining([expect.objectContaining({ id: "queue-1" })]),
+        "claude:env-1:env-env-1%3Atab-1",
+        "environment",
+        "env-1",
       );
       expect(state.attachments.get(SESSION_KEY)).toEqual([queuedAttachment]);
       expect(state.effort.get(SESSION_KEY)).toBe("high");
       expect(state.planMode.get(SESSION_KEY)).toBe(false);
       expect(state.fastMode.get(SESSION_KEY)).toBe(false);
     });
-    expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
-
-    resolveAbort?.(true);
 
     await waitFor(() => {
       const messages = useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
@@ -3990,6 +4140,45 @@ describe("ClaudeChatTab", () => {
         /^system-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       );
     });
+
+    act(() => useClaudeStore.getState().setSessionLoading(SESSION_KEY, false));
+  });
+
+  test("keeps the queue intact when post-abort promotion fails", async () => {
+    const consoleError = mock(() => {});
+    const originalError = console.error;
+    console.error = consoleError as unknown as typeof console.error;
+    mockTransferPromptQueueMessageToComposeDraft.mockRejectedValue(
+      new Error("queue unavailable"),
+    );
+    useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
+    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
+      id: "queue-1",
+      text: "Keep this Claude prompt",
+      attachments: [],
+      effort: "medium",
+      planModeEnabled: false,
+      fastModeEnabled: false,
+    });
+
+    try {
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+      fireEvent.click(screen.getByTitle("Stop current query"));
+
+      await waitFor(() => {
+        expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+        expect(consoleError).toHaveBeenCalledWith(
+          "[ClaudeChatTab] Failed to promote queued prompt:",
+          expect.any(Error),
+        );
+      });
+      expect(useClaudeStore.getState().getQueuedMessages(SESSION_KEY)).toEqual([
+        expect.objectContaining({ id: "queue-1" }),
+      ]);
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    } finally {
+      console.error = originalError;
+    }
   });
 
   test("parks the stalled-turn watchdog while the user's own refresh is running", async () => {
@@ -4564,6 +4753,55 @@ describe("ClaudeChatTab", () => {
       ).toEqual(["task-1"]);
     });
 
+    test("rehydrates a named terminal TaskStop row after the tab remounts", async () => {
+      const stopMessage: ClaudeMessageType = {
+        id: "assistant-stop-background-task",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-07-26T01:00:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          content: "TaskStop",
+          toolName: "TaskStop",
+          toolState: "success",
+          toolArgs: { task_id: "bg-wait" },
+          toolOutput: JSON.stringify({
+            task_id: "bg-wait",
+            command: "sleep 300; echo waited",
+          }),
+        }],
+      };
+      mockGetSessionMessages.mockResolvedValue([stopMessage]);
+      mockGetSession.mockResolvedValue(
+        serverSession({
+          backgroundTasks: {
+            "bg-wait": {
+              id: "bg-wait",
+              description: "Wait for remaining review thread",
+              status: "killed",
+            },
+          },
+        }) as any,
+      );
+
+      const view = render(
+        <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />,
+      );
+      expect(await screen.findByRole("button", {
+        name: /TaskStop Wait for remaining review thread bg-wait stopped/,
+      })).toBeTruthy();
+
+      view.unmount();
+      act(() => {
+        useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {});
+      });
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      expect(await screen.findByRole("button", {
+        name: /TaskStop Wait for remaining review thread bg-wait stopped/,
+      })).toBeTruthy();
+    });
+
     test("rehydrates rate limits without context and later preserves or clears them authoritatively", async () => {
       mockGetSession.mockResolvedValue(
         serverSession({
@@ -4813,6 +5051,47 @@ describe("ClaudeChatTab", () => {
       const state = useClaudeStore.getState();
       expect(state.promptSuggestions.get(SESSION_KEY)).toBe("Add tests for the new branch");
       expect(Object.keys(state.backgroundTasks.get(SESSION_KEY) ?? {})).toEqual(["task-1"]);
+    });
+
+    test("keeps running tasks when a snapshot dropped every one of them", async () => {
+      /*
+       * A REST snapshot that arrives empty *because* every task was rejected is
+       * a malformed payload, not an authoritative "no tasks left" — matching
+       * the session.updated guard. Writing it would remove the Stop controls
+       * for tasks that are still running.
+       */
+      useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+        "task-1": { id: "task-1", description: "Run the suite", status: "running" },
+      });
+      mockGetSession.mockResolvedValue(
+        serverSession({
+          backgroundTasks: {},
+          invalidMetadataFields: ["backgroundTasks.task-1"],
+        }) as any,
+      );
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() =>
+        expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)?.usedTokens).toBe(1_000),
+      );
+      expect(
+        Object.keys(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY) ?? {}),
+      ).toEqual(["task-1"]);
+    });
+
+    test("adopts an authoritatively empty background-task snapshot", async () => {
+      useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+        "task-1": { id: "task-1", description: "Run the suite", status: "running" },
+      });
+      mockGetSession.mockResolvedValue(serverSession({ backgroundTasks: {} }) as any);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() =>
+        expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)?.usedTokens).toBe(1_000),
+      );
+      expect(
+        Object.keys(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY) ?? {}),
+      ).toEqual([]);
     });
   });
 

@@ -38,6 +38,7 @@ const realCodexClientSnapshot = { ...realCodexClient };
 import * as realCodexComposeBar from "./CodexComposeBar";
 import * as realCodexPlanModeCard from "./CodexPlanModeCard";
 import * as realCodexResumeSessionDialog from "./CodexResumeSessionDialog";
+import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 const realCodexComposeBarSnapshot = { ...realCodexComposeBar };
 const realCodexPlanModeCardSnapshot = { ...realCodexPlanModeCard };
 const realCodexResumeSessionDialogSnapshot = { ...realCodexResumeSessionDialog };
@@ -203,6 +204,24 @@ const mockUpdateGlobalConfig = mock(async (config: any) => ({
 }));
 const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
 const claimedPromptHeads = new Set<string>();
+const mockOutstandingQueueClaims = new Map<
+  string,
+  { entry: { id: string }; claimKey: string }
+>();
+let mockQueueRevision = 1;
+const queueSnapshot = (
+  queueKey: string,
+  environmentId: string,
+  messages: Array<{ id: string }>,
+) => ({
+  queueKey,
+  environmentId,
+  messages,
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  revision: mockQueueRevision++,
+});
+const queueSessionKey = (queueKey: string) =>
+  queueKey.slice(queueKey.indexOf("\u0000") + 1);
 const mockClaimPromptQueueHead = mock(async (
   queueKey: string,
   environmentId: string,
@@ -212,17 +231,55 @@ const mockClaimPromptQueueHead = mock(async (
   const claimKey = `${queueKey}\u0000${expectedMessageId}`;
   const alreadyClaimed = claimedPromptHeads.has(claimKey);
   if (!alreadyClaimed) claimedPromptHeads.add(claimKey);
+  const claimed = alreadyClaimed ? null : (candidateMessages[0] ?? null);
+  const claimToken = claimed ? `claim-${claimed.id}` : null;
+  if (claimed && claimToken) {
+    mockOutstandingQueueClaims.set(claimToken, { entry: claimed, claimKey });
+  }
   return {
-    claimed: alreadyClaimed ? null : (candidateMessages[0] ?? null),
-    queue: {
-      queueKey,
-      environmentId,
-      messages: candidateMessages.slice(1),
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      revision: 1,
-    },
+    claimed,
+    claimToken,
+    queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
   };
 });
+const mockRemovePromptQueueMessage = mock(
+  async (queueKey: string, environmentId: string, messageId: string) => {
+    const current = useCodexStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+    return {
+      removed: current.find((message) => message.id === messageId) ?? null,
+      queue: queueSnapshot(
+        queueKey,
+        environmentId,
+        current.filter((message) => message.id !== messageId),
+      ),
+    };
+  },
+);
+const mockTransferPromptQueueMessageToComposeDraft = mock(
+  async (
+    queueKey: string,
+    environmentId: string,
+    messageId: string,
+    draftKey: string,
+    ownerType: "environment" | "project",
+    ownerId: string,
+  ) => {
+    const result = await mockRemovePromptQueueMessage(queueKey, environmentId, messageId);
+    return {
+      ...result,
+      draft: result.removed
+        ? {
+            draftKey,
+            ownerType,
+            ownerId,
+            value: { text: "", mentions: [], attachments: [] },
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            revision: 1,
+          }
+        : null,
+    };
+  },
+);
 
 // NOTE: Do NOT mock @/hooks/useScrollLock here — it pollutes the global
 // module cache and breaks useScrollLock.test.ts. The real hook returns
@@ -230,6 +287,49 @@ const mockClaimPromptQueueHead = mock(async (
 
 mock.module("@/lib/backend", () => ({
   claimPromptQueueHead: mockClaimPromptQueueHead,
+  acknowledgePromptQueueClaim: mock(async (queueKey, environmentId, claimToken) => {
+    mockOutstandingQueueClaims.delete(claimToken);
+    return queueSnapshot(
+      queueKey,
+      environmentId,
+      useCodexStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+    );
+  }),
+  rejectPromptQueueClaim: mock(async (queueKey, environmentId, claimToken) => {
+    const claim = mockOutstandingQueueClaims.get(claimToken);
+    mockOutstandingQueueClaims.delete(claimToken);
+    if (claim) claimedPromptHeads.delete(claim.claimKey);
+    const current = useCodexStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+    return queueSnapshot(
+      queueKey,
+      environmentId,
+      claim ? [claim.entry, ...current] : current,
+    );
+  }),
+  enqueuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    queueSnapshot(queueKey, environmentId, [
+      ...useCodexStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+      message,
+    ])),
+  requeuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
+    {
+      const current = useCodexStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+      return queueSnapshot(
+        queueKey,
+        environmentId,
+        current.some((candidate) => candidate.id === message.id)
+          ? current
+          : [message, ...current],
+      );
+    }),
+  removePromptQueueMessage: mockRemovePromptQueueMessage,
+  transferPromptQueueMessageToComposeDraft: mockTransferPromptQueueMessageToComposeDraft,
+  movePromptQueueMessage: mock(async (queueKey, environmentId) =>
+    queueSnapshot(
+      queueKey,
+      environmentId,
+      useCodexStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
+    )),
   getAgentHandoff: mockGetAgentHandoff,
   getCodexServerLog: mockGetCodexServerLog,
   getCodexServerStatus: mockGetCodexServerStatus,
@@ -816,6 +916,7 @@ describe("CodexChatTab", () => {
   beforeEach(() => {
     cleanup();
     claimedPromptHeads.clear();
+    mockOutstandingQueueClaims.clear();
     mockClaimPromptQueueHead.mockClear();
     composeText = "Rename the environment";
     composeAttachments = [];
@@ -838,6 +939,39 @@ describe("CodexChatTab", () => {
     mockToastWarning.mockClear();
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => ({ status: "accepted" as const }));
+    mockRemovePromptQueueMessage.mockReset();
+    mockRemovePromptQueueMessage.mockImplementation(
+      async (queueKey, environmentId, messageId) => {
+        const current = useCodexStore.getState().getQueuedMessages(queueSessionKey(queueKey));
+        return {
+          removed: current.find((message) => message.id === messageId) ?? null,
+          queue: queueSnapshot(
+            queueKey,
+            environmentId,
+            current.filter((message) => message.id !== messageId),
+          ),
+        };
+      },
+    );
+    mockTransferPromptQueueMessageToComposeDraft.mockReset();
+    mockTransferPromptQueueMessageToComposeDraft.mockImplementation(
+      async (queueKey, environmentId, messageId, draftKey, ownerType, ownerId) => {
+        const result = await mockRemovePromptQueueMessage(queueKey, environmentId, messageId);
+        return {
+          ...result,
+          draft: result.removed
+            ? {
+                draftKey,
+                ownerType,
+                ownerId,
+                value: { text: "", mentions: [], attachments: [] },
+                updatedAt: "2026-01-01T00:00:00.000Z",
+                revision: 1,
+              }
+            : null,
+        };
+      },
+    );
     mockFetchPendingApprovals.mockClear();
     mockFetchPendingApprovals.mockImplementation(async () => []);
     mockFetchPendingInteractions.mockClear();
@@ -5435,7 +5569,7 @@ describe("CodexChatTab", () => {
   test("does not drain queued prompts while a draft exists", async () => {
     seedEnvironment("review-table");
     useCodexStore.getState().setDraftText(SESSION_KEY, "Keep this Codex draft");
-    useCodexStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued behind Codex draft",
       attachments: [],
@@ -5474,7 +5608,7 @@ describe("CodexChatTab", () => {
       previewUrl: "data:image/png;base64,staged",
       name: "staged.png",
     });
-    useCodexStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued behind Codex attachment",
       attachments: [],
@@ -5517,7 +5651,7 @@ describe("CodexChatTab", () => {
 
     useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
     mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
-    useCodexStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
       id: "queue-1",
       text: "Queued prompt",
       attachments: [queuedAttachment],
@@ -5526,7 +5660,7 @@ describe("CodexChatTab", () => {
       reasoningEffort: "medium",
       fastMode: false,
     });
-    useCodexStore.getState().addToQueue(SESSION_KEY, {
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
       id: "queue-2",
       text: "Second queued prompt",
       attachments: [],
@@ -5556,8 +5690,20 @@ describe("CodexChatTab", () => {
 
     await waitFor(() => {
       const state = useCodexStore.getState();
+      expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
       expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(true);
       expect(state.sessionPhase.get(SESSION_KEY)).toBe("cancelling");
+      expect(state.draftText.get(SESSION_KEY) ?? "").toBe("");
+      expect(state.messageQueue.get(SESSION_KEY)?.map((message) => message.text)).toEqual([
+        "Queued prompt",
+        "Second queued prompt",
+      ]);
+    });
+
+    resolveAbort?.({ status: "accepted" });
+
+    await waitFor(() => {
+      const state = useCodexStore.getState();
       expect(state.draftText.get(SESSION_KEY)).toBe("Queued prompt");
       expect(state.messageQueue.get(SESSION_KEY)?.map((message) => message.text)).toEqual([
         "Second queued prompt",
@@ -5568,9 +5714,90 @@ describe("CodexChatTab", () => {
       expect(state.selectedReasoningEffort.get(SESSION_KEY)).toBe("medium");
       expect(state.fastMode.get(SESSION_KEY)).toBe(false);
     });
-    expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
+  });
 
+  test("does not dispatch a queued prompt while a stop is being promoted", async () => {
+    /**
+     * Codex has no `stopInProgress` flag of its own: it keeps the session
+     * loading through the whole interrupt, and the drain refuses to claim while
+     * a turn is loading. If that ever stopped being true, pressing stop could
+     * hand the very next queued prompt to the agent the user just interrupted.
+     */
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
+      id: "queue-1",
+      text: "Must not be sent by stop",
+      attachments: [],
+      model: MOCK_MODELS[0]!.id,
+      mode: "build",
+      reasoningEffort: "medium",
+      fastMode: false,
+    });
+
+    let resolveAbort: ((value: CodexAbortOutcome) => void) | undefined;
+    mockAbortSession.mockImplementation(
+      () =>
+        new Promise<CodexAbortOutcome>((resolve) => {
+          resolveAbort = resolve;
+        }),
+    );
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    fireEvent.click(screen.getByTestId("codex-stop"));
+
+    await waitFor(() => {
+      expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
+    });
     resolveAbort?.({ status: "accepted" });
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().draftText.get(SESSION_KEY)).toBe(
+        "Must not be sent by stop",
+      );
+    });
+    expect(mockClaimPromptQueueHead).not.toHaveBeenCalled();
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+  });
+
+  test("keeps the queue intact when post-abort promotion fails", async () => {
+    const consoleError = mock(() => {});
+    const originalError = console.error;
+    console.error = consoleError as unknown as typeof console.error;
+    mockTransferPromptQueueMessageToComposeDraft.mockRejectedValue(
+      new Error("queue unavailable"),
+    );
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
+      id: "queue-1",
+      text: "Keep this Codex prompt",
+      attachments: [],
+      model: MOCK_MODELS[0]!.id,
+      mode: "build",
+      reasoningEffort: "medium",
+      fastMode: false,
+    });
+
+    try {
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+      fireEvent.click(screen.getByTestId("codex-stop"));
+
+      await waitFor(() => {
+        expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
+        expect(consoleError).toHaveBeenCalledWith(
+          "[CodexChatTab] Failed to promote queued prompt:",
+          expect.any(Error),
+        );
+      });
+      expect(useCodexStore.getState().getQueuedMessages(SESSION_KEY)).toEqual([
+        expect.objectContaining({ id: "queue-1" }),
+      ]);
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+      expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBeDefined();
+    } finally {
+      console.error = originalError;
+    }
   });
 
   test("writes the stop marker once the interrupted turn settles", async () => {
@@ -5995,7 +6222,7 @@ describe("CodexChatTab", () => {
       seedEnvironment("review-table");
       useCodexStore.setState((state) => ({ ...state, clients: new Map(), sessions: new Map() }));
       mockGetCodexServerStatus.mockImplementation(() => new Promise(() => {}));
-      useCodexStore.getState().addToQueue(
+      seedQueuedPrompt(useCodexStore.getState(),
         SESSION_KEY,
         queueEntry({ id: "row-1", text: "Queued before connect" }),
       );

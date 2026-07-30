@@ -658,6 +658,11 @@ describe("pane-layout binding", () => {
     useEnvironmentStore.setState({
       environments: [containerEnvironment("container-b")],
     });
+    // TerminalContainer resets the old container's tabs before initializing
+    // the replacement. Mirror that production transition here so this test
+    // isolates the delayed authoritative read rather than initialize()'s
+    // intentional preservation of tabs inserted before a container mounts.
+    usePaneLayoutStore.getState().reset("env-1");
     usePaneLayoutStore.getState().initialize("container-b", "env-1");
     usePaneLayoutStore.getState().addTab(
       "default",
@@ -695,6 +700,11 @@ describe("pane-layout binding", () => {
     expect(
       usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
     ).not.toContain("stale-a-tab");
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").some(
+        ({ id }) => id === "stale-a-tab",
+      ),
+    ).toBe(false);
     expect(
       usePaneLayoutStore.getState().environments.get("env-1")?.containerId,
     ).toBe("container-b");

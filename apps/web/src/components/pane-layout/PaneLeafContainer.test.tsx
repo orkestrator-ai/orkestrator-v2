@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -10,6 +10,7 @@ import * as realOpenCodeChatTab from "@/components/opencode/OpenCodeChatTab";
 import * as realBrowserTab from "@/components/browser/BrowserTab";
 import * as realLoopedReviewTab from "@/components/review/LoopedReviewTab";
 import * as realFileViewerTab from "@/components/terminal/FileViewerTab";
+import * as realBuildChatTab from "@/components/build-pipeline/BuildChatTab";
 
 const realClaudeChatTabSnapshot = { ...realClaudeChatTab };
 const realClaudeTmuxChatTabSnapshot = { ...realClaudeTmuxChatTab };
@@ -18,6 +19,7 @@ const realOpenCodeChatTabSnapshot = { ...realOpenCodeChatTab };
 const realBrowserTabSnapshot = { ...realBrowserTab };
 const realLoopedReviewTabSnapshot = { ...realLoopedReviewTab };
 const realFileViewerTabSnapshot = { ...realFileViewerTab };
+const realBuildChatTabSnapshot = { ...realBuildChatTab };
 
 mock.module("@dnd-kit/core", () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => children,
@@ -274,6 +276,26 @@ mock.module("@/components/terminal/FileViewerTab", () => ({
   ),
 }));
 
+/** Set to make the build tab throw during render, modelling a chunk failure. */
+let buildChatTabFailure: Error | null = null;
+
+mock.module("@/components/build-pipeline/BuildChatTab", () => ({
+  BuildChatTab: ({
+    data,
+    isActive,
+  }: {
+    data: { pipelineId: string; environmentId: string };
+    isActive: boolean;
+  }) => buildChatTabFailure ? (() => { throw buildChatTabFailure; })() : (
+    <div
+      data-testid="build-chat-tab"
+      data-pipeline-id={data.pipelineId}
+      data-environment-id={data.environmentId}
+      data-active={String(isActive)}
+    />
+  ),
+}));
+
 mock.module("@/stores/terminalPortalStore", () => ({
   createTerminalKey: (environmentId: string, tabId: string) => `${environmentId}::${tabId}`,
   useTerminalPortalStore: <T,>(selector: (state: {
@@ -319,6 +341,10 @@ describe("PaneLeafContainer", () => {
     mock.module(
       "@/components/terminal/FileViewerTab",
       () => realFileViewerTabSnapshot,
+    );
+    mock.module(
+      "@/components/build-pipeline/BuildChatTab",
+      () => realBuildChatTabSnapshot,
     );
   });
 
@@ -428,7 +454,7 @@ describe("PaneLeafContainer", () => {
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
   });
 
-  test("renders ClaudeTmuxChatTab for claude-tmux tabs", () => {
+  test("renders ClaudeTmuxChatTab for claude-tmux tabs", async () => {
     const tmuxPane = {
       kind: "leaf" as const,
       id: "pane-tmux",
@@ -461,11 +487,11 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    expect(screen.getByTestId("claude-tmux-tab")).toBeDefined();
+    expect(await screen.findByTestId("claude-tmux-tab")).toBeDefined();
     expect(screen.getByText("tmux:tab-tmux")).toBeDefined();
   });
 
-  test("forwards the owning environment to file draft recovery", () => {
+  test("forwards the owning environment to file draft recovery", async () => {
     const filePane = {
       kind: "leaf" as const,
       id: "pane-file",
@@ -490,7 +516,7 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    expect(screen.getByTestId("file-viewer-tab")).toMatchObject({
+    expect(await screen.findByTestId("file-viewer-tab")).toMatchObject({
       dataset: {
         tabId: "tab-file",
         environmentId: "env-hidden",
@@ -499,7 +525,7 @@ describe("PaneLeafContainer", () => {
     });
   });
 
-  test("grants global shortcut ownership only to the focused pane", () => {
+  test("grants global shortcut ownership only to the focused pane", async () => {
     const chatPane = {
       kind: "leaf" as const,
       id: "pane-chat",
@@ -531,17 +557,17 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    expect(
-      screen.getByTestId("codex-tab").getAttribute("data-owns-global-shortcuts"),
-    ).toBe("false");
+    const codexTab = await screen.findByTestId("codex-tab");
+
+    expect(codexTab.getAttribute("data-owns-global-shortcuts")).toBe("false");
 
     fireEvent.click(view.container.firstElementChild as HTMLElement);
-    expect(
-      screen.getByTestId("codex-tab").getAttribute("data-owns-global-shortcuts"),
-    ).toBe("true");
+    await waitFor(() => {
+      expect(codexTab.getAttribute("data-owns-global-shortcuts")).toBe("true");
+    });
   });
 
-  test("forwards review-tab state to native chat tabs", () => {
+  test("forwards review-tab state to native chat tabs", async () => {
     const reviewPane = {
       kind: "leaf" as const,
       id: "pane-review",
@@ -597,36 +623,36 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    expect(screen.getByTestId("claude-tab").dataset.reviewTab).toBe("true");
-    expect(screen.getByTestId("claude-tmux-tab").dataset.reviewTab).toBe("true");
-    expect(screen.getByTestId("codex-tab").dataset.reviewTab).toBe("true");
-    expect(screen.getByTestId("opencode-tab").dataset.reviewTab).toBe("true");
+    expect((await screen.findByTestId("claude-tab")).dataset.reviewTab).toBe("true");
+    expect((await screen.findByTestId("claude-tmux-tab")).dataset.reviewTab).toBe("true");
+    expect((await screen.findByTestId("codex-tab")).dataset.reviewTab).toBe("true");
+    expect((await screen.findByTestId("opencode-tab")).dataset.reviewTab).toBe("true");
     for (const provider of ["claude", "codex", "opencode"] as const) {
-      const tab = screen.getByTestId(`${provider}-tab`);
+      const tab = await screen.findByTestId(`${provider}-tab`);
       expect(tab.dataset.agentHandoffId).toBe(`handoff-${provider}`);
       // The consumed id is what keeps a resumed tab's bootstrap prompt hidden,
       // so it has to reach the chat tab alongside the live reference.
       expect(tab.dataset.consumedAgentHandoffId).toBe(`consumed-${provider}`);
     }
-    expect(screen.getByTestId("claude-tab").dataset).toMatchObject({
+    expect((await screen.findByTestId("claude-tab")).dataset).toMatchObject({
       agentModel: "claude-review",
       reasoningEffort: "high",
     });
-    expect(screen.getByTestId("claude-tmux-tab").dataset).toMatchObject({
+    expect((await screen.findByTestId("claude-tmux-tab")).dataset).toMatchObject({
       agentModel: "claude-tmux-review",
       reasoningEffort: "xhigh",
     });
-    expect(screen.getByTestId("codex-tab").dataset).toMatchObject({
+    expect((await screen.findByTestId("codex-tab")).dataset).toMatchObject({
       agentModel: "codex-review",
       reasoningEffort: "medium",
     });
-    expect(screen.getByTestId("opencode-tab").dataset).toMatchObject({
+    expect((await screen.findByTestId("opencode-tab")).dataset).toMatchObject({
       agentModel: "provider/opencode-review",
       reasoningEffort: "deep",
     });
   });
 
-  test("renders a looped-review tab with authoritative workflow identity", () => {
+  test("renders a looped-review tab with authoritative workflow identity", async () => {
     const pane = {
       kind: "leaf" as const,
       id: "pane-looped",
@@ -650,7 +676,7 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    expect(screen.getByTestId("looped-review-tab")).toMatchObject({
+    expect(await screen.findByTestId("looped-review-tab")).toMatchObject({
       dataset: {
         environmentId: "env-hidden",
         workflowId: "workflow-1",
@@ -659,7 +685,130 @@ describe("PaneLeafContainer", () => {
     });
   });
 
-  test("forwards independent repeated refresh requests to every refreshable tab", () => {
+  test("shows a visible fallback while loading and renders a build tab", async () => {
+    const pane = {
+      kind: "leaf" as const,
+      id: "pane-build",
+      tabs: [{
+        id: "tab-build",
+        type: "claude-build" as const,
+        buildTabData: {
+          pipelineId: "pipeline-1",
+          environmentId: "env-hidden",
+          taskId: "task-1",
+        },
+      }],
+      activeTabId: "tab-build",
+    };
+
+    render(
+      <PaneLeafContainer
+        pane={pane}
+        environmentId="env-hidden"
+        containerId="container-hidden"
+        isActive
+      />,
+    );
+
+    expect(screen.getByText("Loading tab...")).toBeTruthy();
+    expect(await screen.findByTestId("build-chat-tab")).toMatchObject({
+      dataset: {
+        pipelineId: "pipeline-1",
+        environmentId: "env-hidden",
+        active: "true",
+      },
+    });
+  });
+
+  test("scopes a tab load failure to its own pane instead of covering the app", async () => {
+    buildChatTabFailure = new Error(
+      "Failed to fetch dynamically imported module: /assets/build-1234.js",
+    );
+    const originalError = console.error;
+    console.error = mock(() => undefined) as typeof console.error;
+    const pane = {
+      kind: "leaf" as const,
+      id: "pane-build",
+      tabs: [{
+        id: "tab-build",
+        type: "claude-build" as const,
+        buildTabData: {
+          pipelineId: "pipeline-1",
+          environmentId: "env-hidden",
+          taskId: "task-1",
+        },
+      }],
+      activeTabId: "tab-build",
+    };
+
+    try {
+      render(
+        <PaneLeafContainer
+          pane={pane}
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isActive={false}
+        />,
+      );
+
+      const alert = await screen.findByRole("alert");
+      expect(screen.getByText("This part of the app failed to load")).toBeTruthy();
+      // The pane is not on screen, so its failure must stay inside the pane box
+      // and stay hidden rather than becoming a full-screen application modal.
+      const surface = alert.parentElement!;
+      expect(surface.className).toContain("absolute");
+      expect(surface.className).toContain("hidden");
+      expect(surface.className).not.toContain("fixed");
+      // The chunk URL must never reach the DOM.
+      expect(screen.queryByText(/assets\/build-1234\.js/)).toBeNull();
+    } finally {
+      console.error = originalError;
+      buildChatTabFailure = null;
+    }
+  });
+
+  test("shows a visible, correctly attributed failure for an active tab that throws", async () => {
+    buildChatTabFailure = new Error("Cannot read properties of undefined (reading 'steps')");
+    const originalError = console.error;
+    console.error = mock(() => undefined) as typeof console.error;
+    const pane = {
+      kind: "leaf" as const,
+      id: "pane-build",
+      tabs: [{
+        id: "tab-build",
+        type: "claude-build" as const,
+        buildTabData: {
+          pipelineId: "pipeline-1",
+          environmentId: "env-hidden",
+          taskId: "task-1",
+        },
+      }],
+      activeTabId: "tab-build",
+    };
+
+    try {
+      render(
+        <PaneLeafContainer
+          pane={pane}
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isActive
+        />,
+      );
+
+      const alert = await screen.findByRole("alert");
+      // The module loaded fine and then threw, so reloading for a fresh copy is
+      // not the diagnosis and must not be presented as one.
+      expect(screen.getByText("Something went wrong in this view")).toBeTruthy();
+      expect(screen.queryByText("This part of the app failed to load")).toBeNull();
+      expect(alert.parentElement!.className).not.toContain("hidden");
+    } finally {
+      console.error = originalError;
+      buildChatTabFailure = null;
+    }
+  });
+
+  test("forwards independent repeated refresh requests to every refreshable tab", async () => {
     const agentPane = {
       kind: "leaf" as const,
       id: "pane-agents",
@@ -704,7 +853,7 @@ describe("PaneLeafContainer", () => {
 
     const testIds = ["claude-tab", "claude-tmux-tab", "codex-tab", "opencode-tab", "browser-tab"];
     for (const testId of testIds) {
-      expect(screen.getByTestId(testId).dataset.refreshRequestId).toBe("0");
+      expect((await screen.findByTestId(testId)).dataset.refreshRequestId).toBe("0");
     }
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh Claude tab" }));
@@ -712,16 +861,16 @@ describe("PaneLeafContainer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh Codex tab" }));
     fireEvent.click(screen.getByRole("button", { name: "Refresh OpenCode tab" }));
     fireEvent.click(screen.getByRole("button", { name: "Refresh Browser tab" }));
-    expect(screen.getByTestId("claude-tab").dataset.refreshRequestId).toBe("1");
-    expect(screen.getByTestId("claude-tmux-tab").dataset.refreshRequestId).toBe("1");
-    expect(screen.getByTestId("codex-tab").dataset.refreshRequestId).toBe("1");
-    expect(screen.getByTestId("opencode-tab").dataset.refreshRequestId).toBe("1");
-    expect(screen.getByTestId("browser-tab").dataset.refreshRequestId).toBe("1");
+    expect((await screen.findByTestId("claude-tab")).dataset.refreshRequestId).toBe("1");
+    expect((await screen.findByTestId("claude-tmux-tab")).dataset.refreshRequestId).toBe("1");
+    expect((await screen.findByTestId("codex-tab")).dataset.refreshRequestId).toBe("1");
+    expect((await screen.findByTestId("opencode-tab")).dataset.refreshRequestId).toBe("1");
+    expect((await screen.findByTestId("browser-tab")).dataset.refreshRequestId).toBe("1");
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh Claude tab" }));
     fireEvent.click(screen.getByRole("button", { name: "Refresh Browser tab" }));
-    expect(screen.getByTestId("claude-tab").dataset.refreshRequestId).toBe("2");
-    expect(screen.getByTestId("codex-tab").dataset.refreshRequestId).toBe("1");
-    expect(screen.getByTestId("browser-tab").dataset.refreshRequestId).toBe("2");
+    expect((await screen.findByTestId("claude-tab")).dataset.refreshRequestId).toBe("2");
+    expect((await screen.findByTestId("codex-tab")).dataset.refreshRequestId).toBe("1");
+    expect((await screen.findByTestId("browser-tab")).dataset.refreshRequestId).toBe("2");
   });
 });

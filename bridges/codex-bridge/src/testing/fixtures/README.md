@@ -33,8 +33,18 @@ it through `scripts/scrub-codex-recording.ts`, then **read the diff** before
 committing. The scrubber is a safety net, not a guarantee — it cannot recognise a
 secret it has no pattern for.
 
-`synthetic-full-turn.jsonl` is hand-written, not recorded, and contains no real
-data. It exists so the harness is covered even with no recordings committed.
+The `synthetic-*.jsonl` fixtures are hand-written, not recorded, and contain no
+real data. They exist so the harness is covered even with no recordings
+committed.
+
+- `synthetic-full-turn.jsonl` — reasoning, command, web search, structured patch,
+  message; plus an interrupted and a failed turn.
+- `synthetic-raw-apply-patch.jsonl` — `apply_patch` reported only as a raw
+  `custom_tool_call`, in all three shapes: superseded by a structured
+  `fileChange`, raw-only across multiple files, and failed. These replay as
+  `item.dynamic.*` events, which are *known* kinds — a harness that dropped them
+  would report no unknown methods while rendering a transcript with every patch
+  missing.
 
 ## Scenarios worth recording
 

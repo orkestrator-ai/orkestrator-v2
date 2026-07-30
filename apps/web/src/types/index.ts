@@ -284,6 +284,12 @@ export interface PersistedPromptQueue<T = unknown> {
     message: string;
     failedAt: string;
   };
+  outstandingClaim?: {
+    token: string;
+    message: T;
+    claimedAt: string;
+    expiresAt: string;
+  };
   updatedAt: string;
   revision: number;
 }
@@ -294,6 +300,10 @@ export interface PersistedComposeDraft<T = unknown> {
   ownerType: "environment" | "project";
   ownerId: string;
   value: T;
+  sourcePromptQueue?: {
+    queueKey: string;
+    messageId: string;
+  };
   updatedAt: string;
   revision: number;
 }

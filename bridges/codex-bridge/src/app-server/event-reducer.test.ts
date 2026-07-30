@@ -497,7 +497,7 @@ describe("deltas", () => {
         status: "completed",
       },
     })).toEqual([{
-      kind: "item.started",
+      kind: "item.dynamic.started",
       threadId: "t1",
       turnId: "turn-1",
       item: {
@@ -638,7 +638,7 @@ describe("deltas", () => {
         input: "*** Begin Patch",
       },
     })[0]).toMatchObject({
-      kind: "item.started",
+      kind: "item.dynamic.started",
       item: { id: "call-patch", tool: "apply_patch" },
     });
   });

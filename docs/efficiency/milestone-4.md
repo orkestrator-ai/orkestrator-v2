@@ -82,6 +82,9 @@ Primary areas:
 - [x] Disconnect during handshake does not skip replay on reconnect.
 - [x] Connected frame echoes the client cursor.
 - [x] Terminal output does not enter the main replay ring.
+- [x] A scoped stream's cursor advances past revisions its filter omitted.
+- [x] An undeliverable replay window reconciles instead of dropping the client.
+- [x] A throw mid-handshake unregisters the client and releases the gauge.
 - [ ] Resource manifest returns stable revisions for unchanged state.
 - [ ] Conditional snapshot returns unchanged without its body.
 - [ ] Backend restart invalidates old cursors and converges.
@@ -136,9 +139,14 @@ Record:
 - Gateway generations are random 128-bit hexadecimal identifiers. Cursors use
   `<generation>:<revision>` and are validated before they can be echoed as an
   SSE `id`.
-- The authoritative ring retains at most 2,048 frames or 8 MiB of encoded SSE,
+- The authoritative ring retains at most 2,048 frames or 2 MiB of encoded SSE,
   whichever is reached first. It releases retained payloads after five minutes
-  without an authoritative event while preserving the issued revision.
+  without an authoritative event while preserving the issued revision. The byte
+  bound is deliberately a quarter of the 8 MiB per-client hard buffer: replay is
+  one synchronous flush and `writableLength` cannot fall during it, so a window
+  sized at the hard limit would leave no room to land. A window that still will
+  not fit reconciles (`replay-too-large`) rather than being destroyed partway
+  through delivery.
 - The per-connection replay-handshake buffer is independently capped at 2,048
   frames and 8 MiB. Overflow disconnects the client so its next request follows
   replay or explicit reconciliation rather than silently dropping state.
@@ -149,9 +157,40 @@ Record:
   the renderer's broad-resync signal; fresh, invalid, expired, and
   prior-generation paths still do.
 - When an automatic `EventSource` retry supplies both its original `since`
-  query and a newer `Last-Event-ID`, the browser-owned header wins. An invalid
-  cursor never receives a replacement SSE id until `reconcile-required`, so a
-  disconnect between handshake frames cannot skip required hydration.
+  query and a newer `Last-Event-ID`, the browser-owned header wins. The browser
+  owns that header and always advances it, so a header *behind* the query means
+  the query is the untrustworthy one; preferring the header re-delivers rather
+  than skips. A blank value in either position means "no cursor", not a
+  malformed one. An invalid cursor never receives a replacement SSE id until
+  `reconcile-required`, so a disconnect between handshake frames cannot skip
+  required hydration.
+- Reconciliation reasons are distinct rather than collapsed onto
+  `cursor-expired`: `cursor-ahead` and `invalid-cursor` mean the client sent
+  something the gateway never issued, and `replay-too-large` means the gap was
+  retained but undeliverable. Conflating them would hide a corrupt cursor behind
+  a routine ring overrun.
+- A scoped (`?events=`) stream receives no SSE id for events its filter omits,
+  so its cursor is advanced with a single coalesced `gateway.cursor` frame on
+  the keepalive tick. Without it the cursor freezes under unrelated traffic and
+  every reconnect reconciles a gap the client never actually missed. Terminal
+  streams are excluded — they never enter the cursor sequence at all.
+- `/metrics` reports handshake outcomes (`fresh`, `caughtUp`, `replayed`,
+  `replayedFrames`, `reconciled`, per-reason counts) and ring occupancy under
+  `replay`. Eviction is otherwise invisible: a ring dropping every gap looks
+  identical to one that never had to retain anything. This is the
+  replay-hit/expiry/reconciliation-rate evidence this milestone asks for. The
+  endpoint's body now routinely exceeds the 1 KiB compression floor and is
+  compressed like any other dynamic body.
+- The renderer's broad-resync suppression at boot is a one-second *window*, not
+  a permanent flag. The desktop supervisor raises
+  `native-event-stream-connected` while the backend starts, long before the
+  renderer subscribes, so a `startResourceSync` closure that has never observed
+  one is not necessarily at boot; treating its first announcement as the boot
+  connect suppressed the refetch for a confirmed replay miss.
+- A same-origin main `EventSource` that reaches `CLOSED` is now rebuilt from the
+  retained cursor. Nothing else rebuilds it, and `ensureEventStream` early
+  returns while one exists, so a fatal error previously stranded every
+  authoritative event until the tab reloaded.
 - The 60-second resource safety sweep remains enabled. Revision manifests,
   conditional snapshots, targeted hydration, equivalence soak, and iOS manual
   verification are the next slice.
@@ -159,8 +198,9 @@ Record:
 - Passing focused checks:
   - `bun run --cwd apps/backend typecheck`
   - `bun run --cwd apps/web typecheck`
-  - `bun test tests/unit/electron/gateway.test.ts --parallel` (139 tests)
+  - `bun run --cwd apps/desktop typecheck`
+  - `bun test tests/unit/electron/gateway.test.ts --parallel` (156 tests)
   - `bun test --cwd apps/backend src/gateway-event-replay.test.ts --parallel`
     (28 tests)
   - `bun test src/lib/native/web-gateway.test.ts src/lib/resource-sync.test.ts --parallel`
-    from `apps/web` (86 tests)
+    from `apps/web` (98 tests)

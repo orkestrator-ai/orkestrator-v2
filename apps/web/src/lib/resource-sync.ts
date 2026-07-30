@@ -44,6 +44,19 @@ export const RESOURCE_RESYNC_INTERVAL_MS = 60_000;
 /** Coalescing window for bursts. Reorders announce once per moved record. */
 const COALESCE_MS = 50;
 
+/**
+ * How long the attach-time resync covers a connection announcement that lands
+ * beside it.
+ *
+ * This must be a *window*, not a permanent flag. The transport announcement can
+ * be emitted before this module subscribes — the desktop supervisor raises it
+ * while the backend starts, long before the renderer tree mounts — so a
+ * closure that has never observed one is not necessarily at boot. Treating the
+ * first announcement it ever sees as "the boot connect" would suppress the
+ * refetch for what is, under the replay protocol, a confirmed replay miss.
+ */
+const BOOT_ANNOUNCE_COALESCE_MS = 1_000;
+
 interface PendingDispatch {
   change: ResourceChange;
   timer: ReturnType<typeof setTimeout>;
@@ -152,7 +165,7 @@ export function startResourceSync(): () => void {
   let lastRevision: number | null = null;
   let attachedListeners = 0;
   let connectionAnnounced = false;
-  let initialResyncRequested = false;
+  let bootResyncAt: number | null = null;
 
   const attach = (
     event: string,
@@ -171,7 +184,7 @@ export function startResourceSync(): () => void {
       if (attachedListeners === 2) {
         setTimeout(() => {
           if (!disposed && !connectionAnnounced) {
-            initialResyncRequested = true;
+            bootResyncAt = Date.now();
             requestResourceResync();
           }
         }, 0);
@@ -207,13 +220,16 @@ export function startResourceSync(): () => void {
     // The web gateway raises this only for a fresh stream or an explicit
     // replay miss/generation change. Retained reconnect gaps are delivered
     // without this notification, so they do not trigger a broad refetch.
-    const isReconnect = connectionAnnounced;
     lastRevision = null;
     connectionAnnounced = true;
-    if (isReconnect || !initialResyncRequested) {
-      initialResyncRequested = true;
-      requestResourceResync();
+    // Only the attach-time resync's own window is suppressed. Anything later is
+    // a confirmed miss and must refetch even if this closure never saw a boot
+    // announcement — see BOOT_ANNOUNCE_COALESCE_MS.
+    if (bootResyncAt !== null && Date.now() - bootResyncAt < BOOT_ANNOUNCE_COALESCE_MS) {
+      bootResyncAt = null;
+      return;
     }
+    requestResourceResync();
   });
 
   const intervalId = setInterval(() => {

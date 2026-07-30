@@ -7,7 +7,12 @@
  */
 
 export const DEFAULT_GATEWAY_REPLAY_FRAME_CAPACITY = 2_048;
-export const DEFAULT_GATEWAY_REPLAY_MAX_BYTES = 8 * 1024 * 1024;
+/**
+ * Deliberately a quarter of the gateway's per-client hard buffer. Replay is one
+ * synchronous flush, so a window sized at the hard limit leaves zero headroom
+ * and a slow socket is destroyed partway through delivering it.
+ */
+export const DEFAULT_GATEWAY_REPLAY_MAX_BYTES = 2 * 1024 * 1024;
 /**
  * Release payloads five minutes after the last authoritative event. Revisions
  * keep advancing after release, so a returning client is told to reconcile.

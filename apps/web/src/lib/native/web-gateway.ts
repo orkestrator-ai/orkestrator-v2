@@ -178,7 +178,22 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     if (options.mainStream && options.lastEventId) {
       mainEventCursor = options.lastEventId;
     }
-    if (parsed.event === GATEWAY_CONNECTED_EVENT) {
+    // Replay control frames are meaningful only on the authoritative stream, and
+    // only the transport may act on them. Swallow them everywhere so a frame
+    // arriving on a terminal socket can neither reach ordinary listeners nor
+    // latch main-stream connection state it has no authority over.
+    if (
+      parsed.event === GATEWAY_CONNECTED_EVENT
+      || parsed.event === GATEWAY_RECONCILE_REQUIRED_EVENT
+      || parsed.event === GATEWAY_CURSOR_EVENT
+    ) {
+      if (!options.mainStream) return;
+      if (parsed.event === GATEWAY_CURSOR_EVENT) return;
+      if (parsed.event === GATEWAY_RECONCILE_REQUIRED_EVENT) {
+        mainConnectionAnnounced = true;
+        announceEventStreamConnected();
+        return;
+      }
       const status = parsed.payload
         && typeof parsed.payload === "object"
         && "status" in parsed.payload
@@ -190,12 +205,6 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       }
       return;
     }
-    if (parsed.event === GATEWAY_RECONCILE_REQUIRED_EVENT) {
-      mainConnectionAnnounced = true;
-      announceEventStreamConnected();
-      return;
-    }
-    if (parsed.event === GATEWAY_CURSOR_EVENT) return;
     // Transport-level events are synthesized locally and share this listener
     // map, so a server frame must never be able to impersonate one.
     if (parsed.event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) return;
@@ -388,21 +397,34 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       return;
     }
 
-    eventSource = new EventSource(apiUrl(eventStreamPath(undefined, mainEventCursor)), {
+    const source = new EventSource(apiUrl(eventStreamPath(undefined, mainEventCursor)), {
       withCredentials: true,
     });
-    eventSource.onopen = () => {
+    eventSource = source;
+    source.onopen = () => {
       if (bootMetricsEventStreamConnectedMs === null && typeof performance !== "undefined") {
         bootMetricsEventStreamConnectedMs = performance.now();
         maybeSendBootMetrics();
       }
     };
-    eventSource.onmessage = (message) => dispatchMessage(message.data, {
-      mainStream: true,
-      lastEventId: message.lastEventId,
-    });
-    eventSource.onerror = () => {
+    source.onmessage = (message) => {
+      if (eventSource !== source) return;
+      dispatchMessage(message.data, {
+        mainStream: true,
+        lastEventId: message.lastEventId,
+      });
+    };
+    source.onerror = () => {
+      if (eventSource !== source) return;
       console.warn("[RemoteGateway] Event stream disconnected");
+      // A recoverable error leaves the socket CONNECTING and the browser retries
+      // it for us, carrying Last-Event-ID; reconnecting here would race that. A
+      // CLOSED socket is dead, and because `ensureEventStream` early-returns
+      // while `eventSource` is set, nothing else would ever rebuild it — the tab
+      // would silently stop receiving every authoritative event until reload.
+      if (source.readyState !== EVENT_SOURCE_CLOSED) return;
+      eventSource = null;
+      scheduleReconnect();
     };
   };
 

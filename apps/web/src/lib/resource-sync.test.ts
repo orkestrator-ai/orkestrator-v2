@@ -462,6 +462,105 @@ describe("startResourceSync", () => {
     expect(resync).toHaveBeenCalledTimes(1);
   });
 
+  test("resyncs on a late first announcement this closure never saw at boot", async () => {
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+    startResourceSync();
+    await tick(10);
+    resync.mockClear();
+
+    // The desktop supervisor raises the connection signal while the backend
+    // starts, long before this module subscribes, so a closure that has never
+    // observed one is not necessarily at boot. Treating this first
+    // announcement as the boot connect would suppress a confirmed replay miss
+    // and leave every resource cache stale until the 60s sweep.
+    const realNow = Date.now;
+    Date.now = () => realNow() + 30_000;
+    try {
+      const connected = listenCalls.find(
+        ({ event }) => event === "native-event-stream-connected",
+      );
+      connected?.handler({ payload: undefined });
+      expect(resync).toHaveBeenCalledTimes(1);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  test("still dedupes an announcement that lands inside the attach window", async () => {
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+    startResourceSync();
+    await tick(10);
+    // The attach-time resync has already run; a boot announcement arriving
+    // beside it must not refetch everything a second time.
+    expect(resync).toHaveBeenCalledTimes(1);
+
+    const connected = listenCalls.find(
+      ({ event }) => event === "native-event-stream-connected",
+    );
+    connected?.handler({ payload: undefined });
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps detecting revision gaps across a replayed reconnect", async () => {
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+    startResourceSync();
+    await tick(10);
+    resync.mockClear();
+
+    const resource = listenCalls.find(({ event }) => event === "resource-changed");
+    resource?.handler({ payload: change({ revision: 30 }) });
+    expect(resync).not.toHaveBeenCalled();
+
+    // A retained replay delivers its gap without any transport announcement, so
+    // `lastRevision` is never reset and a genuine hole still has to be caught.
+    resource?.handler({ payload: change({ revision: 34 }) });
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("accepts any revision on the first change after an announced reconnect", async () => {
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+    startResourceSync();
+    await tick(10);
+
+    const resource = listenCalls.find(({ event }) => event === "resource-changed");
+    const connected = listenCalls.find(
+      ({ event }) => event === "native-event-stream-connected",
+    );
+    resource?.handler({ payload: change({ revision: 40 }) });
+    connected?.handler({ payload: undefined });
+    resync.mockClear();
+
+    // The announcement already forced a full refetch, so the next revision is a
+    // new baseline rather than a gap. Re-resyncing here would double every
+    // reconnect's cost for no additional correctness.
+    resource?.handler({ payload: change({ revision: 900 }) });
+    expect(resync).not.toHaveBeenCalled();
+    resource?.handler({ payload: change({ revision: 902 }) });
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("survives a resync handler that unsubscribes while the set is iterating", () => {
+    const later = mock(() => undefined);
+    const stopLater = onResourceResync(later);
+    const first = mock(() => {
+      stopLater();
+    });
+    onResourceResync(first);
+
+    expect(() => requestResourceResync()).not.toThrow();
+    expect(first).toHaveBeenCalledTimes(1);
+    // Snapshotted before iterating, so the handler removed mid-pass still runs
+    // for this round and is gone by the next.
+    expect(later).toHaveBeenCalledTimes(1);
+    requestResourceResync();
+    expect(first).toHaveBeenCalledTimes(2);
+    expect(later).toHaveBeenCalledTimes(1);
+  });
+
   test("requests a resync when the backend sequence resets", async () => {
     const resync = mock(() => undefined);
     onResourceResync(resync);

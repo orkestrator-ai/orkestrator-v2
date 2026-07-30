@@ -31,6 +31,7 @@ import {
 } from "@orkestrator/protocol/gateway-token";
 import {
   GatewayEventReplay,
+  formatGatewayCursor,
   parseGatewayCursor,
   type GatewayCursorParseResult,
   type GatewayReplayFrame,
@@ -275,6 +276,20 @@ type GatewayStreamMetrics = {
   stalled: number;
   softDesyncs: number;
   keepalives: number;
+};
+
+/**
+ * Handshake outcomes, so replay hit and reconciliation rates are observable.
+ * Without these a ring that evicts every gap looks identical to one that never
+ * has to, and the only symptom is clients quietly refetching everything.
+ */
+type GatewayReplayMetrics = {
+  fresh: number;
+  caughtUp: number;
+  replayed: number;
+  replayedFrames: number;
+  reconciled: number;
+  reasons: Record<GatewayReconcileReason, number>;
 };
 
 type GatewayCompressionMetrics = {
@@ -719,6 +734,20 @@ export class GatewayMetricsStore {
     softDesyncs: 0,
     keepalives: 0,
   };
+  private readonly replay: GatewayReplayMetrics = {
+    fresh: 0,
+    caughtUp: 0,
+    replayed: 0,
+    replayedFrames: 0,
+    reconciled: 0,
+    reasons: {
+      "invalid-cursor": 0,
+      "prior-generation": 0,
+      "cursor-expired": 0,
+      "cursor-ahead": 0,
+      "replay-too-large": 0,
+    },
+  };
   private readonly compression: GatewayCompressionMetrics;
 
   constructor(configuredMode: GatewayCompressionMode) {
@@ -889,6 +918,22 @@ export class GatewayMetricsStore {
     this.stream.keepalives += 1;
   }
 
+  recordReplayHandshake(
+    status: "fresh" | "caught-up" | "replayed" | "reconcile",
+    reason: GatewayReconcileReason | null,
+    replayedFrames: number,
+  ): void {
+    if (status === "fresh") this.replay.fresh += 1;
+    else if (status === "caught-up") this.replay.caughtUp += 1;
+    else if (status === "replayed") {
+      this.replay.replayed += 1;
+      this.replay.replayedFrames += replayedFrames;
+    } else {
+      this.replay.reconciled += 1;
+      if (reason) this.replay.reasons[reason] += 1;
+    }
+  }
+
   recordClientBootReport(report: GatewayClientBootReport): void {
     appendBoundedSample(this.recentClientBootReports, report);
   }
@@ -899,6 +944,7 @@ export class GatewayMetricsStore {
       commands: Object.fromEntries([...this.commands.entries()].sort(([left], [right]) => left.localeCompare(right))),
       events: Object.fromEntries([...this.events.entries()].sort(([left], [right]) => left.localeCompare(right))),
       stream: { ...this.stream },
+      replay: { ...this.replay, reasons: { ...this.replay.reasons } },
       compression: { configuredMode: this.compression.configuredMode },
       recentRouteSamples: [...this.recentRouteSamples],
       recentClientBootReports: [...this.recentClientBootReports],
@@ -2408,7 +2454,36 @@ type GatewayEventClient = {
    * overtaking the retained gap.
    */
   handshake?: GatewayReplayHandshake | null;
+  /**
+   * Whether this stream participates in the authoritative cursor sequence.
+   * Terminal-only streams carry their own snapshot protocol and must never see
+   * a replay control frame.
+   */
+  tracksReplayCursor?: boolean;
+  /** Highest authoritative revision whose `id` this client has been sent. */
+  sentRevision?: number;
+  /**
+   * Newest revision this client's filter omitted since its last `id`. Flushed as
+   * a `gateway.cursor` frame on the keepalive tick — without it a scoped stream's
+   * cursor freezes under unrelated traffic and every reconnect reconciles.
+   */
+  omittedRevision?: number | null;
 };
+
+/**
+ * Why a client must rehydrate from an authoritative snapshot instead of a gap.
+ *
+ * These are distinct on purpose: `cursor-expired` is a routine ring overrun,
+ * while `cursor-ahead` and `invalid-cursor` mean the client sent something the
+ * gateway never issued, and `replay-too-large` means the gap was retained but
+ * could not be delivered without overrunning the client's buffer.
+ */
+export type GatewayReconcileReason =
+  | "invalid-cursor"
+  | "prior-generation"
+  | "cursor-expired"
+  | "cursor-ahead"
+  | "replay-too-large";
 
 type BufferedGatewayEvent = {
   event: string;
@@ -2755,7 +2830,18 @@ export class OrkestratorGateway {
         state.prefixes,
         state.includedPrefixes,
         state.excludedPrefixes,
-      )) continue;
+      )) {
+        // The revision still happened globally. Remember it so the keepalive can
+        // advance this client's cursor; otherwise its next reconnect asks for a
+        // window the ring has long since evicted and reconciles for nothing.
+        if (replayFrame && state.tracksReplayCursor) {
+          state.omittedRevision = replayFrame.revision;
+        }
+        continue;
+      }
+      // A matching authoritative frame carries a newer `id` than anything
+      // omitted before it, so the pending cursor is already superseded.
+      if (replayFrame) state.omittedRevision = null;
       if (message === null) {
         message = `data: ${JSON.stringify({ event, payload })}\n\n`;
         messageBytes = Buffer.byteLength(message);
@@ -2783,7 +2869,7 @@ export class OrkestratorGateway {
         continue;
       }
 
-      this.writeEventToClient(
+      const written = this.writeEventToClient(
         client,
         state,
         event,
@@ -2792,7 +2878,36 @@ export class OrkestratorGateway {
         messageBytes,
         droppable,
       );
+      if (written && replayFrame) state.sentRevision = replayFrame.revision;
     }
+  }
+
+  /**
+   * Advances a client that has only seen revisions its filter omitted.
+   *
+   * A scoped subscription receives no `id` for events it filtered out, so under
+   * sustained unrelated traffic its cursor would freeze while the ring moved on,
+   * and every reconnect would reconcile a gap it never actually missed. Flushing
+   * on the keepalive tick bounds that drift to one keepalive interval and costs
+   * one small frame instead of one per omitted event.
+   */
+  private flushOmittedCursor(client: EventClientWriter, state: GatewayEventClient): void {
+    const omitted = state.omittedRevision;
+    if (
+      omitted === null
+      || omitted === undefined
+      || !state.tracksReplayCursor
+      || state.handshake
+      || omitted <= (state.sentRevision ?? 0)
+    ) return;
+    state.omittedRevision = null;
+    if (!this.writeControlFrame(
+      client,
+      GATEWAY_CURSOR_EVENT,
+      formatGatewayCursor(this.eventReplay.generation, omitted),
+      null,
+    )) return;
+    state.sentRevision = omitted;
   }
 
   private writeEventToClient(
@@ -2884,6 +2999,27 @@ export class OrkestratorGateway {
     return this.writeControlFrame(client, GATEWAY_CURSOR_EVENT, frame.cursor, null);
   }
 
+  /**
+   * Whether the whole replay window can be written without tripping the hard
+   * buffer limit.
+   *
+   * Replay is one synchronous loop and neither writer's `writableLength` can
+   * fall during it, so the window's bytes accumulate against whatever the socket
+   * has not absorbed. Checking up front turns a silent mid-replay destroy into
+   * an explicit reconciliation.
+   */
+  private replayFitsClientBudget(
+    client: EventClientWriter,
+    frames: readonly GatewayReplayFrame[],
+  ): boolean {
+    let projected = client.writableLength;
+    for (const frame of frames) {
+      projected += frame.encodedBytes;
+      if (projected > SSE_CLIENT_HARD_BUFFER_BYTES) return false;
+    }
+    return true;
+  }
+
   private initializeEventReplay(
     client: EventClientWriter,
     state: GatewayEventClient,
@@ -2900,7 +3036,7 @@ export class OrkestratorGateway {
       ? null
       : this.eventReplay.latestCursor;
     let replayStatus: "fresh" | "caught-up" | "replayed" | "reconcile" = "fresh";
-    let reconcileReason: "invalid-cursor" | "prior-generation" | "cursor-expired" | null = null;
+    let reconcileReason: GatewayReconcileReason | null = null;
     let requestedRevision: number | null = null;
 
     if (cursor.kind === "invalid") {
@@ -2912,22 +3048,36 @@ export class OrkestratorGateway {
       if (cursor.generation !== this.eventReplay.generation) {
         replayStatus = "reconcile";
         reconcileReason = "prior-generation";
+      } else if (cursor.revision > this.eventReplay.latestRevision) {
+        // Ahead of the server is the opposite of expired. Both reconcile, but
+        // conflating them hides a corrupt cursor behind a routine ring overrun.
+        replayStatus = "reconcile";
+        reconcileReason = "cursor-ahead";
       } else {
         replay = this.eventReplay.since(cursor.revision);
         if (!replay.complete) {
           replayStatus = "reconcile";
           reconcileReason = "cursor-expired";
+        } else if (!this.replayFitsClientBudget(client, replay.frames)) {
+          // Writing the window would overrun the hard buffer partway through and
+          // destroy the client with no explanation. Reconciling costs one
+          // snapshot instead of a drop/reconnect/drop loop.
+          replay = null;
+          replayStatus = "reconcile";
+          reconcileReason = "replay-too-large";
         } else {
           replayStatus = replay.frames.length > 0 ? "replayed" : "caught-up";
         }
       }
     }
 
+    const replayedFrames = replay?.complete ? replay.frames.length : 0;
+    this.metrics.recordReplayHandshake(replayStatus, reconcileReason, replayedFrames);
     if (!this.writeControlFrame(client, GATEWAY_CONNECTED_EVENT, connectedCursor, {
       generation: this.eventReplay.generation,
       revision: latestAtSubscribe,
       status: replayStatus,
-      replayed: replay?.complete ? replay.frames.length : 0,
+      replayed: replayedFrames,
     })) return;
     if (!this.clients.has(client)) return;
 
@@ -2977,6 +3127,10 @@ export class OrkestratorGateway {
       if (buffered.revision !== null) highestSent = buffered.revision;
     }
     state.handshake = null;
+    // Everything up to `highestSent` now carries an `id` this client has seen,
+    // so any cursor omitted during the handshake is already superseded.
+    state.sentRevision = highestSent;
+    state.omittedRevision = null;
   }
 
   private markTerminalFrameDropped(
@@ -3560,30 +3714,45 @@ export class OrkestratorGateway {
       ),
       desyncedSessions: new Set(),
       handshake: { events: [], bytes: 0 },
+      tracksReplayCursor: false,
+      sentRevision: 0,
+      omittedRevision: null,
     };
-    // Subscribe before inspecting the ring. `emit()` buffers into this state
-    // until replay drains, closing the replay/live race.
-    this.clients.set(client, state);
-    client.write(": connected\n\n");
-    const explicitSince = url.searchParams.get("since");
-    const lastEventId = Array.isArray(request.headers["last-event-id"])
+    const explicitSince = url.searchParams.get("since")?.trim() ?? "";
+    const lastEventIdHeader = Array.isArray(request.headers["last-event-id"])
       ? request.headers["last-event-id"][0]
       : request.headers["last-event-id"];
+    const lastEventId = typeof lastEventIdHeader === "string" ? lastEventIdHeader.trim() : "";
     // A native EventSource reuses its original URL while advancing
     // Last-Event-ID on automatic retries. Prefer that newer browser-owned
     // cursor; direct-fetch clients still fall back to the explicit query.
-    const rawCursor = typeof lastEventId === "string" && lastEventId.trim().length > 0
-      ? lastEventId
-      : explicitSince;
+    // Blank in either position means "no cursor", not a malformed one — a
+    // client that always appends `since=` must not be forced to reconcile.
+    const rawCursor = lastEventId || explicitSince || null;
     const isTerminalOnly = state.prefixes === null
       && state.includedPrefixes?.every((prefix) => prefix.startsWith(DROPPABLE_EVENT_PREFIX))
       && state.excludedPrefixes?.some((prefix) => DROPPABLE_EVENT_PREFIX.startsWith(prefix));
-    if (isTerminalOnly) {
-      // Terminal streams use their own revisioned snapshot protocol. They are
-      // deliberately absent from the authoritative gateway replay sequence.
-      state.handshake = null;
-    } else {
-      this.initializeEventReplay(client, state, parseGatewayCursor(rawCursor));
+    // Subscribe before inspecting the ring. `emit()` buffers into this state
+    // until replay drains, closing the replay/live race. Everything from here
+    // until the handshake settles is guarded: a throw after the client is in the
+    // map but before its `close` handler exists would leak both the client and
+    // the `connecting` gauge for the lifetime of the process.
+    this.clients.set(client, state);
+    try {
+      client.write(": connected\n\n");
+      if (isTerminalOnly) {
+        // Terminal streams use their own revisioned snapshot protocol. They are
+        // deliberately absent from the authoritative gateway replay sequence.
+        state.handshake = null;
+      } else {
+        state.tracksReplayCursor = true;
+        this.initializeEventReplay(client, state, parseGatewayCursor(rawCursor));
+      }
+    } catch (error) {
+      this.clients.delete(client);
+      this.metrics.recordStreamConnectFailed();
+      client.destroy();
+      throw error;
     }
     this.metrics.recordStreamOpened();
     // A client only ever falls behind after a write was refused, so "drained"
@@ -3598,11 +3767,15 @@ export class OrkestratorGateway {
     // limit. Otherwise a stream with no event traffic keeps a client that is
     // already hopelessly behind — and its buffer — alive indefinitely.
     this.keepalive ??= setInterval(() => {
-      for (const client of this.clients.keys()) {
+      for (const [client, clientState] of [...this.clients]) {
         if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
           this.dropBufferedClient(client, METRIC_KEEPALIVE_KEY, client.writableLength);
           continue;
         }
+        // Before the comment, so a scoped stream that received nothing this
+        // interval still leaves with a current cursor.
+        this.flushOmittedCursor(client, clientState);
+        if (!this.clients.has(client)) continue;
         this.metrics.recordKeepalive();
         client.write(": keepalive\n\n");
       }
@@ -3627,7 +3800,13 @@ export class OrkestratorGateway {
       response.end();
       return;
     }
-    jsonResponse(response, 200, this.metrics.snapshot());
+    const snapshot = this.metrics.snapshot();
+    jsonResponse(response, 200, {
+      ...snapshot,
+      // Ring occupancy and eviction are otherwise invisible: a ring dropping
+      // every gap looks exactly like one that never needed to retain anything.
+      replay: { ...snapshot.replay, ring: this.eventReplay.getStats() },
+    });
   }
 
   private async handleClientMetrics(

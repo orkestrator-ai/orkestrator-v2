@@ -62,7 +62,16 @@ export interface TaskListSnapshot {
  */
 export const MAX_SNAPSHOT_ITEMS = 200;
 
-const TASK_STATUSES: readonly TaskSnapshotStatus[] = [
+/**
+ * Every member of `TaskSnapshotStatus`, as a value.
+ *
+ * Exported so consumers that validate a snapshot arriving from outside the
+ * registry — a persisted transcript, a provider payload — check against this
+ * list rather than keeping a hand-copied one. A private copy drifts silently:
+ * adding a status here would still type-check in the consumer while its
+ * validator quietly rejected the new value.
+ */
+export const TASK_SNAPSHOT_STATUSES: readonly TaskSnapshotStatus[] = [
   "pending",
   "in_progress",
   "completed",
@@ -117,12 +126,20 @@ export function isTaskListTool(toolName: string | undefined): boolean {
   return taskToolKind(toolName) !== undefined;
 }
 
-function normalizeStatusToken(value: unknown): TaskSnapshotStatus | undefined {
+/**
+ * The status this value denotes, or `undefined` for anything else.
+ *
+ * Exported alongside `TASK_SNAPSHOT_STATUSES` so a consumer validating a
+ * foreign snapshot accepts exactly the spellings the registry itself accepts.
+ */
+export function parseTaskSnapshotStatus(
+  value: unknown,
+): TaskSnapshotStatus | undefined {
   if (typeof value !== "string") return undefined;
   // `[in progress]` and `[in-progress]` mean the same thing as `[in_progress]`;
   // accepting only the underscore spelling would silently drop the row.
   const normalized = value.trim().toLowerCase().replace(/[-\s]+/g, "_");
-  return TASK_STATUSES.includes(normalized as TaskSnapshotStatus)
+  return TASK_SNAPSHOT_STATUSES.includes(normalized as TaskSnapshotStatus)
     ? (normalized as TaskSnapshotStatus)
     : undefined;
 }
@@ -282,7 +299,7 @@ export class TaskRegistry {
 
     const existing = this.tasks.get(id);
     const subject = asNonEmptyString(toolArgs?.subject);
-    const status = normalizeStatusToken(toolArgs?.status);
+    const status = parseTaskSnapshotStatus(toolArgs?.status);
 
     // An update for a task we never saw created means the list predates us.
     if (!existing && !subject) this.complete = false;
@@ -314,7 +331,7 @@ export class TaskRegistry {
         // Prefer the subject captured at creation: it is exact, whereas the
         // list line has owner/blocked decorations appended to it.
         subject: existing?.subjectKnown ? existing.subject : stripListDecorations(rawSubject!),
-        status: normalizeStatusToken(rawStatus) ?? existing?.status ?? "pending",
+        status: parseTaskSnapshotStatus(rawStatus) ?? existing?.status ?? "pending",
         subjectKnown: true,
       });
     }
@@ -348,7 +365,7 @@ export class TaskRegistry {
 
     const existing = this.tasks.get(id);
     const subject = asNonEmptyString(header?.[2]?.split("\n")[0]);
-    const status = normalizeStatusToken(toolOutput.match(GET_STATUS)?.[1]);
+    const status = parseTaskSnapshotStatus(toolOutput.match(GET_STATUS)?.[1]);
 
     // Nothing usable came back beyond an id we already knew nothing about.
     if (!existing && !subject && !status) return undefined;

@@ -645,6 +645,215 @@ describe("toPipelineTranscript", () => {
     expect(toPipelineTranscript([], "claude", FALLBACK)).toEqual([]);
   });
 
+  test("keeps a background task's status only when the renderer knows it", () => {
+    const transcript = toPipelineTranscript(
+      [{
+        id: "message-1",
+        role: "assistant",
+        content: "",
+        parts: [
+          {
+            type: "tool-invocation",
+            toolName: "Bash",
+            content: "Bash",
+            backgroundTask: { id: "bg-1", description: "dev server", status: "killed" },
+          },
+          {
+            type: "tool-invocation",
+            toolName: "Bash",
+            content: "Bash",
+            // `NativeBackgroundTaskStatus` has no such member. Casting it
+            // through would put a value in the part that its own type says
+            // cannot exist, for the next exhaustive consumer to trip over.
+            backgroundTask: { id: "bg-2", status: "cancelled" },
+          },
+          {
+            type: "tool-invocation",
+            toolName: "Bash",
+            content: "Bash",
+            backgroundTask: { id: "bg-3", status: 7 },
+          },
+        ],
+      }],
+      "codex",
+      FALLBACK,
+    );
+
+    const parts = transcript[0]!.parts;
+    expect(parts[0]!.backgroundTask)
+      .toEqual({ id: "bg-1", description: "dev server", status: "killed" });
+    // The task itself survives; only the unreadable status is dropped.
+    expect(parts[1]!.backgroundTask).toEqual({ id: "bg-2", description: undefined });
+    expect(parts[2]!.backgroundTask).toEqual({ id: "bg-3", description: undefined });
+  });
+
+  test("accepts every task status spelling the protocol's own registry accepts", () => {
+    const transcript = toPipelineTranscript(
+      [{
+        id: "message-1",
+        role: "assistant",
+        content: "",
+        parts: [{
+          type: "tool-invocation",
+          toolName: "TaskList",
+          content: "TaskList",
+          taskSnapshot: {
+            items: [
+              { id: "t1", subject: "a", status: "in progress" },
+              { id: "t2", subject: "b", status: "In-Progress" },
+              { id: "t3", subject: "c", status: "completed" },
+            ],
+            complete: true,
+          },
+        }],
+      }],
+      "codex",
+      FALLBACK,
+    );
+
+    // The vocabulary is the protocol's, not a copy kept here: a snapshot the
+    // registry would have accepted must not be dropped on its way to the tab.
+    expect(transcript[0]!.parts[0]!.taskSnapshot?.items.map((item) => item.status))
+      .toEqual(["in_progress", "in_progress", "completed"]);
+  });
+
+  test("carries the part fields the renderer needs to place a row", () => {
+    const transcript = toPipelineTranscript(
+      [{
+        id: "message-1",
+        role: "assistant",
+        content: "",
+        parts: [
+          {
+            type: "tool-invocation",
+            toolName: "Bash",
+            content: "Bash",
+            toolTitle: "Run the suite",
+            parentTaskUseId: "task-1",
+            sourceMessageId: "source-1",
+          },
+          {
+            type: "file",
+            content: "/workspace/shot.png",
+            fileUrl: "/workspace/shot.png",
+          },
+        ],
+      }],
+      "codex",
+      FALLBACK,
+    );
+
+    const parts = transcript[0]!.parts;
+    // `parentTaskUseId` is what groups a tool under the Task that spawned it,
+    // and `fileUrl` is what makes an image an image rather than a path.
+    expect(parts[0]).toMatchObject({
+      toolTitle: "Run the suite",
+      parentTaskUseId: "task-1",
+      sourceMessageId: "source-1",
+    });
+    expect(parts[1]).toMatchObject({
+      type: "file",
+      fileUrl: "/workspace/shot.png",
+    });
+  });
+
+  test("keeps the model badge on a Claude message", () => {
+    const transcript = toPipelineTranscript(
+      [{
+        id: "m1",
+        role: "assistant",
+        content: "done",
+        modelId: "claude-opus-5",
+      }],
+      "claude",
+      FALLBACK,
+    );
+
+    expect(transcript[0]).toMatchObject({ id: "m1", modelId: "claude-opus-5" });
+  });
+
+  test("keeps a task group whose child tools are unreadable", () => {
+    const transcript = toPipelineTranscript(
+      [{
+        id: "message-1",
+        role: "assistant",
+        content: "",
+        parts: [{
+          type: "task-group",
+          content: "",
+          task: { type: "tool-invocation", toolName: "Task", content: "Task" },
+          childTools: "not-an-array",
+        }],
+      }],
+      "codex",
+      FALLBACK,
+    );
+
+    const [part] = transcript[0]!.parts;
+    // The Task itself is still worth showing; only its children are lost, and
+    // the renderer maps over `childTools`, so it must be an array either way.
+    expect(part?.type).toBe("task-group");
+    expect(part?.type === "task-group" && part.childTools).toEqual([]);
+  });
+
+  test("drops the Claude part types its adapter has no renderer for", () => {
+    const transcript = toPipelineTranscript(
+      [{
+        id: "m1",
+        role: "assistant",
+        content: "",
+        parts: [
+          {
+            type: "tool-group",
+            content: "",
+            parts: [{ type: "tool-invocation", toolName: "Read", content: "Read" }],
+          },
+          { type: "subagent", content: "reviewer", subagentName: "reviewer" },
+          { type: "text", content: "kept" },
+        ],
+      }],
+      "claude",
+      FALLBACK,
+    );
+
+    // Claude parts are grouped by its own adapter from flat tool calls, so a
+    // pre-grouped part is a shape it cannot read. Dropping it here matches what
+    // `normalizeClaudePart` does with it, rather than relying on that.
+    expect(transcript[0]!.parts.map((part) => part.type)).toEqual(["text"]);
+  });
+
+  test("survives an OpenCode timestamp below the time clip", () => {
+    const transcript = toPipelineTranscript(
+      [{
+        info: { id: "m1", role: "assistant", time: { created: -1e18 } },
+        parts: [{ type: "text", text: "still readable" }],
+      }],
+      "opencode",
+      FALLBACK,
+    );
+
+    // `Math.abs` is what makes this the same case as a far-future timestamp;
+    // a bare upper-bound check would let this one through to the RangeError.
+    expect(transcript[0]).toMatchObject({ id: "m1", createdAt: FALLBACK });
+  });
+
+  test("reads an OpenCode entry whose time is not a record at all", () => {
+    const transcript = toPipelineTranscript(
+      [{
+        info: { id: "m1", role: "assistant", time: 1_800_000_000_000 },
+        parts: [{ type: "text", text: "still readable" }],
+      }],
+      "opencode",
+      FALLBACK,
+    );
+
+    expect(transcript[0]).toMatchObject({
+      id: "m1",
+      content: "still readable",
+      createdAt: FALLBACK,
+    });
+  });
+
   test("keeps message order across mixed shapes", () => {
     const transcript = toPipelineTranscript(
       [

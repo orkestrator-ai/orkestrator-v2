@@ -71,6 +71,22 @@ const AGENT_LABELS: Record<string, string> = {
 };
 
 /**
+ * Where each key moves the stage selection.
+ *
+ * Both axes are bound, not just the vertical one the list is drawn on: the
+ * ARIA tabs pattern expects the orientation's own arrows, and binding the other
+ * pair too costs nothing and spares a user who guessed the wrong axis.
+ */
+const STAGE_TAB_KEYS: Record<string, number | "first" | "last"> = {
+  ArrowDown: 1,
+  ArrowRight: 1,
+  ArrowUp: -1,
+  ArrowLeft: -1,
+  Home: "first",
+  End: "last",
+};
+
+/**
  * The stage that owns the structured review report.
  *
  * The report belongs to the review turn that produced it, so it is shown there
@@ -291,10 +307,46 @@ export function BuildChatTab({
         label: issueCountLabel(pipeline.structuredReview.issues.length),
       }
     : undefined;
-  // Colons in a `useId` value are legal in an id and in an ARIA reference; only
-  // CSS selectors would object, and nothing here selects on them.
+  // A `useId` value is legal in an id and in an ARIA reference whatever
+  // punctuation React puts in it; only a CSS selector would object, which is
+  // why the keyboard handler below reaches for `getElementById` rather than
+  // `querySelector`.
   const transcriptPanelId = `${instanceId}transcript`;
   const stageTabId = (sessionKey: string) => `${instanceId}stage-${sessionKey}`;
+
+  /**
+   * Move the selection to another stage from the keyboard.
+   *
+   * Taking `role="tab"` is a promise that arrow keys move between stages and
+   * that only the selected stage is in the page tab sequence — a promise
+   * `aria-orientation="vertical"` repeats. Focus follows selection, which is the
+   * correct pattern here because showing a stage is cheap and has no side
+   * effect beyond rendering its transcript.
+   */
+  const moveStageFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = STAGE_TAB_KEYS[event.key];
+    if (step === undefined || pipeline.sessions.length === 0) return;
+    // Consumed even when the selection does not move (a single-stage pipeline,
+    // or Home on the first stage): a tablist owns these keys, and letting one
+    // fall through to scroll the stage list instead is the inconsistency the
+    // pattern exists to remove.
+    event.preventDefault();
+    const current = pipeline.sessions.findIndex(
+      (session) => session.sdkSessionId === selectedSessionId,
+    );
+    const next = step === "first"
+      ? 0
+      : step === "last"
+        ? pipeline.sessions.length - 1
+        // A tablist wraps at both ends, and `current` of -1 (nothing selected
+        // yet) must still land on a real stage rather than off the front.
+        : (Math.max(current, 0) + step + pipeline.sessions.length)
+          % pipeline.sessions.length;
+    const target = pipeline.sessions[next];
+    if (!target || target.sdkSessionId === selectedSessionId) return;
+    selectSession(target.sdkSessionId);
+    document.getElementById(stageTabId(target.sessionKey))?.focus();
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -392,12 +444,13 @@ export function BuildChatTab({
             role="tablist"
             aria-orientation="vertical"
             aria-label="Build stages"
+            onKeyDown={moveStageFocus}
           >
             {pipeline.sessions.length === 0 ? (
               <div className="px-2 py-4 text-xs text-muted-foreground">
                 The backend is preparing the first stage.
               </div>
-            ) : pipeline.sessions.map((session) => {
+            ) : pipeline.sessions.map((session, index) => {
               const isSelected = selectedSessionId === session.sdkSessionId;
               const ownsReport = Boolean(
                 reportSession && session.sessionKey === reportSession.sessionKey,
@@ -410,6 +463,13 @@ export function BuildChatTab({
                   role="tab"
                   aria-selected={isSelected}
                   aria-controls={transcriptPanelId}
+                  // One stop for the whole list, then arrow keys within it —
+                  // otherwise Tab walks every stage before reaching the
+                  // transcript. The first stage stands in for the frame before
+                  // the following effect has chosen one.
+                  tabIndex={isSelected || (selectedSessionId === null && index === 0)
+                    ? 0
+                    : -1}
                   className={cn(
                     "flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-colors",
                     isSelected

@@ -11,10 +11,10 @@
  */
 
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
-import type {
-  TaskListSnapshot,
-  TaskSnapshotItem,
-  TaskSnapshotStatus,
+import {
+  parseTaskSnapshotStatus,
+  type TaskListSnapshot,
+  type TaskSnapshotItem,
 } from "@orkestrator/protocol/task-list";
 import { normalizeClaudeMessagesForDisplay } from "@/lib/chat/native-message-adapters";
 import { normalizeOpenCodeMessage } from "@/lib/opencode-client";
@@ -23,6 +23,7 @@ import type {
   NativeAgentActivityPart,
   NativeAgentState,
   NativeBackgroundTask,
+  NativeBackgroundTaskStatus,
   NativeMessage,
   NativeMessagePart,
   NativeToolDiffMetadata,
@@ -62,31 +63,50 @@ function asRole(value: unknown): NativeMessage["role"] | undefined {
     : undefined;
 }
 
+const BACKGROUND_TASK_STATUSES = new Set<NativeBackgroundTaskStatus>([
+  "pending",
+  "running",
+  "completed",
+  "failed",
+  "killed",
+  "paused",
+]);
+
+function asBackgroundTaskStatus(
+  value: unknown,
+): NativeBackgroundTaskStatus | undefined {
+  return typeof value === "string"
+    && BACKGROUND_TASK_STATUSES.has(value as NativeBackgroundTaskStatus)
+    ? value as NativeBackgroundTaskStatus
+    : undefined;
+}
+
 function asBackgroundTask(value: unknown): NativeBackgroundTask | undefined {
   const raw = asRecord(value);
   const id = asString(raw?.id);
   if (!raw || !id) return undefined;
-  const status = raw.status;
+  // Validated, not cast: a status outside the union renders as no badge at all
+  // today, but the part would carry a value its own type says cannot exist, and
+  // the next consumer to switch exhaustively over it inherits the lie.
+  const status = asBackgroundTaskStatus(raw.status);
   return {
     id,
     description: asString(raw.description),
-    ...(typeof status === "string"
-      ? { status: status as NativeBackgroundTask["status"] }
-      : {}),
+    ...(status ? { status } : {}),
   };
 }
-
-const TASK_STATUSES = new Set(["pending", "in_progress", "completed"]);
 
 function asTaskItem(value: unknown): TaskSnapshotItem | undefined {
   const raw = asRecord(value);
   const id = asString(raw?.id);
   // A task can legitimately have an empty subject, so this is not `asString`.
   const subject = typeof raw?.subject === "string" ? raw.subject : undefined;
-  const status = raw?.status;
-  if (!raw || !id || subject === undefined) return undefined;
-  if (typeof status !== "string" || !TASK_STATUSES.has(status)) return undefined;
-  return { id, subject, status: status as TaskSnapshotStatus };
+  // The protocol owns the status vocabulary and the spellings it accepts. A
+  // hand-copied set here would still type-check after a status was added there,
+  // while silently dropping every snapshot that used the new one.
+  const status = parseTaskSnapshotStatus(raw?.status);
+  if (!raw || !id || subject === undefined || !status) return undefined;
+  return { id, subject, status };
 }
 
 /**
@@ -318,12 +338,14 @@ function withoutCreatedTime(
  */
 function toOpenCodeMessage(
   raw: Record<string, unknown>,
+  // Never null: `openCodeInfo` is what routed this entry here, and returning a
+  // record is exactly what that routing decision means.
+  info: Record<string, unknown>,
   index: number,
   fallbackCreatedAt: string,
 ): NativeMessage | null {
-  const info = asRecord(raw.info);
-  const timestamped = isRenderableEpoch(asRecord(info?.time)?.created);
-  const entry = timestamped || !info ? raw : withoutCreatedTime(raw, info);
+  const timestamped = isRenderableEpoch(asRecord(info.time)?.created);
+  const entry = timestamped ? raw : withoutCreatedTime(raw, info);
 
   let message: NativeMessage | null;
   try {
@@ -335,7 +357,7 @@ function toOpenCodeMessage(
 
   return {
     ...message,
-    id: asString(info?.id) ?? `pipeline-message-${index}`,
+    id: asString(info.id) ?? `pipeline-message-${index}`,
     ...(timestamped ? {} : { createdAt: fallbackCreatedAt }),
   };
 }
@@ -349,12 +371,16 @@ function messageId(raw: Record<string, unknown>, index: number): string {
 }
 
 /**
+ * The OpenCode envelope's `info`, or null for a flat message.
+ *
  * OpenCode returns `{ info, parts }`; the Claude and Codex bridges return the
  * flat message shape. Detected per entry rather than from the pipeline's agent
  * type so a snapshot whose agent was recorded differently still renders.
  */
-function isOpenCodeShaped(raw: Record<string, unknown>): boolean {
-  return asRecord(raw.info) !== null;
+function openCodeInfo(
+  raw: Record<string, unknown>,
+): Record<string, unknown> | null {
+  return asRecord(raw.info);
 }
 
 export function toPipelineTranscript(
@@ -368,8 +394,9 @@ export function toPipelineTranscript(
     const raw = asRecord(entry);
     if (!raw) return;
 
-    if (isOpenCodeShaped(raw)) {
-      const message = toOpenCodeMessage(raw, index, fallbackCreatedAt);
+    const info = openCodeInfo(raw);
+    if (info) {
+      const message = toOpenCodeMessage(raw, info, index, fallbackCreatedAt);
       if (message) transcript.push(message);
       return;
     }

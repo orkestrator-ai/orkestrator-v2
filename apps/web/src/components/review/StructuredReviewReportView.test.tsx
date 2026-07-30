@@ -226,6 +226,20 @@ describe("StructuredReviewReportView", () => {
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
   });
 
+  test("closes a section again on a second click of its disclosure", () => {
+    render(<StructuredReviewReportView report={report} collapsibleSections />);
+    const disclosure = screen.getByRole("button", { name: /What Changed/ });
+
+    fireEvent.click(disclosure);
+    expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
+
+    // Collapsed sections are unmounted, not hidden — the point of the mode is
+    // that a report inside a transcript stays small, so this must actually
+    // close and not merely toggle a chevron.
+    fireEvent.click(disclosure);
+    expect(screen.queryByText("Adds structured reviews.")).toBeNull();
+  });
+
   test("summarizes a collapsed report's counts in both singular and plural", () => {
     const { rerender } = render(
       <StructuredReviewReportView report={report} collapsibleSections />,

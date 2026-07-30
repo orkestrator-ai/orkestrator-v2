@@ -128,7 +128,7 @@ function renderContent(text: string, mentions: FileMention[]): string {
     const mention = mentionMap.get(pattern);
     if (!mention) continue;
     const escapedPattern = escapeHtml(pattern);
-    const mentionHtml = `<span class="text-blue-500 font-medium" data-mention="true" data-id="${mention.id}" data-filename="${escapeAttr(mention.filename)}" data-path="${escapeAttr(mention.relativePath)}" contenteditable="false">${escapedPattern}</span>`;
+    const mentionHtml = `<span class="text-blue-500 font-medium" data-mention="true" data-id="${escapeAttr(mention.id)}" data-filename="${escapeAttr(mention.filename)}" data-path="${escapeAttr(mention.relativePath)}" contenteditable="false">${escapedPattern}</span>`;
     result = result.replace(new RegExp(escapeRegExp(escapedPattern), "g"), mentionHtml);
   }
 
@@ -143,7 +143,9 @@ function escapeHtml(text: string): string {
 }
 
 function escapeAttr(text: string): string {
-  return text.replace(/"/g, "&quot;");
+  return escapeHtml(text)
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function escapeRegExp(text: string): string {
@@ -169,7 +171,14 @@ function findMentionTokenRange(text: string, cursorPosition: number): { start: n
 
 function areMentionsEqual(a: FileMention[], b: FileMention[]): boolean {
   if (a.length !== b.length) return false;
-  return a.every((mention, index) => mention.id === b[index]?.id);
+  return a.every((mention, index) => {
+    const other = b[index];
+    return (
+      mention.id === other?.id
+      && mention.filename === other.filename
+      && mention.relativePath === other.relativePath
+    );
+  });
 }
 
 function focusEditableElement(element: HTMLElement): void {
@@ -412,7 +421,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
           onPaste={handlePaste}
           onKeyDown={handleKeyDown}
           className={cn(
-            "w-full resize-none overflow-y-auto border-none bg-transparent px-1 py-1 text-sm text-foreground outline-none transition-colors",
+            "native-compose-input w-full resize-none overflow-y-auto border-none bg-transparent px-1 py-1 text-sm text-foreground outline-none transition-colors",
             "[&:empty]:before:pointer-events-none",
             "[&:empty]:before:content-[attr(data-placeholder)]",
             "[&:empty]:before:text-muted-foreground",

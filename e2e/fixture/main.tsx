@@ -8,6 +8,11 @@ import {
 import { BrowserTab } from "../../apps/web/src/components/browser/BrowserTab";
 import { CodexComposeBar } from "../../apps/web/src/components/codex/CodexComposeBar";
 import { AgentThinkingIndicator } from "../../apps/web/src/components/chat/AgentThinkingIndicator";
+import { MentionableInput } from "../../apps/web/src/components/chat/MentionableInput";
+import {
+  COMPOSE_MAX_INPUT_HEIGHT,
+  COMPOSE_MIN_INPUT_HEIGHT,
+} from "../../apps/web/src/components/chat/compose-metrics";
 import { DiffViewerTab } from "../../apps/web/src/components/terminal/DiffViewerTab";
 import { ChangedFileItem } from "../../apps/web/src/components/files-panel/ChangedFileItem";
 import { MobileAppShellLayout } from "../../apps/web/src/components/layout/MobileAppShellLayout";
@@ -175,9 +180,18 @@ function ReviewLaunchDialogFixture() {
 }
 
 function GlobalStylesFixture() {
+  const twelveLineDraft = Array.from(
+    { length: 12 },
+    (_, index) => `Line ${index + 1}`,
+  ).join("\n");
+  const thirteenLineDraft = `${twelveLineDraft}\nLine 13`;
+
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
       <AgentThinkingIndicator agentName="Codex" />
+      <div data-testid="chat-status-row" className="chat-status-row">
+        <span data-testid="chat-status-content">Completed</span>
+      </div>
       <div data-testid="sidebar-glass" className="sidebar-glass">Sidebar</div>
       <div data-testid="panel-surface" className="panel-surface">Panel</div>
       <div data-testid="drag-region" data-backend-drag-region>Drag region</div>
@@ -214,6 +228,26 @@ function GlobalStylesFixture() {
       <select data-testid="mobile-select" aria-label="Mobile select">
         <option>Value</option>
       </select>
+      <div className="w-80">
+        <div data-testid="native-compose-twelve-lines">
+          <MentionableInput
+            value={twelveLineDraft}
+            mentions={[]}
+            onChange={() => {}}
+            minHeight={COMPOSE_MIN_INPUT_HEIGHT}
+            maxHeight={COMPOSE_MAX_INPUT_HEIGHT}
+          />
+        </div>
+        <div data-testid="native-compose-thirteen-lines">
+          <MentionableInput
+            value={thirteenLineDraft}
+            mentions={[]}
+            onChange={() => {}}
+            minHeight={COMPOSE_MIN_INPUT_HEIGHT}
+            maxHeight={COMPOSE_MAX_INPUT_HEIGHT}
+          />
+        </div>
+      </div>
       <div data-testid="dropdown-content" data-slot="dropdown-menu-content">Dropdown</div>
       <div data-testid="context-content" data-slot="context-menu-content">Context</div>
       <div data-testid="dropdown-item" data-slot="dropdown-menu-item">Dropdown item</div>

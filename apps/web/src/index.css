@@ -290,6 +290,19 @@ body {
   }
 }
 
+/*
+ * Touch browsers can zoom focused editable content whose computed font size is
+ * below 16px. Use a real 16px compose font while retaining the shared 20px
+ * line height so the editor still displays the configured twelve lines before
+ * it scrolls. The capability query leaves mouse/trackpad layouts unchanged.
+ */
+@media (hover: none) and (pointer: coarse) {
+  .native-compose-input {
+    font-size: 16px;
+    line-height: 1.25rem;
+  }
+}
+
 @media (max-width: 767px) {
   /* Keep form controls at 16px so mobile browsers do not zoom on focus. */
   input,

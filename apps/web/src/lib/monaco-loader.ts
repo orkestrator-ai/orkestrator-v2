@@ -116,7 +116,8 @@ async function loadMonacoModules(): Promise<MonacoModuleBundle> {
 const monacoConfigurator = createMonacoConfigurator({
   // Bun's DOM test runner cannot execute Vite's `?worker` imports. Browser
   // integration is covered through createMonacoConfigurator with injected modules.
-  initiallyConfigured: typeof Bun !== "undefined",
+  initiallyConfigured:
+    typeof (globalThis as typeof globalThis & { Bun?: unknown }).Bun !== "undefined",
   loadModules: loadMonacoModules,
 });
 

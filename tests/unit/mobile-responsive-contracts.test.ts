@@ -50,6 +50,37 @@ describe("mobile responsive layout contracts", () => {
     expect(css).toContain("min-height: 2.75rem");
   });
 
+  test("touch compose input uses real font geometry instead of transform scaling", () => {
+    const css = read("apps/web/src/index.css");
+    const iosComposeRule = css.match(
+      /@media \(hover: none\) and \(pointer: coarse\) \{[\s\S]*?\.native-compose-input \{([\s\S]*?)\n  \}/,
+    )?.[1];
+
+    expect(iosComposeRule).toBeTruthy();
+    expect(iosComposeRule).toContain("font-size: 16px");
+    expect(iosComposeRule).toContain("line-height: 1.25rem");
+    expect(iosComposeRule).not.toContain("transform");
+    expect(iosComposeRule).not.toContain("width:");
+    expect(css).not.toContain(".native-compose-input-viewport");
+  });
+
+  test("chat status rows keep stable geometry and honor reduced motion", () => {
+    const css = read("apps/web/src/index.css");
+    expect(css).toContain(`.chat-status-row {
+  display: flex;
+  align-items: center;
+  height: 2.5rem;
+}`);
+    expect(css).toContain(`.chat-status-row > * {
+  animation: chat-status-enter 180ms ease-out both;
+}`);
+    expect(css).toContain(`@media (prefers-reduced-motion: reduce) {
+  .chat-status-row > * {
+    animation: none;
+  }
+}`);
+  });
+
   test("mobile environment tab animations preserve direction and motion preferences", () => {
     const css = read("apps/web/src/index.css");
 

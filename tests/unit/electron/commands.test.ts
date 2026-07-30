@@ -314,6 +314,10 @@ function createContext(
     project?: { id: string; name: string; gitUrl: string; localPath: string | null; addedAt: string; order: number };
     repositoryConfig?: RepositoryConfig;
     globalConfig?: Record<string, unknown>;
+    cacheAgentModelCatalog?: (
+      agent: "claude" | "codex",
+      models: unknown[],
+    ) => Promise<unknown>;
   } = {},
 ): {
   context: CommandContext;
@@ -369,6 +373,10 @@ function createContext(
       saveDesktopConnections: mock(async (nextConnections: typeof desktopConnections) => {
         desktopConnections = nextConnections;
       }),
+      cacheAgentModelCatalog: mock(
+        options.cacheAgentModelCatalog
+          ?? (async () => ({ schemaVersion: 1 as const })),
+      ),
       getEnvironment: mock(async (environmentId: string) => environments.find((environment) => environment.id === environmentId) ?? null),
       getEnvironmentsByProject: mock(async (projectId: string) => environments.filter((environment) => environment.projectId === projectId)),
       loadEnvironments: mock(async () => environments),
@@ -10779,17 +10787,35 @@ exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.
     });
 
     const environment = createEnvironment({ worktreePath });
-    const { context, updates, emitted } = createContext(environment);
+    let releaseHostCacheWrite: (() => void) | undefined;
+    const hostCacheWrite = new Promise<void>((resolve) => {
+      releaseHostCacheWrite = resolve;
+    });
+    const { context, updates, emitted } = createContext(environment, {
+      cacheAgentModelCatalog: async () => hostCacheWrite,
+    });
     context.appRoot = appRoot;
     context.resourceRoot = appRoot;
     context.toolchainBinDir = toolchainBinDir;
     const commands = createCommandRegistry();
 
     try {
-      const snapshot = await commands.get("get_claude_model_catalog")?.(
+      const refresh = commands.get("get_claude_model_catalog")?.(
         { environmentId: environment.id, forceRefresh: true },
         context,
       );
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const snapshot = await Promise.race([
+        refresh,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("Claude model refresh waited for the host cache write")),
+            2_000,
+          );
+        }),
+      ]).finally(() => {
+        if (timeout) clearTimeout(timeout);
+      });
 
       expect(snapshot).toMatchObject({
         environmentId: environment.id,
@@ -10813,6 +10839,12 @@ exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.
         event: "claude-model-catalog-updated",
         payload: snapshot,
       });
+      expect(context.storage.cacheAgentModelCatalog).toHaveBeenCalledWith(
+        "claude",
+        expect.arrayContaining([
+          expect.objectContaining({ id: "claude-opus-5" }),
+        ]),
+      );
 
       const updateCount = updates.length;
       await expect(
@@ -10823,6 +10855,7 @@ exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.
       ).resolves.toEqual(snapshot);
       expect(updates).toHaveLength(updateCount);
     } finally {
+      releaseHostCacheWrite?.();
       await commands.get("stop_local_claude_server_cmd")?.(
         { environmentId: environment.id },
         context,
@@ -10864,6 +10897,47 @@ exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.
     expect(updates).toContainEqual({ claudeModelCatalog: snapshot });
   });
 
+  test("does not persist bundled Claude fallback models in the host cache", async () => {
+    const appRoot = await createTempDir("ork-electron-app-claude-fallback-models-");
+    const worktreePath = await createTempDir("ork-electron-worktree-claude-fallback-models-");
+    await writeBridgeServer(appRoot, "claude-bridge", undefined, {
+      models: [{ id: "claude-sonnet-fallback", name: "Claude Sonnet Fallback" }],
+      source: "fallback",
+      fetchedAt: freshFetchedAt(),
+    });
+
+    const environment = createEnvironment({ worktreePath });
+    const { context, updates, emitted } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    try {
+      const snapshot = await commands.get("get_claude_model_catalog")?.(
+        { environmentId: environment.id, forceRefresh: true },
+        context,
+      );
+
+      expect(snapshot).toMatchObject({
+        environmentId: environment.id,
+        source: "fallback",
+        stale: true,
+        models: [{ id: "claude-sonnet-fallback" }],
+      });
+      expect(updates).toContainEqual({ claudeModelCatalog: snapshot });
+      expect(emitted).toContainEqual({
+        event: "claude-model-catalog-updated",
+        payload: snapshot,
+      });
+      expect(context.storage.cacheAgentModelCatalog).not.toHaveBeenCalled();
+    } finally {
+      await commands.get("stop_local_claude_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
+    }
+  });
+
   test("discovers and persists the Claude model catalog from a containerized bridge", async () => {
     const hostPort = await reserveFreePort();
     const pidFile = path.join(
@@ -10894,8 +10968,13 @@ exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.
       containerId: "container-1",
       status: "running",
     });
-    const { context, updates, emitted } = createContext(environment);
+    const { context, updates, emitted } = createContext(environment, {
+      cacheAgentModelCatalog: async () => {
+        throw new Error("injected host cache failure");
+      },
+    });
     const commands = createCommandRegistry();
+    const warning = spyOn(console, "warn").mockImplementation(() => undefined);
 
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
     const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
@@ -10949,8 +11028,14 @@ exit 0
           event: "claude-model-catalog-updated",
           payload: snapshot,
         });
+        await Promise.resolve();
+        expect(warning).toHaveBeenCalledWith(
+          "[ElectronBackend] Failed to persist the Claude model catalogue:",
+          "injected host cache failure",
+        );
       });
     } finally {
+      warning.mockRestore();
       const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
       if (pid) {
         try {

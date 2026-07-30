@@ -9,6 +9,7 @@ import type {
   ClaudeEvent,
   ClaudeMessage as ClaudeMessageType,
   ClaudeModel,
+  ClaudeModelCatalogSnapshot,
   ClaudePlanApprovalRequest,
   ClaudeQuestionRequest,
 } from "@/lib/claude-client";
@@ -50,7 +51,7 @@ const createDefaultSession = async (_client?: unknown): Promise<MockCreatedSessi
 });
 const mockCreateSession = mock(createDefaultSession);
 const mockGetModels = mock(async (): Promise<ClaudeModel[]> => []);
-const mockGetClaudeModelCatalog = mock(async () => ({
+const mockGetClaudeModelCatalog = mock(async (): Promise<ClaudeModelCatalogSnapshot> => ({
   environmentId: "env-1",
   models: await mockGetModels(),
   source: "sdk" as const,
@@ -3971,6 +3972,63 @@ describe("ClaudeChatTab", () => {
     ).toEqual(["opus", "sonnet"]);
     // The global fallback list stays empty; scoping is per environment.
     expect(useClaudeStore.getState().models).toEqual([]);
+  });
+
+  test("projects a discovered authoritative catalog into the host model list", async () => {
+    const hostModel = { id: "host-old", name: "Host old" };
+    const discoveredModel = { id: "claude-opus-5", name: "Claude Opus 5" };
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+      models: [hostModel],
+      modelCatalogs: new Map(),
+    }));
+    mockGetClaudeModelCatalog.mockResolvedValue({
+      environmentId: ENVIRONMENT_ID,
+      models: [discoveredModel],
+      source: "sdk",
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      stale: false,
+    });
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().models).toEqual([discoveredModel]);
+      expect(useClaudeStore.getState().getModels(ENVIRONMENT_ID)).toEqual([
+        discoveredModel,
+      ]);
+    });
+  });
+
+  test("keeps the host last-known-good when an environment returns fallback models", async () => {
+    const hostModel = { id: "host-last-known-good", name: "Host LKG" };
+    const fallbackModel = { id: "claude-fallback", name: "Bundled fallback" };
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+      models: [hostModel],
+      modelCatalogs: new Map(),
+    }));
+    mockGetClaudeModelCatalog.mockResolvedValue({
+      environmentId: ENVIRONMENT_ID,
+      models: [fallbackModel],
+      source: "fallback",
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      stale: false,
+      error: "SDK discovery unavailable",
+    });
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getModels(ENVIRONMENT_ID)).toEqual([
+        fallbackModel,
+      ]);
+    });
+    expect(useClaudeStore.getState().models).toEqual([hostModel]);
   });
 
 

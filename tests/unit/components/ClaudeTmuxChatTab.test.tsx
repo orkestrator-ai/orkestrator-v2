@@ -410,6 +410,16 @@ function mockRunningTmuxStatus() {
   }));
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function seedPane(
   initialPrompt?: string,
   initialAgentModel?: string,
@@ -4001,11 +4011,137 @@ Running 1 Explore agent...
       expect(useClaudeStore.getState().getModels("env-1")[0]?.id).toBe(
         "claude-opus-5",
       );
+      expect(useClaudeStore.getState().models[0]?.id).toBe("claude-opus-5");
     });
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default/ }));
     expect(await screen.findByText("Authoritative Opus 5")).toBeTruthy();
     expect(screen.queryByText("Opus (1M context)")).toBeNull();
+  });
+
+  test("keeps the host last-known-good when catalog rehydration returns fallback models", async () => {
+    seedPane();
+    const hostModel = { id: "host-last-known-good", name: "Host LKG" };
+    const fallbackModel = { id: "claude-fallback", name: "Bundled fallback" };
+    useClaudeStore.setState({ models: [hostModel], modelCatalogs: new Map() });
+    getClaudeModelCatalogMock.mockResolvedValueOnce({
+      environmentId: "env-1",
+      models: [fallbackModel],
+      source: "fallback",
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      stale: false,
+      error: "SDK discovery unavailable",
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getModels("env-1")).toEqual([
+        fallbackModel,
+      ]);
+    });
+    expect(useClaudeStore.getState().models).toEqual([hostModel]);
+  });
+
+  test("projects a successful catalog refresh after the initiating tab unmounts", async () => {
+    seedPane();
+    const pendingCatalog = deferred<{
+      environmentId: string;
+      models: ClaudeModel[];
+      source: "sdk";
+      fetchedAt: string;
+      stale: false;
+    }>();
+    const discoveredModel = { id: "claude-opus-5", name: "Claude Opus 5" };
+    getClaudeModelCatalogMock.mockImplementationOnce(
+      async () => pendingCatalog.promise,
+    );
+
+    const view = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getClaudeModelCatalogMock).toHaveBeenCalledWith("env-1", false);
+    });
+    view.unmount();
+    pendingCatalog.resolve({
+      environmentId: "env-1",
+      models: [discoveredModel],
+      source: "sdk",
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      stale: false,
+    });
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().models).toEqual([discoveredModel]);
+      expect(useClaudeStore.getState().getModels("env-1")).toEqual([
+        discoveredModel,
+      ]);
+    });
+  });
+
+  test("ignores an older catalog response after a newer refresh completes", async () => {
+    seedPane();
+    const olderCatalog = deferred<any>();
+    const newerModel = { id: "claude-newest", name: "Newest Claude" };
+    getClaudeModelCatalogMock
+      .mockImplementationOnce(async () => olderCatalog.promise)
+      .mockResolvedValueOnce({
+        environmentId: "env-1",
+        models: [newerModel],
+        source: "sdk",
+        fetchedAt: "2026-07-25T12:01:00.000Z",
+        stale: false,
+      });
+
+    const view = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+    await waitFor(() => {
+      expect(getClaudeModelCatalogMock).toHaveBeenCalledTimes(1);
+    });
+
+    view.rerender(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+    await waitFor(() => {
+      expect(useClaudeStore.getState().models).toEqual([newerModel]);
+    });
+
+    olderCatalog.resolve({
+      environmentId: "env-1",
+      models: [{ id: "claude-stale", name: "Stale Claude" }],
+      source: "sdk",
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      stale: false,
+    });
+    await act(async () => {
+      await olderCatalog.promise;
+      await Promise.resolve();
+    });
+
+    expect(useClaudeStore.getState().models).toEqual([newerModel]);
   });
 
   test("keeps the bundled model catalog when authoritative rehydration fails", async () => {

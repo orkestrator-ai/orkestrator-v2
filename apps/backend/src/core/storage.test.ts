@@ -8,7 +8,11 @@ import {
   defaultRepositoryConfig,
   StorageService,
 } from "./storage.js";
-import type { AppConfig } from "./models.js";
+import type {
+  AppConfig,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+} from "./models.js";
 import { MAX_CODEX_CONCURRENT_THREADS } from "./constants.js";
 
 async function withTemporaryStorage<T>(
@@ -823,6 +827,298 @@ describe("OpenCode model catalogue cache", () => {
 
       expect(await first.getOpenCodeModelCatalog("project-a")).not.toBeNull();
       expect(await first.getOpenCodeModelCatalog("project-b")).not.toBeNull();
+    });
+  });
+});
+
+describe("host agent model catalogue cache", () => {
+  test("round-trips Claude and Codex catalogues across storage instances", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const claudeModels: ClaudeModelCatalogEntry[] = [{
+        id: "claude-opus-latest",
+        name: "Claude Opus Latest",
+        description: "Most capable",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      }];
+      const codexModels: CodexModelCatalogEntry[] = [{
+        id: "gpt-latest",
+        name: "GPT Latest",
+        description: "Latest coding model",
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "ultra"],
+        defaultReasoningEffort: "medium",
+      }];
+
+      await storage.cacheAgentModelCatalog("claude", claudeModels);
+      await storage.cacheAgentModelCatalog("codex", codexModels);
+
+      const reopened = new StorageService(dataDir);
+      await reopened.init();
+      expect(await reopened.getAgentModelCatalogCache()).toMatchObject({
+        schemaVersion: 1,
+        claude: { models: claudeModels },
+        codex: { models: codexModels },
+      });
+    });
+  });
+
+  test("does not rewrite an unchanged catalogue and ignores malformed persisted entries", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const models = [{ id: "gpt-latest", name: "GPT Latest" }];
+      const first = await storage.cacheAgentModelCatalog("codex", models);
+      const second = await storage.cacheAgentModelCatalog("codex", models);
+      expect(second.codex?.updatedAt).toBe(first.codex?.updatedAt);
+
+      await fs.writeFile(
+        path.join(dataDir, "agent-model-catalog.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          claude: {
+            updatedAt: "not-a-date",
+            models: [{ id: "", name: "Broken" }],
+          },
+          codex: {
+            updatedAt: new Date().toISOString(),
+            models: [{ id: "gpt-broken", name: "Broken", reasoningEfforts: ["impossible"] }],
+          },
+        }),
+      );
+      expect(await storage.getAgentModelCatalogCache()).toEqual({
+        schemaVersion: 1,
+      });
+    });
+  });
+
+  test("normalizes whitespace and drops duplicate or malformed model entries", async () => {
+    await withTemporaryStorage(async (storage) => {
+      await storage.cacheAgentModelCatalog("claude", [
+        {
+          id: "  claude-opus-latest  ",
+          resolvedModel: "  claude-opus-20260701  ",
+          name: "  Claude Opus Latest  ",
+          description: "  Most capable  ",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "high"],
+        },
+        { id: "claude-opus-latest", name: "Duplicate" },
+        { id: "claude-invalid-boolean", name: "Invalid", supportsEffort: "yes" },
+        {
+          id: "claude-invalid-effort",
+          name: "Invalid",
+          supportedEffortLevels: ["impossible"],
+        },
+        {
+          id: "claude-invalid-description",
+          name: "Invalid",
+          description: 42,
+        },
+        {
+          id: "claude-invalid-resolved-model",
+          name: "Invalid",
+          resolvedModel: false,
+        },
+      ] as unknown as ClaudeModelCatalogEntry[]);
+      await storage.cacheAgentModelCatalog("codex", [
+        {
+          id: "  gpt-latest  ",
+          name: "  GPT Latest  ",
+          description: "  Coding model  ",
+          reasoningEfforts: ["minimal", "medium", "ultra"],
+          reasoningOptions: [{
+            effort: "medium",
+            label: "  Balanced  ",
+            description: "  Default choice  ",
+          }],
+          defaultReasoningEffort: "medium",
+        },
+        { id: "gpt-latest", name: "Duplicate" },
+        {
+          id: "gpt-invalid-effort",
+          name: "Invalid",
+          reasoningEfforts: ["impossible"],
+        },
+        {
+          id: "gpt-invalid-option",
+          name: "Invalid",
+          reasoningOptions: [{ effort: "medium", label: "   " }],
+        },
+        {
+          id: "gpt-invalid-description",
+          name: "Invalid",
+          description: 42,
+        },
+      ] as unknown as CodexModelCatalogEntry[]);
+
+      expect(await storage.getAgentModelCatalogCache()).toMatchObject({
+        claude: {
+          models: [{
+            id: "claude-opus-latest",
+            resolvedModel: "claude-opus-20260701",
+            name: "Claude Opus Latest",
+            description: "Most capable",
+            supportsEffort: true,
+            supportedEffortLevels: ["low", "high"],
+          }],
+        },
+        codex: {
+          models: [{
+            id: "gpt-latest",
+            name: "GPT Latest",
+            description: "Coding model",
+            reasoningEfforts: ["minimal", "medium", "ultra"],
+            reasoningOptions: [{
+              effort: "medium",
+              label: "Balanced",
+              description: "Default choice",
+            }],
+            defaultReasoningEffort: "medium",
+          }],
+        },
+      });
+    });
+  });
+
+  test("retains valid models while replacing an invalid persisted timestamp", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await fs.writeFile(
+        path.join(dataDir, "agent-model-catalog.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          codex: {
+            updatedAt: "not-a-date",
+            models: [{
+              id: "gpt-valid",
+              name: "GPT Valid",
+              reasoningEfforts: ["medium"],
+            }],
+          },
+        }),
+      );
+
+      expect(await storage.getAgentModelCatalogCache()).toEqual({
+        schemaVersion: 1,
+        codex: {
+          updatedAt: new Date(0).toISOString(),
+          models: [{
+            id: "gpt-valid",
+            name: "GPT Valid",
+            reasoningEfforts: ["medium"],
+          }],
+        },
+      });
+    });
+  });
+
+  test("rejects catalogues without any valid model", async () => {
+    await withTemporaryStorage(async (storage) => {
+      await expect(
+        storage.cacheAgentModelCatalog(
+          "claude",
+          [{ id: "", name: "Invalid" }],
+        ),
+      ).rejects.toThrow("at least one valid model");
+      await expect(
+        storage.cacheAgentModelCatalog(
+          "codex",
+          [{
+            id: "gpt-invalid",
+            name: "Invalid",
+            defaultReasoningEffort: "impossible",
+          }] as unknown as CodexModelCatalogEntry[],
+        ),
+      ).rejects.toThrow("at least one valid model");
+    });
+  });
+
+  test("serializes separate storage instances without losing either agent", async () => {
+    await withTemporaryStorage(async (first, dataDir) => {
+      const second = new StorageService(dataDir);
+      await second.init();
+      await Promise.all([
+        first.cacheAgentModelCatalog("claude", [{
+          id: "claude-opus-latest",
+          name: "Claude Opus Latest",
+        }]),
+        second.cacheAgentModelCatalog("codex", [{
+          id: "gpt-latest",
+          name: "GPT Latest",
+        }]),
+      ]);
+
+      expect(await first.getAgentModelCatalogCache()).toMatchObject({
+        claude: { models: [{ id: "claude-opus-latest" }] },
+        codex: { models: [{ id: "gpt-latest" }] },
+      });
+    });
+  });
+
+  test("recovers the mutation queue after a failed write", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const internals = storage as unknown as {
+        saveJson: (filePath: string, value: unknown) => Promise<void>;
+      };
+      const saveJson = internals.saveJson.bind(storage);
+      let failNext = true;
+      internals.saveJson = async (filePath, value) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error("injected agent cache write failure");
+        }
+        await saveJson(filePath, value);
+      };
+
+      await expect(
+        storage.cacheAgentModelCatalog("claude", [{
+          id: "claude-failed",
+          name: "Claude Failed",
+        }]),
+      ).rejects.toThrow("injected agent cache write failure");
+      await expect(
+        storage.cacheAgentModelCatalog("codex", [{
+          id: "gpt-recovered",
+          name: "GPT Recovered",
+        }]),
+      ).resolves.toMatchObject({
+        codex: { models: [{ id: "gpt-recovered" }] },
+      });
+      expect(await storage.getAgentModelCatalogCache()).toEqual({
+        schemaVersion: 1,
+        codex: expect.objectContaining({
+          models: [{ id: "gpt-recovered", name: "GPT Recovered" }],
+        }),
+      });
+    });
+  });
+
+  test("a read concurrent with a write sees one coherent snapshot", async () => {
+    await withTemporaryStorage(async (storage) => {
+      await storage.cacheAgentModelCatalog("codex", [{
+        id: "gpt-first",
+        name: "GPT First",
+      }]);
+
+      const [, ...reads] = await Promise.all([
+        storage.cacheAgentModelCatalog("codex", [{
+          id: "gpt-second",
+          name: "GPT Second",
+        }]),
+        ...Array.from({ length: 24 }, () =>
+          storage.getAgentModelCatalogCache()
+        ),
+      ]);
+      const final = await storage.getAgentModelCatalogCache();
+      expect(final.codex?.models).toEqual([{
+        id: "gpt-second",
+        name: "GPT Second",
+      }]);
+      const coherentSnapshots: CodexModelCatalogEntry[][] = [
+        [{ id: "gpt-first", name: "GPT First" }],
+        [{ id: "gpt-second", name: "GPT Second" }],
+      ];
+      for (const read of reads) {
+        if (!read.codex) throw new Error("Codex catalogue disappeared during write");
+        expect(coherentSnapshots).toContainEqual(read.codex.models);
+      }
     });
   });
 });

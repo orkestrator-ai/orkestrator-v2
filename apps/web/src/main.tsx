@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
 import "./lib/native/web-gateway";
+import { renderReactRoot } from "./lib/app-renderer";
+import { startApp } from "./lib/app-startup";
 
 function logReactRootError(
   label: string,
@@ -39,18 +41,27 @@ window.addEventListener("unhandledrejection", (event) => {
   });
 });
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement, {
-  onCaughtError: (error, errorInfo) => {
-    logReactRootError("Caught error", error, errorInfo);
-  },
-  onUncaughtError: (error, errorInfo) => {
-    logReactRootError("Uncaught error", error, errorInfo);
-  },
-  onRecoverableError: (error, errorInfo) => {
-    logReactRootError("Recoverable error", error, errorInfo);
-  },
-}).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+function renderApp(): void {
+  renderReactRoot({
+    document,
+    createRoot: ReactDOM.createRoot,
+    rootOptions: {
+      onCaughtError: (error, errorInfo) => {
+        logReactRootError("Caught error", error, errorInfo);
+      },
+      onUncaughtError: (error, errorInfo) => {
+        logReactRootError("Uncaught error", error, errorInfo);
+      },
+      onRecoverableError: (error, errorInfo) => {
+        logReactRootError("Recoverable error", error, errorInfo);
+      },
+    },
+    children: (
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>
+    ),
+  });
+}
+
+void startApp({ render: renderApp });

@@ -59,6 +59,7 @@ import {
 } from "@/lib/codex-client";
 import {
   adoptNativeAgentSession,
+  cacheAgentModelCatalog,
   getCodexServerLog,
   getCodexServerStatus,
   getLocalCodexServerStatus,
@@ -1539,6 +1540,11 @@ export function CodexChatTab({
         }
 
         const { models: availableModels, source: modelsSource } = await getModels(nextClient);
+        if (modelsSource === "app-server" || modelsSource === "cache") {
+          void cacheAgentModelCatalog("codex", availableModels).catch((error) => {
+            console.warn("[CodexChatTab] Failed to persist models:", error);
+          });
+        }
         const availableSlashCommands = await getSlashCommands(nextClient);
         const codexState = useCodexStore.getState();
         if (

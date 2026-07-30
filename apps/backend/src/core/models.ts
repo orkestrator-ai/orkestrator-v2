@@ -67,6 +67,44 @@ export interface ClaudeModelCatalogSnapshot {
   error?: string;
 }
 
+export type CodexReasoningEffort =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
+
+export interface CodexModelCatalogEntry {
+  id: string;
+  name: string;
+  description?: string;
+  reasoningEfforts?: CodexReasoningEffort[];
+  reasoningOptions?: Array<{
+    effort: CodexReasoningEffort;
+    label: string;
+    description?: string;
+  }>;
+  defaultReasoningEffort?: CodexReasoningEffort;
+}
+
+export interface PersistedAgentModelCatalog<T> {
+  updatedAt: string;
+  models: T[];
+}
+
+/**
+ * Host-wide last-known-good catalogues used before any environment bridge has
+ * started. OpenCode remains project-scoped in `opencode-model-catalog.json`
+ * because its provider list can differ between repositories.
+ */
+export interface AgentModelCatalogCache {
+  schemaVersion: 1;
+  claude?: PersistedAgentModelCatalog<ClaudeModelCatalogEntry>;
+  codex?: PersistedAgentModelCatalog<CodexModelCatalogEntry>;
+}
+
 export interface OpenCodeModelCatalogEntry {
   id: string;
   name: string;

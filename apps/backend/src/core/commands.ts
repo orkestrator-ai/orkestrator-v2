@@ -134,6 +134,10 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { NativeAgentService } from "./native-agent-service.js";
+import {
+  assertValidPromptAttachments,
+  assertValidPromptImages,
+} from "./prompt-attachments.js";
 
 export type BackendEmit = (event: string, payload: unknown) => void;
 
@@ -8205,6 +8209,12 @@ export function createCommandRegistry(
         typeof args.phase === "string"
           ? args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase
           : undefined,
+      // Only an explicit mode overrides the phase-derived default, so a caller
+      // that does not care keeps the existing behaviour.
+      sessionMode:
+        args.sessionMode === "plan" || args.sessionMode === "build"
+          ? args.sessionMode
+          : undefined,
     });
   });
 
@@ -8266,12 +8276,33 @@ export function createCommandRegistry(
           : undefined,
       prompt: asNonBlankString(args.prompt, "prompt"),
       requestId: asNonBlankString(args.requestId, "requestId"),
+      // Validated rather than cast: a malformed element used to surface as a
+      // TypeError deep inside the provider, which the drain path then treated as
+      // a retryable fault and re-attempted forever.
       images: Array.isArray(args.images)
-        ? args.images as import("@orkestrator/protocol/build-pipeline").TaskSnapshotImage[]
+        ? assertValidPromptImages(args.images)
+        : undefined,
+      attachments: Array.isArray(args.attachments)
+        ? assertValidPromptAttachments(args.attachments)
         : undefined,
       schema:
-        args.schema && typeof args.schema === "object"
+        args.schema
+        && typeof args.schema === "object"
+        && !Array.isArray(args.schema)
           ? args.schema as import("@orkestrator/protocol/structured-output").JsonSchema
+          : undefined,
+      // Absent means plan: the permissive direction has to be asked for, since
+      // an unset mode otherwise resolves to bypassPermissions at the bridge.
+      mode: args.mode === "build" ? "build" : "plan",
+      fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,
+      subAgent: typeof args.subAgent === "string" ? args.subAgent : undefined,
+      includeLocalSettings:
+        typeof args.includeLocalSettings === "boolean"
+          ? args.includeLocalSettings
+          : undefined,
+      promptSuggestions:
+        typeof args.promptSuggestions === "boolean"
+          ? args.promptSuggestions
           : undefined,
     });
   });

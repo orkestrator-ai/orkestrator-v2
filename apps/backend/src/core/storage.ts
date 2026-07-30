@@ -2967,16 +2967,6 @@ export class StorageService {
     return (await this.loadNativeAgentSessions())[key] ?? null;
   }
 
-  async listNativeAgentSessions(
-    environmentId: string,
-  ): Promise<PersistedNativeAgentSession[]> {
-    if (!isNonBlankString(environmentId)) {
-      throw new Error("Native agent session environment ID must not be blank");
-    }
-    return Object.values(await this.loadNativeAgentSessions())
-      .filter((session) => session.environmentId === environmentId);
-  }
-
   /**
    * Creates a provider session while holding the same cross-process lock that
    * publishes its logical mapping. OpenCode cannot accept a caller-supplied
@@ -3135,9 +3125,21 @@ export class StorageService {
           ([, session]) => session.environmentId !== environmentId,
         ),
       );
-      if (Object.keys(retained).length === Object.keys(sessions).length) return;
-      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), retained);
-      this.announce("native-agent-session", environmentId);
+      if (Object.keys(retained).length !== Object.keys(sessions).length) {
+        await this.saveSensitiveJson(this.nativeAgentSessionsFile(), retained);
+        this.announce("native-agent-session", environmentId);
+      }
+
+      // Rotating the primary file leaves the deleted environment's logical keys,
+      // provider session ids and dispatch journal readable in its backups. Scrub
+      // unconditionally, as every sibling delete-by-environment does: a prior
+      // failed delete may have removed the primary record while leaving a backup.
+      await this.scrubSensitiveJsonBackups(
+        this.nativeAgentSessionsFile(),
+        (storedKey, session) =>
+          isPersistedNativeAgentSession(session, storedKey)
+          && session.environmentId !== environmentId,
+      );
     });
   }
 

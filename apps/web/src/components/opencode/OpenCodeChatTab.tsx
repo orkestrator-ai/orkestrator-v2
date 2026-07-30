@@ -100,7 +100,9 @@ import { getNativeSlashCommands } from "./slash-command-registry";
 import type { OpenCodeNativeData } from "@/types/paneLayout";
 import type {
   OpenCodeAttachment,
+  OpenCodeQueuedMessage,
 } from "@/stores/openCodeStore";
+import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import {
   classifyNewEnvironmentConnectionStartupError,
   getNewEnvironmentConnectionRetryDecision,
@@ -2365,14 +2367,21 @@ export function OpenCodeChatTab({
     updateTabNativeSessionId,
   ]);
 
-  const promoteNextQueuedPromptToDraft = useCallback(() => {
+  const promoteNextQueuedPromptToDraft = useCallback(async () => {
     const store = useOpenCodeStore.getState();
     const hasCurrentDraft =
       store.getDraftText(sessionKey).trim().length > 0 ||
       store.getAttachments(sessionKey).length > 0;
     if (hasCurrentDraft) return;
 
-    const nextMessage = store.removeFromQueue(sessionKey);
+    // Claim the head through the backend rather than dropping it locally.
+    // Stopping the turn is exactly what makes the provider report idle, so an
+    // unclaimed local removal races the backend drain and the user can end up
+    // holding a prompt in the composer that is already running.
+    const nextMessage = await claimAgentPromptQueueHead<OpenCodeQueuedMessage>(
+      "opencode",
+      sessionKey,
+    );
     if (!nextMessage) return;
 
     store.setDraftText(sessionKey, nextMessage.text);
@@ -2392,7 +2401,7 @@ export function OpenCodeChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    promoteNextQueuedPromptToDraft();
+    await promoteNextQueuedPromptToDraft();
     setSessionLoading(sessionKey, false);
 
     const success = await abortSession(client, session.sessionId);

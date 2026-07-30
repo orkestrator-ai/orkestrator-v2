@@ -31,6 +31,7 @@ import {
   type BridgeConnection,
   type BuildPipelineProvider,
 } from "./build-pipeline-provider.js";
+import { stagePromptImages } from "./prompt-attachments.js";
 import {
   addressPrompt,
   buildPrompt,
@@ -470,7 +471,15 @@ export class BuildPipelineService {
           continue;
         }
       }
-      await this.save(normalized, 0);
+      // save() short-circuits when an active pipeline already holds this
+      // admission key and returns that record instead. Treating the returned id
+      // as imported would report a pipeline that was never persisted and then
+      // schedule a supervisor pass for it.
+      const admitted = await this.save(normalized, 0);
+      if (admitted.id !== normalized.id) {
+        skipped += 1;
+        continue;
+      }
       importedIds.push(normalized.id);
       if (isActiveBuildPhase(normalized.phase) && this.options.autoAdvance !== false) {
         void this.runLocked(normalized.id);
@@ -1565,6 +1574,12 @@ export class BuildPipelineService {
         ?? (pipeline.agentType === "codex"
           ? config.global.codexReasoningEffort
           : undefined),
+    }, {
+      // Task-snapshot images arrive as base64. Both bridges require a workspace
+      // path, so they have to be written into the environment before they can be
+      // attached to a prompt.
+      stageImages: (images) =>
+        stagePromptImages(this.invoke, environment, images),
     });
     for (const session of pipeline.sessions) {
       provider.registerSession?.(session.sdkSessionId);

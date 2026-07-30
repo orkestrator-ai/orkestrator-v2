@@ -415,6 +415,41 @@ async function withControlledNewDate<T>(
   }
 }
 
+/**
+ * The SDK id a client key's stable bridge alias decodes back to.
+ *
+ * The bridge recovers this from the alias itself instead of persisting a global
+ * lookup table, so the tests have to derive it the same way.
+ */
+function sdkIdForClientKey(clientSessionKey: string): string {
+  const alias = sessionIdForClientKey(clientSessionKey);
+  if (!alias) throw new Error("client session key did not produce a bridge id");
+  return alias
+    .slice("session-client-".length)
+    .replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "$1-$2-$3-$4-$5");
+}
+
+/**
+ * Run `body` against a private Claude home, restoring the suite-wide one after.
+ *
+ * Durable preference files are keyed by SDK session id, so tests that write them
+ * must not share a home: a leftover alias or journal entry would decide what a
+ * later test's reconcile adopts.
+ */
+async function withTemporaryClaudeHome<T>(
+  prefix: string,
+  body: (directory: string) => Promise<T>,
+): Promise<T> {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  setClaudeHomeForTesting(directory);
+  try {
+    return await body(directory);
+  } finally {
+    setClaudeHomeForTesting(sessionManagerTestHome);
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 const createdSessionIds: string[] = [];
 function track(id: string): string {
   createdSessionIds.push(id);
@@ -637,6 +672,173 @@ describe("session lifecycle", () => {
       setClaudeHomeForTesting(sessionManagerTestHome);
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  test("sessionIdForClientKey refuses keys that cannot carry a stable identity", () => {
+    // A refused key falls back to a random session id: the caller loses
+    // recovery rather than deriving an id from something unusable.
+    expect(sessionIdForClientKey(undefined)).toBeUndefined();
+    expect(sessionIdForClientKey(42 as unknown as string)).toBeUndefined();
+    expect(sessionIdForClientKey("")).toBeUndefined();
+    expect(sessionIdForClientKey("  \t\n  ")).toBeUndefined();
+    expect(sessionIdForClientKey("x".repeat(513))).toBeUndefined();
+
+    // The boundary length is accepted, and its payload must still be a valid v4
+    // UUID or the SDK id could not be recovered from the bridge id.
+    expect(sessionIdForClientKey("x".repeat(512))).toMatch(
+      /^session-client-[0-9a-f]{32}$/,
+    );
+    expect(sdkIdForClientKey("x".repeat(512))).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
+  test("createOrRecoverSession creates an unkeyed session without consulting the SDK", async () => {
+    const session = await createOrRecoverSession("Untracked");
+    track(session.id);
+
+    expect(session.id).toMatch(
+      /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(session.title).toBe("Untracked");
+    // With no client key there is no durable identity to point-read.
+    expect(mockSdkGetSessionInfo).not.toHaveBeenCalled();
+  });
+
+  test("createOrRecoverSession creates the stable id on a first launch", async () => {
+    await withTemporaryClaudeHome("claude-first-launch-", async () => {
+      const clientSessionKey = "env-env-1:startup-agent";
+      // Nothing on disk yet — the ordinary first launch of a startup agent.
+      mockSdkGetSessionInfo.mockImplementation(async () => undefined);
+
+      const session = await createOrRecoverSession(
+        "Startup agent",
+        clientSessionKey,
+      );
+      track(session.id);
+
+      expect(session.id).toBe(sessionIdForClientKey(clientSessionKey));
+      expect(session.title).toBe("Startup agent");
+      expect(session.status).toBe("idle");
+      // No rollout, so no durable identity yet and nothing to persist under it.
+      expect(session.sdkSessionId).toBeUndefined();
+      expect(
+        await readSessionPreferences(sdkIdForClientKey(clientSessionKey)),
+      ).toBeUndefined();
+
+      // A retried launch must join the same conversation, not mint a second.
+      expect(
+        await createOrRecoverSession("Ignored retry title", clientSessionKey),
+      ).toBe(session);
+      expect(
+        listSessions().filter((entry) => entry.id === session.id),
+      ).toHaveLength(1);
+    });
+  });
+
+  test("createOrRecoverSession converges concurrent callers on one session state", async () => {
+    await withTemporaryClaudeHome("claude-concurrent-recover-", async () => {
+      const clientSessionKey = "env-env-1:startup-agent";
+      const alias = track(sessionIdForClientKey(clientSessionKey)!);
+      const sdkSessionId = sdkIdForClientKey(clientSessionKey);
+      let releaseInfo: ((info: SdkSessionInfo) => void) | undefined;
+      mockSdkGetSessionInfo.mockImplementation(
+        async () => new Promise<SdkSessionInfo>((resolve) => {
+          releaseInfo = resolve;
+        }),
+      );
+
+      // Two tabs mounting at once, or a launch retried before the first read
+      // returned. A second SessionState here is the duplicate session tab.
+      const first = createOrRecoverSession("First", clientSessionKey);
+      const second = createOrRecoverSession("Second", clientSessionKey);
+      await waitFor(() => releaseInfo !== undefined);
+      releaseInfo!(sdkSessionInfo({
+        sessionId: sdkSessionId,
+        customTitle: "From disk",
+      }));
+
+      const [a, b] = await Promise.all([first, second]);
+      expect(a).toBe(b);
+      expect(a.id).toBe(alias);
+      expect(getSession(alias)).toBe(a);
+      expect(mockSdkGetSessionInfo).toHaveBeenCalledTimes(1);
+      expect(
+        listSessions().filter((entry) => entry.sdkSessionId === sdkSessionId),
+      ).toHaveLength(1);
+    });
+  });
+
+  test("persists no metadata for a session with neither plan mode nor a client key", async () => {
+    await withTemporaryClaudeHome("claude-metadata-noop-", async () => {
+      const session = createSession("no durable metadata");
+      track(session.id);
+      const sdkSessionId = session.id.slice("session-".length);
+
+      const promptPromise = sendPrompt(session.id, "go");
+      const call = await nextQueryCall();
+      call.push({
+        type: "system",
+        subtype: "init",
+        session_id: sdkSessionId,
+        mcp_servers: [],
+        plugins: [],
+        slash_commands: [],
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+
+      expect(session.sdkSessionId).toBe(sdkSessionId);
+      // The first init is where a durable key appears, but this session has
+      // nothing to store under it. Writing `{}` would leave a file that later
+      // reads cannot tell apart from a real stored preference.
+      expect(await readSessionPreferences(sdkSessionId)).toBeUndefined();
+    });
+  });
+
+  test("fails a client-key turn whose alias cannot be journaled, with no plan mode set", async () => {
+    await withTemporaryClaudeHome("claude-alias-refused-", async (directory) => {
+      const clientSessionKey = "env-env-1:startup-agent";
+      const sdkSessionId = sdkIdForClientKey(clientSessionKey);
+      const session = createSession("Startup agent", clientSessionKey);
+      track(session.id);
+      const preferencesDirectory = join(
+        directory,
+        ".claude",
+        "orkestrator",
+        "session-preferences",
+      );
+      await mkdir(preferencesDirectory, { recursive: true });
+      await writeFile(
+        join(preferencesDirectory, `${sdkSessionId}.json`),
+        "{",
+        "utf-8",
+      );
+
+      const promptPromise = sendPrompt(session.id, "Inspect the workspace");
+      const call = await nextQueryCall();
+      call.push({
+        type: "system",
+        subtype: "init",
+        session_id: sdkSessionId,
+        mcp_servers: [],
+        plugins: [],
+        slash_commands: [],
+      });
+      call.finish();
+
+      // Intent: the alias is written for every client-key session, not only for
+      // one that has already toggled plan mode, so this refusal is reachable
+      // with `planMode` still undefined. Failing the turn is deliberate —
+      // continuing would drop the alias and the next reconcile would adopt this
+      // rollout a second time under `session-<uuid>`.
+      await expect(promptPromise).rejects.toThrow(
+        "refusing to overwrite the durable prompt journal",
+      );
+      expect(session.status).toBe("error");
+      expect(session.planMode).toBeUndefined();
+    });
   });
 
   test("getSession and listSessions return registered sessions", () => {
@@ -5422,6 +5624,124 @@ describe("reconcilePersistedSessions", () => {
       setClaudeHomeForTesting(sessionManagerTestHome);
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  test("ignores a persisted alias that decodes to a different rollout", async () => {
+    await withTemporaryClaudeHome("claude-reconcile-foreign-alias-", async () => {
+      // A stale alias left by an earlier client key, or one planted by hand.
+      // Adopting it would file this rollout under the id a different
+      // conversation's tab asks for.
+      const foreignAlias = sessionIdForClientKey("env-env-2:other-agent")!;
+      await updateSessionPreferences(PERSISTED_SDK_ID, {
+        clientSessionBridgeId: foreignAlias,
+      });
+      mockSdkListSessions.mockImplementation(async () => [
+        sdkSessionInfo({ cwd: "/repo/env-a" }),
+      ]);
+
+      await withWorkspaceCwd("/repo/env-a", async () => {
+        await reconcilePersistedSessions();
+      });
+      track(`session-${PERSISTED_SDK_ID}`);
+      track(foreignAlias);
+
+      expect(getSession(`session-${PERSISTED_SDK_ID}`)).toMatchObject({
+        sdkSessionId: PERSISTED_SDK_ID,
+      });
+      expect(getSession(foreignAlias)).toBeUndefined();
+    });
+  });
+
+  test("matches a persisted alias against the SDK id case-insensitively", async () => {
+    await withTemporaryClaudeHome("claude-reconcile-alias-case-", async () => {
+      const clientSessionKey = "env-env-1:startup-agent";
+      const alias = sessionIdForClientKey(clientSessionKey)!;
+      const sdkSessionId = sdkIdForClientKey(clientSessionKey);
+      await updateSessionPreferences(sdkSessionId, {
+        clientSessionBridgeId: alias,
+      });
+      // An alias only ever encodes lower-case hex, so an SDK that reports the
+      // rollout id in upper case must still resolve to this same conversation.
+      mockSdkListSessions.mockImplementation(async () => [
+        sdkSessionInfo({
+          sessionId: sdkSessionId.toUpperCase(),
+          cwd: "/repo/env-a",
+        }),
+      ]);
+
+      await withWorkspaceCwd("/repo/env-a", async () => {
+        await reconcilePersistedSessions();
+      });
+      track(alias);
+      track(`session-${sdkSessionId.toUpperCase()}`);
+
+      expect(getSession(alias)).toMatchObject({
+        sdkSessionId: sdkSessionId.toUpperCase(),
+      });
+      expect(getSession(`session-${sdkSessionId.toUpperCase()}`)).toBeUndefined();
+    });
+  });
+
+  test("re-asserts a client-key alias whose only durable write failed", async () => {
+    await withTemporaryClaudeHome("claude-alias-reassert-", async (directory) => {
+      const clientSessionKey = "env-env-1:startup-agent";
+      const alias = sessionIdForClientKey(clientSessionKey)!;
+      const sdkSessionId = sdkIdForClientKey(clientSessionKey);
+      const first = createSession("Startup agent", clientSessionKey);
+      track(first.id);
+
+      // The alias is written exactly once, on the first turn's init. Break that
+      // one write: the preference directory cannot be created underneath a file.
+      await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
+      const failing = sendPrompt(first.id, "Inspect the workspace");
+      const call = await nextQueryCall();
+      call.push({
+        type: "system",
+        subtype: "init",
+        session_id: sdkSessionId,
+        mcp_servers: [],
+        plugins: [],
+        slash_commands: [],
+      });
+      call.finish();
+      await expect(failing).rejects.toBeTruthy();
+
+      await rm(join(directory, ".claude"));
+      expect(await readSessionPreferences(sdkSessionId)).toBeUndefined();
+
+      // Restart: the registry is empty but the rollout and its alias-less
+      // preferences survive. `sdkSessionId` is now derived from the alias, so
+      // init will never report a durable-identity change again.
+      expect(deleteSession(first.id)).toBe(true);
+      mockSdkGetSessionInfo.mockImplementation(async (id) =>
+        id === sdkSessionId
+          ? sdkSessionInfo({ sessionId: sdkSessionId, customTitle: "Recovered" })
+          : undefined);
+      const recovered = await createOrRecoverSession(
+        "Ignored retry title",
+        clientSessionKey,
+      );
+      expect(recovered.id).toBe(alias);
+      expect(await readSessionPreferences(sdkSessionId)).toMatchObject({
+        clientSessionBridgeId: alias,
+      });
+
+      // Without that repair the alias stays absent and this listing adopts the
+      // same conversation a second time under `session-<uuid>`.
+      mockSdkListSessions.mockImplementation(async () => [
+        sdkSessionInfo({ sessionId: sdkSessionId, cwd: "/repo/env-a" }),
+      ]);
+      await withWorkspaceCwd("/repo/env-a", async () => {
+        await reconcilePersistedSessions();
+      });
+      track(`session-${sdkSessionId}`);
+
+      expect(getSession(alias)).toBe(recovered);
+      expect(getSession(`session-${sdkSessionId}`)).toBeUndefined();
+      expect(
+        listSessions().filter((entry) => entry.sdkSessionId === sdkSessionId),
+      ).toHaveLength(1);
+    });
   });
 
   test("rehydrates durable plan mode and suppresses a journaled request after restart", async () => {

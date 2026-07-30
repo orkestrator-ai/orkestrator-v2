@@ -1808,6 +1808,13 @@ export async function ensureNativeAgentSession(input: {
   model?: string;
   reasoningEffort?: string;
   phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
+  /**
+   * Overrides the mode the phase would imply.
+   *
+   * Looped-review phases collapse onto `review`, and preparation has to commit
+   * changes — a phase-derived read-only session would fail that round.
+   */
+  sessionMode?: "plan" | "build";
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>(
     "ensure_native_agent_session",

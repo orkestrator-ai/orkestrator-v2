@@ -468,7 +468,15 @@ describe("native agent and looped-review controller commands", () => {
         prompt: "Review this",
         requestId: "request-1",
         images,
+        attachments: undefined,
         schema,
+        // An absent mode must resolve to the restrictive direction: undefined
+        // reaches the Claude bridge as bypassPermissions.
+        mode: "plan",
+        fastMode: undefined,
+        subAgent: undefined,
+        includeLocalSettings: undefined,
+        promptSuggestions: undefined,
       });
 
       await expect(invoke("dispatch_native_agent_prompt", {
@@ -486,6 +494,79 @@ describe("native agent and looped-review controller commands", () => {
       })).rejects.toThrow("non-blank string");
       expect(dispatchPrompt).toHaveBeenCalledTimes(1);
       expect(adoptSession).toHaveBeenCalledTimes(1);
+    }, { nativeAgents });
+  });
+
+  test("rejects malformed dispatch images, attachments and schema", async () => {
+    const dispatchPrompt = mock(async () => ({ operation: "dispatch" }));
+    const nativeAgents = { dispatchPrompt } as unknown as
+      NonNullable<CommandContext["nativeAgents"]>;
+
+    await withCommands(async (invoke) => {
+      const base = {
+        environmentId: "e1",
+        agent: "claude",
+        logicalSessionKey: "env-e1:tab-2",
+        prompt: "Review this",
+        requestId: "request-1",
+      };
+      // Cast straight through, a malformed element surfaced as a TypeError deep
+      // inside the provider — which the drain path then retried forever.
+      await expect(invoke("dispatch_native_agent_prompt", {
+        ...base,
+        images: [{}],
+      })).rejects.toThrow("filename must be a non-empty string");
+      await expect(invoke("dispatch_native_agent_prompt", {
+        ...base,
+        images: [{ filename: "a.png", data: "not base64!" }],
+      })).rejects.toThrow("valid base64");
+      await expect(invoke("dispatch_native_agent_prompt", {
+        ...base,
+        images: Array.from({ length: 21 }, () => ({ filename: "a.png", data: "AA==" })),
+      })).rejects.toThrow("At most 20 prompt images");
+      await expect(invoke("dispatch_native_agent_prompt", {
+        ...base,
+        attachments: [{ type: "image" }],
+      })).rejects.toThrow("path must be a non-empty string");
+      expect(dispatchPrompt).not.toHaveBeenCalled();
+
+      // typeof x === "object" admits arrays, so a JSON array must not pass as a
+      // JSON Schema object.
+      await expect(invoke("dispatch_native_agent_prompt", {
+        ...base,
+        schema: [{ type: "object" }],
+      })).resolves.toMatchObject({ operation: "dispatch" });
+      expect(dispatchPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({ schema: undefined }),
+      );
+    }, { nativeAgents });
+  });
+
+  test("forwards an explicit dispatch mode and its per-prompt options", async () => {
+    const dispatchPrompt = mock(async () => ({ operation: "dispatch" }));
+    const nativeAgents = { dispatchPrompt } as unknown as
+      NonNullable<CommandContext["nativeAgents"]>;
+
+    await withCommands(async (invoke) => {
+      await invoke("dispatch_native_agent_prompt", {
+        environmentId: "e1",
+        agent: "claude",
+        logicalSessionKey: "env-e1:tab-2",
+        prompt: "Ship it",
+        requestId: "request-1",
+        mode: "build",
+        fastMode: true,
+        subAgent: "reviewer",
+        includeLocalSettings: false,
+        promptSuggestions: true,
+      });
+      expect(dispatchPrompt).toHaveBeenCalledWith(expect.objectContaining({
+        mode: "build",
+        fastMode: true,
+        subAgent: "reviewer",
+        includeLocalSettings: false,
+        promptSuggestions: true,
+      }));
     }, { nativeAgents });
   });
 

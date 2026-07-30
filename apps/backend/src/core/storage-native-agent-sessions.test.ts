@@ -195,6 +195,190 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("refuses to reuse one key for a second logical identity", async () => {
+    await withStorage(async (first) => {
+      await first.addEnvironment({
+        ...(await first.getEnvironment("env-1"))!,
+        id: "env-2",
+      });
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      const createProviderSession = mock(async () => "provider-other");
+
+      // The key is a hash of environment, agent and logical key. A mismatch
+      // means either a hash collision or a caller that built the key wrongly;
+      // adopting the record would hand one tab another tab's session.
+      for (const collision of [
+        { ...input, logicalSessionKey: "env-env-1:other-tab" },
+        { ...input, agent: "codex" as const },
+        { ...input, environmentId: "env-2" },
+      ]) {
+        await expect(
+          first.getOrCreateNativeAgentSession(collision, createProviderSession),
+        ).rejects.toThrow("Native agent session key collision");
+        await expect(first.adoptNativeAgentSession({
+          ...collision,
+          providerSessionId: "provider-other",
+        })).rejects.toThrow("Native agent session key collision");
+      }
+      expect(createProviderSession).not.toHaveBeenCalled();
+      expect((await first.getNativeAgentSession(input.key))?.providerSessionId)
+        .toBe("provider-session");
+    });
+  });
+
+  test("refuses a blank provider session id and persists nothing", async () => {
+    await withStorage(async (first) => {
+      for (const invalid of ["", "   "]) {
+        await expect(
+          first.getOrCreateNativeAgentSession(input, async () => invalid),
+        ).rejects.toThrow("Provider returned an invalid native session ID");
+      }
+      expect(await first.getNativeAgentSession(input.key)).toBeNull();
+    });
+  });
+
+  test("rejects blank and malformed native session identities", async () => {
+    await withStorage(async (first) => {
+      const create = async () => "provider-session";
+      await expect(first.getNativeAgentSession("")).rejects.toThrow("must not be blank");
+      await expect(first.getOrCreateNativeAgentSession({ ...input, key: " " }, create))
+        .rejects.toThrow("Native agent session input is invalid");
+      await expect(
+        first.getOrCreateNativeAgentSession({ ...input, environmentId: "" }, create),
+      ).rejects.toThrow("Native agent session input is invalid");
+      await expect(
+        first.getOrCreateNativeAgentSession({ ...input, logicalSessionKey: "" }, create),
+      ).rejects.toThrow("Native agent session input is invalid");
+      await expect(first.getOrCreateNativeAgentSession(
+        { ...input, agent: "gemini" as unknown as typeof input.agent },
+        create,
+      )).rejects.toThrow("Native agent session input is invalid");
+
+      await expect(first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: " ",
+      })).rejects.toThrow("Native agent session adoption input is invalid");
+      await expect(first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-session",
+        expectedProviderSessionId: " ",
+      })).rejects.toThrow("Native agent session adoption input is invalid");
+
+      await expect(first.invalidateNativeAgentSession("", "provider-session"))
+        .rejects.toThrow("identity must not be blank");
+      await expect(first.invalidateNativeAgentSession(input.key, ""))
+        .rejects.toThrow("identity must not be blank");
+      await expect(first.dispatchNativeAgentPromptOnce("", "request-1", async () => undefined))
+        .rejects.toThrow("dispatch key must not be blank");
+      await expect(first.dispatchNativeAgentPromptOnce(input.key, " ", async () => undefined))
+        .rejects.toThrow("dispatch key must not be blank");
+    });
+  });
+
+  test("bounds the dispatched request id history at one thousand entries", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      // Seeding the file is the only way to reach the bound without a thousand
+      // real cross-process writes; the persisted validator caps it at 1000 too.
+      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
+        string,
+        { dispatchedRequestIds?: string[] }
+      >;
+      stored[input.key]!.dispatchedRequestIds = Array.from(
+        { length: 1_000 },
+        (_, index) => `request-${index}`,
+      );
+      await fs.writeFile(file, JSON.stringify(stored));
+
+      const { session } = await first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "request-new",
+        async () => undefined,
+      );
+      expect(session.dispatchedRequestIds).toHaveLength(1_000);
+      expect(session.dispatchedRequestIds?.[0]).toBe("request-1");
+      expect(session.dispatchedRequestIds?.at(-1)).toBe("request-new");
+      // The oldest id was evicted, so replaying it is no longer suppressed.
+      expect((await first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "request-0",
+        async () => undefined,
+      )).dispatched).toBe(true);
+      expect((await first.dispatchNativeAgentPromptOnce(
+        input.key,
+        "request-new",
+        async () => undefined,
+      )).dispatched).toBe(false);
+    });
+  });
+
+  test("deletes only the sessions belonging to one environment", async () => {
+    await withStorage(async (first) => {
+      await first.addEnvironment({
+        ...(await first.getEnvironment("env-1"))!,
+        id: "env-2",
+      });
+      const other = {
+        key: "native-session-key-2",
+        environmentId: "env-2",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-2:startup-agent",
+      };
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-1");
+      await first.getOrCreateNativeAgentSession(other, async () => "provider-2");
+
+      await first.deleteNativeAgentSessionsByEnvironment("env-1");
+
+      expect(await first.getNativeAgentSession(input.key)).toBeNull();
+      expect((await first.getNativeAgentSession(other.key))?.providerSessionId)
+        .toBe("provider-2");
+    });
+  });
+
+  test("scrubs a deleted environment's sessions out of retained backups", async () => {
+    await withStorage(async (first) => {
+      await first.addEnvironment({
+        ...(await first.getEnvironment("env-1"))!,
+        id: "env-2",
+      });
+      await first.getOrCreateNativeAgentSession(
+        { ...input, environmentId: "env-2", key: "keep-key", logicalSessionKey: "KEEP-ME" },
+        async () => "provider-keep",
+      );
+      // A second write rotates the primary file into a backup, so the deleted
+      // environment's logical key and provider session id survive there unless
+      // the delete scrubs them — every sibling delete-by-environment does.
+      await first.getOrCreateNativeAgentSession(
+        { ...input, logicalSessionKey: "DROP-ME" },
+        async () => "provider-drop",
+      );
+
+      await first.deleteNativeAgentSessionsByEnvironment("env-1");
+
+      const dataDir = first.getDataDir();
+      const contents = await Promise.all(
+        (await fs.readdir(dataDir))
+          .filter((name) => name.startsWith("native-agent-sessions.json"))
+          .map((name) => fs.readFile(path.join(dataDir, name), "utf8")),
+      );
+      const all = contents.join("\n");
+      expect(all).toContain("KEEP-ME");
+      expect(all).not.toContain("DROP-ME");
+      expect(all).not.toContain("provider-drop");
+    });
+  });
+
+  test("treats a blank or unknown environment as nothing to delete", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      await first.deleteNativeAgentSessionsByEnvironment("");
+      await first.deleteNativeAgentSessionsByEnvironment("env-never-existed");
+      expect((await first.getNativeAgentSession(input.key))?.providerSessionId)
+        .toBe("provider-session");
+    });
+  });
+
   test("acknowledges only the startup projection it actually persisted", async () => {
     await withStorage(async (first) => {
       await first.updateEnvironment("env-1", {

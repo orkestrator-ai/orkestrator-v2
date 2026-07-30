@@ -4404,13 +4404,17 @@ describe("OpenCodeChatTab", () => {
       try {
         render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
+        // `accelerateWindowTimers` collapses every backoff to 0, so this budget
+        // is pure wall clock for eleven async reconnect cycles rather than part
+        // of the assertion. Keep it generous: a tighter one made the test a race
+        // against whatever else the file had already loaded.
         await waitFor(() => {
           expect(mockSubscribeToEvents.mock.calls.length).toBeGreaterThanOrEqual(11);
           expect(consoleWarn).toHaveBeenCalledWith(
             "[OpenCodeChatTab] SSE reconnect limit reached for",
             ENVIRONMENT_ID,
           );
-        }, { timeout: 2_000 });
+        }, { timeout: 15_000 });
         expect(useOpenCodeStore.getState().hasActiveEventSubscription(ENVIRONMENT_ID))
           .toBe(false);
       } finally {

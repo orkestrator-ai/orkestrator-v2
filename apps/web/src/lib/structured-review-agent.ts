@@ -299,6 +299,11 @@ export function codexAdapter(
           model: workflow.model,
           reasoningEffort: workflow.reasoningEffort,
           phase: backendPipelinePhase(phase),
+          // The phase alone is not enough: `preparation` and `discovery` both map
+          // onto `review`, which the bridge would create read-only — but only
+          // discovery is read-only. Preparation has to commit changes and write
+          // its validation output, so the policy decides, not the phase.
+          sessionMode: policy.codexMode,
         });
         phases.set(ensured.providerSessionId, phase);
         return ensured.providerSessionId;

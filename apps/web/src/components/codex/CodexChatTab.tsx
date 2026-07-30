@@ -58,6 +58,7 @@ import {
   updateSessionConfig as updateCodexSessionConfig,
 } from "@/lib/codex-client";
 import {
+  adoptNativeAgentSession,
   getCodexServerLog,
   getCodexServerStatus,
   getLocalCodexServerStatus,
@@ -96,7 +97,8 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { CodexNativeData } from "@/types/paneLayout";
-import type { CodexAttachment } from "@/stores/codexStore";
+import type { CodexAttachment, CodexQueuedMessage } from "@/stores/codexStore";
+import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import {
   RetryableNewEnvironmentConnectionError,
   classifyNewEnvironmentConnectionStartupError,
@@ -321,6 +323,30 @@ export function CodexChatTab({
     initialLaunchOptionsPendingRef.current = false;
     clearTabInitialAgentOptions(tabId, environmentId);
   }, [clearTabInitialAgentOptions, environmentId, tabId]);
+  /**
+   * Claim a session this tab restored rather than created.
+   *
+   * A tab persisted before the bridge derived session ids from a client key
+   * holds a random id the backend has no record of, so a prompt queued in that
+   * tab would be dispatched into a freshly created session the user cannot see.
+   * Best-effort: the tab is already usable, so a disagreement here must not
+   * break the reconnect the user is watching.
+   */
+  const adoptRestoredSession = useCallback(
+    async (providerSessionId: string) => {
+      try {
+        await adoptNativeAgentSession({
+          environmentId,
+          agent: "codex",
+          logicalSessionKey: sessionKey,
+          providerSessionId,
+        });
+      } catch (error) {
+        console.warn("[CodexChatTab] Failed to adopt the restored session:", error);
+      }
+    },
+    [environmentId, sessionKey],
+  );
   const config = useConfigStore((state) => state.config);
   const setConfig = useConfigStore((state) => state.setConfig);
   const persistedPreferencesRef = useRef(getPersistedCodexPreferences(config));
@@ -948,14 +974,21 @@ export function CodexChatTab({
     [addToQueue, fastModeEnabled, selectedMode, selectedModel, selectedReasoningEffort, sessionKey],
   );
 
-  const promoteNextQueuedPromptToDraft = useCallback(() => {
+  const promoteNextQueuedPromptToDraft = useCallback(async () => {
     const store = useCodexStore.getState();
     const hasCurrentDraft =
       store.getDraftText(sessionKey).trim().length > 0 ||
       store.getAttachments(sessionKey).length > 0;
     if (hasCurrentDraft) return;
 
-    const nextMessage = store.removeFromQueue(sessionKey);
+    // Claim the head through the backend rather than dropping it locally.
+    // Stopping the turn is exactly what makes the provider report idle, so an
+    // unclaimed local removal races the backend drain and the user can end up
+    // holding a prompt in the composer that is already running.
+    const nextMessage = await claimAgentPromptQueueHead<CodexQueuedMessage>(
+      "codex",
+      sessionKey,
+    );
     if (!nextMessage) return;
 
     store.setDraftText(sessionKey, nextMessage.text);
@@ -973,7 +1006,7 @@ export function CodexChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session?.sessionId) return;
 
-    promoteNextQueuedPromptToDraft();
+    await promoteNextQueuedPromptToDraft();
     setSessionError(sessionKey, undefined);
 
     /**
@@ -1211,6 +1244,16 @@ export function CodexChatTab({
 
       const paneStore = usePaneLayoutStore.getState();
       const forkTabId = createUuid();
+      // Bind the fork to the backend's durable record before the tab exists.
+      // Without this the backend has no session for the fork's logical key, so
+      // draining a prompt queued in that tab creates a *different* provider
+      // session and the prompt lands somewhere the user cannot see.
+      await adoptNativeAgentSession({
+        environmentId,
+        agent: "codex",
+        logicalSessionKey: createSessionKey(environmentId, forkTabId),
+        providerSessionId: fork.sessionId,
+      });
       if (planned.kind === "prompt") {
         useCodexStore.getState().setDraftText(
           createSessionKey(environmentId, forkTabId),
@@ -1377,6 +1420,7 @@ export function CodexChatTab({
             if (restoredStatus) {
               const restoredMessages = await getSessionMessages(cachedClient, data.sessionId);
               if (!mounted) return;
+              await adoptRestoredSession(data.sessionId);
               setSession(sessionKey, {
                 sessionId: data.sessionId,
                 messages: restoredMessages,
@@ -1528,6 +1572,7 @@ export function CodexChatTab({
         if (existingSessionId && existingStatus) {
           const messages = await getSessionMessages(nextClient, existingSessionId);
           if (!mounted) return;
+          await adoptRestoredSession(existingSessionId);
           if (existingSession) {
             setMessages(sessionKey, messages);
           } else {

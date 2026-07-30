@@ -4,6 +4,38 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
 
+async function withWorkflowStorage(
+  run: (storage: StorageService) => Promise<void>,
+): Promise<void> {
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-review-lease-guard-"));
+  const storage = new StorageService(dataDir);
+  await storage.init();
+  await storage.addEnvironment({
+    id: "env-1",
+    projectId: "project-1",
+    name: "Environment",
+    branch: "main",
+    containerId: null,
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: new Date(0).toISOString(),
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "local",
+    worktreePath: dataDir,
+  });
+  await storage.saveLoopedReviewWorkflow("workflow-1", "env-1", 1, {
+    id: "workflow-1",
+  });
+  try {
+    await run(storage);
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+}
+
 describe("StorageService looped-review controller lease", () => {
   test("elects one client across backend processes and supports explicit handoff", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-review-lease-"));
@@ -185,5 +217,59 @@ describe("StorageService looped-review controller lease", () => {
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
+  });
+
+  test.each([
+    ["below the floor", 1_999],
+    ["above the ceiling", 60_001],
+    ["not an integer", 15_000.5],
+    ["not finite", Number.POSITIVE_INFINITY],
+    ["negative", -15_000],
+  ])("refuses a lease %s", async (_label, leaseMs) => {
+    await withWorkflowStorage(async (storage) => {
+      await expect(
+        storage.claimLoopedReviewController("workflow-1", "desktop", leaseMs),
+      ).rejects.toThrow("lease is invalid");
+      // A refused claim must not have written a lease the caller could then
+      // renew into a longer one than the bounds allow.
+      expect(await storage.validateLoopedReviewController(
+        "workflow-1",
+        "desktop",
+        "any-token",
+      )).toBe(false);
+    });
+  });
+
+  test.each([
+    ["the floor", 2_000],
+    ["the ceiling", 60_000],
+  ])("grants a lease at %s", async (_label, leaseMs) => {
+    await withWorkflowStorage(async (storage) => {
+      const claim = await storage.claimLoopedReviewController(
+        "workflow-1",
+        "desktop",
+        leaseMs,
+      );
+      expect(claim.granted).toBe(true);
+      expect(Date.parse(claim.expiresAt) - Date.now())
+        .toBeLessThanOrEqual(leaseMs);
+    });
+  });
+
+  test("refuses a claim for a workflow that does not exist", async () => {
+    await withWorkflowStorage(async (storage) => {
+      await expect(
+        storage.claimLoopedReviewController("workflow-missing", "desktop", 15_000),
+      ).rejects.toThrow("Looped review workflow not found: workflow-missing");
+    });
+  });
+
+  test("refuses a claim with a blank workflow or owner identity", async () => {
+    await withWorkflowStorage(async (storage) => {
+      await expect(storage.claimLoopedReviewController("", "desktop", 15_000))
+        .rejects.toThrow("identity must not be blank");
+      await expect(storage.claimLoopedReviewController("workflow-1", "  ", 15_000))
+        .rejects.toThrow("identity must not be blank");
+    });
   });
 });

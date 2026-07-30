@@ -161,6 +161,59 @@ describe("session preferences", () => {
     ).rejects.toThrow("refusing to overwrite the durable prompt journal");
   });
 
+  test("keeps a well-formed client session alias", async () => {
+    const alias = `session-client-${"0123456789abcdef".repeat(2)}`;
+    await updateSessionPreferences(SESSION_ID, {
+      clientSessionBridgeId: alias,
+    });
+
+    expect(await readSessionPreferences(SESSION_ID)).toEqual({
+      clientSessionBridgeId: alias,
+    });
+  });
+
+  test("fails closed for a malformed client session alias", async () => {
+    await mkdir(claudeSessionPreferencesDir(), { recursive: true });
+    const malformedAliases: unknown[] = [
+      null,
+      42,
+      true,
+      { id: `session-client-${"a".repeat(32)}` },
+      "",
+      "session-client-",
+      `session-${SESSION_ID}`,
+      // One hex digit short, one too long, and the uppercase form: the alias is
+      // decoded back into a filename-bound SDK id, so only the canonical shape
+      // may be trusted.
+      `session-client-${"a".repeat(31)}`,
+      `session-client-${"a".repeat(33)}`,
+      `session-client-${"A".repeat(32)}`,
+    ];
+
+    for (const clientSessionBridgeId of malformedAliases) {
+      await writeFile(
+        preferencePath(),
+        JSON.stringify({
+          clientSessionBridgeId,
+          planMode: false,
+          dispatchedRequestIds: ["request-1"],
+        }),
+        "utf-8",
+      );
+
+      const preferences = await readSessionPreferences(SESSION_ID);
+      expect(preferences).toEqual({ planMode: true });
+      expect(sessionPreferencesUnavailable(preferences)).toBe(true);
+    }
+
+    // Rejecting the alias discards the whole document, so the dispatch journal
+    // beside it is unknown and a later write must refuse rather than replace it
+    // with one that has forgotten every accepted prompt.
+    await expect(
+      updateSessionPreferences(SESSION_ID, { planMode: false }),
+    ).rejects.toThrow("refusing to overwrite the durable prompt journal");
+  });
+
   test("merges fields and serializes concurrent updates to one session", async () => {
     await Promise.all([
       updateSessionPreferences(SESSION_ID, { planMode: true }),

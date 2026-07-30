@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
+import type { TaskSnapshotImage } from "@orkestrator/protocol/build-pipeline";
 import {
   createBuildPipelineProvider,
   PromptRejectedError,
   ProviderUnavailableError,
   type BridgeConnection,
 } from "./build-pipeline-provider.js";
+import { mimeTypeForFilename } from "./prompt-attachments.js";
 
 const claudeConnection: BridgeConnection = {
   agent: "claude",
@@ -31,16 +33,30 @@ const codexConnection: BridgeConnection = {
 function httpProvider(
   handler: (url: string, init: RequestInit) => Promise<Response> | Response,
   connection: BridgeConnection = claudeConnection,
+  options: { stageImages?: boolean } = {},
 ) {
   const requests: RequestRecord[] = [];
+  const staged: TaskSnapshotImage[][] = [];
   const provider = createBuildPipelineProvider(connection, {
     fetch: (async (input, init = {}) => {
       const url = String(input);
       requests.push({ url, init });
       return handler(url, init);
     }) as typeof fetch,
+    stageImages: options.stageImages === false
+      ? undefined
+      : async (images) => {
+          staged.push([...images]);
+          return images.map((image) => ({
+            type: "image" as const,
+            path: `/workspace/.orkestrator/initial-prompt/${image.filename}`,
+            filename: image.filename,
+            dataUrl:
+              `data:${mimeTypeForFilename(image.filename)};base64,${image.data}`,
+          }));
+        },
   });
-  return { provider, requests };
+  return { provider, requests, staged };
 }
 
 function waitUntil(assertion: () => boolean, timeoutMs = 1_000): Promise<void> {
@@ -190,6 +206,9 @@ describe("HTTP build pipeline provider", () => {
       "http://claude.test/session/session%2F1/prompt",
       "http://claude.test/session/session%2F1/abort",
     ]);
+    // Every bridge validator requires `path`: the Claude route rejects the whole
+    // request without one and the Codex route silently drops the entry. So a
+    // base64 image is staged into the workspace and attached by path.
     expect(JSON.parse(String(requests[2]!.init.body))).toMatchObject({
       prompt: "Build it",
       requestId: "request-1",
@@ -197,9 +216,93 @@ describe("HTTP build pipeline provider", () => {
       permissionMode: "bypassPermissions",
       attachments: [{
         type: "image",
-        source: { media_type: "image/webp", data: "AA==" },
+        path: "/workspace/.orkestrator/initial-prompt/screen.webp",
+        filename: "screen.webp",
+        dataUrl: "data:image/webp;base64,AA==",
       }],
     });
+  });
+
+  test("lets an explicit session mode override the one the phase implies", async () => {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ sessionId: "codex-1" }),
+      codexConnection,
+    );
+
+    // `preparation` and `discovery` both reach the bridge as the `review` phase,
+    // which would create a read-only session — but preparation has to commit.
+    await provider.createSession("review", "Prepare", { mode: "build" });
+    await provider.createSession("review", "Discover", { mode: "plan" });
+    await provider.createSession("review", "Unspecified");
+
+    expect(requests.map((request) => JSON.parse(String(request.init.body)).mode))
+      .toEqual(["build", "plan", "plan"]);
+  });
+
+  test("refuses base64 images when nothing can stage them", async () => {
+    const { provider, requests } = httpProvider(
+      () => new Response(null, { status: 204 }),
+      claudeConnection,
+      { stageImages: false },
+    );
+
+    // Silently dropping the image would leave a prompt that references a picture
+    // the agent was never given.
+    await expect(provider.send("session-1", "Look", {
+      requestId: "request-1",
+      images: [{ filename: "screen.png", data: "AA==" }],
+    })).rejects.toBeInstanceOf(PromptRejectedError);
+    expect(requests).toHaveLength(0);
+  });
+
+  test("forwards per-prompt Claude options ahead of the connection defaults", async () => {
+    const { provider, requests } = httpProvider(
+      () => new Response(null, { status: 204 }),
+      { ...claudeConnection, model: "connection-model", effort: "low" },
+    );
+
+    await provider.send("session-1", "Ship it", {
+      requestId: "request-1",
+      model: "prompt-model",
+      effort: "high",
+      subAgent: "reviewer",
+      includeLocalSettings: true,
+      promptSuggestions: false,
+    });
+
+    // A queued prompt carries the model, sub-agent and settings the user chose;
+    // falling back to the connection default would silently change the model.
+    expect(JSON.parse(String(requests[0]!.init.body))).toMatchObject({
+      model: "prompt-model",
+      effort: "high",
+      agent: "reviewer",
+      includeLocalSettings: true,
+      promptSuggestions: false,
+    });
+  });
+
+  test("attaches already-staged attachments without restaging them", async () => {
+    const { provider, requests, staged } = httpProvider(
+      () => new Response(null, { status: 204 }),
+    );
+
+    await provider.send("session-1", "Review this", {
+      requestId: "request-1",
+      attachments: [{
+        type: "image",
+        path: "/workspace/shot.png",
+        filename: "shot.png",
+        dataUrl: "data:image/png;base64,AA==",
+      }],
+    });
+
+    expect(staged).toEqual([]);
+    expect(JSON.parse(String(requests[0]!.init.body)).attachments).toEqual([{
+      type: "image",
+      path: "/workspace/shot.png",
+      filename: "shot.png",
+      dataUrl: "data:image/png;base64,AA==",
+    }]);
   });
 
   test("keeps queued Claude plan turns in plan permission mode", async () => {
@@ -662,6 +765,7 @@ describe("HTTP build pipeline provider (codex)", () => {
     const body = JSON.parse(String(requests[0]!.init.body));
     expect(body.attachments).toEqual([{
       type: "image",
+      path: "/workspace/.orkestrator/initial-prompt/shot.jpeg",
       filename: "shot.jpeg",
       dataUrl: "data:image/jpeg;base64,AAAA",
     }]);

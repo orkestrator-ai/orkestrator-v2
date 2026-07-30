@@ -27,6 +27,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { FilePlus2, Play, Terminal as TerminalIcon } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { markSetupScriptsComplete, preserveCompletedSetupState, shouldAutoResolveSetupCommands } from "@/lib/setup-commands";
 import * as backend from "@/lib/backend";
@@ -175,18 +176,26 @@ const STARTUP_AGENT_TAB_TYPES: Record<TabType, boolean> = {
   root: false,
 };
 
-function hasStartupAgentTab(
-  state: { root: PaneNode },
-  requireStableIdentity = false,
-): boolean {
-  return getAllLeaves(state.root)
-    .some((leaf) =>
-      leaf.tabs.some((tab) =>
-        STARTUP_AGENT_TAB_TYPES[tab.type] === true
-        && (!requireStableIdentity || tab.id === STARTUP_AGENT_TAB_ID)
-      )
-    );
+/**
+ * The id of the tab that already satisfies a startup agent launch, if any.
+ *
+ * Returns the id rather than a boolean because an environment carried over from
+ * before {@link STARTUP_AGENT_TAB_ID} existed holds its agent tab under a
+ * generated id. Insisting on the stable id there reported "no agent tab", so the
+ * launch effect opened a second one and the backend re-dispatched the initial
+ * prompt. The stable id still wins when both are present, so a converged launch
+ * keeps binding its provider session to the canonical tab.
+ */
+function findStartupAgentTabId(state: { root: PaneNode }): string | null {
+  const candidates = getAllLeaves(state.root)
+    .flatMap((leaf) => leaf.tabs)
+    .filter((tab) => STARTUP_AGENT_TAB_TYPES[tab.type] === true);
+  if (candidates.length === 0) return null;
+  return candidates.some((tab) => tab.id === STARTUP_AGENT_TAB_ID)
+    ? STARTUP_AGENT_TAB_ID
+    : candidates[0]!.id;
 }
+
 
 type TerminalTabDragEndAction =
   | { type: "none" }
@@ -820,6 +829,32 @@ export function TerminalContainer({
     }
   }, [isActive, environmentId, setActiveEnvironment]);
 
+  // Report a failed startup launch. The backend records it durably and keeps
+  // retrying, but nothing else renders it: without this the user gets a plain
+  // terminal, no agent tab, and an initial prompt that never arrives.
+  const reportedStartupErrorRef = useRef<string | null>(null);
+  useEffect(() => {
+    const startupSession = environment?.startupAgentSession;
+    if (startupSession?.status !== "error") {
+      reportedStartupErrorRef.current = null;
+      return;
+    }
+    const reason = startupSession.error ?? "The agent could not be started.";
+    // Keyed on the message so a repeated retry failure does not re-toast, but a
+    // different failure still does.
+    if (reportedStartupErrorRef.current === reason) return;
+    reportedStartupErrorRef.current = reason;
+    toast.error(`${startupSession.agent} could not start in ${environment?.name ?? "this environment"}`, {
+      description: reason,
+      duration: 10_000,
+    });
+  }, [
+    environment?.name,
+    environment?.startupAgentSession?.agent,
+    environment?.startupAgentSession?.error,
+    environment?.startupAgentSession?.status,
+  ]);
+
   // Reconstruct the post-setup agent launch from backend-owned environment
   // state after a mobile page reload. The transient options store is only an
   // optimization for the uninterrupted creation path.
@@ -838,12 +873,15 @@ export function TerminalContainer({
       return;
     }
 
-    if (hasStartupAgentTab(currentEnvState, !!backendLaunch)) {
+    const existingStartupTabId = findStartupAgentTabId(currentEnvState);
+    if (existingStartupTabId) {
       if (durableLaunchClearInFlightRef.current) return;
       durableLaunchClearInFlightRef.current = true;
       if (backendLaunch?.providerSessionId) {
+        // Bind the backend's session to whichever tab actually satisfies this
+        // launch, including a legacy generated id.
         usePaneLayoutStore.getState().updateTabNativeSessionId(
-          STARTUP_AGENT_TAB_ID,
+          existingStartupTabId,
           backendLaunch.providerSessionId,
           environmentId,
         );

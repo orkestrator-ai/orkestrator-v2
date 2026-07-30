@@ -238,6 +238,58 @@ describe("StorageService prompt queues", () => {
     });
   });
 
+  test("refuses to claim a head while a rejection is parked", async () => {
+    await withStorage(async (storage) => {
+      await storage.savePromptQueue(KEY, "e1", [
+        { id: "m1", text: "invalid" },
+        { id: "m2", text: "later" },
+      ]);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+      const failed = await storage.failPromptQueueDispatch(KEY, "m1");
+
+      // The renderer promotes a claimed head into its composer. Handing it the
+      // rejected prompt would silently discard the error the user must see.
+      const result = await storage.claimPromptQueueHead(KEY, "e1", "m1", [
+        { id: "m1", text: "invalid" },
+      ]);
+      expect(result.claimed).toBeNull();
+      expect(result.queue).toMatchObject({
+        revision: failed!.revision,
+        dispatchError: { requestId: "m1" },
+      });
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({
+        messages: [{ id: "m1" }, { id: "m2" }],
+        revision: failed!.revision,
+      });
+
+      await storage.retryPromptQueueDispatch(KEY);
+      expect((await storage.claimPromptQueueHead(KEY, "e1", "m1", [])).claimed)
+        .toEqual({ id: "m1", text: "invalid" });
+    });
+  });
+
+  test("keeps a durable in-flight dispatch when a later head is claimed", async () => {
+    await withStorage(async (storage) => {
+      await storage.savePromptQueue(KEY, "e1", [
+        { id: "row-1", text: "dispatching" },
+        { id: "row-2", text: "claimable" },
+      ]);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+
+      const result = await storage.claimPromptQueueHead(KEY, "e1", "row-2", []);
+      expect(result.claimed).toEqual({ id: "row-2", text: "claimable" });
+      // Dropping inFlight here would let the backend reserve and send row-1 a
+      // second time under a fresh request id.
+      expect(result.queue).toMatchObject({
+        messages: [],
+        inFlight: { requestId: "row-1" },
+      });
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({
+        inFlight: { requestId: "row-1", message: { id: "row-1" } },
+      });
+    });
+  });
+
   test("validates claim candidates and environment ownership", async () => {
     await withStorage(async (storage) => {
       await expect(

@@ -1129,6 +1129,42 @@ async function persistSessionMetadata(
 }
 
 /**
+ * Re-assert a client-key session's durable alias when it is missing from disk.
+ *
+ * The alias is otherwise written exactly once, on the first turn's `init`, and
+ * only because that init *changes* `session.sdkSessionId`. A session recovered
+ * from disk already carries the id derived from its alias, so init never sees a
+ * durable-identity change again: one failed write — or one refusal while the
+ * preferences file was unreadable — would be permanent. Every later
+ * {@link reconcilePersistedSessions} would then adopt this rollout a second time
+ * under `session-<uuid>`, which is exactly the duplicate session tab. The
+ * materialization path already point-reads the preferences, so repairing it here
+ * costs one write and only when the alias is genuinely absent.
+ */
+async function ensureClientSessionAlias(
+  session: SessionState,
+  preferences: SessionPreferences | undefined,
+): Promise<void> {
+  if (!CLIENT_SESSION_ID_PATTERN.test(session.id)) return;
+  // The alias encodes this exact SDK id, so the stored value is either already
+  // it or a stale/foreign alias that `persistedBridgeSessionId` ignores anyway.
+  if (preferences?.clientSessionBridgeId === session.id) return;
+  // An unreadable file is refused by `updateSessionPreferences` regardless, and
+  // overwriting it would destroy the dispatch journal that refusal protects.
+  if (sessionPreferencesUnavailable(preferences)) return;
+  try {
+    await persistSessionMetadata(session);
+  } catch (error) {
+    // Best effort: the next materialization retries, and failing here would
+    // stop the user opening a session whose rollout is perfectly readable.
+    console.debug(
+      "[session-manager] Failed to re-assert the client session alias:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+/**
  * Record a plan-mode change on the session, durably and observably.
  *
  * Emitted unconditionally (not only on change) so a renderer whose optimistic
@@ -2575,6 +2611,9 @@ async function materializePersistedSessionState(
   };
   touchSession(state);
   sessions.set(sessionId, state);
+  // Registered first: the alias repair is durability housekeeping and must not
+  // decide whether this session becomes available.
+  await ensureClientSessionAlias(state, preferences);
   return state;
 }
 

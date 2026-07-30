@@ -61,6 +61,7 @@ import {
   startLocalClaudeServer,
   getLocalClaudeServerStatus,
   getClaudeModelCatalog,
+  adoptNativeAgentSession,
   ensureNativeAgentSession,
   renameEnvironmentFromPrompt,
 } from "@/lib/backend";
@@ -79,7 +80,8 @@ import type { ClaudeNativeData } from "@/types/paneLayout";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
-import type { ClaudeAttachment } from "@/stores/claudeStore";
+import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
+import { claimAgentPromptQueueHead } from "@/lib/prompt-queue-sources";
 import {
   applyClaudeBackgroundTaskStates,
   getClaudeSourceMessageId,
@@ -1334,6 +1336,23 @@ export function ClaudeChatTab({
         if (existingSessionId) {
           // Restore session from store - component may have remounted
           tabSessionIdRef.current = existingSessionId;
+          // Claim the restored id for this tab's logical key. A tab persisted
+          // before the bridge derived session ids from a client key holds a
+          // random id the backend has no record of, so the first queued prompt
+          // would otherwise be dispatched into a freshly created session.
+          // Best-effort: the tab is already usable, so a disagreement here must
+          // not break the reconnect the user is watching.
+          await adoptNativeAgentSession({
+            environmentId,
+            agent: "claude",
+            logicalSessionKey: sessionKey,
+            providerSessionId: existingSessionId,
+          }).catch((error) => {
+            console.warn(
+              "[ClaudeChatTab] Failed to adopt the restored session:",
+              error,
+            );
+          });
           updateTabNativeSessionId(tabId, existingSessionId, environmentId);
           isInitializedRef.current = true;
           console.debug("[ClaudeChatTab] Reconnecting to existing session", {
@@ -2208,26 +2227,46 @@ export function ClaudeChatTab({
   // Handle adding a message to the queue when Claude is busy
   const handleQueue = useCallback(
     (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => {
+      const store = useClaudeStore.getState();
+      const model = getSelectedModel(sessionKey);
+      // The backend dispatches this prompt and cannot read the renderer's
+      // selections, so capture them now. Fast mode is resolved against the model
+      // chosen for *this* entry, since the direct send path refuses it for a
+      // model that does not advertise support.
+      const modelSupportsFastMode = store
+        .getModels(environmentId)
+        .find((candidate) => candidate.id === model)?.supportsFastMode !== false;
       addToQueue(sessionKey, {
         id: createUuid(),
         text,
         attachments,
         effort,
         planModeEnabled,
-        fastModeEnabled,
+        fastModeEnabled: fastModeEnabled && modelSupportsFastMode,
+        model,
+        agent: store.getSelectedAgent(sessionKey),
+        includeLocalSettings: store.includesLocalSettings(sessionKey),
+        promptSuggestions: store.promptSuggestionOptIn.get(sessionKey) === true,
       });
     },
-    [sessionKey, addToQueue]
+    [sessionKey, addToQueue, environmentId, getSelectedModel]
   );
 
-  const promoteNextQueuedPromptToDraft = useCallback(() => {
+  const promoteNextQueuedPromptToDraft = useCallback(async () => {
     const store = useClaudeStore.getState();
     const hasCurrentDraft =
       store.getDraftText(sessionKey).trim().length > 0 ||
       store.getAttachments(sessionKey).length > 0;
     if (hasCurrentDraft) return;
 
-    const nextMessage = store.removeFromQueue(sessionKey);
+    // Claim the head through the backend rather than dropping it locally.
+    // Stopping the turn is exactly what makes the provider report idle, so an
+    // unclaimed local removal races the backend drain and the user can end up
+    // holding a prompt in the composer that is already running.
+    const nextMessage = await claimAgentPromptQueueHead<QueuedMessage>(
+      "claude",
+      sessionKey,
+    );
     if (!nextMessage) return;
 
     store.setDraftText(sessionKey, nextMessage.text);
@@ -2245,7 +2284,7 @@ export function ClaudeChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    promoteNextQueuedPromptToDraft();
+    await promoteNextQueuedPromptToDraft();
     setSessionLoading(sessionKey, false);
 
     const success = await abortSession(client, session.sessionId);
@@ -2549,6 +2588,16 @@ export function ClaudeChatTab({
 
       const paneStore = usePaneLayoutStore.getState();
       const forkTabId = createUuid();
+      // Bind the fork to the backend's durable record before the tab exists.
+      // Without this the backend has no session for the fork's logical key, so
+      // draining a prompt queued in that tab creates a *different* provider
+      // session and the prompt lands somewhere the user cannot see.
+      await adoptNativeAgentSession({
+        environmentId,
+        agent: "claude",
+        logicalSessionKey: createSessionKey(environmentId, forkTabId),
+        providerSessionId: fork.sessionId,
+      });
       if (planned.kind === "prompt") {
         useClaudeStore.getState().setDraftText(
           createSessionKey(environmentId, forkTabId),

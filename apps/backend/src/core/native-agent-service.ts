@@ -14,6 +14,12 @@ import {
   type BuildPipelineProvider,
   type ProviderExecutionMode,
 } from "./build-pipeline-provider.js";
+import {
+  assertValidPromptAttachments,
+  INITIAL_PROMPT_STAGING_DIRECTORY,
+  stagePromptImages,
+  type PromptAttachment,
+} from "./prompt-attachments.js";
 
 type CommandInvoker = <T>(
   command: string,
@@ -28,16 +34,30 @@ export interface EnsureNativeAgentSessionInput {
   model?: string;
   reasoningEffort?: string;
   phase?: PipelineSessionPhase;
+  /**
+   * Execution mode for the session, overriding what the phase implies.
+   *
+   * Looped-review phases collapse several distinct steps onto `review`, and one
+   * of them (preparation) has to commit changes — so a phase-derived read-only
+   * Codex session would make that round fail.
+   */
+  sessionMode?: ProviderExecutionMode;
 }
 
 export interface DispatchNativeAgentPromptInput
   extends EnsureNativeAgentSessionInput {
   prompt: string;
   requestId: string;
+  /** Base64 images that still need staging into the workspace. */
   images?: TaskSnapshotImage[];
+  /** Attachments the caller already staged, carrying workspace paths. */
+  attachments?: PromptAttachment[];
   schema?: JsonSchema;
   mode?: ProviderExecutionMode;
   fastMode?: boolean;
+  subAgent?: string;
+  includeLocalSettings?: boolean;
+  promptSuggestions?: boolean;
 }
 
 export interface AdoptNativeAgentSessionInput
@@ -53,8 +73,40 @@ export interface NativeAgentServiceOptions {
   ) => Promise<BuildPipelineProvider>;
 }
 
+const QUEUE_RETRY_BASE_MS = 2_000;
+const QUEUE_RETRY_CEILING_MS = 60_000;
+const MAX_QUEUE_DISPATCH_ATTEMPTS = 5;
+const LAUNCH_RETRY_MS = 10_000;
+
 function nonBlank(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * An agent can only be driven once its environment is running and its setup
+ * scripts have finished.
+ *
+ * The launch path has always checked this. The drain path must too: without it a
+ * stopped or still-provisioning environment with a leftover queued prompt makes
+ * the backend spawn bridge servers and attempt dispatch every two seconds.
+ */
+function isEnvironmentReadyForAgents(environment: Environment): boolean {
+  return environment.status === "running"
+    && environment.setupScriptsComplete === true;
+}
+
+const LEGACY_TIMESTAMP_ENVIRONMENT_NAME = /^\d{8}-\d{6}$/;
+const COMPACT_TIMESTAMP_ENVIRONMENT_NAME = /^\d{15}$/;
+
+/**
+ * True for a name generated before the environment had a prompt-derived title.
+ *
+ * Twin of `apps/web/src/lib/environment-name.ts` — the renderer applies the same
+ * guard on its own send path, and both must agree on which names are renameable.
+ */
+function isGeneratedEnvironmentName(name: string): boolean {
+  return LEGACY_TIMESTAMP_ENVIRONMENT_NAME.test(name)
+    || COMPACT_TIMESTAMP_ENVIRONMENT_NAME.test(name);
 }
 
 export function nativeAgentSessionStorageKey(
@@ -85,6 +137,7 @@ export class NativeAgentService {
   private readonly launchRetryAt = new Map<string, number>();
   private readonly queueTasks = new Map<string, Promise<void>>();
   private readonly queueRetryAt = new Map<string, number>();
+  private readonly queueAttempts = new Map<string, number>();
   private readonly scanTasks = new Set<Promise<void>>();
   private launchTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
@@ -217,9 +270,15 @@ export class NativeAgentService {
             await provider.send(durable.providerSessionId, input.prompt, {
               requestId: input.requestId,
               images: input.images,
+              attachments: input.attachments,
               schema: input.schema,
               mode: input.mode,
               fastMode: input.fastMode,
+              subAgent: input.subAgent,
+              includeLocalSettings: input.includeLocalSettings,
+              promptSuggestions: input.promptSuggestions,
+              model: input.model,
+              effort: input.reasoningEffort,
             });
           },
         ),
@@ -263,12 +322,19 @@ export class NativeAgentService {
     const now = Date.now();
     const environments = await this.storage.loadEnvironments();
     if (this.stopped) return;
+    await this.pruneProviders(
+      new Set(
+        environments
+          .filter((environment) => !environment.deletionRequestedAt)
+          .map((environment) => environment.id),
+      ),
+    );
+    if (this.stopped) return;
     await Promise.allSettled(
       environments
         .filter((environment) =>
           environment.pendingAgentLaunch
-          && environment.status === "running"
-          && environment.setupScriptsComplete === true
+          && isEnvironmentReadyForAgents(environment)
           && (this.launchRetryAt.get(environment.id) ?? 0) <= now
         )
         .map((environment) => this.reconcileInitialLaunch(environment.id)),
@@ -295,6 +361,46 @@ export class NativeAgentService {
     );
   }
 
+  /**
+   * Back off a queue and, once the attempts are clearly not transient, park it
+   * with a durable error the renderer can show.
+   *
+   * An unbounded 2s retry is invisible: nothing is logged, no dispatchError is
+   * latched, and the user sees a queue that simply never drains.
+   */
+  private async deferQueue(
+    queueKey: string,
+    reason: string,
+    requestId?: string,
+  ): Promise<void> {
+    const attempts = (this.queueAttempts.get(queueKey) ?? 0) + 1;
+    this.queueAttempts.set(queueKey, attempts);
+    if (attempts >= MAX_QUEUE_DISPATCH_ATTEMPTS) {
+      // The key and the reason are safe to log; the prompt itself never is.
+      console.warn(
+        `[native-agent] Prompt queue ${queueKey} has failed ${attempts} times: ${reason}`,
+      );
+      if (requestId !== undefined) {
+        this.queueAttempts.delete(queueKey);
+        this.queueRetryAt.delete(queueKey);
+        await this.storage.failPromptQueueDispatch(queueKey, requestId, reason);
+        return;
+      }
+    }
+    // Exponential up to a ceiling so a wedged provider is retried rarely rather
+    // than every two seconds forever.
+    const backoff = Math.min(
+      QUEUE_RETRY_CEILING_MS,
+      QUEUE_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 8),
+    );
+    this.queueRetryAt.set(queueKey, Date.now() + backoff);
+  }
+
+  private clearQueueBackoff(queueKey: string): void {
+    this.queueAttempts.delete(queueKey);
+    this.queueRetryAt.delete(queueKey);
+  }
+
   private async drainPromptQueue(queueKey: string): Promise<void> {
     if (this.stopped) return;
     const existing = this.queueTasks.get(queueKey);
@@ -310,6 +416,23 @@ export class NativeAgentService {
   }
 
   private async drainPromptQueueOnce(queueKey: string): Promise<void> {
+    try {
+      await this.drainReadyPromptQueue(queueKey);
+    } catch (error) {
+      // Any fault that escapes the drain must still back off. A storage read or
+      // reservation that throws bypasses every inner handler, and the scan's
+      // `allSettled` swallows the rejection — so without this the queue was
+      // retried every two seconds with no attempt counter, no latch and no log:
+      // the same invisible hot loop deferQueue exists to prevent, reached
+      // through a storage fault instead of a provider fault.
+      await this.deferQueue(
+        queueKey,
+        error instanceof Error ? error.name : "unknown drain error",
+      ).catch(() => undefined);
+    }
+  }
+
+  private async drainReadyPromptQueue(queueKey: string): Promise<void> {
     if (this.stopped) return;
     const separator = queueKey.indexOf("\0");
     if (separator <= 0) return;
@@ -323,38 +446,46 @@ export class NativeAgentService {
     }
     const queue = await this.storage.getPromptQueue(queueKey);
     if (!queue || queue.dispatchError) return;
-    await this.assertEnvironmentLive(queue.environmentId);
+    const environment = await this.assertEnvironmentLive(queue.environmentId);
+    // The launch path has always required this; so must the drain path. A
+    // stopped or still-provisioning environment must not be started by a
+    // leftover queued prompt.
+    if (!isEnvironmentReadyForAgents(environment)) {
+      await this.deferQueue(queueKey, "environment is not ready for agents");
+      return;
+    }
     const draftKey =
       `${agent}:${queue.environmentId}:${encodeURIComponent(logicalSessionKey)}`;
     const draft = await this.storage.getComposeDraft(draftKey);
     if (this.composeDraftHoldsQueue(draft?.value)) return;
 
-    const mode = this.queueExecutionMode(agent, queue.inFlight?.message ?? queue.messages[0]);
+    const head = queue.inFlight?.message ?? queue.messages[0];
+    const mode = this.queueExecutionMode(agent, head);
     const session = await this.ensureSession({
       environmentId: queue.environmentId,
       agent,
       logicalSessionKey,
-      model: this.queueString(queue.inFlight?.message ?? queue.messages[0], "model"),
-      reasoningEffort: this.queueReasoningEffort(
-        queue.inFlight?.message ?? queue.messages[0],
-      ),
+      model: this.queueString(head, "model"),
+      reasoningEffort: this.queueReasoningEffort(head),
       phase: mode === "plan" ? "review" : "build",
     });
     const provider = await this.provider({
       environmentId: queue.environmentId,
       agent,
       logicalSessionKey,
-      model: this.queueString(queue.inFlight?.message ?? queue.messages[0], "model"),
-      reasoningEffort: this.queueReasoningEffort(
-        queue.inFlight?.message ?? queue.messages[0],
-      ),
+      model: this.queueString(head, "model"),
+      reasoningEffort: this.queueReasoningEffort(head),
     });
     await this.assertEnvironmentLive(queue.environmentId);
     const status = await provider.status(session.providerSessionId);
     await this.assertEnvironmentLive(queue.environmentId);
     if (status === "running") return;
     if (status !== "idle") {
-      this.queueRetryAt.set(queueKey, Date.now() + 2_000);
+      await this.deferQueue(
+        queueKey,
+        `provider session is ${status}`,
+        queue.inFlight?.requestId,
+      );
       return;
     }
     if (this.stopped) return;
@@ -373,66 +504,78 @@ export class NativeAgentService {
       return;
     }
 
-    const attachmentPaths = Array.isArray(message.attachments)
-      ? message.attachments.flatMap((candidate) => {
-          if (
-            !candidate
-            || typeof candidate !== "object"
-            || !nonBlank((candidate as Record<string, unknown>).path)
-          ) {
-            return [];
-          }
-          return [(candidate as { path: string }).path];
-        })
-      : [];
-    const prompt = attachmentPaths.length === 0
-      ? message.text
-      : [
-          message.text,
-          "",
-          "Attached workspace files:",
-          ...attachmentPaths.map((filePath) => `- ${filePath}`),
-        ].join("\n");
+    // Queued attachments were staged by the renderer, so they already carry
+    // workspace paths and can be attached for real. Flattening them into prose
+    // silently degraded an image to a filename the model had to guess at.
+    let attachments: PromptAttachment[] = [];
     try {
+      attachments = Array.isArray(message.attachments)
+        ? assertValidPromptAttachments(message.attachments)
+        : [];
+    } catch (error) {
+      const reason = error instanceof Error
+        ? error.message
+        : "Queued attachment is invalid";
+      await this.storage.failPromptQueueDispatch(
+        queueKey,
+        reservation.requestId,
+        reason,
+      );
+      this.clearQueueBackoff(queueKey);
+      return;
+    }
+    try {
+      // Only the first prompt in a session names the environment, and only while
+      // it still carries a generated name — the same guard the renderer applied
+      // before draining moved to the backend.
+      if ((session.dispatchedRequestIds?.length ?? 0) === 0) {
+        await this.renameEnvironmentFromFirstPrompt(
+          queue.environmentId,
+          message.text,
+        );
+      }
       await this.dispatchPrompt({
         environmentId: queue.environmentId,
         agent,
         logicalSessionKey,
-        model: nonBlank(message.model) ? message.model : undefined,
-        reasoningEffort:
-          nonBlank(message.reasoningEffort)
-            ? message.reasoningEffort
-            : nonBlank(message.effort)
-              ? message.effort
-              : nonBlank(message.variant)
-                ? message.variant
-                : undefined,
+        model: this.queueString(message, "model"),
+        reasoningEffort: this.queueReasoningEffort(message),
         phase: this.queueExecutionMode(agent, message) === "plan"
           ? "review"
           : "build",
         mode: this.queueExecutionMode(agent, message),
         fastMode: this.queueFastMode(agent, message),
-        prompt,
+        subAgent: this.queueString(message, "agent"),
+        includeLocalSettings: this.queueBoolean(message, "includeLocalSettings"),
+        promptSuggestions: this.queueBoolean(message, "promptSuggestions"),
+        attachments,
+        prompt: message.text,
         requestId: reservation.requestId,
       });
       await this.storage.acknowledgePromptQueueDispatch(
         queueKey,
         reservation.requestId,
       );
-      this.queueRetryAt.delete(queueKey);
+      this.clearQueueBackoff(queueKey);
     } catch (error) {
       if (error instanceof PromptRejectedError) {
         await this.storage.failPromptQueueDispatch(
           queueKey,
           reservation.requestId,
+          error.message,
         );
-        this.queueRetryAt.delete(queueKey);
+        this.clearQueueBackoff(queueKey);
         return;
       }
       // Keep the in-flight record durable. The same request id is retried after
       // backoff, so an ambiguous provider response cannot become a second turn.
-      this.queueRetryAt.set(queueKey, Date.now() + 2_000);
-      throw error;
+      // Handled here rather than rethrown so the attempt is counted once, with
+      // the reservation id the latch needs.
+      await this.deferQueue(
+        queueKey,
+        error instanceof Error ? error.name : "unknown dispatch error",
+        reservation.requestId,
+      );
     }
   }
 
@@ -444,8 +587,7 @@ export class NativeAgentService {
     if (
       !environment
       || !environment.pendingAgentLaunch
-      || environment.status !== "running"
-      || environment.setupScriptsComplete !== true
+      || !isEnvironmentReadyForAgents(environment)
     ) {
       return;
     }
@@ -506,6 +648,10 @@ export class NativeAgentService {
 
     try {
       const prompt = environment.initialPrompt?.trim();
+      // Passed as base64 rather than staged here: the provider stages inside the
+      // durable dispatch lock, so only the supervisor that actually wins the
+      // launch writes the file. Staging first would have every supervisor write
+      // the same path concurrently.
       const images = environment.initialPromptAttachments?.map((attachment) => ({
         filename: attachment.name,
         data: attachment.base64Data,
@@ -547,8 +693,24 @@ export class NativeAgentService {
       });
       this.launchRetryAt.delete(environment.id);
     } catch (error) {
-      this.launchRetryAt.set(environment.id, Date.now() + 10_000);
+      // A rejection is the provider's verdict on this prompt, not a transient
+      // fault: retrying it every ten seconds forever would never succeed and
+      // leaves the environment hidden-mounted and polled for the life of the
+      // app. Stop retrying and let the surfaced error stand.
+      const terminal = error instanceof PromptRejectedError;
+      console.warn(
+        `[native-agent] Startup launch for ${environment.id} failed`
+        + `${terminal ? " permanently" : ""}: `
+        + (error instanceof Error ? error.name : "unknown error"),
+      );
+      if (!terminal) this.launchRetryAt.set(environment.id, Date.now() + LAUNCH_RETRY_MS);
       await this.storage.updateEnvironment(environment.id, {
+        ...(terminal
+          ? {
+              pendingAgentLaunch: false,
+              initialPromptAttachments: undefined,
+            }
+          : {}),
         startupAgentSession: {
           tabId: "startup-agent",
           agent,
@@ -556,23 +718,55 @@ export class NativeAgentService {
           model,
           reasoningEffort,
           status: "error",
-          error: "Agent launch failed; the backend will retry.",
+          error: terminal
+            ? `The agent rejected the initial prompt: ${error.message}`
+            : "Agent launch failed; the backend will retry.",
         },
       });
       throw error;
     }
   }
 
+  /**
+   * Name the environment from its first prompt.
+   *
+   * Draining moved out of the renderer, and this call moved with the rest of
+   * `handleSend` — so an environment whose first prompt arrived through the
+   * queue kept its generated timestamp name. A failure here must never block the
+   * prompt: the name is cosmetic, the dispatch is not.
+   */
+  private async renameEnvironmentFromFirstPrompt(
+    environmentId: string,
+    prompt: unknown,
+  ): Promise<void> {
+    if (!nonBlank(prompt)) return;
+    const environment = await this.storage.getEnvironment(environmentId);
+    if (!environment || !isGeneratedEnvironmentName(environment.name)) return;
+    try {
+      await this.invoke("rename_environment_from_prompt", {
+        environmentId,
+        prompt,
+      });
+    } catch (error) {
+      console.warn(
+        `[native-agent] Failed to rename ${environmentId} from its first prompt:`,
+        error instanceof Error ? error.name : "unknown error",
+      );
+    }
+  }
+
+  /**
+   * One provider per environment and agent.
+   *
+   * Model and effort are deliberately excluded from the key and passed per call
+   * instead: keying on them accumulated an undisposed provider — and for
+   * OpenCode a permanent event stream — for every variant a user ever queued.
+   */
   private async provider(
     input: EnsureNativeAgentSessionInput,
   ): Promise<BuildPipelineProvider> {
     this.assertAcceptingWork();
-    const cacheKey = JSON.stringify([
-      input.environmentId,
-      input.agent,
-      input.model ?? null,
-      input.reasoningEffort ?? null,
-    ]);
+    const cacheKey = `${input.environmentId}\0${input.agent}`;
     const environment = await this.assertEnvironmentLive(input.environmentId);
     const cached = this.providers.get(cacheKey);
     if (cached) return cached;
@@ -592,9 +786,47 @@ export class NativeAgentService {
     );
     await this.assertEnvironmentLive(input.environmentId);
     this.assertAcceptingWork();
-    const provider = createBuildPipelineProvider(connection);
+    const provider = createBuildPipelineProvider(connection, {
+      // Interactive sessions belong to a tab that renders approvals and
+      // questions. Answering them here would run a command the user never saw
+      // and cancel the card that exists to answer it.
+      autoAnswerRequests: false,
+      stageImages: (images) =>
+        this.stageImages(input.environmentId, images),
+    });
     this.providers.set(cacheKey, provider);
     return provider;
+  }
+
+  /** Stage base64 images into the workspace so a bridge will accept them. */
+  private async stageImages(
+    environmentId: string,
+    images: readonly TaskSnapshotImage[],
+  ): Promise<PromptAttachment[]> {
+    const environment = await this.assertEnvironmentLive(environmentId);
+    return stagePromptImages(
+      this.invoke,
+      environment,
+      images,
+      INITIAL_PROMPT_STAGING_DIRECTORY,
+    );
+  }
+
+  /**
+   * Dispose providers whose environment has gone away.
+   *
+   * Without this a deleted environment's provider stays cached for the life of
+   * the process, holding its bridge connection open.
+   */
+  private async pruneProviders(liveEnvironmentIds: Set<string>): Promise<void> {
+    const stale: Array<[string, BuildPipelineProvider]> = [];
+    for (const [cacheKey, provider] of this.providers) {
+      const environmentId = cacheKey.slice(0, cacheKey.indexOf("\0"));
+      if (!liveEnvironmentIds.has(environmentId)) stale.push([cacheKey, provider]);
+    }
+    if (stale.length === 0) return;
+    for (const [cacheKey] of stale) this.providers.delete(cacheKey);
+    await Promise.allSettled(stale.map(([, provider]) => provider.dispose?.()));
   }
 
   private trackScan(task: Promise<void>): Promise<void> {
@@ -642,7 +874,12 @@ export class NativeAgentService {
     const providerSessionId = await provider.createSession(
       input.phase ?? "build",
       input.title?.trim() || "Agent Session",
-      input.logicalSessionKey,
+      {
+        clientSessionKey: input.logicalSessionKey,
+        model: input.model,
+        effort: input.reasoningEffort,
+        mode: input.sessionMode,
+      },
     );
     await this.assertEnvironmentLive(input.environmentId);
     return providerSessionId;
@@ -659,6 +896,14 @@ export class NativeAgentService {
     return draft.text.trim().length > 0
       || draft.mentions.length > 0
       || draft.attachments.length > 0;
+  }
+
+  private queueBoolean(message: unknown, field: string): boolean | undefined {
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      return undefined;
+    }
+    const value = (message as Record<string, unknown>)[field];
+    return typeof value === "boolean" ? value : undefined;
   }
 
   private queueString(message: unknown, field: string): string | undefined {

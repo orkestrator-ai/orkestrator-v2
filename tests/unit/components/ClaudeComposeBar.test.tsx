@@ -135,6 +135,12 @@ mock.module("@/components/chat/ContextUsageWheel", () => ({
 }));
 
 import { ClaudeComposeBar } from "../../../apps/web/src/components/claude/ClaudeComposeBar";
+import {
+  hydratePromptQueue,
+  promptQueueKey,
+  resetPromptQueueRevisions,
+  type PromptQueueSource,
+} from "../../../apps/web/src/lib/prompt-queue-persistence";
 import { useClaudeStore } from "../../../apps/web/src/stores/claudeStore";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
@@ -169,6 +175,39 @@ function deferred() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+/**
+ * Latches the durable dispatch error the backend writes when it parks this
+ * queue. `observeDispatchError` is module-private, so the latch is published
+ * through the real change-feed entry point with a recording source, which keeps
+ * the Claude store out of it.
+ */
+async function parkQueue(message: string) {
+  const queueKey = promptQueueKey("claude", SESSION_KEY);
+  const source: PromptQueueSource = {
+    agent: "claude",
+    getQueues: () => new Map(),
+    setQueue: () => {},
+    subscribe: () => () => {},
+    environmentIdFor: () => ENV_ID,
+  };
+  await act(async () => {
+    await hydratePromptQueue(queueKey, [source], async () => ({
+      queueKey,
+      environmentId: ENV_ID,
+      messages: [{ id: "queue-1" }],
+      dispatchError: {
+        requestId: "req-1",
+        messageId: "queue-1",
+        messageFingerprint: "fingerprint-1",
+        message,
+        failedAt: "2026-07-30T00:00:00.000Z",
+      },
+      updatedAt: "2026-07-30T00:00:00.000Z",
+      revision: 1,
+    }));
+  });
 }
 
 const defaultModels = [
@@ -273,6 +312,8 @@ describe("ClaudeComposeBar", () => {
     });
     useEnvironmentStore.setState({ environments: [] });
     useConfigStore.getState().updateGlobalConfig({ claudeModel: "opus" });
+    // The dispatch-error latch is module state shared by every test in this file.
+    resetPromptQueueRevisions();
   });
 
   afterEach(() => {
@@ -451,6 +492,56 @@ describe("ClaudeComposeBar", () => {
   test("does not show queue indicator when queueLength is 0", () => {
     renderComposeBar({ queueLength: 0 });
     expect(screen.queryByText(/queued/)).toBeNull();
+  });
+
+  test("keeps the queue indicator neutral while the queue is draining", () => {
+    renderComposeBar({ queueLength: 2 });
+
+    const indicator = screen.getByTitle("View queued prompts");
+    expect(indicator.className).not.toContain("destructive");
+    expect(indicator.getAttribute("aria-label")).toBeNull();
+  });
+
+  test("marks the queue indicator as blocked when the backend rejected a queued prompt", async () => {
+    await parkQueue("Claude session is gone.");
+
+    renderComposeBar({ queueLength: 2 });
+
+    // The backend stops draining a parked queue until a human retries, so the
+    // reason has to be reachable without opening the dialog.
+    const indicator = await screen.findByRole("button", {
+      name: "2 queued prompts blocked: Claude session is gone.",
+    });
+    expect(indicator.getAttribute("title")).toBe(
+      "Queued prompt was not sent: Claude session is gone.",
+    );
+    expect(indicator.className).toContain("text-destructive");
+    expect(indicator.className).toContain("bg-destructive/10");
+    expect(screen.queryByTitle("View queued prompts")).toBeNull();
+  });
+
+  test("surfaces the dispatch error and its retry inside the queue dialog", async () => {
+    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Queued follow-up",
+      attachments: [],
+      effort: "high",
+      planModeEnabled: false,
+    });
+    await parkQueue("Claude session is gone.");
+
+    const { unmount } = renderComposeBar({ queueLength: 1 });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "1 queued prompts blocked: Claude session is gone.",
+      }),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Claude session is gone.");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+
+    unmount();
   });
 
   test("sends the shared review follow-up prompt from Address all", () => {

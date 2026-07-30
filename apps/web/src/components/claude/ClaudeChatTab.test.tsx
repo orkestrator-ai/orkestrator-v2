@@ -148,6 +148,44 @@ const mockReadFileBase64 = mock(async () => "chat-local-base64");
 const mockReadContainerFileBase64 = mock(async () => "chat-container-base64");
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
+const mockAdoptNativeAgentSession = mock(async (input: {
+  environmentId: string;
+  agent: string;
+  logicalSessionKey: string;
+  providerSessionId: string;
+}) => ({
+  id: `adopted-${input.logicalSessionKey}`,
+  environmentId: input.environmentId,
+  agent: input.agent as "claude",
+  logicalSessionKey: input.logicalSessionKey,
+  providerSessionId: input.providerSessionId,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  dispatchedRequestIds: [],
+}));
+// A claimed head must not be handed out twice: the promote-to-draft path and the
+// backend drain both go through this call, and only one of them may win.
+const claimedPromptHeads = new Set<string>();
+const mockClaimPromptQueueHead = mock(async (
+  queueKey: string,
+  environmentId: string,
+  expectedMessageId: string,
+  candidateMessages: Array<{ id: string }>,
+) => {
+  const claimKey = `${queueKey}\u0000${expectedMessageId}`;
+  const alreadyClaimed = claimedPromptHeads.has(claimKey);
+  if (!alreadyClaimed) claimedPromptHeads.add(claimKey);
+  return {
+    claimed: alreadyClaimed ? null : (candidateMessages[0] ?? null),
+    queue: {
+      queueKey,
+      environmentId,
+      messages: candidateMessages.slice(1),
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    },
+  };
+});
 const mockEnsureNativeAgentSession = mock(async () => {
   const created = await mockCreateSession({ baseUrl: "http://127.0.0.1:9999" });
   if (!created) throw new Error("Failed to create session");
@@ -220,22 +258,9 @@ mock.module("@/lib/claude-client", () => ({
 }));
 
 mock.module("@/lib/backend", () => ({
+  adoptNativeAgentSession: mockAdoptNativeAgentSession,
   ensureNativeAgentSession: mockEnsureNativeAgentSession,
-  claimPromptQueueHead: mock(async (
-    queueKey: string,
-    environmentId: string,
-    _expectedMessageId: string,
-    candidateMessages: Array<{ id: string }>,
-  ) => ({
-    claimed: candidateMessages[0] ?? null,
-    queue: {
-      queueKey,
-      environmentId,
-      messages: candidateMessages.slice(1),
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      revision: 1,
-    },
-  })),
+  claimPromptQueueHead: mockClaimPromptQueueHead,
   getAgentHandoff: mockGetAgentHandoff,
   startClaudeServer: mockStartClaudeServer,
   getClaudeServerStatus: mockGetClaudeServerStatus,
@@ -563,6 +588,9 @@ describe("ClaudeChatTab", () => {
   beforeEach(() => {
     cleanup();
     resetStores();
+    claimedPromptHeads.clear();
+    mockClaimPromptQueueHead.mockClear();
+    mockAdoptNativeAgentSession.mockClear();
     mockIsAtBottom = true;
     mockScrollToBottom.mockClear();
     // `mockClear` only drops call history. Without restoring the factory too, a
@@ -3938,6 +3966,15 @@ describe("ClaudeChatTab", () => {
       expect(state.messageQueue.get(SESSION_KEY)?.map((message) => message.text)).toEqual([
         "Second queued Claude prompt",
       ]);
+      // The head must be claimed through the backend, not just dropped locally:
+      // stopping the turn is what makes the provider report idle, so the backend
+      // drain would otherwise dispatch the prompt the user now holds.
+      expect(mockClaimPromptQueueHead).toHaveBeenCalledWith(
+        "claude\u0000env-env-1:tab-1",
+        "env-1",
+        "queue-1",
+        expect.arrayContaining([expect.objectContaining({ id: "queue-1" })]),
+      );
       expect(state.attachments.get(SESSION_KEY)).toEqual([queuedAttachment]);
       expect(state.effort.get(SESSION_KEY)).toBe("high");
       expect(state.planMode.get(SESSION_KEY)).toBe(false);

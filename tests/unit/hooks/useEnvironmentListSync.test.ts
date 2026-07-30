@@ -11,9 +11,17 @@ const originalSetInterval = globalThis.setInterval;
 const originalClearInterval = globalThis.clearInterval;
 
 /** Drives one `environment` announcement past the dispatcher's coalescing window. */
-async function announceEnvironmentChange(revision = 1): Promise<void> {
+async function announceEnvironmentChange(
+  revision = 1,
+  projectId?: string,
+): Promise<void> {
   await act(async () => {
-    dispatchResourceChange({ resource: "environment", id: "env-1", revision });
+    dispatchResourceChange({
+      resource: "environment",
+      id: "env-1",
+      revision,
+      ...(projectId ? { projectId } : {}),
+    });
     await new Promise((resolve) => originalSetInterval(resolve, 80));
   });
 }
@@ -87,6 +95,22 @@ describe("useEnvironmentListSync", () => {
 
     expect(refreshProject.mock.calls.map(([projectId]) => projectId)).toEqual([
       "project-1", "project-2",
+    ]);
+  });
+
+  test("refreshes only the announced project and ignores unloaded projects", async () => {
+    const refreshProject = mock<(projectId: string) => Promise<void>>(
+      () => Promise.resolve(),
+    );
+    renderHook(() =>
+      useEnvironmentListSync(["project-1", "project-2"], refreshProject)
+    );
+
+    await announceEnvironmentChange(1, "project-2");
+    await announceEnvironmentChange(2, "project-not-loaded");
+
+    expect(refreshProject.mock.calls.map(([projectId]) => projectId)).toEqual([
+      "project-2",
     ]);
   });
 

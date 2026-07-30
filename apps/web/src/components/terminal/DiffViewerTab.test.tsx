@@ -97,7 +97,11 @@ mock.module("@/lib/monaco-loader", () => ({
   ensureMonacoConfigured: ensureMonacoConfiguredMock,
 }));
 
-const { DiffViewerTab, formatBaseRef } = await import("./DiffViewerTab");
+const {
+  DiffViewerTab,
+  clearDiffBaseCacheForTests,
+  formatBaseRef,
+} = await import("./DiffViewerTab");
 
 const originalMatchMedia = window.matchMedia;
 const originalConfig = useConfigStore.getState().config;
@@ -158,6 +162,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  clearDiffBaseCacheForTests();
   viewportWidth = 1024;
   mediaQueryListeners.clear();
   installMatchMedia();
@@ -580,6 +585,196 @@ describe("DiffViewerTab content loading", () => {
       "src/slow.ts",
       "main",
     );
+  });
+});
+
+describe("DiffViewerTab immutable base cache", () => {
+  test("reuses a commit-addressed base across tab remounts", async () => {
+    const props = {
+      ...baseProps,
+      baseBranch: "abcdef0000000000000000000000000000000000",
+      containerId: "container-1",
+    };
+    const firstView = render(<DiffViewerTab {...props} />);
+    await screen.findByTestId("diff-editor");
+    firstView.unmount();
+
+    const secondView = render(<DiffViewerTab {...props} />);
+    await screen.findByTestId("diff-editor");
+    secondView.unmount();
+
+    expect(readFileAtBranchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not cache a moving branch across tab remounts", async () => {
+    const props = {
+      ...baseProps,
+      baseBranch: "main",
+      containerId: "container-1",
+    };
+    const firstView = render(<DiffViewerTab {...props} />);
+    await screen.findByTestId("diff-editor");
+    firstView.unmount();
+
+    const secondView = render(<DiffViewerTab {...props} />);
+    await screen.findByTestId("diff-editor");
+    secondView.unmount();
+
+    expect(readFileAtBranchMock).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * The backend only short-circuits a fetch for a *full* object name; anything
+   * shorter it resolves through `origin/<ref>`, which moves. Caching a hex-
+   * looking branch name here would pin a base that the backend keeps updating,
+   * for the life of the process.
+   */
+  test("does not cache a hex-shaped ref that is not a full object name", async () => {
+    for (const baseBranch of ["abcdef0", "defaced", "abcdef00000000000000000000000000000000000"]) {
+      readFileAtBranchMock.mockClear();
+      const props = { ...baseProps, baseBranch, containerId: "container-1" };
+
+      const firstView = render(<DiffViewerTab {...props} />);
+      await screen.findByTestId("diff-editor");
+      firstView.unmount();
+
+      const secondView = render(<DiffViewerTab {...props} />);
+      await screen.findByTestId("diff-editor");
+      secondView.unmount();
+
+      expect(readFileAtBranchMock).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  test("caches a full object name regardless of case or surrounding space", async () => {
+    const props = {
+      ...baseProps,
+      baseBranch: " ABCDEF0000000000000000000000000000000000 ",
+      containerId: "container-1",
+    };
+    const firstView = render(<DiffViewerTab {...props} />);
+    await screen.findByTestId("diff-editor");
+    firstView.unmount();
+
+    const secondView = render(<DiffViewerTab {...props} />);
+    await screen.findByTestId("diff-editor");
+    secondView.unmount();
+
+    expect(readFileAtBranchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("evicts a rejected commit read so the next mount can retry", async () => {
+    readFileAtBranchMock.mockRejectedValueOnce(new Error("temporary base failure"));
+    const props = {
+      ...baseProps,
+      baseBranch: "abcdef0000000000000000000000000000000000",
+      containerId: "container-1",
+    };
+    const firstView = render(<DiffViewerTab {...props} />);
+    expect(await screen.findByText("temporary base failure")).toBeTruthy();
+    firstView.unmount();
+
+    const secondView = render(<DiffViewerTab {...props} />);
+    expect((await screen.findByTestId("diff-editor")).dataset.original).toBe(
+      "container original",
+    );
+    secondView.unmount();
+
+    expect(readFileAtBranchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps container, worktree, file, and commit cache keys distinct", async () => {
+    const loadOnce = async (
+      props: React.ComponentProps<typeof DiffViewerTab>,
+    ) => {
+      const view = render(<DiffViewerTab {...props} />);
+      await screen.findByTestId("diff-editor");
+      view.unmount();
+    };
+
+    await loadOnce({
+      ...baseProps,
+      baseBranch: "abcdef0000000000000000000000000000000000",
+      containerId: "container-1",
+    });
+    await loadOnce({
+      ...baseProps,
+      baseBranch: "abcdef0000000000000000000000000000000000",
+      containerId: "container-2",
+    });
+    await loadOnce({
+      ...baseProps,
+      filePath: "src/Other.ts",
+      baseBranch: "abcdef0000000000000000000000000000000000",
+      containerId: "container-1",
+    });
+    await loadOnce({
+      ...baseProps,
+      baseBranch: "abcdef1000000000000000000000000000000000",
+      containerId: "container-1",
+    });
+    await loadOnce({
+      ...baseProps,
+      baseBranch: "abcdef0000000000000000000000000000000000",
+      worktreePath: "/repo",
+      isLocalEnvironment: true,
+    });
+
+    expect(readFileAtBranchMock).toHaveBeenCalledTimes(4);
+    expect(readFileAtBranchMock).toHaveBeenCalledWith(
+      "container-1",
+      baseProps.filePath,
+      "abcdef0000000000000000000000000000000000",
+    );
+    expect(readFileAtBranchMock).toHaveBeenCalledWith(
+      "container-2",
+      baseProps.filePath,
+      "abcdef0000000000000000000000000000000000",
+    );
+    expect(readFileAtBranchMock).toHaveBeenCalledWith(
+      "container-1",
+      "src/Other.ts",
+      "abcdef0000000000000000000000000000000000",
+    );
+    expect(readFileAtBranchMock).toHaveBeenCalledWith(
+      "container-1",
+      baseProps.filePath,
+      "abcdef1000000000000000000000000000000000",
+    );
+    expect(readLocalFileAtBranchMock).toHaveBeenCalledWith(
+      "/repo",
+      baseProps.filePath,
+      "abcdef0000000000000000000000000000000000",
+    );
+  });
+
+  test("bounds retained commit bases to 128 entries", async () => {
+    const loadFile = async (filePath: string) => {
+      const view = render(
+        <DiffViewerTab
+          {...baseProps}
+          filePath={filePath}
+          baseBranch="abcdef0000000000000000000000000000000000"
+          containerId="container-1"
+        />,
+      );
+      await screen.findByTestId("diff-editor");
+      view.unmount();
+    };
+
+    for (let index = 0; index < 129; index += 1) {
+      await loadFile(`src/cache-${index}.ts`);
+    }
+    await loadFile("src/cache-0.ts");
+
+    const firstKeyCalls = readFileAtBranchMock.mock.calls.filter(
+      ([containerId, filePath, branch]) =>
+        containerId === "container-1"
+        && filePath === "src/cache-0.ts"
+        && branch === "abcdef0000000000000000000000000000000000",
+    );
+    expect(firstKeyCalls).toHaveLength(2);
+    expect(readFileAtBranchMock).toHaveBeenCalledTimes(130);
   });
 });
 

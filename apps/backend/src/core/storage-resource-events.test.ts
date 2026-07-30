@@ -75,27 +75,111 @@ describe("StorageService resource change announcements", () => {
     });
   });
 
-  test("announces environment lifecycle against the environment id", async () => {
+  test("attributes every environment lifecycle announcement to its project", async () => {
     await withStorage(async (storage, changes) => {
       await storage.addProject(project("p1"));
       await storage.addEnvironment(environment("e1", "p1"));
-      expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
+      await storage.addEnvironment(environment("e2", "p1"));
+      expect(changes.at(-1)).toMatchObject({
+        resource: "environment",
+        id: "e2",
+        projectId: "p1",
+      });
 
+      changes.length = 0;
       await storage.updateEnvironment("e1", { status: "running" });
-      expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
+      expect(changes).toEqual([
+        expect.objectContaining({
+          resource: "environment",
+          id: "e1",
+          projectId: "p1",
+        }),
+      ]);
 
+      changes.length = 0;
       await storage.recordEnvironmentActivity("e1", new Date(1000).toISOString());
-      expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
+      expect(changes).toEqual([
+        expect.objectContaining({
+          resource: "environment",
+          id: "e1",
+          projectId: "p1",
+        }),
+      ]);
 
+      changes.length = 0;
+      const completionAt = new Date(2000).toISOString();
+      await storage.recordEnvironmentCompletion("e1", completionAt);
+      expect(changes).toEqual([
+        expect.objectContaining({
+          resource: "environment",
+          id: "e1",
+          projectId: "p1",
+        }),
+      ]);
+
+      changes.length = 0;
+      await storage.setEnvironmentUnread("e1", false, completionAt);
+      expect(changes).toEqual([
+        expect.objectContaining({
+          resource: "environment",
+          id: "e1",
+          projectId: "p1",
+        }),
+      ]);
+
+      changes.length = 0;
       await storage.setEnvironmentAgentActivity(
-        "e1",
-        "working",
-        new Date(2000).toISOString(),
+        "e1", "working", new Date(3000).toISOString(), "frontend", "renderer-1",
       );
-      expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
+      expect(changes).toEqual([
+        expect.objectContaining({
+          resource: "environment",
+          id: "e1",
+          projectId: "p1",
+        }),
+      ]);
 
+      const withLease = await storage.getEnvironment("e1");
+      const lease = Object.values(
+        withLease!.frontendAgentActivityObservers ?? {},
+      )[0]!;
+      changes.length = 0;
+      await storage.expireFrontendAgentActivityLeases(
+        Date.parse(lease.leaseExpiresAt) + 1,
+      );
+      expect(changes).toEqual([
+        expect.objectContaining({
+          resource: "environment",
+          id: "e1",
+          projectId: "p1",
+        }),
+      ]);
+
+      changes.length = 0;
+      await storage.reorderEnvironments("p1", ["e2", "e1"]);
+      expect(changes).toHaveLength(2);
+      expect(changes).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          resource: "environment",
+          id: "e1",
+          projectId: "p1",
+        }),
+        expect.objectContaining({
+          resource: "environment",
+          id: "e2",
+          projectId: "p1",
+        }),
+      ]));
+
+      changes.length = 0;
       await storage.removeEnvironment("e1");
-      expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
+      expect(changes).toEqual([
+        expect.objectContaining({
+          resource: "environment",
+          id: "e1",
+          projectId: "p1",
+        }),
+      ]);
     });
   });
 

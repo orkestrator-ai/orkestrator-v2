@@ -46,6 +46,10 @@ describe("isResourceChange", () => {
     expect(isResourceChange(change())).toBe(true);
   });
 
+  test("accepts a well-formed project-attributed change", () => {
+    expect(isResourceChange(change({ projectId: "project-1" }))).toBe(true);
+  });
+
   test("accepts a change carrying extra fields", () => {
     expect(isResourceChange({ ...(change() as object), extra: "ignored" })).toBe(true);
   });
@@ -67,6 +71,12 @@ describe("isResourceChange", () => {
 
   test("rejects a non-string id", () => {
     expect(isResourceChange(change({ id: 42 as never }))).toBe(false);
+  });
+
+  test("rejects a blank or non-string project id", () => {
+    for (const projectId of ["", "   ", 42, null, {}, []]) {
+      expect(isResourceChange(change({ projectId: projectId as never }))).toBe(false);
+    }
   });
 
   test("rejects a non-finite revision", () => {

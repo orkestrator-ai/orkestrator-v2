@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { invoke } from "@/lib/native/backend";
 import {
   hydrateBuildPipeline,
   hydrateBuildPipelinesForProject,
@@ -11,6 +12,8 @@ import {
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
 import type { PersistedBuildPipeline } from "@/types";
+
+const invokeMock = invoke as ReturnType<typeof mock>;
 
 function snapshot(id = "pipeline-1"): BuildPipeline {
   return {
@@ -67,6 +70,7 @@ function deferred<T>(): {
 
 describe("build pipeline read model", () => {
   beforeEach(() => {
+    invokeMock.mockReset();
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -91,6 +95,189 @@ describe("build pipeline read model", () => {
       async () => [record(snapshot("one"), 1), record(snapshot("two"), 2)],
     );
     expect(restored.map((pipeline) => pipeline.id)).toEqual(["one", "two"]);
+  });
+
+  test("uses revision and session cursors for an unchanged production point read", async () => {
+    const local = {
+      ...snapshot(),
+      currentSessionIndex: 0,
+      sessions: [{
+        phase: "build" as const,
+        iteration: 0,
+        sessionKey: "session-1",
+        sdkSessionId: "sdk-1",
+        status: "idle" as const,
+        startedAt: "2026-07-29T00:00:00.000Z",
+        label: "Build",
+        messages: [{ id: "message-1" }],
+        messageRevision: 4,
+      }],
+      backendRevision: 7,
+    };
+    useBuildPipelineStore.getState().replacePipeline(local);
+    invokeMock.mockResolvedValueOnce({ unchanged: true, revision: 7 });
+
+    const restored = await hydrateBuildPipeline("pipeline-1");
+
+    expect(restored).toBe(local);
+    expect(invokeMock).toHaveBeenCalledWith("get_build_pipeline", {
+      pipelineId: "pipeline-1",
+      knownRevision: 7,
+      knownSessions: {
+        "session-1": { revision: 4, count: 1 },
+      },
+    });
+  });
+
+  test("merges production tail patches and preserves omitted unchanged messages", async () => {
+    const unchangedMessages = [{ id: "unchanged-message" }];
+    const patchedMessages = [{ id: "old-1" }, { id: "old-2" }];
+    const local = {
+      ...snapshot(),
+      currentSessionIndex: 1,
+      sessions: [
+        {
+          phase: "build" as const,
+          iteration: 0,
+          sessionKey: "unchanged-session",
+          sdkSessionId: "sdk-unchanged",
+          status: "idle" as const,
+          startedAt: "2026-07-29T00:00:00.000Z",
+          label: "Unchanged",
+          messages: unchangedMessages,
+          messageRevision: 2,
+        },
+        {
+          phase: "review" as const,
+          iteration: 0,
+          sessionKey: "patched-session",
+          sdkSessionId: "sdk-patched",
+          status: "running" as const,
+          startedAt: "2026-07-29T00:00:00.000Z",
+          label: "Patched",
+          messages: patchedMessages,
+          messageRevision: 3,
+        },
+      ],
+      backendRevision: 7,
+    };
+    useBuildPipelineStore.getState().replacePipeline(local);
+    const remote = {
+      ...local,
+      phase: "reviewing" as const,
+      backendRevision: 0,
+      sessions: local.sessions.map(({ messages: _messages, ...session }) => session),
+    };
+    invokeMock.mockResolvedValueOnce({
+      unchanged: false,
+      record: record(remote, 8),
+      messagePatches: [{
+        sessionKey: "patched-session",
+        baseRevision: 3,
+        baseCount: 2,
+        startIndex: 1,
+        revision: 4,
+        messages: [{ id: "new-2" }, { id: "new-3" }],
+      }],
+    });
+
+    const restored = await hydrateBuildPipeline("pipeline-1");
+
+    expect(restored?.sessions[0]?.messages).toBe(unchangedMessages);
+    expect(restored?.sessions[1]?.messages).toEqual([
+      { id: "old-1" },
+      { id: "new-2" },
+      { id: "new-3" },
+    ]);
+    expect(restored?.sessions[1]?.messageRevision).toBe(4);
+    expect(restored?.backendRevision).toBe(8);
+  });
+
+  test("falls back to a full production read when a tail patch cannot apply", async () => {
+    const local = {
+      ...snapshot(),
+      currentSessionIndex: 0,
+      sessions: [{
+        phase: "build" as const,
+        iteration: 0,
+        sessionKey: "session-1",
+        sdkSessionId: "sdk-1",
+        status: "idle" as const,
+        startedAt: "2026-07-29T00:00:00.000Z",
+        label: "Build",
+        messages: [{ id: "old" }],
+        messageRevision: 5,
+      }],
+      backendRevision: 7,
+    };
+    useBuildPipelineStore.getState().replacePipeline(local);
+    const remote = {
+      ...local,
+      backendRevision: 0,
+      sessions: local.sessions.map(({ messages: _messages, ...session }) => session),
+    };
+    const full = record({
+      ...local,
+      phase: "verifying",
+      backendRevision: 0,
+      sessions: [{
+        ...local.sessions[0]!,
+        messages: [{ id: "authoritative" }],
+        messageRevision: 6,
+      }],
+    }, 8);
+    invokeMock
+      .mockResolvedValueOnce({
+        unchanged: false,
+        record: record(remote, 8),
+        messagePatches: [{
+          sessionKey: "session-1",
+          baseRevision: 4,
+          baseCount: 1,
+          startIndex: 1,
+          revision: 6,
+          messages: [{ id: "cannot-apply" }],
+        }],
+      })
+      .mockResolvedValueOnce(full);
+
+    const restored = await hydrateBuildPipeline("pipeline-1");
+
+    expect(restored?.phase).toBe("verifying");
+    expect(restored?.sessions[0]?.messages).toEqual([{ id: "authoritative" }]);
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "get_build_pipeline", {
+      pipelineId: "pipeline-1",
+    });
+  });
+
+  test("reuses unchanged production list entries and exposes deleted ids", async () => {
+    const unchanged = { ...snapshot("unchanged"), backendRevision: 4 };
+    const changedLocal = { ...snapshot("changed"), backendRevision: 2 };
+    const deleted = { ...snapshot("deleted"), backendRevision: 3 };
+    useBuildPipelineStore.getState().replacePipeline(unchanged);
+    useBuildPipelineStore.getState().replacePipeline(changedLocal);
+    useBuildPipelineStore.getState().replacePipeline(deleted);
+    invokeMock.mockResolvedValueOnce({
+      ids: ["unchanged", "changed"],
+      records: [record({
+        ...snapshot("changed"),
+        phase: "reviewing",
+      }, 5)],
+    });
+
+    const restored = await hydrateBuildPipelinesForProject("project-1");
+
+    expect(restored.map(({ id }) => id).sort()).toEqual(["changed", "unchanged"]);
+    expect(restored.find(({ id }) => id === "unchanged")).toBe(unchanged);
+    expect(restored.some(({ id }) => id === "deleted")).toBe(false);
+    expect(invokeMock).toHaveBeenCalledWith("list_build_pipelines", {
+      projectId: "project-1",
+      knownRevisions: {
+        unchanged: 4,
+        changed: 2,
+        deleted: 3,
+      },
+    });
   });
 
   test("rejects malformed record metadata and mismatched snapshots", async () => {

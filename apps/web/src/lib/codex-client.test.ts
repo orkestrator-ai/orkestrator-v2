@@ -4,6 +4,8 @@ import {
   CodexForkError,
   DEFAULT_CODEX_MODEL,
   abortSession,
+  applyCodexMessagePatch,
+  classifyCodexMessagePatch,
   checkHealth,
   classifyCodexPromptOutcome,
   compactCodexSession,
@@ -26,6 +28,7 @@ import {
   parseApproval,
   parseContextUsage,
   parseInteraction,
+  preferNewerCodexRevisions,
   respondToApproval,
   respondToInteraction,
   resumeSession,
@@ -33,6 +36,8 @@ import {
   startCodexNativeReview,
   steerCodexSession,
   subscribeToEvents,
+  MAX_CODEX_EVENT_QUEUE_BYTES,
+  MAX_CODEX_EVENT_QUEUE_COUNT,
   updateSessionConfig,
   type CodexApprovalResponseResult,
   type CodexClient,
@@ -61,6 +66,140 @@ function restoreFetch() {
 
 afterEach(() => {
   delete window.orkestratorGateway;
+});
+
+describe("applyCodexMessagePatch", () => {
+  const message = {
+    id: "assistant-1",
+    role: "assistant" as const,
+    content: "old",
+    parts: [{ type: "text" as const, content: "old" }],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    revision: 3,
+  };
+
+  test("applies the immediate indexed successor", () => {
+    expect(applyCodexMessagePatch(message, {
+      messageId: message.id,
+      partCount: 2,
+      changedParts: [
+        { index: 0, part: { type: "text", content: "new" } },
+        { index: 1, part: { type: "thinking", content: "why" } },
+      ],
+      content: "new",
+      createdAt: message.createdAt,
+      revision: 4,
+    })).toMatchObject({
+      content: "new",
+      revision: 4,
+      parts: [
+        { type: "text", content: "new" },
+        { type: "thinking", content: "why" },
+      ],
+    });
+  });
+
+  test("rejects gaps, duplicates, and sparse growth", () => {
+    const base = {
+      messageId: message.id,
+      partCount: 1,
+      changedParts: [],
+      content: "old",
+      createdAt: message.createdAt,
+    };
+    expect(applyCodexMessagePatch(message, { ...base, revision: 3 })).toBeNull();
+    expect(applyCodexMessagePatch(message, { ...base, revision: 5 })).toBeNull();
+    expect(applyCodexMessagePatch(message, {
+      ...base,
+      partCount: 3,
+      changedParts: [{ index: 2, part: { type: "text", content: "late" } }],
+      revision: 4,
+    })).toBeNull();
+  });
+
+  test("distinguishes stale replay from a gap or malformed successor", () => {
+    const base = {
+      messageId: message.id,
+      partCount: 1,
+      changedParts: [],
+      content: "old",
+      createdAt: message.createdAt,
+    };
+    expect(classifyCodexMessagePatch(message, { ...base, revision: 3 })).toEqual({
+      outcome: "stale",
+    });
+    expect(classifyCodexMessagePatch(message, { ...base, revision: 2 })).toEqual({
+      outcome: "stale",
+    });
+    expect(classifyCodexMessagePatch(message, { ...base, revision: 5 })).toEqual({
+      outcome: "needs-reconcile",
+    });
+    expect(classifyCodexMessagePatch(message, {
+      ...base,
+      messageId: "different-message",
+      revision: 4,
+    })).toEqual({ outcome: "needs-reconcile" });
+  });
+});
+
+describe("preferNewerCodexRevisions", () => {
+  const message = (id: string, content: string, revision?: number) => ({
+    id,
+    role: "assistant" as const,
+    content,
+    parts: [{ type: "text" as const, content }],
+    createdAt: "2026-04-15T00:00:00.000Z",
+    ...(revision === undefined ? {} : { revision }),
+  });
+
+  test("keeps the local copy only when it is strictly newer", () => {
+    const incoming = [
+      message("a", "snapshot-a", 5),
+      message("b", "snapshot-b", 5),
+      message("c", "snapshot-c", 5),
+    ];
+    const local = [
+      message("a", "live-a", 7),
+      message("b", "stale-b", 5),
+      message("c", "older-c", 2),
+    ];
+
+    expect(preferNewerCodexRevisions(incoming, local)).toEqual([
+      message("a", "live-a", 7),
+      message("b", "snapshot-b", 5),
+      message("c", "snapshot-c", 5),
+    ]);
+  });
+
+  test("returns the snapshot untouched when nothing local is newer", () => {
+    const incoming = [message("a", "snapshot-a", 5)];
+    expect(preferNewerCodexRevisions(incoming, [message("a", "local-a", 5)]))
+      .toBe(incoming);
+    expect(preferNewerCodexRevisions(incoming, [])).toBe(incoming);
+    expect(preferNewerCodexRevisions(incoming, undefined)).toBe(incoming);
+  });
+
+  test("ignores a message whose revision is missing on either side", () => {
+    // Without a comparable revision there is no evidence the local copy is
+    // newer, and the snapshot is the authority by default.
+    expect(preferNewerCodexRevisions(
+      [message("a", "snapshot-a", 5)],
+      [message("a", "local-a")],
+    )).toEqual([message("a", "snapshot-a", 5)]);
+    expect(preferNewerCodexRevisions(
+      [message("a", "snapshot-a")],
+      [message("a", "local-a", 9)],
+    )).toEqual([message("a", "snapshot-a")]);
+  });
+
+  test("does not resurrect a message the snapshot no longer contains", () => {
+    // A compaction or fork must be able to remove a message, so membership
+    // follows the snapshot even though revisions do not.
+    expect(preferNewerCodexRevisions(
+      [message("a", "snapshot-a", 5)],
+      [message("a", "local-a", 9), message("gone", "removed", 9)],
+    )).toEqual([message("a", "local-a", 9)]);
+  });
 });
 
 describe("codex-client createClient", () => {
@@ -1191,6 +1330,114 @@ describe("codex-client subscribeToEvents", () => {
     await iterator.return?.();
   });
 
+  test("bounds a slow consumer and yields one explicit reconciliation frame", async () => {
+    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")
+      [Symbol.asyncIterator]();
+    const source = MockEventSource.instances[0]!;
+
+    for (let revision = 1; revision <= MAX_CODEX_EVENT_QUEUE_COUNT + 1; revision += 1) {
+      source.emit(
+        "session.updated",
+        { sessionId: "session-1", phase: "running" },
+        String(revision),
+      );
+    }
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: {
+        type: "session.reconcile-required",
+        sessionId: "session-1",
+        data: { reason: "client-event-queue-overflow" },
+        revision: MAX_CODEX_EVENT_QUEUE_COUNT + 1,
+      },
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The byte bound describes a backlog, not a single message. Codex assistant
+   * messages legitimately reach the bridge's very-large-message budget, and
+   * reconciling one would close the stream and refetch the transcript purely to
+   * obtain the payload that had just arrived.
+   */
+  test("delivers one oversized frame that arrives into an empty queue", async () => {
+    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")
+      [Symbol.asyncIterator]();
+    const source = MockEventSource.instances[0]!;
+    source.emit(
+      "message.updated",
+      {
+        sessionId: "session-1",
+        content: "x".repeat(MAX_CODEX_EVENT_QUEUE_BYTES),
+      },
+      "9",
+    );
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: "message.updated", revision: 9 },
+    });
+    expect(source.close).not.toHaveBeenCalled();
+    await iterator.return?.();
+  });
+
+  test("reconciles once an oversized frame is followed by a backlog", async () => {
+    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")
+      [Symbol.asyncIterator]();
+    const source = MockEventSource.instances[0]!;
+    source.emit(
+      "message.updated",
+      {
+        sessionId: "session-1",
+        content: "x".repeat(MAX_CODEX_EVENT_QUEUE_BYTES),
+      },
+      "9",
+    );
+    // Retention stays bounded: the admitted frame counts against the budget, so
+    // the very next frame trips it.
+    source.emit("session.updated", { sessionId: "session-1", phase: "running" }, "10");
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: {
+        type: "session.reconcile-required",
+        revision: 10,
+        data: { reason: "client-event-queue-overflow" },
+      },
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("carries the last seen revision when the overflowing frame has no id", async () => {
+    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")
+      [Symbol.asyncIterator]();
+    const source = MockEventSource.instances[0]!;
+
+    for (let revision = 1; revision <= MAX_CODEX_EVENT_QUEUE_COUNT; revision += 1) {
+      source.emit(
+        "session.updated",
+        { sessionId: "session-1", phase: "running" },
+        String(revision),
+      );
+    }
+    // A keepalive carries no `id:`. Without a fallback cursor the caller would
+    // reconnect from before the drop and replay straight back into it.
+    source.emit("keepalive", { sessionId: "session-1" }, "");
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: {
+        type: "session.reconcile-required",
+        revision: MAX_CODEX_EVENT_QUEUE_COUNT,
+        data: { reason: "client-event-queue-overflow" },
+      },
+    });
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
   test("iterator return closes the source and resolves a pending read", async () => {
     const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
     const pending = iterator.next();
@@ -1336,6 +1583,7 @@ describe("codex-client event cursor", () => {
       "bridge.cursor",
       "connected",
       "keepalive",
+      "message.patched",
       "message.updated",
       "session.approval-requested",
       "session.approval-resolved",

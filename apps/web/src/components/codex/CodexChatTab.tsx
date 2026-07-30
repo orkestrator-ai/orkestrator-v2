@@ -29,6 +29,7 @@ import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   type CodexConversationMode,
   type CodexMessage,
+  type CodexMessagePatch,
   type CodexPromptAcceptedResponse,
   type CodexPromptAttachment,
   type CodexPromptSendOutcome,
@@ -52,6 +53,7 @@ import {
   parseApproval,
   parseContextUsage,
   parseInteraction,
+  preferNewerCodexRevisions,
   resumeSession,
   sendPrompt,
   subscribeToEvents,
@@ -369,6 +371,7 @@ export function CodexChatTab({
   const removeMessage = useCodexStore((state) => state.removeMessage);
   const setMessages = useCodexStore((state) => state.setMessages);
   const upsertMessage = useCodexStore((state) => state.upsertMessage);
+  const patchMessage = useCodexStore((state) => state.patchMessage);
   const setSessionLoading = useCodexStore((state) => state.setSessionLoading);
   const setSessionError = useCodexStore((state) => state.setSessionError);
   const setSessionTitle = useCodexStore((state) => state.setSessionTitle);
@@ -636,6 +639,19 @@ export function CodexChatTab({
       options: {
         throwOnError?: boolean;
         shouldApply?: () => boolean;
+        /**
+         * Apply even though live frames mutated the session while the read was
+         * in flight, keeping any message the store already holds at a higher
+         * revision.
+         *
+         * Required by every caller that deliberately does *not* block the event
+         * loop behind the read. The blanket identity bail below is correct for a
+         * caller that owns the loop — nothing else could have moved the session,
+         * so a difference means a newer authority won — but for a concurrent
+         * reader it is almost always true during a streaming turn, which would
+         * discard the very snapshot that was fetched to repair a gap.
+         */
+        preferNewerLocalRevisions?: boolean;
       } = {},
     ): Promise<boolean> => {
       if (!activeClient || !sessionId) return false;
@@ -649,14 +665,18 @@ export function CodexChatTab({
         return false;
       }
       const sessionAfterRequest = useCodexStore.getState().sessions.get(sessionKey);
-      if (
-        sessionAfterRequest?.sessionId !== sessionId ||
-        sessionAfterRequest !== sessionBeforeRequest
-      ) {
+      if (sessionAfterRequest?.sessionId !== sessionId) return false;
+      const mutatedDuringRequest = sessionAfterRequest !== sessionBeforeRequest;
+      if (mutatedDuringRequest && !options.preferNewerLocalRevisions) {
         return false;
       }
       refreshControllerRef.current.markActivity();
-      setMessages(sessionKey, messages);
+      setMessages(
+        sessionKey,
+        mutatedDuringRequest
+          ? preferNewerCodexRevisions(messages, sessionAfterRequest?.messages)
+          : messages,
+      );
       return true;
     },
     [client, session?.sessionId, sessionKey, setMessages],
@@ -2239,6 +2259,23 @@ export function CodexChatTab({
       useCodexStore.getState().sessions.get(sessionKey)?.isLoading === true;
 
     (async () => {
+      let patchRecovery: Promise<boolean> | null = null;
+      const recoverMessagePatchGap = (): Promise<boolean> => {
+        if (patchRecovery) return patchRecovery;
+        const recovery = refreshMessages(client, session.sessionId, {
+          throwOnError: true,
+          shouldApply: () => !abortController.signal.aborted,
+          // This read runs *alongside* the drain loop, so the store will almost
+          // certainly have moved by the time it lands. Merge on revision instead
+          // of discarding the snapshot the gap was detected for.
+          preferNewerLocalRevisions: true,
+        }).catch(() => false).finally(() => {
+          if (patchRecovery === recovery) patchRecovery = null;
+        });
+        patchRecovery = recovery;
+        return recovery;
+      };
+
       while (!abortController.signal.aborted && isTurnActive()) {
         /**
          * Reconnect from where we left off.
@@ -2344,6 +2381,19 @@ export function CodexChatTab({
                 upsertMessage(sessionKey, message);
               } else {
                 await refreshMessages(client, session.sessionId);
+              }
+              continue;
+            }
+
+            if (event.type === "message.patched") {
+              const patch = event.data as unknown as CodexMessagePatch;
+              const outcome = patchMessage(sessionKey, patch);
+              if (outcome === "needs-reconcile") {
+                // Do not stop draining the stream behind a transcript read.
+                // Every gap/malformed patch observed while the same read is in
+                // flight joins it; once the snapshot lands, queued duplicate
+                // patches classify as stale and cost no additional GET.
+                void recoverMessagePatchGap();
               }
               continue;
             }
@@ -2505,6 +2555,7 @@ export function CodexChatTab({
     setSessionPhase,
     setSessionTitle,
     upsertMessage,
+    patchMessage,
   ]);
 
   // Watchdog poll for stalled turns. Mirrors the SSE gate above so it also

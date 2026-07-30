@@ -97,8 +97,8 @@ export function useFilesPanel() {
   } | null>(null);
 
   const publishChanges = useCallback(
-    (key: string, changes: backend.GitFileChange[]) => {
-      const digest = JSON.stringify(changes);
+    (key: string, changes: backend.GitFileChange[], serverDigest?: string) => {
+      const digest = serverDigest ?? JSON.stringify(changes);
       const previous = changesDigestRef.current;
       if (
         previous?.key === key
@@ -114,8 +114,8 @@ export function useFilesPanel() {
   );
 
   const publishFileTree = useCallback(
-    (key: string, tree: backend.FileNode[]) => {
-      const digest = JSON.stringify(tree);
+    (key: string, tree: backend.FileNode[], serverDigest?: string) => {
+      const digest = serverDigest ?? JSON.stringify(tree);
       const previous = treeDigestRef.current;
       if (
         previous?.key === key
@@ -165,16 +165,33 @@ export function useFilesPanel() {
     const request = (async () => {
       try {
         // Compare against the environment creation commit when available.
-        let changes: backend.GitFileChange[] = [];
+        let snapshot: backend.ConditionalSnapshot<backend.GitFileChange[]> = {
+          unchanged: false,
+          digest: "",
+          value: [],
+        };
+        const knownDigest = changesDigestRef.current?.key === environmentSnapshotKey
+          ? changesDigestRef.current.digest
+          : undefined;
         if (isLocalEnvironment && worktreePath) {
-          // Local environment - use local git status command
-          changes = await backend.getLocalGitStatus(worktreePath, comparisonRef, true);
+          snapshot = await backend.getLocalGitStatusSnapshot(
+            worktreePath,
+            comparisonRef,
+            knownDigest,
+          );
         } else if (containerId) {
-          // Container environment - use container git status command
-          changes = await backend.getGitStatus(containerId, comparisonRef, true);
+          snapshot = await backend.getGitStatusSnapshot(
+            containerId,
+            comparisonRef,
+            knownDigest,
+          );
         }
-        if (activeSnapshotKeyRef.current === environmentSnapshotKey) {
-          publishChanges(environmentSnapshotKey, changes);
+        if (
+          !snapshot.unchanged
+          && snapshot.value
+          && activeSnapshotKeyRef.current === environmentSnapshotKey
+        ) {
+          publishChanges(environmentSnapshotKey, snapshot.value, snapshot.digest);
         }
       } catch (err) {
         console.error("Failed to load git changes:", err);
@@ -216,16 +233,25 @@ export function useFilesPanel() {
 
     const request = (async () => {
       try {
-        let tree: backend.FileNode[] = [];
+        let snapshot: backend.ConditionalSnapshot<backend.FileNode[]> = {
+          unchanged: false,
+          digest: "",
+          value: [],
+        };
+        const knownDigest = treeDigestRef.current?.key === environmentSnapshotKey
+          ? treeDigestRef.current.digest
+          : undefined;
         if (isLocalEnvironment && worktreePath) {
-          // Local environment - use local file tree command
-          tree = await backend.getLocalFileTree(worktreePath);
+          snapshot = await backend.getLocalFileTreeSnapshot(worktreePath, knownDigest);
         } else if (containerId) {
-          // Container environment - use container file tree command
-          tree = await backend.getFileTree(containerId);
+          snapshot = await backend.getFileTreeSnapshot(containerId, knownDigest);
         }
-        if (activeSnapshotKeyRef.current === environmentSnapshotKey) {
-          publishFileTree(environmentSnapshotKey, tree);
+        if (
+          !snapshot.unchanged
+          && snapshot.value
+          && activeSnapshotKeyRef.current === environmentSnapshotKey
+        ) {
+          publishFileTree(environmentSnapshotKey, snapshot.value, snapshot.digest);
         }
       } catch (err) {
         console.error("Failed to load file tree:", err);

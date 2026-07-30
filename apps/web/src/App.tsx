@@ -45,7 +45,7 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
-import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, syncAllEnvironmentsWithDocker } from "@/lib/backend";
+import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, getEnvironment, syncAllEnvironmentsWithDocker } from "@/lib/backend";
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
 import { useCodexBackgroundSync } from "@/hooks/useCodexBackgroundSync";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
@@ -606,13 +606,58 @@ function App() {
       const existingOptions = useClaudeOptionsStore.getState().getOptions(environmentId);
 
       if (launchPrompt) {
+        // List hydration deliberately excludes attachment bodies. Read the
+        // targeted record only for the one launch that needs them — the listed
+        // record still says whether there is anything to read, so a prompt with
+        // no attachments costs no round trip and cannot be blocked by one.
+        let detailedEnvironment = environment;
+        /**
+         * `undefined` means the backend predates the flag, so the read still has
+         * to happen — but a failure then degrades to the listed record rather
+         * than refusing the launch, which is what that backend always did.
+         * Only a backend that positively says "there are attachments" earns a
+         * blocking failure, because that is the only case where starting anyway
+         * would run a prompt whose images are missing.
+         */
+        const attachmentState = environment?.hasInitialPromptAttachments;
+        if (
+          existingOptions?.initialPromptAttachments === undefined
+          && attachmentState !== false
+        ) {
+          try {
+            const loadedEnvironment = await getEnvironment(environmentId);
+            if (!loadedEnvironment) {
+              throw new Error(`Environment ${environmentId} was not found`);
+            }
+            detailedEnvironment = loadedEnvironment;
+          } catch (error) {
+            console.error(
+              "[App] Failed to restore saved prompt attachments before startup:",
+              error,
+            );
+            if (attachmentState === true) {
+              toast.error("Could not restore saved prompt attachments", {
+                description:
+                  "The environment was not started. Try again to reload its saved prompt.",
+              });
+              return false;
+            }
+          }
+        }
+        const storedAttachments = detailedEnvironment?.initialPromptAttachments?.map(
+          (attachment) => ({
+            ...attachment,
+            previewUrl: attachment.previewUrl
+              ?? `data:image/png;base64,${attachment.base64Data}`,
+          }),
+        );
         setClaudeOptions(environmentId, {
           launchAgent: true,
           agentType: existingOptions?.agentType ?? environment?.defaultAgent ?? config.global.defaultAgent ?? "claude",
           initialPrompt: launchPrompt,
           initialPromptAttachments:
             existingOptions?.initialPromptAttachments
-            ?? environment?.initialPromptAttachments,
+            ?? storedAttachments,
         });
       } else if (existingOptions?.initialPrompt?.trim()) {
         clearClaudeOptions(environmentId);

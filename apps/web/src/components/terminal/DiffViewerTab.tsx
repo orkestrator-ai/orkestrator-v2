@@ -35,6 +35,47 @@ interface DiffViewerTabProps {
   onSwitchToFileView?: () => void;
 }
 
+const diffBaseCache = new Map<string, Promise<backend.FileContent | null>>();
+const MAX_DIFF_BASE_CACHE_ENTRIES = 128;
+
+/** Clears module-level immutable bases so tests can assert cache boundaries. */
+export function clearDiffBaseCacheForTests(): void {
+  diffBaseCache.clear();
+}
+
+/**
+ * Must stay in step with the backend's `isImmutableCommitRef`.
+ *
+ * The backend only short-circuits a fetch for a *full* object name; anything
+ * else it resolves through `origin/<ref>`, which moves. A broader test here
+ * would pin a moving branch in a module-level cache that nothing invalidates,
+ * so a hex-looking branch name (`defaced`, `1234567`) would render against a
+ * stale base for the life of the process.
+ */
+const IMMUTABLE_COMMIT_REF = /^[0-9a-f]{40}$/i;
+
+function cachedImmutableDiffBase(
+  key: string,
+  comparisonRef: string,
+  load: () => Promise<backend.FileContent | null>,
+): Promise<backend.FileContent | null> {
+  // Branches move; only commit-addressed bases are safe across tab remounts.
+  if (!IMMUTABLE_COMMIT_REF.test(comparisonRef.trim())) return load();
+  const existing = diffBaseCache.get(key);
+  if (existing) return existing;
+  const pending = load().catch((error) => {
+    diffBaseCache.delete(key);
+    throw error;
+  });
+  diffBaseCache.set(key, pending);
+  while (diffBaseCache.size > MAX_DIFF_BASE_CACHE_ENTRIES) {
+    const oldest = diffBaseCache.keys().next().value;
+    if (oldest === undefined) break;
+    diffBaseCache.delete(oldest);
+  }
+  return pending;
+}
+
 type DiffMode = "side-by-side" | "inline";
 
 /** Viewports narrower than this get the touch-oriented single-column layout. */
@@ -242,9 +283,17 @@ export function DiffViewerTab({
         if (!isNewFile) {
           let originalResult: backend.FileContent | null;
           if (isLocalEnvironment && worktreePath) {
-            originalResult = await backend.readLocalFileAtBranch(worktreePath, filePath, baseBranch);
+            originalResult = await cachedImmutableDiffBase(
+              `local\0${worktreePath}\0${baseBranch}\0${filePath}`,
+              baseBranch,
+              () => backend.readLocalFileAtBranch(worktreePath, filePath, baseBranch),
+            );
           } else if (containerId) {
-            originalResult = await backend.readFileAtBranch(containerId, filePath, baseBranch);
+            originalResult = await cachedImmutableDiffBase(
+              `container\0${containerId}\0${baseBranch}\0${filePath}`,
+              baseBranch,
+              () => backend.readFileAtBranch(containerId, filePath, baseBranch),
+            );
           } else {
             throw new Error("No container ID or worktree path available");
           }

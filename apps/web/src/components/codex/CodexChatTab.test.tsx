@@ -77,6 +77,8 @@ const MOCK_MODELS: CodexModel[] = [
 
 type TestCodexMessage = NativeMessage & {
   planReview?: boolean;
+  /** Carried by every real `CodexMessage`; patch classification branches on it. */
+  revision?: number;
 };
 
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
@@ -3854,6 +3856,209 @@ describe("CodexChatTab", () => {
         expect.objectContaining({ throwOnError: undefined }),
       );
     });
+  });
+
+  test("ignores stale message patches without refetching the transcript", async () => {
+    const message = {
+      ...createMessage("patched-message", "current"),
+      revision: 3,
+    };
+    seedCodexStore([message]);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockSubscribeToEvents.mockImplementation(() => (async function* () {
+      await gate;
+      yield {
+        type: "message.patched",
+        sessionId: SESSION_ID,
+        data: {
+          messageId: message.id,
+          partCount: 1,
+          changedParts: [{ index: 0, part: { type: "text", content: "duplicate" } }],
+          content: "duplicate",
+          createdAt: message.createdAt,
+          revision: 3,
+        },
+      };
+    })() as any);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    mockGetSessionMessages.mockClear();
+    release();
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockGetSessionMessages).not.toHaveBeenCalled();
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages[0])
+      .toMatchObject({ content: "current", revision: 3 });
+  });
+
+  test("coalesces a backlog of malformed and gapped patches into one refresh", async () => {
+    const current = {
+      ...createMessage("patched-message", "one"),
+      revision: 1,
+    };
+    const reconciled = {
+      ...createMessage("patched-message", "authoritative"),
+      revision: 5,
+    };
+    seedCodexStore([current]);
+    let releaseEvents!: () => void;
+    const eventGate = new Promise<void>((resolve) => {
+      releaseEvents = resolve;
+    });
+    let resolveMessages!: (messages: TestCodexMessage[]) => void;
+    const messages = new Promise<TestCodexMessage[]>((resolve) => {
+      resolveMessages = resolve;
+    });
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockSubscribeToEvents.mockImplementation(() => (async function* () {
+      await eventGate;
+      yield {
+        type: "message.patched",
+        sessionId: SESSION_ID,
+        data: {
+          messageId: current.id,
+          partCount: 1,
+          changedParts: [],
+          content: "gap",
+          createdAt: current.createdAt,
+          revision: 3,
+        },
+      };
+      yield {
+        type: "message.patched",
+        sessionId: SESSION_ID,
+        data: {
+          messageId: current.id,
+          partCount: 2,
+          changedParts: [],
+          content: "malformed",
+          createdAt: current.createdAt,
+          revision: 2,
+        },
+      };
+      yield {
+        type: "message.patched",
+        sessionId: SESSION_ID,
+        data: {
+          messageId: current.id,
+          partCount: 1,
+          changedParts: [],
+          content: "later gap",
+          createdAt: current.createdAt,
+          revision: 5,
+        },
+      };
+    })() as any);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    mockGetSessionMessages.mockClear();
+    mockGetSessionMessages.mockImplementation(() => messages);
+    releaseEvents();
+
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalledTimes(1));
+    resolveMessages([reconciled]);
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages[0])
+        .toMatchObject({ content: "authoritative", revision: 5 });
+    });
+    expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The recovery read runs *alongside* the drain loop, so the store will have
+   * moved by the time it lands — a streaming turn emits `message.updated`
+   * continuously. Discarding the snapshot on that basis would leave the gap
+   * unrepaired until `session.idle`, which is the whole reason the read was
+   * issued.
+   */
+  test("applies a gap recovery even though live frames landed during the read", async () => {
+    const gapped = { ...createMessage("gapped-message", "stale"), revision: 1 };
+    const other = { ...createMessage("other-message", "before"), revision: 1 };
+    seedCodexStore([gapped, other]);
+
+    let releaseEvents!: () => void;
+    const eventGate = new Promise<void>((resolve) => {
+      releaseEvents = resolve;
+    });
+    let resolveMessages!: (messages: TestCodexMessage[]) => void;
+    const messages = new Promise<TestCodexMessage[]>((resolve) => {
+      resolveMessages = resolve;
+    });
+    let releaseLiveFrame!: () => void;
+    const liveFrameGate = new Promise<void>((resolve) => {
+      releaseLiveFrame = resolve;
+    });
+
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockSubscribeToEvents.mockImplementation(() => (async function* () {
+      await eventGate;
+      yield {
+        type: "message.patched",
+        sessionId: SESSION_ID,
+        data: {
+          messageId: gapped.id,
+          partCount: 1,
+          changedParts: [],
+          content: "gap",
+          createdAt: gapped.createdAt,
+          revision: 4,
+        },
+      };
+      // Lands while the recovery GET is still in flight, replacing the session
+      // object and therefore breaking reference identity.
+      await liveFrameGate;
+      yield {
+        type: "message.updated",
+        sessionId: SESSION_ID,
+        data: {
+          message: { ...other, content: "during-read", revision: 2 },
+        },
+      };
+    })() as any);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    mockGetSessionMessages.mockClear();
+    mockGetSessionMessages.mockImplementation(() => messages);
+    releaseEvents();
+
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalledTimes(1));
+    releaseLiveFrame();
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages
+        .find((message) => message.id === other.id))
+        .toMatchObject({ content: "during-read", revision: 2 });
+    });
+
+    // The snapshot predates the live frame, so it still carries revision 1 for
+    // the message that moved. The gap it was fetched for must still be closed,
+    // and the newer local revision must survive.
+    resolveMessages([
+      { ...gapped, content: "authoritative", revision: 4 },
+      { ...other, content: "before", revision: 1 },
+    ]);
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages
+        .find((message) => message.id === gapped.id))
+        .toMatchObject({ content: "authoritative", revision: 4 });
+    });
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages
+      .find((message) => message.id === other.id))
+      .toMatchObject({ content: "during-read", revision: 2 });
+    expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
   });
 
   test("watchdog refreshes a loading turn after activity becomes stale", async () => {

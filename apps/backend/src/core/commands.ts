@@ -12,6 +12,7 @@ import {
 import {
   PANE_LAYOUT_VERSION,
   type AgentModelConfigKey,
+  type ClientEnvironment,
   type Environment,
   type AppConfig,
   type ClaudeEffortLevel,
@@ -195,6 +196,9 @@ type TerminalOutputBuffer = {
 const terminalOutputBuffers = new Map<string, TerminalOutputBuffer>();
 const terminalOutputRevisions = new Map<string, number>();
 const terminalOutputGenerations = new Map<string, number>();
+type TerminalOutputDelta = { revision: number; text: string };
+const terminalOutputDeltas = new Map<string, TerminalOutputDelta[]>();
+const terminalOutputDeltaBytes = new Map<string, number>();
 const terminalOutputTruncated = new Set<string>();
 const terminalOutputRetentionTimers = new Map<
   string,
@@ -455,6 +459,13 @@ type EnvironmentSetupStartResult = {
   setupStarted: boolean;
   setupSessionId?: string;
   environment: Environment;
+};
+
+type ClientEnvironmentSetupStartResult = Omit<
+  EnvironmentSetupStartResult,
+  "environment"
+> & {
+  environment: ClientEnvironment;
 };
 
 const environmentSetupSessions = new Map<string, EnvironmentSetupSession>();
@@ -2721,28 +2732,92 @@ function findEnvironmentByContainerId(environments: Environment[], containerId: 
   return environments.find((environment) => environment.containerId && containerIdMatches(environment.containerId, containerId));
 }
 
+/** Explicit list projection: renderer hydration never receives backend internals. */
+export function toClientEnvironment(environment: Environment): ClientEnvironment {
+  const {
+    agentActivitySources: _agentActivitySources,
+    frontendAgentActivityObservers: _frontendObservers,
+    initialPromptAttachments: _attachments,
+    claudeModelCatalog: _modelCatalog,
+    opencodePid: _opencodePid,
+    claudeBridgePid: _claudeBridgePid,
+    codexBridgePid: _codexBridgePid,
+    pendingRenamePrompt: _pendingRenamePrompt,
+    ...client
+  } = environment;
+  if (
+    !client.pendingAgentLaunch
+    && client.startupAgentSession?.status !== "starting"
+  ) {
+    delete client.initialAgentModel;
+    delete client.initialReasoningEffort;
+  }
+  // The bodies stay backend-only, but their existence does not: the renderer
+  // uses this to decide whether the targeted detail read is worth making at all.
+  // Always emitted, including `false`, so a renderer can tell "this backend says
+  // there are none" apart from "this backend is too old to say".
+  return {
+    ...client,
+    hasInitialPromptAttachments: (_attachments?.length ?? 0) > 0,
+  };
+}
+
+function toClientEnvironmentSetupStartResult(
+  result: EnvironmentSetupStartResult,
+): ClientEnvironmentSetupStartResult {
+  return {
+    ...result,
+    environment: toClientEnvironment(result.environment),
+  };
+}
+
+export type EnvironmentActivityUpdate = Pick<
+  Environment,
+  "id" | "lastActivityAt" | "hasUnreadWork" | "agentActivityState" | "agentActivityUpdatedAt"
+>;
+
+function toEnvironmentActivityUpdate(environment: Environment): EnvironmentActivityUpdate {
+  return {
+    id: environment.id,
+    lastActivityAt: environment.lastActivityAt,
+    hasUnreadWork: environment.hasUnreadWork,
+    agentActivityState: environment.agentActivityState,
+    agentActivityUpdatedAt: environment.agentActivityUpdatedAt,
+  };
+}
+
+function conditionalSnapshot<T>(value: T, knownDigest: unknown): T | {
+  unchanged: boolean;
+  digest: string;
+  value?: T;
+} {
+  if (knownDigest === undefined) return value;
+  const digest = createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return typeof knownDigest === "string" && knownDigest === digest
+    ? { unchanged: true, digest }
+    : { unchanged: false, digest, value };
+}
+
 /**
- * Terminal bytes travel as base64 rather than as a JSON array of numbers.
- *
- * The payload is serialized four times on its way to xterm.js (backend event →
- * gateway SSE → Electron main → renderer IPC). As an array, one byte becomes
- * up to four wire characters (`"104,"`) and an eight-byte heap slot in every
- * process that parses it; base64 costs 1.33 characters per byte and one string.
+ * PTY output is already UTF-8 text at this boundary. Keeping it plain avoids a
+ * base64 encode/decode and the 33% wire expansion on every live frame. The
+ * renderer still accepts the old base64 form for rolling upgrades.
  */
 function terminalOutputPayload(
   data: string | Buffer,
   revision: number,
   generation: number,
-): { bytesBase64: string; revision: number; generation: number } {
-  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8");
+): { text: string; revision: number; generation: number } {
   return {
-    bytesBase64: buffer.toString("base64"),
+    text: Buffer.isBuffer(data) ? data.toString("utf8") : data,
     revision,
     generation,
   };
 }
 
 const MAX_TERMINAL_OUTPUT_BUFFER_CHUNKS = 1_024;
+const MAX_TERMINAL_OUTPUT_DELTA_BYTES = 2 * 1024 * 1024;
+const MAX_TERMINAL_OUTPUT_DELTAS = 1_024;
 
 function createTerminalOutputBuffer(): TerminalOutputBuffer {
   return { chunks: [], headIndex: 0, headOffset: 0, length: 0 };
@@ -2819,6 +2894,8 @@ function deleteRetainedTerminalOutputBuffer(sessionId: string): void {
   terminalOutputBuffers.delete(sessionId);
   terminalOutputRevisions.delete(sessionId);
   terminalOutputGenerations.delete(sessionId);
+  terminalOutputDeltas.delete(sessionId);
+  terminalOutputDeltaBytes.delete(sessionId);
   terminalOutputTruncated.delete(sessionId);
 }
 
@@ -2829,6 +2906,8 @@ function resetTerminalOutputBuffers(): void {
   terminalOutputBuffers.clear();
   terminalOutputRevisions.clear();
   terminalOutputGenerations.clear();
+  terminalOutputDeltas.clear();
+  terminalOutputDeltaBytes.clear();
   terminalOutputTruncated.clear();
 }
 
@@ -2908,6 +2987,24 @@ function appendTerminalOutputBuffer(sessionId: string, data: string | Buffer): n
   }
   const revision = (terminalOutputRevisions.get(sessionId) ?? 0) + 1;
   terminalOutputRevisions.set(sessionId, revision);
+  let deltas = terminalOutputDeltas.get(sessionId);
+  if (!deltas) {
+    deltas = [];
+    terminalOutputDeltas.set(sessionId, deltas);
+  }
+  deltas.push({ revision, text });
+  let deltaBytes =
+    (terminalOutputDeltaBytes.get(sessionId) ?? 0)
+    + Buffer.byteLength(text, "utf8");
+  while (
+    deltas.length > MAX_TERMINAL_OUTPUT_DELTAS
+    || deltaBytes > MAX_TERMINAL_OUTPUT_DELTA_BYTES
+  ) {
+    const removed = deltas.shift();
+    if (!removed) break;
+    deltaBytes -= Buffer.byteLength(removed.text, "utf8");
+  }
+  terminalOutputDeltaBytes.set(sessionId, deltaBytes);
   return revision;
 }
 
@@ -2926,6 +3023,8 @@ function resetTerminalOutputBuffer(sessionId: string): void {
   terminalOutputRetentionTimers.delete(sessionId);
   terminalOutputBuffers.set(sessionId, createTerminalOutputBuffer());
   terminalOutputRevisions.set(sessionId, 0);
+  terminalOutputDeltas.set(sessionId, []);
+  terminalOutputDeltaBytes.set(sessionId, 0);
   terminalOutputTruncated.delete(sessionId);
   terminalOutputGenerations.set(
     sessionId,
@@ -3590,7 +3689,7 @@ function beginSetupPreparationSession(environment: Environment, context: Command
   context.emit("environment-setup-started", {
     environment_id: environment.id,
     session_id: sessionId,
-    environment,
+    environment: toClientEnvironment(environment),
   });
   return sessionId;
 }
@@ -3723,7 +3822,7 @@ async function spawnSetupTerminal(
   context.emit("environment-setup-started", {
     environment_id: environment.id,
     session_id: sessionId,
-    environment,
+    environment: toClientEnvironment(environment),
   });
 
   return { sessionId, completion: tracker.completion };
@@ -3764,7 +3863,7 @@ async function completeEnvironmentSetup(
   context.emit("environment-setup-complete", {
     environment_id: environment.id,
     success: true,
-    environment: updated,
+    environment: toClientEnvironment(updated),
   });
   return updated;
 }
@@ -3822,7 +3921,7 @@ async function failEnvironmentSetup(environmentId: string, error: unknown, conte
     environment_id: environmentId,
     success: false,
     error: message,
-    ...(updated ? { environment: updated } : {}),
+    ...(updated ? { environment: toClientEnvironment(updated) } : {}),
   });
 }
 
@@ -7450,13 +7549,19 @@ export function createCommandRegistry(
     // after a restart. The monitor never resubmits the merge; it only confirms a
     // terminal state so the persisted deletion follow-up can resume safely.
     void syncPrMonitorTracking(context).catch(() => undefined);
-    return synced;
+    return synced.map(toClientEnvironment);
   });
-  register("get_environment_snapshots", ({ projectId }, { storage }) =>
-    storage.getEnvironmentsByProject(asString(projectId, "projectId"))
+  register("get_environment_snapshots", async ({ projectId }, { storage }) =>
+    (await storage.getEnvironmentsByProject(asString(projectId, "projectId")))
+      .map(toClientEnvironment)
   );
   register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
-  register("reorder_environments", ({ projectId, environmentIds }, { storage }) => storage.reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds)));
+  register("reorder_environments", ({ projectId, environmentIds }, { storage }) =>
+    storage.reorderEnvironments(
+      asString(projectId, "projectId"),
+      asStringArray(environmentIds),
+    ).then((environments) => environments.map(toClientEnvironment))
+  );
   register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt, buildPipelineId }, context) => {
     const { storage } = context;
     const project = await storage.getProject(asString(projectId, "projectId"));
@@ -7484,7 +7589,7 @@ export function createCommandRegistry(
       pendingRenamePrompt,
     });
     await storage.updateRepositoryConfig(project.id, { ...repoConfig, lastEnvironmentType: env.environmentType });
-    return storage.addEnvironment(env);
+    return toClientEnvironment(await storage.addEnvironment(env));
   });
   register("delete_environment", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
@@ -7497,7 +7602,8 @@ export function createCommandRegistry(
       name: newName,
       branch: sanitizeBranchName(newName),
       pendingRenamePrompt: undefined,
-    });
+    })
+      .then(toClientEnvironment);
   });
   register("rename_environment_from_prompt", async ({ environmentId, prompt }, context) => {
     const envId = asString(environmentId, "environmentId");
@@ -7517,7 +7623,9 @@ export function createCommandRegistry(
     const knownContainerStates = environment.environmentType !== "local" && environment.containerId
       ? await getOrkestratorContainerStates()
       : null;
-    return syncStoredEnvironmentStatus(environment, storage, knownContainerStates);
+    return toClientEnvironment(
+      await syncStoredEnvironmentStatus(environment, storage, knownContainerStates),
+    );
   });
   register("sync_all_environments_with_docker", async (_args, { storage }) => {
     const cleared: string[] = [];
@@ -7549,7 +7657,7 @@ export function createCommandRegistry(
       context,
       schedulePendingEnvironmentRename,
     );
-    return task;
+    return toClientEnvironmentSetupStartResult(await task);
   });
   register("start_environment_background", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
@@ -7574,20 +7682,21 @@ export function createCommandRegistry(
       (id) => extensionDiscoveryCache.invalidate(id),
     )
   );
-  register("recreate_environment", async ({ environmentId }, context) =>
-    recreateEnvironmentTask(
+  register("recreate_environment", async ({ environmentId }, context) => {
+    const result = await recreateEnvironmentTask(
       asString(environmentId, "environmentId"),
       context,
       schedulePendingEnvironmentRename,
       (id) => extensionDiscoveryCache.invalidate(id),
-    )
-  );
+    );
+    return result ? toClientEnvironmentSetupStartResult(result) : undefined;
+  });
   register("set_environment_pr", async ({ environmentId, prUrl, prState, hasMergeConflicts }, context) => {
     const updated = await context.storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: asString(prUrl, "prUrl"), prState, hasMergeConflicts });
     // A PR recorded outside the monitor (e.g. right after a merge command) must
     // enter the monitored set without waiting for a client to rehydrate.
     void syncPrMonitorTracking(context).catch(() => undefined);
-    return updated;
+    return toClientEnvironment(updated);
   });
   register("clear_environment_pr", async ({ environmentId }, context) => {
     await context.storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: null, prState: null, hasMergeConflicts: null });
@@ -7597,7 +7706,9 @@ export function createCommandRegistry(
   register("record_environment_activity", async ({ environmentId, occurredAt }, { storage }) => {
     const id = asString(environmentId, "environmentId");
     const activityAt = asString(occurredAt, "occurredAt");
-    return storage.recordEnvironmentActivity(id, activityAt);
+    return toEnvironmentActivityUpdate(
+      await storage.recordEnvironmentActivity(id, activityAt),
+    );
   });
   register("set_environment_agent_activity", async ({
     environmentId,
@@ -7627,18 +7738,22 @@ export function createCommandRegistry(
     if (activityState === "idle") {
       probePrMonitorEnvironment(asString(environmentId, "environmentId"), context);
     }
-    return environment;
+    return toEnvironmentActivityUpdate(environment);
   });
   register("record_environment_completion", async ({ environmentId, occurredAt }, { storage }) => {
     const id = asString(environmentId, "environmentId");
     const activityAt = asString(occurredAt, "occurredAt");
-    return storage.recordEnvironmentCompletion(id, activityAt);
+    return toEnvironmentActivityUpdate(
+      await storage.recordEnvironmentCompletion(id, activityAt),
+    );
   });
   register("set_environment_setup_complete", async ({ environmentId, complete }, context) => {
     const id = asString(environmentId, "environmentId");
     const shouldComplete = asBoolean(complete);
     if (!shouldComplete) {
-      return context.storage.updateEnvironment(id, { setupScriptsComplete: false });
+      return toClientEnvironment(
+        await context.storage.updateEnvironment(id, { setupScriptsComplete: false }),
+      );
     }
     const environment = await context.storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
@@ -7654,10 +7769,14 @@ export function createCommandRegistry(
         + "diff stats will compare against the repository base branch.",
       );
     }
-    return context.storage.updateEnvironment(id, { setupScriptsComplete: true });
+    return toClientEnvironment(
+      await context.storage.updateEnvironment(id, { setupScriptsComplete: true }),
+    );
   });
   register("run_environment_setup", async ({ environmentId }, context) => {
-    return runEnvironmentSetupNow(asString(environmentId, "environmentId"), context);
+    return toClientEnvironment(
+      await runEnvironmentSetupNow(asString(environmentId, "environmentId"), context),
+    );
   });
   register("ensure_environment_setup", async ({ environmentId }, context) => {
     const environment = await context.storage.getEnvironment(asString(environmentId, "environmentId"));
@@ -7668,7 +7787,9 @@ export function createCommandRegistry(
       setupScriptsComplete: environment.setupScriptsComplete ?? false,
       status: environment.status,
     });
-    return startEnvironmentSetup(environment, context);
+    return toClientEnvironmentSetupStartResult(
+      await startEnvironmentSetup(environment, context),
+    );
   });
   register("get_environment_setup_session", ({ environmentId }) => {
     const id = asString(environmentId, "environmentId");
@@ -7700,7 +7821,10 @@ export function createCommandRegistry(
     return setupCommands.length > 0 ? setupCommands : null;
   });
   register("update_port_mappings", ({ environmentId, portMappings }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), { portMappings: asPortMappings(portMappings) ?? [] }),
+    storage.updateEnvironment(
+      asString(environmentId, "environmentId"),
+      { portMappings: asPortMappings(portMappings) ?? [] },
+    ).then(toClientEnvironment),
   );
   register("update_environment_agent_settings", ({
     environmentId,
@@ -7739,7 +7863,8 @@ export function createCommandRegistry(
       updates.initialPromptAttachments =
         initialPromptAttachments as Environment["initialPromptAttachments"];
     }
-    return storage.updateEnvironment(asString(environmentId, "environmentId"), updates);
+    return storage.updateEnvironment(asString(environmentId, "environmentId"), updates)
+      .then(toClientEnvironment);
   });
   register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) => {
     const nextPending = asRequiredBoolean(pending, "pending");
@@ -7747,7 +7872,8 @@ export function createCommandRegistry(
       ...(nextPending
         ? { pendingAgentLaunch: true }
         : clearPendingAgentLaunchUpdates()),
-    });
+    })
+      .then(toClientEnvironment);
   });
   register(
     "acknowledge_startup_agent_session",
@@ -7758,7 +7884,8 @@ export function createCommandRegistry(
           ? undefined
           : asNonBlankString(providerSessionId, "providerSessionId"),
         startedAt === undefined ? undefined : asNonBlankString(startedAt, "startedAt"),
-      ),
+      )
+        .then(toClientEnvironment),
   );
   // The renderer rewrites the initial prompt once it has uploaded the create
   // dialog's attachments and knows their in-workspace paths. Persisting that
@@ -7768,7 +7895,8 @@ export function createCommandRegistry(
     storage.updateEnvironment(asString(environmentId, "environmentId"), {
       initialPrompt: asString(initialPrompt, "initialPrompt"),
       ...(Array.isArray(initialPromptAttachments) ? { initialPromptAttachments } : {}),
-    }),
+    })
+      .then(toClientEnvironment),
   );
   register("get_environment_extensions", async ({ environmentId, refresh }, context) => {
     const id = asString(environmentId, "environmentId");
@@ -7783,7 +7911,11 @@ export function createCommandRegistry(
     );
   });
   register("update_environment_allowed_domains", ({ environmentId, domains }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), { allowedDomains: asStringArray(domains) }),
+    storage.updateEnvironment(
+      asString(environmentId, "environmentId"),
+      { allowedDomains: asStringArray(domains) },
+    )
+      .then(toClientEnvironment),
   );
   register("add_environment_domains", async ({ environmentId, domains }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
@@ -7875,7 +8007,7 @@ export function createCommandRegistry(
     const env = createEnvironment(asString(projectId, "projectId"), { name: asOptionalString(name) ?? `reattached-${String(containerId).slice(0, 8)}` });
     env.containerId = asString(containerId, "containerId");
     env.status = await getDockerStatus(env.containerId).catch(() => "stopped");
-    return storage.addEnvironment(env);
+    return toClientEnvironment(await storage.addEnvironment(env));
   });
   register("propagate_github_token_to_containers", async (_args, { storage }) => {
     const config = await storage.loadConfig();
@@ -8545,12 +8677,101 @@ export function createCommandRegistry(
     }
     return context.buildPipelines.importLegacy(id, snapshots);
   });
-  register("get_build_pipeline", ({ pipelineId }, { storage }) =>
-    storage.getBuildPipeline(asNonBlankString(pipelineId, "pipelineId")),
-  );
-  register("list_build_pipelines", ({ projectId }, { storage }) =>
-    storage.listBuildPipelines(asNonBlankString(projectId, "projectId")),
-  );
+  register("get_build_pipeline", async ({
+    pipelineId,
+    knownRevision,
+    knownSessions,
+  }, { storage }) => {
+    const record = await storage.getBuildPipeline(
+      asNonBlankString(pipelineId, "pipelineId"),
+    );
+    if (
+      record
+      && Number.isSafeInteger(knownRevision)
+      && knownRevision === record.revision
+    ) {
+      return { unchanged: true, revision: record.revision };
+    }
+    if (
+      record
+      && knownRevision !== undefined
+      && knownSessions
+      && typeof knownSessions === "object"
+      && !Array.isArray(knownSessions)
+      && record.snapshot
+      && typeof record.snapshot === "object"
+      && !Array.isArray(record.snapshot)
+      && Array.isArray((record.snapshot as { sessions?: unknown }).sessions)
+    ) {
+      const cursors = knownSessions as Record<string, unknown>;
+      const snapshot = record.snapshot as Record<string, unknown>;
+      const messagePatches: Array<Record<string, unknown>> = [];
+      const sessions = (snapshot.sessions as unknown[]).map((value) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+        const session = value as Record<string, unknown>;
+        const sessionKey = session.sessionKey;
+        const messages = session.messages;
+        const revision = session.messageRevision;
+        if (
+          typeof sessionKey !== "string"
+          || !Array.isArray(messages)
+          || !Number.isSafeInteger(revision)
+        ) {
+          return session;
+        }
+        const cursor = cursors[sessionKey];
+        const cursorRecord = cursor && typeof cursor === "object" && !Array.isArray(cursor)
+          ? cursor as Record<string, unknown>
+          : undefined;
+        const baseRevision = cursorRecord?.revision;
+        const baseCount = cursorRecord?.count;
+        if (baseRevision === revision && baseCount === messages.length) {
+          const { messages: _messages, ...withoutMessages } = session;
+          return withoutMessages;
+        }
+        const usableBase = Number.isSafeInteger(baseRevision)
+          && (baseRevision as number) >= 0
+          && (baseRevision as number) < (revision as number)
+          && Number.isSafeInteger(baseCount)
+          && (baseCount as number) >= 0
+          && (baseCount as number) <= messages.length;
+        const startIndex = usableBase
+          ? Math.max(0, (baseCount as number) - 1)
+          : 0;
+        messagePatches.push({
+          sessionKey,
+          ...(usableBase ? { baseRevision, baseCount } : {}),
+          startIndex,
+          revision,
+          messages: messages.slice(startIndex),
+        });
+        const { messages: _messages, ...withoutMessages } = session;
+        return withoutMessages;
+      });
+      return {
+        unchanged: false,
+        record: {
+          ...record,
+          snapshot: { ...snapshot, sessions },
+        },
+        messagePatches,
+      };
+    }
+    return record;
+  });
+  register("list_build_pipelines", async ({ projectId, knownRevisions }, { storage }) => {
+    const records = await storage.listBuildPipelines(
+      asNonBlankString(projectId, "projectId"),
+    );
+    if (!knownRevisions || typeof knownRevisions !== "object" || Array.isArray(knownRevisions)) {
+      return records;
+    }
+    const revisions = knownRevisions as Record<string, unknown>;
+    return {
+      ids: records.map((record) => record.id),
+      records: records.filter((record) => revisions[record.id] !== record.revision),
+    };
+  });
   register(
     "save_build_pipeline",
     () => {
@@ -8567,12 +8788,14 @@ export function createCommandRegistry(
   register(
     "set_environment_unread",
     async ({ environmentId, unread, expectedLastActivityAt }, { storage }) =>
-      storage.setEnvironmentUnread(
-        asString(environmentId, "environmentId"),
-        asBoolean(unread),
-        expectedLastActivityAt === undefined || expectedLastActivityAt === null
-          ? expectedLastActivityAt
-          : asString(expectedLastActivityAt, "expectedLastActivityAt"),
+      toClientEnvironment(
+        await storage.setEnvironmentUnread(
+          asString(environmentId, "environmentId"),
+          asBoolean(unread),
+          expectedLastActivityAt === undefined || expectedLastActivityAt === null
+            ? expectedLastActivityAt
+            : asString(expectedLastActivityAt, "expectedLastActivityAt"),
+        ),
       ),
   );
 
@@ -8936,12 +9159,47 @@ export function createCommandRegistry(
     }
     return buffer;
   });
-  register("get_terminal_output_snapshot", ({ sessionId }) => {
+  register("get_terminal_output_snapshot", ({ sessionId, sinceRevision, sinceGeneration }) => {
     const id = asString(sessionId, "sessionId");
+    const revision = terminalOutputRevisions.get(id) ?? 0;
+    const generation = terminalOutputGenerations.get(id) ?? 0;
+    if (sinceRevision !== undefined || sinceGeneration !== undefined) {
+      const requestedRevision = asNumber(sinceRevision, "sinceRevision");
+      const requestedGeneration = asNumber(sinceGeneration, "sinceGeneration");
+      const deltas = terminalOutputDeltas.get(id) ?? [];
+      const oldestRevision = deltas[0]?.revision ?? revision + 1;
+      if (
+        Number.isSafeInteger(requestedRevision)
+        && requestedRevision >= 0
+        && Number.isSafeInteger(requestedGeneration)
+        && requestedGeneration === generation
+        && requestedRevision <= revision
+        && requestedRevision >= oldestRevision - 1
+      ) {
+        return {
+          mode: "delta",
+          output: deltas
+            .filter((entry) => entry.revision > requestedRevision)
+            .map((entry) => entry.text)
+            .join(""),
+          revision,
+          generation,
+          truncated: false,
+        };
+      }
+      return {
+        mode: "full",
+        reason: requestedGeneration === generation ? "expired" : "generation-changed",
+        output: readTerminalOutputBuffer(id),
+        revision,
+        generation,
+        truncated: terminalOutputTruncated.has(id),
+      };
+    }
     return {
       output: readTerminalOutputBuffer(id),
-      revision: terminalOutputRevisions.get(id) ?? 0,
-      generation: terminalOutputGenerations.get(id) ?? 0,
+      revision,
+      generation,
       truncated: terminalOutputTruncated.has(id),
     };
   });
@@ -9037,21 +9295,24 @@ export function createCommandRegistry(
     explicitlyCloseTerminalSession(asString(sessionId, "sessionId"));
   });
 
-  register("get_local_git_status", async ({ worktreePath, targetBranch, includeUncommitted }) => {
+  register("get_local_git_status", async ({ worktreePath, targetBranch, includeUncommitted, knownDigest }) => {
     const resolvedWorktreePath = asString(worktreePath, "worktreePath");
     const ref = asString(targetBranch, "targetBranch");
     const includeWorkingTree = includeUncommitted !== false;
     if (!includeWorkingTree) {
-      return getLocalGitStatus(resolvedWorktreePath, ref, false);
+      return conditionalSnapshot(
+        await getLocalGitStatus(resolvedWorktreePath, ref, false),
+        knownDigest,
+      );
     }
 
     // The sidebar badge and the Files panel look at the same environment and used
     // to ask for it separately. Whichever arrives first pays for the scan.
     const cached = diffStatsService.cachedChanges({ worktreePath: resolvedWorktreePath }, ref, DIFF_CACHE_MAX_AGE_MS);
-    if (cached) return cached as GitFileChange[];
+    if (cached) return conditionalSnapshot(cached as GitFileChange[], knownDigest);
     const changes = await getLocalGitStatus(resolvedWorktreePath, ref, true);
     diffStatsService.adoptScan({ worktreePath: resolvedWorktreePath }, ref, changes);
-    return changes;
+    return conditionalSnapshot(changes, knownDigest);
   });
   /**
    * Authoritative diff-stat snapshot.
@@ -9070,7 +9331,12 @@ export function createCommandRegistry(
     diffStatsService.refresh(asString(environmentId, "environmentId"));
   });
 
-  register("get_local_file_tree", ({ worktreePath }) => buildFileTree(asString(worktreePath, "worktreePath")));
+  register("get_local_file_tree", async ({ worktreePath, knownDigest }) =>
+    conditionalSnapshot(
+      await buildFileTree(asString(worktreePath, "worktreePath")),
+      knownDigest,
+    )
+  );
   register("read_local_file", ({ worktreePath, filePath }) => readTextFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")));
   register("read_local_file_at_branch", ({ worktreePath, filePath, branch }) =>
     readLocalFileAtBranch(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(branch, "branch")),
@@ -9098,17 +9364,17 @@ export function createCommandRegistry(
     return result;
   });
 
-  register("get_git_status", async ({ containerId, targetBranch, includeUncommitted }) => {
+  register("get_git_status", async ({ containerId, targetBranch, includeUncommitted, knownDigest }) => {
     const ref = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
     const includeWorkingTree = includeUncommitted !== false;
     const resolvedContainerId = asString(containerId, "containerId");
 
     if (includeWorkingTree) {
       const cached = diffStatsService.cachedChanges({ containerId: resolvedContainerId }, ref, DIFF_CACHE_MAX_AGE_MS);
-      if (cached) return cached as GitFileChange[];
+      if (cached) return conditionalSnapshot(cached as GitFileChange[], knownDigest);
       const changes = (await getContainerGitStatusDetailed(resolvedContainerId, ref, true)).changes;
       diffStatsService.adoptScan({ containerId: resolvedContainerId }, ref, changes);
-      return changes;
+      return conditionalSnapshot(changes, knownDigest);
     }
 
     const output = await dockerExec(
@@ -9121,11 +9387,17 @@ export function createCommandRegistry(
     if (isMissingTargetRefResponse(output)) {
       throw new Error(`Target ref is not present in the container: ${ref}`);
     }
-    return parseContainerGitStatusResponse(output, includeWorkingTree);
+    return conditionalSnapshot(
+      parseContainerGitStatusResponse(output, includeWorkingTree),
+      knownDigest,
+    );
   });
-  register("get_file_tree", async ({ containerId }) => {
+  register("get_file_tree", async ({ containerId, knownDigest }) => {
     const output = await dockerExec(asString(containerId, "containerId"), "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type l -prune -o -type f -printf '%P\\n' | head -5000");
-    return output.split("\n").filter(Boolean).map((filePath) => ({ name: path.basename(filePath), path: filePath, isDirectory: false, extension: path.extname(filePath) }));
+    return conditionalSnapshot(
+      output.split("\n").filter(Boolean).map((filePath) => ({ name: path.basename(filePath), path: filePath, isDirectory: false, extension: path.extname(filePath) })),
+      knownDigest,
+    );
   });
   register("read_container_file", async ({ containerId, filePath }) => {
     const target = validateRelativeFilePath(asString(filePath, "filePath"));

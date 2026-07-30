@@ -256,8 +256,8 @@ function pathDirname(kind: BackendKind, filePath: string): string {
   return kind === "container" ? path.posix.dirname(filePath) : path.dirname(filePath);
 }
 
-function bytesPayload(text: string): { bytesBase64: string } {
-  return { bytesBase64: Buffer.from(text, "utf8").toString("base64") };
+function bytesPayload(text: string, full = false): { text: string; full: boolean } {
+  return { text, full };
 }
 
 function countNewlines(buffer: Buffer): number {
@@ -2589,11 +2589,79 @@ export const INTERACTIVE_SNAPSHOT_MIN_MS = 250;
 /** Cadence a pane backs off to while nothing at all changes. */
 export const INTERACTIVE_SNAPSHOT_MAX_MS = 1_000;
 
+export interface TmuxPaneUpdate {
+  text: string;
+  full: boolean;
+}
+
+/**
+ * Drops the terminator `tmux capture-pane -p` writes after the *last* row.
+ *
+ * A capture of an N-row pane contains exactly N newlines, so replaying it
+ * verbatim issues a line feed while the cursor sits on the bottom row. That
+ * scrolls the viewport by one, and every subsequent line-addressed patch then
+ * names the row below the one it meant to replace. Normalising here keeps the
+ * repaint and the patch agreed on which row holds which line.
+ */
+function paneRows(capture: string): string[] {
+  const rows = capture.split("\n");
+  if (rows.length > 1 && rows[rows.length - 1] === "") rows.pop();
+  return rows;
+}
+
+/** Build a bounded ANSI line patch, falling back to an exact pane repaint. */
+export function buildTmuxPaneUpdate(
+  previous: string | undefined,
+  next: string,
+  force = false,
+): TmuxPaneUpdate {
+  const after = paneRows(next);
+  const full = (): TmuxPaneUpdate => ({
+    text: `\x1b[H\x1b[2J${after.join("\r\n")}`,
+    full: true,
+  });
+  if (force || previous === undefined) return full();
+  const before = paneRows(previous);
+  if (before.length !== after.length) return full();
+
+  const changed: number[] = [];
+  for (let index = 0; index < after.length; index += 1) {
+    if (before[index] !== after[index]) changed.push(index);
+  }
+  if (changed.length === 0) return { text: "", full: false };
+  // Clear-heavy transitions and widespread redraws are both smaller and safer
+  // as a full pane, especially around alternate-screen applications.
+  if (
+    changed.length * 2 >= after.length
+    || after.every((line) => line.trim().length === 0)
+  ) {
+    return full();
+  }
+  return {
+    text: changed
+      .map((index) => `\x1b[${index + 1};1H\x1b[2K${after[index] ?? ""}`)
+      .join(""),
+    full: false,
+  };
+}
+
 type InteractiveTerminalSession = {
   id: string;
   tmux: TmuxSession;
   timer?: unknown;
   lastSnapshot?: string;
+  /**
+   * Invalidates captures that began before a forced restart or resize. A
+   * capture may outlive the operation that superseded it, so attachment alone
+   * is not enough to decide whether its result is still authoritative.
+   */
+  captureGeneration: number;
+  /** Suppresses timer captures while tmux is changing the pane geometry. */
+  captureSuspended: boolean;
+  /** The first capture after a geometry change must repaint the whole pane. */
+  forceNextSnapshot: boolean;
+  /** Serializes resize-window commands so an older resize cannot finish last. */
+  geometryTail: Promise<void>;
   cols: number;
   rows: number;
   /** Current gap between captures; doubles while the pane is static. */
@@ -2620,14 +2688,24 @@ export class InteractiveTmuxTerminalManager {
 
   create(tmux: TmuxSession, cols: number, rows: number): string {
     const id = `tmux:${tmux.environmentId}:${tmux.tabId}:${randomUUID()}`;
-    this.terminals.set(id, { id, tmux, cols, rows, intervalMs: INTERACTIVE_SNAPSHOT_MIN_MS });
+    this.terminals.set(id, {
+      id,
+      tmux,
+      cols,
+      rows,
+      intervalMs: INTERACTIVE_SNAPSHOT_MIN_MS,
+      captureGeneration: 0,
+      captureSuspended: false,
+      forceNextSnapshot: true,
+      geometryTail: Promise.resolve(),
+    });
     return id;
   }
 
   async start(id: string, context: CommandContext): Promise<void> {
     const terminal = this.require(id);
     terminal.context = context;
-    await terminal.tmux.resize(terminal.cols, terminal.rows);
+    await this.changeGeometry(terminal, terminal.cols, terminal.rows);
     await this.emitSnapshot(terminal, context, true);
     this.schedule(terminal);
   }
@@ -2644,7 +2722,7 @@ export class InteractiveTmuxTerminalManager {
     const terminal = this.require(id);
     terminal.cols = cols;
     terminal.rows = rows;
-    await terminal.tmux.resize(cols, rows);
+    await this.changeGeometry(terminal, cols, rows);
   }
 
   detach(id: string): void {
@@ -2668,6 +2746,47 @@ export class InteractiveTmuxTerminalManager {
     const terminal = this.terminals.get(id);
     if (!terminal) throw new Error("tmux interactive terminal session not found");
     return terminal;
+  }
+
+  private beginGeometryChange(terminal: InteractiveTerminalSession): number {
+    terminal.captureGeneration += 1;
+    terminal.captureSuspended = true;
+    return terminal.captureGeneration;
+  }
+
+  private async changeGeometry(
+    terminal: InteractiveTerminalSession,
+    cols: number,
+    rows: number,
+  ): Promise<void> {
+    const generation = this.beginGeometryChange(terminal);
+    const operation = terminal.geometryTail.then(
+      () => terminal.tmux.resize(cols, rows),
+      () => terminal.tmux.resize(cols, rows),
+    );
+    terminal.geometryTail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      await operation;
+    } finally {
+      this.finishGeometryChange(terminal, generation);
+    }
+  }
+
+  private finishGeometryChange(
+    terminal: InteractiveTerminalSession,
+    generation: number,
+  ): void {
+    if (
+      this.terminals.get(terminal.id) !== terminal
+      || terminal.captureGeneration !== generation
+    ) {
+      return;
+    }
+    terminal.captureSuspended = false;
+    terminal.forceNextSnapshot = true;
   }
 
   /**
@@ -2703,18 +2822,36 @@ export class InteractiveTmuxTerminalManager {
   }
 
   private async emitSnapshot(terminal: InteractiveTerminalSession, context: CommandContext, force: boolean): Promise<void> {
+    if (terminal.captureSuspended) return;
+    const generation = terminal.captureGeneration;
     const snapshot = await terminal.tmux.capturePane({ ansi: true, joinWrapped: false });
     // Detach can happen while capture-pane is in flight. Never emit the late
-    // snapshot or revive its timer after the terminal has been removed.
-    if (this.terminals.get(terminal.id) !== terminal) return;
-    if (!force && snapshot === terminal.lastSnapshot) {
+    // snapshot or revive its timer after the terminal has been removed. A
+    // resize or forced restart also makes an earlier capture stale even if it
+    // finishes last.
+    if (
+      this.terminals.get(terminal.id) !== terminal
+      || terminal.captureGeneration !== generation
+      || terminal.captureSuspended
+    ) {
+      return;
+    }
+    const repaint = force || terminal.forceNextSnapshot;
+    if (!repaint && snapshot === terminal.lastSnapshot) {
       terminal.intervalMs = Math.min(INTERACTIVE_SNAPSHOT_MAX_MS, terminal.intervalMs * 2);
       return;
     }
     // Any change snaps the cadence back: output usually arrives in bursts.
     terminal.intervalMs = INTERACTIVE_SNAPSHOT_MIN_MS;
+    const update = buildTmuxPaneUpdate(terminal.lastSnapshot, snapshot, repaint);
     terminal.lastSnapshot = snapshot;
-    context.emit(`terminal-output-${terminal.id}`, bytesPayload(`\x1b[H\x1b[2J${snapshot.replaceAll("\n", "\r\n")}`));
+    terminal.forceNextSnapshot = false;
+    if (update.text) {
+      context.emit(
+        `terminal-output-${terminal.id}`,
+        bytesPayload(update.text, update.full),
+      );
+    }
   }
 }
 

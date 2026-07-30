@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AppServerRuntime,
+  estimateOrderedEventBytes,
   MAX_PENDING_EVENTS_PER_TURN,
   MAX_PENDING_TURNS,
   MAX_RECOVERED_CONTEXT_CHARS,
@@ -331,6 +332,8 @@ async function harness(
     environmentDrainTimeoutMs?: number;
     ambiguousRecoveryTimeoutMs?: number;
     compactionTimeoutMs?: number;
+    orderedEventMaxCount?: number;
+    orderedEventMaxBytes?: number;
     fingerprintEnvironment?: () => string;
     /** Uses the production adaptive cadence instead of deterministic immediate publishes. */
     adaptiveCoalesce?: boolean;
@@ -405,6 +408,12 @@ async function harness(
     ...(options.compactionTimeoutMs !== undefined
       ? { compactionTimeoutMs: options.compactionTimeoutMs }
       : {}),
+    ...(options.orderedEventMaxCount !== undefined
+      ? { orderedEventMaxCount: options.orderedEventMaxCount }
+      : {}),
+    ...(options.orderedEventMaxBytes !== undefined
+      ? { orderedEventMaxBytes: options.orderedEventMaxBytes }
+      : {}),
   });
   if (options.deferStart !== true) await runtime.start();
 
@@ -435,6 +444,322 @@ async function harness(
     waitForEvent,
   };
 }
+
+describe("estimateOrderedEventBytes", () => {
+  test("charges strings by their UTF-16 storage and scalars a flat node cost", () => {
+    expect(estimateOrderedEventBytes("")).toBe(2);
+    expect(estimateOrderedEventBytes("abcd")).toBe(10);
+    expect(estimateOrderedEventBytes(42)).toBe(16);
+    expect(estimateOrderedEventBytes(null)).toBe(16);
+    expect(estimateOrderedEventBytes(undefined)).toBe(16);
+    expect(estimateOrderedEventBytes(true)).toBe(16);
+  });
+
+  test("charges keys as well as values so a wide object is not free", () => {
+    const wide = estimateOrderedEventBytes({ aa: 1, bb: 2 });
+    const narrow = estimateOrderedEventBytes({ a: 1, b: 2 });
+    expect(wide).toBeGreaterThan(narrow);
+    expect(estimateOrderedEventBytes([1, 2, 3]))
+      .toBeGreaterThan(estimateOrderedEventBytes([1]));
+  });
+
+  /**
+   * The walk is bounded so a pathological structure cannot make the *estimate*
+   * the expensive part of a bounded queue. It is a heuristic, so undercounting
+   * past the cap is deliberate.
+   */
+  test("stops descending at the depth cap instead of walking forever", () => {
+    let deep: unknown = "leaf".repeat(64);
+    for (let index = 0; index < 40; index += 1) deep = { next: deep };
+    const start = performance.now();
+    const estimate = estimateOrderedEventBytes(deep);
+    expect(performance.now() - start).toBeLessThan(50);
+    // Nine nested nodes plus their keys, and nothing for the truncated tail.
+    expect(estimate).toBeLessThan(400);
+
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(estimateOrderedEventBytes(cyclic)).toBeLessThan(400);
+  });
+});
+
+describe("ordered event backpressure", () => {
+  test("bounds a slow-render queue and emits explicit authoritative reconciliation", async () => {
+    const h = await harness({}, {
+      orderedEventMaxCount: 3,
+      orderedEventMaxBytes: 1_024,
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "start",
+      requestId: "req-ordered-overflow",
+      attachments: [],
+    });
+    await h.drain();
+
+    const runtime = h.runtime as unknown as {
+      threadState: Map<string, {
+        coalescer: { flushNow: () => Promise<void> };
+        orderedEvents: Array<{ bytes: number }>;
+        orderedEventBytes: number;
+      }>;
+      enqueueAfterMessageFlush: (
+        threadId: string,
+        publish: () => void,
+        options?: { bytes?: number; coalesceKey?: "status" },
+      ) => void;
+    };
+    const state = runtime.threadState.get("thread-1")!;
+    let releaseRender!: () => void;
+    const slowRender = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    state.coalescer.flushNow = () => slowRender;
+
+    // The first event is removed from the queue and parked behind rendering.
+    // Notification handlers must still return synchronously while it is slow.
+    runtime.enqueueAfterMessageFlush("thread-1", () => {}, { bytes: 100 });
+    await Promise.resolve();
+    for (let index = 0; index < 4; index += 1) {
+      runtime.enqueueAfterMessageFlush("thread-1", () => {}, { bytes: 100 });
+    }
+
+    expect(state.orderedEvents).toHaveLength(0);
+    expect(state.orderedEventBytes).toBeLessThanOrEqual(1_024);
+    expect(
+      h.events.some((event) => event.type === "session.reconcile-required"),
+    ).toBe(false);
+
+    releaseRender();
+    await h.runtime.drainPendingWork();
+    expect(h.events).toContainEqual({
+      type: "session.reconcile-required",
+      sessionId,
+      data: { reason: "ordered-event-queue-overflow" },
+    });
+  });
+
+  test("coalesces superseded status work while a prior render is slow", async () => {
+    const h = await harness({}, { orderedEventMaxCount: 3 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "start",
+      requestId: "req-ordered-status",
+      attachments: [],
+    });
+    await h.drain();
+
+    const runtime = h.runtime as unknown as {
+      threadState: Map<string, {
+        coalescer: { flushNow: () => Promise<void> };
+        orderedEvents: Array<{ coalesceKey?: "status" }>;
+      }>;
+      enqueueAfterMessageFlush: (
+        threadId: string,
+        publish: () => void,
+        options?: { bytes?: number; coalesceKey?: "status" },
+      ) => void;
+    };
+    const state = runtime.threadState.get("thread-1")!;
+    let releaseRender!: () => void;
+    const slowRender = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    state.coalescer.flushNow = () => slowRender;
+    const published: number[] = [];
+
+    runtime.enqueueAfterMessageFlush("thread-1", () => published.push(0));
+    await Promise.resolve();
+    runtime.enqueueAfterMessageFlush(
+      "thread-1",
+      () => published.push(1),
+      { coalesceKey: "status" },
+    );
+    runtime.enqueueAfterMessageFlush(
+      "thread-1",
+      () => published.push(2),
+      { coalesceKey: "status" },
+    );
+    runtime.enqueueAfterMessageFlush(
+      "thread-1",
+      () => published.push(3),
+      { coalesceKey: "status" },
+    );
+
+    expect(state.orderedEvents).toHaveLength(1);
+    releaseRender();
+    await h.runtime.drainPendingWork();
+    expect(published).toEqual([0, 3]);
+  });
+
+  test("drops work queued while a reconcile is pending and still announces it", async () => {
+    const h = await harness({}, { orderedEventMaxCount: 2 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "start",
+      requestId: "req-ordered-drop",
+      attachments: [],
+    });
+    await h.drain();
+
+    const runtime = h.runtime as unknown as {
+      threadState: Map<string, {
+        coalescer: { flushNow: () => Promise<void> };
+        orderedEvents: unknown[];
+        orderedReconcilePending: boolean;
+      }>;
+      enqueueAfterMessageFlush: (
+        threadId: string,
+        publish: () => void,
+        options?: { bytes?: number; coalesceKey?: "status" },
+      ) => void;
+    };
+    const state = runtime.threadState.get("thread-1")!;
+    let releaseRender!: () => void;
+    const slowRender = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    state.coalescer.flushNow = () => slowRender;
+    const published: number[] = [];
+
+    runtime.enqueueAfterMessageFlush("thread-1", () => published.push(0));
+    await Promise.resolve();
+    // Overflows the count bound, which arms the reconcile.
+    runtime.enqueueAfterMessageFlush("thread-1", () => published.push(1));
+    runtime.enqueueAfterMessageFlush("thread-1", () => published.push(2));
+    expect(state.orderedReconcilePending).toBe(true);
+
+    // Anything enqueued from here is dropped on purpose: the reconcile the
+    // client is about to receive covers it, and re-queueing would just re-trip
+    // the bound.
+    runtime.enqueueAfterMessageFlush("thread-1", () => published.push(3));
+    expect(state.orderedEvents).toHaveLength(0);
+
+    releaseRender();
+    await h.runtime.drainPendingWork();
+    expect(published).toEqual([0]);
+    expect(h.events).toContainEqual({
+      type: "session.reconcile-required",
+      sessionId,
+      data: { reason: "ordered-event-queue-overflow" },
+    });
+  });
+
+  test("announces a reconcile when publishing an ordered event throws", async () => {
+    const h = await harness({});
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "start",
+      requestId: "req-ordered-throw",
+      attachments: [],
+    });
+    await h.drain();
+
+    const runtime = h.runtime as unknown as {
+      enqueueAfterMessageFlush: (threadId: string, publish: () => void) => void;
+    };
+    const published: number[] = [];
+    const errors: unknown[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args); };
+    try {
+      runtime.enqueueAfterMessageFlush("thread-1", () => {
+        throw new Error("render blew up");
+      });
+      // Queued behind the failure, and deliberately abandoned: the stream now
+      // has a hole, so the client must rehydrate rather than trust what follows.
+      runtime.enqueueAfterMessageFlush("thread-1", () => published.push(1));
+      await h.runtime.drainPendingWork();
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(published).toEqual([]);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(h.events).toContainEqual({
+      type: "session.reconcile-required",
+      sessionId,
+      data: { reason: "ordered-event-queue-overflow" },
+    });
+  });
+
+  /**
+   * An approval or interaction can resolve *during* `detachThread`, after the
+   * runtime state was released. Creating state there would re-insert a render
+   * state and coalescer for a thread nothing will ever release again.
+   */
+  test("publishes inline instead of recreating released thread state", async () => {
+    const h = await harness({});
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "start",
+      requestId: "req-released-state",
+      attachments: [],
+    });
+    await h.drain();
+
+    const runtime = h.runtime as unknown as {
+      threadState: Map<string, unknown>;
+      releaseThreadRuntimeState: (threadId: string) => void;
+      enqueueAfterMessageFlush: (threadId: string, publish: () => void) => void;
+    };
+    runtime.releaseThreadRuntimeState("thread-1");
+    expect(runtime.threadState.has("thread-1")).toBe(false);
+
+    let published = 0;
+    runtime.enqueueAfterMessageFlush("thread-1", () => { published += 1; });
+
+    expect(published).toBe(1);
+    expect(runtime.threadState.has("thread-1")).toBe(false);
+    await h.runtime.drainPendingWork();
+    expect(runtime.threadState.has("thread-1")).toBe(false);
+  });
+
+  /**
+   * `recoverAfterGenerationChange` releases runtime state for an unmaterialized
+   * thread — precisely a first prompt in flight. The streaming identity has to
+   * land on whatever `stateFor` hands out *after* the dispatch, or the turn runs
+   * without ever streaming to the tab.
+   */
+  test("writes the streaming identity to state released during the dispatch", async () => {
+    const h = await harness({});
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const runtime = h.runtime as unknown as {
+      threadState: Map<string, {
+        assistantMessageId?: string;
+        publishedMessageId?: string;
+        publishedParts: unknown[];
+      }>;
+      releaseThreadRuntimeState: (threadId: string) => void;
+    };
+
+    let released = false;
+    const startTurn = h.engine.startTurn.bind(h.engine);
+    h.engine.startTurn = async (options) => {
+      if (!released) {
+        released = true;
+        // The object the dispatch path captured before the await is now orphaned.
+        runtime.releaseThreadRuntimeState("thread-1");
+      }
+      return startTurn(options);
+    };
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "first",
+      requestId: "req-released-mid-dispatch",
+      attachments: [],
+    });
+    expect(outcome.ok).toBe(true);
+    expect(released).toBe(true);
+
+    const live = runtime.threadState.get("thread-1");
+    const assistantMessage = h.runtime.getRegistry().getThread("thread-1")!
+      .messages.find((message) => message.role === "assistant");
+    expect(assistantMessage).toBeDefined();
+    expect(live?.assistantMessageId).toBe(assistantMessage!.id);
+    expect(live?.publishedMessageId).toBe(assistantMessage!.id);
+  });
+});
 
 describe("session lifecycle", () => {
   test("concurrent start callers share initialization and wait for it to finish", async () => {
@@ -1759,6 +2084,14 @@ describe("session lifecycle", () => {
     await h.runtime.prompt(sessionId, { prompt: "hello", requestId: "req-1", attachments: [] });
     const promptRevision = h.runtime.getStatus(sessionId)!.messageRevision;
     expect(promptRevision).toBe(1);
+    const initialAssistantUpdates = h.events.filter(
+      (event) => event.type === "message.updated"
+        && (event.data?.message as { role?: unknown } | undefined)?.role === "assistant",
+    );
+    expect(initialAssistantUpdates).toHaveLength(1);
+    expect(
+      (initialAssistantUpdates[0]!.data?.message as { revision?: number }).revision,
+    ).toBe(1);
 
     const child = h.child();
     child.notify("turn/started", { threadId: "thread-1", turn: { id: "turn-1" } });
@@ -1781,6 +2114,11 @@ describe("session lifecycle", () => {
     expect(messages[0]!.content).toBe("hello");
     // Streaming text is visible before completion.
     expect(messages[1]!.content).toBe("Hi there");
+    expect(h.events.some((event) => event.type === "message.patched")).toBe(true);
+    expect(h.events.filter(
+      (event) => event.type === "message.updated"
+        && (event.data?.message as { role?: unknown } | undefined)?.role === "assistant",
+    )).toHaveLength(1);
 
     const streamingRevision = h.runtime.getStatus(sessionId)!.messageRevision;
     expect(streamingRevision).toBeGreaterThan(promptRevision);
@@ -1811,6 +2149,8 @@ describe("session lifecycle", () => {
     expect(h.runtime.getStatus(sessionId)!.messageRevision).toBeGreaterThan(streamingRevision);
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
     expect(h.events.some((event) => event.type === "session.idle")).toBe(true);
+    expect(h.events.findLastIndex((event) => event.type === "message.patched"))
+      .toBeLessThan(h.events.findLastIndex((event) => event.type === "session.idle"));
   });
 
   test("command output streams while the command is in progress", async () => {
@@ -2297,6 +2637,27 @@ describe("session lifecycle", () => {
         aggregatedOutput: output,
       },
     });
+    await h.drain();
+    const completedToolPatchCount = h.events.length;
+    h.child().notify("item/agentMessage/delta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "message-after-large-tool",
+      delta: "Done",
+    });
+    await h.drain();
+    const laterPatches = h.events
+      .slice(completedToolPatchCount)
+      .filter((event) => event.type === "message.patched");
+    expect(laterPatches).not.toHaveLength(0);
+    for (const patch of laterPatches) {
+      expect(
+        (patch.data as {
+          changedParts?: Array<{ index: number }>;
+        }).changedParts?.some(({ index }) => index === 0),
+      ).toBe(false);
+    }
+
     h.child().notify("turn/completed", {
       threadId: "thread-1",
       turn: { id: "turn-1", status: "completed" },
@@ -3732,7 +4093,9 @@ describe("crash recovery", () => {
     const status = h.runtime.getStatus(sessionId)!;
     expect(status.phase).not.toBe("recovering");
     expect(status.status).toBe("idle");
-    expect(status.messageRevision).toBeGreaterThan(revisionBeforeRecovery);
+    // Recovery changed only execution state in this fixture. Sparse transcript
+    // publishing must not invent a message revision when no part changed.
+    expect(status.messageRevision).toBe(revisionBeforeRecovery);
 
     // And the session must accept work again.
     const next = await h.runtime.prompt(sessionId, {
@@ -5407,13 +5770,24 @@ describe("interactive approvals", () => {
    * real threadId bound to a real bridge session.
    */
   async function withPendingApproval(
-    options: { approvalParams?: Record<string, unknown> } = {},
+    options: {
+      approvalParams?: Record<string, unknown>;
+      withPendingMessageDelta?: boolean;
+    } = {},
   ) {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
     await h.drain();
 
+    if (options.withPendingMessageDelta) {
+      h.child().notify("item/agentMessage/delta", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "message-before-approval",
+        delta: "Before approval",
+      });
+    }
     h.child().stdout.pushMessage({
       jsonrpc: "2.0",
       id: 9001,
@@ -5434,12 +5808,18 @@ describe("interactive approvals", () => {
   }
 
   test("emits approval-requested to the owning session and lists it", async () => {
-    const { h, sessionId } = await withPendingApproval();
+    const { h, sessionId } = await withPendingApproval({
+      withPendingMessageDelta: true,
+    });
 
     const requested = h.events.filter((event) => event.type === "session.approval-requested");
     expect(requested).toHaveLength(1);
     expect(requested[0]!.sessionId).toBe(sessionId);
     expect((requested[0]!.data!.approval as { command?: string }).command).toBe("rm -rf build");
+    expect(h.events.findLastIndex((event) => event.type === "message.patched"))
+      .toBeLessThan(
+        h.events.findIndex((event) => event.type === "session.approval-requested"),
+      );
 
     // The rehydration path: a remounting tab must be able to ask rather than
     // relying on having seen the SSE frame.
@@ -5715,6 +6095,12 @@ describe("interactive approvals", () => {
       threadId: "thread-1",
       mode: "build",
     });
+    h.child().notify("item/agentMessage/delta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "message-before-warning",
+      delta: "Before warning",
+    });
     h.child().notify("error", {
       threadId: "thread-1",
       turnId: "turn-1",
@@ -5728,6 +6114,8 @@ describe("interactive approvals", () => {
 
     const warnings = h.events.filter((event) => event.type === "session.warning");
     expect(warnings).toHaveLength(2);
+    expect(h.events.findLastIndex((event) => event.type === "message.patched"))
+      .toBeLessThan(h.events.findIndex((event) => event.type === "session.warning"));
     expect(warnings.map((event) => event.sessionId).sort())
       .toEqual([first.sessionId, second!.sessionId].sort());
     for (const warning of warnings) {
@@ -6856,10 +7244,33 @@ describe("interactions", () => {
   }
 
   test("presents a question to every tab on the thread and serves it for rehydration", async () => {
-    const { h, sessionId } = await askingSession();
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-1",
+      attachments: [],
+    });
+    h.child().notify("item/agentMessage/delta", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "message-before-question",
+      delta: "Before question",
+    });
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 7001,
+      method: "item/tool/requestUserInput",
+      params: QUESTION_PARAMS,
+    });
+    await h.drain();
 
     const requested = h.events.filter((event) => event.type === "session.interaction-requested");
     expect(requested).toHaveLength(1);
+    expect(h.events.findLastIndex((event) => event.type === "message.patched"))
+      .toBeLessThan(
+        h.events.findIndex((event) => event.type === "session.interaction-requested"),
+      );
     // The authoritative rehydration path: a tab that was unmounted for the SSE
     // frame must still be able to ask.
     const listed = h.runtime.listInteractions(sessionId);

@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   agentMcpConfigJson,
   agentToolConnectionTarget,
+  buildTmuxPaneUpdate,
   CAPTURE_PANE_CACHE_MS,
   CLAUDE_STATE_POLL_INTERVAL_MS,
   CLAUDE_STATE_READ_TIMEOUT_MS,
@@ -2007,15 +2008,11 @@ exit 0
       expect(emitted.some((item) => item.event === "claude-tmux:event")).toBe(true);
       const terminalOutput = emitted.find((item) => item.event === `terminal-output-${terminalSessionId}`);
       expect(terminalOutput).toBeDefined();
-      // Pins the wire shape, not just the event name. The renderer decodes
-      // base64; handed the older `{ bytes: number[] }` payload it writes nothing
-      // and the terminal simply stays blank, so an assertion on the event alone
-      // lets a revert break every tmux terminal with a green suite.
+      // Pins the current plain UTF-8 shape and exact-repaint marker.
       const terminalPayload = terminalOutput!.payload as Record<string, unknown>;
-      expect(Object.keys(terminalPayload)).toEqual(["bytesBase64"]);
-      expect(typeof terminalPayload.bytesBase64).toBe("string");
-      expect(Buffer.from(terminalPayload.bytesBase64 as string, "base64").toString("utf8"))
-        .toBe("\u001b[H\u001b[2Jbypass permissions on");
+      expect(Object.keys(terminalPayload)).toEqual(["text", "full"]);
+      expect(terminalPayload.full).toBe(true);
+      expect(terminalPayload.text).toBe("\u001b[H\u001b[2Jbypass permissions on");
     });
   });
 
@@ -3808,16 +3805,109 @@ describe("TranscriptTail incremental reads", () => {
 });
 
 describe("interactive tmux terminal snapshots", () => {
-  function createInteractiveHarness(captures: Array<string | Promise<string>>) {
+  test("emits line patches and falls back for resize-shaped redraws", () => {
+    expect(buildTmuxPaneUpdate("one\ntwo\nthree", "one\nTWO\nthree")).toEqual({
+      text: "\u001b[2;1H\u001b[2KTWO",
+      full: false,
+    });
+    expect(buildTmuxPaneUpdate(
+      "one\ntwo\nthree",
+      "one\n\u001b[31mTWO\u001b[0m\nthree",
+    )).toEqual({
+      text: "\u001b[2;1H\u001b[2K\u001b[31mTWO\u001b[0m",
+      full: false,
+    });
+    expect(buildTmuxPaneUpdate("one\ntwo", "one\ntwo\nthree")).toEqual({
+      text: "\u001b[H\u001b[2Jone\r\ntwo\r\nthree",
+      full: true,
+    });
+    expect(buildTmuxPaneUpdate("one\ntwo", "\n")).toEqual({
+      text: "\u001b[H\u001b[2J",
+      full: true,
+    });
+    expect(buildTmuxPaneUpdate("same", "same")).toEqual({
+      text: "",
+      full: false,
+    });
+    expect(buildTmuxPaneUpdate("same", "same", true)).toEqual({
+      text: "\u001b[H\u001b[2Jsame",
+      full: true,
+    });
+  });
+  /**
+   * `tmux capture-pane -p` terminates *every* row, so a capture of an N-row
+   * pane contains N newlines. Replaying that verbatim issues a line feed with
+   * the cursor already on the bottom row, which scrolls the viewport by one and
+   * leaves every later line address naming the wrong row. Verified against tmux
+   * 3.6a: a 6-row pane showing two lines captures as "line1\nline2\n\n\n\n\n".
+   */
+  test("keeps repaint and patch row addressing agreed on a real capture", () => {
+    const before = "line1\nline2\n\n\n\n\n";
+    const after = "line1\nLINE2\n\n\n\n\n";
+
+    const repaint = buildTmuxPaneUpdate(undefined, before);
+    expect(repaint.full).toBe(true);
+    // Six rows written with five separators: the cursor finishes on the last
+    // row without ever scrolling, so row R keeps displaying capture line R.
+    expect(repaint.text).toBe(
+      "\u001b[H\u001b[2Jline1\r\nline2\r\n\r\n\r\n\r\n",
+    );
+    expect(repaint.text.split("\r\n")).toHaveLength(6);
+
+    // `line2` is capture line 2, so it must be patched at row 2.
+    expect(buildTmuxPaneUpdate(before, after)).toEqual({
+      text: "\u001b[2;1H\u001b[2KLINE2",
+      full: false,
+    });
+  });
+
+  test("treats a terminated and an unterminated capture as the same pane", () => {
+    expect(buildTmuxPaneUpdate("one\ntwo\nthree\n", "one\nTWO\nthree\n")).toEqual({
+      text: "\u001b[2;1H\u001b[2KTWO",
+      full: false,
+    });
+    // Row count is what forces a repaint, so a terminator present on only one
+    // side must not read as an extra row.
+    expect(buildTmuxPaneUpdate("one\ntwo\nthree", "one\nTWO\nthree\n")).toEqual({
+      text: "\u001b[2;1H\u001b[2KTWO",
+      full: false,
+    });
+    expect(buildTmuxPaneUpdate("one\ntwo\n", "one\ntwo\nthree\n")).toEqual({
+      text: "\u001b[H\u001b[2Jone\r\ntwo\r\nthree",
+      full: true,
+    });
+  });
+
+  test("repaints blank and empty captures without a trailing feed", () => {
+    expect(buildTmuxPaneUpdate(undefined, "\n\n\n")).toEqual({
+      text: "\u001b[H\u001b[2J\r\n\r\n",
+      full: true,
+    });
+    expect(buildTmuxPaneUpdate(undefined, "")).toEqual({
+      text: "\u001b[H\u001b[2J",
+      full: true,
+    });
+  });
+
+  function createInteractiveHarness(
+    captures: Array<string | Promise<string>>,
+    resizes: Array<void | Promise<void>> = [],
+  ) {
     const scheduled: Array<{ callback: () => void; delayMs: number; timer: object }> = [];
     const cancelled = new Set<unknown>();
     const emitted: Array<{ event: string; payload: unknown }> = [];
     let captureIndex = 0;
+    let resizeIndex = 0;
+    const resizeCalls: Array<{ cols: number; rows: number }> = [];
     let writes = 0;
     const tmux = {
       environmentId: "env-interactive",
       tabId: "tab-interactive",
-      resize: async () => undefined,
+      resize: async (cols: number, rows: number) => {
+        resizeCalls.push({ cols, rows });
+        const resize = resizes[resizeIndex++];
+        if (resize) await resize;
+      },
       writeInteractive: async () => {
         writes += 1;
       },
@@ -3848,6 +3938,7 @@ describe("interactive tmux terminal snapshots", () => {
       scheduled,
       cancelled,
       emitted,
+      resizeCalls,
       captureCount: () => captureIndex,
       writeCount: () => writes,
     };
@@ -3943,6 +4034,114 @@ describe("interactive tmux terminal snapshots", () => {
     await delay(0);
     expect(harness.emitted).toHaveLength(1);
     expect(harness.scheduled).toHaveLength(1);
+  });
+
+  test("forced recovery invalidates an older in-flight capture", async () => {
+    const stale = deferred<string>();
+    const harness = createInteractiveHarness(["initial", stale.promise, "recovered"]);
+    await harness.manager.start(harness.id, harness.context);
+
+    harness.scheduled[0]!.callback();
+    await waitFor(() => harness.captureCount() === 2);
+
+    const recovery = harness.manager.start(harness.id, harness.context);
+    await waitFor(() => harness.captureCount() === 3);
+    await recovery;
+
+    expect(harness.emitted).toHaveLength(2);
+    expect(harness.emitted[1]).toEqual({
+      event: `terminal-output-${harness.id}`,
+      payload: expect.objectContaining({ text: expect.stringContaining("recovered"), full: true }),
+    });
+
+    stale.resolve("stale capture");
+    await delay(0);
+    expect(harness.emitted).toHaveLength(2);
+  });
+
+  test("resize discards an in-flight capture and makes the next frame full", async () => {
+    const stale = deferred<string>();
+    const harness = createInteractiveHarness(["initial", stale.promise, "resized pane"]);
+    await harness.manager.start(harness.id, harness.context);
+
+    harness.scheduled[0]!.callback();
+    await waitFor(() => harness.captureCount() === 2);
+    await harness.manager.resize(harness.id, 90, 24);
+
+    stale.resolve("old geometry");
+    await waitFor(() => harness.scheduled.length === 2);
+    expect(harness.emitted).toHaveLength(1);
+
+    harness.scheduled[1]!.callback();
+    await waitFor(() => harness.emitted.length === 2);
+    expect(harness.emitted[1]).toEqual({
+      event: `terminal-output-${harness.id}`,
+      payload: expect.objectContaining({ text: expect.stringContaining("resized pane"), full: true }),
+    });
+  });
+
+  test("serializes overlapping geometry changes in request order", async () => {
+    const firstResize = deferred<void>();
+    const secondResize = deferred<void>();
+    const harness = createInteractiveHarness(
+      ["initial"],
+      [undefined, firstResize.promise, secondResize.promise],
+    );
+    await harness.manager.start(harness.id, harness.context);
+
+    const first = harness.manager.resize(harness.id, 100, 30);
+    await waitFor(() => harness.resizeCalls.length === 2);
+    const second = harness.manager.resize(harness.id, 80, 20);
+    await delay(0);
+    expect(harness.resizeCalls).toHaveLength(2);
+
+    firstResize.resolve(undefined);
+    await first;
+    await waitFor(() => harness.resizeCalls.length === 3);
+    secondResize.resolve(undefined);
+    await second;
+
+    expect(harness.resizeCalls).toEqual([
+      { cols: 120, rows: 40 },
+      { cols: 100, rows: 30 },
+      { cols: 80, rows: 20 },
+    ]);
+  });
+
+  test("resumes captures after a failed resize instead of staying suspended", async () => {
+    const failedResize = deferred<void>();
+    const harness = createInteractiveHarness(
+      ["initial", "after failed resize"],
+      [undefined, failedResize.promise],
+    );
+    await harness.manager.start(harness.id, harness.context);
+
+    const resize = harness.manager.resize(harness.id, 90, 24);
+    await waitFor(() => harness.resizeCalls.length === 2);
+    failedResize.reject(new Error("tmux resize-window failed"));
+    // The caller still sees the failure, but capture suspension must not outlive
+    // it — the pane would otherwise emit nothing for the rest of the session.
+    await expect(resize).rejects.toThrow("tmux resize-window failed");
+
+    harness.scheduled[0]!.callback();
+    await waitFor(() => harness.emitted.length === 2);
+    expect(harness.emitted[1]).toEqual({
+      event: `terminal-output-${harness.id}`,
+      payload: expect.objectContaining({
+        text: expect.stringContaining("after failed resize"),
+        full: true,
+      }),
+    });
+  });
+
+  test("does not resurrect a detached terminal from a late geometry change", async () => {
+    const harness = createInteractiveHarness(["initial"]);
+    await harness.manager.start(harness.id, harness.context);
+    harness.manager.detach(harness.id);
+
+    await expect(harness.manager.resize(harness.id, 80, 20)).rejects.toThrow();
+    expect(harness.captureCount()).toBe(1);
+    expect(harness.emitted).toHaveLength(1);
   });
 });
 

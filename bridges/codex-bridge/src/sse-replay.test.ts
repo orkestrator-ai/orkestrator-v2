@@ -395,6 +395,24 @@ describe("/event/subscribe", () => {
     expect(frames.some((frame) => frame.event === "session.reconcile-required")).toBe(false);
   });
 
+  test("replays an explicit runtime overflow reconciliation frame", async () => {
+    const cursor = __testing.eventRingForTesting().latestRevision;
+    __testing.emitForTesting({
+      type: "session.reconcile-required",
+      sessionId: "ordered-overflow",
+      data: { reason: "ordered-event-queue-overflow" },
+    });
+
+    const frames = await collect(`?since=${cursor}`, () => undefined);
+    expect(frames).toContainEqual(expect.objectContaining({
+      event: "session.reconcile-required",
+      data: {
+        sessionId: "ordered-overflow",
+        reason: "ordered-event-queue-overflow",
+      },
+    }));
+  });
+
   test("accepts the cursor from a Last-Event-ID header", async () => {
     const cursor = __testing.eventRingForTesting().latestRevision;
     __testing.emitForTesting({ type: "session.idle", sessionId: "via-header" });

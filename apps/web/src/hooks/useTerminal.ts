@@ -11,8 +11,8 @@ import * as backend from "@/lib/backend";
 /**
  * Wire shape of a `terminal-output-<sessionId>` event.
  *
- * `bytesBase64` is what the backend emits today. The legacy `number[]` forms
- * remain accepted during rolling upgrades, and `desynced` is the gateway
+ * `text` is the current plain UTF-8 form. Base64 and `number[]` forms remain
+ * accepted during one rolling-upgrade window, and `desynced` is the gateway
  * telling this client that frames were dropped for it under backpressure and
  * the authoritative buffer must be replayed.
  */
@@ -21,6 +21,8 @@ export type TerminalOutputPayload =
   | string
   | {
       bytesBase64?: string;
+      text?: string;
+      full?: boolean;
       bytes?: number[];
       data?: number[];
       desynced?: boolean;
@@ -42,10 +44,11 @@ export function decodeTerminalOutputPayload(payload: TerminalOutputPayload): Uin
   if (typeof payload === "string") return decodeBase64Bytes(payload);
   if (Array.isArray(payload)) return new Uint8Array(payload);
   if (!payload || typeof payload !== "object") return new Uint8Array(0);
+  if (payload.desynced) return null;
+  if (typeof payload.text === "string") return new TextEncoder().encode(payload.text);
   if (typeof payload.bytesBase64 === "string") return decodeBase64Bytes(payload.bytesBase64);
   if (Array.isArray(payload.bytes)) return new Uint8Array(payload.bytes);
   if (Array.isArray(payload.data)) return new Uint8Array(payload.data);
-  if (payload.desynced) return null;
   return new Uint8Array(0);
 }
 
@@ -397,16 +400,32 @@ export function useTerminal({
       const reconcileOnce = async (): Promise<void> => {
         snapshotPending = true;
         try {
-          const snapshot = await backend.getTerminalOutputSnapshot(id);
+          const requestedCursor = activeGeneration === null
+            ? undefined
+            : { revision: lastAppliedRevision, generation: activeGeneration };
+          const snapshot = requestedCursor
+            ? await backend.getTerminalOutputSnapshot(id, requestedCursor)
+            : await backend.getTerminalOutputSnapshot(id);
           if (disposed || !isCurrentConnect()) return;
 
-          onReplayRef.current?.(
-            new TextEncoder().encode(snapshot.output),
-            {
-              preserveExisting,
-              degraded: snapshot.truncated ? "truncated" : undefined,
-            },
-          );
+          if (
+            snapshot.mode === "delta"
+            && requestedCursor
+            && snapshot.generation === requestedCursor.generation
+          ) {
+            if (snapshot.output) {
+              onDataRef.current?.(new TextEncoder().encode(snapshot.output));
+            }
+          } else {
+            onReplayRef.current?.(
+              new TextEncoder().encode(snapshot.output),
+              {
+                // A reconciliation fallback replaces the local view exactly.
+                preserveExisting: requestedCursor ? false : preserveExisting,
+                degraded: snapshot.truncated ? "truncated" : undefined,
+              },
+            );
+          }
           activeGeneration = snapshot.generation;
           lastAppliedRevision = snapshot.revision;
           if (snapshotErrorActive) {

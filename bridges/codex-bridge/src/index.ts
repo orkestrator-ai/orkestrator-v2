@@ -118,6 +118,7 @@ interface SseEvent {
     | "session.title-updated"
     | "session.structured-output"
     | "message.updated"
+    | "message.patched"
     | "session.approval-requested"
     | "session.approval-resolved"
     | "session.interaction-requested"

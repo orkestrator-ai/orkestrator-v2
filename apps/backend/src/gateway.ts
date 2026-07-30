@@ -2681,7 +2681,7 @@ export class OrkestratorGateway {
         droppable
         && client.writableLength + messageBytes > SSE_CLIENT_SOFT_BUFFER_BYTES
       ) {
-        this.markTerminalFrameDropped(client, state, event, message);
+        this.markTerminalFrameDropped(client, state, event, message, payload);
         continue;
       }
       if (
@@ -2699,7 +2699,7 @@ export class OrkestratorGateway {
       // A desync notice may itself consume the last available soft-limit
       // space. Re-check droppable frames after flushing it.
       if (droppable && projectedBytes > SSE_CLIENT_SOFT_BUFFER_BYTES) {
-        this.markTerminalFrameDropped(client, state, event, message);
+        this.markTerminalFrameDropped(client, state, event, message, payload);
         continue;
       }
       client.write(message);
@@ -2712,6 +2712,7 @@ export class OrkestratorGateway {
     state: GatewayEventClient,
     event: string,
     message: string,
+    payload: unknown,
   ): void {
     const sessionId = event.slice(DROPPABLE_EVENT_PREFIX.length);
     const streamAlreadyStalled = state.desyncedSessions.size > 0;
@@ -2732,7 +2733,17 @@ export class OrkestratorGateway {
     // retain at most the newest full-pane frame for each subscribed tmux
     // session. Broader/legacy streams receive the ordinary desync notice
     // instead of accumulating panes for terminals they are not displaying.
-    frames.set(sessionId, message);
+    if (
+      payload
+      && typeof payload === "object"
+      && (payload as { full?: unknown }).full === true
+    ) {
+      frames.set(sessionId, message);
+    } else {
+      // A line patch cannot recover earlier dropped patches. Force the client
+      // through the explicit desync path instead of replaying an incomplete pane.
+      frames.delete(sessionId);
+    }
   }
 
   private dropBufferedClient(client: EventClientWriter, event: string, projectedBytes: number): void {

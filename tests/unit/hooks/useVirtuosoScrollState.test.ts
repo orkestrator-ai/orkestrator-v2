@@ -466,18 +466,22 @@ describe("useVirtuosoScrollState", () => {
         result.current.scrollToBottom();
       });
 
-      // Wait on the retry counter, not on the footer scroll. `scrollTo` fires
-      // once per chain at the very end, so waiting for it to reach 1 would
-      // resolve the instant the *first* chain finished and never observe the
-      // extra chains a broken guard would have started. Exactly MAX_ATTEMPTS
+      // Gate on the retry counter, not on the footer scroll alone. `scrollTo`
+      // fires once per chain at the very end, so waiting only for it to reach 1
+      // would resolve the instant the *first* chain finished and never observe
+      // the extra chains a broken guard would have started. Exactly MAX_ATTEMPTS
       // retries is only reachable when a single chain ran; three chains would
       // reach 30 and this condition would never hold.
+      //
+      // `scrollTo` is asserted inside the same wait because it lands a tick
+      // after the tenth `scrollToIndex`. Reading it immediately after the wait
+      // resolved made this test lose that race under load.
       await waitFor(() => {
         expect(scrollToIndexCalls).toHaveLength(10);
+        expect(scrollToCalls).toHaveLength(1);
       }, {
         timeout: 2_000,
       });
-      expect(scrollToCalls).toHaveLength(1);
     });
 
     test("can be invoked again after a previous scroll completes", async () => {

@@ -228,6 +228,10 @@ const mockCheckCodexCli = mock(async () => true);
 const mockCheckGithubCli = mock(async () => true);
 const mockGetAvailableAiCli = mock<() => Promise<string | null>>(async () => "claude");
 const mockGetConfig = mock(async () => mockConfig);
+const mockGetEnvironment = mock(
+  async (environmentId: string): Promise<Environment | null> =>
+    useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
+);
 const mockSavePaneLayout = mock(async (environmentId: string, layout: Record<string, unknown>) => ({
   ...layout,
   environmentId,
@@ -302,6 +306,7 @@ mock.module("@/lib/backend", () => ({
   checkGithubCli: mockCheckGithubCli,
   getAvailableAiCli: mockGetAvailableAiCli,
   getConfig: mockGetConfig,
+  getEnvironment: mockGetEnvironment,
   listBuildPipelines: mockListBuildPipelines,
   listLoopedReviewWorkflows: mockListLoopedReviewWorkflows,
   listPromptQueues: mockListPromptQueues,
@@ -454,6 +459,11 @@ function resetAppMocks() {
   mockGetAvailableAiCli.mockImplementation(async () => "claude");
   mockGetConfig.mockClear();
   mockGetConfig.mockImplementation(async () => mockConfig);
+  mockGetEnvironment.mockClear();
+  mockGetEnvironment.mockImplementation(
+    async (environmentId: string) =>
+      useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
+  );
   mockSavePaneLayout.mockClear();
   mockListLoopedReviewWorkflows.mockReset();
   mockListLoopedReviewWorkflows.mockResolvedValue([]);
@@ -1836,6 +1846,218 @@ describe("App terminal overlay actions", () => {
     });
     expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
       .toMatchObject({ initialPrompt: "Prompt from terminal" });
+  });
+
+  test("rehydrates saved attachments and reconstructs missing preview URLs", async () => {
+    const listedEnvironment = {
+      ...makeEnvironment("env-visible", "project-1"),
+      initialPrompt: "Resume with images",
+      hasInitialPromptAttachments: true,
+    };
+    mockGetEnvironment.mockResolvedValueOnce({
+      ...listedEnvironment,
+      initialPromptAttachments: [
+        {
+          id: "saved-image",
+          name: "diagram.png",
+          base64Data: "QUJD",
+        },
+        {
+          id: "saved-preview",
+          name: "existing.png",
+          previewUrl: "data:image/webp;base64,REVG",
+          base64Data: "REVG",
+        },
+      ],
+    });
+    resetStores({
+      environments: [listedEnvironment],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+    act(() => screen.getByTestId("start-env-visible").click());
+
+    await waitFor(() => {
+      expect(mockStartEnvironment).toHaveBeenCalledWith(
+        "env-visible",
+        "Resume with images",
+      );
+    });
+    expect(mockGetEnvironment).toHaveBeenCalledWith("env-visible");
+    expect(
+      useClaudeOptionsStore.getState().getOptions("env-visible")
+        ?.initialPromptAttachments,
+    ).toEqual([
+      {
+        id: "saved-image",
+        name: "diagram.png",
+        previewUrl: "data:image/png;base64,QUJD",
+        base64Data: "QUJD",
+      },
+      {
+        id: "saved-preview",
+        name: "existing.png",
+        previewUrl: "data:image/webp;base64,REVG",
+        base64Data: "REVG",
+      },
+    ]);
+  });
+
+  test("keeps existing launch attachments without replacing them from storage", async () => {
+    const listedEnvironment = {
+      ...makeEnvironment("env-visible", "project-1"),
+      initialPrompt: "Use staged image",
+    };
+    resetStores({
+      environments: [listedEnvironment],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+    const stagedAttachments = [
+      {
+        id: "staged-image",
+        name: "staged.png",
+        previewUrl: "data:image/png;base64,U1RBR0VE",
+        base64Data: "U1RBR0VE",
+      },
+    ];
+    useClaudeOptionsStore.getState().setOptions("env-visible", {
+      launchAgent: false,
+      agentType: "opencode",
+      initialPrompt: "",
+      initialPromptAttachments: stagedAttachments,
+    });
+
+    render(<App />);
+    act(() => screen.getByTestId("start-env-visible").click());
+
+    await waitFor(() => {
+      expect(mockStartEnvironment).toHaveBeenCalledWith(
+        "env-visible",
+        "Use staged image",
+      );
+    });
+    expect(mockGetEnvironment).not.toHaveBeenCalled();
+    expect(
+      useClaudeOptionsStore.getState().getOptions("env-visible")
+        ?.initialPromptAttachments,
+    ).toEqual(stagedAttachments);
+  });
+
+  test("blocks startup when saved attachments cannot be read and allows retry", async () => {
+    const environment = {
+      ...makeEnvironment("env-visible", "project-1"),
+      initialPrompt: "Resume safely",
+      hasInitialPromptAttachments: true,
+    };
+    mockGetEnvironment
+      .mockRejectedValueOnce(new Error("detail read failed"))
+      .mockResolvedValueOnce(environment);
+    resetStores({
+      environments: [environment],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    const originalConsoleError = console.error;
+    console.error = mock(() => {});
+    try {
+      render(<App />);
+      act(() => screen.getByTestId("start-env-visible").click());
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalledWith(
+          "Could not restore saved prompt attachments",
+          {
+            description:
+              "The environment was not started. Try again to reload its saved prompt.",
+          },
+        );
+      });
+      expect(mockStartEnvironment).not.toHaveBeenCalled();
+      expect(
+        useClaudeOptionsStore.getState().getOptions("env-visible"),
+      ).toBeUndefined();
+
+      act(() => screen.getByTestId("start-env-visible").click());
+      await waitFor(() => {
+        expect(mockStartEnvironment).toHaveBeenCalledWith(
+          "env-visible",
+          "Resume safely",
+        );
+      });
+      expect(mockGetEnvironment).toHaveBeenCalledTimes(2);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  /**
+   * The common case: a typed or stored prompt with no images at all. The listed
+   * record already says so, so the launch must cost no detail read and must not
+   * be blocked by one.
+   */
+  test("starts without a detail read when the backend reports no attachments", async () => {
+    const environment = {
+      ...makeEnvironment("env-visible", "project-1"),
+      initialPrompt: "Resume without images",
+      hasInitialPromptAttachments: false,
+    };
+    resetStores({
+      environments: [environment],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+    act(() => screen.getByTestId("start-env-visible").click());
+
+    await waitFor(() => {
+      expect(mockStartEnvironment).toHaveBeenCalledWith(
+        "env-visible",
+        "Resume without images",
+      );
+    });
+    expect(mockGetEnvironment).not.toHaveBeenCalled();
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A backend that predates the flag cannot say either way, so the read still
+   * happens — but failing it degrades to the listed record rather than refusing
+   * the launch, which is what that backend has always done.
+   */
+  test("starts anyway when a legacy backend cannot report attachment state", async () => {
+    const environment = {
+      ...makeEnvironment("env-visible", "project-1"),
+      initialPrompt: "Resume on a legacy backend",
+    };
+    mockGetEnvironment.mockRejectedValueOnce(new Error("detail read failed"));
+    resetStores({
+      environments: [environment],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    const originalConsoleError = console.error;
+    console.error = mock(() => {});
+    try {
+      render(<App />);
+      act(() => screen.getByTestId("start-env-visible").click());
+
+      await waitFor(() => {
+        expect(mockStartEnvironment).toHaveBeenCalledWith(
+          "env-visible",
+          "Resume on a legacy backend",
+        );
+      });
+      expect(mockGetEnvironment).toHaveBeenCalledWith("env-visible");
+      expect(mockToastError).not.toHaveBeenCalled();
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 
   test("rehydration keeps an existing agentType over the environment default", async () => {

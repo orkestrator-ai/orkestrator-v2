@@ -716,11 +716,13 @@ describe("useTerminal reconnect behavior", () => {
         generation: 4,
       })
       .mockResolvedValueOnce({
-        output: "before disconnect\r\nmissed output",
+        mode: "delta",
+        output: "\r\nmissed output",
         revision: 2,
         generation: 4,
       });
     const replayed: string[] = [];
+    const received: string[] = [];
 
     const { result } = renderHook(() =>
       useTerminal({
@@ -729,6 +731,7 @@ describe("useTerminal reconnect behavior", () => {
         persistSession: true,
         replayOutputBuffer: true,
         onReplay: (data) => replayed.push(new TextDecoder().decode(data)),
+        onData: (data) => received.push(new TextDecoder().decode(data)),
       }),
     );
     await act(async () => {
@@ -737,10 +740,12 @@ describe("useTerminal reconnect behavior", () => {
     act(() => reconnectHandler?.());
 
     await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(2));
-    expect(replayed).toEqual([
-      "before disconnect",
-      "before disconnect\r\nmissed output",
-    ]);
+    expect(getTerminalOutputSnapshotMock).toHaveBeenLastCalledWith(
+      "session-old",
+      { revision: 1, generation: 4 },
+    );
+    expect(replayed).toEqual(["before disconnect"]);
+    expect(received).toEqual(["\r\nmissed output"]);
   });
 
   it("replaces the view when a live event belongs to a new output generation", async () => {

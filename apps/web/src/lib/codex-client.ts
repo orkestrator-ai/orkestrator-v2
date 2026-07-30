@@ -138,8 +138,126 @@ export interface CodexMessage {
   modelId?: string;
   planReview?: boolean;
   turnId?: string;
+  /** Monotonic per-message revision for sparse streaming patches. */
+  revision?: number;
 }
 
+export interface CodexMessagePatch {
+  messageId: string;
+  partCount: number;
+  changedParts: { index: number; part: NativeMessagePart }[];
+  content: string;
+  createdAt: string;
+  turnId?: string;
+  revision: number;
+}
+
+export type CodexMessagePatchResult =
+  | { outcome: "applied"; message: CodexMessage }
+  | { outcome: "stale" }
+  | { outcome: "needs-reconcile" };
+
+/**
+ * Classifies a sparse patch without conflating an already-applied replay with a
+ * real revision gap. Callers may safely ignore `stale`; only
+ * `needs-reconcile` requires an authoritative transcript read.
+ */
+export function classifyCodexMessagePatch(
+  message: CodexMessage,
+  patch: CodexMessagePatch,
+): CodexMessagePatchResult {
+  if (!patch || typeof patch !== "object" || !Array.isArray(patch.changedParts)) {
+    return { outcome: "needs-reconcile" };
+  }
+  if (
+    patch.messageId !== message.id
+    || !Number.isInteger(patch.partCount)
+    || patch.partCount < 0
+    || !Number.isInteger(patch.revision)
+  ) {
+    return { outcome: "needs-reconcile" };
+  }
+  const baseRevision = message.revision;
+  if (!Number.isInteger(baseRevision)) return { outcome: "needs-reconcile" };
+  if (patch.revision <= (baseRevision as number)) return { outcome: "stale" };
+  if (patch.revision !== (baseRevision as number) + 1) {
+    return { outcome: "needs-reconcile" };
+  }
+
+  const parts = message.parts.slice();
+  for (const change of patch.changedParts) {
+    if (
+      !change
+      || !Number.isInteger(change.index)
+      || change.index < 0
+      || change.index >= patch.partCount
+      || !change.part
+      || typeof change.part !== "object"
+    ) {
+      return { outcome: "needs-reconcile" };
+    }
+    parts[change.index] = change.part;
+  }
+  parts.length = patch.partCount;
+  for (let index = 0; index < parts.length; index += 1) {
+    if (!parts[index]) return { outcome: "needs-reconcile" };
+  }
+  return {
+    outcome: "applied",
+    message: {
+      ...message,
+      parts,
+      content: typeof patch.content === "string" ? patch.content : message.content,
+      createdAt: typeof patch.createdAt === "string" && patch.createdAt
+        ? patch.createdAt
+        : message.createdAt,
+      turnId: typeof patch.turnId === "string" ? patch.turnId : message.turnId,
+      revision: patch.revision,
+    },
+  };
+}
+
+export function applyCodexMessagePatch(
+  message: CodexMessage,
+  patch: CodexMessagePatch,
+): CodexMessage | null {
+  const result = classifyCodexMessagePatch(message, patch);
+  return result.outcome === "applied" ? result.message : null;
+}
+
+/**
+ * Keeps the locally-held copy of a message when it is strictly newer.
+ *
+ * A transcript read that deliberately does not block the event stream can land
+ * *after* live frames have already advanced a message. Applying the snapshot
+ * verbatim would roll those frames back, so the higher revision wins per
+ * message and the snapshot supplies everything else. Messages absent from the
+ * snapshot are deliberately not resurrected: the snapshot is authoritative
+ * about which messages exist, and a compaction or fork must be able to remove
+ * one.
+ */
+export function preferNewerCodexRevisions(
+  incoming: CodexMessage[],
+  local: readonly CodexMessage[] | undefined,
+): CodexMessage[] {
+  if (!local?.length) return incoming;
+  const localById = new Map(local.map((message) => [message.id, message]));
+  let replaced = false;
+  const merged = incoming.map((message) => {
+    const current = localById.get(message.id);
+    if (
+      !current
+      || !Number.isInteger(current.revision)
+      || !Number.isInteger(message.revision)
+      || (current.revision as number) <= (message.revision as number)
+    ) {
+      return message;
+    }
+    replaced = true;
+    return current;
+  });
+  return replaced ? merged : incoming;
+}
 
 export interface CodexSession {
   sessionId: string;
@@ -194,6 +312,7 @@ export interface CodexEvent {
     | "session.title-updated"
     | "session.structured-output"
     | "message.updated"
+    | "message.patched"
     | "session.approval-requested"
     | "session.approval-resolved"
     | "session.interaction-requested"
@@ -1497,21 +1616,38 @@ export async function deleteSession(
  * lightweight cursor-only frames. The cursor remains bridge-wide, so replay
  * semantics are unchanged.
  */
+export const MAX_CODEX_EVENT_QUEUE_COUNT = 256;
+export const MAX_CODEX_EVENT_QUEUE_BYTES = 2 * 1024 * 1024;
+
 export function subscribeToEvents(
   client: CodexClient,
   signal?: AbortSignal,
   since?: number,
   sessionId?: string,
 ): AsyncIterable<CodexEvent> {
+  const maxQueuedEvents = MAX_CODEX_EVENT_QUEUE_COUNT;
+  const maxQueuedBytes = MAX_CODEX_EVENT_QUEUE_BYTES;
   return {
     [Symbol.asyncIterator](): AsyncIterator<CodexEvent> {
       let eventSource: EventSource | null = null;
       let resolver: ((value: IteratorResult<CodexEvent>) => void) | null = null;
       let rejecter: ((error: Error) => void) | null = null;
-      const eventQueue: CodexEvent[] = [];
+      const eventQueue: Array<{ event: CodexEvent; bytes: number }> = [];
+      let queuedBytes = 0;
+      let endAfterQueue = false;
       let done = false;
+      /**
+       * Highest revision this connection has seen, including frames that were
+       * handed straight to a waiting consumer.
+       *
+       * The overflow frame needs a cursor even when the frame that tripped the
+       * bound carried no `id:`. Without one the caller's cursor would not
+       * advance and the reconnect would replay from before the drop.
+       */
+      let lastSeenRevision: number | undefined;
 
       const handleEvent = (event: MessageEvent) => {
+        if (done || endAfterQueue) return;
         try {
           const data = JSON.parse(event.data);
           // `lastEventId` is the SSE `id:` field. Parsed here so consumers get a
@@ -1523,13 +1659,54 @@ export function subscribeToEvents(
             data,
             ...(Number.isSafeInteger(revision) && revision >= 0 ? { revision } : {}),
           };
+          if (codexEvent.revision !== undefined) lastSeenRevision = codexEvent.revision;
 
           if (resolver) {
             resolver({ value: codexEvent, done: false });
             resolver = null;
             rejecter = null;
           } else {
-            eventQueue.push(codexEvent);
+            // Conservatively charge UTF-16 storage plus object/list overhead;
+            // the parsed payload, not the raw string, is what the queue retains.
+            const bytes = event.data.length * 2 + event.type.length * 2 + 64;
+            /**
+             * The byte bound describes a *backlog*, so it is only consulted once
+             * something is already queued.
+             *
+             * A single frame arriving into an empty queue is admitted however
+             * large it is. Codex messages legitimately reach the bridge's
+             * `VERY_LARGE_MESSAGE_CHARS` budget, and rejecting one would close
+             * the stream and force a full transcript resync to fetch the very
+             * payload that had just been delivered. Retention stays bounded:
+             * one oversized frame can sit in the queue, and the next frame trips
+             * the bound and reconciles.
+             */
+            if (
+              eventQueue.length + 1 > maxQueuedEvents
+              || (eventQueue.length > 0 && queuedBytes + bytes > maxQueuedBytes)
+            ) {
+              // A slow consumer cannot retain an unbounded transcript/event
+              // backlog. Close this connection and hand the caller one explicit
+              // recovery frame. Its revision becomes the reconnect cursor after
+              // the authoritative snapshot has been applied.
+              eventQueue.length = 0;
+              queuedBytes = 0;
+              const reconcile: CodexEvent = {
+                type: "session.reconcile-required",
+                sessionId: sessionId ?? codexEvent.sessionId,
+                data: { reason: "client-event-queue-overflow" },
+                ...(lastSeenRevision === undefined
+                  ? {}
+                  : { revision: lastSeenRevision }),
+              };
+              eventQueue.push({ event: reconcile, bytes: 0 });
+              endAfterQueue = true;
+              eventSource?.close();
+              eventSource = null;
+            } else {
+              eventQueue.push({ event: codexEvent, bytes });
+              queuedBytes += bytes;
+            }
           }
         } catch (error) {
           console.error("[codex-client] Failed to parse SSE event:", error);
@@ -1580,6 +1757,7 @@ export function subscribeToEvents(
           "session.title-updated",
           "session.structured-output",
           "message.updated",
+          "message.patched",
           "session.approval-requested",
           "session.approval-resolved",
           // Named SSE events are only delivered to an explicit listener, so a
@@ -1612,7 +1790,17 @@ export function subscribeToEvents(
           }
 
           if (eventQueue.length > 0) {
-            return Promise.resolve({ value: eventQueue.shift()!, done: false });
+            const queued = eventQueue.shift()!;
+            queuedBytes -= queued.bytes;
+            return Promise.resolve({ value: queued.event, done: false });
+          }
+
+          if (endAfterQueue) {
+            done = true;
+            return Promise.resolve({
+              value: undefined as unknown as CodexEvent,
+              done: true,
+            });
           }
 
           return new Promise((resolve, reject) => {

@@ -170,7 +170,7 @@ describe("backend command I/O coverage", () => {
       {
         event: `terminal-output-${sessionId}`,
         payload: {
-          bytesBase64: Buffer.from("ready\r\n").toString("base64"),
+          text: "ready\r\n",
           revision: 1,
           generation: 1,
         },
@@ -209,6 +209,25 @@ describe("backend command I/O coverage", () => {
       },
       { name: "README.md", path: "README.md", isDirectory: false, extension: ".md" },
     ]);
+    const changedTree = await commands.get("get_local_file_tree")?.(
+      { worktreePath: root, knownDigest: "stale" },
+      context,
+    ) as {
+      unchanged: boolean;
+      digest: string;
+      value?: unknown;
+    };
+    expect(changedTree).toMatchObject({
+      unchanged: false,
+      value: expect.any(Array),
+    });
+    await expect(commands.get("get_local_file_tree")?.(
+      { worktreePath: root, knownDigest: changedTree.digest },
+      context,
+    )).resolves.toEqual({
+      unchanged: true,
+      digest: changedTree.digest,
+    });
     await expect(commands.get("read_local_file")?.(
       { worktreePath: root, filePath: "src/app.ts" },
       context,
@@ -400,6 +419,25 @@ esac
         { name: "app.ts", path: "src/app.ts", isDirectory: false, extension: ".ts" },
         { name: "README.md", path: "README.md", isDirectory: false, extension: ".md" },
       ]);
+      const changedTree = await commands.get("get_file_tree")?.(
+        { containerId: "container-1", knownDigest: "stale" },
+        context,
+      ) as {
+        unchanged: boolean;
+        digest: string;
+        value?: unknown;
+      };
+      expect(changedTree).toMatchObject({
+        unchanged: false,
+        value: expect.any(Array),
+      });
+      await expect(commands.get("get_file_tree")?.(
+        { containerId: "container-1", knownDigest: changedTree.digest },
+        context,
+      )).resolves.toEqual({
+        unchanged: true,
+        digest: changedTree.digest,
+      });
       await expect(commands.get("read_container_file")?.(
         { containerId: "container-1", filePath: "src/app.ts" },
         context,

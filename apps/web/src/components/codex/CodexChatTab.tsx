@@ -1482,7 +1482,12 @@ export function CodexChatTab({
             throw classifyNewEnvironmentConnectionStartupError(error);
           }
           if (!status.running || !status.authToken) {
-            const result = await startLocalCodexServer(environmentId);
+            let result;
+            try {
+              result = await startLocalCodexServer(environmentId);
+            } catch (error) {
+              throw classifyNewEnvironmentConnectionStartupError(error);
+            }
             status = {
               running: true,
               port: result.port,
@@ -1504,7 +1509,12 @@ export function CodexChatTab({
             throw classifyNewEnvironmentConnectionStartupError(error);
           }
           if (!status.running || !status.authToken) {
-            const result = await startCodexServer(containerId);
+            let result;
+            try {
+              result = await startCodexServer(containerId);
+            } catch (error) {
+              throw classifyNewEnvironmentConnectionStartupError(error);
+            }
             status = {
               running: true,
               hostPort: result.hostPort,

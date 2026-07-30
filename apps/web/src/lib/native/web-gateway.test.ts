@@ -942,6 +942,48 @@ describe("web gateway browser API", () => {
     await expect(api.invoke("get_projects")).rejects.toThrow("not allowed");
   });
 
+  test("carries the HTTP status on the thrown invoke error", async () => {
+    /*
+     * The status has to survive as a property. `classifyNewEnvironmentConnection
+     * StartupError` retries an infrastructure 502/503/504 by reading
+     * `error.status`; with the code only interpolated into the message, that
+     * branch could never fire for any error the renderer actually sees.
+     */
+    globalThis.fetch = mock(async () =>
+      new Response("<html>Bad Gateway</html>", { status: 502 })
+    ) as unknown as typeof fetch;
+
+    const api = createBrowserGatewayApi();
+
+    const error = await api.invoke("start_claude_server_cmd").then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as { status?: unknown }).status).toBe(502);
+    // A non-JSON body still yields an actionable message.
+    expect((error as Error).message).toBe("Gateway command failed with HTTP 502");
+  });
+
+  test("keeps the backend's own message for a command that failed", async () => {
+    // A failing backend command comes back as 500 with its message, so the
+    // startup classifier decides on the text rather than the envelope status.
+    globalThis.fetch = mock(async () =>
+      new Response(JSON.stringify({ error: "Container is not running" }), {
+        status: 500,
+      })
+    ) as unknown as typeof fetch;
+
+    const api = createBrowserGatewayApi();
+
+    const error = await api.invoke("start_claude_server_cmd").then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+    expect((error as Error).message).toBe("Container is not running");
+    expect((error as { status?: unknown }).status).toBe(500);
+  });
+
   test("reads and updates gateway token settings through the authenticated endpoint", async () => {
     const requests: Array<{ input: string; init?: RequestInit }> = [];
     globalThis.fetch = mock(async (input, init) => {

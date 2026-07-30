@@ -20,6 +20,7 @@ import {
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { shouldReconnectEventSubscription } from "@/stores/createNativeChatStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -1182,7 +1183,12 @@ export function OpenCodeChatTab({
           }
 
           if (!localStatus.running) {
-            const result = await startLocalOpencodeServer(environmentId);
+            let result;
+            try {
+              result = await startLocalOpencodeServer(environmentId);
+            } catch (error) {
+              throw classifyNewEnvironmentConnectionStartupError(error);
+            }
             localStatus = {
               running: true,
               port: result.port,
@@ -1215,7 +1221,12 @@ export function OpenCodeChatTab({
           }
 
           if (!status.running) {
-            const result = await startOpenCodeServer(containerId);
+            let result;
+            try {
+              result = await startOpenCodeServer(containerId);
+            } catch (error) {
+              throw classifyNewEnvironmentConnectionStartupError(error);
+            }
             status = {
               running: true,
               hostPort: result.hostPort,
@@ -1557,10 +1568,6 @@ export function OpenCodeChatTab({
 
       // Get or create subscription state from store
       const subscriptionState = getOrCreateEventSubscription(environmentId);
-      if (!subscriptionState) {
-        return;
-      }
-
       const { abortController } = subscriptionState;
       const lastReloadTimeBySession = new Map<string, number>();
       const pendingReloads = new Map<string, NodeJS.Timeout>();
@@ -1583,7 +1590,7 @@ export function OpenCodeChatTab({
         }
 
         // Store stream reference in the store for cleanup
-        setEventStream(environmentId, eventStream);
+        setEventStream(environmentId, eventStream, abortController);
 
         const DEBOUNCE_MS = 200; // Debounce all message fetches
 
@@ -2084,7 +2091,7 @@ export function OpenCodeChatTab({
         pendingReloads.clear();
         reloadGenerationByKey.clear();
         // Clear the stream reference when loop ends
-        setEventStream(environmentId, null);
+        setEventStream(environmentId, null, abortController);
 
         // Auto-reconnect SSE if the connection dropped unexpectedly (not explicitly aborted).
         // Uses exponential backoff capped at 60s, with a maximum retry count.
@@ -2097,8 +2104,15 @@ export function OpenCodeChatTab({
             sseReconnectAttemptsRef.current = attempt + 1;
             console.debug("[OpenCodeChatTab] SSE dropped, reconnect attempt", attempt + 1, "in", reconnectDelay, "ms for", environmentId);
             setTimeout(() => {
-              const currentClient = useOpenCodeStore.getState().clients.get(environmentId);
-              if (currentClient && !hasActiveEventSubscription(environmentId)) {
+              const currentState = useOpenCodeStore.getState();
+              const currentClient = currentState.clients.get(environmentId);
+              if (
+                currentClient
+                && shouldReconnectEventSubscription(
+                  currentState.eventSubscriptions.get(environmentId),
+                  abortController,
+                )
+              ) {
                 console.debug("[OpenCodeChatTab] Reconnecting SSE for", environmentId);
                 startSharedEventSubscriptionRef.current?.(currentClient);
               }

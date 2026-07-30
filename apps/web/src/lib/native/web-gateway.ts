@@ -5,6 +5,7 @@ import {
   updateDirectGatewayToken,
 } from "@/lib/native/gateway-auth-transport";
 import { readClipboardImageDimensions } from "@/lib/clipboard-image";
+import { GatewayHttpError } from "@/lib/native/gateway-http-error";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 
 const GATEWAY_PREFIX = "/__orkestrator";
@@ -589,7 +590,15 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
   const readGatewayResponse = async <T>(response: Response, fallback: string): Promise<T> => {
     const payload = await response.json().catch(() => ({})) as T & { error?: string };
-    if (!response.ok) throw new Error(payload.error ?? `${fallback} with HTTP ${response.status}`);
+    if (!response.ok) {
+      // The status travels as a property, not just inside the message. A
+      // gateway 502/503 during environment bring-up has to reach the startup
+      // retry classifier, and it looks for `error.status`.
+      throw new GatewayHttpError(
+        response.status,
+        payload.error ?? `${fallback} with HTTP ${response.status}`,
+      );
+    }
     return payload;
   };
 

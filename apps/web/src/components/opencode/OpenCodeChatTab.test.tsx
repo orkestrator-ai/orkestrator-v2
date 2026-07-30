@@ -2022,6 +2022,114 @@ describe("OpenCodeChatTab", () => {
       expect(screen.queryByText("Connection Failed")).toBeNull();
     });
 
+    test("surfaces a generic health-wrapper start failure without spending a retry", async () => {
+      /*
+       * `did not become healthy` is the backend's wording for every bridge child
+       * failure, permanent ones included, and it arrives with the child's log
+       * appended — here a log line that would otherwise read as transient.
+       * Inferring retryability from it would hide the real error behind the
+       * full backoff while the same broken child is restarted four times.
+       */
+      const retryCallbacks = captureWindowTimers(new Set([500, 1_000, 2_000, 4_000]));
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date().toISOString(),
+      });
+      mockGetOpenCodeServerStatus.mockResolvedValue({
+        running: false,
+        hostPort: null,
+      } as any);
+      mockStartOpenCodeServer.mockRejectedValue(
+        new Error(
+          "Server on port 9999 did not become healthy\nbridge dependency is temporarily unavailable",
+        ),
+      );
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      expect(await screen.findByText(/did not become healthy/)).toBeTruthy();
+      expect(retryCallbacks).toHaveLength(0);
+      expect(mockStartOpenCodeServer).toHaveBeenCalledTimes(1);
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    test("automatically retries when the container bridge start races container startup", async () => {
+      const retryCallbacks = captureWindowTimers(new Set([500]));
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date().toISOString(),
+      });
+      mockGetOpenCodeServerStatus.mockResolvedValue({
+        running: false,
+        hostPort: null,
+      } as any);
+      mockStartOpenCodeServer
+        .mockRejectedValueOnce(new Error("Container is not running"))
+        .mockResolvedValueOnce({
+          hostPort: 9999,
+          authToken: "opencode-secret",
+        });
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await flushReactMicrotasks();
+
+      expect(retryCallbacks).toHaveLength(1);
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+
+      await act(async () => {
+        retryCallbacks[0]!();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(1));
+      expect(mockStartOpenCodeServer).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+
+    test("automatically retries when the local bridge start races worktree creation", async () => {
+      const retryCallbacks = captureWindowTimers(new Set([500]));
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date().toISOString(),
+      });
+      useEnvironmentStore.setState({
+        setupCommandsResolved: new Set([ENVIRONMENT_ID]),
+      });
+      mockGetLocalOpencodeServerStatus.mockResolvedValue({
+        running: false,
+        port: null,
+        pid: null,
+      } as any);
+      mockStartLocalOpencodeServer
+        .mockRejectedValueOnce(
+          new Error("Local environment worktree is not available"),
+        )
+        .mockResolvedValueOnce({
+          running: true,
+          port: 9999,
+          pid: 1234,
+          authToken: "opencode-secret",
+        });
+
+      render(
+        <OpenCodeChatTab
+          tabId={TAB_ID}
+          data={createData({ isLocal: true, containerId: undefined })}
+          isActive
+        />,
+      );
+      await flushReactMicrotasks();
+
+      expect(retryCallbacks).toHaveLength(1);
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+
+      await act(async () => {
+        retryCallbacks[0]!();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(1));
+      expect(mockStartLocalOpencodeServer).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+
     test("exhausts all four automatic startup retries before surfacing the bridge error", async () => {
       const retryCallbacks = captureWindowTimers(
         new Set([500, 1_000, 2_000, 4_000]),
@@ -4600,6 +4708,40 @@ describe("OpenCodeChatTab", () => {
         console.warn = originalWarn;
         console.debug = originalDebug;
       }
+    });
+
+    test("does not let a stale reconnect timer replace an explicitly closed subscription", async () => {
+      let reconnectCallback: (() => void) | undefined;
+      window.setTimeout = ((
+        handler: TimerHandler,
+        timeout?: number,
+        ...args: unknown[]
+      ) => {
+        if (timeout === 3_000 && typeof handler === "function") {
+          const callback = handler as (...callbackArgs: unknown[]) => void;
+          reconnectCallback = () => callback(...args);
+          return 1;
+        }
+        return callOriginalWindowTimeout(handler, timeout, ...args);
+      }) as unknown as typeof window.setTimeout;
+      mockSubscribeToEvents.mockResolvedValue(
+        (async function* () {})() as AsyncGenerator<any>,
+      );
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(reconnectCallback).toBeDefined());
+      expect(mockSubscribeToEvents).toHaveBeenCalledTimes(1);
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      await act(async () => {
+        reconnectCallback?.();
+        await Promise.resolve();
+      });
+
+      expect(mockSubscribeToEvents).toHaveBeenCalledTimes(1);
+      expect(
+        useOpenCodeStore.getState().eventSubscriptions.has(ENVIRONMENT_ID),
+      ).toBe(false);
     });
 
     test("stops applying events after the shared subscription is aborted", async () => {

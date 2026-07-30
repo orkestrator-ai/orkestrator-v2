@@ -7,6 +7,7 @@ import {
   createNativeChatStoreSlice,
   pruneSessionKeyedMap,
   sessionKeyPrefixFor,
+  shouldReconnectEventSubscription,
   teardownEventSubscription,
   type NativeChatStoreSlice,
   type NativeEventSubscriptionSlice,
@@ -490,5 +491,106 @@ describe("createEventSubscriptionSlice", () => {
     expect(() => store.closeEventSubscription("env-unknown")).not.toThrow();
 
     expect(useEventStore.getState()).toBe(before);
+  });
+
+  test("getOrCreateEventSubscription always returns a subscription", () => {
+    // The callers dropped their null checks on the strength of this contract.
+    const store = useEventStore.getState();
+
+    const created = store.getOrCreateEventSubscription("env-1");
+    expect(created).toBeDefined();
+    expect(created.isActive).toBe(true);
+    // An active subscription is reused rather than duplicated.
+    expect(store.getOrCreateEventSubscription("env-1")).toBe(created);
+
+    // An inactive one is replaced, and the replacement gets its own controller
+    // so a stale loop can tell that it has been superseded.
+    store.setEventStream("env-1", null);
+    const replacement = store.getOrCreateEventSubscription("env-1");
+    expect(replacement).not.toBe(created);
+    expect(replacement.abortController).not.toBe(created.abortController);
+    expect(replacement.isActive).toBe(true);
+  });
+
+  test("a superseded subscription cannot clear the stream of its replacement", () => {
+    /*
+     * A dropped loop runs its teardown asynchronously. By the time it calls
+     * `setEventStream(id, null)` the environment may already belong to a fresh
+     * subscription, and clearing that one would strand a running loop behind a
+     * store entry that reads as "nothing is listening".
+     */
+    const store = useEventStore.getState();
+    const stream: AsyncIterable<TestEvent> = {
+      [Symbol.asyncIterator]: async function* () {},
+    };
+    const dropped = store.getOrCreateEventSubscription("env-1");
+    store.setEventStream("env-1", null, dropped.abortController);
+    const replacement = store.getOrCreateEventSubscription("env-1");
+    store.setEventStream("env-1", stream, replacement.abortController);
+
+    // The dropped loop's trailing teardown, arriving late.
+    store.setEventStream("env-1", null, dropped.abortController);
+
+    const current = useEventStore.getState().eventSubscriptions.get("env-1");
+    expect(current?.abortController).toBe(replacement.abortController);
+    expect(current?.stream).toBe(stream);
+    expect(store.hasActiveEventSubscription("env-1")).toBe(true);
+  });
+
+  test("an owner-less setEventStream still applies, for callers that predate ownership", () => {
+    const store = useEventStore.getState();
+    const stream: AsyncIterable<TestEvent> = {
+      [Symbol.asyncIterator]: async function* () {},
+    };
+    store.getOrCreateEventSubscription("env-1");
+
+    store.setEventStream("env-1", stream);
+    expect(store.hasActiveEventSubscription("env-1")).toBe(true);
+
+    store.setEventStream("env-1", null);
+    expect(store.hasActiveEventSubscription("env-1")).toBe(false);
+  });
+});
+
+describe("shouldReconnectEventSubscription", () => {
+  function subscription(
+    abortController: AbortController,
+    isActive: boolean,
+  ): NativeEventSubscriptionState<TestEvent> {
+    return { abortController, stream: null, isActive };
+  }
+
+  test("reconnects only the dropped subscription that still owns the environment", () => {
+    const owner = new AbortController();
+
+    expect(shouldReconnectEventSubscription(subscription(owner, false), owner))
+      .toBe(true);
+  });
+
+  test("refuses to resurrect an explicitly closed subscription", () => {
+    // `closeEventSubscription`/`clearEnvironment` delete the entry outright.
+    // Reconnecting here would restart a stream the app deliberately stopped.
+    expect(shouldReconnectEventSubscription(undefined, new AbortController()))
+      .toBe(false);
+  });
+
+  test("stands down when a replacement subscription owns the environment", () => {
+    const owner = new AbortController();
+    const replacement = new AbortController();
+
+    // Running both loops against one environment would double every event.
+    expect(
+      shouldReconnectEventSubscription(subscription(replacement, true), owner),
+    ).toBe(false);
+    expect(
+      shouldReconnectEventSubscription(subscription(replacement, false), owner),
+    ).toBe(false);
+  });
+
+  test("stands down while its own subscription is still active", () => {
+    const owner = new AbortController();
+
+    expect(shouldReconnectEventSubscription(subscription(owner, true), owner))
+      .toBe(false);
   });
 });

@@ -34,8 +34,13 @@ export class RetryableNewEnvironmentConnectionError extends Error {
   }
 }
 
+// Health-timeout and early-exit wrappers are deliberately absent. The backend
+// uses those messages for every child failure, including permanent executable
+// and configuration errors, so the wrapper alone cannot establish retryability.
 const TRANSIENT_STARTUP_MESSAGE =
-  /\b(?:still starting|not ready|became ready|delayed by setup|temporar(?:y|ily)|unavailable|connection refused|timed? out|timeout|econnrefused|econnreset|fetch failed|network error|socket hang up)\b/i;
+  /\b(?:still starting|not ready|became ready|delayed by setup|container is not running|container is restarting|worktree is not available|temporar(?:y|ily)|unavailable|connection refused|timed? out|timeout|econnrefused|econnreset|fetch failed|network error|socket hang up)\b/i;
+const GENERIC_STARTUP_FAILURE_MESSAGE =
+  /\b(?:did not become healthy|before becoming healthy)\b/i;
 
 function connectionErrorMessage(
   error: unknown,
@@ -54,18 +59,25 @@ function connectionErrorMessage(
 export function classifyNewEnvironmentConnectionStartupError(
   error: unknown,
 ): Error {
+  const message = connectionErrorMessage(error);
   const status =
     error && typeof error === "object" && "status" in error
       ? Number((error as { status?: unknown }).status)
       : Number.NaN;
   const retryableStatus = status === 425 || status === 429 || status === 502
     || status === 503 || status === 504;
-  if (retryableStatus || TRANSIENT_STARTUP_MESSAGE.test(connectionErrorMessage(error))) {
+  if (
+    retryableStatus
+    || (
+      !GENERIC_STARTUP_FAILURE_MESSAGE.test(message)
+      && TRANSIENT_STARTUP_MESSAGE.test(message)
+    )
+  ) {
     return new RetryableNewEnvironmentConnectionError(error);
   }
   return error instanceof Error
     ? error
-    : new Error(connectionErrorMessage(error));
+    : new Error(message);
 }
 
 export function isRetryableNewEnvironmentConnectionError(

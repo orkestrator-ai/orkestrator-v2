@@ -467,13 +467,47 @@ export interface NativeEventSubscriptionSlice<TEvent> {
   eventSubscriptions: Map<string, NativeEventSubscriptionState<TEvent>>;
   getOrCreateEventSubscription: (
     environmentId: string,
-  ) => NativeEventSubscriptionState<TEvent> | null;
+  ) => NativeEventSubscriptionState<TEvent>;
+  /**
+   * Publish (or clear) the stream for an environment's subscription.
+   *
+   * `owner` is the `abortController` of the subscription making the call. When
+   * supplied, a subscription that has already been superseded or closed cannot
+   * clobber whichever entry currently holds the environment: a dropped loop
+   * runs its teardown asynchronously, so without the check its trailing
+   * `setEventStream(id, null)` would mark a healthy *replacement* inactive and
+   * strand it — reading as "no subscription" while its loop is still running.
+   */
   setEventStream: (
     environmentId: string,
     stream: AsyncIterable<TEvent> | null,
+    owner?: AbortController,
   ) => void;
   closeEventSubscription: (environmentId: string) => void;
   hasActiveEventSubscription: (environmentId: string) => boolean;
+}
+
+/**
+ * Decides whether a dropped subscription's reconnect timer may still act.
+ *
+ * Shared because Claude and OpenCode run byte-identical reconnect loops, and
+ * the three conditions are each load-bearing:
+ *
+ * - **missing** — `closeEventSubscription`/`clearEnvironment` deleted the
+ *   entry, so the app explicitly stopped listening. Reconnecting would
+ *   resurrect a subscription the user closed.
+ * - **not ours** — a remount already created a replacement with its own
+ *   controller. Reconnecting would run two loops against one environment.
+ * - **still active** — nothing has torn this stream down, so there is nothing
+ *   to reconnect.
+ */
+export function shouldReconnectEventSubscription<TEvent>(
+  subscription: NativeEventSubscriptionState<TEvent> | undefined,
+  owner: AbortController,
+): boolean {
+  if (!subscription) return false;
+  if (subscription.abortController !== owner) return false;
+  return !subscription.isActive;
 }
 
 /**
@@ -541,10 +575,11 @@ export function createEventSubscriptionSlice<TEvent>(
       return newSubscription;
     },
 
-    setEventStream: (environmentId, stream) =>
+    setEventStream: (environmentId, stream, owner) =>
       set((state) => {
         const subscription = state.eventSubscriptions.get(environmentId);
         if (!subscription) return state;
+        if (owner && subscription.abortController !== owner) return state;
         const next = new Map(state.eventSubscriptions);
         next.set(environmentId, {
           ...subscription,

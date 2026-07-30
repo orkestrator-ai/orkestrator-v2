@@ -1,10 +1,28 @@
 const NEW_ENVIRONMENT_RETRY_WINDOW_MS = 60_000;
 
-const NEW_ENVIRONMENT_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000] as const;
+/**
+ * Keep retrying for almost the entire one-minute startup window. The previous
+ * four-entry schedule exhausted itself after only 7.5 seconds, so the window
+ * below was mostly theoretical and slower first launches still surfaced a
+ * terminal error while their bridge was becoming ready.
+ */
+const NEW_ENVIRONMENT_RETRY_DELAYS_MS = [
+  500,
+  1_000,
+  2_000,
+  4_000,
+  8_000,
+  8_000,
+  8_000,
+  8_000,
+  8_000,
+  8_000,
+] as const;
 
 export interface NewEnvironmentConnectionRetryDecision {
   delayMs: number;
   retryWindowStartedAt: number;
+  retryWindowExpiresAt: number;
 }
 
 export interface NewEnvironmentConnectionRetryOptions {
@@ -122,9 +140,11 @@ export function getNewEnvironmentConnectionRetryDecision({
   }
 
   const startedAt = retryWindowStartedAt ?? now;
+  const expiresAt = startedAt + NEW_ENVIRONMENT_RETRY_WINDOW_MS;
   const retryWindowAgeMs = now - startedAt;
   if (
     !Number.isFinite(startedAt)
+    || !Number.isFinite(expiresAt)
     || retryWindowAgeMs < 0
     || retryWindowAgeMs > NEW_ENVIRONMENT_RETRY_WINDOW_MS
   ) {
@@ -132,7 +152,14 @@ export function getNewEnvironmentConnectionRetryDecision({
   }
 
   const delayMs = NEW_ENVIRONMENT_RETRY_DELAYS_MS[attempt];
-  return delayMs === undefined
+  // A retry is useful only if its timer is expected to fire within the bounded
+  // startup window. The callback also checks `retryWindowExpiresAt`, because a
+  // backgrounded renderer can throttle an otherwise-valid timer past it.
+  return delayMs === undefined || now + delayMs > expiresAt
     ? null
-    : { delayMs, retryWindowStartedAt: startedAt };
+    : {
+        delayMs,
+        retryWindowStartedAt: startedAt,
+        retryWindowExpiresAt: expiresAt,
+      };
 }

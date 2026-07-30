@@ -5542,15 +5542,18 @@ export async function shutdownLocalServers(
   }
 }
 
-async function getLocalServerStatus(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<{
+async function readLocalServerStatus(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<{
   running: boolean;
   port: number | null;
   pid: number | null;
   authToken?: string;
 }> {
   const key = `${kind}:${environmentId}`;
-  const child = localServerProcesses.get(key);
   const env = await context.storage.getEnvironment(environmentId);
+  // The owned child can exit while storage is being read. Re-read ownership
+  // after the await so an exit handler that released the process cannot leave
+  // this snapshot claiming that a dead child is still running.
+  const child = localServerProcesses.get(key);
   const port = kind === "opencode" ? env?.localOpencodePort : kind === "claude" ? env?.localClaudePort : env?.localCodexPort;
   const pid = kind === "opencode" ? env?.opencodePid : kind === "claude" ? env?.claudeBridgePid : env?.codexBridgePid;
   const authToken = localBridgeTokens(kind)?.get(environmentId);
@@ -5560,6 +5563,22 @@ async function getLocalServerStatus(environmentId: string, context: CommandConte
     pid: child?.pid ?? pid ?? null,
     ...(authToken ? { authToken } : {}),
   };
+}
+
+function getLocalServerStatus(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<{
+  running: boolean;
+  port: number | null;
+  pid: number | null;
+  authToken?: string;
+}> {
+  // Status is a readiness snapshot, not merely a process-exists snapshot.
+  // Serialize it behind any in-flight start/stop so callers never observe the
+  // child and credential before the healthy port has been persisted (or a
+  // replacement child paired with the previous child's stale port).
+  return enqueueLocalServerEnvironmentOperation(
+    environmentId,
+    () => readLocalServerStatus(environmentId, context, kind),
+  );
 }
 
 async function allocateLocalPort(): Promise<number> {

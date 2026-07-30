@@ -632,7 +632,7 @@ async function flushMicrotaskWork(rounds = 12) {
 function installRetryTimeoutQueue() {
   const timers: Array<{ callback: () => void; delay: number }> = [];
   let nextHandle = 20_000;
-  const retryDelays = new Set([500, 1_000, 2_000, 4_000]);
+  const retryDelays = new Set([500, 1_000, 2_000, 4_000, 8_000]);
   const schedule = ((
     handler: TimerHandler,
     timeout?: number,
@@ -5257,7 +5257,7 @@ describe("ClaudeChatTab", () => {
        * The backend uses this wording for every bridge child failure, permanent
        * ones included, and appends the child's log — here a log line that would
        * otherwise read as transient. Retrying on the wrapper would restart the
-       * same broken child four times before showing the user anything.
+       * same broken child throughout the startup window before showing anything.
        */
       const retryTimers = installRetryTimeoutQueue();
       useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
@@ -5368,17 +5368,67 @@ describe("ClaudeChatTab", () => {
       expect(await retryTimers.runNextRetry()).toBe(2_000);
       expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([4_000]);
       expect(await retryTimers.runNextRetry()).toBe(4_000);
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([8_000]);
+        expect(await retryTimers.runNextRetry()).toBe(8_000);
+      }
 
       expect(screen.getByText("bridge is still starting")).toBeTruthy();
-      expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(5);
+      expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(11);
       expect(retryTimers.timers).toHaveLength(0);
 
       fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
       await flushMicrotaskWork();
 
-      expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(6);
+      expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(12);
       expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([500]);
       expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+
+    test("surfaces the saved error instead of running a throttled retry after its deadline", async () => {
+      const retryWindowStart = Date.parse("2026-07-28T18:30:00.000Z");
+      const originalDateNow = Date.now;
+      const originalGlobalSetTimeout = globalThis.setTimeout;
+      const originalWindowSetTimeout = window.setTimeout;
+      let now = retryWindowStart;
+      Date.now = () => now;
+      const retryTimers = installRetryTimeoutQueue();
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date(retryWindowStart).toISOString(),
+      });
+      mockGetClaudeServerStatus.mockRejectedValue(
+        new Error("bridge is still starting"),
+      );
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await flushMicrotaskWork();
+
+        for (const expectedDelay of [500, 1_000, 2_000, 4_000]) {
+          expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([
+            expectedDelay,
+          ]);
+          now += expectedDelay;
+          await retryTimers.runNextRetry();
+        }
+        expect(now - retryWindowStart).toBe(7_500);
+        expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([8_000]);
+        expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(5);
+
+        // The timer was valid when scheduled, but the backgrounded renderer
+        // does not deliver it until just after the absolute deadline.
+        now = retryWindowStart + 60_001;
+        await retryTimers.runNextRetry();
+
+        expect(screen.getByText("bridge is still starting")).toBeTruthy();
+        expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(5);
+        expect(retryTimers.timers).toHaveLength(0);
+        expect(mockCreateSession).not.toHaveBeenCalled();
+      } finally {
+        Date.now = originalDateNow;
+        globalThis.setTimeout = originalGlobalSetTimeout;
+        window.setTimeout = originalWindowSetTimeout;
+      }
     });
 
     test("does not reconnect after unmounting with an automatic retry pending", async () => {

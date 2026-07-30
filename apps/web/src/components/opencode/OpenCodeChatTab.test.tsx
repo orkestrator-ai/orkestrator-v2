@@ -2383,9 +2383,12 @@ describe("OpenCodeChatTab", () => {
        * failure, permanent ones included, and it arrives with the child's log
        * appended — here a log line that would otherwise read as transient.
        * Inferring retryability from it would hide the real error behind the
-       * full backoff while the same broken child is restarted four times.
+       * full backoff while the same broken child is restarted throughout the
+       * startup window.
        */
-      const retryCallbacks = captureWindowTimers(new Set([500, 1_000, 2_000, 4_000]));
+      const retryCallbacks = captureWindowTimers(
+        new Set([500, 1_000, 2_000, 4_000, 8_000]),
+      );
       useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
         createdAt: new Date().toISOString(),
       });
@@ -2485,9 +2488,9 @@ describe("OpenCodeChatTab", () => {
       expect(screen.queryByText("Connection Failed")).toBeNull();
     });
 
-    test("exhausts all four automatic startup retries before surfacing the bridge error", async () => {
+    test("uses the full automatic startup window before surfacing the bridge error", async () => {
       const retryCallbacks = captureWindowTimers(
-        new Set([500, 1_000, 2_000, 4_000]),
+        new Set([500, 1_000, 2_000, 4_000, 8_000]),
       );
       useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
         createdAt: new Date().toISOString(),
@@ -2498,7 +2501,7 @@ describe("OpenCodeChatTab", () => {
 
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
-      for (let attempt = 0; attempt < 4; attempt += 1) {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
         await flushReactMicrotasks();
         expect(retryCallbacks).toHaveLength(attempt + 1);
         await act(async () => {
@@ -2511,8 +2514,60 @@ describe("OpenCodeChatTab", () => {
       expect(
         await screen.findByText(/bridge never became ready/),
       ).toBeTruthy();
-      expect(mockGetOpenCodeServerStatus).toHaveBeenCalledTimes(5);
+      expect(mockGetOpenCodeServerStatus).toHaveBeenCalledTimes(11);
       expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    test("surfaces the saved error instead of running a throttled retry after its deadline", async () => {
+      const retryWindowStart = Date.parse("2026-07-28T18:30:00.000Z");
+      const originalDateNow = Date.now;
+      const originalWindowSetTimeout = window.setTimeout;
+      let now = retryWindowStart;
+      Date.now = () => now;
+      const retryCallbacks = captureWindowTimers(
+        new Set([500, 1_000, 2_000, 4_000, 8_000]),
+      );
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date(retryWindowStart).toISOString(),
+      });
+      mockGetOpenCodeServerStatus.mockRejectedValue(
+        new Error("bridge is still starting"),
+      );
+
+      try {
+        render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+        const elapsedDelays = [500, 1_000, 2_000, 4_000];
+        for (let index = 0; index < elapsedDelays.length; index += 1) {
+          await flushReactMicrotasks();
+          expect(retryCallbacks).toHaveLength(index + 1);
+          now += elapsedDelays[index]!;
+          await act(async () => {
+            retryCallbacks[index]!();
+            await Promise.resolve();
+          });
+        }
+        await flushReactMicrotasks();
+        expect(now - retryWindowStart).toBe(7_500);
+        expect(retryCallbacks).toHaveLength(5);
+        expect(mockGetOpenCodeServerStatus).toHaveBeenCalledTimes(5);
+
+        // The first 8-second timer is delivered after the one-minute window,
+        // so it surfaces the saved failure without starting a sixth request.
+        now = retryWindowStart + 60_001;
+        await act(async () => {
+          retryCallbacks[4]!();
+          await Promise.resolve();
+        });
+        await flushReactMicrotasks();
+
+        expect(screen.getByText(/bridge is still starting/)).toBeTruthy();
+        expect(mockGetOpenCodeServerStatus).toHaveBeenCalledTimes(5);
+        expect(mockCreateSession).not.toHaveBeenCalled();
+      } finally {
+        Date.now = originalDateNow;
+        window.setTimeout = originalWindowSetTimeout;
+      }
     });
 
     test("does not run a pending automatic retry after unmount", async () => {
@@ -2546,7 +2601,7 @@ describe("OpenCodeChatTab", () => {
 
     test("manual retry restores the automatic retry budget after exhaustion", async () => {
       const retryCallbacks = captureWindowTimers(
-        new Set([500, 1_000, 2_000, 4_000]),
+        new Set([500, 1_000, 2_000, 4_000, 8_000]),
       );
       useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
         createdAt: new Date().toISOString(),
@@ -2556,7 +2611,7 @@ describe("OpenCodeChatTab", () => {
       );
 
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
-      for (let attempt = 0; attempt < 4; attempt += 1) {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
         await flushReactMicrotasks();
         expect(retryCallbacks).toHaveLength(attempt + 1);
         await act(async () => {
@@ -2566,7 +2621,7 @@ describe("OpenCodeChatTab", () => {
       }
       await flushReactMicrotasks();
       expect(screen.getByText(/bridge remains unavailable/)).toBeTruthy();
-      expect(mockGetOpenCodeServerStatus).toHaveBeenCalledTimes(5);
+      expect(mockGetOpenCodeServerStatus).toHaveBeenCalledTimes(11);
 
       mockGetOpenCodeServerStatus
         .mockReset()
@@ -2579,9 +2634,9 @@ describe("OpenCodeChatTab", () => {
       fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
 
       await flushReactMicrotasks();
-      expect(retryCallbacks).toHaveLength(5);
+      expect(retryCallbacks).toHaveLength(11);
       await act(async () => {
-        retryCallbacks[4]!();
+        retryCallbacks[10]!();
         await Promise.resolve();
       });
       window.setTimeout = ORIGINAL_WINDOW_SET_TIMEOUT;
@@ -2592,7 +2647,7 @@ describe("OpenCodeChatTab", () => {
 
     test("retries the first transient status failure after setup took over a minute", async () => {
       const retryCallbacks = captureWindowTimers(
-        new Set([500, 1_000, 2_000, 4_000]),
+        new Set([500, 1_000, 2_000, 4_000, 8_000]),
       );
       useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
         createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),

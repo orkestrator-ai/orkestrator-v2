@@ -27,20 +27,31 @@ describe("getNewEnvironmentConnectionRetryDecision", () => {
     expect(decide({ attempt: 0 })).toEqual({
       delayMs: 500,
       retryWindowStartedAt: NOW,
+      retryWindowExpiresAt: NOW + 60_000,
     });
     expect(decide({ attempt: 1 })).toEqual({
       delayMs: 1_000,
       retryWindowStartedAt: NOW,
+      retryWindowExpiresAt: NOW + 60_000,
     });
     expect(decide({ attempt: 2 })).toEqual({
       delayMs: 2_000,
       retryWindowStartedAt: NOW,
+      retryWindowExpiresAt: NOW + 60_000,
     });
     expect(decide({ attempt: 3 })).toEqual({
       delayMs: 4_000,
       retryWindowStartedAt: NOW,
+      retryWindowExpiresAt: NOW + 60_000,
     });
-    expect(decide({ attempt: 4 })).toBeNull();
+    for (let attempt = 4; attempt < 10; attempt += 1) {
+      expect(decide({ attempt })).toEqual({
+        delayMs: 8_000,
+        retryWindowStartedAt: NOW,
+        retryWindowExpiresAt: NOW + 60_000,
+      });
+    }
+    expect(decide({ attempt: 10 })).toBeNull();
   });
 
   test("rejects negative, fractional, and non-finite attempt numbers", () => {
@@ -74,6 +85,7 @@ describe("getNewEnvironmentConnectionRetryDecision", () => {
     ).toEqual({
       delayMs: 500,
       retryWindowStartedAt: NOW,
+      retryWindowExpiresAt: NOW + 60_000,
     });
   });
 
@@ -87,14 +99,96 @@ describe("getNewEnvironmentConnectionRetryDecision", () => {
     ).toEqual({
       delayMs: 2_000,
       retryWindowStartedAt: NOW - 2_000,
+      retryWindowExpiresAt: NOW + 58_000,
     });
   });
 
-  test("rejects expired, future, and non-finite retry windows", () => {
-    expect(decide({ retryWindowStartedAt: NOW - 60_000 })).not.toBeNull();
+  test("rejects windows that are expired, invalid, or too close to expiry for the delay", () => {
+    expect(
+      decide({
+        attempt: 0,
+        retryWindowStartedAt: NOW - 59_500,
+      }),
+    ).toEqual({
+      delayMs: 500,
+      retryWindowStartedAt: NOW - 59_500,
+      retryWindowExpiresAt: NOW + 500,
+    });
+    expect(decide({ retryWindowStartedAt: NOW - 59_501 })).toBeNull();
+    expect(decide({ retryWindowStartedAt: NOW - 60_000 })).toBeNull();
     expect(decide({ retryWindowStartedAt: NOW - 60_001 })).toBeNull();
     expect(decide({ retryWindowStartedAt: NOW + 1 })).toBeNull();
     expect(decide({ retryWindowStartedAt: Number.NaN })).toBeNull();
+  });
+
+  test("keeps the complete schedule within the window after request latency and delayed callbacks", () => {
+    const requestLatencyMs = 200;
+    const callbackLagMs = [0, 0, 0, 0, 500, 500, 500, 500, 0, 0];
+    let now = NOW;
+    // Components establish the window before starting the first request, so
+    // the initial request's latency counts against the same deadline.
+    let retryWindowStartedAt: number | null = NOW;
+    const observedDelays: number[] = [];
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      // Model time spent waiting for the failed status/start request before the
+      // retry decision is made.
+      now += requestLatencyMs;
+      const decision = decide({
+        attempt,
+        retryWindowStartedAt,
+        now,
+      });
+      expect(decision).not.toBeNull();
+      retryWindowStartedAt = decision!.retryWindowStartedAt;
+      observedDelays.push(decision!.delayMs);
+
+      // The first four 8-second callbacks are delivered 500ms late, as can
+      // happen when the renderer is backgrounded or its timers are throttled.
+      now += decision!.delayMs + callbackLagMs[attempt]!;
+    }
+
+    now += requestLatencyMs;
+    expect(now - NOW).toBe(59_700);
+    expect(now - retryWindowStartedAt!).toBe(59_700);
+    expect(
+      decide({
+        attempt: 10,
+        retryWindowStartedAt,
+        now,
+      }),
+    ).toBeNull();
+    expect(observedDelays).toEqual([
+      500,
+      1_000,
+      2_000,
+      4_000,
+      8_000,
+      8_000,
+      8_000,
+      8_000,
+      8_000,
+      8_000,
+    ]);
+  });
+
+  test("cuts off an unexhausted schedule when its next delay would cross the deadline", () => {
+    const retryWindowStartedAt = NOW;
+
+    expect(
+      decide({
+        attempt: 8,
+        retryWindowStartedAt,
+        now: NOW + 52_000,
+      }),
+    ).not.toBeNull();
+    expect(
+      decide({
+        attempt: 8,
+        retryWindowStartedAt,
+        now: NOW + 52_001,
+      }),
+    ).toBeNull();
   });
 });
 

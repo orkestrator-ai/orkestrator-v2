@@ -1487,7 +1487,11 @@ export function OpenCodeChatTab({
             })
           : null;
         if (retryDecision !== null) {
-          const { delayMs, retryWindowStartedAt } = retryDecision;
+          const {
+            delayMs,
+            retryWindowStartedAt,
+            retryWindowExpiresAt,
+          } = retryDecision;
           automaticInitRetryWindowStartedAtRef.current = retryWindowStartedAt;
           automaticInitRetryCountRef.current += 1;
           console.warn(
@@ -1498,7 +1502,13 @@ export function OpenCodeChatTab({
           setConnectionState("connecting");
           setErrorMessage(null);
           window.setTimeout(() => {
-            if (mounted) setInitAttempt((value) => value + 1);
+            if (!mounted) return;
+            if (Date.now() > retryWindowExpiresAt) {
+              setConnectionState("error");
+              setErrorMessage(message);
+              return;
+            }
+            setInitAttempt((value) => value + 1);
           }, delayMs);
           return;
         }

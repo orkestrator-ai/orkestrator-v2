@@ -2950,6 +2950,18 @@ describe("ClaudeChatTab", () => {
     expect(mockGetSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
   });
 
+  test("restores running state after a healthy fast reconnect reads an active session", async () => {
+    mockGetSession.mockResolvedValueOnce({ status: "running" });
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() =>
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true),
+    );
+    expect(mockGetSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+    expect(screen.queryByText(/Completed in/)).toBeNull();
+  });
+
   test("does not apply a late fast-reconnect snapshot to a replacement session", async () => {
     const sessionGate = deferred<any>();
     mockGetSession.mockImplementationOnce(() => sessionGate.promise);
@@ -5842,6 +5854,25 @@ describe("ClaudeChatTab", () => {
         expect(
           useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)?.["bg-1"]?.description,
         ).toBe("Long build");
+      });
+    });
+
+    test("marks a backend-dispatched turn running and removes the stale completion state", async () => {
+      await withChannel(async (channel) => {
+        act(() => useClaudeStore.getState().setSessionLoading(SESSION_KEY, false));
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+
+        channel.push({
+          type: "session.updated",
+          sessionId: "session-1",
+          data: { status: "running" },
+        } as any);
+
+        await waitFor(() =>
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true),
+        );
+        expect(screen.queryByText(/Completed in/)).toBeNull();
+        expect(screen.getByRole("status").textContent).toContain("Claude is thinking...");
       });
     });
 

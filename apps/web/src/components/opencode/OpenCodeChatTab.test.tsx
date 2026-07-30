@@ -4122,6 +4122,31 @@ describe("OpenCodeChatTab", () => {
       channel.close();
     });
 
+    test("marks a backend-dispatched session busy and removes stale completion state", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      channel.push({
+        type: "session.status",
+        properties: {
+          sessionID: "session-1",
+          status: { type: "busy" },
+        },
+      });
+
+      await waitFor(() =>
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true),
+      );
+      expect(screen.queryByText(/Completed in/)).toBeNull();
+      expect(screen.getByRole("status").textContent).toContain("OpenCode is thinking...");
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
     test("applies streaming parts, parent refreshes, idle state, errors, and context usage", async () => {
       const channel = eventChannel();
       mockSubscribeToEvents.mockResolvedValue(channel.stream);

@@ -1082,6 +1082,16 @@ export function ClaudeChatTab({
             const messages = await getSessionMessages(existingClient, existingSessionId);
             if (!isCurrentFastReconnect()) return;
 
+            /*
+             * A live frame may change this session while the two REST reads are
+             * in flight. In that case its loading edge is newer than the
+             * snapshot, so do not let an older `running` response re-lock a
+             * turn that has since gone idle (or an older `idle` response unlock
+             * a new turn).
+             */
+            const sessionSnapshotStillCurrent =
+              useClaudeStore.getState().sessions.get(sessionKey) === existingSession;
+
             // Only apply fetched messages if they are more complete than what
             // the store currently has (SSE may have already delivered newer data).
             applyServerSessionMetadata(sessionKey, serverSession);
@@ -1090,11 +1100,13 @@ export function ClaudeChatTab({
               setMessages(sessionKey, messages);
             }
 
-            // Reconcile loading state with server - re-read from store to avoid
-            // acting on the stale snapshot captured at the start of this block.
-            const currentSession = useClaudeStore.getState().sessions.get(sessionKey);
-            if (serverSession.status !== "running" && currentSession?.isLoading) {
-              setSessionLoading(sessionKey, false);
+            /*
+             * Reconcile in both directions. Background queue dispatches and
+             * turns started while this tab was unmounted can leave the stored
+             * flag idle even though the bridge is actively producing tools.
+             */
+            if (sessionSnapshotStillCurrent) {
+              setSessionLoading(sessionKey, serverSession.status === "running");
             }
 
             await pendingPromptsSync;
@@ -1878,6 +1890,16 @@ export function ClaudeChatTab({
 
             if (eventType === "session.updated") {
               const sessionUpdate = eventDataRecord;
+              /*
+               * Prompt dispatch can be owned by the backend (queued prompts,
+               * pipelines, or another mounted tab), so there is no local
+               * optimistic send to set `isLoading`. The bridge's running edge
+               * is authoritative and must clear a stale Completed footer.
+               * Terminal transitions still use session.idle/session.error.
+               */
+              if (sessionUpdate?.status === "running") {
+                setSessionLoading(sessionTabId, true);
+              }
               const exactUsage = parseClaudeContextUsage(sessionUpdate?.contextUsage);
               if (exactUsage) {
                 setContextUsage(sessionTabId, exactUsage);

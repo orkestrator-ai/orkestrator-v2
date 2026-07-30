@@ -1923,8 +1923,22 @@ export function OpenCodeChatTab({
               });
             }
 
-            // Clear loading state on final events
-            if (isFinalEvent) {
+            /*
+             * A queued prompt can be dispatched by the backend while this tab
+             * is unmounted, so no renderer send path exists to optimistically
+             * mark it busy. Session status is the authoritative lifecycle edge
+             * in that case. Apply non-terminal edges as well as idle, otherwise
+             * fresh parts can stream under a stale Completed footer.
+             */
+            if (
+              eventType === "session.status"
+              && (
+                props?.status?.type === "busy"
+                || props?.status?.type === "retry"
+              )
+            ) {
+              setSessionLoading(sessionTabId, true);
+            } else if (isFinalEvent) {
               setSessionLoading(sessionTabId, false);
             }
 

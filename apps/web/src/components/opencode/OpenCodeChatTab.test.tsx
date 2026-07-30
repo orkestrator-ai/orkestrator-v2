@@ -2518,6 +2518,58 @@ describe("OpenCodeChatTab", () => {
       expect(mockCreateSession).not.toHaveBeenCalled();
     });
 
+    test("surfaces the saved error instead of running a throttled retry after its deadline", async () => {
+      const retryWindowStart = Date.parse("2026-07-28T18:30:00.000Z");
+      const originalDateNow = Date.now;
+      const originalWindowSetTimeout = window.setTimeout;
+      let now = retryWindowStart;
+      Date.now = () => now;
+      const retryCallbacks = captureWindowTimers(
+        new Set([500, 1_000, 2_000, 4_000, 8_000]),
+      );
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date(retryWindowStart).toISOString(),
+      });
+      mockGetOpenCodeServerStatus.mockRejectedValue(
+        new Error("bridge is still starting"),
+      );
+
+      try {
+        render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+        const elapsedDelays = [500, 1_000, 2_000, 4_000];
+        for (let index = 0; index < elapsedDelays.length; index += 1) {
+          await flushReactMicrotasks();
+          expect(retryCallbacks).toHaveLength(index + 1);
+          now += elapsedDelays[index]!;
+          await act(async () => {
+            retryCallbacks[index]!();
+            await Promise.resolve();
+          });
+        }
+        await flushReactMicrotasks();
+        expect(now - retryWindowStart).toBe(7_500);
+        expect(retryCallbacks).toHaveLength(5);
+        expect(mockGetOpenCodeServerStatus).toHaveBeenCalledTimes(5);
+
+        // The first 8-second timer is delivered after the one-minute window,
+        // so it surfaces the saved failure without starting a sixth request.
+        now = retryWindowStart + 60_001;
+        await act(async () => {
+          retryCallbacks[4]!();
+          await Promise.resolve();
+        });
+        await flushReactMicrotasks();
+
+        expect(screen.getByText(/bridge is still starting/)).toBeTruthy();
+        expect(mockGetOpenCodeServerStatus).toHaveBeenCalledTimes(5);
+        expect(mockCreateSession).not.toHaveBeenCalled();
+      } finally {
+        Date.now = originalDateNow;
+        window.setTimeout = originalWindowSetTimeout;
+      }
+    });
+
     test("does not run a pending automatic retry after unmount", async () => {
       let retryCallback: (() => void) | undefined;
       window.setTimeout = ((handler: TimerHandler, timeout?: number) => {

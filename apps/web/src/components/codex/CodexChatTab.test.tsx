@@ -674,11 +674,19 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function installAcceleratedConnectionRetryTimers(options: { hold?: boolean } = {}) {
+function installAcceleratedConnectionRetryTimers(
+  options: { hold?: boolean; now?: number } = {},
+) {
   const originalSetTimeout = window.setTimeout;
+  const originalDateNow = Date.now;
   const delays: number[] = [];
   const callbacks: Array<() => void> = [];
   const retryDelays = new Set([500, 1_000, 2_000, 4_000, 8_000]);
+  let now = options.now;
+
+  if (now !== undefined) {
+    Date.now = () => now!;
+  }
 
   window.setTimeout = ((
     callback: TimerHandler,
@@ -704,6 +712,19 @@ function installAcceleratedConnectionRetryTimers(options: { hold?: boolean } = {
   return {
     delays,
     callbacks,
+    runCallback(index: number, elapsedMs = delays[index]) {
+      const callback = callbacks[index];
+      if (!callback || elapsedMs === undefined) {
+        throw new Error(`Connection retry callback ${index} is not available`);
+      }
+      if (now !== undefined) {
+        now += elapsedMs;
+      }
+      callback();
+    },
+    get now() {
+      return now;
+    },
     async waitForDelayCount(expectedCount: number) {
       for (let attempt = 0; attempt < 100; attempt += 1) {
         if (delays.length >= expectedCount) return;
@@ -718,6 +739,7 @@ function installAcceleratedConnectionRetryTimers(options: { hold?: boolean } = {
     },
     restore() {
       window.setTimeout = originalSetTimeout;
+      Date.now = originalDateNow;
     },
   };
 }
@@ -2043,14 +2065,18 @@ describe("CodexChatTab", () => {
   });
 
   test("uses the full startup retry sequence before surfacing the final failure", async () => {
-    const retryTimers = installAcceleratedConnectionRetryTimers({ hold: true });
+    const retryWindowStart = Date.parse("2026-07-28T18:30:00.000Z");
+    const retryTimers = installAcceleratedConnectionRetryTimers({
+      hold: true,
+      now: retryWindowStart,
+    });
     useCodexStore.setState((state) => ({
       ...state,
       clients: new Map(),
       sessions: new Map(),
     }));
     useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(retryWindowStart).toISOString(),
     });
     mockGetCodexServerStatus.mockRejectedValue(new Error("bridge never became ready"));
 
@@ -2060,7 +2086,7 @@ describe("CodexChatTab", () => {
       for (let index = 0; index < 10; index += 1) {
         await retryTimers.waitForDelayCount(index + 1);
         await act(async () => {
-          retryTimers.callbacks[index]?.();
+          retryTimers.runCallback(index);
           await Promise.resolve();
         });
       }
@@ -2080,6 +2106,59 @@ describe("CodexChatTab", () => {
         8_000,
         8_000,
       ]);
+      expect(retryTimers.now! - retryWindowStart).toBe(55_500);
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    } finally {
+      retryTimers.restore();
+    }
+  });
+
+  test("surfaces the saved error instead of running a throttled retry after its deadline", async () => {
+    const retryWindowStart = Date.parse("2026-07-28T18:30:00.000Z");
+    const retryTimers = installAcceleratedConnectionRetryTimers({
+      hold: true,
+      now: retryWindowStart,
+    });
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      createdAt: new Date(retryWindowStart).toISOString(),
+    });
+    mockGetCodexServerStatus.mockRejectedValue(
+      new Error("bridge is still starting"),
+    );
+
+    try {
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      // Reach the first 8-second retry at t=7.5s using the actual elapsed
+      // schedule rather than firing the callbacks immediately.
+      for (let index = 0; index < 4; index += 1) {
+        await retryTimers.waitForDelayCount(index + 1);
+        await act(async () => {
+          retryTimers.runCallback(index);
+          await Promise.resolve();
+        });
+      }
+      await retryTimers.waitForDelayCount(5);
+      expect(retryTimers.delays).toEqual([500, 1_000, 2_000, 4_000, 8_000]);
+      expect(retryTimers.now! - retryWindowStart).toBe(7_500);
+      expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(5);
+
+      // The 8-second timer was valid when scheduled, but a backgrounded
+      // renderer delivers it after the absolute one-minute deadline.
+      await act(async () => {
+        retryTimers.runCallback(4, 52_501);
+        await Promise.resolve();
+      });
+      await retryTimers.settle();
+
+      expect(retryTimers.now! - retryWindowStart).toBe(60_001);
+      expect(await screen.findByText("bridge is still starting")).toBeTruthy();
+      expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(5);
       expect(mockCreateSession).not.toHaveBeenCalled();
     } finally {
       retryTimers.restore();

@@ -999,6 +999,20 @@ function createFakeChild(pid: number): ChildProcessWithoutNullStreams {
   } as unknown as ChildProcessWithoutNullStreams;
 }
 
+function createDeferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 // Fake `docker` that reports the container as running and succeeds on exec,
 // returning a deterministic HEAD commit for `git rev-parse`.
 const RUNNING_CONTAINER_DOCKER_SCRIPT = `#!/bin/sh
@@ -10338,6 +10352,52 @@ exit 0
     }
   });
 
+  test("does not report a child that exits while local status awaits storage as running", async () => {
+    const appRoot = await createTempDir("ork-electron-app-status-exit-race-");
+    const worktreePath = await createTempDir("ork-electron-worktree-status-exit-race-");
+    await writeBridgeServer(appRoot, "codex-bridge");
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    const started = await commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { port: number; pid: number };
+    const lookupStarted = createDeferred();
+    const releaseLookup = createDeferred();
+    const getEnvironment = context.storage.getEnvironment.bind(context.storage);
+    context.storage.getEnvironment = mock(async (environmentId: string) => {
+      lookupStarted.resolve(undefined);
+      await releaseLookup.promise;
+      return getEnvironment(environmentId);
+    });
+
+    const statusPromise = commands.get("get_local_codex_server_status")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<unknown>;
+    await lookupStarted.promise;
+    try {
+      process.kill(started.pid, "SIGTERM");
+      await waitForCondition(
+        () => commandTesting.getLocalServerProcess(`codex:${environment.id}`) === undefined,
+        "exited Codex bridge ownership release",
+      );
+    } finally {
+      releaseLookup.resolve(undefined);
+    }
+
+    await expect(statusPromise).resolves.toEqual({
+      running: false,
+      port: started.port,
+      pid: started.pid,
+    });
+    expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
+  });
+
   test("drains a local Codex bridge and its descendants before deleting the environment", async () => {
     const appRoot = await createTempDir("ork-electron-app-delete-codex-");
     const worktreePath = await createTempDir("ork-electron-worktree-delete-codex-");
@@ -10454,53 +10514,53 @@ exit 0
   test("holds local server status behind an in-flight startup until its ready port is committed", async () => {
     const appRoot = await createTempDir("ork-electron-app-start-status-");
     const worktreePath = await createTempDir("ork-electron-worktree-start-status-");
-    const startedMarkerPath = path.join(appRoot, "bridge-started.txt");
-    await writeBridgeEntrypoint(
-      appRoot,
-      "codex-bridge",
-      `
-        const fs = require("node:fs");
-        const http = require("node:http");
-        fs.writeFileSync(${JSON.stringify(startedMarkerPath)}, "started");
-        setTimeout(() => {
-          http.createServer((req, res) => {
-            res.writeHead(req.url === "/global/health" ? 200 : 404);
-            res.end();
-          }).listen(Number(process.env.PORT), "127.0.0.1");
-        }, 100);
-      `,
-    );
+    await writeBridgeServer(appRoot, "codex-bridge");
     const environment = createEnvironment({ worktreePath });
     const { context } = createContext(environment);
     context.appRoot = appRoot;
     context.resourceRoot = appRoot;
+    const commitStarted = createDeferred();
+    const releaseCommit = createDeferred();
+    const updateEnvironment = context.storage.updateEnvironment.bind(context.storage);
+    context.storage.updateEnvironment = mock(async (
+      environmentId: string,
+      update: Record<string, unknown>,
+    ) => {
+      if (typeof update.localCodexPort === "number") {
+        commitStarted.resolve(undefined);
+        await releaseCommit.promise;
+      }
+      return updateEnvironment(environmentId, update);
+    });
     const commands = createCommandRegistry();
 
     const startPromise = commands.get("start_local_codex_server_cmd")?.(
       { environmentId: environment.id },
       context,
     ) as Promise<{ port: number; pid: number; authToken: string }>;
-    await waitForCondition(() => existsSync(startedMarkerPath), "in-flight bridge startup");
+    await commitStarted.promise;
 
-    let statusSettled = false;
-    const statusPromise = (
-      commands.get("get_local_codex_server_status")?.(
-        { environmentId: environment.id },
-        context,
-      ) as Promise<{
-        running: boolean;
-        port: number | null;
-        pid: number | null;
-        authToken?: string;
-      }>
-    ).then((status) => {
-      statusSettled = true;
-      return status;
+    let statusReadStarted = false;
+    const getEnvironment = context.storage.getEnvironment.bind(context.storage);
+    context.storage.getEnvironment = mock(async (environmentId: string) => {
+      statusReadStarted = true;
+      return getEnvironment(environmentId);
     });
 
-    await Bun.sleep(20);
-    expect(statusSettled).toBe(false);
-
+    const statusPromise = commands.get("get_local_codex_server_status")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<{
+      running: boolean;
+      port: number | null;
+      pid: number | null;
+      authToken?: string;
+    }>;
+    try {
+      expect(statusReadStarted).toBe(false);
+    } finally {
+      releaseCommit.resolve(undefined);
+    }
     const [started, status] = await Promise.all([startPromise, statusPromise]);
     try {
       expect(status).toEqual({
@@ -10516,6 +10576,148 @@ exit 0
       );
     }
   }, ASYNC_TEST_BUDGET_MS);
+
+  test("runs queued status after a rejected startup and reports the cleaned stopped state", async () => {
+    const appRoot = await createTempDir("ork-electron-app-rejected-start-status-");
+    const worktreePath = await createTempDir("ork-electron-worktree-rejected-start-status-");
+    await writeBridgeEntrypoint(
+      appRoot,
+      "codex-bridge",
+      "process.exitCode = 23;",
+    );
+    const environment = createEnvironment({
+      worktreePath,
+      localCodexPort: 40123,
+      codexBridgePid: 50123,
+    });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    const startPromise = commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<unknown>;
+    const statusPromise = commands.get("get_local_codex_server_status")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<unknown>;
+
+    const [startResult, statusResult] = await Promise.allSettled([
+      startPromise,
+      statusPromise,
+    ]);
+    expect(startResult.status).toBe("rejected");
+    if (startResult.status === "rejected") {
+      expect(startResult.reason).toBeInstanceOf(Error);
+      expect((startResult.reason as Error).message).toContain(
+        "codex server exited before becoming healthy",
+      );
+    }
+    expect(statusResult).toEqual({
+      status: "fulfilled",
+      value: {
+        running: false,
+        port: null,
+        pid: null,
+      },
+    });
+    expect(commandTesting.getLocalServerProcess(`codex:${environment.id}`)).toBeUndefined();
+    expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("holds status behind an in-flight stop until process ownership and metadata are cleared", async () => {
+    const environment = createEnvironment({
+      id: "env-status-behind-stop",
+      localCodexPort: 40124,
+      codexBridgePid: 50124,
+    });
+    const { context } = createContext(environment);
+    const child = createFakeChild(50124);
+    commandTesting.setLocalServerProcess(`codex:${environment.id}`, child);
+    const terminationStarted = createDeferred();
+    const releaseTermination = createDeferred();
+    commandTesting.setTerminateProcessTree(async () => {
+      terminationStarted.resolve(undefined);
+      await releaseTermination.promise;
+      return true;
+    });
+    const commands = createCommandRegistry();
+
+    const stopPromise = commands.get("stop_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<void>;
+    await terminationStarted.promise;
+
+    let statusReadStarted = false;
+    const getEnvironment = context.storage.getEnvironment.bind(context.storage);
+    context.storage.getEnvironment = mock(async (environmentId: string) => {
+      statusReadStarted = true;
+      return getEnvironment(environmentId);
+    });
+    const statusPromise = commands.get("get_local_codex_server_status")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<unknown>;
+    try {
+      expect(statusReadStarted).toBe(false);
+    } finally {
+      releaseTermination.resolve(undefined);
+    }
+    await expect(Promise.all([stopPromise, statusPromise])).resolves.toEqual([
+      undefined,
+      { running: false, port: null, pid: null },
+    ]);
+  });
+
+  test("serializes status across local server kinds for the same environment", async () => {
+    const environment = createEnvironment({
+      id: "env-cross-kind-status-order",
+      localCodexPort: 40125,
+      codexBridgePid: 50125,
+      localClaudePort: 40126,
+      claudeBridgePid: 50126,
+    });
+    const { context } = createContext(environment);
+    const child = createFakeChild(50125);
+    commandTesting.setLocalServerProcess(`codex:${environment.id}`, child);
+    const terminationStarted = createDeferred();
+    const releaseTermination = createDeferred();
+    commandTesting.setTerminateProcessTree(async () => {
+      terminationStarted.resolve(undefined);
+      await releaseTermination.promise;
+      return true;
+    });
+    const commands = createCommandRegistry();
+
+    const stopPromise = commands.get("stop_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<void>;
+    await terminationStarted.promise;
+
+    let claudeStatusReadStarted = false;
+    const getEnvironment = context.storage.getEnvironment.bind(context.storage);
+    context.storage.getEnvironment = mock(async (environmentId: string) => {
+      claudeStatusReadStarted = true;
+      return getEnvironment(environmentId);
+    });
+    const claudeStatusPromise = commands.get("get_local_claude_server_status")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<unknown>;
+    try {
+      expect(claudeStatusReadStarted).toBe(false);
+    } finally {
+      releaseTermination.resolve(undefined);
+    }
+    await expect(Promise.all([stopPromise, claudeStatusPromise])).resolves.toEqual([
+      undefined,
+      { running: false, port: 40126, pid: 50126 },
+    ]);
+  });
 
   test("serializes a stop queued behind startup and leaves metadata cleared", async () => {
     const appRoot = await createTempDir("ork-electron-app-start-stop-");
@@ -12481,12 +12683,57 @@ exit 0
     ) as { port: number; pid: number; wasRunning: boolean };
     expect(first.wasRunning).toBe(false);
     await expect(requestOk(first.port, "/disable")).resolves.toBe(true);
-    await Bun.sleep(25);
+    await commandTesting.waitForUnhealthy(first.port);
 
-    const second = await commands.get("start_local_codex_server_cmd")?.(
+    const replacementCommitStarted = createDeferred();
+    const releaseReplacementCommit = createDeferred();
+    const updateEnvironment = context.storage.updateEnvironment.bind(context.storage);
+    context.storage.updateEnvironment = mock(async (
+      environmentId: string,
+      update: Record<string, unknown>,
+    ) => {
+      if (typeof update.localCodexPort === "number") {
+        replacementCommitStarted.resolve(undefined);
+        await releaseReplacementCommit.promise;
+      }
+      return updateEnvironment(environmentId, update);
+    });
+
+    const replacementPromise = commands.get("start_local_codex_server_cmd")?.(
       { environmentId: environment.id },
       context,
-    ) as { port: number; pid: number; wasRunning: boolean };
+    ) as Promise<{
+      port: number;
+      pid: number;
+      wasRunning: boolean;
+      authToken: string;
+    }>;
+    await replacementCommitStarted.promise;
+
+    let statusReadStarted = false;
+    const getEnvironment = context.storage.getEnvironment.bind(context.storage);
+    context.storage.getEnvironment = mock(async (environmentId: string) => {
+      statusReadStarted = true;
+      return getEnvironment(environmentId);
+    });
+    const statusPromise = commands.get("get_local_codex_server_status")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<{
+      running: boolean;
+      port: number | null;
+      pid: number | null;
+      authToken?: string;
+    }>;
+    try {
+      expect(statusReadStarted).toBe(false);
+    } finally {
+      releaseReplacementCommit.resolve(undefined);
+    }
+    const [second, status] = await Promise.all([
+      replacementPromise,
+      statusPromise,
+    ]);
     try {
       expect(second.wasRunning).toBe(false);
       expect(second.pid).not.toBe(first.pid);
@@ -12494,6 +12741,12 @@ exit 0
       expect(updates.at(-1)).toEqual({
         localCodexPort: second.port,
         codexBridgePid: second.pid,
+      });
+      expect(status).toEqual({
+        running: true,
+        port: second.port,
+        pid: second.pid,
+        authToken: second.authToken,
       });
       await expect(requestOk(second.port, "/global/health")).resolves.toBe(true);
     } finally {

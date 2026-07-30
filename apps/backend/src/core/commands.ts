@@ -5549,8 +5549,11 @@ async function readLocalServerStatus(environmentId: string, context: CommandCont
   authToken?: string;
 }> {
   const key = `${kind}:${environmentId}`;
-  const child = localServerProcesses.get(key);
   const env = await context.storage.getEnvironment(environmentId);
+  // The owned child can exit while storage is being read. Re-read ownership
+  // after the await so an exit handler that released the process cannot leave
+  // this snapshot claiming that a dead child is still running.
+  const child = localServerProcesses.get(key);
   const port = kind === "opencode" ? env?.localOpencodePort : kind === "claude" ? env?.localClaudePort : env?.localCodexPort;
   const pid = kind === "opencode" ? env?.opencodePid : kind === "claude" ? env?.claudeBridgePid : env?.codexBridgePid;
   const authToken = localBridgeTokens(kind)?.get(environmentId);

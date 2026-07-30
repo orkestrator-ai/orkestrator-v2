@@ -107,24 +107,37 @@ and performs any negotiated compression only on the browser-facing hop.
 Already encoded upstream responses are passed through without another encoding.
 Browser-preview HTML, CSS, and JavaScript are decoded within fixed encoded and
 decoded byte and chunk-count limits, rewritten, and then optionally
-recompressed. Dynamic compression also has bounded source/output sizes and a
-fixed concurrency limit. Before buffering a proxied non-streaming body, the
-gateway reserves one of eight proxy-buffer slots and the declared body size
-against a shared 64 MiB aggregate source-buffer budget. Those reservations are
-held until the downstream response finishes or closes and released after every
-success, failure, abort, or client disconnect; a response that cannot reserve
-both limits is streamed as identity.
+recompressed. A decoded preview body has no declared size to reserve up front,
+so its bytes are charged per chunk against a shared 64 MiB aggregate decode
+budget and returned when the downstream response settles; this bounds
+concurrency, which the per-request limit alone does not. Dynamic compression
+also has bounded source/output sizes and a fixed concurrency limit. Before
+buffering a proxied non-streaming body, the gateway reserves one of eight
+proxy-buffer slots and the declared body size against a shared 64 MiB aggregate
+source-buffer budget. Those reservations are held until the downstream response
+finishes or closes and released after every success, failure, abort, or client
+disconnect; a response that cannot reserve both limits is streamed as identity.
+
+A buffered body that holds a reservation is also subject to a 30 second idle
+timeout, reset by every chunk received. A slow upstream is fine; a silent one is
+aborted with `502` so its slot and bytes return to the shared budget instead of
+being held until the downstream client gives up.
 
 The gateway does not transform responses to `HEAD`, bodyless status responses,
 `206 Partial Content` responses, or responses carrying `Content-Range`. This
-preserves empty-body and selected-range semantics. When an eligible `HEAD` or
-`304 Not Modified` could describe a coded `GET`, the gateway keeps
-`Vary: Accept-Encoding` and the valid identity representation length, but omits
-identity-only validators, digests, and range metadata that cannot describe the
-selected cached variant. Whenever preview rewriting or compression changes
-representation bytes, the gateway removes stale `ETag`, `Content-MD5`,
-`Content-Digest`, `Repr-Digest`, legacy `Digest`, and `Accept-Ranges` fields
-rather than forwarding metadata calculated for the upstream bytes.
+preserves empty-body and selected-range semantics. Because nothing is
+transformed on those paths, an eligible `HEAD` or `304 Not Modified` keeps
+`Vary: Accept-Encoding` alongside the identity metadata its retained
+`Content-Length` already describes — including the `ETag` that RFC 9110 requires
+a `304` to carry, and `Accept-Ranges`, which stays honest because ranged `GET`s
+are passed through untransformed. Only `Content-MD5` and `Content-Digest` are
+dropped there: both are defined over the content-coded bytes, which a
+corresponding `GET` may well have compressed.
+
+Whenever preview rewriting or compression actually changes representation bytes,
+the gateway removes stale `ETag`, `Content-MD5`, `Content-Digest`, `Repr-Digest`,
+legacy `Digest`, and `Accept-Ranges` fields rather than forwarding metadata
+calculated for the upstream bytes.
 
 Compressed event streams use the same terminal soft-limit desync recovery,
 authoritative-event hard-limit disconnect, and keepalive behavior as identity

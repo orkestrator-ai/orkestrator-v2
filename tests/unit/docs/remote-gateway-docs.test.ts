@@ -147,8 +147,22 @@ describe("remote gateway documentation", () => {
     expect(normalizedGuide).toContain(
       "does not transform responses to `HEAD`, bodyless status responses, `206 Partial Content` responses, or responses carrying `Content-Range`",
     );
+    // The untransformed bodyless path keeps identity metadata and drops only the
+    // two fields defined over content-coded bytes.
     expect(normalizedGuide).toContain(
-      "`Vary: Accept-Encoding` and the valid identity representation length, but omits identity-only validators, digests, and range metadata",
+      "keeps `Vary: Accept-Encoding` alongside the identity metadata its retained `Content-Length` already describes",
+    );
+    expect(normalizedGuide).toContain(
+      "including the `ETag` that RFC 9110 requires a `304` to carry",
+    );
+    expect(normalizedGuide).toContain(
+      "`Accept-Ranges`, which stays honest because ranged `GET`s are passed through untransformed",
+    );
+    expect(normalizedGuide).toContain(
+      "Only `Content-MD5` and `Content-Digest` are dropped there",
+    );
+    expect(normalizedGuide).toContain(
+      "Whenever preview rewriting or compression actually changes representation bytes",
     );
     for (const field of [
       "`ETag`",
@@ -165,6 +179,9 @@ describe("remote gateway documentation", () => {
       "Proxy `HEAD`, `1xx`, `204`, `304`, `206`, and `Content-Range` responses preserve bodyless/range semantics",
     );
     expect(normalizedMilestoneTwo).toContain(
+      "Untransformed bodyless responses retain `ETag` and `Accept-Ranges` and drop only the content-coded digests",
+    );
+    expect(normalizedMilestoneTwo).toContain(
       "Automated tests and simulator runs do not complete these manual items",
     );
     expect(milestoneTwo).toContain("- [ ] Test through raw tailnet HTTP and Tailscale Serve.");
@@ -173,6 +190,38 @@ describe("remote gateway documentation", () => {
     );
     expect(normalizedMilestoneTwo).toContain(
       "implementation evidence only and do not replace the unchecked tailnet and physical-device manual evidence",
+    );
+  });
+
+  test("documents the stall timeout and the aggregate preview decode budget", async () => {
+    const [guide, milestoneTwo] = await Promise.all([
+      readFile(path.join(root, "docs", "remote-gateway.md"), "utf8"),
+      readFile(path.join(root, "docs", "efficiency", "milestone-2.md"), "utf8"),
+    ]);
+    const normalizedGuide = guide.replace(/\s+/g, " ");
+    const normalizedMilestoneTwo = milestoneTwo.replace(/\s+/g, " ");
+
+    expect(normalizedGuide).toContain(
+      "subject to a 30 second idle timeout, reset by every chunk received",
+    );
+    expect(normalizedGuide).toContain(
+      "A slow upstream is fine; a silent one is aborted with `502`",
+    );
+    expect(normalizedGuide).toContain(
+      "charged per chunk against a shared 64 MiB aggregate decode budget",
+    );
+    expect(normalizedGuide).toContain(
+      "this bounds concurrency, which the per-request limit alone does not",
+    );
+
+    expect(normalizedMilestoneTwo).toContain(
+      "Abort a buffered body whose upstream goes idle past the timeout",
+    );
+    expect(normalizedMilestoneTwo).toContain(
+      "A stalled upstream is aborted at the idle timeout and returns its reservation, while a slow but progressing body outlives that timeout",
+    );
+    expect(normalizedMilestoneTwo).toContain(
+      "Decoded preview bytes return to the shared aggregate budget after success, rewrite rejection, and upstream abort",
     );
   });
 });

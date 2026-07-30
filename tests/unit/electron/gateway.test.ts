@@ -4,6 +4,7 @@ import {
   createServer,
   request as httpRequest,
   type IncomingHttpHeaders,
+  type OutgoingHttpHeaders,
   type Server,
   type ServerResponse,
 } from "node:http";
@@ -20,8 +21,13 @@ import {
 } from "node:zlib";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
+  activeDynamicCompressionCount,
+  AggregateByteBudget,
+  allocateBufferedProxySource,
   appendVary,
   BoundedMetricMap,
+  browserPreviewDecodeSnapshot,
+  canAppendToProxySourceBuffer,
   canBufferBodyChunk,
   canStartDynamicCompression,
   canTransformProxyRepresentation,
@@ -29,10 +35,12 @@ import {
   compressBody,
   compressionModeForListener,
   DynamicCompressionBufferBudget,
+  dynamicProxyCompressionBufferSnapshot,
   type EventClientWriter,
   eventMatchesSubscription,
   GATEWAY_COMMAND_METRIC_MAP_LIMIT,
   GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
+  GATEWAY_COMPRESSION_MODES,
   GatewayMetricsStore,
   canStartStaticFallbackCompression,
   compressStaticFileWithinLimits,
@@ -40,6 +48,7 @@ import {
   isCompressibleContentType,
   isDynamicCompressionSizeEligible,
   loadOrCreateGatewayToken,
+  MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES,
   MAX_BUFFERED_BODY_CHUNKS,
   MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS,
   MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
@@ -58,6 +67,7 @@ import {
   negotiateEncoding,
   OrkestratorGateway,
   parseEventSubscriptionFilter,
+  parseGatewayCompressionMode,
   parseStrictContentLengthHeader,
   prepareCompressedBody,
   readStaticFileWithinLimit,
@@ -68,6 +78,9 @@ import {
   rewriteBrowserPreviewBody,
   selectTailscaleBindAddress,
   settlePreparedBodyResponse,
+  shouldAbandonBufferedProxyBody,
+  stripCodedContentHeaders,
+  stripTransformedRepresentationHeaders,
   truncateUtf8,
 } from "../../../apps/backend/src/gateway";
 import { createCommandRegistry } from "../../../apps/backend/src/core/commands";
@@ -486,7 +499,17 @@ describe("remote gateway", () => {
     expect(canBufferBodyChunk(1, 1, 1, 1)).toBe(false);
     expect(canBufferBodyChunk(0, MAX_BUFFERED_BODY_CHUNKS - 1, 1, 1)).toBe(true);
     expect(canBufferBodyChunk(0, MAX_BUFFERED_BODY_CHUNKS, 1, 1)).toBe(false);
+    expect(canBufferBodyChunk(0, 0, 0, 0)).toBe(true);
     expect(canBufferBodyChunk(-1, 0, 1, 1)).toBe(false);
+    expect(canBufferBodyChunk(0, -1, 1, 1)).toBe(false);
+    expect(canBufferBodyChunk(0, 0, -1, 1)).toBe(false);
+    expect(canBufferBodyChunk(0, 0, 1, -1)).toBe(false);
+    expect(canBufferBodyChunk(Number.NaN, 0, 1, 1)).toBe(false);
+    expect(canBufferBodyChunk(0, Number.NaN, 1, 1)).toBe(false);
+    expect(canBufferBodyChunk(0, 0, Number.NaN, 1)).toBe(false);
+    expect(canBufferBodyChunk(0, 0, 1, Number.NaN)).toBe(false);
+    expect(canBufferBodyChunk(0.5, 0, 1, 1)).toBe(false);
+    expect(canBufferBodyChunk(0, 0, 1, Number.MAX_SAFE_INTEGER + 1)).toBe(false);
 
     expect(responseStatusCanHaveBody("GET", 200)).toBe(true);
     expect(responseStatusCanHaveBody("HEAD", 200)).toBe(false);
@@ -525,7 +548,22 @@ describe("remote gateway", () => {
     });
     releaseSecond?.();
     expect(budget.snapshot()).toEqual({ activeCount: 0, activeBytes: 0 });
-    expect(budget.tryReserve(COMPRESSION_MIN_BYTES - 1)).toBeNull();
+    // Admission is decided against this instance's own ceilings. Compression
+    // eligibility is the caller's concern, so a sub-threshold size that fits the
+    // budget is admitted rather than silently refused.
+    const releaseSmall = budget.tryReserve(COMPRESSION_MIN_BYTES - 1);
+    expect(releaseSmall).not.toBeNull();
+    expect(budget.snapshot().activeBytes).toBe(COMPRESSION_MIN_BYTES - 1);
+    releaseSmall?.();
+    const tinyBudget = new DynamicCompressionBufferBudget(1, 512);
+    const releaseTiny = tinyBudget.tryReserve(256);
+    expect(releaseTiny).not.toBeNull();
+    expect(tinyBudget.tryReserve(257)).toBeNull();
+    releaseTiny?.();
+    expect(budget.tryReserve(-1)).toBeNull();
+    expect(budget.tryReserve(Number.NaN)).toBeNull();
+    expect(budget.tryReserve(Number.MAX_SAFE_INTEGER + 1)).toBeNull();
+    expect(budget.snapshot()).toEqual({ activeCount: 0, activeBytes: 0 });
 
     const productionBudget = new DynamicCompressionBufferBudget();
     const releaseLarge = productionBudget.tryReserve(MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES);
@@ -548,6 +586,117 @@ describe("remote gateway", () => {
     response.emit("finish");
     response.emit("close");
     expect(responseBudget.snapshot()).toEqual({ activeCount: 0, activeBytes: 0 });
+  });
+
+  test("bounds incrementally sized decode buffers with an aggregate byte budget", () => {
+    const budget = new AggregateByteBudget(1024);
+    expect(budget.tryAcquire(512)).toBe(true);
+    expect(budget.tryAcquire(512)).toBe(true);
+    expect(budget.snapshot()).toEqual({ activeBytes: 1024 });
+    expect(budget.tryAcquire(1)).toBe(false);
+    expect(budget.tryAcquire(0)).toBe(true);
+    expect(budget.tryAcquire(-1)).toBe(false);
+    expect(budget.tryAcquire(Number.NaN)).toBe(false);
+    expect(budget.tryAcquire(1.5)).toBe(false);
+    expect(budget.snapshot()).toEqual({ activeBytes: 1024 });
+
+    budget.release(512);
+    expect(budget.snapshot()).toEqual({ activeBytes: 512 });
+    // Releases that cannot describe real bytes must not credit the budget.
+    budget.release(0);
+    budget.release(-1);
+    budget.release(Number.NaN);
+    expect(budget.snapshot()).toEqual({ activeBytes: 512 });
+    // Over-releasing floors at zero rather than manufacturing capacity.
+    budget.release(4096);
+    expect(budget.snapshot()).toEqual({ activeBytes: 0 });
+    expect(budget.tryAcquire(1024)).toBe(true);
+  });
+
+  test("guards the buffered proxy source allocation, bound, and abandon decision", () => {
+    const allocated = allocateBufferedProxySource(COMPRESSION_MIN_BYTES);
+    expect(allocated?.byteLength).toBe(COMPRESSION_MIN_BYTES);
+    expect(allocateBufferedProxySource(0)?.byteLength).toBe(0);
+    // An allocation the host cannot satisfy surfaces as null so the caller can
+    // release its reservation and fail the request instead of throwing inside
+    // an event callback.
+    expect(allocateBufferedProxySource(Number.MAX_SAFE_INTEGER)).toBeNull();
+    expect(allocateBufferedProxySource(-1)).toBeNull();
+    expect(allocateBufferedProxySource(Number.NaN)).toBeNull();
+    expect(allocateBufferedProxySource(1.5)).toBeNull();
+
+    expect(canAppendToProxySourceBuffer(0, 1024, 1024)).toBe(true);
+    expect(canAppendToProxySourceBuffer(1024, 0, 1024)).toBe(true);
+    expect(canAppendToProxySourceBuffer(1024, 1, 1024)).toBe(false);
+    expect(canAppendToProxySourceBuffer(0, 1025, 1024)).toBe(false);
+    expect(canAppendToProxySourceBuffer(-1, 1, 1024)).toBe(false);
+    expect(canAppendToProxySourceBuffer(0, -1, 1024)).toBe(false);
+    expect(canAppendToProxySourceBuffer(0, 1, -1)).toBe(false);
+    expect(canAppendToProxySourceBuffer(Number.NaN, 1, 1024)).toBe(false);
+    expect(canAppendToProxySourceBuffer(0, Number.NaN, 1024)).toBe(false);
+    expect(canAppendToProxySourceBuffer(0, 1, Number.NaN)).toBe(false);
+
+    expect(shouldAbandonBufferedProxyBody(false, false, false)).toBe(false);
+    expect(shouldAbandonBufferedProxyBody(true, false, false)).toBe(true);
+    expect(shouldAbandonBufferedProxyBody(false, true, false)).toBe(true);
+    expect(shouldAbandonBufferedProxyBody(false, false, true)).toBe(true);
+    expect(shouldAbandonBufferedProxyBody(true, true, true)).toBe(true);
+  });
+
+  test("separates content-coded metadata from full transformed-representation stripping", () => {
+    const upstream = () => ({
+      etag: "\"upstream\"",
+      "content-md5": "identity-md5",
+      "content-digest": "sha-256=:content:",
+      "repr-digest": "sha-256=:representation:",
+      digest: "sha-256=identity",
+      "accept-ranges": "bytes",
+      "content-type": "text/plain",
+    });
+
+    // Nothing was transformed: only the fields defined over content-coded bytes
+    // are dropped, so the response still describes the identity representation.
+    const coded = upstream();
+    stripCodedContentHeaders(coded);
+    expect(coded).toEqual({
+      etag: "\"upstream\"",
+      "repr-digest": "sha-256=:representation:",
+      digest: "sha-256=identity",
+      "accept-ranges": "bytes",
+      "content-type": "text/plain",
+    });
+
+    // Bytes were replaced: every validator and digest calculated over them goes,
+    // and the gateway cannot serve ranges over what it produced on the fly.
+    const transformed = upstream();
+    stripTransformedRepresentationHeaders(transformed);
+    expect(transformed).toEqual({ "content-type": "text/plain" });
+
+    // Both are safe on headers that never carried the fields.
+    const bare: OutgoingHttpHeaders = { "content-type": "text/plain" };
+    stripCodedContentHeaders(bare);
+    stripTransformedRepresentationHeaders(bare);
+    expect(bare).toEqual({ "content-type": "text/plain" });
+  });
+
+  test("parses gateway compression modes and rejects unknown values", () => {
+    expect([...GATEWAY_COMPRESSION_MODES]).toEqual(["off", "body", "on"]);
+    for (const mode of GATEWAY_COMPRESSION_MODES) {
+      expect(parseGatewayCompressionMode(mode)).toBe(mode);
+    }
+    expect(parseGatewayCompressionMode(" body ")).toBe("body");
+    expect(parseGatewayCompressionMode("BODY")).toBe("body");
+    // An absent value leaves the caller's default in place; anything present but
+    // unrecognized is a configuration error rather than a silent fallback.
+    expect(parseGatewayCompressionMode(undefined)).toBeUndefined();
+    for (const invalid of ["", "gzip", "true", "  "]) {
+      expect(() => parseGatewayCompressionMode(invalid)).toThrow(
+        "Expected one of off, body, on",
+      );
+    }
+    expect(() => parseGatewayCompressionMode("gzip", "ORKESTRATOR_GATEWAY_COMPRESSION")).toThrow(
+      "Invalid ORKESTRATOR_GATEWAY_COMPRESSION: gzip",
+    );
   });
 
   test("falls back for non-beneficial and failed codecs and caps concurrent codec jobs", async () => {
@@ -654,6 +803,41 @@ describe("remote gateway", () => {
     );
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(destroy.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+
+    // A client that vanished while the codec was running must not be written to:
+    // the prepared body is discarded rather than pushed at a dead socket.
+    const destroyedWriteHead = mock(() => undefined);
+    const destroyedEnd = mock(() => undefined);
+    const destroyedResponse = {
+      headersSent: false,
+      destroyed: true,
+      setHeader: mock(() => undefined),
+      getHeader: mock(() => undefined),
+      removeHeader: mock(() => undefined),
+      writeHead: destroyedWriteHead,
+      end: destroyedEnd,
+      destroy: mock(() => undefined),
+    } as unknown as ServerResponse;
+    let settledPreparation = false;
+    settlePreparedBodyResponse(
+      destroyedResponse,
+      200,
+      { "content-type": "text/plain" },
+      source,
+      Promise.resolve({
+        body: Buffer.from("compressed"),
+        encoding: "gzip",
+        variesByEncoding: true,
+      }).finally(() => {
+        settledPreparation = true;
+      }),
+    );
+    await waitUntil(() => settledPreparation, "Body preparation never settled");
+    // One extra turn so a stray write would have landed before we assert.
+    await Promise.resolve();
+    expect(destroyedWriteHead).not.toHaveBeenCalled();
+    expect(destroyedEnd).not.toHaveBeenCalled();
+    expect(destroyedResponse.destroy).not.toHaveBeenCalled();
   });
 
   test("keeps small dynamic bodies identity while allowing static compression on browser listeners", async () => {
@@ -3869,12 +4053,15 @@ describe("remote gateway", () => {
     expect(notModified.status).toBe(304);
     expect(notModified.rawBody.byteLength).toBe(0);
     expect(notModified.headers["content-length"]).toBe("4096");
-    expect(notModified.headers.etag).toBeUndefined();
+    // RFC 9110 requires a 304 to carry the ETag a 200 would have sent, and the
+    // gateway transforms nothing here, so identity-representation metadata is
+    // preserved. Only the content-coded digests are dropped.
+    expect(notModified.headers.etag).toBe("\"cached\"");
+    expect(notModified.headers["accept-ranges"]).toBe("bytes");
+    expect(notModified.headers["repr-digest"]).toBe("sha-256=:identity:");
+    expect(notModified.headers.digest).toBe("sha-256=identity");
     expect(notModified.headers["content-md5"]).toBeUndefined();
     expect(notModified.headers["content-digest"]).toBeUndefined();
-    expect(notModified.headers["repr-digest"]).toBeUndefined();
-    expect(notModified.headers.digest).toBeUndefined();
-    expect(notModified.headers["accept-ranges"]).toBeUndefined();
     expect(notModified.headers["content-encoding"]).toBeUndefined();
     expect(notModified.headers.vary).toContain("Accept-Encoding");
 
@@ -3945,6 +4132,13 @@ describe("remote gateway", () => {
       request.on("error", reject);
       request.end();
     });
+    // Every buffered body needs a codec slot from a separate pool of the same
+    // size once it completes. Assert the pool is idle up front so a slot leaked
+    // by an earlier test fails here instead of silently flipping one of the
+    // expected gzip responses to identity.
+    expect(activeDynamicCompressionCount()).toBe(0);
+    expect(dynamicProxyCompressionBufferSnapshot()).toEqual({ activeCount: 0, activeBytes: 0 });
+
     const completed = Array.from(
       { length: MAX_CONCURRENT_DYNAMIC_COMPRESSIONS + 1 },
       () => startRequest(),
@@ -3958,6 +4152,13 @@ describe("remote gateway", () => {
       "Overflow proxy response did not begin streaming identity",
     );
     expect(openedHeaders[0]?.["content-encoding"]).toBeUndefined();
+    // The reserved byte total must be the sum of the declared Content-Lengths,
+    // which is what proves the admission call is wired to the declared size
+    // rather than to some other eligible constant.
+    expect(dynamicProxyCompressionBufferSnapshot()).toEqual({
+      activeCount: MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
+      activeBytes: MAX_CONCURRENT_DYNAMIC_COMPRESSIONS * Buffer.byteLength(body),
+    });
 
     for (const response of parkedResponses) {
       response.end(body.slice(Math.floor(body.length / 2)));
@@ -3977,6 +4178,112 @@ describe("remote gateway", () => {
     });
     expect(recovered.headers["content-encoding"]).toBe("gzip");
     expect(decodeResponseBody(recovered)).toBe(body);
+    await waitUntil(
+      () => dynamicProxyCompressionBufferSnapshot().activeCount === 0,
+      "Proxy buffer reservations were not all returned",
+    );
+    expect(dynamicProxyCompressionBufferSnapshot()).toEqual({ activeCount: 0, activeBytes: 0 });
+  });
+
+  test("aborts a buffered proxy body that stalls and returns its reservation", async () => {
+    const recoveryBody = "stall recovery ".repeat(256);
+    const stalled: ServerResponse[] = [];
+    const target = createServer((request, response) => {
+      if (request.url === "/recovery") {
+        response.writeHead(200, {
+          "content-type": "text/plain; charset=utf-8",
+          "content-length": Buffer.byteLength(recoveryBody),
+        });
+        response.end(recoveryBody);
+        return;
+      }
+      // Headers and a first chunk arrive, then the upstream goes silent forever.
+      response.writeHead(200, {
+        "content-type": "text/plain; charset=utf-8",
+        "content-length": 8192,
+      });
+      response.write("partial");
+      stalled.push(response);
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const address = target.address();
+    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
+    const { info } = await startGateway({
+      compression: "body",
+      proxyBodyIdleTimeoutMs: 150,
+    });
+    const headers = {
+      authorization: `Bearer ${info.token}`,
+      "accept-encoding": "gzip",
+    };
+    const endpoint = (path: string) => (
+      `${info.url}__orkestrator/proxy/loopback/${address.port}${path}`
+    );
+
+    const stalledResult = await requestUrl(endpoint("/stall"), { headers });
+    expect(stalledResult.status).toBe(502);
+    expect(stalledResult.body).toContain("stalled for 150 ms");
+    expect(stalled).toHaveLength(1);
+
+    // The stalled request must not have left its slot or its bytes behind.
+    await waitUntil(
+      () => dynamicProxyCompressionBufferSnapshot().activeCount === 0,
+      "Stalled proxy body did not release its reservation",
+    );
+    expect(dynamicProxyCompressionBufferSnapshot()).toEqual({ activeCount: 0, activeBytes: 0 });
+
+    const recovery = await requestUrl(endpoint("/recovery"), { headers });
+    expect(recovery.status).toBe(200);
+    expect(recovery.headers["content-encoding"]).toBe("gzip");
+    expect(decodeResponseBody(recovery)).toBe(recoveryBody);
+  });
+
+  test("keeps a slow but progressing proxy body alive past the idle timeout", async () => {
+    const chunk = "slow drip ".repeat(64);
+    const chunkCount = 6;
+    const body = chunk.repeat(chunkCount);
+    const target = createServer((_request, response) => {
+      response.writeHead(200, {
+        "content-type": "text/plain; charset=utf-8",
+        "content-length": Buffer.byteLength(body),
+      });
+      let written = 0;
+      // Each gap is under the idle timeout but the total run is well over it,
+      // so this only succeeds if every chunk rearms the timer.
+      const writeNext = () => {
+        response.write(chunk);
+        written += 1;
+        if (written === chunkCount) {
+          response.end();
+          return;
+        }
+        setTimeout(writeNext, 40);
+      };
+      setTimeout(writeNext, 40);
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const address = target.address();
+    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
+    const { info } = await startGateway({
+      compression: "body",
+      proxyBodyIdleTimeoutMs: 120,
+    });
+
+    const result = await requestUrl(
+      `${info.url}__orkestrator/proxy/loopback/${address.port}/slow`,
+      {
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "accept-encoding": "gzip",
+        },
+      },
+    );
+    expect(result.status).toBe(200);
+    expect(result.headers["content-encoding"]).toBe("gzip");
+    expect(decodeResponseBody(result)).toBe(body);
+    expect(dynamicProxyCompressionBufferSnapshot()).toEqual({ activeCount: 0, activeBytes: 0 });
   });
 
   test("streams ineligible proxy bodies as identity without changing their metadata", async () => {
@@ -3998,6 +4305,11 @@ describe("remote gateway", () => {
           "content-type": "text/plain; charset=utf-8",
           "content-length": Buffer.byteLength(large),
           etag: "\"head\"",
+          "content-md5": "identity-md5",
+          "content-digest": "sha-256=:identity:",
+          "repr-digest": "sha-256=:identity:",
+          digest: "sha-256=identity",
+          "accept-ranges": "bytes",
         });
         response.end(large);
         return;
@@ -4042,7 +4354,18 @@ describe("remote gateway", () => {
     expect(head.rawBody.byteLength).toBe(0);
     expect(head.headers["content-length"]).toBe(String(Buffer.byteLength(large)));
     expect(head.headers["content-encoding"]).toBeUndefined();
-    expect(head.headers.etag).toBeUndefined();
+    // The gateway transforms nothing for a HEAD, so the identity metadata it
+    // reports stays internally consistent with the identity Content-Length it
+    // also reports. Accept-Ranges is honest because ranged GETs are passed
+    // through untransformed.
+    expect(head.headers.etag).toBe("\"head\"");
+    expect(head.headers["accept-ranges"]).toBe("bytes");
+    expect(head.headers["repr-digest"]).toBe("sha-256=:identity:");
+    expect(head.headers.digest).toBe("sha-256=identity");
+    // Both of these are defined over the content-coded bytes, which a
+    // corresponding GET may well have compressed.
+    expect(head.headers["content-md5"]).toBeUndefined();
+    expect(head.headers["content-digest"]).toBeUndefined();
     expect(head.headers.vary).toContain("Accept-Encoding");
 
     const chunked = await requestUrl(endpoint("/chunked"), { headers });
@@ -4568,6 +4891,72 @@ describe("remote gateway", () => {
     );
     expect(result.status).toBe(502);
     expect(result.body).toContain("exceeded 8388608 rewritten bytes");
+    // Even the rejected-at-rewrite path must hand its decoded bytes back.
+    await waitUntil(
+      () => browserPreviewDecodeSnapshot().activeBytes === 0,
+      "Rejected preview rewrite did not release its decoded bytes",
+    );
+  });
+
+  test("returns decoded preview bytes to the shared budget on success and failure", async () => {
+    const html = "<a href=\"/page\">link</a>".repeat(64);
+    const target = createServer((request, response) => {
+      if (request.url === "/abort.html") {
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "content-length": Buffer.byteLength(html) * 2,
+        });
+        response.write(html);
+        setTimeout(() => response.socket?.destroy(), 10);
+        return;
+      }
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-length": Buffer.byteLength(html),
+      });
+      response.end(html);
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const address = target.address();
+    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
+    const { info } = await startGateway({ compression: "body" });
+    const headers = {
+      authorization: `Bearer ${info.token}`,
+      origin: "null",
+      "accept-encoding": "gzip",
+    };
+    const endpoint = (path: string) => (
+      `${info.url}__orkestrator/browser/loopback/${address.port}${path}`
+    );
+
+    expect(browserPreviewDecodeSnapshot()).toEqual({ activeBytes: 0 });
+    // The aggregate ceiling has to leave room for real preview traffic; a single
+    // per-request limit's worth must be a small fraction of it.
+    expect(MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES).toBeGreaterThan(8 * 1024 * 1024);
+
+    const rewritten = await requestUrl(endpoint("/ok.html"), { headers });
+    expect(rewritten.status).toBe(200);
+    expect(decodeResponseBody(rewritten)).toContain(
+      `/__orkestrator/browser/loopback/${address.port}/page`,
+    );
+    await waitUntil(
+      () => browserPreviewDecodeSnapshot().activeBytes === 0,
+      "Successful preview did not release its decoded bytes",
+    );
+
+    const aborted = await requestUrl(endpoint("/abort.html"), { headers });
+    expect(aborted.status).toBe(502);
+    await waitUntil(
+      () => browserPreviewDecodeSnapshot().activeBytes === 0,
+      "Aborted preview did not release its decoded bytes",
+    );
+
+    // A budget that never returned bytes would eventually refuse everything, so
+    // prove the path still works after both a success and a failure.
+    const afterRecovery = await requestUrl(endpoint("/again.html"), { headers });
+    expect(afterRecovery.status).toBe(200);
+    expect(browserPreviewDecodeSnapshot()).toEqual({ activeBytes: 0 });
   });
 
   test("allows null-origin browser preview preflights and forwards non-simple requests", async () => {

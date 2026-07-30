@@ -74,13 +74,21 @@ Primary files:
       a shared 64 MiB budget before buffering; stream identity on saturation
       and hold each reservation until downstream finish/close or another
       success, failure, abort, or disconnect terminal path.
+- [x] Abort a buffered body whose upstream goes idle past the timeout so its
+      reservation returns instead of being pinned until the client gives up.
 - [x] Leave `HEAD`, bodyless status, `206 Partial Content`, and
       `Content-Range` responses untransformed.
 - [x] Remove stale `ETag`, `Content-MD5`, `Content-Digest`, `Repr-Digest`,
       legacy `Digest`, and `Accept-Ranges` fields whenever rewriting or
       compression changes representation bytes.
+- [x] On untransformed bodyless responses remove only `Content-MD5` and
+      `Content-Digest`, which describe content-coded bytes; retain `ETag`,
+      `Accept-Ranges`, `Repr-Digest`, and legacy `Digest`, which describe the
+      identity representation the retained `Content-Length` also describes.
 - [x] Do not double-encode already encoded upstream bodies.
-- [x] Keep browser-preview rewriting as a separate decoded path.
+- [x] Keep browser-preview rewriting as a separate decoded path, with decoded
+      bytes charged per chunk against a shared aggregate budget so preview
+      concurrency is bounded rather than only per-request.
 
 ### Rollout
 
@@ -113,10 +121,19 @@ Primary files:
       preserve bodyless/range semantics without gateway compression.
 - [x] Rewritten or compressed responses do not retain upstream validators,
       content digests, or range support for different representation bytes.
+- [x] Untransformed bodyless responses retain `ETag` and `Accept-Ranges` and
+      drop only the content-coded digests.
+- [x] A stalled upstream is aborted at the idle timeout and returns its
+      reservation, while a slow but progressing body outlives that timeout.
+- [x] Decoded preview bytes return to the shared aggregate budget after
+      success, rewrite rejection, and upstream abort.
 - [x] Exact threshold and maximum-size boundaries, non-beneficial output,
       codec failure, and admission fallback are covered.
 - [x] Dynamic response rejection, compressor error, proxy abort, `no-transform`,
       malformed length, and preview chunk/post-rewrite limits are covered.
+- [x] Source-buffer allocation failure, the declared-length bound, the abandon
+      decision, budget input validation, and compression-mode parsing are
+      covered directly.
 
 ## Manual verification
 
@@ -189,12 +206,30 @@ Implementation evidence recorded on 2026-07-30:
   `WKWebView` evidence.
 - Proxy body admission reserves one of eight buffer slots and the declared
   source size against a 64 MiB aggregate budget before collection. Saturated
-  responses stream identity, and automated success/error/abort/disconnect tests
-  verify that reservations are returned.
+  responses stream identity, and automated
+  success/error/abort/disconnect/stall tests verify that reservations are
+  returned. A saturation test asserts the reserved byte total equals the sum of
+  the declared `Content-Length` values, which is what proves admission is wired
+  to the declared size rather than to another eligible constant.
+- A buffered body whose upstream goes silent is aborted at a 30 second idle
+  timeout, configurable per gateway for tests. Automated coverage coupled with a
+  slow-but-progressing case confirms the timer is rearmed by every chunk, so the
+  timeout bounds silence rather than duration.
+- Decoded browser-preview bytes are charged per chunk against a shared 64 MiB
+  aggregate budget and returned when the downstream response settles. This is
+  the concurrency bound the per-request limit did not provide; automated tests
+  cover the success, rewrite-rejection, and upstream-abort return paths.
+- Untransformed bodyless responses keep the metadata that describes the identity
+  representation their retained `Content-Length` also describes. `ETag` is
+  retained because RFC 9110 requires a `304` to carry it, and `Accept-Ranges`
+  because ranged `GET`s are passed through untransformed; only `Content-MD5` and
+  `Content-Digest`, which are defined over content-coded bytes, are dropped.
 - Automated validation covers bodyless and ranged proxy semantics, transformed
-  metadata removal, exact compression boundaries, fallbacks, error paths, and
-  preview limits. These results are implementation evidence only and do not
-  replace the unchecked tailnet and physical-device manual evidence above.
+  metadata removal, exact compression boundaries, fallbacks, error paths,
+  preview limits, source-buffer allocation failure, the declared-length bound,
+  and compression-mode parsing. These results are implementation evidence only
+  and do not replace the unchecked tailnet and physical-device manual evidence
+  above.
 - Validation passed: backend and web typechecks, focused gateway and
   remote-gateway documentation tests, all four repository test groups, the
   Codex protocol lockfile check, and the iOS simulator suite. The full test

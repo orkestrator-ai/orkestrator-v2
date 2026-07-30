@@ -87,6 +87,7 @@ const {
   shutdownDiffStatsTracking,
   shutdownLocalServers,
   shutdownPrMonitorTracking,
+  toClientEnvironment,
 } = await import("../../../apps/backend/src/core/commands");
 const { CommandFailedError } = await import("../../../apps/backend/src/core/shell");
 
@@ -1160,7 +1161,10 @@ exit 42
       expect(result.name).toBe("20260415-123456");
       expect(result.branch).toBe("20260415-123456");
       expect(result.initialPrompt).toBeUndefined();
-      expect(result.pendingRenamePrompt).toBe("Build task\n\nShip the feature\n\nAll checks green");
+      expect(result.pendingRenamePrompt).toBeUndefined();
+      expect(
+        (await context.storage.getEnvironment(result.id))?.pendingRenamePrompt,
+      ).toBe("Build task\n\nShip the feature\n\nAll checks green");
       await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
     });
   });
@@ -1870,6 +1874,167 @@ printf '%s\\n' '{}' > "$out"
     expect(updates).toHaveLength(0);
   });
 
+  test("keeps detail reads authoritative while projecting renderer mutation responses", async () => {
+    const environment = createEnvironment({
+      status: "running",
+      environmentType: "local",
+      opencodePid: 40,
+      claudeBridgePid: 41,
+      codexBridgePid: 42,
+      pendingRenamePrompt: "backend-owned rename prompt",
+      pendingAgentLaunch: true,
+      initialAgentModel: "launch-model",
+      initialReasoningEffort: "high",
+      initialPromptAttachments: [{
+        id: "image-1",
+        name: "private.png",
+        base64Data: "cHJpdmF0ZQ==",
+      }],
+      agentActivitySources: {
+        frontend: {
+          state: "working",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+      frontendAgentActivityObservers: {
+        observer: {
+          state: "working",
+          updatedAt: new Date().toISOString(),
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      },
+    });
+    const { context } = createContext(environment);
+    const storage = context.storage as unknown as {
+      reorderEnvironments: ReturnType<typeof mock>;
+      acknowledgeStartupAgentSession: ReturnType<typeof mock>;
+      setEnvironmentUnread: ReturnType<typeof mock>;
+    };
+    storage.reorderEnvironments = mock(async () => [environment]);
+    storage.acknowledgeStartupAgentSession = mock(async () => environment);
+    storage.setEnvironmentUnread = mock(async () => environment);
+    const commands = createCommandRegistry();
+    const backendOnlyFields = [
+      "opencodePid",
+      "claudeBridgePid",
+      "codexBridgePid",
+      "claudeModelCatalog",
+      "agentActivitySources",
+      "frontendAgentActivityObservers",
+      "pendingRenamePrompt",
+      "initialPromptAttachments",
+    ];
+    const expectProjected = (value: unknown) => {
+      for (const field of backendOnlyFields) {
+        expect(value).not.toHaveProperty(field);
+      }
+    };
+
+    const detail = await commands.get("get_environment")?.(
+      { environmentId: environment.id },
+      context,
+    );
+    expect(detail).toBe(environment);
+    expect(detail).toHaveProperty("initialPromptAttachments");
+    expect(detail).toHaveProperty("pendingRenamePrompt");
+
+    const reordered = await commands.get("reorder_environments")?.(
+      { projectId: environment.projectId, environmentIds: [environment.id] },
+      context,
+    ) as unknown[];
+    expectProjected(reordered[0]);
+
+    const responses = [
+      await commands.get("sync_environment_status")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+      await commands.get("rename_environment")?.(
+        { environmentId: environment.id, name: "renamed" },
+        context,
+      ),
+      await commands.get("set_environment_pr")?.(
+        {
+          environmentId: environment.id,
+          prUrl: "https://example.invalid/pull/1",
+          prState: "open",
+          hasMergeConflicts: false,
+        },
+        context,
+      ),
+      await commands.get("set_environment_setup_complete")?.(
+        { environmentId: environment.id, complete: false },
+        context,
+      ),
+      await commands.get("update_port_mappings")?.(
+        { environmentId: environment.id, portMappings: [] },
+        context,
+      ),
+      await commands.get("update_environment_agent_settings")?.(
+        {
+          environmentId: environment.id,
+          pendingAgentLaunch: true,
+          initialPromptAttachments: environment.initialPromptAttachments,
+        },
+        context,
+      ),
+      await commands.get("set_environment_pending_agent_launch")?.(
+        { environmentId: environment.id, pending: true },
+        context,
+      ),
+      await commands.get("acknowledge_startup_agent_session")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+      await commands.get("set_environment_initial_prompt")?.(
+        {
+          environmentId: environment.id,
+          initialPrompt: "updated",
+          initialPromptAttachments: environment.initialPromptAttachments,
+        },
+        context,
+      ),
+      await commands.get("update_environment_allowed_domains")?.(
+        { environmentId: environment.id, domains: ["example.invalid"] },
+        context,
+      ),
+      await commands.get("set_environment_unread")?.(
+        { environmentId: environment.id, unread: false },
+        context,
+      ),
+    ];
+    for (const response of responses) expectProjected(response);
+  });
+
+  test("projects launch-only fields only while a launch remains pending", () => {
+    const environment = createEnvironment({
+      pendingAgentLaunch: false,
+      initialAgentModel: "launch-model",
+      initialReasoningEffort: "high",
+    });
+    expect(toClientEnvironment(environment)).not.toHaveProperty("initialAgentModel");
+    expect(toClientEnvironment(environment)).not.toHaveProperty("initialReasoningEffort");
+
+    environment.pendingAgentLaunch = true;
+    expect(toClientEnvironment(environment)).toMatchObject({
+      initialAgentModel: "launch-model",
+      initialReasoningEffort: "high",
+    });
+
+    environment.pendingAgentLaunch = false;
+    environment.startupAgentSession = {
+      tabId: "startup-agent",
+      agent: "codex",
+      style: "native",
+      status: "starting",
+      startedAt: new Date().toISOString(),
+    };
+    expect(toClientEnvironment(environment)).toMatchObject({
+      initialAgentModel: "launch-model",
+      initialReasoningEffort: "high",
+    });
+  });
+
   test("records only newer environment activity timestamps", async () => {
     const environment = createEnvironment({
       lastActivityAt: "2026-07-22T10:00:00.000Z",
@@ -2533,7 +2698,7 @@ exit 1
 `, async () => {
       const result = await commands.get("run_environment_setup")?.({ environmentId: environment.id }, context);
 
-      expect(result).toBe(environment);
+      expect(result).toEqual(environment);
       expect(emitted).toEqual([]);
     });
   });
@@ -6383,6 +6548,36 @@ exit 1
       deletions: 0,
       status: "M",
     })]);
+
+    const changedSnapshot = await commands.get("get_local_git_status")?.(
+      {
+        worktreePath: worktree,
+        targetBranch: creationCommit,
+        includeUncommitted: false,
+        knownDigest: "stale",
+      },
+      createContext(createEnvironment()).context,
+    ) as {
+      unchanged: boolean;
+      digest: string;
+      value?: unknown;
+    };
+    expect(changedSnapshot).toMatchObject({
+      unchanged: false,
+      value: changes,
+    });
+    await expect(commands.get("get_local_git_status")?.(
+      {
+        worktreePath: worktree,
+        targetBranch: creationCommit,
+        includeUncommitted: false,
+        knownDigest: changedSnapshot.digest,
+      },
+      createContext(createEnvironment()).context,
+    )).resolves.toEqual({
+      unchanged: true,
+      digest: changedSnapshot.digest,
+    });
   });
 
   test("reads local branch files from origin and returns null for files missing in the base", async () => {
@@ -7667,6 +7862,34 @@ exit 1
         { containerId: "container-1", targetBranch: "main" },
         context,
       )).resolves.toEqual([expect.objectContaining({ path: "tracked.txt", status: "M" })]);
+
+      const changedSnapshot = await commands.get("get_git_status")?.(
+        {
+          containerId: "container-1",
+          targetBranch: "main",
+          knownDigest: "stale",
+        },
+        context,
+      ) as {
+        unchanged: boolean;
+        digest: string;
+        value?: unknown;
+      };
+      expect(changedSnapshot).toMatchObject({
+        unchanged: false,
+        value: [expect.objectContaining({ path: "tracked.txt", status: "M" })],
+      });
+      await expect(commands.get("get_git_status")?.(
+        {
+          containerId: "container-1",
+          targetBranch: "main",
+          knownDigest: changedSnapshot.digest,
+        },
+        context,
+      )).resolves.toEqual({
+        unchanged: true,
+        digest: changedSnapshot.digest,
+      });
 
       const dockerExec = await fs.readFile(logs.exec, "utf8");
       expect(dockerExec).toContain("git rev-parse --is-inside-work-tree");
@@ -14341,6 +14564,106 @@ test("build pipeline point reads omit unchanged transcripts and return tail patc
       revision: 3,
       messages: [{ id: "m2-old" }, { id: "m3" }],
     }],
+  });
+
+  expect(await commands.get("get_build_pipeline")?.({
+    pipelineId: record.id,
+    knownRevision: 7,
+    knownSessions: {
+      "session-1": { revision: 3, count: 3 },
+    },
+  }, context)).toMatchObject({
+    unchanged: false,
+    record: {
+      revision: 8,
+      snapshot: {
+        sessions: [{ sessionKey: "session-1", messageRevision: 3 }],
+      },
+    },
+    messagePatches: [],
+  });
+
+  expect(await commands.get("get_build_pipeline")?.({
+    pipelineId: record.id,
+    knownRevision: 7,
+    knownSessions: {
+      "session-1": { revision: 2, count: 99 },
+    },
+  }, context)).toMatchObject({
+    unchanged: false,
+    messagePatches: [{
+      sessionKey: "session-1",
+      startIndex: 0,
+      revision: 3,
+      messages: [{ id: "m1" }, { id: "m2-old" }, { id: "m3" }],
+    }],
+  });
+
+  expect(await commands.get("get_build_pipeline")?.({
+    pipelineId: record.id,
+    knownRevision: "8",
+  }, context)).toBe(record);
+
+  context.storage.getBuildPipeline = mock(async () => null);
+  expect(await commands.get("get_build_pipeline")?.({
+    pipelineId: "missing",
+    knownRevision: 1,
+    knownSessions: {},
+  }, context)).toBeNull();
+});
+
+test("build pipeline list reads return only changed records and retain deletion ids", async () => {
+  const environment = createEnvironment();
+  const { context } = createContext(environment);
+  const records = [
+    {
+      version: 2,
+      id: "pipeline-1",
+      projectId: environment.projectId,
+      environmentId: environment.id,
+      revision: 2,
+      updatedAt: new Date().toISOString(),
+      snapshot: { id: "pipeline-1" },
+    },
+    {
+      version: 2,
+      id: "pipeline-2",
+      projectId: environment.projectId,
+      environmentId: environment.id,
+      revision: 4,
+      updatedAt: new Date().toISOString(),
+      snapshot: { id: "pipeline-2" },
+    },
+  ];
+  context.storage.listBuildPipelines = mock(async () => records);
+  const commands = createCommandRegistry();
+
+  expect(await commands.get("list_build_pipelines")?.({
+    projectId: environment.projectId,
+  }, context)).toBe(records);
+  expect(await commands.get("list_build_pipelines")?.({
+    projectId: environment.projectId,
+    knownRevisions: [],
+  }, context)).toBe(records);
+  expect(await commands.get("list_build_pipelines")?.({
+    projectId: environment.projectId,
+    knownRevisions: {
+      "pipeline-1": 2,
+      "pipeline-2": 3,
+      "pipeline-deleted": 7,
+    },
+  }, context)).toEqual({
+    ids: ["pipeline-1", "pipeline-2"],
+    records: [records[1]],
+  });
+
+  context.storage.listBuildPipelines = mock(async () => []);
+  expect(await commands.get("list_build_pipelines")?.({
+    projectId: environment.projectId,
+    knownRevisions: { "pipeline-deleted": 7 },
+  }, context)).toEqual({
+    ids: [],
+    records: [],
   });
 });
 

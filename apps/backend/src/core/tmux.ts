@@ -2635,6 +2635,18 @@ type InteractiveTerminalSession = {
   tmux: TmuxSession;
   timer?: unknown;
   lastSnapshot?: string;
+  /**
+   * Invalidates captures that began before a forced restart or resize. A
+   * capture may outlive the operation that superseded it, so attachment alone
+   * is not enough to decide whether its result is still authoritative.
+   */
+  captureGeneration: number;
+  /** Suppresses timer captures while tmux is changing the pane geometry. */
+  captureSuspended: boolean;
+  /** The first capture after a geometry change must repaint the whole pane. */
+  forceNextSnapshot: boolean;
+  /** Serializes resize-window commands so an older resize cannot finish last. */
+  geometryTail: Promise<void>;
   cols: number;
   rows: number;
   /** Current gap between captures; doubles while the pane is static. */
@@ -2661,14 +2673,24 @@ export class InteractiveTmuxTerminalManager {
 
   create(tmux: TmuxSession, cols: number, rows: number): string {
     const id = `tmux:${tmux.environmentId}:${tmux.tabId}:${randomUUID()}`;
-    this.terminals.set(id, { id, tmux, cols, rows, intervalMs: INTERACTIVE_SNAPSHOT_MIN_MS });
+    this.terminals.set(id, {
+      id,
+      tmux,
+      cols,
+      rows,
+      intervalMs: INTERACTIVE_SNAPSHOT_MIN_MS,
+      captureGeneration: 0,
+      captureSuspended: false,
+      forceNextSnapshot: true,
+      geometryTail: Promise.resolve(),
+    });
     return id;
   }
 
   async start(id: string, context: CommandContext): Promise<void> {
     const terminal = this.require(id);
     terminal.context = context;
-    await terminal.tmux.resize(terminal.cols, terminal.rows);
+    await this.changeGeometry(terminal, terminal.cols, terminal.rows);
     await this.emitSnapshot(terminal, context, true);
     this.schedule(terminal);
   }
@@ -2685,9 +2707,7 @@ export class InteractiveTmuxTerminalManager {
     const terminal = this.require(id);
     terminal.cols = cols;
     terminal.rows = rows;
-    await terminal.tmux.resize(cols, rows);
-    // Wrapping changed, so line addresses from the previous capture are stale.
-    terminal.lastSnapshot = undefined;
+    await this.changeGeometry(terminal, cols, rows);
   }
 
   detach(id: string): void {
@@ -2711,6 +2731,47 @@ export class InteractiveTmuxTerminalManager {
     const terminal = this.terminals.get(id);
     if (!terminal) throw new Error("tmux interactive terminal session not found");
     return terminal;
+  }
+
+  private beginGeometryChange(terminal: InteractiveTerminalSession): number {
+    terminal.captureGeneration += 1;
+    terminal.captureSuspended = true;
+    return terminal.captureGeneration;
+  }
+
+  private async changeGeometry(
+    terminal: InteractiveTerminalSession,
+    cols: number,
+    rows: number,
+  ): Promise<void> {
+    const generation = this.beginGeometryChange(terminal);
+    const operation = terminal.geometryTail.then(
+      () => terminal.tmux.resize(cols, rows),
+      () => terminal.tmux.resize(cols, rows),
+    );
+    terminal.geometryTail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      await operation;
+    } finally {
+      this.finishGeometryChange(terminal, generation);
+    }
+  }
+
+  private finishGeometryChange(
+    terminal: InteractiveTerminalSession,
+    generation: number,
+  ): void {
+    if (
+      this.terminals.get(terminal.id) !== terminal
+      || terminal.captureGeneration !== generation
+    ) {
+      return;
+    }
+    terminal.captureSuspended = false;
+    terminal.forceNextSnapshot = true;
   }
 
   /**
@@ -2746,18 +2807,30 @@ export class InteractiveTmuxTerminalManager {
   }
 
   private async emitSnapshot(terminal: InteractiveTerminalSession, context: CommandContext, force: boolean): Promise<void> {
+    if (terminal.captureSuspended) return;
+    const generation = terminal.captureGeneration;
     const snapshot = await terminal.tmux.capturePane({ ansi: true, joinWrapped: false });
     // Detach can happen while capture-pane is in flight. Never emit the late
-    // snapshot or revive its timer after the terminal has been removed.
-    if (this.terminals.get(terminal.id) !== terminal) return;
-    if (!force && snapshot === terminal.lastSnapshot) {
+    // snapshot or revive its timer after the terminal has been removed. A
+    // resize or forced restart also makes an earlier capture stale even if it
+    // finishes last.
+    if (
+      this.terminals.get(terminal.id) !== terminal
+      || terminal.captureGeneration !== generation
+      || terminal.captureSuspended
+    ) {
+      return;
+    }
+    const repaint = force || terminal.forceNextSnapshot;
+    if (!repaint && snapshot === terminal.lastSnapshot) {
       terminal.intervalMs = Math.min(INTERACTIVE_SNAPSHOT_MAX_MS, terminal.intervalMs * 2);
       return;
     }
     // Any change snaps the cadence back: output usually arrives in bursts.
     terminal.intervalMs = INTERACTIVE_SNAPSHOT_MIN_MS;
-    const update = buildTmuxPaneUpdate(terminal.lastSnapshot, snapshot, force);
+    const update = buildTmuxPaneUpdate(terminal.lastSnapshot, snapshot, repaint);
     terminal.lastSnapshot = snapshot;
+    terminal.forceNextSnapshot = false;
     if (update.text) {
       context.emit(
         `terminal-output-${terminal.id}`,

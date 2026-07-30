@@ -149,6 +149,41 @@ describe("codexStore message helpers", () => {
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toHaveLength(0);
   });
 
+  test("classifies applied, stale, and gap message patches", () => {
+    const store = useCodexStore.getState();
+    store.setMessages(SESSION_KEY, [{
+      id: "assistant-patched",
+      role: "assistant",
+      content: "one",
+      parts: [{ type: "text", content: "one" }],
+      createdAt: "2026-04-15T00:00:00.000Z",
+      revision: 1,
+    }]);
+    const patch = (revision: number, content = "two") => ({
+      messageId: "assistant-patched",
+      partCount: 1,
+      changedParts: [{ index: 0, part: { type: "text" as const, content } }],
+      content,
+      createdAt: "2026-04-15T00:00:00.000Z",
+      revision,
+    });
+
+    expect(store.patchMessage(SESSION_KEY, patch(2))).toBe("applied");
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages[0])
+      .toMatchObject({ content: "two", revision: 2 });
+    expect(store.patchMessage(SESSION_KEY, patch(2, "duplicate"))).toBe("stale");
+    expect(store.patchMessage(SESSION_KEY, patch(4, "gap"))).toBe("needs-reconcile");
+    expect(store.patchMessage(SESSION_KEY, {
+      ...patch(3),
+      changedParts: [],
+      partCount: 2,
+    })).toBe("needs-reconcile");
+    expect(store.patchMessage(SESSION_KEY, {
+      ...patch(3),
+      messageId: "missing",
+    })).toBe("needs-reconcile");
+  });
+
   test("setMessages preserves optimistic prompts until Codex echoes the matching attachment", () => {
     const store = useCodexStore.getState();
     const optimistic = createOptimisticNativeMessage("optimistic-2", "Check the screenshot", [

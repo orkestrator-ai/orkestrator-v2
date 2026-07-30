@@ -459,6 +459,13 @@ type EnvironmentSetupStartResult = {
   environment: Environment;
 };
 
+type ClientEnvironmentSetupStartResult = Omit<
+  EnvironmentSetupStartResult,
+  "environment"
+> & {
+  environment: ClientEnvironment;
+};
+
 const environmentSetupSessions = new Map<string, EnvironmentSetupSession>();
 const environmentSetupTasks = new Map<string, Promise<Environment>>();
 const environmentSetupStartTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();
@@ -2652,6 +2659,15 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     delete client.initialReasoningEffort;
   }
   return client;
+}
+
+function toClientEnvironmentSetupStartResult(
+  result: EnvironmentSetupStartResult,
+): ClientEnvironmentSetupStartResult {
+  return {
+    ...result,
+    environment: toClientEnvironment(result.environment),
+  };
 }
 
 export type EnvironmentActivityUpdate = Pick<
@@ -7408,7 +7424,12 @@ export function createCommandRegistry(
       .map(toClientEnvironment)
   );
   register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
-  register("reorder_environments", ({ projectId, environmentIds }, { storage }) => storage.reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds)));
+  register("reorder_environments", ({ projectId, environmentIds }, { storage }) =>
+    storage.reorderEnvironments(
+      asString(projectId, "projectId"),
+      asStringArray(environmentIds),
+    ).then((environments) => environments.map(toClientEnvironment))
+  );
   register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt, buildPipelineId }, context) => {
     const { storage } = context;
     const project = await storage.getProject(asString(projectId, "projectId"));
@@ -7436,7 +7457,7 @@ export function createCommandRegistry(
       pendingRenamePrompt,
     });
     await storage.updateRepositoryConfig(project.id, { ...repoConfig, lastEnvironmentType: env.environmentType });
-    return storage.addEnvironment(env);
+    return toClientEnvironment(await storage.addEnvironment(env));
   });
   register("delete_environment", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
@@ -7449,7 +7470,8 @@ export function createCommandRegistry(
       name: newName,
       branch: sanitizeBranchName(newName),
       pendingRenamePrompt: undefined,
-    });
+    })
+      .then(toClientEnvironment);
   });
   register("rename_environment_from_prompt", async ({ environmentId, prompt }, context) => {
     const envId = asString(environmentId, "environmentId");
@@ -7469,7 +7491,9 @@ export function createCommandRegistry(
     const knownContainerStates = environment.environmentType !== "local" && environment.containerId
       ? await getOrkestratorContainerStates()
       : null;
-    return syncStoredEnvironmentStatus(environment, storage, knownContainerStates);
+    return toClientEnvironment(
+      await syncStoredEnvironmentStatus(environment, storage, knownContainerStates),
+    );
   });
   register("sync_all_environments_with_docker", async (_args, { storage }) => {
     const cleared: string[] = [];
@@ -7501,7 +7525,7 @@ export function createCommandRegistry(
       context,
       schedulePendingEnvironmentRename,
     );
-    return task;
+    return toClientEnvironmentSetupStartResult(await task);
   });
   register("start_environment_background", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
@@ -7526,20 +7550,21 @@ export function createCommandRegistry(
       (id) => extensionDiscoveryCache.invalidate(id),
     )
   );
-  register("recreate_environment", async ({ environmentId }, context) =>
-    recreateEnvironmentTask(
+  register("recreate_environment", async ({ environmentId }, context) => {
+    const result = await recreateEnvironmentTask(
       asString(environmentId, "environmentId"),
       context,
       schedulePendingEnvironmentRename,
       (id) => extensionDiscoveryCache.invalidate(id),
-    )
-  );
+    );
+    return result ? toClientEnvironmentSetupStartResult(result) : undefined;
+  });
   register("set_environment_pr", async ({ environmentId, prUrl, prState, hasMergeConflicts }, context) => {
     const updated = await context.storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: asString(prUrl, "prUrl"), prState, hasMergeConflicts });
     // A PR recorded outside the monitor (e.g. right after a merge command) must
     // enter the monitored set without waiting for a client to rehydrate.
     void syncPrMonitorTracking(context).catch(() => undefined);
-    return updated;
+    return toClientEnvironment(updated);
   });
   register("clear_environment_pr", async ({ environmentId }, context) => {
     await context.storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: null, prState: null, hasMergeConflicts: null });
@@ -7594,7 +7619,9 @@ export function createCommandRegistry(
     const id = asString(environmentId, "environmentId");
     const shouldComplete = asBoolean(complete);
     if (!shouldComplete) {
-      return context.storage.updateEnvironment(id, { setupScriptsComplete: false });
+      return toClientEnvironment(
+        await context.storage.updateEnvironment(id, { setupScriptsComplete: false }),
+      );
     }
     const environment = await context.storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
@@ -7610,10 +7637,14 @@ export function createCommandRegistry(
         + "diff stats will compare against the repository base branch.",
       );
     }
-    return context.storage.updateEnvironment(id, { setupScriptsComplete: true });
+    return toClientEnvironment(
+      await context.storage.updateEnvironment(id, { setupScriptsComplete: true }),
+    );
   });
   register("run_environment_setup", async ({ environmentId }, context) => {
-    return runEnvironmentSetupNow(asString(environmentId, "environmentId"), context);
+    return toClientEnvironment(
+      await runEnvironmentSetupNow(asString(environmentId, "environmentId"), context),
+    );
   });
   register("ensure_environment_setup", async ({ environmentId }, context) => {
     const environment = await context.storage.getEnvironment(asString(environmentId, "environmentId"));
@@ -7624,7 +7655,9 @@ export function createCommandRegistry(
       setupScriptsComplete: environment.setupScriptsComplete ?? false,
       status: environment.status,
     });
-    return startEnvironmentSetup(environment, context);
+    return toClientEnvironmentSetupStartResult(
+      await startEnvironmentSetup(environment, context),
+    );
   });
   register("get_environment_setup_session", ({ environmentId }) => {
     const id = asString(environmentId, "environmentId");
@@ -7656,7 +7689,10 @@ export function createCommandRegistry(
     return setupCommands.length > 0 ? setupCommands : null;
   });
   register("update_port_mappings", ({ environmentId, portMappings }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), { portMappings: asPortMappings(portMappings) ?? [] }),
+    storage.updateEnvironment(
+      asString(environmentId, "environmentId"),
+      { portMappings: asPortMappings(portMappings) ?? [] },
+    ).then(toClientEnvironment),
   );
   register("update_environment_agent_settings", ({
     environmentId,
@@ -7695,7 +7731,8 @@ export function createCommandRegistry(
       updates.initialPromptAttachments =
         initialPromptAttachments as Environment["initialPromptAttachments"];
     }
-    return storage.updateEnvironment(asString(environmentId, "environmentId"), updates);
+    return storage.updateEnvironment(asString(environmentId, "environmentId"), updates)
+      .then(toClientEnvironment);
   });
   register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) => {
     const nextPending = asRequiredBoolean(pending, "pending");
@@ -7703,7 +7740,8 @@ export function createCommandRegistry(
       ...(nextPending
         ? { pendingAgentLaunch: true }
         : clearPendingAgentLaunchUpdates()),
-    });
+    })
+      .then(toClientEnvironment);
   });
   register(
     "acknowledge_startup_agent_session",
@@ -7714,7 +7752,8 @@ export function createCommandRegistry(
           ? undefined
           : asNonBlankString(providerSessionId, "providerSessionId"),
         startedAt === undefined ? undefined : asNonBlankString(startedAt, "startedAt"),
-      ),
+      )
+        .then(toClientEnvironment),
   );
   // The renderer rewrites the initial prompt once it has uploaded the create
   // dialog's attachments and knows their in-workspace paths. Persisting that
@@ -7724,7 +7763,8 @@ export function createCommandRegistry(
     storage.updateEnvironment(asString(environmentId, "environmentId"), {
       initialPrompt: asString(initialPrompt, "initialPrompt"),
       ...(Array.isArray(initialPromptAttachments) ? { initialPromptAttachments } : {}),
-    }),
+    })
+      .then(toClientEnvironment),
   );
   register("get_environment_extensions", async ({ environmentId, refresh }, context) => {
     const id = asString(environmentId, "environmentId");
@@ -7739,7 +7779,11 @@ export function createCommandRegistry(
     );
   });
   register("update_environment_allowed_domains", ({ environmentId, domains }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), { allowedDomains: asStringArray(domains) }),
+    storage.updateEnvironment(
+      asString(environmentId, "environmentId"),
+      { allowedDomains: asStringArray(domains) },
+    )
+      .then(toClientEnvironment),
   );
   register("add_environment_domains", async ({ environmentId, domains }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
@@ -7831,7 +7875,7 @@ export function createCommandRegistry(
     const env = createEnvironment(asString(projectId, "projectId"), { name: asOptionalString(name) ?? `reattached-${String(containerId).slice(0, 8)}` });
     env.containerId = asString(containerId, "containerId");
     env.status = await getDockerStatus(env.containerId).catch(() => "stopped");
-    return storage.addEnvironment(env);
+    return toClientEnvironment(await storage.addEnvironment(env));
   });
   register("propagate_github_token_to_containers", async (_args, { storage }) => {
     const config = await storage.loadConfig();
@@ -8612,12 +8656,14 @@ export function createCommandRegistry(
   register(
     "set_environment_unread",
     async ({ environmentId, unread, expectedLastActivityAt }, { storage }) =>
-      storage.setEnvironmentUnread(
-        asString(environmentId, "environmentId"),
-        asBoolean(unread),
-        expectedLastActivityAt === undefined || expectedLastActivityAt === null
-          ? expectedLastActivityAt
-          : asString(expectedLastActivityAt, "expectedLastActivityAt"),
+      toClientEnvironment(
+        await storage.setEnvironmentUnread(
+          asString(environmentId, "environmentId"),
+          asBoolean(unread),
+          expectedLastActivityAt === undefined || expectedLastActivityAt === null
+            ? expectedLastActivityAt
+            : asString(expectedLastActivityAt, "expectedLastActivityAt"),
+        ),
       ),
   );
 

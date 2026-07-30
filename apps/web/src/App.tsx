@@ -608,9 +608,26 @@ function App() {
       if (launchPrompt) {
         // List hydration deliberately excludes attachment bodies. Read the
         // targeted record only for the one launch that needs them.
-        const detailedEnvironment = existingOptions?.initialPromptAttachments
-          ? environment
-          : await getEnvironment(environmentId).catch(() => environment ?? null);
+        let detailedEnvironment = environment;
+        if (existingOptions?.initialPromptAttachments === undefined) {
+          try {
+            const loadedEnvironment = await getEnvironment(environmentId);
+            if (!loadedEnvironment) {
+              throw new Error(`Environment ${environmentId} was not found`);
+            }
+            detailedEnvironment = loadedEnvironment;
+          } catch (error) {
+            console.error(
+              "[App] Failed to restore saved prompt attachments before startup:",
+              error,
+            );
+            toast.error("Could not restore saved prompt attachments", {
+              description:
+                "The environment was not started. Try again to reload its saved prompt.",
+            });
+            return false;
+          }
+        }
         const storedAttachments = detailedEnvironment?.initialPromptAttachments?.map(
           (attachment) => ({
             ...attachment,

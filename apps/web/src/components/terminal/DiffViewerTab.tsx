@@ -38,6 +38,11 @@ interface DiffViewerTabProps {
 const diffBaseCache = new Map<string, Promise<backend.FileContent | null>>();
 const MAX_DIFF_BASE_CACHE_ENTRIES = 128;
 
+/** Clears module-level immutable bases so tests can assert cache boundaries. */
+export function clearDiffBaseCacheForTests(): void {
+  diffBaseCache.clear();
+}
+
 function cachedImmutableDiffBase(
   key: string,
   comparisonRef: string,

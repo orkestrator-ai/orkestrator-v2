@@ -331,6 +331,8 @@ async function harness(
     environmentDrainTimeoutMs?: number;
     ambiguousRecoveryTimeoutMs?: number;
     compactionTimeoutMs?: number;
+    orderedEventMaxCount?: number;
+    orderedEventMaxBytes?: number;
     fingerprintEnvironment?: () => string;
     /** Uses the production adaptive cadence instead of deterministic immediate publishes. */
     adaptiveCoalesce?: boolean;
@@ -405,6 +407,12 @@ async function harness(
     ...(options.compactionTimeoutMs !== undefined
       ? { compactionTimeoutMs: options.compactionTimeoutMs }
       : {}),
+    ...(options.orderedEventMaxCount !== undefined
+      ? { orderedEventMaxCount: options.orderedEventMaxCount }
+      : {}),
+    ...(options.orderedEventMaxBytes !== undefined
+      ? { orderedEventMaxBytes: options.orderedEventMaxBytes }
+      : {}),
   });
   if (options.deferStart !== true) await runtime.start();
 
@@ -435,6 +443,116 @@ async function harness(
     waitForEvent,
   };
 }
+
+describe("ordered event backpressure", () => {
+  test("bounds a slow-render queue and emits explicit authoritative reconciliation", async () => {
+    const h = await harness({}, {
+      orderedEventMaxCount: 3,
+      orderedEventMaxBytes: 1_024,
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "start",
+      requestId: "req-ordered-overflow",
+      attachments: [],
+    });
+    await h.drain();
+
+    const runtime = h.runtime as unknown as {
+      threadState: Map<string, {
+        coalescer: { flushNow: () => Promise<void> };
+        orderedEvents: Array<{ bytes: number }>;
+        orderedEventBytes: number;
+      }>;
+      enqueueAfterMessageFlush: (
+        threadId: string,
+        publish: () => void,
+        options?: { bytes?: number; coalesceKey?: "status" },
+      ) => void;
+    };
+    const state = runtime.threadState.get("thread-1")!;
+    let releaseRender!: () => void;
+    const slowRender = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    state.coalescer.flushNow = () => slowRender;
+
+    // The first event is removed from the queue and parked behind rendering.
+    // Notification handlers must still return synchronously while it is slow.
+    runtime.enqueueAfterMessageFlush("thread-1", () => {}, { bytes: 100 });
+    await Promise.resolve();
+    for (let index = 0; index < 4; index += 1) {
+      runtime.enqueueAfterMessageFlush("thread-1", () => {}, { bytes: 100 });
+    }
+
+    expect(state.orderedEvents).toHaveLength(0);
+    expect(state.orderedEventBytes).toBeLessThanOrEqual(1_024);
+    expect(
+      h.events.some((event) => event.type === "session.reconcile-required"),
+    ).toBe(false);
+
+    releaseRender();
+    await h.runtime.drainPendingWork();
+    expect(h.events).toContainEqual({
+      type: "session.reconcile-required",
+      sessionId,
+      data: { reason: "ordered-event-queue-overflow" },
+    });
+  });
+
+  test("coalesces superseded status work while a prior render is slow", async () => {
+    const h = await harness({}, { orderedEventMaxCount: 3 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "start",
+      requestId: "req-ordered-status",
+      attachments: [],
+    });
+    await h.drain();
+
+    const runtime = h.runtime as unknown as {
+      threadState: Map<string, {
+        coalescer: { flushNow: () => Promise<void> };
+        orderedEvents: Array<{ coalesceKey?: "status" }>;
+      }>;
+      enqueueAfterMessageFlush: (
+        threadId: string,
+        publish: () => void,
+        options?: { bytes?: number; coalesceKey?: "status" },
+      ) => void;
+    };
+    const state = runtime.threadState.get("thread-1")!;
+    let releaseRender!: () => void;
+    const slowRender = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    state.coalescer.flushNow = () => slowRender;
+    const published: number[] = [];
+
+    runtime.enqueueAfterMessageFlush("thread-1", () => published.push(0));
+    await Promise.resolve();
+    runtime.enqueueAfterMessageFlush(
+      "thread-1",
+      () => published.push(1),
+      { coalesceKey: "status" },
+    );
+    runtime.enqueueAfterMessageFlush(
+      "thread-1",
+      () => published.push(2),
+      { coalesceKey: "status" },
+    );
+    runtime.enqueueAfterMessageFlush(
+      "thread-1",
+      () => published.push(3),
+      { coalesceKey: "status" },
+    );
+
+    expect(state.orderedEvents).toHaveLength(1);
+    releaseRender();
+    await h.runtime.drainPendingWork();
+    expect(published).toEqual([0, 3]);
+  });
+});
 
 describe("session lifecycle", () => {
   test("concurrent start callers share initialization and wait for it to finish", async () => {

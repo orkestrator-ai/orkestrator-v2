@@ -25,18 +25,32 @@ const snapshot = <T,>(value: T): realBackend.ConditionalSnapshot<T> => ({
   digest: JSON.stringify(value),
   value,
 });
-const mockGetGitStatusSnapshot = mock(
-  async (containerId: string, targetBranch?: string) =>
+const mockGetGitStatusSnapshot = mock<(
+  containerId: string,
+  targetBranch: string,
+  knownDigest?: string,
+) => Promise<realBackend.ConditionalSnapshot<GitFileChange[]>>>(
+  async (containerId: string, targetBranch: string) =>
     snapshot(await mockGetGitStatus(containerId, targetBranch, true)),
 );
-const mockGetLocalGitStatusSnapshot = mock(
-  async (worktreePath: string, targetBranch?: string) =>
+const mockGetLocalGitStatusSnapshot = mock<(
+  worktreePath: string,
+  targetBranch: string,
+  knownDigest?: string,
+) => Promise<realBackend.ConditionalSnapshot<GitFileChange[]>>>(
+  async (worktreePath: string, targetBranch: string) =>
     snapshot(await mockGetLocalGitStatus(worktreePath, targetBranch, true)),
 );
-const mockGetFileTreeSnapshot = mock(
+const mockGetFileTreeSnapshot = mock<(
+  containerId: string,
+  knownDigest?: string,
+) => Promise<realBackend.ConditionalSnapshot<FileNode[]>>>(
   async (containerId: string) => snapshot(await mockGetFileTree(containerId)),
 );
-const mockGetLocalFileTreeSnapshot = mock(
+const mockGetLocalFileTreeSnapshot = mock<(
+  worktreePath: string,
+  knownDigest?: string,
+) => Promise<realBackend.ConditionalSnapshot<FileNode[]>>>(
   async (worktreePath: string) =>
     snapshot(await mockGetLocalFileTree(worktreePath)),
 );
@@ -175,6 +189,21 @@ describe("useFilesPanel", () => {
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([]));
     mockGetFileTree.mockImplementation(() => Promise.resolve([]));
     mockGetLocalFileTree.mockImplementation(() => Promise.resolve([]));
+    mockGetGitStatusSnapshot.mockImplementation(
+      async (containerId, targetBranch) =>
+        snapshot(await mockGetGitStatus(containerId, targetBranch, true)),
+    );
+    mockGetLocalGitStatusSnapshot.mockImplementation(
+      async (worktreePath, targetBranch) =>
+        snapshot(await mockGetLocalGitStatus(worktreePath, targetBranch, true)),
+    );
+    mockGetFileTreeSnapshot.mockImplementation(
+      async (containerId) => snapshot(await mockGetFileTree(containerId)),
+    );
+    mockGetLocalFileTreeSnapshot.mockImplementation(
+      async (worktreePath) =>
+        snapshot(await mockGetLocalFileTree(worktreePath)),
+    );
     mockRevertContainerFile.mockImplementation((_environmentId, filePath) => Promise.resolve(filePath));
     mockDeleteContainerFile.mockImplementation((_environmentId, filePath) => Promise.resolve(filePath));
     mockRevertLocalFile.mockImplementation((_environmentId, filePath) => Promise.resolve(filePath));
@@ -320,6 +349,104 @@ describe("useFilesPanel", () => {
 
     expect(useFilesPanelStore.getState().changes).toBe(changesBefore);
     expect(useFilesPanelStore.getState().fileTree).toBe(treeBefore);
+  });
+
+  test("reuses server digests after unchanged reads and publishes a later change", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const nextChange = { ...change, additions: 9 };
+    const nextTree: FileNode[] = [{
+      name: "README.md",
+      path: "README.md",
+      isDirectory: false,
+    }];
+    resetStores(environment);
+    useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
+    mockGetGitStatusSnapshot
+      .mockResolvedValueOnce({
+        unchanged: false,
+        digest: "changes-v1",
+        value: [change],
+      })
+      .mockResolvedValueOnce({
+        unchanged: true,
+        digest: "changes-v1",
+      })
+      .mockResolvedValueOnce({
+        unchanged: false,
+        digest: "changes-v2",
+        value: [nextChange],
+      });
+    mockGetFileTreeSnapshot
+      .mockResolvedValueOnce({
+        unchanged: false,
+        digest: "tree-v1",
+        value: tree,
+      })
+      .mockResolvedValueOnce({
+        unchanged: true,
+        digest: "tree-v1",
+      })
+      .mockResolvedValueOnce({
+        unchanged: false,
+        digest: "tree-v2",
+        value: nextTree,
+      });
+
+    const { result } = renderHook(() => useFilesPanel());
+    await waitFor(() => {
+      expect(useFilesPanelStore.getState().changes).toEqual([change]);
+      expect(useFilesPanelStore.getState().fileTree).toEqual(tree);
+    });
+    const changesBefore = useFilesPanelStore.getState().changes;
+    const treeBefore = useFilesPanelStore.getState().fileTree;
+
+    await act(async () => {
+      await Promise.all([
+        result.current.loadChanges(true),
+        result.current.loadFileTree(true),
+      ]);
+    });
+
+    expect(mockGetGitStatusSnapshot).toHaveBeenNthCalledWith(
+      2,
+      "container-1",
+      "develop",
+      "changes-v1",
+    );
+    expect(mockGetFileTreeSnapshot).toHaveBeenNthCalledWith(
+      2,
+      "container-1",
+      "tree-v1",
+    );
+    expect(useFilesPanelStore.getState().changes).toBe(changesBefore);
+    expect(useFilesPanelStore.getState().fileTree).toBe(treeBefore);
+
+    await act(async () => {
+      await Promise.all([
+        result.current.loadChanges(true),
+        result.current.loadFileTree(true),
+      ]);
+    });
+
+    expect(mockGetGitStatusSnapshot).toHaveBeenNthCalledWith(
+      3,
+      "container-1",
+      "develop",
+      "changes-v1",
+    );
+    expect(mockGetFileTreeSnapshot).toHaveBeenNthCalledWith(
+      3,
+      "container-1",
+      "tree-v1",
+    );
+    expect(useFilesPanelStore.getState().changes).toEqual([nextChange]);
+    expect(useFilesPanelStore.getState().fileTree).toEqual(nextTree);
   });
 
   test("loads container changes against the environment creation commit when available", async () => {

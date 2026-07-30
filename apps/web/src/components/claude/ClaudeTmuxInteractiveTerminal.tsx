@@ -28,6 +28,8 @@ import {
   MobileTerminalKeyBar,
 } from "@/components/terminal/MobileTerminalKeyBar";
 
+const INTERACTIVE_RECOVERY_MAX_ATTEMPTS = 2;
+
 interface ClaudeTmuxInteractiveTerminalProps {
   tabId: string;
   environmentId?: string;
@@ -254,18 +256,44 @@ export function ClaudeTmuxInteractiveTerminal({
         }
 
         sessionIdRef.current = sessionId;
-        let recoveryInFlight = false;
+        let recoveryInFlight: Promise<void> | null = null;
+        const recoverFromDesync = () => {
+          if (recoveryInFlight) return;
+          recoveryInFlight = (async () => {
+            let recoveryError: unknown;
+            for (
+              let attempt = 0;
+              attempt < INTERACTIVE_RECOVERY_MAX_ATTEMPTS;
+              attempt += 1
+            ) {
+              try {
+                await startInteractiveTerminal(sessionId);
+                if (!cancelled && sessionIdRef.current === sessionId) {
+                  setError(null);
+                }
+                return;
+              } catch (error) {
+                recoveryError = error;
+                if (cancelled || sessionIdRef.current !== sessionId) return;
+              }
+            }
+            console.error(
+              "[ClaudeTmuxInteractiveTerminal] Failed to recover terminal:",
+              recoveryError,
+            );
+            if (!cancelled && sessionIdRef.current === sessionId) {
+              setError(`Terminal recovery failed: ${String(recoveryError)}`);
+            }
+          })().finally(() => {
+            recoveryInFlight = null;
+          });
+        };
         activeUnlisten = await listen<TerminalOutputPayload>(
           `terminal-output-${sessionId}`,
           (event) => {
             const bytes = decodeTerminalOutputPayload(event.payload);
             if (bytes === null) {
-              if (!recoveryInFlight) {
-                recoveryInFlight = true;
-                void startInteractiveTerminal(sessionId).finally(() => {
-                  recoveryInFlight = false;
-                });
-              }
+              recoverFromDesync();
               return;
             }
             if (bytes?.length) terminal.write(bytes);

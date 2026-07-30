@@ -1430,9 +1430,20 @@ describe("backend native agent and looped review wrappers", () => {
 describe("backend command wrapper coverage", () => {
   beforeEach(() => {
     invokeMock.mockReset();
-    invokeMock.mockImplementation(async (command: unknown) =>
-      command === "read_file_base64" ? btoa("binary") : undefined
-    );
+    invokeMock.mockImplementation(async (command: unknown) => {
+      if (command === "read_file_base64") return btoa("binary");
+      if (command === "get_build_pipeline") return null;
+      if (
+        command === "list_build_pipelines"
+        || command === "get_git_status"
+        || command === "get_file_tree"
+        || command === "get_local_git_status"
+        || command === "get_local_file_tree"
+      ) {
+        return [];
+      }
+      return undefined;
+    });
     window.orkestrator = originalOrkestrator;
     window.orkestratorGateway = originalGateway;
   });

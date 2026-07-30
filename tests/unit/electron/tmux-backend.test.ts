@@ -3834,16 +3834,25 @@ describe("interactive tmux terminal snapshots", () => {
       full: true,
     });
   });
-  function createInteractiveHarness(captures: Array<string | Promise<string>>) {
+  function createInteractiveHarness(
+    captures: Array<string | Promise<string>>,
+    resizes: Array<void | Promise<void>> = [],
+  ) {
     const scheduled: Array<{ callback: () => void; delayMs: number; timer: object }> = [];
     const cancelled = new Set<unknown>();
     const emitted: Array<{ event: string; payload: unknown }> = [];
     let captureIndex = 0;
+    let resizeIndex = 0;
+    const resizeCalls: Array<{ cols: number; rows: number }> = [];
     let writes = 0;
     const tmux = {
       environmentId: "env-interactive",
       tabId: "tab-interactive",
-      resize: async () => undefined,
+      resize: async (cols: number, rows: number) => {
+        resizeCalls.push({ cols, rows });
+        const resize = resizes[resizeIndex++];
+        if (resize) await resize;
+      },
       writeInteractive: async () => {
         writes += 1;
       },
@@ -3874,6 +3883,7 @@ describe("interactive tmux terminal snapshots", () => {
       scheduled,
       cancelled,
       emitted,
+      resizeCalls,
       captureCount: () => captureIndex,
       writeCount: () => writes,
     };
@@ -3969,6 +3979,78 @@ describe("interactive tmux terminal snapshots", () => {
     await delay(0);
     expect(harness.emitted).toHaveLength(1);
     expect(harness.scheduled).toHaveLength(1);
+  });
+
+  test("forced recovery invalidates an older in-flight capture", async () => {
+    const stale = deferred<string>();
+    const harness = createInteractiveHarness(["initial", stale.promise, "recovered"]);
+    await harness.manager.start(harness.id, harness.context);
+
+    harness.scheduled[0]!.callback();
+    await waitFor(() => harness.captureCount() === 2);
+
+    const recovery = harness.manager.start(harness.id, harness.context);
+    await waitFor(() => harness.captureCount() === 3);
+    await recovery;
+
+    expect(harness.emitted).toHaveLength(2);
+    expect(harness.emitted[1]).toEqual({
+      event: `terminal-output-${harness.id}`,
+      payload: expect.objectContaining({ text: expect.stringContaining("recovered"), full: true }),
+    });
+
+    stale.resolve("stale capture");
+    await delay(0);
+    expect(harness.emitted).toHaveLength(2);
+  });
+
+  test("resize discards an in-flight capture and makes the next frame full", async () => {
+    const stale = deferred<string>();
+    const harness = createInteractiveHarness(["initial", stale.promise, "resized pane"]);
+    await harness.manager.start(harness.id, harness.context);
+
+    harness.scheduled[0]!.callback();
+    await waitFor(() => harness.captureCount() === 2);
+    await harness.manager.resize(harness.id, 90, 24);
+
+    stale.resolve("old geometry");
+    await waitFor(() => harness.scheduled.length === 2);
+    expect(harness.emitted).toHaveLength(1);
+
+    harness.scheduled[1]!.callback();
+    await waitFor(() => harness.emitted.length === 2);
+    expect(harness.emitted[1]).toEqual({
+      event: `terminal-output-${harness.id}`,
+      payload: expect.objectContaining({ text: expect.stringContaining("resized pane"), full: true }),
+    });
+  });
+
+  test("serializes overlapping geometry changes in request order", async () => {
+    const firstResize = deferred<void>();
+    const secondResize = deferred<void>();
+    const harness = createInteractiveHarness(
+      ["initial"],
+      [undefined, firstResize.promise, secondResize.promise],
+    );
+    await harness.manager.start(harness.id, harness.context);
+
+    const first = harness.manager.resize(harness.id, 100, 30);
+    await waitFor(() => harness.resizeCalls.length === 2);
+    const second = harness.manager.resize(harness.id, 80, 20);
+    await delay(0);
+    expect(harness.resizeCalls).toHaveLength(2);
+
+    firstResize.resolve(undefined);
+    await first;
+    await waitFor(() => harness.resizeCalls.length === 3);
+    secondResize.resolve(undefined);
+    await second;
+
+    expect(harness.resizeCalls).toEqual([
+      { cols: 120, rows: 40 },
+      { cols: 100, rows: 30 },
+      { cols: 80, rows: 20 },
+    ]);
   });
 });
 

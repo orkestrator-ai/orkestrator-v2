@@ -6,6 +6,7 @@ import * as realBackendEvent from "@/lib/native/events";
 import * as realTmuxClient from "@/lib/claude-tmux-client";
 import * as realTerminalPaste from "@/lib/terminal-paste";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
+import type { TerminalOutputPayload } from "@/hooks/useTerminal";
 import {
   emitViewportChange,
   restoreMatchMedia,
@@ -19,7 +20,7 @@ const realTmuxClientSnapshot = { ...realTmuxClient };
 const realTerminalPasteSnapshot = { ...realTerminalPaste };
 const realClipboardImagePasteSnapshot = { ...realClipboardImagePaste };
 
-type OutputHandler = (event: { payload: number[] }) => void;
+type OutputHandler = (event: { payload: TerminalOutputPayload }) => void;
 type KeyHandler = (event: KeyboardEvent) => boolean;
 type ImagePasteOptions = {
   onImageSaved?: (filePath: string) => void | Promise<void>;
@@ -33,6 +34,20 @@ const fitInstances: MockFitAddon[] = [];
 let outputHandler: OutputHandler | null = null;
 let resizeCallback: ResizeObserverCallback | null = null;
 let fitFailure: Error | null = null;
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 class MockTerminal {
   cols = 120;
@@ -666,6 +681,97 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
       );
       expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
     } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("coalesces desync notices while terminal recovery is in flight", async () => {
+    render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(1));
+
+    const recovery = deferred<void>();
+    startInteractiveTerminalMock.mockImplementationOnce(() => recovery.promise);
+    act(() => {
+      outputHandler?.({ payload: { desynced: true } });
+      outputHandler?.({ payload: { desynced: true } });
+    });
+
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(2));
+    expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(2);
+
+    recovery.resolve(undefined);
+    await act(async () => {
+      await recovery.promise;
+    });
+  });
+
+  test("retries a failed desync recovery and accepts the restored full frame", async () => {
+    render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(1));
+
+    startInteractiveTerminalMock.mockRejectedValueOnce(new Error("transient recovery failure"));
+    startInteractiveTerminalMock.mockResolvedValueOnce(undefined);
+    act(() => {
+      outputHandler?.({ payload: { desynced: true } });
+    });
+
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(3));
+    act(() => {
+      outputHandler?.({ payload: { text: "restored", full: true } });
+    });
+
+    expect(new TextDecoder().decode(terminalInstances[0]!.writes.at(-1)!)).toBe("restored");
+    expect(screen.queryByText(/Terminal recovery failed/)).toBeNull();
+  });
+
+  test("contains and surfaces a rejected desync recovery", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    const consoleError = mock((_message?: unknown, _error?: unknown) => {});
+    const originalError = console.error;
+    console.error = consoleError as typeof console.error;
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      render(
+        <ClaudeTmuxInteractiveTerminal
+          tabId="tab-1"
+          environmentId={environmentId}
+          isActive
+        />,
+      );
+      await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(1));
+
+      startInteractiveTerminalMock.mockRejectedValueOnce(new Error("recovery unavailable"));
+      startInteractiveTerminalMock.mockRejectedValueOnce(new Error("recovery unavailable"));
+      act(() => {
+        outputHandler?.({ payload: { desynced: true } });
+      });
+
+      await screen.findByText("Terminal recovery failed: Error: recovery unavailable");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(3);
+      expect(consoleError).toHaveBeenCalledWith(
+        "[ClaudeTmuxInteractiveTerminal] Failed to recover terminal:",
+        expect.objectContaining({ message: "recovery unavailable" }),
+      );
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
       console.error = originalError;
     }
   });

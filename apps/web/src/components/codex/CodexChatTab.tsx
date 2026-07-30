@@ -2225,6 +2225,19 @@ export function CodexChatTab({
       useCodexStore.getState().sessions.get(sessionKey)?.isLoading === true;
 
     (async () => {
+      let patchRecovery: Promise<boolean> | null = null;
+      const recoverMessagePatchGap = (): Promise<boolean> => {
+        if (patchRecovery) return patchRecovery;
+        const recovery = refreshMessages(client, session.sessionId, {
+          throwOnError: true,
+          shouldApply: () => !abortController.signal.aborted,
+        }).catch(() => false).finally(() => {
+          if (patchRecovery === recovery) patchRecovery = null;
+        });
+        patchRecovery = recovery;
+        return recovery;
+      };
+
       while (!abortController.signal.aborted && isTurnActive()) {
         /**
          * Reconnect from where we left off.
@@ -2336,8 +2349,13 @@ export function CodexChatTab({
 
             if (event.type === "message.patched") {
               const patch = event.data as unknown as CodexMessagePatch;
-              if (!patchMessage(sessionKey, patch)) {
-                await refreshMessages(client, session.sessionId);
+              const outcome = patchMessage(sessionKey, patch);
+              if (outcome === "needs-reconcile") {
+                // Do not stop draining the stream behind a transcript read.
+                // Every gap/malformed patch observed while the same read is in
+                // flight joins it; once the snapshot lands, queued duplicate
+                // patches classify as stale and cost no additional GET.
+                void recoverMessagePatchGap();
               }
               continue;
             }

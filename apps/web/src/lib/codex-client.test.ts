@@ -5,6 +5,7 @@ import {
   DEFAULT_CODEX_MODEL,
   abortSession,
   applyCodexMessagePatch,
+  classifyCodexMessagePatch,
   checkHealth,
   classifyCodexPromptOutcome,
   compactCodexSession,
@@ -34,6 +35,8 @@ import {
   startCodexNativeReview,
   steerCodexSession,
   subscribeToEvents,
+  MAX_CODEX_EVENT_QUEUE_BYTES,
+  MAX_CODEX_EVENT_QUEUE_COUNT,
   updateSessionConfig,
   type CodexApprovalResponseResult,
   type CodexClient,
@@ -111,6 +114,30 @@ describe("applyCodexMessagePatch", () => {
       changedParts: [{ index: 2, part: { type: "text", content: "late" } }],
       revision: 4,
     })).toBeNull();
+  });
+
+  test("distinguishes stale replay from a gap or malformed successor", () => {
+    const base = {
+      messageId: message.id,
+      partCount: 1,
+      changedParts: [],
+      content: "old",
+      createdAt: message.createdAt,
+    };
+    expect(classifyCodexMessagePatch(message, { ...base, revision: 3 })).toEqual({
+      outcome: "stale",
+    });
+    expect(classifyCodexMessagePatch(message, { ...base, revision: 2 })).toEqual({
+      outcome: "stale",
+    });
+    expect(classifyCodexMessagePatch(message, { ...base, revision: 5 })).toEqual({
+      outcome: "needs-reconcile",
+    });
+    expect(classifyCodexMessagePatch(message, {
+      ...base,
+      messageId: "different-message",
+      revision: 4,
+    })).toEqual({ outcome: "needs-reconcile" });
   });
 });
 
@@ -1240,6 +1267,56 @@ describe("codex-client subscribeToEvents", () => {
     });
 
     await iterator.return?.();
+  });
+
+  test("bounds a slow consumer and yields one explicit reconciliation frame", async () => {
+    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")
+      [Symbol.asyncIterator]();
+    const source = MockEventSource.instances[0]!;
+
+    for (let revision = 1; revision <= MAX_CODEX_EVENT_QUEUE_COUNT + 1; revision += 1) {
+      source.emit(
+        "session.updated",
+        { sessionId: "session-1", phase: "running" },
+        String(revision),
+      );
+    }
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: {
+        type: "session.reconcile-required",
+        sessionId: "session-1",
+        data: { reason: "client-event-queue-overflow" },
+        revision: MAX_CODEX_EVENT_QUEUE_COUNT + 1,
+      },
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects one oversized queued frame through the same recovery path", async () => {
+    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")
+      [Symbol.asyncIterator]();
+    const source = MockEventSource.instances[0]!;
+    source.emit(
+      "message.updated",
+      {
+        sessionId: "session-1",
+        content: "x".repeat(MAX_CODEX_EVENT_QUEUE_BYTES),
+      },
+      "9",
+    );
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: {
+        type: "session.reconcile-required",
+        revision: 9,
+        data: { reason: "client-event-queue-overflow" },
+      },
+    });
+    expect(source.close).toHaveBeenCalledTimes(1);
   });
 
   test("iterator return closes the source and resolves a pending read", async () => {

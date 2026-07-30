@@ -1302,6 +1302,30 @@ export interface ConditionalSnapshot<T> {
   value?: T;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeConditionalArraySnapshot<T>(
+  response: unknown,
+  command: string,
+): ConditionalSnapshot<T[]> {
+  // Older backends ignore knownDigest and return the original raw array.
+  if (Array.isArray(response)) {
+    return { unchanged: false, digest: "", value: response as T[] };
+  }
+  if (
+    !isRecord(response)
+    || typeof response.unchanged !== "boolean"
+    || typeof response.digest !== "string"
+    || (!response.unchanged && !Array.isArray(response.value))
+    || (response.unchanged && response.value !== undefined)
+  ) {
+    throw new Error(`Invalid ${command} response`);
+  }
+  return response as unknown as ConditionalSnapshot<T[]>;
+}
+
 /** Get git changes comparing current state against a target branch */
 export async function getGitStatus(
   containerId: string,
@@ -1320,12 +1344,16 @@ export async function getGitStatusSnapshot(
   targetBranch: string,
   knownDigest?: string,
 ): Promise<ConditionalSnapshot<GitFileChange[]>> {
-  return invoke("get_git_status", {
+  const response = await invoke<unknown>("get_git_status", {
     containerId,
     targetBranch,
     includeUncommitted: true,
     knownDigest: knownDigest ?? "",
   });
+  return normalizeConditionalArraySnapshot<GitFileChange>(
+    response,
+    "get_git_status",
+  );
 }
 
 /** Get workspace file tree from a container */
@@ -1337,7 +1365,11 @@ export async function getFileTreeSnapshot(
   containerId: string,
   knownDigest?: string,
 ): Promise<ConditionalSnapshot<FileNode[]>> {
-  return invoke("get_file_tree", { containerId, knownDigest: knownDigest ?? "" });
+  const response = await invoke<unknown>("get_file_tree", {
+    containerId,
+    knownDigest: knownDigest ?? "",
+  });
+  return normalizeConditionalArraySnapshot<FileNode>(response, "get_file_tree");
 }
 
 /** Read a file from inside a container */
@@ -1417,12 +1449,16 @@ export async function getLocalGitStatusSnapshot(
   targetBranch: string,
   knownDigest?: string,
 ): Promise<ConditionalSnapshot<GitFileChange[]>> {
-  return invoke("get_local_git_status", {
+  const response = await invoke<unknown>("get_local_git_status", {
     worktreePath,
     targetBranch,
     includeUncommitted: true,
     knownDigest: knownDigest ?? "",
   });
+  return normalizeConditionalArraySnapshot<GitFileChange>(
+    response,
+    "get_local_git_status",
+  );
 }
 
 /**
@@ -1472,10 +1508,14 @@ export async function getLocalFileTreeSnapshot(
   worktreePath: string,
   knownDigest?: string,
 ): Promise<ConditionalSnapshot<FileNode[]>> {
-  return invoke("get_local_file_tree", {
+  const response = await invoke<unknown>("get_local_file_tree", {
     worktreePath,
     knownDigest: knownDigest ?? "",
   });
+  return normalizeConditionalArraySnapshot<FileNode>(
+    response,
+    "get_local_file_tree",
+  );
 }
 
 /** Read a file from a local environment (worktree path) */
@@ -2018,7 +2058,52 @@ export async function getBuildPipelineConditional<T = unknown>(
   knownRevision?: number,
   knownSessions?: Record<string, { revision: number; count: number }>,
 ): Promise<ConditionalBuildPipeline<T>> {
-  return invoke("get_build_pipeline", { pipelineId, knownRevision, knownSessions });
+  const response = await invoke<unknown>("get_build_pipeline", {
+    pipelineId,
+    knownRevision,
+    knownSessions,
+  });
+  if (response === null) return null;
+  if (!isRecord(response)) {
+    throw new Error("Invalid get_build_pipeline response");
+  }
+  if (!("unchanged" in response)) {
+    if (typeof response.id !== "string") {
+      throw new Error("Invalid get_build_pipeline response");
+    }
+    return response as unknown as PersistedBuildPipeline<T>;
+  }
+  if (
+    response.unchanged === true
+    && Number.isSafeInteger(response.revision)
+    && (response.revision as number) >= 0
+  ) {
+    return response as { unchanged: true; revision: number };
+  }
+  if (
+    response.unchanged !== false
+    || !isRecord(response.record)
+    || typeof response.record.id !== "string"
+    || !Array.isArray(response.messagePatches)
+    || !response.messagePatches.every((value) => {
+      if (!isRecord(value)) return false;
+      return typeof value.sessionKey === "string"
+        && Number.isSafeInteger(value.startIndex)
+        && (value.startIndex as number) >= 0
+        && Number.isSafeInteger(value.revision)
+        && (value.revision as number) >= 0
+        && (value.baseRevision === undefined
+          || (Number.isSafeInteger(value.baseRevision)
+            && (value.baseRevision as number) >= 0))
+        && (value.baseCount === undefined
+          || (Number.isSafeInteger(value.baseCount)
+            && (value.baseCount as number) >= 0))
+        && Array.isArray(value.messages);
+    })
+  ) {
+    throw new Error("Invalid get_build_pipeline response");
+  }
+  return response as unknown as ConditionalBuildPipeline<T>;
 }
 
 export async function listBuildPipelines<T = unknown>(
@@ -2031,7 +2116,35 @@ export async function listBuildPipelinesConditional<T = unknown>(
   projectId: string,
   knownRevisions: Record<string, number>,
 ): Promise<{ ids: string[]; records: Array<PersistedBuildPipeline<T>> }> {
-  return invoke("list_build_pipelines", { projectId, knownRevisions });
+  const response = await invoke<unknown>("list_build_pipelines", {
+    projectId,
+    knownRevisions,
+  });
+  // Older backends ignore knownRevisions and return the complete record array.
+  if (Array.isArray(response)) {
+    if (!response.every((entry) => isRecord(entry) && typeof entry.id === "string")) {
+      throw new Error("Invalid list_build_pipelines response");
+    }
+    return {
+      ids: response.map((entry) => entry.id as string),
+      records: response as Array<PersistedBuildPipeline<T>>,
+    };
+  }
+  if (
+    !isRecord(response)
+    || !Array.isArray(response.ids)
+    || !response.ids.every((id) => typeof id === "string")
+    || !Array.isArray(response.records)
+    || !response.records.every((entry) =>
+      isRecord(entry) && typeof entry.id === "string"
+    )
+  ) {
+    throw new Error("Invalid list_build_pipelines response");
+  }
+  return response as unknown as {
+    ids: string[];
+    records: Array<PersistedBuildPipeline<T>>;
+  };
 }
 
 export async function deleteBuildPipeline(pipelineId: string): Promise<void> {

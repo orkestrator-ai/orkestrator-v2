@@ -68,7 +68,7 @@ export function isResourceChange(value: unknown): value is ResourceChange {
     && typeof candidate.id === "string"
     && candidate.id.length > 0
     && (candidate.projectId === undefined || (
-      typeof candidate.projectId === "string" && candidate.projectId.length > 0
+      typeof candidate.projectId === "string" && candidate.projectId.trim().length > 0
     ))
     && typeof candidate.revision === "number"
     && Number.isSafeInteger(candidate.revision)

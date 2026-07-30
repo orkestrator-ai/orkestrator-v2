@@ -152,15 +152,36 @@ export interface CodexMessagePatch {
   revision: number;
 }
 
-export function applyCodexMessagePatch(
+export type CodexMessagePatchResult =
+  | { outcome: "applied"; message: CodexMessage }
+  | { outcome: "stale" }
+  | { outcome: "needs-reconcile" };
+
+/**
+ * Classifies a sparse patch without conflating an already-applied replay with a
+ * real revision gap. Callers may safely ignore `stale`; only
+ * `needs-reconcile` requires an authoritative transcript read.
+ */
+export function classifyCodexMessagePatch(
   message: CodexMessage,
   patch: CodexMessagePatch,
-): CodexMessage | null {
-  if (!patch || typeof patch !== "object" || !Array.isArray(patch.changedParts)) return null;
-  if (!Number.isInteger(patch.partCount) || patch.partCount < 0) return null;
+): CodexMessagePatchResult {
+  if (!patch || typeof patch !== "object" || !Array.isArray(patch.changedParts)) {
+    return { outcome: "needs-reconcile" };
+  }
+  if (
+    patch.messageId !== message.id
+    || !Number.isInteger(patch.partCount)
+    || patch.partCount < 0
+    || !Number.isInteger(patch.revision)
+  ) {
+    return { outcome: "needs-reconcile" };
+  }
   const baseRevision = message.revision;
-  if (!Number.isInteger(baseRevision) || patch.revision !== (baseRevision as number) + 1) {
-    return null;
+  if (!Number.isInteger(baseRevision)) return { outcome: "needs-reconcile" };
+  if (patch.revision <= (baseRevision as number)) return { outcome: "stale" };
+  if (patch.revision !== (baseRevision as number) + 1) {
+    return { outcome: "needs-reconcile" };
   }
 
   const parts = message.parts.slice();
@@ -173,24 +194,35 @@ export function applyCodexMessagePatch(
       || !change.part
       || typeof change.part !== "object"
     ) {
-      return null;
+      return { outcome: "needs-reconcile" };
     }
     parts[change.index] = change.part;
   }
   parts.length = patch.partCount;
   for (let index = 0; index < parts.length; index += 1) {
-    if (!parts[index]) return null;
+    if (!parts[index]) return { outcome: "needs-reconcile" };
   }
   return {
-    ...message,
-    parts,
-    content: typeof patch.content === "string" ? patch.content : message.content,
-    createdAt: typeof patch.createdAt === "string" && patch.createdAt
-      ? patch.createdAt
-      : message.createdAt,
-    turnId: typeof patch.turnId === "string" ? patch.turnId : message.turnId,
-    revision: patch.revision,
+    outcome: "applied",
+    message: {
+      ...message,
+      parts,
+      content: typeof patch.content === "string" ? patch.content : message.content,
+      createdAt: typeof patch.createdAt === "string" && patch.createdAt
+        ? patch.createdAt
+        : message.createdAt,
+      turnId: typeof patch.turnId === "string" ? patch.turnId : message.turnId,
+      revision: patch.revision,
+    },
   };
+}
+
+export function applyCodexMessagePatch(
+  message: CodexMessage,
+  patch: CodexMessagePatch,
+): CodexMessage | null {
+  const result = classifyCodexMessagePatch(message, patch);
+  return result.outcome === "applied" ? result.message : null;
 }
 
 export interface CodexSession {
@@ -1550,21 +1582,29 @@ export async function deleteSession(
  * lightweight cursor-only frames. The cursor remains bridge-wide, so replay
  * semantics are unchanged.
  */
+export const MAX_CODEX_EVENT_QUEUE_COUNT = 256;
+export const MAX_CODEX_EVENT_QUEUE_BYTES = 2 * 1024 * 1024;
+
 export function subscribeToEvents(
   client: CodexClient,
   signal?: AbortSignal,
   since?: number,
   sessionId?: string,
 ): AsyncIterable<CodexEvent> {
+  const maxQueuedEvents = MAX_CODEX_EVENT_QUEUE_COUNT;
+  const maxQueuedBytes = MAX_CODEX_EVENT_QUEUE_BYTES;
   return {
     [Symbol.asyncIterator](): AsyncIterator<CodexEvent> {
       let eventSource: EventSource | null = null;
       let resolver: ((value: IteratorResult<CodexEvent>) => void) | null = null;
       let rejecter: ((error: Error) => void) | null = null;
-      const eventQueue: CodexEvent[] = [];
+      const eventQueue: Array<{ event: CodexEvent; bytes: number }> = [];
+      let queuedBytes = 0;
+      let endAfterQueue = false;
       let done = false;
 
       const handleEvent = (event: MessageEvent) => {
+        if (done || endAfterQueue) return;
         try {
           const data = JSON.parse(event.data);
           // `lastEventId` is the SSE `id:` field. Parsed here so consumers get a
@@ -1582,7 +1622,35 @@ export function subscribeToEvents(
             resolver = null;
             rejecter = null;
           } else {
-            eventQueue.push(codexEvent);
+            // Conservatively charge UTF-16 storage plus object/list overhead;
+            // the parsed payload, not the raw string, is what the queue retains.
+            const bytes = event.data.length * 2 + event.type.length * 2 + 64;
+            if (
+              eventQueue.length + 1 > maxQueuedEvents
+              || queuedBytes + bytes > maxQueuedBytes
+            ) {
+              // A slow consumer cannot retain an unbounded transcript/event
+              // backlog. Close this connection and hand the caller one explicit
+              // recovery frame. Its revision becomes the reconnect cursor after
+              // the authoritative snapshot has been applied.
+              eventQueue.length = 0;
+              queuedBytes = 0;
+              const reconcile: CodexEvent = {
+                type: "session.reconcile-required",
+                sessionId: sessionId ?? codexEvent.sessionId,
+                data: { reason: "client-event-queue-overflow" },
+                ...(codexEvent.revision === undefined
+                  ? {}
+                  : { revision: codexEvent.revision }),
+              };
+              eventQueue.push({ event: reconcile, bytes: 0 });
+              endAfterQueue = true;
+              eventSource?.close();
+              eventSource = null;
+            } else {
+              eventQueue.push({ event: codexEvent, bytes });
+              queuedBytes += bytes;
+            }
           }
         } catch (error) {
           console.error("[codex-client] Failed to parse SSE event:", error);
@@ -1666,7 +1734,17 @@ export function subscribeToEvents(
           }
 
           if (eventQueue.length > 0) {
-            return Promise.resolve({ value: eventQueue.shift()!, done: false });
+            const queued = eventQueue.shift()!;
+            queuedBytes -= queued.bytes;
+            return Promise.resolve({ value: queued.event, done: false });
+          }
+
+          if (endAfterQueue) {
+            done = true;
+            return Promise.resolve({
+              value: undefined as unknown as CodexEvent,
+              done: true,
+            });
           }
 
           return new Promise((resolve, reject) => {

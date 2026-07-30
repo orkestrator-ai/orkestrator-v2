@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import {
-  applyCodexMessagePatch,
+  classifyCodexMessagePatch,
   CODEX_MODELS,
   DEFAULT_CODEX_MODEL,
   type CodexApproval,
@@ -87,7 +87,10 @@ type CodexChatSlice = NativeChatStoreSlice<
 >;
 
 interface CodexState extends CodexChatSlice {
-  patchMessage: (sessionKey: string, patch: CodexMessagePatch) => boolean;
+  patchMessage: (
+    sessionKey: string,
+    patch: CodexMessagePatch,
+  ) => "applied" | "stale" | "needs-reconcile";
   // Agent-specific state
   models: CodexModel[];
   slashCommands: Map<string, CodexSlashCommand[]>;
@@ -276,24 +279,24 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
   >({ mergeMessages: mergeNativeMessagesPreservingClientOnly })(set, get, api),
 
   patchMessage: (sessionKey, patch) => {
-    if (!patch?.messageId) return false;
-    let applied = false;
+    if (!patch?.messageId) return "needs-reconcile";
+    let outcome: "applied" | "stale" | "needs-reconcile" = "needs-reconcile";
     set((state) => {
       const session = state.sessions.get(sessionKey);
       if (!session) return state;
       const index = session.messages.findIndex((message) => message.id === patch.messageId);
       const target = index < 0 ? undefined : session.messages[index];
       if (!target) return state;
-      const patched = applyCodexMessagePatch(target, patch);
-      if (!patched) return state;
+      const result = classifyCodexMessagePatch(target, patch);
+      outcome = result.outcome;
+      if (result.outcome !== "applied") return state;
       const messages = session.messages.slice();
-      messages[index] = patched;
+      messages[index] = result.message;
       const sessions = new Map(state.sessions);
       sessions.set(sessionKey, { ...session, messages });
-      applied = true;
       return { sessions };
     });
-    return applied;
+    return outcome;
   },
 
   // Agent-specific state

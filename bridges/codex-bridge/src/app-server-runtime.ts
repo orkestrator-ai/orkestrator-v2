@@ -111,7 +111,8 @@ export interface RuntimeSseEvent {
     /** The approval is no longer actionable — answered, expired or withdrawn. */
     | "session.approval-resolved"
     | "session.interaction-requested"
-    | "session.interaction-resolved";
+    | "session.interaction-resolved"
+    | "session.reconcile-required";
   sessionId?: string;
   data?: Record<string, unknown>;
 }
@@ -139,6 +140,16 @@ export interface AppServerRuntimeOptions {
   ambiguousRecoveryTimeoutMs?: number;
   /** Test/embedding override for the background compaction completion deadline. */
   compactionTimeoutMs?: number;
+  /** Test/embedding override for the per-thread ordered-event count bound. */
+  orderedEventMaxCount?: number;
+  /** Test/embedding override for the per-thread ordered-event byte estimate. */
+  orderedEventMaxBytes?: number;
+}
+
+interface OrderedRuntimeEvent {
+  publish: () => void;
+  bytes: number;
+  coalesceKey?: "status";
 }
 
 interface ThreadRuntimeState {
@@ -154,6 +165,11 @@ interface ThreadRuntimeState {
   publishedModelId?: string;
   /** Serializes transcript-dependent events without blocking app-server stdout. */
   orderedEventTail: Promise<void>;
+  orderedEvents: OrderedRuntimeEvent[];
+  orderedEventBytes: number;
+  orderedEventActiveBytes: number;
+  orderedEventDraining: boolean;
+  orderedReconcilePending: boolean;
   /**
    * Events that arrived before the turn they belong to was registered.
    *
@@ -168,8 +184,29 @@ interface ThreadRuntimeState {
 /** Bounds the pre-registration buffer so a misbehaving peer cannot grow it. */
 export const MAX_PENDING_EVENTS_PER_TURN = 2_000;
 export const MAX_PENDING_TURNS = 8;
+export const MAX_ORDERED_EVENTS_PER_THREAD = 128;
+export const MAX_ORDERED_EVENT_BYTES_PER_THREAD = 512 * 1024;
 const LARGE_MESSAGE_CHARS = 256 * 1024;
 const VERY_LARGE_MESSAGE_CHARS = 1024 * 1024;
+
+const ORDERED_EVENT_ESTIMATE_MAX_DEPTH = 8;
+const ORDERED_EVENT_ESTIMATE_NODE_BYTES = 16;
+
+/** Cheap retained-size estimate that does not allocate a second encoded payload. */
+function estimateOrderedEventBytes(value: unknown, depth = 0): number {
+  if (typeof value === "string") return value.length * 2 + 2;
+  if (value === null || typeof value !== "object") return ORDERED_EVENT_ESTIMATE_NODE_BYTES;
+  if (depth >= ORDERED_EVENT_ESTIMATE_MAX_DEPTH) return ORDERED_EVENT_ESTIMATE_NODE_BYTES;
+  let total = ORDERED_EVENT_ESTIMATE_NODE_BYTES;
+  if (Array.isArray(value)) {
+    for (const entry of value) total += estimateOrderedEventBytes(entry, depth + 1);
+    return total;
+  }
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    total += key.length * 2 + 6 + estimateOrderedEventBytes(entry, depth + 1);
+  }
+  return total;
+}
 
 /**
  * Large snapshots are expensive to render, serialize and reconcile in React.
@@ -593,7 +630,9 @@ export class AppServerRuntime {
       }
     };
     if (enriched.threadId) {
-      this.enqueueAfterMessageFlush(enriched.threadId, publish);
+      this.enqueueAfterMessageFlush(enriched.threadId, publish, {
+        bytes: estimateOrderedEventBytes(enriched),
+      });
     } else {
       publish();
     }
@@ -619,7 +658,9 @@ export class AppServerRuntime {
       }
     };
     if (request.threadId) {
-      this.enqueueAfterMessageFlush(request.threadId, publish);
+      this.enqueueAfterMessageFlush(request.threadId, publish, {
+        bytes: estimateOrderedEventBytes(request),
+      });
     } else {
       publish();
     }
@@ -704,7 +745,7 @@ export class AppServerRuntime {
           data: { interaction: request },
         });
       }
-    });
+    }, { bytes: estimateOrderedEventBytes(request) });
     return true;
   }
 
@@ -722,7 +763,7 @@ export class AppServerRuntime {
           data: { interactionId: request.interactionId, action: answer.action, resolution },
         });
       }
-    });
+    }, { bytes: estimateOrderedEventBytes(request) });
   }
 
   private sessionIdsForThread(threadId: string): string[] {
@@ -914,6 +955,9 @@ export class AppServerRuntime {
       const pending = [
         ...this.pendingFinalizations,
         ...this.pendingSessionWrites,
+        ...[...this.threadState.values()]
+          .filter((state) => state.orderedEventDraining)
+          .map((state) => state.orderedEventTail),
       ];
       if (pending.length === 0) return;
       await Promise.allSettled(pending);
@@ -1131,6 +1175,9 @@ export class AppServerRuntime {
     const state = this.threadState.get(threadId);
     if (!state) return;
     state.coalescer.stop();
+    state.orderedEvents.length = 0;
+    state.orderedEventBytes = 0;
+    state.orderedReconcilePending = false;
     releaseTurnRenderState(state.render);
     state.pendingEvents.clear();
     this.threadState.delete(threadId);
@@ -1282,6 +1329,11 @@ export class AppServerRuntime {
         pendingEvents: new Map(),
         publishedParts: [],
         orderedEventTail: Promise.resolve(),
+        orderedEvents: [],
+        orderedEventBytes: 0,
+        orderedEventActiveBytes: 0,
+        orderedEventDraining: false,
+        orderedReconcilePending: false,
         lastPublishedSnapshotChars: 0,
         coalescer: new UpdateCoalescer({
           intervalMs:
@@ -1556,7 +1608,7 @@ export class AppServerRuntime {
               },
             });
           }
-        });
+        }, { bytes: estimateOrderedEventBytes(event.error) });
         return;
       }
       case "turn.completed": {
@@ -1983,14 +2035,125 @@ export class AppServerRuntime {
    * chain is deliberately not awaited by notification handlers: app-server's
    * stdout loop must remain independent from rendering and SSE delivery.
    */
-  private enqueueAfterMessageFlush(threadId: string, publish: () => void): void {
+  private enqueueAfterMessageFlush(
+    threadId: string,
+    publish: () => void,
+    options: { bytes?: number; coalesceKey?: "status" } = {},
+  ): void {
     const state = this.stateFor(threadId);
-    state.orderedEventTail = state.orderedEventTail
-      .then(() => state.coalescer.flushNow())
-      .then(publish)
-      .catch((error) => {
-        console.error("[codex-bridge] Failed to publish ordered event:", error);
-      });
+    const bytes = Math.max(1, Math.ceil(options.bytes ?? 256));
+    if (state.orderedReconcilePending) return;
+
+    if (options.coalesceKey) {
+      const existing = state.orderedEvents.find(
+        (event) => event.coalesceKey === options.coalesceKey,
+      );
+      if (existing) {
+        const replacementQueueBytes = state.orderedEventBytes - existing.bytes + bytes;
+        if (
+          state.orderedEventActiveBytes + replacementQueueBytes
+          <= this.orderedEventMaxBytes()
+        ) {
+          state.orderedEventBytes = replacementQueueBytes;
+          existing.publish = publish;
+          existing.bytes = bytes;
+          return;
+        }
+      }
+    }
+
+    if (
+      bytes > this.orderedEventMaxBytes()
+      || state.orderedEvents.length + (state.orderedEventDraining ? 2 : 1)
+        > this.orderedEventMaxCount()
+      || state.orderedEventActiveBytes + state.orderedEventBytes + bytes
+        > this.orderedEventMaxBytes()
+    ) {
+      this.replaceOrderedEventsWithReconcile(threadId, state);
+      return;
+    }
+
+    state.orderedEvents.push({ publish, bytes, coalesceKey: options.coalesceKey });
+    state.orderedEventBytes += bytes;
+    this.startOrderedEventDrain(threadId, state);
+  }
+
+  private orderedEventMaxCount(): number {
+    return Math.max(1, this.options.orderedEventMaxCount ?? MAX_ORDERED_EVENTS_PER_THREAD);
+  }
+
+  private orderedEventMaxBytes(): number {
+    return Math.max(1, this.options.orderedEventMaxBytes ?? MAX_ORDERED_EVENT_BYTES_PER_THREAD);
+  }
+
+  private replaceOrderedEventsWithReconcile(
+    threadId: string,
+    state: ThreadRuntimeState,
+  ): void {
+    state.orderedEvents.length = 0;
+    state.orderedEventBytes = 0;
+    state.orderedReconcilePending = true;
+    this.startOrderedEventDrain(threadId, state);
+  }
+
+  private startOrderedEventDrain(
+    threadId: string,
+    state: ThreadRuntimeState,
+  ): void {
+    if (state.orderedEventDraining) return;
+    state.orderedEventDraining = true;
+    state.orderedEventTail = (async () => {
+      try {
+        while (state.orderedReconcilePending || state.orderedEvents.length > 0) {
+          if (state.orderedReconcilePending) {
+            try {
+              await state.coalescer.flushNow();
+            } catch (error) {
+              console.error(
+                "[codex-bridge] Failed to flush before ordered-event reconciliation:",
+                error,
+              );
+            }
+            state.orderedReconcilePending = false;
+            for (const sessionId of this.sessionIdsForThread(threadId)) {
+              this.options.emit({
+                type: "session.reconcile-required",
+                sessionId,
+                data: { reason: "ordered-event-queue-overflow" },
+              });
+            }
+            continue;
+          }
+          const event = state.orderedEvents.shift()!;
+          state.orderedEventBytes -= event.bytes;
+          state.orderedEventActiveBytes = event.bytes;
+          try {
+            await state.coalescer.flushNow();
+            event.publish();
+          } catch (error) {
+            console.error("[codex-bridge] Failed to publish ordered event:", error);
+            // Approval/interaction/status state remains authoritative. Make
+            // the loss explicit so clients rehydrate it instead of silently
+            // trusting a stream with a hole.
+            state.orderedEvents.length = 0;
+            state.orderedEventBytes = 0;
+            state.orderedReconcilePending = true;
+          } finally {
+            state.orderedEventActiveBytes = 0;
+          }
+        }
+      } catch (error) {
+        console.error("[codex-bridge] Failed to reconcile ordered events:", error);
+      } finally {
+        state.orderedEventDraining = false;
+        if (
+          (state.orderedReconcilePending || state.orderedEvents.length > 0)
+          && this.threadState.get(threadId) === state
+        ) {
+          this.startOrderedEventDrain(threadId, state);
+        }
+      }
+    })();
   }
 
   /** Re-renders the streaming assistant message and publishes a sparse update. */
@@ -2076,7 +2239,10 @@ export class AppServerRuntime {
       }
     };
     if (context.activeTurn && this.threadState.has(context.threadId)) {
-      this.enqueueAfterMessageFlush(context.threadId, publish);
+      this.enqueueAfterMessageFlush(context.threadId, publish, {
+        bytes: 128,
+        coalesceKey: "status",
+      });
     } else {
       publish();
     }

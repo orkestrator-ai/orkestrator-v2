@@ -1649,7 +1649,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 </ToolbarTooltipTrigger>
               )}
 
-              {!isPRFinished && changes.length > 0 && (
+              {!isPRFinished && (
                 <ContextMenu>
                   <ToolbarContextMenuTrigger
                     tooltip={

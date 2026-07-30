@@ -735,6 +735,23 @@ describe("ActionBar grid presentation", () => {
     expect(kanban.getAttribute("data-variant")).toBe("ghost");
   });
 
+  test("shows Push Changes as soon as a PR is detected, without waiting for file changes", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentChanges = [];
+    render(<ActionBar presentation="grid" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Push Changes" }));
+
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "codex",
+      expect.objectContaining({ displayTitle: "Git Push" }),
+    );
+  });
+
   test("places the mobile file-change dot inline after the Show files label", () => {
     currentChanges = [{}];
     render(<ActionBar presentation="grid" />);

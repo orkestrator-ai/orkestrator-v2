@@ -161,6 +161,9 @@ const RESET_DATE_TIME_FORMAT_OPTIONS = {
   second: "numeric",
 } satisfies Intl.DateTimeFormatOptions;
 
+const WEEK_MINUTES = 7 * 24 * 60;
+const MINUTE_MS = 60_000;
+
 export function formatResetDateTime(
   value: string,
   locales?: Intl.LocalesArgument,
@@ -168,6 +171,34 @@ export function formatResetDateTime(
   const resetDate = new Date(value);
   if (!Number.isFinite(resetDate.getTime())) return null;
   return resetDate.toLocaleString(locales, RESET_DATE_TIME_FORMAT_OPTIONS);
+}
+
+/**
+ * Locate the current time within a weekly rate-limit period.
+ *
+ * Window duration is authoritative when the provider supplies it. Claude's
+ * structured usage response currently names weekly windows without including
+ * their duration, so its explicit "Weekly" labels use the known seven-day
+ * period as a compatibility fallback.
+ */
+export function weeklyWindowPosition(
+  limit: AgentRateLimitWindow,
+  nowMs: number,
+): number | null {
+  const isWeeklyLabel = /\bweekly\b/i.test(limit.label);
+  const durationMinutes = limit.windowMinutes === WEEK_MINUTES
+    ? limit.windowMinutes
+    : limit.windowMinutes === undefined && isWeeklyLabel
+    ? WEEK_MINUTES
+    : null;
+  if (durationMinutes === null || !limit.resetsAt) return null;
+
+  const resetMs = new Date(limit.resetsAt).getTime();
+  if (!Number.isFinite(resetMs) || !Number.isFinite(nowMs)) return null;
+  const durationMs = durationMinutes * MINUTE_MS;
+  const periodStartMs = resetMs - durationMs;
+  if (nowMs < periodStartMs || nowMs > resetMs) return null;
+  return ((nowMs - periodStartMs) / durationMs) * 100;
 }
 
 function Metric({
@@ -302,6 +333,9 @@ function codexLimitsFromHealth(health: unknown): {
     const window = record(snapshot[key]);
     if (Object.keys(window).length === 0) continue;
     const reset = typeof window.resetsAt === "number" ? window.resetsAt : undefined;
+    const windowMinutes = typeof window.windowDurationMins === "number"
+      ? window.windowDurationMins
+      : undefined;
     rateLimits.push({
       label: typeof snapshot.limitName === "string" && key === "primary"
         ? snapshot.limitName
@@ -312,6 +346,7 @@ function codexLimitsFromHealth(health: unknown): {
       ...(reset !== undefined
         ? { resetsAt: new Date(reset * 1_000).toISOString() }
         : {}),
+      ...(windowMinutes !== undefined ? { windowMinutes } : {}),
     });
   }
   const rawCredits = record(snapshot.credits);
@@ -488,6 +523,18 @@ function RateLimitsSection({
 }: {
   rateLimits: AgentRateLimitWindow[];
 }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!rateLimits.some((limit) =>
+      limit.windowMinutes === WEEK_MINUTES || /\bweekly\b/i.test(limit.label)
+    )) {
+      return;
+    }
+    const interval = window.setInterval(() => setNowMs(Date.now()), MINUTE_MS);
+    return () => window.clearInterval(interval);
+  }, [rateLimits]);
+
   return (
     <div className="space-y-3 border-t border-border/60 pt-4">
       <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
@@ -495,6 +542,7 @@ function RateLimitsSection({
       </div>
       {rateLimits.map((limit) => {
         const resetLabel = limit.resetsAt ? formatResetDateTime(limit.resetsAt) : null;
+        const weekPosition = weeklyWindowPosition(limit, nowMs);
         return (
           <div key={`${limit.label}:${limit.resetsAt ?? ""}`}>
             <div className="mb-1.5 flex justify-between gap-3 text-xs">
@@ -506,7 +554,21 @@ function RateLimitsSection({
               </span>
             </div>
             {limit.usedPercent !== undefined ? (
-              <Progress value={limit.usedPercent} className="h-1" />
+              <div className="relative">
+                <Progress value={limit.usedPercent} className="h-1" />
+                {weekPosition !== null ? (
+                  <span
+                    className="pointer-events-none absolute -inset-y-1 z-10 w-px bg-red-500 shadow-[0_0_2px_rgba(239,68,68,0.8)]"
+                    style={{
+                      left: `${weekPosition}%`,
+                      transform: "translateX(-50%)",
+                    }}
+                    role="img"
+                    aria-label={`Current point in weekly period: ${weekPosition.toFixed(0)}%`}
+                    title={`Current point in weekly period: ${weekPosition.toFixed(0)}%`}
+                  />
+                ) : null}
+              </div>
             ) : null}
             {resetLabel ? (
               <div className="mt-1 text-right text-[10px] text-muted-foreground">

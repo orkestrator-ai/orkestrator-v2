@@ -163,6 +163,7 @@ export interface EngineRateLimitWindow {
   label: string;
   usedPercent?: number;
   resetsAt?: string;
+  windowMinutes?: number;
 }
 
 export interface EngineCreditSnapshot {

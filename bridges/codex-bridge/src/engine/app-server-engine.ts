@@ -244,6 +244,13 @@ function allowlistRateLimits(value: unknown): Record<string, unknown> | { error:
     if (typeof window.resetsAt === "number" && Number.isFinite(window.resetsAt)) {
       allowed.resetsAt = window.resetsAt;
     }
+    if (
+      typeof window.windowDurationMins === "number"
+      && Number.isFinite(window.windowDurationMins)
+      && window.windowDurationMins >= 0
+    ) {
+      allowed.windowDurationMins = window.windowDurationMins;
+    }
     if (Object.keys(allowed).length > 0) rateLimits[key] = allowed;
   }
   return { rateLimits };

@@ -7533,7 +7533,7 @@ describe("usage and account rate limits", () => {
     h.child().notify("account/rateLimits/updated", {
       rateLimits: {
         limitName: "Five hour",
-        primary: { usedPercent: 60 },
+        primary: { usedPercent: 60, windowDurationMins: 300 },
         secondary: { usedPercent: 20 },
         credits: { balance: "12.50", hasCredits: true },
       },
@@ -7542,21 +7542,33 @@ describe("usage and account rate limits", () => {
 
     expect(h.runtime.getStatus(sessionId)?.contextUsage).toMatchObject({
       rateLimits: [
-        { slot: "primary", label: "Five hour", usedPercent: 60 },
+        {
+          slot: "primary",
+          label: "Five hour",
+          usedPercent: 60,
+          windowMinutes: 300,
+        },
         { slot: "secondary", usedPercent: 20 },
       ],
       credits: { balance: "12.50", hasCredits: true },
     });
 
-    // Secondary only, and no credits at all.
+    // Sparse window fields, and no credits at all.
     h.child().notify("account/rateLimits/updated", {
-      rateLimits: { secondary: { usedPercent: 35 } },
+      rateLimits: {
+        primary: { usedPercent: 65 },
+        secondary: { usedPercent: 35 },
+      },
     });
     await h.drain();
 
     expect(h.runtime.getStatus(sessionId)?.contextUsage).toMatchObject({
       rateLimits: [
-        { slot: "primary", label: "Five hour", usedPercent: 60 },
+        {
+          slot: "primary",
+          usedPercent: 65,
+          windowMinutes: 300,
+        },
         { slot: "secondary", usedPercent: 35 },
       ],
       // Absent metadata does not clear a previously observed value.

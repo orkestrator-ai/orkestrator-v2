@@ -269,7 +269,11 @@ describe("usage and limits", () => {
     const events = reduce("account/rateLimits/updated", {
       rateLimits: {
         limitName: "Five hour",
-        primary: { usedPercent: 60, resetsAt: 1_800_000_000 },
+        primary: {
+          usedPercent: 60,
+          resetsAt: 1_800_000_000,
+          windowDurationMins: 300,
+        },
         secondary: { usedPercent: 20, resetsAt: null },
         credits: { balance: "12.50", hasCredits: true, unlimited: false },
       },
@@ -288,6 +292,7 @@ describe("usage and limits", () => {
           // Codex reports epoch *seconds*; pinning the exact ISO string is what
           // makes dropping or inverting the ×1000 a test failure.
           resetsAt: "2027-01-15T08:00:00.000Z",
+          windowMinutes: 300,
         },
         { slot: "secondary", label: "Secondary", usedPercent: 20 },
       ],
@@ -324,6 +329,18 @@ describe("usage and limits", () => {
       (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
         .rateLimits[0]?.resetsAt,
     ).toBeUndefined();
+  });
+
+  test("a negative or non-numeric window duration is ignored", () => {
+    for (const windowDurationMins of [-1, "10080"]) {
+      const events = reduce("account/rateLimits/updated", {
+        rateLimits: { secondary: { usedPercent: 10, windowDurationMins } },
+      });
+      expect(
+        (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
+          .rateLimits[0]?.windowMinutes,
+      ).toBeUndefined();
+    }
   });
 
   test("a missing or malformed rateLimits payload emits nothing", () => {

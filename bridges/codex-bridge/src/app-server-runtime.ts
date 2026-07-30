@@ -349,7 +349,12 @@ export function mergeRateLimitWindows(
   if (update.length === 0) return retained;
   const bySlot = new Map<string, EngineRateLimitWindow>();
   for (const window of retained) bySlot.set(window.slot, window);
-  for (const window of update) bySlot.set(window.slot, window);
+  for (const window of update) {
+    bySlot.set(window.slot, {
+      ...bySlot.get(window.slot),
+      ...window,
+    });
+  }
   // Stable presentation order regardless of which window the update carried.
   return [...bySlot.values()].sort((left, right) =>
     left.slot === right.slot ? 0 : left.slot === "primary" ? -1 : 1,

@@ -1257,7 +1257,12 @@ describe("runtime health", () => {
       "account/rateLimits/read": () => ({
         rateLimits: {
           limitName: "Pro",
-          primary: { usedPercent: 12, resetsAt: 42, rawTokenCount: 99 },
+          primary: {
+            usedPercent: 12,
+            resetsAt: 42,
+            windowDurationMins: 10_080,
+            rawTokenCount: 99,
+          },
           credits: { balance: "123.45", hasCredits: true },
           spendControl: { monthlyLimit: 500 },
         },
@@ -1278,7 +1283,7 @@ describe("runtime health", () => {
     expect(health.rateLimits).toEqual({
       rateLimits: {
         limitName: "Pro",
-        primary: { usedPercent: 12, resetsAt: 42 },
+        primary: { usedPercent: 12, resetsAt: 42, windowDurationMins: 10_080 },
       },
     });
     expect(serialized).not.toContain("codexHome");

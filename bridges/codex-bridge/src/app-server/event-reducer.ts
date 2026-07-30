@@ -40,6 +40,11 @@ function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function nonNegativeNum(value: unknown): number | undefined {
+  const parsed = num(value);
+  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
+}
+
 /**
  * ECMAScript `Date` only represents ±8.64e15 ms around the epoch. `new Date(x)`
  * outside that range yields an Invalid Date and `toISOString()` *throws* — inside
@@ -249,14 +254,17 @@ export function reduceNotification(
         const window = isRecord(snapshot[key]) ? snapshot[key] : undefined;
         if (!window) continue;
         const resetsAt = epochSecondsToIso(window.resetsAt);
+        const usedPercent = num(window.usedPercent);
+        const windowMinutes = nonNegativeNum(window.windowDurationMins);
         windows.push({
           slot: key,
           label: typeof snapshot.limitName === "string" && snapshot.limitName.length > 0
             && key === "primary"
             ? snapshot.limitName
             : label,
-          usedPercent: num(window.usedPercent),
+          ...(usedPercent !== undefined ? { usedPercent } : {}),
           ...(resetsAt !== undefined ? { resetsAt } : {}),
+          ...(windowMinutes !== undefined ? { windowMinutes } : {}),
         });
       }
       const rawCredits = isRecord(snapshot.credits) ? snapshot.credits : null;

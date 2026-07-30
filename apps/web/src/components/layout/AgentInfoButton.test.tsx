@@ -179,6 +179,7 @@ const {
   describeRewindTarget,
   formatResetDateTime,
   summarizeRewindPreview,
+  weeklyWindowPosition,
 } =
   await import("./AgentInfoButton");
 
@@ -680,6 +681,46 @@ describe("AgentInfoButton provider resolution", () => {
 });
 
 describe("AgentInfoButton usage panel", () => {
+  test("positions the current-week marker relative to the reset boundary", () => {
+    const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
+    const halfwayMs = resetMs - 3.5 * 24 * 60 * 60 * 1_000;
+
+    expect(
+      weeklyWindowPosition({
+        label: "Secondary",
+        resetsAt: new Date(resetMs).toISOString(),
+        windowMinutes: 10_080,
+      }, halfwayMs),
+    ).toBe(50);
+    // Claude names the period but does not currently report its duration.
+    expect(
+      weeklyWindowPosition({
+        label: "Weekly (Sonnet)",
+        resetsAt: new Date(resetMs).toISOString(),
+      }, halfwayMs),
+    ).toBe(50);
+  });
+
+  test("does not place a weekly marker on other or stale limit periods", () => {
+    const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
+    expect(
+      weeklyWindowPosition({
+        label: "Five Hour",
+        resetsAt: new Date(resetMs).toISOString(),
+        windowMinutes: 300,
+      }, resetMs - 60_000),
+    ).toBeNull();
+    expect(
+      weeklyWindowPosition({
+        label: "Weekly",
+        resetsAt: new Date(resetMs).toISOString(),
+      }, resetMs + 1),
+    ).toBeNull();
+    expect(
+      weeklyWindowPosition({ label: "Weekly", resetsAt: "not-a-date" }, resetMs),
+    ).toBeNull();
+  });
+
   test("prompts for a first snapshot when usage is unavailable", () => {
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
@@ -903,6 +944,36 @@ describe("AgentInfoButton usage panel", () => {
     ).toBeTruthy();
   });
 
+  test("renders a red current-week marker over a weekly usage bar", () => {
+    const originalDateNow = Date.now;
+    const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
+    Date.now = () => resetMs - 3.5 * 24 * 60 * 60 * 1_000;
+    try {
+      useClaudeStore.setState({
+        contextUsage: new Map([[
+          CLAUDE_KEY,
+          usage({
+            rateLimits: [{
+              label: "Weekly",
+              usedPercent: 42,
+              resetsAt: new Date(resetMs).toISOString(),
+            }],
+          }),
+        ]]),
+      } as never);
+      render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
+
+      const marker = screen.getByRole("img", {
+        name: "Current point in weekly period: 50%",
+      });
+      expect(marker.className).toContain("bg-red-500");
+      expect((marker as HTMLElement).style.left).toBe("50%");
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
   test("formats reset timestamps with one locale-native formatter", () => {
     const resetValue = "2026-07-27T09:00:00.000Z";
     const resetDate = new Date(resetValue);
@@ -1102,7 +1173,11 @@ describe("AgentInfoButton Codex runtime panel", () => {
       rateLimits: {
         rateLimits: {
           limitName: "Codex weekly",
-          primary: { usedPercent: 12.5, resetsAt: resetsAtSeconds },
+          primary: {
+            usedPercent: 12.5,
+            resetsAt: resetsAtSeconds,
+            windowDurationMins: 10_080,
+          },
           secondary: { usedPercent: 80 },
           credits: { balance: "$20.00", hasCredits: true, unlimited: false },
         },
@@ -1124,6 +1199,7 @@ describe("AgentInfoButton Codex runtime panel", () => {
         label: "Codex weekly",
         usedPercent: 12.5,
         resetsAt: new Date(resetsAtSeconds * 1_000).toISOString(),
+        windowMinutes: 10_080,
       },
       { label: "Secondary", usedPercent: 80 },
     ]);

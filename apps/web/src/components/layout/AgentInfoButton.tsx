@@ -151,6 +151,12 @@ function formatCount(value: number, singular: string): string {
   return `${value} ${singular}${value === 1 ? "" : "s"}`;
 }
 
+function formatResetDateTime(value: string): string {
+  const resetDate = new Date(value);
+  const weekday = resetDate.toLocaleDateString(undefined, { weekday: "long" });
+  return `${weekday}, ${resetDate.toLocaleString()}`;
+}
+
 function Metric({
   label,
   value,
@@ -486,7 +492,7 @@ function RateLimitsSection({
           ) : null}
           {limit.resetsAt ? (
             <div className="mt-1 text-right text-[10px] text-muted-foreground">
-              Resets {new Date(limit.resetsAt).toLocaleString()}
+              Resets {formatResetDateTime(limit.resetsAt)}
             </div>
           ) : null}
         </div>

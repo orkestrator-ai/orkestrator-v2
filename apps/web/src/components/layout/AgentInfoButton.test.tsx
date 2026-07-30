@@ -831,6 +831,7 @@ describe("AgentInfoButton usage panel", () => {
   });
 
   test("renders rate limits, including a window with no percentage and a reset time", () => {
+    const resetDate = new Date("2026-07-27T09:00:00.000Z");
     useClaudeStore.setState({
       contextUsage: new Map([[
         CLAUDE_KEY,
@@ -850,7 +851,9 @@ describe("AgentInfoButton usage panel", () => {
     // No percentage is not "0% used" — it means the window was not reported.
     expect(screen.getByText("Available")).toBeTruthy();
     expect(
-      screen.getByText(`Resets ${new Date("2026-07-27T09:00:00.000Z").toLocaleString()}`),
+      screen.getByText(
+        `Resets ${resetDate.toLocaleDateString(undefined, { weekday: "long" })}, ${resetDate.toLocaleString()}`,
+      ),
     ).toBeTruthy();
   });
 
@@ -1042,6 +1045,12 @@ describe("AgentInfoButton Codex runtime panel", () => {
       hasCredits: true,
       unlimited: false,
     });
+    const resetDate = new Date(resetsAtSeconds * 1_000);
+    expect(
+      screen.getByText(
+        `Resets ${resetDate.toLocaleDateString(undefined, { weekday: "long" })}, ${resetDate.toLocaleString()}`,
+      ),
+    ).toBeTruthy();
     // The rest of the snapshot survives the merge.
     expect(stored.usedTokens).toBe(25_000);
   });

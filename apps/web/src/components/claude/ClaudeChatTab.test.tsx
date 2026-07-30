@@ -4393,6 +4393,35 @@ describe("ClaudeChatTab", () => {
       expect(screen.queryByText("Connection Failed")).toBeNull();
     });
 
+    test("automatically retries when the bridge start command races container startup", async () => {
+      const retryTimers = installRetryTimeoutQueue();
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        createdAt: new Date().toISOString(),
+      });
+      mockGetClaudeServerStatus.mockResolvedValue({
+        running: false,
+        hostPort: 9999,
+      });
+      mockStartClaudeServer
+        .mockRejectedValueOnce(new Error("Container is not running"))
+        .mockResolvedValueOnce({
+          hostPort: 9999,
+          authToken: BRIDGE_AUTH_TOKEN,
+        });
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await flushMicrotaskWork();
+
+      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([500]);
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+
+      await retryTimers.runNextRetry();
+
+      expect(mockStartClaudeServer).toHaveBeenCalledTimes(2);
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+
     test("shows the terminal error after exhausting retries and manual retry resets the budget", async () => {
       const retryTimers = installRetryTimeoutQueue();
       useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {

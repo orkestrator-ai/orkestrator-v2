@@ -1217,7 +1217,12 @@ export function ClaudeChatTab({
 
           if (!localStatus.running || !localStatus.authToken) {
             console.debug("[ClaudeChatTab] Starting local Claude server...");
-            const result = await startLocalClaudeServer(environmentId);
+            let result;
+            try {
+              result = await startLocalClaudeServer(environmentId);
+            } catch (error) {
+              throw classifyNewEnvironmentConnectionStartupError(error);
+            }
             localStatus = {
               running: true,
               port: result.port,
@@ -1250,7 +1255,12 @@ export function ClaudeChatTab({
 
           if (!status.running || !status.authToken) {
             console.debug("[ClaudeChatTab] Starting container Claude server...");
-            const result = await startClaudeServer(containerId);
+            let result;
+            try {
+              result = await startClaudeServer(containerId);
+            } catch (error) {
+              throw classifyNewEnvironmentConnectionStartupError(error);
+            }
             status = {
               running: true,
               hostPort: result.hostPort,

@@ -35,7 +35,7 @@ export class RetryableNewEnvironmentConnectionError extends Error {
 }
 
 const TRANSIENT_STARTUP_MESSAGE =
-  /\b(?:still starting|not ready|became ready|delayed by setup|temporar(?:y|ily)|unavailable|connection refused|timed? out|timeout|econnrefused|econnreset|fetch failed|network error|socket hang up)\b/i;
+  /\b(?:still starting|not ready|became ready|did not become healthy|before becoming healthy|delayed by setup|container is not running|container is restarting|worktree is not available|temporar(?:y|ily)|unavailable|connection refused|timed? out|timeout|econnrefused|econnreset|fetch failed|network error|socket hang up)\b/i;
 
 function connectionErrorMessage(
   error: unknown,

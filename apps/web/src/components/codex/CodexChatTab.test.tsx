@@ -1809,6 +1809,49 @@ describe("CodexChatTab", () => {
     expect(screen.queryByText("Connection Failed")).toBeNull();
   });
 
+  test("automatically retries when the bridge start command races container startup", async () => {
+    const retryTimers = installAcceleratedConnectionRetryTimers({ hold: true });
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      createdAt: new Date().toISOString(),
+    });
+    mockGetCodexServerStatus.mockResolvedValue({
+      running: false,
+      hostPort: 9999,
+      authToken: "stale-status-token",
+    });
+    mockStartCodexServer
+      .mockRejectedValueOnce(new Error("Container is not running"))
+      .mockResolvedValueOnce({
+        hostPort: 9999,
+        authToken: "container-start-token",
+      });
+
+    try {
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await retryTimers.waitForDelayCount(1);
+
+      expect(retryTimers.delays).toEqual([500]);
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+
+      await act(async () => {
+        retryTimers.callbacks[0]?.();
+        await Promise.resolve();
+      });
+      await retryTimers.settle();
+
+      expect(mockStartCodexServer).toHaveBeenCalledTimes(2);
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    } finally {
+      retryTimers.restore();
+    }
+  });
+
   test("uses the full startup retry sequence before surfacing the final failure", async () => {
     const retryTimers = installAcceleratedConnectionRetryTimers({ hold: true });
     useCodexStore.setState((state) => ({

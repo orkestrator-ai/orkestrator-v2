@@ -25,6 +25,7 @@ import type {
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import {
+  AmbiguousPromptDispatchError,
   PromptRejectedError,
   ProviderUnavailableError,
   type BuildPipelineProvider,
@@ -411,7 +412,7 @@ describe("BuildPipelineService prompt dispatch", () => {
     await withService(async ({ service, storage, provider }) => {
       const staged = await startAtSetup(service, storage);
       // The build stage's send fails after the bridge may already have taken it.
-      provider.sendErrors = [new ProviderUnavailableError("response lost")];
+      provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
       await service.advanceNow(staged.id);
 
       const pending = await snapshot(storage, staged.id);
@@ -433,7 +434,7 @@ describe("BuildPipelineService prompt dispatch", () => {
   test("does not redispatch when the session is already running the attempt", async () => {
     await withService(async ({ service, storage, provider }) => {
       const staged = await startAtSetup(service, storage);
-      provider.sendErrors = [new ProviderUnavailableError("response lost")];
+      provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
       await service.advanceNow(staged.id);
       const pending = await snapshot(storage, staged.id);
       const sessionId = pending.pendingPromptAttempt!.sessionId;
@@ -444,6 +445,62 @@ describe("BuildPipelineService prompt dispatch", () => {
 
       const reconciled = await snapshot(storage, staged.id);
       expect(reconciled.pendingPromptAttempt).toBeUndefined();
+      expect(provider.sent).toHaveLength(0);
+    });
+  });
+
+  test("bounds repeated definite dispatch failures even while status stays healthy", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const staged = await startAtSetup(service, storage);
+      provider.sendErrors = [
+        new ProviderUnavailableError("preflight unavailable"),
+        new ProviderUnavailableError("preflight still unavailable"),
+      ];
+
+      await service.advanceNow(staged.id);
+
+      const reconnecting = await snapshot(storage, staged.id);
+      expect(reconnecting.phase).toBe("building");
+      expect(reconnecting.pendingPromptAttempt).toBeTruthy();
+      expect(reconnecting.reconnectAttempt?.phase).toBe("building");
+      expect(reconnecting.error).toContain("preflight unavailable");
+      expect(provider.sent).toHaveLength(0);
+
+      // A healthy status endpoint must not clear the original deadline while
+      // the config/prompt preflight for this durable attempt still fails.
+      const stored = (await storage.getBuildPipeline(staged.id))!;
+      const backdated = structuredClone(stored.snapshot) as BuildPipeline;
+      backdated.reconnectAttempt!.startedAt = new Date(0).toISOString();
+      await storage.saveBuildPipeline(
+        staged.id,
+        staged.projectId,
+        staged.environmentId,
+        stored.version,
+        backdated,
+        stored.revision,
+      );
+      await service.advanceNow(staged.id);
+
+      const failed = await snapshot(storage, staged.id);
+      expect(failed.phase).toBe("failed");
+      expect(failed.pendingPromptAttempt).toBeUndefined();
+      expect(failed.error).toContain("stayed unreachable");
+      expect(failed.error).toContain("preflight still unavailable");
+      expect(provider.sent).toHaveLength(0);
+    }, { reconnectDeadlineMs: 60_000 });
+  });
+
+  test("fails visibly when a definite dispatch preflight is malformed", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const staged = await startAtSetup(service, storage);
+      provider.sendErrors = [new Error("malformed session config")];
+
+      await service.advanceNow(staged.id);
+
+      const failed = await snapshot(storage, staged.id);
+      expect(failed.phase).toBe("failed");
+      expect(failed.pendingPromptAttempt).toBeUndefined();
+      expect(failed.error).toContain("malformed session config");
       expect(provider.sent).toHaveLength(0);
     });
   });
@@ -544,9 +601,10 @@ describe("BuildPipelineService addressing stage", () => {
       expect(addressing.sessions).toHaveLength(reviewing.sessions.length);
       const addressPrompt = provider.sent.at(-1)!;
       expect(addressPrompt.sessionId).toBe(reviewSessionId);
-      expect(addressPrompt.prompt).toBe(
+      expect(addressPrompt.prompt).toStartWith(
         "Address all the above issues and coverage gaps, making sensible assumptions and without asking questions.",
       );
+      expect(addressPrompt.prompt).toContain("commit every relevant fix");
       expect(addressPrompt.mode).toBe("build");
 
       provider.structuredResult = "absent";
@@ -566,7 +624,7 @@ describe("BuildPipelineService addressing stage", () => {
         requestId: reviewing.structuredReviewRequestId!,
         value: reviewWithIssues,
       };
-      provider.sendErrors = [new ProviderUnavailableError("response lost")];
+      provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
 
       await service.advanceNow(built.id);
 
@@ -577,9 +635,10 @@ describe("BuildPipelineService addressing stage", () => {
       await service.advanceNow(built.id);
       const dispatched = await snapshot(storage, built.id);
       expect(dispatched.pendingPromptAttempt).toBeUndefined();
-      expect(provider.sent.at(-1)?.prompt).toBe(
+      expect(provider.sent.at(-1)?.prompt).toStartWith(
         "Address all the above issues and coverage gaps, making sensible assumptions and without asking questions.",
       );
+      expect(provider.sent.at(-1)?.prompt).toContain("commit every relevant fix");
     });
   });
 
@@ -670,7 +729,7 @@ describe("BuildPipelineService user messages", () => {
     await withService(async ({ service, storage, provider }) => {
       const built = await startBuilding(service, storage);
       await service.sendMessage(built.id, "check the migration");
-      provider.sendErrors = [new ProviderUnavailableError("response lost")];
+      provider.sendErrors = [new AmbiguousPromptDispatchError("response lost")];
 
       await service.advanceNow(built.id);
 

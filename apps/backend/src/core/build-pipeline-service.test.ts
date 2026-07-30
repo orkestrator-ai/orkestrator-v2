@@ -190,7 +190,7 @@ async function withService(
     if (controls.failCommands.has(command)) {
       throw new Error(`${command} failed`);
     }
-    if (command === "detect_pr_local") {
+    if (command === "detect_pr_local" || command === "detect_pr") {
       return controls.detection as T;
     }
     if (command === "start_environment" || command === "run_environment_setup") {
@@ -279,7 +279,36 @@ function startInput(
   };
 }
 
+async function startVerifying(
+  service: BuildPipelineService,
+  storage: StorageService,
+): Promise<BuildPipeline> {
+  const started = await service.start(startInput());
+  for (let pass = 0; pass < 4; pass += 1) {
+    await service.advanceNow(started.id);
+  }
+  const verifying = await pipeline(storage, started.id);
+  expect(verifying.phase).toBe("verifying");
+  return verifying;
+}
+
 describe("BuildPipelineService", () => {
+  test("rejects malformed starts and environments already being deleted", async () => {
+    await withService(async (service, storage) => {
+      await expect(service.start({} as never)).rejects.toThrow(
+        "Invalid build pipeline start request",
+      );
+
+      await storage.updateEnvironment("env-1", {
+        deletionRequestedAt: new Date().toISOString(),
+      });
+      await expect(service.start(startInput())).rejects.toThrow(
+        "does not belong to this project",
+      );
+      expect(await storage.listBuildPipelines("project-1")).toEqual([]);
+    });
+  });
+
   test("admits one equivalent start across two backend processes", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-admission-"));
     const firstStorage = new StorageService(dataDir);
@@ -578,6 +607,128 @@ describe("BuildPipelineService", () => {
       );
     } finally {
       await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("wires repository defaults, authentication and staged images into the production Codex provider", async () => {
+    const dataDir = await fs.mkdtemp(
+      path.join(tmpdir(), "orkestrator-pipeline-production-provider-"),
+    );
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "build",
+      branch: "build",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "full",
+      order: 0,
+      environmentType: "local",
+      worktreePath: "/tmp/build",
+      setupScriptsComplete: true,
+    });
+    await storage.updateRepositoryConfig("project-1", {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      defaultAgent: "codex",
+      defaultModel: "repo-codex",
+      defaultEffort: "xhigh",
+    });
+
+    const requests: Array<{ url: string; init: RequestInit }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (
+      input: string | URL | Request,
+      init: RequestInit = {},
+    ) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url.endsWith("/session/create")) {
+        return Response.json({ sessionId: "build-production-1" });
+      }
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    const invocations: Array<{
+      command: string;
+      args: Record<string, unknown>;
+    }> = [];
+    const service = new BuildPipelineService(
+      storage,
+      async <T>(
+        command: string,
+        args: Record<string, unknown> = {},
+      ): Promise<T> => {
+        invocations.push({ command, args });
+        if (
+          command === "update_environment_agent_settings"
+          || command === "run_environment_setup"
+        ) {
+          return (await storage.getEnvironment("env-1")) as T;
+        }
+        if (command === "start_local_codex_server_cmd") {
+          return { port: 3210, authToken: "test-auth-token" } as T;
+        }
+        if (command === "write_local_file") {
+          return "/tmp/build/.orkestrator/prompt-attachments/shot.png" as T;
+        }
+        throw new Error(`Unexpected command: ${command}`);
+      },
+      { autoAdvance: false },
+    );
+    try {
+      const started = await service.start(startInput({
+        agentType: "codex",
+        taskSnapshot: {
+          ...startInput().taskSnapshot,
+          images: [{ filename: "shot.png", data: "AAAA" }],
+        },
+      }));
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+
+      expect(invocations).toContainEqual({
+        command: "start_local_codex_server_cmd",
+        args: { environmentId: "env-1" },
+      });
+      expect(invocations).toContainEqual({
+        command: "write_local_file",
+        args: {
+          worktreePath: "/tmp/build",
+          filePath: ".orkestrator/prompt-attachments/shot.png",
+          base64Data: "AAAA",
+        },
+      });
+      expect(requests.map(({ url }) => url)).toEqual([
+        "http://127.0.0.1:3210/session/create",
+        "http://127.0.0.1:3210/session/build-production-1/prompt",
+      ]);
+      const create = requests[0]!;
+      expect(new Headers(create.init.headers).get("X-Orkestrator-Codex-Token"))
+        .toBe("test-auth-token");
+      expect(JSON.parse(String(create.init.body))).toMatchObject({
+        model: "repo-codex",
+        modelReasoningEffort: "xhigh",
+        mode: "build",
+      });
+      expect(JSON.parse(String(requests[1]!.init.body))).toMatchObject({
+        attachments: [{
+          type: "image",
+          path: "/tmp/build/.orkestrator/prompt-attachments/shot.png",
+          filename: "shot.png",
+          dataUrl: "data:image/png;base64,AAAA",
+        }],
+      });
+    } finally {
+      await service.shutdown();
+      globalThis.fetch = originalFetch;
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
@@ -929,6 +1080,68 @@ describe("BuildPipelineService", () => {
     });
   });
 
+  test("uses container PR detection for containerized build environments", async () => {
+    await withService(async (service, storage, _provider, invocations) => {
+      await storage.updateEnvironment("env-1", {
+        environmentType: "containerized",
+        containerId: "container-1",
+      });
+      const started = await service.start(startInput({
+        environmentType: "containerized",
+      }));
+      for (let pass = 0; pass < 6; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+
+      expect((await pipeline(storage, started.id)).phase).toBe("complete");
+      expect(invocations).toContainEqual({
+        command: "detect_pr",
+        args: { containerId: "container-1", branch: "build" },
+      });
+      expect(invocations.some(({ command }) => command === "detect_pr_local"))
+        .toBe(false);
+    });
+  });
+
+  test("fails when a containerized build has no container for PR detection", async () => {
+    await withService(async (service, storage) => {
+      await storage.updateEnvironment("env-1", {
+        environmentType: "containerized",
+        containerId: null,
+      });
+      const started = await service.start(startInput({
+        environmentType: "containerized",
+      }));
+      for (let pass = 0; pass < 6; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: "Build container is unavailable",
+      });
+    });
+  });
+
+  test("rejects malformed pull request detection results", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      controls.detection = {
+        url: "",
+        state: "unknown",
+        hasMergeConflicts: "yes",
+      } as unknown as typeof controls.detection;
+      const started = await service.start(startInput());
+      for (let pass = 0; pass < 6; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: "Pull request detection returned an invalid result",
+      });
+    });
+  });
+
   test("restores Kanban lifecycle transitions, comments, and PR metadata idempotently", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
       const started = await service.start(startInput({
@@ -977,6 +1190,14 @@ describe("BuildPipelineService", () => {
         completionCommentError: "post_github_completion_comment failed",
       });
 
+      await expect(service.retryCompletionComment(started.id)).rejects.toThrow(
+        "post_github_completion_comment failed",
+      );
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        completionCommentStatus: "failed",
+        completionCommentError: "post_github_completion_comment failed",
+      });
+
       controls.failCommands.delete("post_github_completion_comment");
       const retried = await service.retryCompletionComment(started.id);
       expect(retried).toMatchObject({
@@ -984,7 +1205,7 @@ describe("BuildPipelineService", () => {
         completionCommentId: "comment-1",
       });
       expect(invocations.filter((entry) =>
-        entry.command === "post_github_completion_comment")).toHaveLength(2);
+        entry.command === "post_github_completion_comment")).toHaveLength(3);
     });
   });
 
@@ -1017,6 +1238,91 @@ describe("BuildPipelineService", () => {
       });
       const duplicate = await service.importLegacy("project-1", [legacy]);
       expect(duplicate).toEqual({ importedIds: [], skipped: 1 });
+
+      expect(await service.importLegacy("", [legacy])).toEqual({
+        importedIds: [],
+        skipped: 1,
+      });
+      expect(await service.importLegacy(
+        "project-1",
+        null as unknown as unknown[],
+      )).toEqual({ importedIds: [], skipped: 0 });
+
+      expect(await service.importLegacy("project-1", [{
+        ...legacy,
+        id: "missing-environment",
+        environmentId: "does-not-exist",
+      }])).toEqual({ importedIds: [], skipped: 1 });
+
+      await storage.addEnvironment({
+        ...(await storage.getEnvironment("env-1"))!,
+        id: "owned-env",
+        name: "owned",
+        branch: "owned",
+        worktreePath: "/tmp/owned",
+        buildPipelineId: "another-pipeline",
+      });
+      expect(await service.importLegacy("project-1", [{
+        ...legacy,
+        id: "owned-environment",
+        environmentId: "owned-env",
+      }])).toEqual({ importedIds: [], skipped: 1 });
+    });
+  });
+
+  test("does not report or persist a legacy snapshot that collides with an active admission", async () => {
+    await withService(async (service, storage) => {
+      const active = await service.start(startInput({
+        taskId: "admission-collision",
+      }));
+      const collidingId = "legacy-admission-collision";
+      const collidingSnapshot: BuildPipeline = {
+        ...active,
+        id: collidingId,
+        backendRevision: 0,
+        controller: "backend",
+      };
+
+      const result = await service.importLegacy("project-1", [
+        collidingSnapshot,
+      ]);
+
+      expect(result).toEqual({ importedIds: [], skipped: 1 });
+      expect(await storage.getBuildPipeline(collidingId)).toBeNull();
+      expect(await storage.getBuildPipeline(active.id)).toMatchObject({
+        id: active.id,
+        snapshot: expect.objectContaining({
+          admissionKey: active.admissionKey,
+          taskId: "admission-collision",
+        }),
+      });
+      expect(await storage.listBuildPipelines("project-1")).toHaveLength(1);
+    });
+  });
+
+  test("remove disposes a cached provider only after its final pipeline is gone", async () => {
+    await withService(async (service, storage, provider) => {
+      const first = await service.start(startInput({ taskId: "remove-first" }));
+      const second = await service.start(startInput({ taskId: "remove-second" }));
+      await service.cancel(first.id);
+      await service.cancel(second.id);
+
+      const dispose = mock(async () => {});
+      (provider as FakeProvider & { dispose: () => Promise<void> }).dispose =
+        dispose;
+      const providers = (service as unknown as {
+        providers: Map<string, BuildPipelineProvider>;
+      }).providers;
+      providers.set("env-1:claude", provider);
+
+      await service.remove(first.id);
+      expect(await storage.getBuildPipeline(first.id)).toBeNull();
+      expect(dispose).not.toHaveBeenCalled();
+
+      await service.remove(second.id);
+      expect(await storage.getBuildPipeline(second.id)).toBeNull();
+      expect(dispose).toHaveBeenCalledTimes(1);
+      expect(providers.has("env-1:claude")).toBe(false);
     });
   });
 
@@ -1186,6 +1492,98 @@ describe("BuildPipelineService", () => {
       expect(await pipeline(storage, started.id)).toMatchObject({
         phase: "failed",
         error: expect.any(String),
+      });
+    });
+  });
+
+  for (const [label, legacyMessage, expectedRequestId] of [
+    [
+      "nested provider metadata",
+      { info: { role: "user", id: "legacy-info-request" } },
+      "legacy-info-request",
+    ],
+    [
+      "an explicit requestId",
+      { requestId: "legacy-explicit-request" },
+      "legacy-explicit-request",
+    ],
+    [
+      "a top-level user message",
+      { id: "legacy-user-request", role: "user" },
+      "legacy-user-request",
+    ],
+  ] as const) {
+    test(`recovers a legacy verification request id from ${label}`, async () => {
+      await withService(async (service, storage, provider) => {
+        const verifying = await startVerifying(service, storage);
+        const record = await storage.getBuildPipeline(verifying.id);
+        if (!record) throw new Error("Pipeline disappeared");
+        const snapshot = record.snapshot as BuildPipeline;
+        const session = snapshot.sessions[snapshot.currentSessionIndex]!;
+        delete session.structuredRequestId;
+        await storage.saveBuildPipeline(
+          snapshot.id,
+          snapshot.projectId,
+          snapshot.environmentId,
+          record.version,
+          snapshot,
+          record.revision,
+        );
+
+        provider.messages = async (sessionId) =>
+          provider.phases.get(sessionId) === "verify"
+            ? [legacyMessage]
+            : [];
+        let observedRequestId = "";
+        provider.structured = async <T>(
+          sessionId: string,
+          requestId: string,
+        ): Promise<StructuredOutputResult<T>> => {
+          observedRequestId = requestId;
+          return {
+            ok: true,
+            provider: "claude",
+            requestId,
+            value: (provider.phases.get(sessionId) === "review"
+              ? cleanReview
+              : { complete: true, rationale: "Recovered." }) as T,
+          };
+        };
+
+        await service.advanceNow(verifying.id);
+
+        expect(observedRequestId).toBe(expectedRequestId);
+        expect((await pipeline(storage, verifying.id)).phase).toBe("creating-pr");
+      });
+    });
+  }
+
+  test("fails a legacy verification snapshot with no recoverable request id", async () => {
+    await withService(async (service, storage, provider) => {
+      const verifying = await startVerifying(service, storage);
+      const record = await storage.getBuildPipeline(verifying.id);
+      if (!record) throw new Error("Pipeline disappeared");
+      const snapshot = record.snapshot as BuildPipeline;
+      delete snapshot.sessions[snapshot.currentSessionIndex]!.structuredRequestId;
+      await storage.saveBuildPipeline(
+        snapshot.id,
+        snapshot.projectId,
+        snapshot.environmentId,
+        record.version,
+        snapshot,
+        record.revision,
+      );
+      provider.messages = async () => [
+        null,
+        "not-an-object",
+        { info: { role: "assistant", id: "not-a-user" } },
+      ];
+
+      await service.advanceNow(verifying.id);
+
+      expect(await pipeline(storage, verifying.id)).toMatchObject({
+        phase: "failed",
+        error: "Verification result key is missing",
       });
     });
   });

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type { TaskSnapshotImage } from "@orkestrator/protocol/build-pipeline";
 import {
+  AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
   PromptRejectedError,
   ProviderUnavailableError,
@@ -73,6 +74,14 @@ function waitUntil(assertion: () => boolean, timeoutMs = 1_000): Promise<void> {
     };
     check();
   });
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 describe("HTTP build pipeline provider", () => {
@@ -176,6 +185,12 @@ describe("HTTP build pipeline provider", () => {
       await expect(raced.provider.send("s", "prompt", { requestId: "r" }))
         .rejects.toBeInstanceOf(ProviderUnavailableError);
     }
+
+    const ambiguous = httpProvider(() => {
+      throw new Error("socket closed");
+    });
+    await expect(ambiguous.provider.send("s", "prompt", { requestId: "r" }))
+      .rejects.toBeInstanceOf(AmbiguousPromptDispatchError);
   });
 
   test("reads status and messages, dispatches prompts, and aborts sessions", async () => {
@@ -323,6 +338,82 @@ describe("HTTP build pipeline provider", () => {
       .rejects.toThrow("malformed session");
   });
 
+  test("forwards session idempotency and per-session codex model settings", async () => {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ sessionId: "codex-1" }),
+      codexConnection,
+    );
+
+    await provider.createSession("build", "Build task", {
+      clientSessionKey: "pipeline:task:attempt",
+      model: "gpt-override",
+      effort: "medium",
+    });
+
+    expect(JSON.parse(String(requests[0]!.init.body))).toEqual({
+      title: "Build task",
+      model: "gpt-override",
+      modelReasoningEffort: "medium",
+      mode: "build",
+      clientSessionKey: "pipeline:task:attempt",
+    });
+  });
+
+  test("forwards an HTTP structured schema and omits an empty attachment list", async () => {
+    const { provider, requests } = httpProvider(
+      () => new Response(null, { status: 204 }),
+    );
+    const schema = { type: "object", properties: {} } as const;
+
+    await provider.send("session-1", "Review it", {
+      requestId: "request-1",
+      schema,
+    });
+
+    const body = JSON.parse(String(requests[0]!.init.body));
+    expect(body.outputSchema).toEqual(schema);
+    expect(body.attachments).toBeUndefined();
+  });
+
+  test("maps every valid HTTP status and malformed status to the provider contract", async () => {
+    for (const [wireStatus, expected] of [
+      ["running", "running"],
+      ["idle", "idle"],
+      ["error", "error"],
+      ["unknown", "error"],
+      [undefined, "error"],
+    ] as const) {
+      const { provider } = httpProvider(() => Response.json({ status: wireStatus }));
+      await expect(provider.status("session-1")).resolves.toBe(expected);
+    }
+  });
+
+  test("maps missing and malformed HTTP transcripts to an empty list", async () => {
+    const missing = httpProvider(() => new Response(null, { status: 404 }));
+    await expect(missing.provider.messages("session-1")).resolves.toEqual([]);
+
+    const malformed = httpProvider(() => Response.json({ messages: "invalid" }));
+    await expect(malformed.provider.messages("session-1")).resolves.toEqual([]);
+  });
+
+  test("returns successful structured output and escapes its request id", async () => {
+    const result = {
+      ok: true,
+      provider: "claude",
+      requestId: "request/1",
+      value: { complete: true },
+    } as const;
+    const { provider, requests } = httpProvider(() =>
+      Response.json({ structuredOutput: result }));
+
+    await expect(provider.structured("session/1", "request/1")).resolves.toEqual(
+      result,
+    );
+    expect(requests[0]!.url).toBe(
+      "http://claude.test/session/session%2F1/structured-output?requestId=request%2F1",
+    );
+  });
+
   test("aborts a bridge request after the configured deadline", async () => {
     const { provider } = httpProvider((_url, init) =>
       new Promise<Response>((_resolve, reject) => {
@@ -387,15 +478,27 @@ type OpenCodeFake = {
   promptCalls: Array<Record<string, unknown>>;
   setPromptError(error: unknown): void;
   client: OpencodeClient;
+  readonly permissionListCallCount: number;
   permissionReplies: Array<Record<string, unknown>>;
+  readonly questionListCallCount: number;
   questionRejections: Array<Record<string, unknown>>;
+  readonly subscribeCallCount: number;
   subscriptions: EventHarness[];
   setPending(
     permissions: Array<Record<string, unknown>>,
     questions: Array<Record<string, unknown>>,
   ): void;
+  setPendingReadGate(gate: Promise<void> | null): void;
+  setPendingReadResponses(
+    permissions: Record<string, unknown> | null,
+    questions: Record<string, unknown> | null,
+  ): void;
+  setPermissionReplyResponse(response: Record<string, unknown>): void;
+  setQuestionRejectResponse(response: Record<string, unknown>): void;
+  setSubscribeFailures(failures: Array<"throw" | "missing-stream">): void;
   setMessagesResponse(response: Record<string, unknown>): void;
   setAbortResponse(response: Record<string, unknown>): void;
+  setCreateResponse(response: Record<string, unknown>): void;
   setPromptResponse(response: Record<string, unknown>): void;
   setStatusResponse(response: Record<string, unknown>): void;
 };
@@ -406,10 +509,20 @@ function openCodeFake(): OpenCodeFake {
   let promptError: unknown = null;
   const questionRejections: Array<Record<string, unknown>> = [];
   const subscriptions: EventHarness[] = [];
+  let subscribeCallCount = 0;
+  let subscribeFailures: Array<"throw" | "missing-stream"> = [];
+  let permissionListCallCount = 0;
+  let questionListCallCount = 0;
   let pendingPermissions: Array<Record<string, unknown>> = [];
   let pendingQuestions: Array<Record<string, unknown>> = [];
+  let pendingReadGate: Promise<void> | null = null;
+  let permissionListResponse: Record<string, unknown> | null = null;
+  let questionListResponse: Record<string, unknown> | null = null;
+  let permissionReplyResponse: Record<string, unknown> = { data: true };
+  let questionRejectResponse: Record<string, unknown> = { data: true };
   let messagesResponse: Record<string, unknown> = { data: [] };
   let abortResponse: Record<string, unknown> = { data: true };
+  let createResponse: Record<string, unknown> = { data: { id: "owned-session" } };
   let promptResponse: Record<string, unknown> = { data: true };
   let statusResponse: Record<string, unknown> = {
     data: { "owned-session": { type: "idle" } },
@@ -421,6 +534,10 @@ function openCodeFake(): OpenCodeFake {
         _parameters: unknown,
         options: { signal: AbortSignal },
       ) {
+        subscribeCallCount += 1;
+        const failure = subscribeFailures.shift();
+        if (failure === "throw") throw new Error("subscribe failed");
+        if (failure === "missing-stream") return { data: true };
         const harness = eventHarness(options.signal);
         subscriptions.push(harness);
         return { stream: harness.stream };
@@ -428,25 +545,39 @@ function openCodeFake(): OpenCodeFake {
     },
     permission: {
       async list() {
-        return { data: pendingPermissions };
+        permissionListCallCount += 1;
+        await pendingReadGate;
+        return permissionListResponse ?? { data: pendingPermissions };
       },
       async reply(parameters: Record<string, unknown>) {
         permissionReplies.push(parameters);
-        return { data: true };
+        if (!permissionReplyResponse.error) {
+          pendingPermissions = pendingPermissions.filter(
+            ({ id }) => id !== parameters.requestID,
+          );
+        }
+        return permissionReplyResponse;
       },
     },
     question: {
       async list() {
-        return { data: pendingQuestions };
+        questionListCallCount += 1;
+        await pendingReadGate;
+        return questionListResponse ?? { data: pendingQuestions };
       },
       async reject(parameters: Record<string, unknown>) {
         questionRejections.push(parameters);
-        return { data: true };
+        if (!questionRejectResponse.error) {
+          pendingQuestions = pendingQuestions.filter(
+            ({ id }) => id !== parameters.requestID,
+          );
+        }
+        return questionRejectResponse;
       },
     },
     session: {
       async create() {
-        return { data: { id: "owned-session" } };
+        return createResponse;
       },
       async promptAsync(parameters: Record<string, unknown>) {
         promptCalls.push(parameters);
@@ -467,9 +598,18 @@ function openCodeFake(): OpenCodeFake {
 
   return {
     client,
+    get permissionListCallCount() {
+      return permissionListCallCount;
+    },
     permissionReplies,
     promptCalls,
+    get questionListCallCount() {
+      return questionListCallCount;
+    },
     questionRejections,
+    get subscribeCallCount() {
+      return subscribeCallCount;
+    },
     subscriptions,
     setPromptError(error: unknown) {
       promptError = error;
@@ -478,11 +618,30 @@ function openCodeFake(): OpenCodeFake {
       pendingPermissions = permissions;
       pendingQuestions = questions;
     },
+    setPendingReadGate(gate) {
+      pendingReadGate = gate;
+    },
+    setPendingReadResponses(permissions, questions) {
+      permissionListResponse = permissions;
+      questionListResponse = questions;
+    },
+    setPermissionReplyResponse(response) {
+      permissionReplyResponse = response;
+    },
+    setQuestionRejectResponse(response) {
+      questionRejectResponse = response;
+    },
+    setSubscribeFailures(failures) {
+      subscribeFailures = [...failures];
+    },
     setMessagesResponse(response) {
       messagesResponse = response;
     },
     setAbortResponse(response) {
       abortResponse = response;
+    },
+    setCreateResponse(response) {
+      createResponse = response;
     },
     setPromptResponse(response) {
       promptResponse = response;
@@ -509,6 +668,58 @@ function openCodeProvider(fake: OpenCodeFake, monitorRetryMs = 1) {
 }
 
 describe("OpenCode build pipeline provider", () => {
+  test("constructs the OpenCode SDK client with bridge auth and directory", async () => {
+    const fake = openCodeFake();
+    const factoryCalls: unknown[] = [];
+    const provider = createBuildPipelineProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "factory-token",
+        directory: "/workspace/project",
+      },
+      {
+        openCodeClientFactory: ((options: unknown) => {
+          factoryCalls.push(options);
+          return fake.client;
+        }) as never,
+        autoAnswerRequests: false,
+      },
+    );
+
+    try {
+      expect(factoryCalls).toEqual([{
+        baseUrl: "http://opencode.test",
+        directory: "/workspace/project",
+        headers: {
+          Authorization: `Basic ${
+            Buffer.from("opencode:factory-token").toString("base64")
+          }`,
+          "X-Orkestrator-OpenCode-Token": "factory-token",
+        },
+      }]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("wraps empty and failed OpenCode session creation responses as unavailable", async () => {
+    for (const response of [
+      { data: {} },
+      { error: { message: "failed" } },
+    ]) {
+      const fake = openCodeFake();
+      fake.setCreateResponse(response);
+      const provider = openCodeProvider(fake);
+      try {
+        await expect(provider.createSession("build", "Build task"))
+          .rejects.toBeInstanceOf(ProviderUnavailableError);
+      } finally {
+        await provider.dispose?.();
+      }
+    }
+  });
+
   test("answers only owned-session events and grants permissions once", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
@@ -576,6 +787,184 @@ describe("OpenCode build pipeline provider", () => {
     }
   });
 
+  test.each([["throw"], ["missing-stream"]] as const)(
+    "reconnects after an OpenCode subscribe %s failure",
+    async (failure) => {
+      const fake = openCodeFake();
+      fake.setSubscribeFailures([failure]);
+      const provider = openCodeProvider(fake);
+      try {
+        await waitUntil(() => fake.subscribeCallCount >= 2);
+        expect(fake.subscriptions).toHaveLength(1);
+      } finally {
+        await provider.dispose?.();
+      }
+    },
+  );
+
+  test.each([["permission"], ["question"]] as const)(
+    "recovers after an OpenCode pending %s list failure",
+    async (requestType) => {
+      const fake = openCodeFake();
+      fake.setPending(
+        requestType === "permission"
+          ? [{ id: "pending-request", sessionID: "restored" }]
+          : [],
+        requestType === "question"
+          ? [{ id: "pending-request", sessionID: "restored" }]
+          : [],
+      );
+      fake.setPendingReadResponses(
+        requestType === "permission" ? { error: { message: "failed" } } : null,
+        requestType === "question" ? { error: { message: "failed" } } : null,
+      );
+      const provider = openCodeProvider(fake);
+      try {
+        await waitUntil(() => fake.subscriptions.length === 1);
+        provider.registerSession?.("restored");
+        await waitUntil(() =>
+          fake.permissionListCallCount >= 1 && fake.questionListCallCount >= 1
+        );
+
+        fake.setPendingReadResponses(null, null);
+        fake.subscriptions[0]!.close();
+        if (requestType === "permission") {
+          await waitUntil(() => fake.permissionReplies.length === 1);
+        } else {
+          await waitUntil(() => fake.questionRejections.length === 1);
+        }
+        expect(fake.subscriptions.length).toBeGreaterThanOrEqual(2);
+      } finally {
+        await provider.dispose?.();
+      }
+    },
+  );
+
+  test.each([["permission"], ["question"]] as const)(
+    "cleans up the answering request id after an OpenCode %s response fails",
+    async (requestType) => {
+      const fake = openCodeFake();
+      const provider = openCodeProvider(fake);
+      try {
+        await provider.createSession("build", "Build task");
+        await waitUntil(() => fake.subscriptions.length === 1);
+        const event = {
+          type: `${requestType}.asked`,
+          properties: { id: "same-request", sessionID: "owned-session" },
+        };
+        if (requestType === "permission") {
+          fake.setPermissionReplyResponse({ error: { message: "failed" } });
+        } else {
+          fake.setQuestionRejectResponse({ error: { message: "failed" } });
+        }
+        fake.subscriptions[0]!.push(event);
+        await waitUntil(() =>
+          (requestType === "permission"
+            ? fake.permissionReplies
+            : fake.questionRejections).length === 1
+        );
+
+        if (requestType === "permission") {
+          fake.setPermissionReplyResponse({ data: true });
+        } else {
+          fake.setQuestionRejectResponse({ data: true });
+        }
+        await waitUntil(() => fake.subscriptions.length >= 2);
+        fake.subscriptions[1]!.push(event);
+        await waitUntil(() =>
+          (requestType === "permission"
+            ? fake.permissionReplies
+            : fake.questionRejections).length === 2
+        );
+      } finally {
+        await provider.dispose?.();
+      }
+    },
+  );
+
+  test("serializes reconciliation when sessions register concurrently", async () => {
+    const fake = openCodeFake();
+    fake.setPending([
+      { id: "permission-a", sessionID: "restored-a" },
+      { id: "permission-b", sessionID: "restored-b" },
+    ], []);
+    const gate = deferred();
+    const provider = openCodeProvider(fake);
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1);
+      fake.setPendingReadGate(gate.promise);
+      provider.registerSession?.("restored-a");
+      await waitUntil(() => fake.permissionListCallCount === 1);
+      provider.registerSession?.("restored-b");
+      gate.resolve();
+
+      await waitUntil(() => fake.permissionListCallCount === 2);
+      expect(fake.questionListCallCount).toBe(2);
+      expect(fake.permissionReplies.map(({ requestID }) => requestID).sort())
+        .toEqual(["permission-a", "permission-b"]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("does not monitor or answer requests for an interactive OpenCode provider", async () => {
+    const fake = openCodeFake();
+    fake.setPending(
+      [{ id: "permission-1", sessionID: "owned-session" }],
+      [{ id: "question-1", sessionID: "owned-session" }],
+    );
+    const provider = createBuildPipelineProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+      },
+      {
+        openCodeClient: fake.client,
+        autoAnswerRequests: false,
+      },
+    );
+
+    try {
+      await provider.createSession("build", "Interactive task");
+      expect(fake.subscriptions).toHaveLength(0);
+      expect(fake.permissionReplies).toHaveLength(0);
+      expect(fake.questionRejections).toHaveLength(0);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("unblocks an owned OpenCode session when its question is answered elsewhere", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await provider.createSession("build", "Build task");
+      await waitUntil(() => fake.subscriptions.length === 1);
+      const stream = fake.subscriptions[0]!;
+      stream.push({
+        type: "question.asked",
+        properties: { id: "owned-q", sessionID: "owned-session" },
+      });
+      await waitUntil(() => fake.questionRejections.length === 1);
+      await expect(provider.status("owned-session")).resolves.toBe("error");
+
+      stream.push({
+        type: "question.replied",
+        properties: { id: "owned-q", sessionID: "owned-session" },
+      });
+      stream.push({
+        type: "permission.asked",
+        properties: { id: "after-reply", sessionID: "owned-session" },
+      });
+      await waitUntil(() => fake.permissionReplies.length === 1);
+      await expect(provider.status("owned-session")).resolves.toBe("idle");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("reconnects after an event stream ends and dispose stops monitoring", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
@@ -618,6 +1007,23 @@ describe("OpenCode build pipeline provider", () => {
     }
   });
 
+  test("returns OpenCode transcripts, normalizes malformed data, and aborts successfully", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      fake.setMessagesResponse({ data: [{ info: { role: "assistant" } }] });
+      await expect(provider.messages("owned-session")).resolves.toEqual([
+        { info: { role: "assistant" } },
+      ]);
+
+      fake.setMessagesResponse({ data: "invalid" });
+      await expect(provider.messages("owned-session")).resolves.toEqual([]);
+      await expect(provider.abort("owned-session")).resolves.toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("maps OpenCode status and prompt error envelopes", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
@@ -627,6 +1033,14 @@ describe("OpenCode build pipeline provider", () => {
         data: { "owned-session": { type: "busy" } },
       });
       await expect(provider.status("owned-session")).resolves.toBe("running");
+      fake.setStatusResponse({
+        data: { "owned-session": { type: "retry" } },
+      });
+      await expect(provider.status("owned-session")).resolves.toBe("running");
+      fake.setStatusResponse({
+        data: { "owned-session": { type: "unexpected" } },
+      });
+      await expect(provider.status("owned-session")).resolves.toBe("error");
       await expect(provider.status("missing-session")).resolves.toBe("missing");
 
       fake.setPromptResponse({ error: { message: "rejected" } });
@@ -643,6 +1057,23 @@ describe("OpenCode build pipeline provider", () => {
       })).rejects.toBeInstanceOf(ProviderUnavailableError);
     } finally {
       await provider.dispose?.();
+    }
+  });
+
+  test("wraps malformed and failed OpenCode status reads as unavailable", async () => {
+    for (const response of [
+      { data: undefined },
+      { error: { message: "failed" } },
+    ]) {
+      const fake = openCodeFake();
+      fake.setStatusResponse(response);
+      const provider = openCodeProvider(fake);
+      try {
+        await expect(provider.status("owned-session"))
+          .rejects.toBeInstanceOf(ProviderUnavailableError);
+      } finally {
+        await provider.dispose?.();
+      }
     }
   });
 
@@ -682,6 +1113,82 @@ describe("OpenCode build pipeline provider", () => {
             role: "assistant",
             parentID: "request-1",
             error: { message: "failed" },
+            time: { completed: 1 },
+          },
+        }],
+      });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({
+          ok: false,
+          error: { code: "provider_error", retryable: true },
+        });
+
+      fake.setMessagesResponse({ data: "invalid" });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toBeNull();
+
+      fake.setMessagesResponse({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID: "other-request",
+            structured: { complete: true },
+            time: { completed: 1 },
+          },
+        }],
+      });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toBeNull();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("uses the newest matching structured result and distinguishes null from missing", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      fake.setMessagesResponse({
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID: "request-1",
+              structured: { version: "old" },
+              time: { completed: 1 },
+            },
+          },
+          {
+            info: {
+              role: "assistant",
+              parentID: "request-1",
+              structured: { version: "new" },
+              time: { completed: 2 },
+            },
+          },
+        ],
+      });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { version: "new" } });
+
+      fake.setMessagesResponse({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID: "request-1",
+            structured: null,
+            time: { completed: 1 },
+          },
+        }],
+      });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: null });
+
+      fake.setMessagesResponse({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID: "request-1",
             time: { completed: 1 },
           },
         }],
@@ -816,6 +1323,298 @@ describe("HTTP build pipeline provider (codex)", () => {
     });
   });
 
+  test("skips a durable mode update when the codex session already matches", async () => {
+    const { provider, requests } = httpProvider((url) => {
+      if (url.endsWith("/config")) {
+        return Response.json({
+          model: "gpt-5-codex",
+          modelReasoningEffort: "high",
+          mode: "build",
+          fastMode: false,
+          durable: true,
+        });
+      }
+      return new Response(null, { status: 204 });
+    }, codexConnection);
+
+    await provider.send("review-1", "Address the findings", {
+      requestId: "request-address",
+      mode: "build",
+    });
+
+    expect(requests.map(({ url, init }) => [url, init.method ?? "GET"])).toEqual([
+      ["http://codex.test/session/review-1/config", "GET"],
+      ["http://codex.test/session/review-1/prompt", "POST"],
+    ]);
+  });
+
+  test("retries the same durable request id after reconciling codex mode", async () => {
+    let promptAttempts = 0;
+    const { provider, requests } = httpProvider((url) => {
+      if (url.endsWith("/config")) {
+        return Response.json({
+          mode: "build",
+          fastMode: false,
+          durable: true,
+        });
+      }
+      promptAttempts += 1;
+      if (promptAttempts === 1) {
+        return new Response(null, { status: 503 });
+      }
+      return new Response(null, { status: 204 });
+    }, codexConnection);
+
+    const options = {
+      requestId: "request-address",
+      mode: "build" as const,
+    };
+    await expect(provider.send("review-1", "Address the findings", options))
+      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    await expect(provider.send("review-1", "Address the findings", options))
+      .resolves.toBeUndefined();
+
+    const promptBodies = requests
+      .filter(({ url }) => url.endsWith("/prompt"))
+      .map(({ init }) => JSON.parse(String(init.body)));
+    expect(promptBodies).toHaveLength(2);
+    expect(promptBodies.map(({ requestId }) => requestId)).toEqual([
+      "request-address",
+      "request-address",
+    ]);
+  });
+
+  test("updates a matching but non-durable codex config and suppresses the prompt when persistence fails", async () => {
+    const { provider, requests } = httpProvider((url, init) => {
+      if (url.endsWith("/config") && init.method !== "POST") {
+        return Response.json({
+          mode: "build",
+          fastMode: true,
+          durable: false,
+        });
+      }
+      if (url.endsWith("/config")) {
+        return Response.json({ status: "updated", durable: false });
+      }
+      return new Response(null, { status: 204 });
+    }, codexConnection);
+
+    await expect(provider.send("review-1", "Address the findings", {
+      requestId: "request-address",
+      mode: "build",
+    })).rejects.toThrow("not durably persisted");
+
+    expect(requests.map(({ url }) => url)).toEqual([
+      "http://codex.test/session/review-1/config",
+      "http://codex.test/session/review-1/config",
+    ]);
+    expect(JSON.parse(String(requests[1]!.init.body))).toEqual({
+      mode: "build",
+      fastMode: true,
+    });
+  });
+
+  test.each([
+    ["invalid JSON", () => new Response("{", {
+      headers: { "Content-Type": "application/json" },
+    }), SyntaxError],
+    ["missing durability", () => Response.json({ status: "updated" }),
+      ProviderUnavailableError],
+  ] as const)(
+    "rejects a codex config update with %s and suppresses the prompt",
+    async (_case, updateResponse, errorType) => {
+      const { provider, requests } = httpProvider((url, init) => {
+        if (url.endsWith("/config") && init.method !== "POST") {
+          return Response.json({
+            mode: "plan",
+            fastMode: false,
+            durable: true,
+          });
+        }
+        return updateResponse();
+      }, codexConnection);
+
+      await expect(provider.send("review-1", "Address", {
+        requestId: "request-address",
+        mode: "build",
+      })).rejects.toBeInstanceOf(errorType);
+      expect(requests).toHaveLength(2);
+      expect(requests.some(({ url }) => url.endsWith("/prompt"))).toBe(false);
+    },
+  );
+
+  test.each([[404], [409], [408], [425], [429], [500]])(
+    "treats codex config-read HTTP %i as retryable and does not dispatch",
+    async (status) => {
+      const { provider, requests } = httpProvider(
+        () => new Response(null, { status }),
+        codexConnection,
+      );
+
+      await expect(provider.send("review-1", "Address", {
+        requestId: "request-address",
+        mode: "build",
+      })).rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(requests.map(({ url }) => url)).toEqual([
+        "http://codex.test/session/review-1/config",
+      ]);
+    },
+  );
+
+  test("keeps a semantic codex config-read failure out of retry recovery", async () => {
+    const { provider, requests } = httpProvider(
+      () => new Response(null, { status: 400 }),
+      codexConnection,
+    );
+
+    const promise = provider.send("review-1", "Address", {
+      requestId: "request-address",
+      mode: "build",
+    });
+    await expect(promise).rejects.toThrow("Codex config read failed (HTTP 400)");
+    await expect(promise).rejects.not.toBeInstanceOf(ProviderUnavailableError);
+    expect(requests).toHaveLength(1);
+  });
+
+  test.each([[404], [409], [408], [425], [429], [500]])(
+    "treats codex config-update HTTP %i as retryable and does not dispatch",
+    async (status) => {
+      const { provider, requests } = httpProvider((url, init) => {
+        if (url.endsWith("/config") && init.method !== "POST") {
+          return Response.json({
+            mode: "plan",
+            fastMode: false,
+            durable: true,
+          });
+        }
+        return new Response(null, { status });
+      }, codexConnection);
+
+      await expect(provider.send("review-1", "Address", {
+        requestId: "request-address",
+        mode: "build",
+      })).rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(requests.map(({ url }) => url)).toEqual([
+        "http://codex.test/session/review-1/config",
+        "http://codex.test/session/review-1/config",
+      ]);
+    },
+  );
+
+  test("keeps a semantic codex config-update failure out of retry recovery", async () => {
+    const { provider, requests } = httpProvider((url, init) => {
+      if (url.endsWith("/config") && init.method !== "POST") {
+        return Response.json({
+          mode: "plan",
+          fastMode: false,
+          durable: true,
+        });
+      }
+      return new Response(null, { status: 400 });
+    }, codexConnection);
+
+    const promise = provider.send("review-1", "Address", {
+      requestId: "request-address",
+      mode: "build",
+    });
+    await expect(promise).rejects.toThrow("Codex config update failed (HTTP 400)");
+    await expect(promise).rejects.not.toBeInstanceOf(ProviderUnavailableError);
+    expect(requests).toHaveLength(2);
+  });
+
+  test.each([
+    ["mode", { mode: "invalid", fastMode: false, durable: true }],
+    ["fastMode", { mode: "build", fastMode: "false", durable: true }],
+    ["durable", { mode: "build", fastMode: false, durable: "true" }],
+    ["model", { mode: "build", model: 42, fastMode: false, durable: true }],
+    ["modelReasoningEffort", {
+      mode: "build",
+      modelReasoningEffort: 42,
+      fastMode: false,
+      durable: true,
+    }],
+  ] as const)("rejects malformed codex config field %s before dispatch", async (
+    _field,
+    body,
+  ) => {
+    const { provider, requests } = httpProvider(
+      () => Response.json(body),
+      codexConnection,
+    );
+
+    await expect(provider.send("review-1", "Address", {
+      requestId: "request-address",
+      mode: "build",
+    })).rejects.toThrow("malformed session config");
+    expect(requests).toHaveLength(1);
+  });
+
+  test("rejects invalid codex config JSON before dispatch", async () => {
+    const { provider, requests } = httpProvider(
+      () => new Response("{", {
+        headers: { "Content-Type": "application/json" },
+      }),
+      codexConnection,
+    );
+
+    await expect(provider.send("review-1", "Address", {
+      requestId: "request-address",
+      mode: "build",
+    })).rejects.toBeInstanceOf(SyntaxError);
+    expect(requests).toHaveLength(1);
+  });
+
+  test.each(["read", "update"] as const)(
+    "maps a codex config %s network failure to unavailable and suppresses dispatch",
+    async (failurePoint) => {
+      const { provider, requests } = httpProvider((url, init) => {
+        if (failurePoint === "update" && url.endsWith("/config")
+          && init.method !== "POST") {
+          return Response.json({
+            mode: "plan",
+            fastMode: false,
+            durable: true,
+          });
+        }
+        throw new Error("socket closed");
+      }, codexConnection);
+
+      await expect(provider.send("review-1", "Address", {
+        requestId: "request-address",
+        mode: "build",
+      })).rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(requests).toHaveLength(failurePoint === "read" ? 1 : 2);
+      expect(requests.some(({ url }) => url.endsWith("/prompt"))).toBe(false);
+    },
+  );
+
+  test("escapes the session id in codex config reconciliation and prompt routes", async () => {
+    const { provider, requests } = httpProvider((url, init) => {
+      if (url.endsWith("/config") && init.method !== "POST") {
+        return Response.json({
+          mode: "plan",
+          fastMode: false,
+          durable: true,
+        });
+      }
+      if (url.endsWith("/config")) {
+        return Response.json({ durable: true });
+      }
+      return new Response(null, { status: 204 });
+    }, codexConnection);
+
+    await provider.send("codex/../admin", "Address", {
+      requestId: "request-address",
+      mode: "build",
+    });
+
+    expect(requests.map(({ url }) => url)).toEqual([
+      "http://codex.test/session/codex%2F..%2Fadmin/config",
+      "http://codex.test/session/codex%2F..%2Fadmin/config",
+      "http://codex.test/session/codex%2F..%2Fadmin/prompt",
+    ]);
+  });
+
   test.each([
     ["shot.png", "image/png"],
     ["shot.jpg", "image/jpeg"],
@@ -860,11 +1659,11 @@ describe("OpenCode build pipeline provider dispatch", () => {
       fake.setPromptError(new Error("socket hang up"));
 
       // The distinction matters: PromptRejectedError fails the build, while
-      // ProviderUnavailableError keeps the durable attempt and retries the same
-      // request id. A dropped connection may already have delivered the turn.
+      // AmbiguousPromptDispatchError keeps the durable attempt and retries the
+      // same request id. A dropped connection may already have delivered the turn.
       await expect(provider.send("owned-session", "prompt", {
         requestId: "request-1",
-      })).rejects.toBeInstanceOf(ProviderUnavailableError);
+      })).rejects.toBeInstanceOf(AmbiguousPromptDispatchError);
       await expect(provider.send("owned-session", "prompt", {
         requestId: "request-1",
       })).rejects.not.toBeInstanceOf(PromptRejectedError);
@@ -951,6 +1750,69 @@ describe("OpenCode build pipeline provider dispatch", () => {
       await provider.dispose?.();
     }
   });
+
+  test("sends staged attachments with per-prompt model and effort overrides", async () => {
+    const fake = openCodeFake();
+    const provider = createBuildPipelineProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+        model: "fallback/model",
+        effort: "low",
+      },
+      { openCodeClient: fake.client, monitorRetryMs: 1 },
+    );
+    try {
+      await provider.send("owned-session", "Inspect the file", {
+        requestId: "request-attachment",
+        model: "anthropic/claude/sonnet",
+        effort: "high",
+        attachments: [{
+          type: "file",
+          path: "/workspace/image.gif",
+        }],
+      });
+
+      expect(fake.promptCalls[0]).toMatchObject({
+        model: {
+          providerID: "anthropic",
+          modelID: "claude/sonnet",
+        },
+        variant: "high",
+        parts: [
+          { type: "text", text: "Inspect the file" },
+          {
+            type: "file",
+            mime: "image/gif",
+            url: "file:///workspace/image.gif",
+          },
+        ],
+      });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test.each([[409], [408], [425], [429], [500]])(
+    "maps OpenCode prompt HTTP %i to a retryable dispatch failure",
+    async (status) => {
+      const fake = openCodeFake();
+      fake.setPromptResponse({
+        error: { message: "temporarily unavailable" },
+        response: new Response(null, { status }),
+      });
+      const provider = openCodeProvider(fake);
+      try {
+        await expect(provider.send("owned-session", "prompt", {
+          requestId: "request-1",
+        })).rejects.toBeInstanceOf(ProviderUnavailableError);
+      } finally {
+        await provider.dispose?.();
+      }
+    },
+  );
 
   test("splits a provider-qualified model and omits an unqualified one", async () => {
     const fake = openCodeFake();

@@ -25,8 +25,8 @@ import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type { Environment, PersistedBuildPipeline } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
+  AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
-  PromptRejectedError,
   ProviderUnavailableError,
   type BridgeConnection,
   type BuildPipelineProvider,
@@ -846,7 +846,7 @@ export class BuildPipelineService {
     }
     const provider = await this.provider(pipeline);
     const status = await provider.status(session.sdkSessionId);
-    if (pipeline.reconnectAttempt) {
+    if (pipeline.reconnectAttempt && !pipeline.pendingPromptAttempt) {
       delete pipeline.reconnectAttempt;
       delete pipeline.error;
       await this.save(pipeline, record.revision);
@@ -864,6 +864,8 @@ export class BuildPipelineService {
     ) {
       if (status === "running") {
         delete pipeline.pendingPromptAttempt;
+        delete pipeline.reconnectAttempt;
+        delete pipeline.error;
         await this.save(pipeline, record.revision);
         return;
       }
@@ -1116,10 +1118,14 @@ export class BuildPipelineService {
       delete pipeline.pendingPromptAttempt;
       await this.save(pipeline, pipeline.backendRevision);
     } catch (error) {
-      if (error instanceof PromptRejectedError) throw error;
-      // The bridge may have accepted the stable request before the response was
-      // lost. Keep the durable attempt; the next tick reconciles status and, if
-      // still idle, retries this exact request ID through bridge deduplication.
+      if (error instanceof AmbiguousPromptDispatchError) {
+        // The bridge may have accepted the stable request before the response
+        // was lost. Keep the durable attempt; the next tick reconciles status
+        // and, if still idle, retries this exact request ID through bridge
+        // deduplication.
+        return;
+      }
+      throw error;
     }
   }
 
@@ -1149,9 +1155,12 @@ export class BuildPipelineService {
         candidate.sdkSessionId === attempt.sessionId);
       if (session) session.status = "running";
       delete pipeline.pendingPromptAttempt;
+      delete pipeline.reconnectAttempt;
+      delete pipeline.error;
       await this.save(pipeline, pipeline.backendRevision);
     } catch (error) {
-      if (error instanceof PromptRejectedError) throw error;
+      if (error instanceof AmbiguousPromptDispatchError) return;
+      throw error;
     }
   }
 
@@ -1221,7 +1230,7 @@ export class BuildPipelineService {
     pipeline.structuredReview = report;
     if (report.issues.length || report.testCoverageGaps.length) {
       pipeline.phase = "addressing";
-      const prompt = addressPrompt();
+      const prompt = addressPrompt(report);
       const request = randomUUID();
       pipeline.pendingPromptAttempt = {
         id: randomUUID(),

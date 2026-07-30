@@ -182,6 +182,7 @@ const EMPTY_AGENTS: OpenCodeAgent[] = [];
  */
 const OPENCODE_SESSION_KEYED_MAPS = [
   "sessions",
+  "sessionLoadingRevisions",
   "attachments",
   "draftText",
   "draftMentions",

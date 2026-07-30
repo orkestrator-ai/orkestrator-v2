@@ -53,6 +53,16 @@ export interface NativeChatStoreSlice<TClient, TMessage, TAttachment, TQueued> {
 
   // State keyed by sessionKey (format: "env-{environmentId}:{tabId}")
   sessions: Map<string, NativeSessionState<TMessage>>;
+  /**
+   * Monotonic revision for loading/lifecycle writes.
+   *
+   * Session objects also change for transcript and metadata updates, while a
+   * repeated authoritative lifecycle edge can deliberately preserve the same
+   * object. Consumers reconciling an asynchronous status snapshot therefore
+   * use this revision instead of treating session identity as a lifecycle
+   * token.
+   */
+  sessionLoadingRevisions: Map<string, number>;
   attachments: Map<string, TAttachment[]>;
   draftText: Map<string, string>;
   draftMentions: Map<string, FileMention[]>;
@@ -148,6 +158,7 @@ export function createNativeChatStoreSlice<
     serverStatus: new Map(),
     clients: new Map(),
     sessions: new Map(),
+    sessionLoadingRevisions: new Map(),
     attachments: new Map(),
     draftText: new Map(),
     draftMentions: new Map(),
@@ -178,6 +189,7 @@ export function createNativeChatStoreSlice<
     setSession: (sessionKey, session) =>
       set((state) => {
         const next = new Map(state.sessions);
+        const revisions = new Map(state.sessionLoadingRevisions);
         if (session) {
           const previous = state.sessions.get(sessionKey);
           next.set(
@@ -190,7 +202,14 @@ export function createNativeChatStoreSlice<
         } else {
           next.delete(sessionKey);
         }
-        return { sessions: next };
+        revisions.set(
+          sessionKey,
+          (state.sessionLoadingRevisions.get(sessionKey) ?? 0) + 1,
+        );
+        return {
+          sessions: next,
+          sessionLoadingRevisions: revisions,
+        };
       }),
 
     getSession: (sessionKey) => get().sessions.get(sessionKey),
@@ -263,8 +282,16 @@ export function createNativeChatStoreSlice<
         const session = state.sessions.get(sessionKey);
         if (!session) return state;
         const next = new Map(state.sessions);
+        const revisions = new Map(state.sessionLoadingRevisions);
         next.set(sessionKey, updateTimedSessionLoading(session, isLoading));
-        return { sessions: next };
+        revisions.set(
+          sessionKey,
+          (state.sessionLoadingRevisions.get(sessionKey) ?? 0) + 1,
+        );
+        return {
+          sessions: next,
+          sessionLoadingRevisions: revisions,
+        };
       }),
 
     setSessionError: (sessionKey, error) =>

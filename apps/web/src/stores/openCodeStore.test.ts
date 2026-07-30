@@ -19,6 +19,7 @@ function resetOpenCodeStore() {
   useOpenCodeStore.setState({
     serverStatus: new Map(),
     sessions: new Map(),
+    sessionLoadingRevisions: new Map(),
     clients: new Map(),
     models: new Map(),
     modelSource: new Map(),
@@ -283,6 +284,8 @@ describe("openCodeStore clearSession", () => {
 
     const next = useOpenCodeStore.getState();
     expect(next.getSession(closed)).toBeUndefined();
+    expect(next.sessionLoadingRevisions.has(closed)).toBe(false);
+    expect(next.sessionLoadingRevisions.has(kept)).toBe(true);
     expect(next.getDraftText(closed)).toBe("");
     expect(next.getDraftMentions(closed)).toEqual([]);
     expect(next.getSelectedModel(closed)).toBeUndefined();

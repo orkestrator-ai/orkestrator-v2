@@ -251,8 +251,6 @@ export function OpenCodeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
-  const [stopInProgress, setStopInProgress] = useState(false);
-  const stopPromotionPendingRef = useRef(false);
   const automaticInitRetryCountRef = useRef(0);
   const automaticInitRetryWindowStartedAtRef = useRef<number | null>(null);
   const setupPendingObservedForInitRetryRef = useRef(false);
@@ -806,6 +804,8 @@ export function OpenCodeChatTab({
 
     const stateBeforeAttempt = useOpenCodeStore.getState();
     const sessionBeforeAttempt = stateBeforeAttempt.sessions.get(sessionKey);
+    const loadingRevisionBeforeAttempt =
+      stateBeforeAttempt.sessionLoadingRevisions.get(sessionKey) ?? 0;
     if (
       stateBeforeAttempt.clients.get(environmentId) !== activeClient ||
       sessionBeforeAttempt?.sessionId !== sessionId
@@ -827,12 +827,24 @@ export function OpenCodeChatTab({
     ) {
       return;
     }
-    if (sessionAfterAttempt !== sessionBeforeAttempt) {
+    if (
+      sessionAfterAttempt !== sessionBeforeAttempt
+      || (stateAfterAttempt.sessionLoadingRevisions.get(sessionKey) ?? 0)
+        !== loadingRevisionBeforeAttempt
+    ) {
       /**
        * The snapshot is older than a frame that already landed; applying it
        * would let a stale `busy` status re-lock a session that just went idle.
        * A manual refresh reports this so the user can retry; the watchdog
        * stays silent and re-checks once activity goes stale again.
+       *
+       * Both tokens are required. The session reference catches transcript
+       * writes, which this pass would otherwise overwrite with an older
+       * `messages` snapshot. It cannot catch every lifecycle edge on its own:
+       * `updateTimedSessionLoading` returns the *same* object for a repeated
+       * `busy` edge (`lib/session-timer.ts`), so a turn restarting while these
+       * reads were in flight would slip past it and let the older `idle`
+       * response unlock it. The monotonic revision closes exactly that hole.
        */
       if (manual) {
         throw new Error("OpenCode session changed while refreshing; try again");
@@ -1050,6 +1062,20 @@ export function OpenCodeChatTab({
           // is stale — invalidate both sequences, not just the manual one.
           const reconnectSequence = ++manualRefreshSequenceRef.current;
           backgroundRefreshSequenceRef.current += 1;
+          const loadingRevisionBeforeSnapshot =
+            useOpenCodeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0;
+          /*
+           * Re-read the session here rather than reusing `existingSession`.
+           * That was captured before the health check and the launch-option
+           * model fetch above, so by now it is stale by one or two round trips
+           * — and the SSE subscription this path may have just restarted
+           * delivers its first frames into exactly that window. Comparing
+           * against it would skip the transcript rehydration in the common
+           * case, which is precisely the missed-message catch-up this reconnect
+           * exists to perform.
+           */
+          const sessionBeforeSnapshot =
+            useOpenCodeStore.getState().sessions.get(sessionKey);
           void Promise.all([
             getSessionMessages(existingClient, existingSession.sessionId, {
               throwOnError: true,
@@ -1075,15 +1101,23 @@ export function OpenCodeChatTab({
             const currentSession = currentState.sessions.get(sessionKey);
             if (
               currentState.clients.get(environmentId) !== existingClient ||
-              currentSession?.sessionId !== existingSession.sessionId ||
-              currentSession !== existingSession
+              currentSession?.sessionId !== existingSession.sessionId
             ) {
               return;
             }
             // An empty reconnect response must not erase a transcript that
             // received a live update after this request started.
-            if (messages.length > 0) setMessages(sessionKey, messages);
-            if (status) setSessionLoading(sessionKey, status !== "idle");
+            if (currentSession === sessionBeforeSnapshot && messages.length > 0) {
+              setMessages(sessionKey, messages);
+            }
+            if (
+              status
+              && (
+                useOpenCodeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0
+              ) === loadingRevisionBeforeSnapshot
+            ) {
+              setSessionLoading(sessionKey, status !== "idle");
+            }
           }).catch((error) => {
             console.warn("[OpenCodeChatTab] Fast reconnect rehydration failed:", error);
           });
@@ -1923,8 +1957,22 @@ export function OpenCodeChatTab({
               });
             }
 
-            // Clear loading state on final events
-            if (isFinalEvent) {
+            /*
+             * A queued prompt can be dispatched by the backend while this tab
+             * is unmounted, so no renderer send path exists to optimistically
+             * mark it busy. Session status is the authoritative lifecycle edge
+             * in that case. Apply non-terminal edges as well as idle, otherwise
+             * fresh parts can stream under a stale Completed footer.
+             */
+            if (
+              eventType === "session.status"
+              && (
+                props?.status?.type === "busy"
+                || props?.status?.type === "retry"
+              )
+            ) {
+              setSessionLoading(sessionTabId, true);
+            } else if (isFinalEvent) {
               setSessionLoading(sessionTabId, false);
             }
 
@@ -2416,10 +2464,6 @@ export function OpenCodeChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    // Prevent queue draining immediately, then interrupt the live request
-    // before starting the durable queue-to-draft transfer.
-    stopPromotionPendingRef.current = true;
-    setStopInProgress(true);
     const success = await abortSession(client, session.sessionId);
     if (success) {
       // Leave a marker in the transcript. Without it an interrupted turn is
@@ -2437,10 +2481,6 @@ export function OpenCodeChatTab({
     } else {
       console.error("[OpenCodeChatTab] Failed to abort session");
     }
-    stopPromotionPendingRef.current = false;
-    if (useOpenCodeStore.getState().sessions.get(sessionKey)?.isLoading !== true) {
-      setStopInProgress(false);
-    }
   }, [
     addMessage,
     client,
@@ -2448,16 +2488,6 @@ export function OpenCodeChatTab({
     sessionKey,
     promoteNextQueuedPromptToDraft,
   ]);
-
-  useEffect(() => {
-    if (
-      stopInProgress
-      && !stopPromotionPendingRef.current
-      && session?.isLoading === false
-    ) {
-      setStopInProgress(false);
-    }
-  }, [session?.isLoading, stopInProgress]);
 
   useEscapeToStop({
     isActive,

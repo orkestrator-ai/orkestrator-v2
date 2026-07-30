@@ -52,6 +52,7 @@ function resetStore(store: typeof useTestStore | typeof useMergedStore) {
     serverStatus: new Map(),
     clients: new Map(),
     sessions: new Map(),
+    sessionLoadingRevisions: new Map(),
     attachments: new Map(),
     draftText: new Map(),
     draftMentions: new Map(),
@@ -207,6 +208,83 @@ describe("createNativeChatStoreSlice", () => {
     expect(useTestStore.getState().sessions.has(sessionKey)).toBe(false);
     // Sibling tabs of the same environment survive.
     expect(store.getSession("env-env-1:tab-2")?.sessionId).toBe("session-2");
+  });
+
+  test("advances loading revisions for repeated lifecycle writes but not transcript writes", () => {
+    const store = useTestStore.getState();
+    const sessionKey = "env-env-1:tab-1";
+
+    store.setSession(sessionKey, {
+      sessionId: "session-1",
+      messages: [],
+      isLoading: false,
+    });
+    const afterSession = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+
+    store.setSessionLoading(sessionKey, true);
+    const afterRunning = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+    store.setSessionLoading(sessionKey, true);
+    const afterRepeatedRunning = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+    store.upsertMessage(sessionKey, { id: "m-1", content: "streaming" });
+    const afterTranscript = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+    store.setSessionLoading(sessionKey, false);
+    const afterIdle = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+    store.setSessionLoading(sessionKey, false);
+
+    expect(afterSession).toBe(1);
+    expect(afterRunning).toBe(2);
+    expect(afterRepeatedRunning).toBe(3);
+    expect(afterTranscript).toBe(afterRepeatedRunning);
+    expect(afterIdle).toBe(4);
+    expect(
+      useTestStore.getState().sessionLoadingRevisions.get(sessionKey),
+    ).toBe(5);
+  });
+
+  test("advances the loading revision across a session delete and its replacement", () => {
+    const store = useTestStore.getState();
+    const sessionKey = "env-env-1:tab-1";
+
+    store.setSession(sessionKey, {
+      sessionId: "session-1",
+      messages: [],
+      isLoading: true,
+    });
+    const afterFirstSession = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+
+    // `handleRetry` tears the session down with a null write. The revision has
+    // to keep advancing rather than reset: a reconcile that started against
+    // `session-1` must still read as stale once a replacement lands under the
+    // same key.
+    store.setSession(sessionKey, null);
+    const afterDelete = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+    expect(useTestStore.getState().sessions.has(sessionKey)).toBe(false);
+
+    store.setSession(sessionKey, {
+      sessionId: "session-2",
+      messages: [],
+      isLoading: false,
+    });
+
+    expect(afterFirstSession).toBe(1);
+    expect(afterDelete).toBe(2);
+    expect(
+      useTestStore.getState().sessionLoadingRevisions.get(sessionKey),
+    ).toBe(3);
   });
 
   test("setClient with null deletes the client entry", () => {

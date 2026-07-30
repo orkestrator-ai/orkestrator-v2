@@ -218,8 +218,6 @@ export function ClaudeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
-  const [stopInProgress, setStopInProgress] = useState(false);
-  const stopPromotionPendingRef = useRef(false);
   const automaticInitRetryCountRef = useRef(0);
   const automaticInitRetryWindowStartedAtRef = useRef<number | null>(null);
   const setupPendingObservedForInitRetryRef = useRef(false);
@@ -697,6 +695,8 @@ export function ClaudeChatTab({
 
     const stateBeforeAttempt = useClaudeStore.getState();
     const sessionBeforeAttempt = stateBeforeAttempt.sessions.get(sessionKey);
+    const loadingRevisionBeforeAttempt =
+      stateBeforeAttempt.sessionLoadingRevisions.get(sessionKey) ?? 0;
     const backgroundTaskRevisionBeforeAttempt =
       stateBeforeAttempt.backgroundTaskRevisions.get(sessionKey) ?? 0;
     if (
@@ -730,12 +730,24 @@ export function ClaudeChatTab({
     ) {
       return;
     }
-    if (sessionAfterAttempt !== sessionBeforeAttempt) {
+    if (
+      sessionAfterAttempt !== sessionBeforeAttempt
+      || (stateAfterAttempt.sessionLoadingRevisions.get(sessionKey) ?? 0)
+        !== loadingRevisionBeforeAttempt
+    ) {
       /**
        * The snapshot is older than a frame that already landed; applying it
        * would let a stale `running` response re-lock a session that just went
        * idle. A manual refresh reports this so the user can retry; the
        * watchdog stays silent and re-checks once activity goes stale again.
+       *
+       * Both tokens are required. The session reference catches transcript
+       * writes, which this pass would otherwise overwrite with an older
+       * `messages` snapshot. It cannot catch every lifecycle edge on its own:
+       * `updateTimedSessionLoading` returns the *same* object for a repeated
+       * `running` edge (`lib/session-timer.ts`), so a turn restarting while
+       * these reads were in flight would slip past it and let the older `idle`
+       * response unlock it. The monotonic revision closes exactly that hole.
        */
       if (manual) {
         throw new Error("Claude session changed while refreshing; try again");
@@ -1077,11 +1089,20 @@ export function ClaudeChatTab({
             // If SSE events were missed while this tab was inactive (e.g. due to
             // an EventSource error killing the subscription), messages and loading
             // state can be stale.
+            const loadingRevisionBeforeSnapshot =
+              useClaudeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0;
             const serverSession = await getSession(existingClient, existingSessionId);
             if (!isCurrentFastReconnect() || !serverSession) return;
             const messages = await getSessionMessages(existingClient, existingSessionId);
             if (!isCurrentFastReconnect()) return;
 
+            /*
+             * Transcript and metadata frames also replace the session object,
+             * while a repeated lifecycle edge may preserve it. The dedicated
+             * monotonic revision changes for every lifecycle/identity write
+             * but not transcript or metadata writes, so an older REST status
+             * cannot overwrite a newer live one.
+             */
             // Only apply fetched messages if they are more complete than what
             // the store currently has (SSE may have already delivered newer data).
             applyServerSessionMetadata(sessionKey, serverSession);
@@ -1090,11 +1111,16 @@ export function ClaudeChatTab({
               setMessages(sessionKey, messages);
             }
 
-            // Reconcile loading state with server - re-read from store to avoid
-            // acting on the stale snapshot captured at the start of this block.
-            const currentSession = useClaudeStore.getState().sessions.get(sessionKey);
-            if (serverSession.status !== "running" && currentSession?.isLoading) {
-              setSessionLoading(sessionKey, false);
+            /*
+             * Reconcile in both directions. Background queue dispatches and
+             * turns started while this tab was unmounted can leave the stored
+             * flag idle even though the bridge is actively producing tools.
+             */
+            if (
+              (useClaudeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0)
+                === loadingRevisionBeforeSnapshot
+            ) {
+              setSessionLoading(sessionKey, serverSession.status === "running");
             }
 
             await pendingPromptsSync;
@@ -1878,6 +1904,16 @@ export function ClaudeChatTab({
 
             if (eventType === "session.updated") {
               const sessionUpdate = eventDataRecord;
+              /*
+               * Prompt dispatch can be owned by the backend (queued prompts,
+               * pipelines, or another mounted tab), so there is no local
+               * optimistic send to set `isLoading`. The bridge's running edge
+               * is authoritative and must clear a stale Completed footer.
+               * Terminal transitions still use session.idle/session.error.
+               */
+              if (sessionUpdate?.status === "running") {
+                setSessionLoading(sessionTabId, true);
+              }
               const exactUsage = parseClaudeContextUsage(sessionUpdate?.contextUsage);
               if (exactUsage) {
                 setContextUsage(sessionTabId, exactUsage);
@@ -2317,11 +2353,8 @@ export function ClaudeChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    // Block queue draining before yielding to either backend request. The
-    // abort must be issued first: promoting the queue is durable I/O and may
-    // stall, while the active turn must be interrupted immediately.
-    stopPromotionPendingRef.current = true;
-    setStopInProgress(true);
+    // Issue the abort first: promoting the queue is durable I/O and may stall,
+    // while the active turn must be interrupted immediately.
     const success = await abortSession(client, session.sessionId);
     if (success) {
       // Leave a marker in the transcript. Without it an interrupted turn is
@@ -2340,21 +2373,7 @@ export function ClaudeChatTab({
     } else {
       console.error("[ClaudeChatTab] Failed to abort session");
     }
-    stopPromotionPendingRef.current = false;
-    if (useClaudeStore.getState().sessions.get(sessionKey)?.isLoading !== true) {
-      setStopInProgress(false);
-    }
   }, [client, session, sessionKey, promoteNextQueuedPromptToDraft, addMessage]);
-
-  useEffect(() => {
-    if (
-      stopInProgress
-      && !stopPromotionPendingRef.current
-      && session?.isLoading === false
-    ) {
-      setStopInProgress(false);
-    }
-  }, [session?.isLoading, stopInProgress]);
 
   const handlePlanModeChange = useCallback((enabled: boolean) => {
     if (!client || !session) return;

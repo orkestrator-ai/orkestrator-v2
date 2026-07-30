@@ -873,6 +873,7 @@ function seedCodexStore(messages: ReturnType<typeof createMessage>[] = []) {
         },
       ],
     ]),
+    sessionLoadingRevisions: new Map(),
     slashCommands: new Map(),
     attachments: new Map(),
     draftText: new Map(),

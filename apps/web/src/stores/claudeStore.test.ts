@@ -22,6 +22,7 @@ function resetClaudeStore() {
     clients: new Map(),
     eventSubscriptions: new Map(),
     sessions: new Map(),
+    sessionLoadingRevisions: new Map(),
     attachments: new Map(),
     draftText: new Map(),
     draftMentions: new Map(),
@@ -208,6 +209,12 @@ describe("claudeStore cleanup and queue helpers", () => {
 
     expect(store.getSession(sessionKeyA)).toBeUndefined();
     expect(store.getSession(sessionKeyB)?.sessionId).toBe("session-b");
+    expect(
+      useClaudeStore.getState().sessionLoadingRevisions.has(sessionKeyA),
+    ).toBe(false);
+    expect(
+      useClaudeStore.getState().sessionLoadingRevisions.has(sessionKeyB),
+    ).toBe(true);
     expect(store.getSelectedModel(sessionKeyA)).toBeUndefined();
     expect(store.getSelectedModel(sessionKeyB)).toBe("opus");
     expect(store.isComposingFor(sessionKeyA)).toBe(false);
@@ -288,6 +295,30 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(state.selectedModel.get(SESSION_KEY)).toBe("claude-sonnet");
   });
 
+  test("replaceSessionIdentity advances the loading revision so an in-flight reconcile is discarded", () => {
+    const store = useClaudeStore.getState();
+    store.setSession(SESSION_KEY, {
+      sessionId: "session-old",
+      messages: [],
+      isLoading: true,
+    });
+    const revisionBeforeFork =
+      useClaudeStore.getState().sessionLoadingRevisions.get(SESSION_KEY) ?? 0;
+
+    // A fork/resume swaps the provider identity underneath the same tab. A
+    // reconcile that started against `session-old` must not be allowed to write
+    // its status onto `session-new`, so this has to read as a lifecycle edge.
+    store.replaceSessionIdentity(SESSION_KEY, {
+      sessionId: "session-new",
+      messages: [],
+      isLoading: false,
+    });
+
+    expect(
+      useClaudeStore.getState().sessionLoadingRevisions.get(SESSION_KEY),
+    ).toBe(revisionBeforeFork + 1);
+  });
+
   test("clearSession exhaustively removes every session-keyed map and only its pending requests", () => {
     const targetKey = createSessionKey("env-1", "tab-target");
     const otherKey = createSessionKey("env-1", "tab-other");
@@ -306,6 +337,10 @@ describe("claudeStore cleanup and queue helpers", () => {
       sessions: new Map([
         [targetKey, targetSession],
         [otherKey, otherSession],
+      ]),
+      sessionLoadingRevisions: new Map([
+        [targetKey, 3],
+        [otherKey, 7],
       ]),
       attachments: new Map([[targetKey, []], [otherKey, []]]),
       draftText: new Map([[targetKey, "target"], [otherKey, "other"]]),
@@ -358,6 +393,7 @@ describe("claudeStore cleanup and queue helpers", () => {
     const state = useClaudeStore.getState();
     const sessionKeyedMaps = [
       "sessions",
+      "sessionLoadingRevisions",
       "attachments",
       "draftText",
       "draftMentions",

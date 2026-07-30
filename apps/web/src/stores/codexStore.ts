@@ -248,6 +248,15 @@ function isSameContextUsage(
  */
 const CODEX_SESSION_KEYED_MAPS = [
   "sessions",
+  /**
+   * Codex has no reader for this map today: unlike Claude and OpenCode it never
+   * reconciles `isLoading` from an asynchronous REST snapshot — `turnStatus`
+   * from the bridge is the authoritative lifecycle signal and `refreshMessages`
+   * only rehydrates the transcript. It is still listed here because the shared
+   * slice populates it on every `setSessionLoading`, so omitting it would leak
+   * one entry per closed Codex tab.
+   */
+  "sessionLoadingRevisions",
   "attachments",
   "draftText",
   "draftMentions",

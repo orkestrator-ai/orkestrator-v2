@@ -10,7 +10,7 @@ marks work as optional.
 | [1](milestone-1.md) | Static delivery and initial bundle improvements | Not started |
 | [2](milestone-2.md) | Dynamic body, event-stream, and proxy compression | Not started |
 | [3](milestone-3.md) | Repeated payload and polling reduction | Implemented; manual verification pending |
-| [4](milestone-4.md) | Gateway replay and revision-aware synchronization | Not started |
+| [4](milestone-4.md) | Gateway replay and revision-aware synchronization | In progress — replay transport implemented |
 | [5](milestone-5.md) | Multiplexed terminal WebSocket | Not started |
 | [6](milestone-6.md) | Large payloads and optional connection brokerage | Not started |
 

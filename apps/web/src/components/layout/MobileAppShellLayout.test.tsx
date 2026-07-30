@@ -70,7 +70,11 @@ describe("MobileAppShellLayout", () => {
     // The bar starts a window drag on mouse-down; without the stop, tapping the
     // button drags the window instead of opening the panel.
     const { container, props } = renderLayout();
-    fireEvent.mouseDown(screen.getByRole("button", { name: "Open projects and environments" }));
+    const sidebarTrigger = screen
+      .getAllByRole("button", { name: "Close projects and environments" })
+      .find((button) => button.hasAttribute("aria-controls"));
+    expect(sidebarTrigger).toBeTruthy();
+    fireEvent.mouseDown(sidebarTrigger!);
     fireEvent.mouseDown(screen.getByRole("button", { name: "pgstack1 - feature-auth" }));
     fireEvent.mouseDown(screen.getByRole("button", { name: "Open tools" }));
     fireEvent.mouseDown(screen.getByRole("button", { name: "Agent info" }));
@@ -276,12 +280,9 @@ describe("MobileAppShellLayout", () => {
     await waitFor(() => expect(document.activeElement).toBe(toolsButton));
   });
 
-  test("opens and closes the project drawer while keeping workspace content mounted", () => {
+  test("opens the project drawer on initial mobile entry and keeps workspace content mounted", () => {
     renderLayout();
     expect(screen.getByText("Workspace")).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Open projects and environments" }));
     expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
     expect(screen.getByText("Projects")).toBeTruthy();
     const closeButtons = screen.getAllByRole("button", { name: "Close projects and environments" });
@@ -294,33 +295,37 @@ describe("MobileAppShellLayout", () => {
 
   test("toggles the project drawer closed with a second menu-button tap", () => {
     renderLayout();
-    const menuButton = screen.getByRole("button", { name: "Open projects and environments" });
+    const menuButton = screen
+      .getAllByRole("button", { name: "Close projects and environments" })
+      .find((button) => button.hasAttribute("aria-controls"));
+    expect(menuButton).toBeTruthy();
 
-    fireEvent.click(menuButton);
-    expect(menuButton.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
-
-    fireEvent.click(menuButton);
-    expect(menuButton.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(menuButton!);
+    expect(menuButton!.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
+
+    fireEvent.click(menuButton!);
+    expect(menuButton!.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
   });
 
   test("closes the project drawer from its backdrop and restores trigger focus", async () => {
     const { container } = renderLayout();
-    const menuButton = screen.getByRole("button", { name: "Open projects and environments" });
-    fireEvent.click(menuButton);
+    const menuButton = screen
+      .getAllByRole("button", { name: "Close projects and environments" })
+      .find((button) => button.hasAttribute("aria-controls"));
+    expect(menuButton).toBeTruthy();
 
     const backdrop = container.querySelector("#mobile-projects-drawer > button.absolute.inset-0");
     expect(backdrop).toBeTruthy();
     fireEvent.click(backdrop!);
 
     expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
-    await waitFor(() => expect(document.activeElement).toBe(menuButton));
+    await waitFor(() => expect(document.activeElement).toBe(menuButton!));
   });
 
   test("closes the drawer when project or environment selection changes", () => {
     const { rerender, props } = renderLayout();
-    fireEvent.click(screen.getByRole("button", { name: "Open projects and environments" }));
     rerender(<MobileAppShellLayout {...props} selectedEnvironmentId="environment-2" />);
     expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
 

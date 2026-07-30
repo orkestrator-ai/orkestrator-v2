@@ -39,9 +39,10 @@ export function MobileAppShellLayout({
   children,
   onTitleBarMouseDown,
 }: MobileAppShellLayoutProps) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [titleTooltipOpen, setTitleTooltipOpen] = useState(false);
+  const previousSelectionRef = useRef({ selectedEnvironmentId, selectedProjectId });
   const titlePointerTypeRef = useRef<string | null>(null);
   const titleTooltipWasOpenOnPointerDownRef = useRef(false);
   const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
@@ -61,6 +62,15 @@ export function MobileAppShellLayout({
   };
 
   useEffect(() => {
+    const previousSelection = previousSelectionRef.current;
+    previousSelectionRef.current = { selectedEnvironmentId, selectedProjectId };
+    if (
+      previousSelection.selectedEnvironmentId === selectedEnvironmentId
+      && previousSelection.selectedProjectId === selectedProjectId
+    ) {
+      return;
+    }
+
     restoreSidebarFocusRef.current = false;
     restoreToolsFocusRef.current = false;
     setSidebarOpen(false);

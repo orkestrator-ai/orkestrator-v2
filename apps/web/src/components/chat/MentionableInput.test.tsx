@@ -39,6 +39,22 @@ describe("MentionableInput", () => {
     expect(input!.textContent).toBe("");
   });
 
+  test("marks the editable viewport for the iOS focus-zoom workaround", () => {
+    const { container } = render(
+      <MentionableInput
+        value=""
+        mentions={[]}
+        onChange={() => {}}
+      />,
+    );
+
+    const input = container.querySelector("[contenteditable]");
+    expect(input?.classList.contains("native-compose-input")).toBe(true);
+    expect(
+      input?.parentElement?.classList.contains("native-compose-input-viewport"),
+    ).toBe(true);
+  });
+
   test("restores draft text with mentions on first render", () => {
     const draftText = "Check @utils.ts for details";
     const mentions = [

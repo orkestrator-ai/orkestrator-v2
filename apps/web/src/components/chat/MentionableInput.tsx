@@ -401,7 +401,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
     const showPlaceholder = !value;
 
     return (
-      <div className="relative">
+      <div className="native-compose-input-viewport relative">
         <div
           ref={inputRef}
           contentEditable={!disabled}
@@ -412,7 +412,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
           onPaste={handlePaste}
           onKeyDown={handleKeyDown}
           className={cn(
-            "w-full resize-none overflow-y-auto border-none bg-transparent px-1 py-1 text-sm text-foreground outline-none transition-colors",
+            "native-compose-input w-full resize-none overflow-y-auto border-none bg-transparent px-1 py-1 text-sm text-foreground outline-none transition-colors",
             "[&:empty]:before:pointer-events-none",
             "[&:empty]:before:content-[attr(data-placeholder)]",
             "[&:empty]:before:text-muted-foreground",

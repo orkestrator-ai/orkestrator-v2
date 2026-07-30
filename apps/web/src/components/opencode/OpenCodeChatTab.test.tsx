@@ -3682,7 +3682,7 @@ describe("OpenCodeChatTab", () => {
       <OpenCodeChatTab
         tabId={TAB_ID}
         data={createData()}
-        isActive={false}
+        isActive
       />,
     );
     await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
@@ -3709,6 +3709,14 @@ describe("OpenCodeChatTab", () => {
     await act(async () => {
       pendingAbort.resolve(true);
       await pendingAbort.promise;
+    });
+    await waitFor(() => {
+      expect(
+        useOpenCodeStore
+          .getState()
+          .sessions.get(SESSION_KEY)
+          ?.messages.some((message) => message.content === TURN_STOPPED_BY_USER),
+      ).toBe(true);
     });
     fireEvent.click(screen.getByTestId("opencode-send"));
     await waitFor(() => {

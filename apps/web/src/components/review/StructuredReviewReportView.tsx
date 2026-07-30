@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 import type {
   ReviewIssue,
   StructuredReviewReport,
@@ -13,6 +13,11 @@ import {
   ShieldCheck,
   TestTube2,
 } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +31,66 @@ function location(file: string, line: number | null): string {
   return line ? `${file}:${line}` : file;
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** One line of substance for a report whose sections are all collapsed. */
+function verdictSummary(report: StructuredReviewReport): string {
+  return [
+    `Ready: ${report.verdict.ready}`,
+    plural(report.issues.length, "issue"),
+    plural(report.testCoverageGaps.length, "coverage gap"),
+    `${report.riskProfile.overallRisk} risk`,
+  ].join(" · ");
+}
+
+/**
+ * Collapsed sections are genuinely unmounted rather than hidden: the report is
+ * the largest thing in a transcript, and a build pipeline appends one to a
+ * stage that already scrolls.
+ */
+function CollapsibleSection({
+  title,
+  icon,
+  children,
+}: {
+  title: string;
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <Collapsible
+      open={isOpen}
+      onOpenChange={setIsOpen}
+      className="border-t border-border/40 first:border-t-0"
+    >
+      <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 py-2.5 text-left text-muted-foreground transition-colors hover:text-foreground">
+        <ChevronRight
+          className={cn(
+            "size-3.5 shrink-0 transition-transform",
+            isOpen && "rotate-90",
+          )}
+        />
+        {icon}
+        <h3 className="text-sm font-medium tracking-tight text-foreground">
+          {title}
+        </h3>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="pb-4 pl-5.5">{children}</CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/**
+ * Whether sections render collapsed. Carried in context so every section reads
+ * one stable value: a wrapper component recreated per render would remount the
+ * sections and throw away whatever the user had expanded.
+ */
+const CollapsibleSectionsContext = createContext(false);
+
 function Section({
   title,
   icon,
@@ -35,6 +100,16 @@ function Section({
   icon?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const collapsible = useContext(CollapsibleSectionsContext);
+
+  if (collapsible) {
+    return (
+      <CollapsibleSection title={title} icon={icon}>
+        {children}
+      </CollapsibleSection>
+    );
+  }
+
   return (
     <section className="border-t border-border/70 py-5 first:border-t-0 first:pt-0">
       <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold tracking-tight text-foreground">
@@ -74,12 +149,29 @@ export interface StructuredReviewReportViewProps {
   report: StructuredReviewReport;
   className?: string;
   heading?: string;
+  /** Render every section collapsed behind a disclosure. */
+  collapsibleSections?: boolean;
+  /**
+   * Offer the raw report JSON. Off inside a transcript, where the surrounding
+   * messages are prose and a JSON dump reads as a rendering failure.
+   */
+  showRawJson?: boolean;
 }
 
-export function StructuredReviewReportView({
+export function StructuredReviewReportView(props: StructuredReviewReportViewProps) {
+  return (
+    <CollapsibleSectionsContext.Provider value={props.collapsibleSections ?? false}>
+      <ReportArticle {...props} />
+    </CollapsibleSectionsContext.Provider>
+  );
+}
+
+function ReportArticle({
   report,
   className,
   heading = "Structured review report",
+  collapsibleSections = false,
+  showRawJson = true,
 }: StructuredReviewReportViewProps) {
   const [showRaw, setShowRaw] = useState(false);
   const scope = report.reviewScope;
@@ -95,35 +187,56 @@ export function StructuredReviewReportView({
   return (
     <article
       className={cn(
-        "rounded-xl border border-border/80 bg-card/45 p-4 shadow-sm @sm:p-5",
+        "rounded-xl border border-border/50 bg-card/40 p-4 shadow-sm @sm:p-5",
         className,
       )}
       aria-label={heading}
     >
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+      <div
+        className={cn(
+          "flex flex-wrap items-start justify-between gap-3",
+          collapsibleSections ? "mb-3" : "mb-5",
+        )}
+      >
         <div>
-          <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-cyan-400/80">
-            Validated JSON Schema
-          </p>
-          <h2 className="mt-1 text-base font-semibold text-foreground">{heading}</h2>
+          {showRawJson && (
+            <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-cyan-400/80">
+              Validated JSON Schema
+            </p>
+          )}
+          <h2
+            className={cn(
+              "text-base font-semibold text-foreground",
+              showRawJson && "mt-1",
+            )}
+          >
+            {heading}
+          </h2>
+          {collapsibleSections && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {verdictSummary(report)}
+            </p>
+          )}
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 text-xs"
-          aria-expanded={showRaw}
-          onClick={() => setShowRaw((value) => !value)}
-        >
-          <Braces className="size-3.5" />
-          {showRaw ? "Hide raw JSON" : "Inspect raw JSON"}
-          {showRaw
-            ? <ChevronDown className="size-3.5" />
-            : <ChevronRight className="size-3.5" />}
-        </Button>
+        {showRawJson && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            aria-expanded={showRaw}
+            onClick={() => setShowRaw((value) => !value)}
+          >
+            <Braces className="size-3.5" />
+            {showRaw ? "Hide raw JSON" : "Inspect raw JSON"}
+            {showRaw
+              ? <ChevronDown className="size-3.5" />
+              : <ChevronRight className="size-3.5" />}
+          </Button>
+        )}
       </div>
 
-      {showRaw && (
+      {showRawJson && showRaw && (
         <pre
           className="mb-5 max-h-96 overflow-auto rounded-lg border border-border bg-background/80 p-3 text-xs leading-relaxed text-foreground/80"
           tabIndex={0}

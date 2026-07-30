@@ -375,6 +375,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   <LazyBuildChatTab
                     data={tab.buildTabData}
                     isActive={isTabActive && isActive}
+                    ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
                   />
                 </LazyLoadBoundary>
               </div>

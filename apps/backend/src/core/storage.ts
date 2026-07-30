@@ -29,9 +29,13 @@ import {
 import type {
   AgentActivityState,
   AgentActivitySource,
+  AgentModelCatalogCache,
   AgentModelConfigKey,
   AppConfig,
   ClaudeModelCatalogSnapshot,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
   Environment,
   EnvironmentStatus,
   EnvironmentType,
@@ -653,6 +657,216 @@ function isClaudeModelCatalogSnapshot(
     && (value.error == null || typeof value.error === "string");
 }
 
+const CODEX_REASONING_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const satisfies readonly CodexReasoningEffort[];
+
+function normalizeClaudeModelCatalogEntries(
+  value: unknown,
+): ClaudeModelCatalogEntry[] {
+  if (!Array.isArray(value)) return [];
+  const normalized: ClaudeModelCatalogEntry[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    if (!isRecord(candidate)) continue;
+    const id = isNonBlankString(candidate.id) ? candidate.id.trim() : "";
+    const name = isNonBlankString(candidate.name) ? candidate.name.trim() : "";
+    if (!id || !name || seen.has(id)) continue;
+
+    const optionalStrings = ["resolvedModel", "description"] as const;
+    if (
+      optionalStrings.some(
+        (field) =>
+          field in candidate
+          && candidate[field] != null
+          && typeof candidate[field] !== "string",
+      )
+    ) {
+      continue;
+    }
+    const optionalBooleans = [
+      "supportsFastMode",
+      "supportsEffort",
+      "supportsAdaptiveThinking",
+      "supportsAutoMode",
+    ] as const;
+    if (
+      optionalBooleans.some(
+        (field) =>
+          field in candidate
+          && candidate[field] != null
+          && typeof candidate[field] !== "boolean",
+      )
+    ) {
+      continue;
+    }
+    const supportedEffortLevels = candidate.supportedEffortLevels;
+    if (
+      supportedEffortLevels != null
+      && (
+        !Array.isArray(supportedEffortLevels)
+        || !supportedEffortLevels.every((level) =>
+          isOneOf(level, ["low", "medium", "high", "xhigh", "max"] as const)
+        )
+      )
+    ) {
+      continue;
+    }
+
+    seen.add(id);
+    normalized.push({
+      id,
+      ...(isNonBlankString(candidate.resolvedModel)
+        ? { resolvedModel: candidate.resolvedModel.trim() }
+        : {}),
+      name,
+      ...(isNonBlankString(candidate.description)
+        ? { description: candidate.description.trim() }
+        : {}),
+      ...(typeof candidate.supportsFastMode === "boolean"
+        ? { supportsFastMode: candidate.supportsFastMode }
+        : {}),
+      ...(typeof candidate.supportsEffort === "boolean"
+        ? { supportsEffort: candidate.supportsEffort }
+        : {}),
+      ...(Array.isArray(supportedEffortLevels)
+        ? { supportedEffortLevels: [...supportedEffortLevels] }
+        : {}),
+      ...(typeof candidate.supportsAdaptiveThinking === "boolean"
+        ? { supportsAdaptiveThinking: candidate.supportsAdaptiveThinking }
+        : {}),
+      ...(typeof candidate.supportsAutoMode === "boolean"
+        ? { supportsAutoMode: candidate.supportsAutoMode }
+        : {}),
+    });
+  }
+  return normalized;
+}
+
+function normalizeCodexModelCatalogEntries(
+  value: unknown,
+): CodexModelCatalogEntry[] {
+  if (!Array.isArray(value)) return [];
+  const normalized: CodexModelCatalogEntry[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    if (!isRecord(candidate)) continue;
+    const id = isNonBlankString(candidate.id) ? candidate.id.trim() : "";
+    const name = isNonBlankString(candidate.name) ? candidate.name.trim() : "";
+    if (!id || !name || seen.has(id)) continue;
+    if (
+      "description" in candidate
+      && candidate.description != null
+      && typeof candidate.description !== "string"
+    ) {
+      continue;
+    }
+
+    const reasoningEfforts = Array.isArray(candidate.reasoningEfforts)
+      ? candidate.reasoningEfforts.filter(
+          (effort): effort is CodexReasoningEffort =>
+            isOneOf(effort, CODEX_REASONING_EFFORTS),
+        )
+      : undefined;
+    if (
+      candidate.reasoningEfforts != null
+      && (
+        !Array.isArray(candidate.reasoningEfforts)
+        || reasoningEfforts!.length !== candidate.reasoningEfforts.length
+      )
+    ) {
+      continue;
+    }
+    const defaultReasoningEffort =
+      candidate.defaultReasoningEffort == null
+        ? undefined
+        : isOneOf(candidate.defaultReasoningEffort, CODEX_REASONING_EFFORTS)
+          ? candidate.defaultReasoningEffort
+          : null;
+    if (defaultReasoningEffort === null) continue;
+
+    let reasoningOptions: CodexModelCatalogEntry["reasoningOptions"];
+    if (candidate.reasoningOptions != null) {
+      if (!Array.isArray(candidate.reasoningOptions)) continue;
+      reasoningOptions = [];
+      let invalid = false;
+      for (const option of candidate.reasoningOptions) {
+        if (
+          !isRecord(option)
+          || !isOneOf(option.effort, CODEX_REASONING_EFFORTS)
+          || !isNonBlankString(option.label)
+          || (
+            option.description != null
+            && typeof option.description !== "string"
+          )
+        ) {
+          invalid = true;
+          break;
+        }
+        reasoningOptions.push({
+          effort: option.effort,
+          label: option.label.trim(),
+          ...(isNonBlankString(option.description)
+            ? { description: option.description.trim() }
+            : {}),
+        });
+      }
+      if (invalid) continue;
+    }
+
+    seen.add(id);
+    normalized.push({
+      id,
+      name,
+      ...(isNonBlankString(candidate.description)
+        ? { description: candidate.description.trim() }
+        : {}),
+      ...(reasoningEfforts ? { reasoningEfforts: [...reasoningEfforts] } : {}),
+      ...(reasoningOptions ? { reasoningOptions } : {}),
+      ...(defaultReasoningEffort
+        ? { defaultReasoningEffort }
+        : {}),
+    });
+  }
+  return normalized;
+}
+
+function parsePersistedAgentModelCatalogCache(
+  value: unknown,
+): AgentModelCatalogCache {
+  const empty: AgentModelCatalogCache = { schemaVersion: 1 };
+  if (!isRecord(value) || value.schemaVersion !== 1) return empty;
+
+  const parseCatalog = <T>(
+    candidate: unknown,
+    normalize: (models: unknown) => T[],
+  ) => {
+    if (!isRecord(candidate)) return undefined;
+    const models = normalize(candidate.models);
+    if (models.length === 0) return undefined;
+    const updatedAt =
+      typeof candidate.updatedAt === "string"
+      && Number.isFinite(Date.parse(candidate.updatedAt))
+        ? candidate.updatedAt
+        : new Date(0).toISOString();
+    return { updatedAt, models };
+  };
+
+  const claude = parseCatalog(value.claude, normalizeClaudeModelCatalogEntries);
+  const codex = parseCatalog(value.codex, normalizeCodexModelCatalogEntries);
+  return {
+    schemaVersion: 1,
+    ...(claude ? { claude } : {}),
+    ...(codex ? { codex } : {}),
+  };
+}
+
 function validateCodexMaxConcurrentThreads(value: unknown): number {
   if (!isValidCodexMaxConcurrentThreads(value)) {
     throw new Error(
@@ -1123,6 +1337,7 @@ export class StorageService {
   private environmentMutationQueue: Promise<unknown> = Promise.resolve();
   private configMutationQueue: Promise<unknown> = Promise.resolve();
   private openCodeModelCatalogMutationQueue: Promise<unknown> = Promise.resolve();
+  private agentModelCatalogMutationQueue: Promise<unknown> = Promise.resolve();
   private githubCompletionCommentMutationQueue: Promise<unknown> = Promise.resolve();
   private featurePlanMutation: Promise<unknown> = Promise.resolve();
   private paneLayoutMutation: Promise<unknown> = Promise.resolve();
@@ -1219,6 +1434,10 @@ export class StorageService {
 
   private openCodeModelCatalogFile(): string {
     return this.file("opencode-model-catalog.json");
+  }
+
+  private agentModelCatalogFile(): string {
+    return this.file("agent-model-catalog.json");
   }
 
   private sessionsFile(): string {
@@ -2460,6 +2679,66 @@ export class StorageService {
     const validated = validateConfigReviewInstruction(config);
     await this.enqueueConfigMutation(() => this.saveJson(this.configFile(), validated));
     this.announce("config", "app");
+  }
+
+  async getAgentModelCatalogCache(): Promise<AgentModelCatalogCache> {
+    const persisted = await this.loadJson<unknown>(
+      this.agentModelCatalogFile(),
+      () => null,
+    );
+    return parsePersistedAgentModelCatalogCache(persisted);
+  }
+
+  async cacheAgentModelCatalog(
+    agent: "claude",
+    models: ClaudeModelCatalogEntry[],
+  ): Promise<AgentModelCatalogCache>;
+  async cacheAgentModelCatalog(
+    agent: "codex",
+    models: CodexModelCatalogEntry[],
+  ): Promise<AgentModelCatalogCache>;
+  async cacheAgentModelCatalog(
+    agent: "claude" | "codex",
+    models: ClaudeModelCatalogEntry[] | CodexModelCatalogEntry[],
+  ): Promise<AgentModelCatalogCache> {
+    const normalizedModels = agent === "claude"
+      ? normalizeClaudeModelCatalogEntries(models)
+      : normalizeCodexModelCatalogEntries(models);
+    if (normalizedModels.length === 0) {
+      throw new Error(`${agent} model catalogue must contain at least one valid model.`);
+    }
+
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.agentModelCatalogFile(),
+        "Agent model catalogue storage",
+      );
+      try {
+        const current = await this.getAgentModelCatalogCache();
+        const existing = current[agent];
+        if (existing && JSON.stringify(existing.models) === JSON.stringify(normalizedModels)) {
+          return current;
+        }
+        const next: AgentModelCatalogCache = {
+          ...current,
+          [agent]: {
+            updatedAt: new Date().toISOString(),
+            models: normalizedModels,
+          },
+        };
+        await this.saveJson(this.agentModelCatalogFile(), next);
+        return next;
+      } finally {
+        await release();
+      }
+    };
+
+    const next = this.agentModelCatalogMutationQueue.then(run, run);
+    this.agentModelCatalogMutationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   async getOpenCodeModelCatalog(

@@ -15,6 +15,8 @@ import type {
   CodexAbortOutcome,
   CodexApproval,
   CodexInteraction,
+  CodexModel,
+  CodexModelSource,
   CodexPromptAcceptedResponse,
   CodexPromptSendOutcome,
   CodexSessionConfigUpdateOutcome,
@@ -52,7 +54,7 @@ let lastVirtualizedFind: {
   getSearchText: (message: NativeMessage) => string;
 } | undefined;
 
-const MOCK_MODELS = [
+const MOCK_MODELS: CodexModel[] = [
   {
     id: "gpt-5.3-codex",
     name: "gpt-5.3-codex",
@@ -188,9 +190,13 @@ const mockStartLocalCodexServer = mock(async () => ({
   pid: 1234,
   authToken: "local-start-token",
 }));
-const mockGetModels = mock(async () => ({
+const mockCacheAgentModelCatalog = mock(async () => ({ schemaVersion: 1 as const }));
+const mockGetModels = mock(async (): Promise<{
+  models: CodexModel[];
+  source: CodexModelSource;
+}> => ({
   models: MOCK_MODELS,
-  source: "fallback" as const,
+  source: "fallback",
 }));
 const mockGetSlashCommands = mock(async () => []);
 const mockCreateClient = mock(
@@ -302,6 +308,7 @@ const mockTransferPromptQueueMessageToComposeDraft = mock(
 
 mock.module("@/lib/backend", () => ({
   adoptNativeAgentSession: mockAdoptNativeAgentSession,
+  cacheAgentModelCatalog: mockCacheAgentModelCatalog,
   claimPromptQueueHead: mockClaimPromptQueueHead,
   acknowledgePromptQueueClaim: mock(async (queueKey, environmentId, claimToken) => {
     mockOutstandingQueueClaims.delete(claimToken);
@@ -1040,6 +1047,7 @@ describe("CodexChatTab", () => {
       pid: 1234,
       authToken: "local-start-token",
     });
+    mockCacheAgentModelCatalog.mockClear();
     mockGetModels.mockReset();
     mockGetModels.mockResolvedValue({
       models: MOCK_MODELS,
@@ -2441,12 +2449,84 @@ describe("CodexChatTab", () => {
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
 
     await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+    expect(mockCacheAgentModelCatalog).toHaveBeenCalledWith(
+      "codex",
+      authoritativeModels,
+    );
     expect(useCodexStore.getState().models).toEqual(authoritativeModels);
     expect(useCodexStore.getState().selectedMode.get(SESSION_KEY)).toBe("build");
     expect(mockCreateSession.mock.calls.at(-1)?.[1]).toMatchObject({
       model: MOCK_MODELS[1]!.id,
       mode: "build",
     });
+  });
+
+  test("persists and adopts a cache-sourced cold catalog", async () => {
+    const cachedModels: CodexModel[] = [MOCK_MODELS[1]!];
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    mockGetModels.mockResolvedValueOnce({
+      models: cachedModels,
+      source: "cache",
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+    expect(mockCacheAgentModelCatalog).toHaveBeenCalledWith("codex", cachedModels);
+    expect(useCodexStore.getState().models).toEqual(cachedModels);
+  });
+
+  test("does not persist a fallback cold catalog", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    mockGetModels.mockResolvedValueOnce({
+      models: MOCK_MODELS,
+      source: "fallback",
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+    expect(mockCacheAgentModelCatalog).not.toHaveBeenCalled();
+  });
+
+  test("continues cold initialization when model catalog persistence rejects", async () => {
+    const authoritativeModels: CodexModel[] = [MOCK_MODELS[1]!];
+    const originalWarn = console.warn;
+    const warn = mock(() => {});
+    console.warn = warn as unknown as typeof console.warn;
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    mockGetModels.mockResolvedValueOnce({
+      models: authoritativeModels,
+      source: "app-server",
+    });
+    mockCacheAgentModelCatalog.mockRejectedValueOnce(new Error("disk unavailable"));
+
+    try {
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+      await waitFor(() => {
+        expect(warn).toHaveBeenCalledWith(
+          "[CodexChatTab] Failed to persist models:",
+          expect.any(Error),
+        );
+      });
+      expect(useCodexStore.getState().models).toEqual(authoritativeModels);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   test("reports a cold-start status that does not resolve a bridge port", async () => {

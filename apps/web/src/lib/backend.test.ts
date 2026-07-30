@@ -44,6 +44,7 @@ const {
   updateGitHubIssueComment,
   postGitHubCompletionComment,
   getSetupCommands,
+  getAgentModelCatalogCache,
   getGatewayTokenSettings,
   getWebClientStatus,
   postLinearCompletionComment,
@@ -65,6 +66,7 @@ const {
   setEnvironmentPendingAgentLaunch,
   setEnvironmentInitialPrompt,
   cacheOpenCodeModelCatalog,
+  cacheAgentModelCatalog,
   claimFeaturePlanBuild,
   updateAgentModelDefault,
   updateEnvironmentAgentSettings,
@@ -295,6 +297,30 @@ describe("backend setup wrappers", () => {
       [
         "cache_opencode_model_catalog",
         { projectId: "project-1", models: snapshot.models },
+      ],
+    ]);
+  });
+
+  test("loads and updates the host-wide agent model catalogue", async () => {
+    const cache = {
+      schemaVersion: 1 as const,
+      claude: {
+        updatedAt: "2026-07-30T10:00:00.000Z",
+        models: [{ id: "claude-opus-5", name: "Claude Opus 5" }],
+      },
+    };
+    invokeMock.mockResolvedValue(cache);
+
+    await expect(getAgentModelCatalogCache()).resolves.toEqual(cache);
+    await expect(
+      cacheAgentModelCatalog("claude", cache.claude.models),
+    ).resolves.toEqual(cache);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_agent_model_catalog_cache"],
+      [
+        "cache_agent_model_catalog",
+        { agent: "claude", models: cache.claude.models },
       ],
     ]);
   });

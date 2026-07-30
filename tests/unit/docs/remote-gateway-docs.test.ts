@@ -37,7 +37,7 @@ describe("remote gateway documentation", () => {
     }
   });
 
-  test("documents compression modes, precedence, defaults, and milestone-zero behavior", async () => {
+  test("documents compression modes, precedence, the body default, and milestone-zero history", async () => {
     const [guide, milestone] = await Promise.all([
       readFile(path.join(root, "docs", "remote-gateway.md"), "utf8"),
       readFile(path.join(root, "docs", "efficiency", "milestone-0.md"), "utf8"),
@@ -47,11 +47,15 @@ describe("remote gateway documentation", () => {
     expect(guide).toContain("--compression off|body|on");
     expect(guide).toContain("The standalone `--compression` CLI flag.");
     expect(guide).toContain("`ORKESTRATOR_GATEWAY_COMPRESSION`.");
-    expect(guide).toContain("The default, `off`.");
+    expect(guide).toContain("The default, `body`.");
     expect(guide).toContain("constructor option takes precedence");
-    expect(guide).toContain("All three modes are intentionally no-op rollout controls");
-    expect(guide).toContain("does not add response compression in `off`, `body`, or `on`");
-    expect(guide).toContain("`off` is the immediate rollback mode");
+    expect(guide).toContain("`off`: identity responses everywhere");
+    expect(guide).toContain("`body`: Brotli (preferred) or gzip");
+    expect(guide).toContain("`on`: everything in `body`, plus gzip server-sent events");
+    expect(guide).toContain("Bodies smaller than 1 KiB remain identity");
+    expect(guide).toContain("Accept-Encoding: identity");
+    expect(guide).toContain("Already encoded upstream responses are passed through");
+    expect(guide.replace(/\s+/g, " ")).toContain("`body` remains the default");
 
     expect(milestone).toContain("CLI compression overrides the environment");
     expect(milestone).toContain("defaults to `off`");

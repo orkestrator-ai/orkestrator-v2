@@ -59,7 +59,7 @@ The gateway supports these environment variables:
 | `ORKESTRATOR_GATEWAY_HOST` | first detected Tailscale address | Overrides the bind address. The address must still be a Tailscale address. |
 | `ORKESTRATOR_GATEWAY_PORT` | `34121` | Overrides the gateway port. |
 | `ORKESTRATOR_GATEWAY_TOKEN` | generated token in `gateway-auth.json` | Sets the login token. Must be at least 16 characters. |
-| `ORKESTRATOR_GATEWAY_COMPRESSION` | `off` | Compression rollout mode. Accepts `off`, `body`, or `on`. In this milestone every response still stays identity; the setting only prepares later milestones and metrics. |
+| `ORKESTRATOR_GATEWAY_COMPRESSION` | `body` | Compression rollout mode. Accepts `off`, `body`, or `on`. |
 | `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | unset | Comma-separated browser origins allowed to call the gateway directly. Supports entries such as `https://orkestrator.example` and `https://*.vercel.app`. |
 | `ORKESTRATOR_TAILSCALE_SERVE=1` | unset | Makes the backend own a tailnet-only HTTPS listener through `tailscale serve`. The browser listener binds to loopback automatically. |
 | `ORKESTRATOR_TAILSCALE_SERVE_PORT` | `443` | HTTPS port configured by backend-managed Tailscale Serve. |
@@ -86,17 +86,36 @@ Compression configuration resolves in this order:
 
 1. The standalone `--compression` CLI flag.
 2. `ORKESTRATOR_GATEWAY_COMPRESSION`.
-3. The default, `off`.
+3. The default, `body`.
 
 When the gateway is embedded, an explicit constructor option takes precedence
-over `ORKESTRATOR_GATEWAY_COMPRESSION` and has the same `off` default. Invalid
+over `ORKESTRATOR_GATEWAY_COMPRESSION` and has the same `body` default. Invalid
 CLI or environment values fail startup and identify the offending setting.
 
-All three modes are intentionally no-op rollout controls in this milestone:
-the gateway does not add response compression in `off`, `body`, or `on`.
-`off` is the immediate rollback mode. Later milestones can make `body` compress
-eligible bounded responses and `on` additionally cover long-lived streams
-without changing this configuration contract.
+The modes select:
+
+- `off`: identity responses everywhere. This is the immediate rollback mode.
+- `body`: Brotli (preferred) or gzip for eligible renderer assets, dynamic
+  JSON, rewritten browser previews, and bounded non-streaming proxy bodies.
+  Bodies smaller than 1 KiB remain identity.
+- `on`: everything in `body`, plus gzip server-sent events with sync-flush so a
+  quiet stream's connected frame and each application frame are decodable
+  immediately.
+
+The gateway requests `Accept-Encoding: identity` from loopback proxy targets
+and performs any negotiated compression only on the browser-facing hop.
+Already encoded upstream responses are passed through without another encoding.
+Browser-preview HTML, CSS, and JavaScript are decoded within fixed encoded and
+decoded byte and chunk-count limits, rewritten, and then optionally
+recompressed. Dynamic compression also has bounded source/output sizes and a
+fixed concurrency limit; saturation falls back to identity.
+
+Compressed event streams use the same terminal soft-limit desync recovery,
+authoritative-event hard-limit disconnect, and keepalive behavior as identity
+streams. Their safety accounting measures uncompressed input still owed by the
+compressor; it does not rely only on the smaller encoded socket queue. `body`
+remains the default until low-volume `on` streams have been verified not to
+buffer in a real iPhone and iPad `WKWebView`.
 
 Compression policy follows the listener's role, not its bind address. A browser
 listener remains a `browser` listener, and therefore retains the configured
@@ -203,8 +222,10 @@ Two label rules keep that true as the code grows:
 
 Event counters are per delivery, not per emit: a frame written to three
 subscribers counts three frames and three frames' worth of `wireBytes`, and an
-event with no matching subscriber is not recorded at all. That is what makes
-`wireBytes` the bytes actually put on the wire.
+event with no matching subscriber is not recorded at all. For identity streams,
+`wireBytes` is also the transport size. For compressed streams it records
+uncompressed application-frame bytes; the route-level `responseBytes` counter
+records the encoded chunks actually written to the client.
 
 ## Vercel-hosted public client
 

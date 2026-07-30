@@ -8,12 +8,24 @@ import {
 } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
+import { randomBytes } from "node:crypto";
+import {
+  brotliCompressSync,
+  brotliDecompressSync,
+  constants as zlibConstants,
+  createGunzip,
+  gunzipSync,
+  gzipSync,
+} from "node:zlib";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   appendVary,
   BoundedMetricMap,
+  canStartDynamicCompression,
+  COMPRESSION_MIN_BYTES,
+  compressBody,
   compressionModeForListener,
+  type EventClientWriter,
   eventMatchesSubscription,
   GATEWAY_COMMAND_METRIC_MAP_LIMIT,
   GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
@@ -21,8 +33,10 @@ import {
   canStartStaticFallbackCompression,
   compressStaticFileWithinLimits,
   isTailscaleAddress,
+  isCompressibleContentType,
   loadOrCreateGatewayToken,
   MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS,
+  MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
   MAX_STATIC_FALLBACK_SOURCE_BYTES,
   normalizeAcceptEncoding,
   normalizeCacheControl,
@@ -33,6 +47,7 @@ import {
   normalizeHttpVersion,
   normalizeMetricLabel,
   normalizeNextHopProtocol,
+  negotiateEncoding,
   OrkestratorGateway,
   parseEventSubscriptionFilter,
   readStaticFileWithinLimit,
@@ -270,7 +285,7 @@ type GatewayEventStream = {
   /** Everything this browser-side client has received so far. */
   received: () => string;
   /** The gateway-side response the real request path registered. */
-  response: ServerResponse;
+  response: EventClientWriter;
   /** True once the gateway hung up on this client. */
   aborted: () => boolean;
   close: () => void;
@@ -311,6 +326,57 @@ async function openEventStream(
   };
 }
 
+async function openCompressedEventStream(
+  gateway: OrkestratorGateway,
+  info: { url: string; token: string },
+  search = "",
+): Promise<GatewayEventStream & { headers: () => IncomingHttpHeaders }> {
+  const parsed = new URL(`${info.url}__orkestrator/events${search}`);
+  const known = new Set(eventClients(gateway).keys());
+  const chunks: Buffer[] = [];
+  let responseHeaders: IncomingHttpHeaders = {};
+  let aborted = false;
+  const request = httpRequest({
+    hostname: parsed.hostname,
+    port: parsed.port,
+    path: `${parsed.pathname}${parsed.search}`,
+    headers: {
+      authorization: `Bearer ${info.token}`,
+      "accept-encoding": "gzip",
+    },
+  }, (response) => {
+    responseHeaders = response.headers;
+    response.on("data", (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    response.on("aborted", () => { aborted = true; });
+  });
+  request.on("error", () => { aborted = true; });
+  request.end();
+
+  const received = () => {
+    const compressed = Buffer.concat(chunks);
+    if (compressed.byteLength === 0) return "";
+    try {
+      return gunzipSync(compressed, {
+        finishFlush: zlibConstants.Z_SYNC_FLUSH,
+      }).toString("utf8");
+    } catch {
+      return "";
+    }
+  };
+  await waitUntil(() => received().includes(": connected"), "Compressed event stream never connected");
+  const writer = [...eventClients(gateway).keys()].find((client) => !known.has(client));
+  if (!writer) throw new Error("Gateway did not register the compressed event-stream client");
+  return {
+    received,
+    response: writer,
+    headers: () => responseHeaders,
+    aborted: () => aborted,
+    close: () => request.destroy(),
+  };
+}
+
 /**
  * Pins the buffered byte count the gateway sees for a live response.
  *
@@ -319,11 +385,11 @@ async function openEventStream(
  * parked client is not reproducible here. Pinning the value puts a real
  * response into the state the limits exist for.
  */
-function pinBufferedBytes(response: ServerResponse, bytes: number): void {
+function pinBufferedBytes(response: ServerResponse | EventClientWriter, bytes: number): void {
   Object.defineProperty(response, "writableLength", { value: bytes, configurable: true });
 }
 
-function releaseBufferedBytes(response: ServerResponse): void {
+function releaseBufferedBytes(response: ServerResponse | EventClientWriter): void {
   Reflect.deleteProperty(response, "writableLength");
 }
 
@@ -344,11 +410,30 @@ describe("remote gateway", () => {
     expect(resolveGatewayCompressionMode(undefined, {
       ORKESTRATOR_GATEWAY_COMPRESSION: "body",
     })).toBe("body");
+    expect(resolveGatewayCompressionMode(undefined, {})).toBe("body");
     expect(compressionModeForListener("on", "control")).toBe("off");
     expect(compressionModeForListener("on", "browser")).toBe("on");
   });
 
-  test("keeps non-static bodies uncompressed while allowing static compression on browser listeners", async () => {
+  test("negotiates shared compression primitives and excludes precompressed content", async () => {
+    expect(negotiateEncoding("gzip, br")).toBe("br");
+    expect(negotiateEncoding("br;q=0, gzip;q=0.5")).toBe("gzip");
+    expect(negotiateEncoding("br;q=0, gzip;q=0, identity")).toBe("identity");
+    expect(negotiateEncoding("gzip", ["gzip", "identity"])).toBe("gzip");
+    expect(isCompressibleContentType("application/json; charset=utf-8")).toBe(true);
+    expect(isCompressibleContentType("image/svg+xml")).toBe(true);
+    expect(isCompressibleContentType("font/woff2")).toBe(false);
+    expect(isCompressibleContentType("image/png")).toBe(false);
+    expect(isCompressibleContentType("application/octet-stream")).toBe(false);
+    expect(canStartDynamicCompression(MAX_CONCURRENT_DYNAMIC_COMPRESSIONS - 1)).toBe(true);
+    expect(canStartDynamicCompression(MAX_CONCURRENT_DYNAMIC_COMPRESSIONS)).toBe(false);
+
+    const source = Buffer.from("shared compression ".repeat(COMPRESSION_MIN_BYTES));
+    expect((await compressBody(source, "br")).byteLength).toBeLessThan(source.byteLength);
+    expect((await compressBody(source, "gzip")).byteLength).toBeLessThan(source.byteLength);
+  });
+
+  test("keeps small dynamic bodies identity while allowing static compression on browser listeners", async () => {
     for (const compression of ["off", "body", "on"] as const) {
       const dataDir = await createTempDir(`ork-static-compression-${compression}-`);
       const rendererRoot = await createRendererRoot(
@@ -393,6 +478,81 @@ describe("remote gateway", () => {
       expect(metrics.routes.status?.encodings.identity).toBeGreaterThan(0);
       expect(metrics.compression.configuredMode).toBe(compression);
     }
+  });
+
+  test("compresses eligible invoke bodies above the threshold with Brotli then gzip", async () => {
+    const payload = "dynamic invoke body ".repeat(256);
+    const { info } = await startGateway({
+      compression: "body",
+      backend: { invoke: mock(async () => payload) },
+    });
+    const invoke = (acceptEncoding: string) => requestUrl(`${info.url}__orkestrator/invoke`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        "content-type": "application/json",
+        "accept-encoding": acceptEncoding,
+      },
+      body: JSON.stringify({ command: "large_response", args: {} }),
+    });
+
+    const brotli = await invoke("br, gzip");
+    expect(brotli.headers["content-encoding"]).toBe("br");
+    expect(brotli.headers.vary).toContain("Accept-Encoding");
+    expect(JSON.parse(decodeResponseBody(brotli))).toEqual({ result: payload });
+
+    const gzip = await invoke("gzip");
+    expect(gzip.headers["content-encoding"]).toBe("gzip");
+    expect(JSON.parse(decodeResponseBody(gzip))).toEqual({ result: payload });
+
+    const identity = await invoke("identity");
+    expect(identity.headers["content-encoding"]).toBeUndefined();
+    expect(identity.json()).toEqual({ result: payload });
+  });
+
+  test("keeps the control listener identity and merges Origin with Accept-Encoding remotely", async () => {
+    const dataDir = await createTempDir("ork-dynamic-control-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const payload = "private state ".repeat(512);
+    const { gateway, info } = await startGateway({
+      dataDir,
+      rendererRoot,
+      bindAddress: "127.0.0.1",
+      port: 0,
+      controlBindAddress: "127.0.0.1",
+      controlPort: 0,
+      compression: "body",
+      allowedOrigins: ["https://client.example"],
+      backend: { invoke: mock(async () => payload) },
+    });
+    expect(info.browserUrl).toBeDefined();
+    const invoke = (baseUrl: string, origin?: string) => requestUrl(
+      `${baseUrl}__orkestrator/invoke`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "content-type": "application/json",
+          "accept-encoding": "gzip",
+          ...(origin ? { origin } : {}),
+        },
+        body: JSON.stringify({ command: "large_response", args: {} }),
+      },
+    );
+
+    const control = await invoke(info.url);
+    expect(control.headers["content-encoding"]).toBeUndefined();
+    expect(control.headers.vary).toBeUndefined();
+
+    const browser = await invoke(info.browserUrl!, "https://client.example");
+    expect(browser.headers["content-encoding"]).toBe("gzip");
+    expect(browser.headers.vary?.toLowerCase().split(/,\s*/).sort()).toEqual([
+      "accept-encoding",
+      "origin",
+    ]);
+    expect(browser.headers["cache-control"]).toBe("no-store");
+    expect(JSON.parse(decodeResponseBody(browser))).toEqual({ result: payload });
+    expect(eventClients(gateway).size).toBe(0);
   });
 
   test("prefers Brotli, then gzip, then identity for static sibling assets", async () => {
@@ -1477,7 +1637,7 @@ describe("remote gateway", () => {
     expect(JSON.stringify(sample)).not.toContain("private-value");
     expect(JSON.stringify(sample)).not.toContain("private-accept-value");
     expect(Object.keys(metrics.routes["proxy-loopback"]!.encodings)).toEqual(["other"]);
-    expect(metrics.compression.configuredMode).toBe("off");
+    expect(metrics.compression.configuredMode).toBe("body");
   });
 
   test("never retains a rejected command name, including when the registry is not consulted", async () => {
@@ -1630,6 +1790,106 @@ describe("remote gateway", () => {
       ["terminal-output-one"],
       ["terminal-output-"],
     )).toBe(false);
+  });
+
+  test("sync-flushes compressed SSE immediately and cleans up its compressor", async () => {
+    const { gateway, info } = await startGateway({ compression: "on" });
+    const stream = await openCompressedEventStream(gateway, info);
+
+    expect(stream.headers()["content-encoding"]).toBe("gzip");
+    expect(stream.headers().vary).toContain("Accept-Encoding");
+    expect(stream.headers()["cache-control"]).toBe("no-store, no-transform");
+    expect(stream.received()).toContain(": compression-priming");
+    expect(stream.received()).toContain(": connected");
+
+    gateway.emit("environment-changed", { id: "environment-a" });
+    await waitUntil(
+      () => stream.received().includes("environment-changed"),
+      "Compressed application frame was buffered",
+    );
+
+    const writer = stream.response as unknown as {
+      compressor: { destroyed: boolean };
+    };
+    expect(writer.compressor.destroyed).toBe(false);
+    stream.response.destroy();
+    stream.close();
+    await waitUntil(
+      () => eventClients(gateway).size === 0,
+      "Compressed event writer was not unregistered",
+    );
+    expect(writer.compressor.destroyed).toBe(true);
+  });
+
+  test("keeps SSE identity in off and body modes", async () => {
+    for (const compression of ["off", "body"] as const) {
+      const { gateway, info } = await startGateway({ compression });
+      const stream = await openEventStream(gateway, info);
+      expect(stream.received()).toContain(": connected");
+      expect((stream.response as unknown as { response?: unknown }).response).toBeDefined();
+      stream.close();
+    }
+  });
+
+  test("preserves compressed SSE soft-limit recovery and keepalives", async () => {
+    const { gateway, info } = await startGateway({
+      compression: "on",
+      keepaliveMs: 5,
+    });
+    const event = "terminal-output-tmux:env:tab:one";
+    const pane = randomBytes(256).toString("base64");
+    const stream = await openCompressedEventStream(
+      gateway,
+      info,
+      `?excludeEvents=terminal-output-&includeEvents=${event}`,
+    );
+    await waitUntil(
+      () => stream.received().includes(": keepalive"),
+      "Compressed stream never received a keepalive",
+    );
+
+    pinBufferedBytes(stream.response, 2 * 1024 * 1024);
+    gateway.emit(event, { bytesBase64: pane });
+    expect(stream.received()).not.toContain(pane);
+    releaseBufferedBytes(stream.response);
+    gateway.emit(event, { bytesBase64: randomBytes(256).toString("base64") });
+    await waitUntil(
+      () => stream.received().includes(pane),
+      "Compressed stream did not recover its retained tmux repaint",
+    );
+    expect(stream.received()).not.toContain("\"desynced\":true");
+    stream.close();
+  });
+
+  test("drops a real non-reading incompressible compressed stream at the hard limit", async () => {
+    const { gateway, info } = await startGateway({ compression: "on" });
+    const endpoint = new URL(`${info.url}__orkestrator/events`);
+    const request = httpRequest({
+      hostname: endpoint.hostname,
+      port: endpoint.port,
+      path: endpoint.pathname,
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        "accept-encoding": "gzip",
+      },
+    }, (response) => response.pause());
+    request.on("error", () => undefined);
+    request.end();
+    await waitUntil(
+      () => eventClients(gateway).size === 1,
+      "Non-reading compressed stream was not registered",
+    );
+    const writer = [...eventClients(gateway).keys()][0] as unknown as {
+      compressor: { destroyed: boolean };
+    };
+
+    for (let index = 0; index < 160 && eventClients(gateway).size > 0; index += 1) {
+      gateway.emit("authoritative-random", randomBytes(64 * 1024).toString("base64"));
+    }
+
+    expect(eventClients(gateway).size).toBe(0);
+    expect(writer.compressor.destroyed).toBe(true);
+    request.destroy();
   });
 
   test("applies event filters before writing to connected clients", async () => {
@@ -3234,6 +3494,119 @@ describe("remote gateway", () => {
     expect(eventBody).toContain("menu-zoom");
   });
 
+  test("forces proxy upstream identity and compresses bounded response bodies once", async () => {
+    const body = JSON.stringify({ value: "proxy response ".repeat(512) });
+    const upstreamEncodings: Array<string | undefined> = [];
+    const target = createServer((request, response) => {
+      upstreamEncodings.push(request.headers["accept-encoding"]);
+      response.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "content-length": Buffer.byteLength(body),
+      });
+      response.end(body);
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const address = target.address();
+    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway({ compression: "body" });
+    const result = await requestUrl(
+      `${info.url}__orkestrator/proxy/loopback/${address.port}/body`,
+      {
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "accept-encoding": "br, gzip",
+        },
+      },
+    );
+    expect(upstreamEncodings).toEqual(["identity"]);
+    expect(result.headers["content-encoding"]).toBe("br");
+    expect(result.headers.vary).toContain("Accept-Encoding");
+    expect(decodeResponseBody(result)).toBe(body);
+  });
+
+  test("does not double encode an already encoded proxy response", async () => {
+    const body = Buffer.from("already encoded ".repeat(512));
+    const encoded = gzipSync(body);
+    const target = createServer((_request, response) => {
+      response.writeHead(200, {
+        "content-type": "text/plain; charset=utf-8",
+        "content-encoding": "gzip",
+        "content-length": encoded.byteLength,
+      });
+      response.end(encoded);
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const address = target.address();
+    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway({ compression: "on" });
+    const result = await requestUrl(
+      `${info.url}__orkestrator/proxy/loopback/${address.port}/encoded`,
+      {
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "accept-encoding": "br, gzip",
+        },
+      },
+    );
+    expect(result.headers["content-encoding"]).toBe("gzip");
+    expect(gunzipSync(result.rawBody)).toEqual(body);
+  });
+
+  test("sync-flushes proxied SSE before the upstream stream ends", async () => {
+    const target = createServer((request, response) => {
+      expect(request.headers["accept-encoding"]).toBe("identity");
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      response.write("data: first\n\n");
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const address = target.address();
+    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
+    const { info } = await startGateway({ compression: "on" });
+    const endpoint = new URL(
+      `${info.url}__orkestrator/proxy/loopback/${address.port}/events`,
+    );
+
+    let downstream: ReturnType<typeof httpRequest> | null = null;
+    const firstFrame = new Promise<string>((resolve, reject) => {
+      downstream = httpRequest({
+        hostname: endpoint.hostname,
+        port: endpoint.port,
+        path: endpoint.pathname,
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "accept-encoding": "gzip",
+        },
+      }, (response) => {
+        expect(response.headers["content-encoding"]).toBe("gzip");
+        const decoder = createGunzip({
+          finishFlush: zlibConstants.Z_SYNC_FLUSH,
+        });
+        response.pipe(decoder);
+        decoder.once("data", (chunk) => resolve(chunk.toString("utf8")));
+        decoder.once("error", reject);
+      });
+      downstream.once("error", reject);
+      downstream.end();
+    });
+
+    await expect(Promise.race([
+      firstFrame,
+      new Promise<never>((_, reject) => setTimeout(
+        () => reject(new Error("Proxied SSE frame was buffered")),
+        1_000,
+      )),
+    ])).resolves.toContain("data: first");
+    downstream?.destroy();
+  });
+
   test("terminates the downstream response when an upstream proxy aborts after headers", async () => {
     const target = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/plain" });
@@ -3427,6 +3800,42 @@ describe("remote gateway", () => {
 
     const script = await requestUrl(`${info.url}${prefix}/src/main.js`, { headers });
     expect(script.body).toBe(`import "${prefix}/src/dependency.js";`);
+  });
+
+  test("recompresses bounded browser-preview text after rewriting", async () => {
+    const source = `<script src="/asset.js"></script>${" preview text".repeat(512)}`;
+    const upstreamEncodings: Array<string | undefined> = [];
+    const target = createServer((request, response) => {
+      upstreamEncodings.push(request.headers["accept-encoding"]);
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-length": Buffer.byteLength(source),
+        etag: "\"upstream-identity\"",
+      });
+      response.end(source);
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const address = target.address();
+    if (!address || typeof address !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway({ compression: "body" });
+    const prefix = `/__orkestrator/browser/loopback/${address.port}`;
+    const result = await requestUrl(`${info.url}${prefix}/`, {
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        origin: "null",
+        "accept-encoding": "br, gzip",
+      },
+    });
+    expect(upstreamEncodings).toEqual(["identity"]);
+    expect(result.headers["content-encoding"]).toBe("br");
+    expect(result.headers.etag).toBeUndefined();
+    expect(result.headers.vary?.toLowerCase()).toContain("origin");
+    expect(result.headers.vary?.toLowerCase()).toContain("accept-encoding");
+    expect(decodeResponseBody(result)).toBe(
+      `<script src="${prefix}/asset.js"></script>${" preview text".repeat(512)}`,
+    );
   });
 
   test("allows null-origin browser preview preflights and forwards non-simple requests", async () => {

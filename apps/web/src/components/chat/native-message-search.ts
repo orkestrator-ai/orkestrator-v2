@@ -3,6 +3,10 @@ import type {
   NativeMessage,
   NativeMessagePart,
 } from "@/lib/chat/native-message-types";
+import {
+  jsonPayloadSearchText,
+  parseJsonPayload,
+} from "@/lib/chat/json-payload";
 
 class SearchTextRenderer extends Renderer {
   override space(): string {
@@ -132,9 +136,29 @@ function textPartSources(parts: readonly NativeMessagePart[]): string[] {
 }
 
 /**
+ * The searchable text of one rendered text part.
+ *
+ * `NativeMessage` folds an agent block that is nothing but a JSON document into
+ * a closed disclosure, which unmounts everything below its trigger. Find
+ * highlights are drawn from mounted DOM text nodes, so indexing the raw
+ * document here would report matches that can never be highlighted — and,
+ * because highlights are assigned by occurrence *ordinal* within a row, would
+ * also shift the numbering of every sibling part in the same message onto the
+ * wrong text. Folded parts therefore contribute exactly what the collapsed row
+ * renders.
+ */
+function textPartSearchText(source: string, foldJsonPayload: boolean): string {
+  if (foldJsonPayload) {
+    const payload = parseJsonPayload(source);
+    if (payload) return jsonPayloadSearchText(payload);
+  }
+  return markdownToAgentSearchText(source);
+}
+
+/**
  * Mirrors the content roots rendered by NativeMessage: each text part is one
- * independently searchable Markdown segment, with message.content as the
- * fallback for system/error/legacy messages without text parts.
+ * independently searchable segment, with message.content as the fallback for
+ * system/error/legacy messages without text parts.
  */
 export function getNativeMessageSearchText(
   message: NativeMessage,
@@ -147,11 +171,18 @@ export function getNativeMessageSearchText(
     return message.content;
   }
 
+  // NativeMessage only folds JSON for non-user roles; a prompt is shown back
+  // as written, so it is indexed as written.
+  const foldJsonPayload = message.role !== "user";
   const sources = textPartSources(message.parts);
-  if (sources.length === 0) return message.content;
+  if (sources.length === 0) {
+    // The legacy fallback indexes `content` as written; only the fold is new.
+    const payload = foldJsonPayload ? parseJsonPayload(message.content) : null;
+    return payload ? jsonPayloadSearchText(payload) : message.content;
+  }
 
   return sources
-    .map(markdownToAgentSearchText)
+    .map((source) => textPartSearchText(source, foldJsonPayload))
     .filter(Boolean)
     .join("\n\n");
 }

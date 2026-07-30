@@ -36,6 +36,17 @@ const EVENT_SOURCE_CONNECTING = 0;
 const EVENT_SOURCE_OPEN = 1;
 const EVENT_SOURCE_CLOSED = 2;
 
+function gatewayControlFrame(
+  event: "gateway.connected" | "gateway.reconcile-required",
+  statusOrReason: string,
+  id = "12345678:0",
+): string {
+  const payload = event === "gateway.connected"
+    ? { status: statusOrReason, generation: "12345678", revision: 0 }
+    : { reason: statusOrReason, generation: "12345678", latestRevision: 0 };
+  return `id: ${id}\ndata: ${JSON.stringify({ event, payload })}\n\n`;
+}
+
 class MockEventSource {
   static instances: MockEventSource[] = [];
   onopen: ((event?: Event) => void) | null = null;
@@ -774,6 +785,7 @@ describe("web gateway browser API", () => {
       if (attempt === 1) return new Response(null, { status: 503 });
       return new Response(new ReadableStream({
         start(controller) {
+          controller.enqueue(encoder.encode(gatewayControlFrame("gateway.connected", "fresh")));
           controller.enqueue(encoder.encode('data: {"event":"changed","payload":"reconnected"}\n\n'));
         },
       }), { status: 200 });
@@ -806,7 +818,7 @@ describe("web gateway browser API", () => {
     }
   });
 
-  test("announces every browser EventSource connection", () => {
+  test("announces a fresh browser stream but not a replayed reconnect", () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi();
     const connected = mock(() => undefined);
@@ -818,15 +830,108 @@ describe("web gateway browser API", () => {
     if (!source) throw new Error("EventSource was not created");
 
     source.onopen?.();
+    source.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({
+        event: "gateway.connected",
+        payload: { status: "fresh" },
+      }),
+      lastEventId: "12345678:0",
+    }));
     source.onopen?.();
+    source.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({
+        event: "gateway.connected",
+        payload: { status: "caught-up" },
+      }),
+      lastEventId: "12345678:0",
+    }));
 
-    expect(connected).toHaveBeenCalledTimes(2);
+    expect(connected).toHaveBeenCalledTimes(1);
     unsubscribe();
   });
 
+  test("ignores malformed, missing, and replay-success connected statuses", () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+    const connected = mock(() => undefined);
+    const unsubscribe = api.listen(
+      NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+      connected,
+    );
+    const source = MockEventSource.instances[0];
+    if (!source) throw new Error("EventSource was not created");
+
+    for (const payload of [
+      undefined,
+      {},
+      { status: 42 },
+      { status: "caught-up" },
+      { status: "replayed" },
+      { status: "reconcile" },
+    ]) {
+      source.onmessage?.(new MessageEvent("message", {
+        data: JSON.stringify({ event: "gateway.connected", payload }),
+        lastEventId: "12345678:0",
+      }));
+    }
+
+    expect(connected).not.toHaveBeenCalled();
+
+    source.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({
+        event: "gateway.connected",
+        payload: { status: "fresh" },
+      }),
+      lastEventId: "12345678:0",
+    }));
+    expect(connected).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  test("announces same-origin reconciliation only from its explicit control frame", () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+    const connected = mock(() => undefined);
+    const reconcileFrame = mock(() => undefined);
+    const stopConnected = api.listen(
+      NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+      connected,
+    );
+    const stopReconcile = api.listen("gateway.reconcile-required", reconcileFrame);
+    const source = MockEventSource.instances[0];
+    if (!source) throw new Error("EventSource was not created");
+
+    source.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({
+        event: "gateway.connected",
+        payload: { status: "reconcile" },
+      }),
+      lastEventId: "",
+    }));
+    expect(connected).not.toHaveBeenCalled();
+
+    source.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({
+        event: "gateway.reconcile-required",
+        payload: { reason: "cursor-expired" },
+      }),
+      lastEventId: "12345678:9",
+    }));
+
+    expect(connected).toHaveBeenCalledTimes(1);
+    expect(reconcileFrame).not.toHaveBeenCalled();
+    stopReconcile();
+    stopConnected();
+  });
+
   test("notifies listeners when a direct gateway stream connects", async () => {
+    const encoder = new TextEncoder();
     globalThis.fetch = mock(async () =>
-      new Response(new ReadableStream({ start() {} }), { status: 200 })
+      new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(gatewayControlFrame("gateway.connected", "fresh")));
+        },
+      }), { status: 200 })
     ) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
@@ -841,18 +946,42 @@ describe("web gateway browser API", () => {
     });
   });
 
-  test("re-notifies connected listeners on each successful direct reconnect, not on failed attempts", async () => {
+  test("reconciles only fresh streams and explicit replay misses across direct reconnects", async () => {
+    const encoder = new TextEncoder();
     const warning = mock(() => undefined);
     const originalWarn = console.warn;
     console.warn = warning;
     let attempt = 0;
     const attemptsAtConnect: number[] = [];
-    globalThis.fetch = mock(async () => {
+    const requestUrls: string[] = [];
+    globalThis.fetch = mock(async (input) => {
+      requestUrls.push(String(input));
       attempt += 1;
-      // Fail the first attempt, then succeed and immediately end the stream so
-      // the reconnect loop runs again.
       if (attempt === 1) return new Response(null, { status: 503 });
-      return new Response(new ReadableStream({ start(controller) { controller.close(); } }), { status: 200 });
+      return new Response(new ReadableStream({
+        start(controller) {
+          // Each attempt issues a distinct id so a `since` assertion below
+          // cannot be satisfied by a cursor that never advanced.
+          if (attempt === 2) {
+            controller.enqueue(encoder.encode(
+              gatewayControlFrame("gateway.connected", "fresh", "12345678:2"),
+            ));
+            controller.close();
+          } else if (attempt === 3) {
+            controller.enqueue(encoder.encode(
+              gatewayControlFrame("gateway.connected", "caught-up", "12345678:3"),
+            ));
+            controller.close();
+          } else {
+            controller.enqueue(encoder.encode(
+              gatewayControlFrame("gateway.connected", "reconcile", "12345678:3"),
+            ));
+            controller.enqueue(encoder.encode(
+              gatewayControlFrame("gateway.reconcile-required", "cursor-expired", "12345678:9"),
+            ));
+          }
+        },
+      }), { status: 200 });
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
@@ -874,10 +1003,143 @@ describe("web gateway browser API", () => {
       // The 503 attempt throws before the connected event is dispatched, so the
       // first notification belongs to attempt 2 and never to attempt 1.
       expect(attemptsAtConnect[0]).toBe(2);
-      expect(attemptsAtConnect[1]).toBe(3);
+      expect(attemptsAtConnect[1]).toBe(4);
+      // The first attempt has no cursor to resume from; every later one carries
+      // the newest id the previous attempt actually delivered.
+      expect(new URL(requestUrls[0]!).searchParams.has("since")).toBe(false);
+      expect(new URL(requestUrls[1]!).searchParams.has("since")).toBe(false);
+      expect(new URL(requestUrls[2]!).searchParams.get("since")).toBe("12345678:2");
+      expect(new URL(requestUrls[3]!).searchParams.get("since")).toBe("12345678:3");
     } finally {
       console.warn = originalWarn;
     }
+  });
+
+  test("resumes a direct fetch reconnect from the newest authoritative event id", async () => {
+    const encoder = new TextEncoder();
+    const requestUrls: string[] = [];
+    let attempt = 0;
+    globalThis.fetch = mock(async (input) => {
+      requestUrls.push(String(input));
+      attempt += 1;
+      if (attempt === 1) {
+        return new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(
+              gatewayControlFrame("gateway.connected", "fresh", "12345678:0"),
+            ));
+            controller.enqueue(encoder.encode(
+              'id: 12345678:7\ndata: {"event":"changed","payload":"latest"}\n\n',
+            ));
+            controller.close();
+          },
+        }), { status: 200 });
+      }
+      return new Response(new ReadableStream({ start() {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+      eventReconnectDelayMs: 0,
+    });
+    const changed = mock(() => undefined);
+    const unsubscribe = api.listen("changed", changed);
+
+    await waitForCondition(
+      () => requestUrls.length === 2,
+      "The direct stream did not reconnect",
+    );
+
+    expect(changed).toHaveBeenCalledWith("latest");
+    expect(new URL(requestUrls[1]!).searchParams.get("since")).toBe("12345678:7");
+    unsubscribe();
+  });
+
+  test("takes the last id in a block and ignores id-only and empty-id frames", async () => {
+    const encoder = new TextEncoder();
+    const requestUrls: string[] = [];
+    let attempt = 0;
+    globalThis.fetch = mock(async (input) => {
+      requestUrls.push(String(input));
+      attempt += 1;
+      if (attempt === 1) {
+        return new Response(new ReadableStream({
+          start(controller) {
+            // Last id wins within a block, per the SSE field-parsing rules.
+            controller.enqueue(encoder.encode(
+              'id: 12345678:1\nid: 12345678:4\ndata: {"event":"changed","payload":"multi"}\n\n',
+            ));
+            // No data means nothing to dispatch and no cursor to adopt.
+            controller.enqueue(encoder.encode("id: 12345678:5\n\n"));
+            // A blank id must not blank the cursor the client already holds.
+            controller.enqueue(encoder.encode(
+              'id: \ndata: {"event":"changed","payload":"blank-id"}\n\n',
+            ));
+            // A comment-only frame is a keepalive, not an event.
+            controller.enqueue(encoder.encode(": keepalive\n\n"));
+            controller.close();
+          },
+        }), { status: 200 });
+      }
+      return new Response(new ReadableStream({ start() {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+      eventReconnectDelayMs: 0,
+    });
+    const changed = mock((_payload: unknown) => undefined);
+    const unsubscribe = api.listen("changed", changed);
+
+    await waitForCondition(
+      () => requestUrls.length === 2,
+      "The direct stream did not reconnect",
+    );
+
+    expect(changed.mock.calls.map(([payload]) => payload)).toEqual(["multi", "blank-id"]);
+    expect(new URL(requestUrls[1]!).searchParams.get("since")).toBe("12345678:4");
+    unsubscribe();
+  });
+
+  test("reassembles a direct fetch frame split across chunk boundaries", async () => {
+    const encoder = new TextEncoder();
+    const requestUrls: string[] = [];
+    let attempt = 0;
+    globalThis.fetch = mock(async (input) => {
+      requestUrls.push(String(input));
+      attempt += 1;
+      if (attempt === 1) {
+        return new Response(new ReadableStream({
+          start(controller) {
+            // The id, the data, and even the blank-line terminator arrive in
+            // separate reads — a stream that only parsed whole chunks would
+            // drop the frame and never advance its cursor.
+            controller.enqueue(encoder.encode("id: 1234"));
+            controller.enqueue(encoder.encode('5678:6\ndata: {"event":"cha'));
+            controller.enqueue(encoder.encode('nged","payload":"split"}\r\n'));
+            controller.enqueue(encoder.encode("\r\n"));
+            controller.close();
+          },
+        }), { status: 200 });
+      }
+      return new Response(new ReadableStream({ start() {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+      eventReconnectDelayMs: 0,
+    });
+    const changed = mock(() => undefined);
+    const unsubscribe = api.listen("changed", changed);
+
+    await waitForCondition(
+      () => requestUrls.length === 2,
+      "The direct stream did not reconnect",
+    );
+
+    expect(changed).toHaveBeenCalledWith("split");
+    expect(new URL(requestUrls[1]!).searchParams.get("since")).toBe("12345678:6");
+    unsubscribe();
   });
 
   test("ignores a server frame that impersonates the transport connected event", async () => {
@@ -885,6 +1147,9 @@ describe("web gateway browser API", () => {
     globalThis.fetch = mock(async () =>
       new Response(new ReadableStream({
         start(controller) {
+          controller.enqueue(encoder.encode(
+            gatewayControlFrame("gateway.connected", "fresh"),
+          ));
           controller.enqueue(encoder.encode(
             `data: {"event":"${NATIVE_EVENT_STREAM_CONNECTED_EVENT}","payload":"spoofed"}\n\n`,
           ));
@@ -1091,6 +1356,13 @@ describe("web gateway browser API", () => {
       connectedCallback,
     );
     source.onopen?.({} as Event);
+    source.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({
+        event: "gateway.connected",
+        payload: { status: "fresh" },
+      }),
+      lastEventId: "12345678:0",
+    }));
     expect(connectedCallback).toHaveBeenCalledTimes(1);
 
     source.onmessage?.({
@@ -1118,6 +1390,230 @@ describe("web gateway browser API", () => {
     unsubscribe();
 
     expect(source.closed).toBe(true);
+  });
+
+  test("retains the newest browser cursor across automatic retry and stream recreation", () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    try {
+      const api = createBrowserGatewayApi();
+      const cursorCallback = mock(() => undefined);
+      const unsubscribe = api.listen("gateway.cursor", cursorCallback);
+      const firstSource = MockEventSource.instances[0];
+      if (!firstSource) throw new Error("EventSource was not created");
+
+      firstSource.onmessage?.(new MessageEvent("message", {
+        data: JSON.stringify({
+          event: "gateway.cursor",
+          payload: { generation: "12345678", revision: 5 },
+        }),
+        lastEventId: "12345678:5",
+      }));
+
+      // CONNECTING means the browser owns the retry. The client must keep the
+      // same EventSource and continue accepting its later authoritative IDs.
+      firstSource.fail(EVENT_SOURCE_CONNECTING);
+      expect(MockEventSource.instances).toHaveLength(1);
+      expect(firstSource.closed).toBe(false);
+      firstSource.onmessage?.(new MessageEvent("message", {
+        data: JSON.stringify({
+          event: "gateway.cursor",
+          payload: { generation: "12345678", revision: 8 },
+        }),
+        lastEventId: "12345678:8",
+      }));
+
+      expect(cursorCallback).not.toHaveBeenCalled();
+      unsubscribe();
+      expect(firstSource.closed).toBe(true);
+
+      const stopReplacement = api.listen("menu-zoom", () => undefined);
+      expect(MockEventSource.instances).toHaveLength(2);
+      expect(MockEventSource.instances[1]?.url).toBe(
+        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A8",
+      );
+      stopReplacement();
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("rebuilds the authoritative browser stream after a fatal error", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    try {
+      const api = createBrowserGatewayApi({ eventReconnectDelayMs: 0 });
+      const unsubscribe = api.listen("menu-zoom", () => undefined);
+      const first = MockEventSource.instances[0];
+      if (!first) throw new Error("EventSource was not created");
+
+      first.onmessage?.(new MessageEvent("message", {
+        data: JSON.stringify({ event: "menu-zoom", payload: "in" }),
+        lastEventId: "12345678:4",
+      }));
+
+      // CLOSED means the browser has given up. Nothing else rebuilds the main
+      // stream, so leaving it here strands every authoritative event until the
+      // tab reloads.
+      first.fail(EVENT_SOURCE_CLOSED);
+      await waitForCondition(
+        () => MockEventSource.instances.length === 2,
+        "The authoritative stream was not rebuilt after a fatal error",
+      );
+      expect(MockEventSource.instances[1]?.url).toBe(
+        "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A4",
+      );
+
+      // The abandoned socket must not keep dispatching into the live listeners.
+      const stale = mock(() => undefined);
+      const stopStale = api.listen("menu-zoom", stale);
+      first.onmessage?.(new MessageEvent("message", {
+        data: JSON.stringify({ event: "menu-zoom", payload: "stale" }),
+        lastEventId: "12345678:9",
+      }));
+      expect(stale).not.toHaveBeenCalled();
+      stopStale();
+      unsubscribe();
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("does not rebuild a browser stream the browser is still retrying", () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    try {
+      const api = createBrowserGatewayApi({ eventReconnectDelayMs: 0 });
+      const unsubscribe = api.listen("menu-zoom", () => undefined);
+      const source = MockEventSource.instances[0];
+      if (!source) throw new Error("EventSource was not created");
+
+      source.fail(EVENT_SOURCE_CONNECTING);
+      expect(MockEventSource.instances).toHaveLength(1);
+      expect(source.closed).toBe(false);
+      unsubscribe();
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("ignores replay control frames that arrive on a terminal stream", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+    const connected = mock(() => undefined);
+    const stopConnected = api.listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, connected);
+    const stopTerminal = api.listen("terminal-output-one", () => undefined);
+    await waitForCondition(
+      () => MockEventSource.instances.length === 2,
+      "The terminal stream was not created",
+    );
+    const main = MockEventSource.instances[0];
+    const terminal = MockEventSource.instances[1];
+    if (!main || !terminal) throw new Error("Streams were not created");
+
+    // A control frame has authority only on the authoritative stream. Acting on
+    // one here would fire an app-wide resync, or latch the connection flag and
+    // permanently suppress the main stream's own one-shot fresh announcement.
+    for (const event of [
+      "gateway.reconcile-required",
+      "gateway.connected",
+    ] as const) {
+      terminal.onmessage?.(new MessageEvent("message", {
+        data: JSON.stringify({
+          event,
+          payload: event === "gateway.connected"
+            ? { status: "fresh" }
+            : { reason: "cursor-expired" },
+        }),
+        lastEventId: "87654321:99",
+      }));
+    }
+    expect(connected).not.toHaveBeenCalled();
+
+    // The main stream's genuine handshake still announces exactly once.
+    main.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({
+        event: "gateway.connected",
+        payload: { status: "fresh" },
+      }),
+      lastEventId: "12345678:3",
+    }));
+    expect(connected).toHaveBeenCalledTimes(1);
+
+    // ...and the terminal frame's id never became the authoritative cursor.
+    stopTerminal();
+    stopConnected();
+    const stopReplacement = api.listen("menu-zoom", () => undefined);
+    const replacement = MockEventSource.instances.at(-1);
+    expect(replacement?.url).toBe(
+      "/__orkestrator/events?excludeEvents=terminal-output-&since=12345678%3A3",
+    );
+    stopReplacement();
+  });
+
+  test("never forwards replay control frames to ordinary listeners", () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+    const connectedListener = mock(() => undefined);
+    const cursorListener = mock(() => undefined);
+    const reconcileListener = mock(() => undefined);
+    const stops = [
+      api.listen("gateway.connected", connectedListener),
+      api.listen("gateway.cursor", cursorListener),
+      api.listen("gateway.reconcile-required", reconcileListener),
+    ];
+    const source = MockEventSource.instances[0];
+    if (!source) throw new Error("EventSource was not created");
+
+    for (const [event, payload] of [
+      ["gateway.connected", { status: "fresh" }],
+      ["gateway.cursor", { generation: "12345678", revision: 2 }],
+      ["gateway.reconcile-required", { reason: "invalid-cursor" }],
+    ] as const) {
+      source.onmessage?.(new MessageEvent("message", {
+        data: JSON.stringify({ event, payload }),
+        lastEventId: "12345678:2",
+      }));
+    }
+
+    expect(connectedListener).not.toHaveBeenCalled();
+    expect(cursorListener).not.toHaveBeenCalled();
+    expect(reconcileListener).not.toHaveBeenCalled();
+    for (const stop of stops) stop();
+  });
+
+  test("keeps the terminal stream URL free of the authoritative cursor", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const api = createBrowserGatewayApi();
+    const stopMain = api.listen("menu-zoom", () => undefined);
+    const main = MockEventSource.instances[0];
+    if (!main) throw new Error("EventSource was not created");
+    main.onmessage?.(new MessageEvent("message", {
+      data: JSON.stringify({ event: "menu-zoom", payload: "in" }),
+      lastEventId: "12345678:7",
+    }));
+
+    const stopTerminal = api.listen("terminal-output-one", () => undefined);
+    await waitForCondition(
+      () => MockEventSource.instances.length === 2,
+      "The terminal stream was not created",
+    );
+
+    // Terminal streams have their own snapshot protocol and are deliberately
+    // absent from the replay sequence; a cursor here would make the gateway
+    // treat them as replay participants.
+    expect(MockEventSource.instances[1]?.url).toBe(
+      "/__orkestrator/events?excludeEvents=terminal-output-&includeEvents=terminal-output-one",
+    );
+    expect(MockEventSource.instances[1]?.url).not.toContain("since");
+    stopTerminal();
+    stopMain();
   });
 
   test("keeps the authoritative stream stable and uses one filtered browser terminal stream", async () => {

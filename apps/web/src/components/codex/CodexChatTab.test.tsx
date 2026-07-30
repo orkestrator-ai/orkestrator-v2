@@ -678,7 +678,7 @@ function installAcceleratedConnectionRetryTimers(options: { hold?: boolean } = {
   const originalSetTimeout = window.setTimeout;
   const delays: number[] = [];
   const callbacks: Array<() => void> = [];
-  const retryDelays = new Set([500, 1_000, 2_000, 4_000]);
+  const retryDelays = new Set([500, 1_000, 2_000, 4_000, 8_000]);
 
   window.setTimeout = ((
     callback: TimerHandler,
@@ -2057,7 +2057,7 @@ describe("CodexChatTab", () => {
     try {
       render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
 
-      for (let index = 0; index < 4; index += 1) {
+      for (let index = 0; index < 10; index += 1) {
         await retryTimers.waitForDelayCount(index + 1);
         await act(async () => {
           retryTimers.callbacks[index]?.();
@@ -2067,8 +2067,19 @@ describe("CodexChatTab", () => {
       await retryTimers.settle();
       retryTimers.restore();
       expect(await screen.findByText("bridge never became ready")).toBeTruthy();
-      expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(5);
-      expect(retryTimers.delays).toEqual([500, 1_000, 2_000, 4_000]);
+      expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(11);
+      expect(retryTimers.delays).toEqual([
+        500,
+        1_000,
+        2_000,
+        4_000,
+        8_000,
+        8_000,
+        8_000,
+        8_000,
+        8_000,
+        8_000,
+      ]);
       expect(mockCreateSession).not.toHaveBeenCalled();
     } finally {
       retryTimers.restore();
@@ -2124,6 +2135,12 @@ describe("CodexChatTab", () => {
       .mockRejectedValueOnce(new Error("bridge still starting (attempt 3)"))
       .mockRejectedValueOnce(new Error("bridge still starting (attempt 4)"))
       .mockRejectedValueOnce(new Error("bridge still starting (attempt 5)"))
+      .mockRejectedValueOnce(new Error("bridge still starting (attempt 6)"))
+      .mockRejectedValueOnce(new Error("bridge still starting (attempt 7)"))
+      .mockRejectedValueOnce(new Error("bridge still starting (attempt 8)"))
+      .mockRejectedValueOnce(new Error("bridge still starting (attempt 9)"))
+      .mockRejectedValueOnce(new Error("bridge still starting (attempt 10)"))
+      .mockRejectedValueOnce(new Error("bridge still starting (attempt 11)"))
       .mockRejectedValueOnce(new Error("bridge still starting after manual retry"))
       .mockResolvedValueOnce({
         running: true,
@@ -2134,7 +2151,7 @@ describe("CodexChatTab", () => {
     try {
       render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
 
-      for (let index = 0; index < 4; index += 1) {
+      for (let index = 0; index < 10; index += 1) {
         await retryTimers.waitForDelayCount(index + 1);
         await act(async () => {
           retryTimers.callbacks[index]?.();
@@ -2142,21 +2159,44 @@ describe("CodexChatTab", () => {
         });
       }
       await retryTimers.settle();
-      expect(screen.getByText("bridge still starting (attempt 5)")).toBeTruthy();
-      expect(retryTimers.delays).toEqual([500, 1_000, 2_000, 4_000]);
+      expect(screen.getByText("bridge still starting (attempt 11)")).toBeTruthy();
+      expect(retryTimers.delays).toEqual([
+        500,
+        1_000,
+        2_000,
+        4_000,
+        8_000,
+        8_000,
+        8_000,
+        8_000,
+        8_000,
+        8_000,
+      ]);
 
       fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
 
-      await retryTimers.waitForDelayCount(5);
+      await retryTimers.waitForDelayCount(11);
       await act(async () => {
-        retryTimers.callbacks[4]?.();
+        retryTimers.callbacks[10]?.();
         await Promise.resolve();
       });
       await retryTimers.settle();
       retryTimers.restore();
       await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(1));
-      expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(7);
-      expect(retryTimers.delays).toEqual([500, 1_000, 2_000, 4_000, 500]);
+      expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(13);
+      expect(retryTimers.delays).toEqual([
+        500,
+        1_000,
+        2_000,
+        4_000,
+        8_000,
+        8_000,
+        8_000,
+        8_000,
+        8_000,
+        8_000,
+        500,
+      ]);
       expect(screen.queryByText("Connection Failed")).toBeNull();
     } finally {
       retryTimers.restore();
@@ -2393,6 +2433,35 @@ describe("CodexChatTab", () => {
       expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(SESSION_ID);
     });
     expect(mockStartLocalCodexServer).not.toHaveBeenCalled();
+  });
+
+  test("waits on a running local bridge whose ready port is still being committed", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    useEnvironmentStore.setState({
+      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
+    });
+    mockGetLocalCodexServerStatus.mockResolvedValueOnce({
+      running: true,
+      port: null,
+      pid: 1234,
+      authToken: "local-start-token",
+    } as any);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
+
+    await waitFor(() => {
+      expect(mockStartLocalCodexServer).toHaveBeenCalledWith(ENVIRONMENT_ID);
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        "local-start-token",
+      );
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByText("Failed to resolve Codex bridge port")).toBeNull();
   });
 
   test("fails cold container initialization without a container id", async () => {

@@ -10451,6 +10451,72 @@ exit 0
     }
   });
 
+  test("holds local server status behind an in-flight startup until its ready port is committed", async () => {
+    const appRoot = await createTempDir("ork-electron-app-start-status-");
+    const worktreePath = await createTempDir("ork-electron-worktree-start-status-");
+    const startedMarkerPath = path.join(appRoot, "bridge-started.txt");
+    await writeBridgeEntrypoint(
+      appRoot,
+      "codex-bridge",
+      `
+        const fs = require("node:fs");
+        const http = require("node:http");
+        fs.writeFileSync(${JSON.stringify(startedMarkerPath)}, "started");
+        setTimeout(() => {
+          http.createServer((req, res) => {
+            res.writeHead(req.url === "/global/health" ? 200 : 404);
+            res.end();
+          }).listen(Number(process.env.PORT), "127.0.0.1");
+        }, 100);
+      `,
+    );
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    const startPromise = commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as Promise<{ port: number; pid: number; authToken: string }>;
+    await waitForCondition(() => existsSync(startedMarkerPath), "in-flight bridge startup");
+
+    let statusSettled = false;
+    const statusPromise = (
+      commands.get("get_local_codex_server_status")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<{
+        running: boolean;
+        port: number | null;
+        pid: number | null;
+        authToken?: string;
+      }>
+    ).then((status) => {
+      statusSettled = true;
+      return status;
+    });
+
+    await Bun.sleep(20);
+    expect(statusSettled).toBe(false);
+
+    const [started, status] = await Promise.all([startPromise, statusPromise]);
+    try {
+      expect(status).toEqual({
+        running: true,
+        port: started.port,
+        pid: started.pid,
+        authToken: started.authToken,
+      });
+    } finally {
+      await commands.get("stop_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
+    }
+  }, ASYNC_TEST_BUDGET_MS);
+
   test("serializes a stop queued behind startup and leaves metadata cleared", async () => {
     const appRoot = await createTempDir("ork-electron-app-start-stop-");
     const worktreePath = await createTempDir("ork-electron-worktree-start-stop-");

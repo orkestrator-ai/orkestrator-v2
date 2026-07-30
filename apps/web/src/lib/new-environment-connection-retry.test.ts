@@ -40,7 +40,13 @@ describe("getNewEnvironmentConnectionRetryDecision", () => {
       delayMs: 4_000,
       retryWindowStartedAt: NOW,
     });
-    expect(decide({ attempt: 4 })).toBeNull();
+    for (let attempt = 4; attempt < 10; attempt += 1) {
+      expect(decide({ attempt })).toEqual({
+        delayMs: 8_000,
+        retryWindowStartedAt: NOW,
+      });
+    }
+    expect(decide({ attempt: 10 })).toBeNull();
   });
 
   test("rejects negative, fractional, and non-finite attempt numbers", () => {

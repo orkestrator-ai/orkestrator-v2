@@ -1,6 +1,23 @@
 const NEW_ENVIRONMENT_RETRY_WINDOW_MS = 60_000;
 
-const NEW_ENVIRONMENT_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000] as const;
+/**
+ * Keep retrying for almost the entire one-minute startup window. The previous
+ * four-entry schedule exhausted itself after only 7.5 seconds, so the window
+ * below was mostly theoretical and slower first launches still surfaced a
+ * terminal error while their bridge was becoming ready.
+ */
+const NEW_ENVIRONMENT_RETRY_DELAYS_MS = [
+  500,
+  1_000,
+  2_000,
+  4_000,
+  8_000,
+  8_000,
+  8_000,
+  8_000,
+  8_000,
+  8_000,
+] as const;
 
 export interface NewEnvironmentConnectionRetryDecision {
   delayMs: number;

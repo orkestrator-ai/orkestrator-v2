@@ -5542,7 +5542,7 @@ export async function shutdownLocalServers(
   }
 }
 
-async function getLocalServerStatus(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<{
+async function readLocalServerStatus(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<{
   running: boolean;
   port: number | null;
   pid: number | null;
@@ -5560,6 +5560,22 @@ async function getLocalServerStatus(environmentId: string, context: CommandConte
     pid: child?.pid ?? pid ?? null,
     ...(authToken ? { authToken } : {}),
   };
+}
+
+function getLocalServerStatus(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<{
+  running: boolean;
+  port: number | null;
+  pid: number | null;
+  authToken?: string;
+}> {
+  // Status is a readiness snapshot, not merely a process-exists snapshot.
+  // Serialize it behind any in-flight start/stop so callers never observe the
+  // child and credential before the healthy port has been persisted (or a
+  // replacement child paired with the previous child's stale port).
+  return enqueueLocalServerEnvironmentOperation(
+    environmentId,
+    () => readLocalServerStatus(environmentId, context, kind),
+  );
 }
 
 async function allocateLocalPort(): Promise<number> {

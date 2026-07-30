@@ -1501,7 +1501,12 @@ export function CodexChatTab({
           } catch (error) {
             throw classifyNewEnvironmentConnectionStartupError(error);
           }
-          if (!status.running || !status.authToken) {
+          // A concurrent backend/native-agent startup can own a live child and
+          // token before its ready port has been committed. Reissuing start is
+          // safe and joins the backend's per-environment lifecycle queue, so
+          // wait for that in-flight startup instead of treating its intermediate
+          // status snapshot as a permanent connection failure.
+          if (!status.running || !status.port || !status.authToken) {
             let result;
             try {
               result = await startLocalCodexServer(environmentId);

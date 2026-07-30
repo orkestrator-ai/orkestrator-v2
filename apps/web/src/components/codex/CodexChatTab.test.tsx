@@ -203,6 +203,21 @@ const mockUpdateGlobalConfig = mock(async (config: any) => ({
   global: config,
 }));
 const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
+const mockAdoptNativeAgentSession = mock(async (input: {
+  environmentId: string;
+  agent: string;
+  logicalSessionKey: string;
+  providerSessionId: string;
+}) => ({
+  id: `adopted-${input.logicalSessionKey}`,
+  environmentId: input.environmentId,
+  agent: input.agent as "codex",
+  logicalSessionKey: input.logicalSessionKey,
+  providerSessionId: input.providerSessionId,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  dispatchedRequestIds: [],
+}));
 const claimedPromptHeads = new Set<string>();
 const mockOutstandingQueueClaims = new Map<
   string,
@@ -286,6 +301,7 @@ const mockTransferPromptQueueMessageToComposeDraft = mock(
 // safe defaults (isAtBottom: true) when no viewport is found in happy-dom.
 
 mock.module("@/lib/backend", () => ({
+  adoptNativeAgentSession: mockAdoptNativeAgentSession,
   claimPromptQueueHead: mockClaimPromptQueueHead,
   acknowledgePromptQueueClaim: mock(async (queueKey, environmentId, claimToken) => {
     mockOutstandingQueueClaims.delete(claimToken);
@@ -1037,6 +1053,17 @@ describe("CodexChatTab", () => {
       ...useConfigStore.getState().config,
       global,
     }));
+    mockAdoptNativeAgentSession.mockReset();
+    mockAdoptNativeAgentSession.mockImplementation(async (input) => ({
+      id: `adopted-${input.logicalSessionKey}`,
+      environmentId: input.environmentId,
+      agent: input.agent as "codex",
+      logicalSessionKey: input.logicalSessionKey,
+      providerSessionId: input.providerSessionId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      dispatchedRequestIds: [],
+    }));
     mockIsAtBottom = true;
     lastVirtualizedMessages = [];
     lastVirtualizedFind = undefined;
@@ -1474,6 +1501,56 @@ describe("CodexChatTab", () => {
     expect(restoredTab?.codexNativeData?.sessionId).toBe(restoredSessionId);
   });
 
+  test("keeps a restored session usable when best-effort backend adoption fails", async () => {
+    const restoredSessionId = "adoption-failed-codex-session";
+    const restoredMessage = createMessage(
+      "adoption-failed-message",
+      "The restored transcript remains available",
+    );
+    const adoptionError = new Error("adoption persistence unavailable");
+    const originalWarn = console.warn;
+    const consoleWarn = mock(() => {});
+    console.warn = consoleWarn as unknown as typeof console.warn;
+    useCodexStore.setState({ sessions: new Map() });
+    seedPaneLayout();
+    usePaneLayoutStore
+      .getState()
+      .updateTabNativeSessionId(TAB_ID, restoredSessionId, ENVIRONMENT_ID);
+    mockGetSessionMessages.mockResolvedValueOnce([restoredMessage]);
+    mockAdoptNativeAgentSession.mockRejectedValueOnce(adoptionError);
+
+    try {
+      render(
+        <CodexChatTab
+          tabId={TAB_ID}
+          data={createData({ sessionId: restoredSessionId })}
+          isActive
+        />,
+      );
+
+      await waitFor(() => {
+        expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith({
+          environmentId: ENVIRONMENT_ID,
+          agent: "codex",
+          logicalSessionKey: SESSION_KEY,
+          providerSessionId: restoredSessionId,
+        });
+        expect(consoleWarn).toHaveBeenCalledWith(
+          "[CodexChatTab] Failed to adopt the restored session:",
+          adoptionError,
+        );
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+          sessionId: restoredSessionId,
+          messages: [restoredMessage],
+        });
+      });
+      expect(mockCreateSession).not.toHaveBeenCalled();
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   test("cold-restores a persisted session with its transcript", async () => {
     const restoredSessionId = "cold-restored-codex";
     const restoredMessage = createMessage("restored-message", "Persisted Codex transcript");
@@ -1845,6 +1922,64 @@ describe("CodexChatTab", () => {
       await retryTimers.settle();
 
       expect(mockStartCodexServer).toHaveBeenCalledTimes(2);
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    } finally {
+      retryTimers.restore();
+    }
+  });
+
+  test("automatically retries when the local bridge start races worktree creation", async () => {
+    const retryTimers = installAcceleratedConnectionRetryTimers({ hold: true });
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      createdAt: new Date().toISOString(),
+    });
+    useEnvironmentStore.setState({
+      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
+    });
+    mockGetLocalCodexServerStatus.mockResolvedValue({
+      running: false,
+      port: null,
+      pid: null,
+      authToken: undefined,
+    } as any);
+    mockStartLocalCodexServer
+      .mockRejectedValueOnce(new Error("Local environment worktree is not available"))
+      .mockResolvedValueOnce({
+        port: 9999,
+        pid: 1234,
+        authToken: "local-start-token",
+      });
+
+    try {
+      render(
+        <CodexChatTab
+          tabId={TAB_ID}
+          data={createData({ isLocal: true })}
+          isActive
+        />,
+      );
+      await retryTimers.waitForDelayCount(1);
+
+      expect(retryTimers.delays).toEqual([500]);
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+
+      await act(async () => {
+        retryTimers.callbacks[0]?.();
+        await Promise.resolve();
+      });
+      await retryTimers.settle();
+
+      expect(mockStartLocalCodexServer).toHaveBeenCalledTimes(2);
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:9999",
+        "local-start-token",
+      );
       expect(mockCreateSession).toHaveBeenCalledTimes(1);
       expect(screen.queryByText("Connection Failed")).toBeNull();
     } finally {

@@ -467,7 +467,7 @@ export interface NativeEventSubscriptionSlice<TEvent> {
   eventSubscriptions: Map<string, NativeEventSubscriptionState<TEvent>>;
   getOrCreateEventSubscription: (
     environmentId: string,
-  ) => NativeEventSubscriptionState<TEvent> | null;
+  ) => NativeEventSubscriptionState<TEvent>;
   setEventStream: (
     environmentId: string,
     stream: AsyncIterable<TEvent> | null,

@@ -118,8 +118,6 @@ describe("RetryableNewEnvironmentConnectionError", () => {
       "bridge is still starting",
       "bridge not ready",
       "bridge never became ready",
-      "Server on port 49152 did not become healthy",
-      "codex server exited before becoming healthy (code 1, signal null)",
       "bridge delayed by setup",
       "Container is not running",
       "Container is restarting",
@@ -142,6 +140,62 @@ describe("RetryableNewEnvironmentConnectionError", () => {
       expect(
         isRetryableNewEnvironmentConnectionError(
           classifyNewEnvironmentConnectionStartupError({ status }),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  test("does not infer retryability from generic health wrappers", () => {
+    for (const message of [
+      "Server on port 49152 did not become healthy",
+      "codex server exited before becoming healthy (code 1, signal null)",
+      [
+        "Server on port 49152 did not become healthy",
+        "permission denied while loading configuration",
+      ].join("\n"),
+      [
+        "claude server exited before becoming healthy (code 1, signal null)",
+        "authentication failed",
+      ].join("\n"),
+      [
+        "Server on port 49152 did not become healthy",
+        "bridge dependency is temporarily unavailable",
+      ].join("\n"),
+    ]) {
+      const error = new Error(message);
+      expect(classifyNewEnvironmentConnectionStartupError(error)).toBe(error);
+      expect(
+        isRetryableNewEnvironmentConnectionError(
+          classifyNewEnvironmentConnectionStartupError(error),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  test("requires explicit lifecycle-race wording rather than near matches", () => {
+    for (const message of [
+      "Container was not running",
+      "Container is running",
+      "Container will restart later",
+      "Local environment worktree was not available",
+      "Local environment worktree is available",
+      "The worktree is not yet provisioned",
+    ]) {
+      expect(
+        isRetryableNewEnvironmentConnectionError(
+          classifyNewEnvironmentConnectionStartupError(new Error(message)),
+        ),
+      ).toBe(false);
+    }
+
+    for (const message of [
+      "Container is not running",
+      "Container is restarting",
+      "Local environment worktree is not available",
+    ]) {
+      expect(
+        isRetryableNewEnvironmentConnectionError(
+          classifyNewEnvironmentConnectionStartupError(new Error(message)),
         ),
       ).toBe(true);
     }

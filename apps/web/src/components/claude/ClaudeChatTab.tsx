@@ -1168,10 +1168,6 @@ export function ClaudeChatTab({
           const newSession = { sessionId: ensured.providerSessionId };
           if (!mounted) return;
 
-          if (!newSession) {
-            throw new Error("Failed to create session");
-          }
-
           tabSessionIdRef.current = newSession.sessionId;
           updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
           isInitializedRef.current = true;
@@ -1278,9 +1274,6 @@ export function ClaudeChatTab({
           authToken = status.authToken;
         }
 
-        if (!hostPort) {
-          throw new Error("Failed to get server port");
-        }
         if (!authToken) {
           throw new Error("Failed to resolve Claude bridge authentication");
         }
@@ -1401,16 +1394,11 @@ export function ClaudeChatTab({
           try {
             const messages = await getSessionMessages(bridgeClient, existingSessionId);
             if (!mounted) return;
-            // Preserve any client-side error messages that may not be on the server
-            const currentMessages = existingSessionFromStore?.messages || [];
-            const errorMessages = currentMessages.filter((m) => m.id.startsWith(ERROR_MESSAGE_PREFIX));
-            const serverMessageIds = new Set(messages.map((m) => m.id));
-            const errorMessagesToKeep = errorMessages.filter((m) => !serverMessageIds.has(m.id));
             if (existingSessionFromStore) {
-              setMessages(
-                sessionKey,
-                errorMessagesToKeep.length > 0 ? [...messages, ...errorMessagesToKeep] : messages,
-              );
+              // The store owns client-only message preservation and
+              // de-duplication. Appending errors here as well would publish the
+              // same row twice.
+              setMessages(sessionKey, messages);
             } else {
               const serverSession = await getSession(bridgeClient, existingSessionId);
               if (!mounted) return;
@@ -1466,10 +1454,6 @@ export function ClaudeChatTab({
           });
           const newSession = { sessionId: ensured.providerSessionId };
           if (!mounted) return;
-
-          if (!newSession) {
-            throw new Error("Failed to create session");
-          }
 
           tabSessionIdRef.current = newSession.sessionId;
           updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
@@ -1644,10 +1628,6 @@ export function ClaudeChatTab({
       }
 
       const subscriptionState = getOrCreateEventSubscription(environmentId);
-      if (!subscriptionState) {
-        return;
-      }
-
       const { abortController } = subscriptionState;
 
       try {

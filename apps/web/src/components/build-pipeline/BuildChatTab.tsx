@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  ArrowDown,
   CheckCircle2,
   Circle,
   Loader2,
@@ -15,16 +16,23 @@ import { MAX_PIPELINE_USER_MESSAGE_LENGTH } from "@orkestrator/protocol/build-pi
 import type { BuildTabData } from "@/types/paneLayout";
 import {
   useBuildPipelineStore,
+  type BuildPipeline,
   type PipelineSession,
 } from "@/stores/buildPipelineStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as backend from "@/lib/backend";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
+import { useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { NativeMessage } from "@/components/chat/NativeMessage";
+import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
+import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
+import { toPipelineTranscript } from "./pipeline-transcript";
 
 interface BuildChatTabProps {
   data: BuildTabData;
@@ -47,50 +55,39 @@ const PHASE_LABELS: Record<string, string> = {
   failed: "Failed",
 };
 
-type DisplayMessage = {
-  key: string;
-  role: string;
-  text: string;
+const TRANSCRIPT_PANEL_ID = "build-stage-transcript";
+
+const AGENT_LABELS: Record<string, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  opencode: "OpenCode",
 };
 
-function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function partText(value: unknown): string {
-  const part = record(value);
-  if (!part) return "";
-  for (const key of ["text", "content", "message", "output"]) {
-    if (typeof part[key] === "string") return part[key] as string;
-  }
-  return "";
-}
-
-function normalizeMessages(messages: unknown[] | undefined): DisplayMessage[] {
-  return (messages ?? []).flatMap((value, index) => {
-    const item = record(value);
-    if (!item) return [];
-    const info = record(item.info);
-    const role = typeof (info?.role ?? item.role) === "string"
-      ? String(info?.role ?? item.role)
-      : "assistant";
-    const rawParts = Array.isArray(item.parts)
-      ? item.parts
-      : Array.isArray(item.content)
-        ? item.content
-        : [];
-    const direct = typeof item.content === "string" ? item.content : "";
-    const text = rawParts.map(partText).filter(Boolean).join("\n") || direct;
-    if (!text.trim()) return [];
-    const id = info?.id ?? item.id;
-    return [{
-      key: typeof id === "string" ? id : `${index}`,
-      role,
-      text,
-    }];
-  });
+/**
+ * The stage that owns the structured review report.
+ *
+ * The report belongs to the review turn that produced it, so it is shown there
+ * and nowhere else — appending it to whichever stage is on screen makes every
+ * stage look as though it had reviewed the work. `structuredRequestId` is the
+ * durable link; the newest review session is the fallback for a pipeline
+ * persisted before that field existed.
+ */
+function reviewReportSessionKey(
+  pipeline: BuildPipeline,
+): string | undefined {
+  if (!pipeline.structuredReview) return undefined;
+  const requestId = pipeline.structuredReviewRequestId;
+  const linked = requestId
+    ? pipeline.sessions.find(
+        (session) => session.structuredRequestId === requestId,
+      )
+    : undefined;
+  return (
+    linked
+      ?? [...pipeline.sessions].reverse().find(
+        (session) => session.phase === "review",
+      )
+  )?.sessionKey;
 }
 
 function SessionStateIcon({ session }: { session: PipelineSession }) {
@@ -103,13 +100,18 @@ function SessionStateIcon({ session }: { session: PipelineSession }) {
   return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />;
 }
 
-export function BuildChatTab({ data }: BuildChatTabProps) {
+export function BuildChatTab({ data, isActive = false }: BuildChatTabProps) {
   const pipeline = useBuildPipelineStore(
     (state) => state.pipelines.get(data.pipelineId),
   );
   const replacePipeline = useBuildPipelineStore(
     (state) => state.replacePipeline,
   );
+  // Images the agent wrote inside a Dockerised environment are readable only
+  // through its container, exactly as in the native tabs.
+  const containerId = useEnvironmentStore(
+    (state) => state.getEnvironmentById(data.environmentId)?.containerId,
+  ) ?? undefined;
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [controlPending, setControlPending] = useState(false);
   const [draft, setDraft] = useState("");
@@ -119,6 +121,15 @@ export function BuildChatTab({ data }: BuildChatTabProps) {
   // transcript there for the rest of the run, because it stays a valid session.
   const pinnedSessionRef = useRef(false);
   const hydrationAttemptedFor = useRef<string | null>(null);
+  const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } =
+    useVirtuosoScrollState({
+      isActive,
+      persistKey: `build-pipeline:${data.pipelineId}`,
+      environmentId: data.environmentId,
+      // A build runs unattended, so returning to the tab should show what the
+      // pipeline is doing now rather than where the transcript was left.
+      stickToBottomOnActivation: true,
+    });
 
   const selectSession = useCallback((sessionId: string) => {
     pinnedSessionRef.current = true;
@@ -160,9 +171,17 @@ export function BuildChatTab({ data }: BuildChatTabProps) {
   const selectedSession = pipeline?.sessions.find(
     (session) => session.sdkSessionId === selectedSessionId,
   );
+  const agentType = pipeline?.agentType;
   const messages = useMemo(
-    () => normalizeMessages(selectedSession?.messages),
-    [selectedSession?.messages],
+    () =>
+      agentType
+        ? toPipelineTranscript(
+            selectedSession?.messages,
+            agentType,
+            selectedSession?.startedAt ?? new Date().toISOString(),
+          )
+        : [],
+    [agentType, selectedSession?.messages, selectedSession?.startedAt],
   );
 
   const runControl = async (
@@ -238,10 +257,17 @@ export function BuildChatTab({ data }: BuildChatTabProps) {
   const canSendMessage = pipeline.phase !== "complete"
     && pipeline.phase !== "failed";
   const queuedMessages = pipeline.pendingUserMessages?.length ?? 0;
+  const agentLabel = AGENT_LABELS[pipeline.agentType] ?? pipeline.agentType;
+  const reportSessionKey = reviewReportSessionKey(pipeline);
+  const showReviewReport = Boolean(
+    pipeline.structuredReview
+      && selectedSession
+      && selectedSession.sessionKey === reportSessionKey,
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+      <div className="flex items-center justify-between gap-3 border-b border-border/40 bg-zinc-900/40 px-4 py-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-medium">{pipeline.taskTitle}</div>
           <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -315,108 +341,167 @@ export function BuildChatTab({ data }: BuildChatTabProps) {
       <BuildCompletionStatus pipeline={pipeline} />
 
       <div className="flex min-h-0 flex-1">
-        <ScrollArea className="w-56 shrink-0 border-r">
-          <div className="space-y-1 p-2">
+        <ScrollArea className="w-60 shrink-0 border-r border-border/40 bg-zinc-900/40">
+          <div
+            className="space-y-1 p-2"
+            role="tablist"
+            aria-orientation="vertical"
+            aria-label="Build stages"
+          >
             {pipeline.sessions.length === 0 ? (
               <div className="px-2 py-4 text-xs text-muted-foreground">
                 The backend is preparing the first stage.
               </div>
-            ) : pipeline.sessions.map((session) => (
-              <button
-                key={session.sessionKey}
-                type="button"
-                className={cn(
-                  "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-muted",
-                  selectedSessionId === session.sdkSessionId && "bg-muted",
-                )}
-                onClick={() => selectSession(session.sdkSessionId)}
-              >
-                <SessionStateIcon session={session} />
-                <span className="min-w-0">
-                  <span className="block truncate text-xs font-medium">
-                    {session.label}
+            ) : pipeline.sessions.map((session) => {
+              const isSelected = selectedSessionId === session.sdkSessionId;
+              return (
+                <button
+                  key={session.sessionKey}
+                  id={`build-stage-tab-${session.sessionKey}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={isSelected}
+                  aria-controls={TRANSCRIPT_PANEL_ID}
+                  className={cn(
+                    "flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-colors",
+                    isSelected
+                      ? "border-zinc-700/70 bg-zinc-800/85"
+                      : "border-transparent hover:bg-zinc-800/55",
+                  )}
+                  onClick={() => selectSession(session.sdkSessionId)}
+                >
+                  <SessionStateIcon session={session} />
+                  <span className="min-w-0">
+                    <span
+                      className={cn(
+                        "block truncate text-xs font-medium",
+                        isSelected ? "text-foreground" : "text-foreground/80",
+                      )}
+                    >
+                      {session.label}
+                    </span>
+                    <span className="block text-[11px] text-muted-foreground">
+                      Iteration {session.iteration + 1}
+                    </span>
                   </span>
-                  <span className="block text-[11px] text-muted-foreground">
-                    Iteration {session.iteration + 1}
-                  </span>
-                </span>
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </div>
         </ScrollArea>
 
-        <ScrollArea className="min-w-0 flex-1">
-          <div className="mx-auto max-w-4xl space-y-4 p-4">
-            {!selectedSession ? (
-              <div className="py-12 text-center text-sm text-muted-foreground">
-                Waiting for the backend to start a build stage.
-              </div>
-            ) : messages.length === 0 ? (
-              <div className="py-12 text-center text-sm text-muted-foreground">
-                {selectedSession.status === "running"
-                  ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
-                  : "No text transcript was produced for this stage."}
-              </div>
-            ) : messages.map((message) => (
-              <div
-                key={message.key}
-                className={cn(
-                  "rounded-lg border px-4 py-3",
-                  message.role === "user" && "ml-8 bg-muted/50",
-                )}
-              >
-                <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  {message.role}
-                </div>
-                <div className="whitespace-pre-wrap break-words text-sm">
-                  {message.text}
-                </div>
-              </div>
-            ))}
-            {pipeline.structuredReview && (
-              <StructuredReviewReportView report={pipeline.structuredReview} />
+        <div
+          className="@container relative flex min-w-0 flex-1 flex-col"
+          id={TRANSCRIPT_PANEL_ID}
+          role="tabpanel"
+          aria-label={
+            selectedSession
+              ? `${selectedSession.label} transcript`
+              : "Build stage transcript"
+          }
+        >
+          {/*
+            The transcript list the native agent tabs use: the same message
+            renderer, the same virtualization, the same in-transcript find, and
+            the same follow-the-tail behaviour while a stage streams.
+          */}
+          <VirtualizedMessageList
+            messages={messages}
+            computeItemKey={(_index, message) => message.id}
+            renderMessage={(_index, message, previous) => (
+              <NativeMessage
+                message={message}
+                previousMessage={previous}
+                assistantLabel={agentLabel}
+                containerId={containerId}
+              />
             )}
-          </div>
-        </ScrollArea>
+            emptyState={
+              <div className="py-12 text-center text-sm text-muted-foreground">
+                {!selectedSession
+                  ? "Waiting for the backend to start a build stage."
+                  : selectedSession.status === "running"
+                    ? "This stage is running. Its authoritative transcript will appear here as it is synchronized."
+                    : "No text transcript was produced for this stage."}
+              </div>
+            }
+            footer={
+              showReviewReport && pipeline.structuredReview ? (
+                <div className="px-3 py-3 @sm:px-6">
+                  <StructuredReviewReportView
+                    className="mx-auto max-w-3xl"
+                    report={pipeline.structuredReview}
+                    collapsibleSections
+                    showRawJson={false}
+                  />
+                </div>
+              ) : undefined
+            }
+            scrollProps={scrollProps}
+            virtuosoRef={virtuosoRef}
+            find={{ isActive, getSearchText: getNativeMessageSearchText }}
+          />
+        </div>
       </div>
 
-      {canSendMessage && (
-        <div className="shrink-0 border-t p-3">
-          {queuedMessages > 0 && (
-            <div className="mb-1.5 text-[11px] text-muted-foreground">
-              {queuedMessages === 1
-                ? "1 message queued — it will be delivered when the agent is next idle."
-                : `${queuedMessages} messages queued — they will be delivered one at a time as the agent goes idle.`}
+      {(canSendMessage || !isAtBottom) && (
+        // The native tabs dock their composer as a floating card rather than a
+        // bordered footer strip, so this matches that shape instead of drawing
+        // another rule across the pane.
+        <div className="shrink-0 px-3 pt-2 pb-4">
+          {!isAtBottom && (
+            <div className="mx-auto mb-1 flex w-full max-w-[56rem] justify-end">
+              <button
+                type="button"
+                onClick={scrollToBottom}
+                className="flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
+                aria-label="Scroll to bottom of transcript"
+              >
+                <ArrowDown className="h-3.5 w-3.5" />
+                <span>Scroll down</span>
+              </button>
             </div>
           )}
-          <div className="flex items-end gap-2">
-            <Textarea
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              maxLength={MAX_PIPELINE_USER_MESSAGE_LENGTH}
-              rows={2}
-              className="min-h-0 resize-none"
-              placeholder="Send a message to the agent..."
-              aria-label="Send a message to the agent"
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" || event.shiftKey) return;
-                event.preventDefault();
-                void sendMessage();
-              }}
-            />
-            <Button
-              type="button"
-              size="sm"
-              title="Send message"
-              aria-label="Send message"
-              disabled={sendPending || draft.trim().length === 0}
-              onClick={() => void sendMessage()}
-            >
-              {sendPending
-                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                : <Send className="h-3.5 w-3.5" />}
-            </Button>
-          </div>
+          {canSendMessage && (
+            <div className="mx-auto w-full max-w-[56rem] rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20">
+              {queuedMessages > 0 && (
+                <div className="mb-1.5 text-[11px] text-muted-foreground">
+                  {queuedMessages === 1
+                    ? "1 message queued — it will be delivered when the agent is next idle."
+                    : `${queuedMessages} messages queued — they will be delivered one at a time as the agent goes idle.`}
+                </div>
+              )}
+              <div className="flex items-end gap-2">
+                <Textarea
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  maxLength={MAX_PIPELINE_USER_MESSAGE_LENGTH}
+                  rows={2}
+                  className="min-h-0 resize-none border-none bg-transparent px-1 py-1 shadow-none focus-visible:ring-0"
+                  placeholder="Send a message to the agent..."
+                  aria-label="Send a message to the agent"
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" || event.shiftKey) return;
+                    event.preventDefault();
+                    void sendMessage();
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  className="rounded-full"
+                  title="Send message"
+                  aria-label="Send message"
+                  disabled={sendPending || draft.trim().length === 0}
+                  onClick={() => void sendMessage()}
+                >
+                  {sendPending
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <Send className="h-3.5 w-3.5" />}
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

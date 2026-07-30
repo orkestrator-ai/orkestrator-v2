@@ -176,6 +176,35 @@ describe("StructuredReviewReportView", () => {
     expect(screen.getByText(/expected paused/)).toBeTruthy();
   });
 
+  test("collapses every section behind a disclosure when asked", () => {
+    render(<StructuredReviewReportView report={report} collapsibleSections />);
+
+    // Collapsed content is unmounted, not hidden: this report is the largest
+    // thing in a transcript that already scrolls.
+    expect(screen.queryByText("Adds structured reviews.")).toBeNull();
+    expect(screen.queryByText("Long-running state changed.")).toBeNull();
+    // A collapsed report still says what it concluded.
+    expect(screen.getByText(/Ready: with-fixes · 1 issue · 1 coverage gap/))
+      .toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
+    expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
+    expect(screen.queryByText("Long-running state changed.")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
+    expect(screen.queryByText("Adds structured reviews.")).toBeNull();
+  });
+
+  test("keeps the raw JSON inspector out of the report when it is suppressed", () => {
+    render(<StructuredReviewReportView report={report} showRawJson={false} />);
+
+    expect(screen.queryByRole("button", { name: /Inspect raw JSON/ })).toBeNull();
+    expect(screen.queryByText("Validated JSON Schema")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Structured review report" }))
+      .toBeTruthy();
+    expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
+  });
+
   test("renders explicit empty states for findings, strengths, and coverage gaps", () => {
     render(
       <StructuredReviewReportView

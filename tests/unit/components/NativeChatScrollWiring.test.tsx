@@ -162,7 +162,10 @@ describe("native chat scroll wiring", () => {
     });
   });
 
-  test("backend build transcript rendering does not allocate native chat scroll state", () => {
+  // The build transcript renders through the same virtualized list as the
+  // native tabs, so it needs the same scroll wiring: a stage that streams while
+  // the user is on another tab must be scrolled to its tail on return.
+  test("the build transcript passes its environmentId to the Virtuoso scroll hook", () => {
     render(
       <BuildChatTab
         data={{ environmentId: "env-build", pipelineId: "pipeline-1", taskId: "task-1" }}
@@ -170,6 +173,11 @@ describe("native chat scroll wiring", () => {
       />,
     );
 
-    expect(useVirtuosoScrollStateMock).not.toHaveBeenCalled();
+    expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({
+      isActive: false,
+      persistKey: "build-pipeline:pipeline-1",
+      environmentId: "env-build",
+      stickToBottomOnActivation: true,
+    });
   });
 });

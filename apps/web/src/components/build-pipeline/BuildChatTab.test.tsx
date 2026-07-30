@@ -15,8 +15,31 @@ import {
 } from "@testing-library/react";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import * as realBackend from "@/lib/backend";
+import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
 const realBackendSnapshot = { ...realBackend };
+const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
+
+/*
+ * react-virtuoso measures a real viewport, so its rows never render under
+ * happy-dom. Every native chat tab's suite stubs it the same way to assert on
+ * the transcript the shared renderer produced.
+ */
+mock.module("@/components/chat/VirtualizedMessageList", () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  VirtualizedMessageList: ({ messages, renderMessage, emptyState, footer }: any) => (
+    <div>
+      {messages.length === 0 ? emptyState : null}
+      {messages.map((message: unknown, index: number) => (
+        <div key={index}>
+          {renderMessage(index, message, index > 0 ? messages[index - 1] : null)}
+        </div>
+      ))}
+      {footer}
+    </div>
+  ),
+}));
 const pauseBuildPipelineMock = mock(async (pipelineId: string) => ({
   ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
   phase: "paused" as const,
@@ -61,6 +84,10 @@ const { BuildChatTab } = await import("./BuildChatTab");
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
+  mock.module(
+    "@/components/chat/VirtualizedMessageList",
+    () => realVirtualizedMessageListSnapshot,
+  );
 });
 
 const pipeline: BuildPipeline = {
@@ -278,6 +305,131 @@ describe("BuildChatTab backend projection", () => {
     expect(screen.getByRole("button", {
       name: "Retry GitHub completion comment",
     })).toBeTruthy();
+  });
+});
+
+describe("BuildChatTab presentation", () => {
+  const reviewSession: BuildPipeline["sessions"][number] = {
+    phase: "review",
+    iteration: 0,
+    sessionKey: "review-key",
+    sdkSessionId: "review-session",
+    status: "idle",
+    startedAt: "2026-07-29T00:00:30.000Z",
+    label: "Review Session",
+    structuredRequestId: "review-request",
+    messages: [{
+      id: "review-answer",
+      role: "assistant",
+      content: "The review is complete",
+      parts: [
+        { type: "text", content: "The review is complete" },
+        {
+          type: "tool-invocation",
+          content: "shell",
+          toolName: "shell",
+          toolArgs: { command: "git diff --stat" },
+          toolState: "success",
+          toolOutput: "1 file changed",
+        },
+      ],
+    }],
+  };
+  const reviewed: BuildPipeline = {
+    ...pipeline,
+    sessions: [pipeline.sessions[0]!, reviewSession, pipeline.sessions[1]!],
+    currentSessionIndex: 2,
+    structuredReview: TEST_STRUCTURED_REVIEW_REPORT,
+    structuredReviewRequestId: "review-request",
+    backendRevision: 40,
+  };
+
+  function renderTab(next: BuildPipeline) {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[next.id, next]]),
+      buildEnvironmentIds: new Set([next.environmentId]),
+    });
+    render(<BuildChatTab data={{
+      pipelineId: next.id,
+      environmentId: next.environmentId,
+      taskId: next.taskId,
+      isLocal: true,
+    }} />);
+  }
+
+  beforeEach(cleanup);
+
+  test("marks the shown stage as selected in the stage list", async () => {
+    renderTab(reviewed);
+
+    const selected = () =>
+      screen.getAllByRole("tab")
+        .filter((tab) => tab.getAttribute("aria-selected") === "true")
+        .map((tab) => tab.textContent);
+
+    // The pipeline is followed to its current stage until the user picks one.
+    expect(selected()).toEqual([expect.stringContaining("Verification Session")]);
+
+    fireEvent.click(screen.getByText("Build Session"));
+    await waitFor(() =>
+      expect(selected()).toEqual([expect.stringContaining("Build Session")]));
+  });
+
+  test("renders tool activity through the shared transcript components", () => {
+    renderTab(reviewed);
+    fireEvent.click(screen.getByText("Review Session"));
+
+    // The tool row, not a flattened dump of every part's text.
+    expect(screen.getByText("Shell")).toBeTruthy();
+    expect(screen.getByText("git diff --stat")).toBeTruthy();
+    expect(screen.getByText("The review is complete")).toBeTruthy();
+    expect(screen.queryByText(/"toolArgs"/)).toBeNull();
+  });
+
+  test("shows the structured review report only on the stage that produced it", async () => {
+    renderTab(reviewed);
+    const reportLabel = "Structured review report";
+
+    // The pipeline is following its verification stage, which did not review.
+    expect(screen.queryByLabelText(reportLabel)).toBeNull();
+
+    fireEvent.click(screen.getByText("Review Session"));
+    await waitFor(() => expect(screen.getByLabelText(reportLabel)).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Build Session"));
+    await waitFor(() => expect(screen.queryByLabelText(reportLabel)).toBeNull());
+  });
+
+  test("keeps the report's sections collapsed and its JSON out of the transcript", async () => {
+    renderTab(reviewed);
+    fireEvent.click(screen.getByText("Review Session"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Structured review report")).toBeTruthy());
+
+    expect(screen.queryByRole("button", { name: /Inspect raw JSON/ })).toBeNull();
+    expect(screen.queryByLabelText("Raw structured review JSON")).toBeNull();
+    expect(screen.queryByText("Updates the review workflow.")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
+    await waitFor(() =>
+      expect(screen.getByText("Updates the review workflow.")).toBeTruthy());
+  });
+
+  test("falls back to the newest review stage for a report with no request id", async () => {
+    renderTab({
+      ...reviewed,
+      structuredReviewRequestId: undefined,
+      sessions: reviewed.sessions.map((session) =>
+        session.sessionKey === "review-key"
+          ? { ...session, structuredRequestId: undefined }
+          : session
+      ),
+      backendRevision: 41,
+    });
+
+    fireEvent.click(screen.getByText("Review Session"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Structured review report")).toBeTruthy());
   });
 });
 

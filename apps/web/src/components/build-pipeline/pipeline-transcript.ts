@@ -11,7 +11,11 @@
  */
 
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
-import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
+import type {
+  TaskListSnapshot,
+  TaskSnapshotItem,
+  TaskSnapshotStatus,
+} from "@orkestrator/protocol/task-list";
 import { normalizeClaudeMessagesForDisplay } from "@/lib/chat/native-message-adapters";
 import { normalizeOpenCodeMessage } from "@/lib/opencode-client";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
@@ -72,11 +76,71 @@ function asBackgroundTask(value: unknown): NativeBackgroundTask | undefined {
   };
 }
 
-/** `TodoToolPart` maps over `items`, so a snapshot without one must be dropped. */
+const TASK_STATUSES = new Set(["pending", "in_progress", "completed"]);
+
+function asTaskItem(value: unknown): TaskSnapshotItem | undefined {
+  const raw = asRecord(value);
+  const id = asString(raw?.id);
+  // A task can legitimately have an empty subject, so this is not `asString`.
+  const subject = typeof raw?.subject === "string" ? raw.subject : undefined;
+  const status = raw?.status;
+  if (!raw || !id || subject === undefined) return undefined;
+  if (typeof status !== "string" || !TASK_STATUSES.has(status)) return undefined;
+  return { id, subject, status: status as TaskSnapshotStatus };
+}
+
+/**
+ * `TodoToolPart` maps over `items` and dereferences `id`, `subject` and
+ * `status` on every element, so the snapshot is rebuilt field by field rather
+ * than cast.
+ *
+ * One unreadable item drops the whole snapshot instead of silently shortening
+ * the list: the renderer then falls back to the tool call itself, which is
+ * honest, where a partial list would read as the whole of it. `complete`
+ * defaults to false for the same reason — a snapshot that never said it was
+ * complete must not claim to be.
+ */
 function asTaskSnapshot(value: unknown): TaskListSnapshot | undefined {
   const raw = asRecord(value);
   if (!raw || !Array.isArray(raw.items)) return undefined;
-  return raw as unknown as TaskListSnapshot;
+  const items: TaskSnapshotItem[] = [];
+  for (const entry of raw.items) {
+    const item = asTaskItem(entry);
+    if (!item) return undefined;
+    items.push(item);
+  }
+  const changedTaskId = asString(raw.changedTaskId);
+  const truncated = asNumber(raw.truncated);
+  return {
+    items,
+    ...(changedTaskId ? { changedTaskId } : {}),
+    complete: raw.complete === true,
+    ...(truncated !== undefined ? { truncated } : {}),
+  };
+}
+
+/**
+ * The edit renderer calls `.split()` on `filePath`, `diff`, `before` and
+ * `after` with no guard, so every field is validated. Unlike `toolArgs` — raw
+ * provider JSON that the native tabs pass through identically — a diff is
+ * client-constructed everywhere else, which makes this adapter the only way a
+ * non-string could reach those calls.
+ */
+function asToolDiff(value: unknown): NativeToolDiffMetadata | undefined {
+  const raw = asRecord(value);
+  if (!raw) return undefined;
+  const diff: NativeToolDiffMetadata = {
+    filePath: asString(raw.filePath),
+    before: asString(raw.before),
+    after: asString(raw.after),
+    diff: asString(raw.diff),
+    additions: asNumber(raw.additions),
+    deletions: asNumber(raw.deletions),
+  };
+  // An object every field of which was dropped is not a diff at all.
+  return Object.values(diff).some((field) => field !== undefined)
+    ? diff
+    : undefined;
 }
 
 const PART_TYPES = new Set([
@@ -130,9 +194,7 @@ function toNativePart(value: unknown): NativeMessagePart | null {
     toolTitle: asString(raw.toolTitle),
     toolOutput: asString(raw.toolOutput),
     toolError: asString(raw.toolError),
-    toolDiff: (asRecord(raw.toolDiff) ?? undefined) as
-      | NativeToolDiffMetadata
-      | undefined,
+    toolDiff: asToolDiff(raw.toolDiff),
     toolUseCount: asNumber(raw.toolUseCount),
     tokenCount: asNumber(raw.tokenCount),
     tokenCountText: asString(raw.tokenCountText),
@@ -189,11 +251,93 @@ function toNativePart(value: unknown): NativeMessagePart | null {
   }
 }
 
+/** The part types `normalizeClaudePart` understands; it drops the rest. */
+const CLAUDE_PART_TYPES = new Set([
+  "text",
+  "thinking",
+  "file",
+  "tool-invocation",
+  "tool-result",
+]);
+
+/**
+ * Validate provider parts and put back the two names Claude spells differently.
+ *
+ * `toNativePart` normalizes `timestamp` → `createdAt` and `_messageUuid` →
+ * `sourcePartId`, but `normalizeClaudePart` reads the wire names. Handing it a
+ * native part directly leaves every part untimestamped, so
+ * `splitClaudeAssistantTextBlocks` can never fire and a long stage renders as
+ * one row — the exact behaviour this module claims to share with the Claude tab.
+ */
 function toClaudeParts(value: unknown): ClaudeMessagePart[] {
   if (!Array.isArray(value)) return [];
-  // The Claude adapter reads the same field names this validator produces, so a
-  // validated native part is a valid input to it.
-  return toNativeParts(value) as unknown as ClaudeMessagePart[];
+  return toNativeParts(value)
+    .filter((part) => CLAUDE_PART_TYPES.has(part.type))
+    .map(({ createdAt, sourcePartId, content, ...rest }) => ({
+      ...rest,
+      // The Claude adapter falls back to the tool name for a part that carries
+      // no content of its own; the validator's `""` would suppress that.
+      ...(content ? { content } : {}),
+      ...(createdAt ? { timestamp: createdAt } : {}),
+      ...(sourcePartId ? { _messageUuid: sourcePartId } : {}),
+    }) as unknown as ClaudeMessagePart);
+}
+
+/** `new Date(value).toISOString()` throws beyond the ECMA-262 time clip. */
+const MAX_EPOCH_MS = 8.64e15;
+
+function isRenderableEpoch(value: unknown): boolean {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && Math.abs(value) <= MAX_EPOCH_MS;
+  }
+  return asString(value) !== undefined;
+}
+
+/** The entry with `info.time.created` removed, so the normalizer skips it. */
+function withoutCreatedTime(
+  raw: Record<string, unknown>,
+  info: Record<string, unknown>,
+): Record<string, unknown> {
+  const time = asRecord(info.time);
+  if (!time) return { ...raw, info: { ...info } };
+  const { created: _created, ...restTime } = time;
+  return { ...raw, info: { ...info, time: restTime } };
+}
+
+/**
+ * OpenCode's own normalizer is not total and not deterministic, and both matter
+ * here.
+ *
+ * It builds a `Date` from an unvalidated epoch, which throws a `RangeError` out
+ * of the render-time memo for an out-of-range value — one bad entry would
+ * replace the whole tab with the error boundary instead of being dropped. It
+ * also mints a fresh UUID for a message with no `info.id` and stamps "now" for
+ * one with no timestamp; this runs again on every backend push, so the id
+ * Virtuoso keys on would churn and the row would remount mid-stream. Both are
+ * anchored to the entry's position instead.
+ */
+function toOpenCodeMessage(
+  raw: Record<string, unknown>,
+  index: number,
+  fallbackCreatedAt: string,
+): NativeMessage | null {
+  const info = asRecord(raw.info);
+  const timestamped = isRenderableEpoch(asRecord(info?.time)?.created);
+  const entry = timestamped || !info ? raw : withoutCreatedTime(raw, info);
+
+  let message: NativeMessage | null;
+  try {
+    message = normalizeOpenCodeMessage(entry);
+  } catch {
+    return null;
+  }
+  if (!message || !hasRenderableContent(message)) return null;
+
+  return {
+    ...message,
+    id: asString(info?.id) ?? `pipeline-message-${index}`,
+    ...(timestamped ? {} : { createdAt: fallbackCreatedAt }),
+  };
 }
 
 function hasRenderableContent(message: NativeMessage): boolean {
@@ -225,8 +369,8 @@ export function toPipelineTranscript(
     if (!raw) return;
 
     if (isOpenCodeShaped(raw)) {
-      const message = normalizeOpenCodeMessage(entry);
-      if (message && hasRenderableContent(message)) transcript.push(message);
+      const message = toOpenCodeMessage(raw, index, fallbackCreatedAt);
+      if (message) transcript.push(message);
       return;
     }
 

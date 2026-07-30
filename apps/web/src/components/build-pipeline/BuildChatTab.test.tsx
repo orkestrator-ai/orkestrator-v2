@@ -14,12 +14,23 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
 const realBackendSnapshot = { ...realBackend };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
+
+/**
+ * The props the tab handed the transcript list on its last render.
+ *
+ * `computeItemKey`, `find` and the scroll wiring are the list's contract with
+ * the tab and never reach the DOM, so the stub records them rather than letting
+ * them go unasserted.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let listProps: any = null;
 
 /*
  * react-virtuoso measures a real viewport, so its rows never render under
@@ -28,17 +39,21 @@ const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
  */
 mock.module("@/components/chat/VirtualizedMessageList", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  VirtualizedMessageList: ({ messages, renderMessage, emptyState, footer }: any) => (
-    <div>
-      {messages.length === 0 ? emptyState : null}
-      {messages.map((message: unknown, index: number) => (
-        <div key={index}>
-          {renderMessage(index, message, index > 0 ? messages[index - 1] : null)}
-        </div>
-      ))}
-      {footer}
-    </div>
-  ),
+  VirtualizedMessageList: (props: any) => {
+    listProps = props;
+    const { messages, renderMessage, emptyState, footer } = props;
+    return (
+      <div>
+        {messages.length === 0 ? emptyState : null}
+        {messages.map((message: unknown, index: number) => (
+          <div key={index}>
+            {renderMessage(index, message, index > 0 ? messages[index - 1] : null)}
+          </div>
+        ))}
+        {footer}
+      </div>
+    );
+  },
 }));
 const pauseBuildPipelineMock = mock(async (pipelineId: string) => ({
   ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
@@ -431,6 +446,158 @@ describe("BuildChatTab presentation", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("Structured review report")).toBeTruthy());
   });
+
+  test("points at the stage holding the report while showing another", async () => {
+    renderTab(reviewed);
+
+    // The tab follows the pipeline past review, so without this nothing on
+    // screen would say a review had happened at all.
+    const hint = screen.getByRole("button", { name: /The review reported/ });
+    expect(hint.textContent).toContain("1 issue");
+    expect(hint.textContent).toContain("Review Session");
+
+    fireEvent.click(hint);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Structured review report")).toBeTruthy());
+    // Once the report is on screen the pointer to it is redundant.
+    expect(screen.queryByRole("button", { name: /The review reported/ })).toBeNull();
+  });
+
+  test("badges the stage that holds the report, and only that stage", () => {
+    renderTab(reviewed);
+
+    const badged = screen.getAllByRole("tab")
+      .filter((tab) => tab.textContent?.includes("Report · 1 issue"))
+      .map((tab) => tab.textContent);
+    expect(badged).toEqual([expect.stringContaining("Review Session")]);
+  });
+
+  test("says nothing about a review for a pipeline that has not had one", () => {
+    renderTab({ ...pipeline, backendRevision: 42 });
+
+    expect(screen.queryByRole("button", { name: /The review reported/ })).toBeNull();
+    expect(screen.queryByText(/Report ·/)).toBeNull();
+  });
+
+  test("names the transcript panel after the stage whose tab is selected", async () => {
+    renderTab(reviewed);
+    const panel = screen.getByRole("tabpanel");
+    const selectedTabId = () =>
+      screen.getAllByRole("tab")
+        .find((tab) => tab.getAttribute("aria-selected") === "true")?.id ?? null;
+
+    expect(panel.getAttribute("aria-labelledby")).toBe(selectedTabId());
+
+    fireEvent.click(screen.getByText("Review Session"));
+    await waitFor(() =>
+      expect(panel.getAttribute("aria-labelledby")).toBe(selectedTabId()));
+    // Two build tabs can be mounted at once, so the ids cannot be constants.
+    expect(panel.id).not.toBe("build-stage-transcript");
+    expect(screen.getAllByRole("tab").every((tab) => tab.id.length > 0)).toBe(true);
+  });
+
+  test("distinguishes a running stage from a failed one in the stage list", () => {
+    renderTab({
+      ...reviewed,
+      sessions: [
+        { ...reviewed.sessions[0]!, status: "error" },
+        { ...reviewed.sessions[1]!, status: "running", messages: [] },
+      ],
+      currentSessionIndex: 1,
+      backendRevision: 43,
+    });
+
+    const [failed, running] = screen.getAllByRole("tab");
+    expect(failed!.querySelector(".text-destructive")).toBeTruthy();
+    expect(running!.querySelector(".animate-spin")).toBeTruthy();
+    // A running stage with nothing synchronized yet says so.
+    expect(screen.getByText(/This stage is running/)).toBeTruthy();
+  });
+});
+
+describe("BuildChatTab transcript wiring", () => {
+  beforeEach(() => {
+    cleanup();
+    listProps = null;
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[pipeline.id, pipeline]]),
+      buildEnvironmentIds: new Set([pipeline.environmentId]),
+    });
+    useEnvironmentStore.setState({
+      environments: [{ id: "env-1", containerId: "container-1" }],
+    } as never);
+  });
+
+  afterAll(() => {
+    useEnvironmentStore.setState({ environments: [] } as never);
+  });
+
+  function renderTab(props: { isActive?: boolean; ownsGlobalShortcuts?: boolean } = {}) {
+    render(<BuildChatTab
+      data={{
+        pipelineId: pipeline.id,
+        environmentId: pipeline.environmentId,
+        taskId: pipeline.taskId,
+        isLocal: true,
+      }}
+      {...props}
+    />);
+  }
+
+  test("keys each row on its message id so a re-render does not remount it", () => {
+    renderTab();
+
+    expect(listProps.messages.map((message: { id: string }) => message.id))
+      .toEqual(["answer-2"]);
+    expect(listProps.computeItemKey(0, listProps.messages[0])).toBe("answer-2");
+  });
+
+  test("claims the find shortcut only while its pane owns the keyboard", () => {
+    // `useAgentChatFind` binds Cmd+F on the document, so a split layout would
+    // otherwise open two find bars from one keystroke.
+    renderTab({ isActive: true, ownsGlobalShortcuts: false });
+    expect(listProps.find.isActive).toBe(false);
+    expect(typeof listProps.find.getSearchText).toBe("function");
+
+    cleanup();
+    renderTab({ isActive: true, ownsGlobalShortcuts: true });
+    expect(listProps.find.isActive).toBe(true);
+  });
+
+  test("defaults shortcut ownership to visibility for a caller that omits it", () => {
+    renderTab({ isActive: true });
+    expect(listProps.find.isActive).toBe(true);
+  });
+
+  test("gives every row the agent's label and the environment's container", () => {
+    renderTab();
+
+    // Images the agent wrote inside a Dockerised environment are readable only
+    // through its container.
+    const row = listProps.renderMessage(0, listProps.messages[0], null);
+    expect(row.props).toMatchObject({
+      assistantLabel: "Codex",
+      containerId: "container-1",
+    });
+  });
+
+  test("uses each provider's own name on its rows", () => {
+    for (const [agentType, label] of [
+      ["claude", "Claude"],
+      ["opencode", "OpenCode"],
+    ] as const) {
+      cleanup();
+      useBuildPipelineStore.getState().replacePipeline({
+        ...pipeline,
+        agentType,
+        backendRevision: 44 + label.length,
+      });
+      renderTab();
+
+      const row = listProps.renderMessage(0, listProps.messages[0], null);
+      expect(row.props.assistantLabel).toBe(label);
+    }
+  });
 });
 
 describe("BuildChatTab rehydration", () => {
@@ -688,6 +855,103 @@ describe("BuildChatTab agent messaging", () => {
     await waitFor(() =>
       expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase)
         .toBe("reviewing"));
+  });
+
+  test("reports a queue of more than one message as a queue", () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...running,
+      pendingUserMessages: [
+        { id: "q1", text: "one", createdAt: "2026-07-29T00:02:00.000Z" },
+        { id: "q2", text: "two", createdAt: "2026-07-29T00:03:00.000Z" },
+      ],
+      backendRevision: 50,
+    });
+    renderTab();
+
+    expect(screen.getByText(/2 messages queued/)).toBeTruthy();
+    expect(screen.queryByText(/1 message queued/)).toBeNull();
+  });
+
+  test("disables the send button and shows progress while a send is in flight", async () => {
+    let release: (() => void) | undefined;
+    sendMessageMock.mockImplementationOnce(async (pipelineId: string) => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return {
+        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        pendingUserMessages: [],
+        backendRevision: 51,
+      };
+    });
+    renderTab();
+    fireEvent.change(
+      screen.getByLabelText("Send a message to the agent"),
+      { target: { value: "hold on" } },
+    );
+
+    const button = screen.getByRole("button", {
+      name: "Send message",
+    }) as HTMLButtonElement;
+    fireEvent.click(button);
+
+    // A second click would queue the same text twice.
+    await waitFor(() => expect(button.disabled).toBe(true));
+    expect(button.querySelector(".animate-spin")).toBeTruthy();
+
+    release?.();
+    await waitFor(() => expect(button.querySelector(".animate-spin")).toBeNull());
+  });
+
+  test("re-enables the retry control when the backend refuses a review restart", async () => {
+    retryReviewMock.mockRejectedValueOnce(new Error("no review stage"));
+    renderTab();
+
+    const retry = screen.getByRole("button", {
+      name: /Retry Review/,
+    }) as HTMLButtonElement;
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(retryReviewMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(retry.disabled).toBe(false));
+    expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase)
+      .toBe("building");
+  });
+
+  test("follows the restarted review instead of the stage the user was reading", async () => {
+    renderTab();
+    fireEvent.click(screen.getByText("Build Session"));
+    await waitFor(() =>
+      expect(screen.getByText("Implementation complete")).toBeTruthy());
+
+    // A retry appends a new stage. Holding the pinned one would leave the user
+    // watching a transcript that has stopped moving.
+    retryReviewMock.mockImplementationOnce(async (pipelineId: string) => {
+      const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+      return {
+        ...current,
+        phase: "reviewing" as const,
+        sessions: [...current.sessions, {
+          phase: "review" as const,
+          iteration: 1,
+          sessionKey: "retry-key",
+          sdkSessionId: "retry-session",
+          status: "idle" as const,
+          startedAt: "2026-07-29T00:05:00.000Z",
+          label: "Retry Review Session",
+          messages: [{
+            id: "retry-answer",
+            role: "assistant",
+            content: "Reviewing again",
+          }],
+        }],
+        currentSessionIndex: current.sessions.length,
+        backendRevision: 52,
+      };
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Retry Review/ }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Reviewing again")).toBeTruthy());
   });
 
   test("does not offer a review retry before the first stage exists", () => {

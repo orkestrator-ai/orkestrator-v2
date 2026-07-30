@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
+import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import * as realHooks from "@/hooks";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useClaudeStore } from "@/stores/claudeStore";
@@ -9,10 +10,13 @@ import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 
 const realHooksSnapshot = { ...realHooks };
+/** Whether the hook reports the transcript as pinned to its tail. */
+let isAtBottom = true;
+const scrollToBottomMock = mock(() => {});
 const useVirtuosoScrollStateMock = mock((options: any = {}) => ({
-  isAtBottom: true,
-  isAtBottomRef: { current: true },
-  scrollToBottom: () => {},
+  isAtBottom,
+  isAtBottomRef: { current: isAtBottom },
+  scrollToBottom: scrollToBottomMock,
   virtuosoRef: { current: null },
   scrollProps: {
     followOutput: () => false,
@@ -38,6 +42,44 @@ const { CodexChatTab } = await import("@/components/codex/CodexChatTab");
 const { OpenCodeChatTab } = await import("@/components/opencode/OpenCodeChatTab");
 const { BuildChatTab } = await import("@/components/build-pipeline/BuildChatTab");
 
+const buildPipeline: BuildPipeline = {
+  id: "pipeline-1",
+  taskId: "task-1",
+  projectId: "project-1",
+  environmentId: "env-build",
+  environmentType: "local",
+  agentType: "codex",
+  phase: "building",
+  sessions: [{
+    phase: "build",
+    iteration: 0,
+    sessionKey: "build-key",
+    sdkSessionId: "build-session",
+    status: "idle",
+    startedAt: "2026-07-29T00:00:00.000Z",
+    label: "Build Session",
+    messages: [{
+      id: "answer-1",
+      role: "assistant",
+      parts: [{ type: "text", content: "Implementation complete" }],
+    }],
+  }],
+  currentSessionIndex: 0,
+  iteration: 0,
+  maxIterations: 3,
+  createdAt: "2026-07-29T00:00:00.000Z",
+  taskTitle: "Backend-owned build",
+  taskSnapshot: {
+    title: "Backend-owned build",
+    description: "",
+    acceptanceCriteria: "",
+    comments: [],
+    images: [],
+  },
+  backendRevision: 1,
+  controller: "backend",
+};
+
 describe("native chat scroll wiring", () => {
   afterAll(() => {
     mock.module("@/hooks", () => realHooksSnapshot);
@@ -46,6 +88,8 @@ describe("native chat scroll wiring", () => {
   beforeEach(() => {
     cleanup();
     useVirtuosoScrollStateMock.mockClear();
+    scrollToBottomMock.mockClear();
+    isAtBottom = true;
 
     useEnvironmentStore.setState({
       environments: [],
@@ -179,5 +223,51 @@ describe("native chat scroll wiring", () => {
       environmentId: "env-build",
       stickToBottomOnActivation: true,
     });
+  });
+
+  test("the build transcript offers a way back to the tail once scrolled away", () => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[buildPipeline.id, buildPipeline]]),
+    });
+
+    // Pinned to the tail there is nothing to return to, so no affordance.
+    const view = render(
+      <BuildChatTab
+        data={{ environmentId: "env-build", pipelineId: buildPipeline.id, taskId: "task-1" }}
+        isActive
+      />,
+    );
+    expect(view.queryByLabelText("Scroll to bottom of transcript")).toBeNull();
+
+    cleanup();
+    isAtBottom = false;
+    const scrolled = render(
+      <BuildChatTab
+        data={{ environmentId: "env-build", pipelineId: buildPipeline.id, taskId: "task-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.click(scrolled.getByLabelText("Scroll to bottom of transcript"));
+    expect(scrollToBottomMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("the build transcript keeps the way back after the composer is gone", () => {
+    // A finished build has no compose box, and the button lives in the same
+    // footer — losing it there would strand the user mid-transcript.
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[buildPipeline.id, { ...buildPipeline, phase: "complete" as const }]]),
+    });
+    isAtBottom = false;
+
+    const view = render(
+      <BuildChatTab
+        data={{ environmentId: "env-build", pipelineId: buildPipeline.id, taskId: "task-1" }}
+        isActive
+      />,
+    );
+
+    expect(view.queryByLabelText("Send a message to the agent")).toBeNull();
+    expect(view.getByLabelText("Scroll to bottom of transcript")).toBeTruthy();
   });
 });

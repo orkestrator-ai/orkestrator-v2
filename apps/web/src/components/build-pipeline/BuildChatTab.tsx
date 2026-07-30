@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowDown,
   CheckCircle2,
   Circle,
+  ClipboardCheck,
   Loader2,
   Pause,
   Play,
@@ -36,7 +37,15 @@ import { toPipelineTranscript } from "./pipeline-transcript";
 
 interface BuildChatTabProps {
   data: BuildTabData;
+  /** This tab is the visible one in its pane. Drives transcript scroll state. */
   isActive?: boolean;
+  /**
+   * This tab's pane also holds the layout focus. Document-level shortcuts —
+   * Cmd+F for the in-transcript find — are claimed on this and not on
+   * visibility, because a split layout shows several panes at once and only the
+   * focused one may answer the keyboard.
+   */
+  ownsGlobalShortcuts?: boolean;
 }
 
 const PHASE_LABELS: Record<string, string> = {
@@ -55,8 +64,6 @@ const PHASE_LABELS: Record<string, string> = {
   failed: "Failed",
 };
 
-const TRANSCRIPT_PANEL_ID = "build-stage-transcript";
-
 const AGENT_LABELS: Record<string, string> = {
   claude: "Claude",
   codex: "Codex",
@@ -72,9 +79,9 @@ const AGENT_LABELS: Record<string, string> = {
  * durable link; the newest review session is the fallback for a pipeline
  * persisted before that field existed.
  */
-function reviewReportSessionKey(
+function reviewReportSession(
   pipeline: BuildPipeline,
-): string | undefined {
+): PipelineSession | undefined {
   if (!pipeline.structuredReview) return undefined;
   const requestId = pipeline.structuredReviewRequestId;
   const linked = requestId
@@ -87,7 +94,11 @@ function reviewReportSessionKey(
       ?? [...pipeline.sessions].reverse().find(
         (session) => session.phase === "review",
       )
-  )?.sessionKey;
+  );
+}
+
+function issueCountLabel(count: number): string {
+  return `${count} issue${count === 1 ? "" : "s"}`;
 }
 
 function SessionStateIcon({ session }: { session: PipelineSession }) {
@@ -100,7 +111,12 @@ function SessionStateIcon({ session }: { session: PipelineSession }) {
   return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />;
 }
 
-export function BuildChatTab({ data, isActive = false }: BuildChatTabProps) {
+export function BuildChatTab({
+  data,
+  isActive = false,
+  ownsGlobalShortcuts = isActive,
+}: BuildChatTabProps) {
+  const instanceId = useId();
   const pipeline = useBuildPipelineStore(
     (state) => state.pipelines.get(data.pipelineId),
   );
@@ -258,12 +274,27 @@ export function BuildChatTab({ data, isActive = false }: BuildChatTabProps) {
     && pipeline.phase !== "failed";
   const queuedMessages = pipeline.pendingUserMessages?.length ?? 0;
   const agentLabel = AGENT_LABELS[pipeline.agentType] ?? pipeline.agentType;
-  const reportSessionKey = reviewReportSessionKey(pipeline);
+  const reportSession = reviewReportSession(pipeline);
   const showReviewReport = Boolean(
     pipeline.structuredReview
       && selectedSession
-      && selectedSession.sessionKey === reportSessionKey,
+      && reportSession
+      && selectedSession.sessionKey === reportSession.sessionKey,
   );
+  // The report lives on the stage that produced it, but the tab follows the
+  // pipeline past review, so by the time a build finishes nothing on screen
+  // would say a review had happened at all.
+  const reviewReportHint = pipeline.structuredReview && reportSession
+    && !showReviewReport
+    ? {
+        session: reportSession,
+        label: issueCountLabel(pipeline.structuredReview.issues.length),
+      }
+    : undefined;
+  // Colons in a `useId` value are legal in an id and in an ARIA reference; only
+  // CSS selectors would object, and nothing here selects on them.
+  const transcriptPanelId = `${instanceId}transcript`;
+  const stageTabId = (sessionKey: string) => `${instanceId}stage-${sessionKey}`;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -340,6 +371,20 @@ export function BuildChatTab({ data, isActive = false }: BuildChatTabProps) {
       )}
       <BuildCompletionStatus pipeline={pipeline} />
 
+      {reviewReportHint && (
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 border-b border-cyan-500/20 bg-cyan-500/5 px-4 py-2 text-left text-xs text-cyan-200/90 transition-colors hover:bg-cyan-500/10"
+          onClick={() => selectSession(reviewReportHint.session.sdkSessionId)}
+        >
+          <ClipboardCheck className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 truncate">
+            The review reported {reviewReportHint.label} — open{" "}
+            {reviewReportHint.session.label} to read the report.
+          </span>
+        </button>
+      )}
+
       <div className="flex min-h-0 flex-1">
         <ScrollArea className="w-60 shrink-0 border-r border-border/40 bg-zinc-900/40">
           <div
@@ -354,14 +399,17 @@ export function BuildChatTab({ data, isActive = false }: BuildChatTabProps) {
               </div>
             ) : pipeline.sessions.map((session) => {
               const isSelected = selectedSessionId === session.sdkSessionId;
+              const ownsReport = Boolean(
+                reportSession && session.sessionKey === reportSession.sessionKey,
+              );
               return (
                 <button
                   key={session.sessionKey}
-                  id={`build-stage-tab-${session.sessionKey}`}
+                  id={stageTabId(session.sessionKey)}
                   type="button"
                   role="tab"
                   aria-selected={isSelected}
-                  aria-controls={TRANSCRIPT_PANEL_ID}
+                  aria-controls={transcriptPanelId}
                   className={cn(
                     "flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-colors",
                     isSelected
@@ -383,6 +431,13 @@ export function BuildChatTab({ data, isActive = false }: BuildChatTabProps) {
                     <span className="block text-[11px] text-muted-foreground">
                       Iteration {session.iteration + 1}
                     </span>
+                    {ownsReport && pipeline.structuredReview && (
+                      <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200/90">
+                        <ClipboardCheck className="h-2.5 w-2.5" />
+                        Report ·{" "}
+                        {issueCountLabel(pipeline.structuredReview.issues.length)}
+                      </span>
+                    )}
                   </span>
                 </button>
               );
@@ -392,13 +447,13 @@ export function BuildChatTab({ data, isActive = false }: BuildChatTabProps) {
 
         <div
           className="@container relative flex min-w-0 flex-1 flex-col"
-          id={TRANSCRIPT_PANEL_ID}
+          id={transcriptPanelId}
           role="tabpanel"
-          aria-label={
-            selectedSession
-              ? `${selectedSession.label} transcript`
-              : "Build stage transcript"
-          }
+          // A tabpanel is named by its own tab; only the no-selection case,
+          // which has no tab to point at, needs a literal label.
+          {...(selectedSession
+            ? { "aria-labelledby": stageTabId(selectedSession.sessionKey) }
+            : { "aria-label": "Build stage transcript" })}
         >
           {/*
             The transcript list the native agent tabs use: the same message
@@ -439,7 +494,10 @@ export function BuildChatTab({ data, isActive = false }: BuildChatTabProps) {
             }
             scrollProps={scrollProps}
             virtuosoRef={virtuosoRef}
-            find={{ isActive, getSearchText: getNativeMessageSearchText }}
+            find={{
+              isActive: ownsGlobalShortcuts,
+              getSearchText: getNativeMessageSearchText,
+            }}
           />
         </div>
       </div>

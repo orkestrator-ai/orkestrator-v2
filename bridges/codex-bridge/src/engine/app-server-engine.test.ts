@@ -1263,6 +1263,12 @@ describe("runtime health", () => {
             windowDurationMins: 10_080,
             rawTokenCount: 99,
           },
+          secondary: {
+            usedPercent: 34,
+            resetsAt: 84,
+            windowDurationMins: 300,
+            internalWindowId: "private-window-id",
+          },
           credits: { balance: "123.45", hasCredits: true },
           spendControl: { monthlyLimit: 500 },
         },
@@ -1284,6 +1290,7 @@ describe("runtime health", () => {
       rateLimits: {
         limitName: "Pro",
         primary: { usedPercent: 12, resetsAt: 42, windowDurationMins: 10_080 },
+        secondary: { usedPercent: 34, resetsAt: 84, windowDurationMins: 300 },
       },
     });
     expect(serialized).not.toContain("codexHome");
@@ -1291,6 +1298,40 @@ describe("runtime health", () => {
     expect(serialized).not.toContain("private@example.test");
     expect(serialized).not.toContain("123.45");
     expect(serialized).not.toContain("monthlyLimit");
+    expect(serialized).not.toContain("private-window-id");
+  });
+
+  test("invalid rate-limit durations are omitted at the runtime-health boundary", async () => {
+    const invalidDurations: unknown[] = [
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      "10080",
+    ];
+
+    for (const windowDurationMins of invalidDurations) {
+      const h = harness({
+        ...HEALTH_HANDLERS,
+        "account/rateLimits/read": () => ({
+          rateLimits: {
+            primary: {
+              usedPercent: 12,
+              windowDurationMins,
+            },
+          },
+        }),
+      });
+      await h.engine.start();
+
+      const health = await h.engine.getRuntimeHealth() as {
+        rateLimits: {
+          rateLimits: {
+            primary: Record<string, unknown>;
+          };
+        };
+      };
+      expect(health.rateLimits.rateLimits.primary).toEqual({ usedPercent: 12 });
+    }
   });
 });
 

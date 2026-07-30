@@ -17,7 +17,7 @@ import type {
   EngineError,
   EngineEvent,
   EngineGeneration,
-  EngineRateLimitWindow,
+  EngineRateLimitWindowUpdate,
 } from "../engine/types.js";
 
 export interface ReduceResult {
@@ -249,7 +249,14 @@ export function reduceNotification(
     case "account/rateLimits/updated": {
       if (!isRecord(params) || !isRecord(params.rateLimits)) return { events: [] };
       const snapshot = params.rateLimits;
-      const windows: EngineRateLimitWindow[] = [];
+      const windows: EngineRateLimitWindowUpdate[] = [];
+      const limitName =
+        typeof snapshot.limitName === "string" && snapshot.limitName.length > 0
+          ? snapshot.limitName
+          : undefined;
+      if (!isRecord(snapshot.primary) && limitName !== undefined) {
+        windows.push({ slot: "primary", label: limitName });
+      }
       for (const [key, label] of [["primary", "Primary"], ["secondary", "Secondary"]] as const) {
         const window = isRecord(snapshot[key]) ? snapshot[key] : undefined;
         if (!window) continue;
@@ -258,10 +265,11 @@ export function reduceNotification(
         const windowMinutes = nonNegativeNum(window.windowDurationMins);
         windows.push({
           slot: key,
-          label: typeof snapshot.limitName === "string" && snapshot.limitName.length > 0
-            && key === "primary"
-            ? snapshot.limitName
-            : label,
+          ...(key === "secondary"
+            ? { label }
+            : limitName !== undefined
+            ? { label: limitName }
+            : {}),
           ...(usedPercent !== undefined ? { usedPercent } : {}),
           ...(resetsAt !== undefined ? { resetsAt } : {}),
           ...(windowMinutes !== undefined ? { windowMinutes } : {}),

@@ -164,6 +164,11 @@ const RESET_DATE_TIME_FORMAT_OPTIONS = {
 const WEEK_MINUTES = 7 * 24 * 60;
 const MINUTE_MS = 60_000;
 
+function isWeeklyRateLimit(limit: AgentRateLimitWindow): boolean {
+  return limit.windowMinutes === WEEK_MINUTES
+    || (limit.windowMinutes === undefined && /\bweekly\b/i.test(limit.label));
+}
+
 export function formatResetDateTime(
   value: string,
   locales?: Intl.LocalesArgument,
@@ -185,12 +190,7 @@ export function weeklyWindowPosition(
   limit: AgentRateLimitWindow,
   nowMs: number,
 ): number | null {
-  const isWeeklyLabel = /\bweekly\b/i.test(limit.label);
-  const durationMinutes = limit.windowMinutes === WEEK_MINUTES
-    ? limit.windowMinutes
-    : limit.windowMinutes === undefined && isWeeklyLabel
-    ? WEEK_MINUTES
-    : null;
+  const durationMinutes = isWeeklyRateLimit(limit) ? WEEK_MINUTES : null;
   if (durationMinutes === null || !limit.resetsAt) return null;
 
   const resetMs = new Date(limit.resetsAt).getTime();
@@ -524,16 +524,24 @@ function RateLimitsSection({
   rateLimits: AgentRateLimitWindow[];
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const weeklyClockKey = JSON.stringify(
+    rateLimits
+      .filter(isWeeklyRateLimit)
+      .map((limit) => [
+        limit.label,
+        limit.resetsAt ?? null,
+        limit.windowMinutes ?? null,
+      ]),
+  );
 
   useEffect(() => {
-    if (!rateLimits.some((limit) =>
-      limit.windowMinutes === WEEK_MINUTES || /\bweekly\b/i.test(limit.label)
-    )) {
-      return;
-    }
-    const interval = window.setInterval(() => setNowMs(Date.now()), MINUTE_MS);
+    if (weeklyClockKey === "[]") return;
+
+    const updateClock = () => setNowMs(Date.now());
+    updateClock();
+    const interval = window.setInterval(updateClock, MINUTE_MS);
     return () => window.clearInterval(interval);
-  }, [rateLimits]);
+  }, [weeklyClockKey]);
 
   return (
     <div className="space-y-3 border-t border-border/60 pt-4">
@@ -891,12 +899,12 @@ export function AgentInfoButton({
     setOpen(false);
   };
 
-  const readAuthoritativeHandoffMessages = async (): Promise<NativeMessage[]> => {
-    if (!activeSession || !currentSessionId) {
-      throw new Error("No active conversation is available");
-    }
-    if (activeSession.provider === "claude" && claudeClient) {
-      const status = await getClaudeSession(claudeClient, currentSessionId);
+  const readAuthoritativeHandoffMessages = async (
+    sourceSession: ActiveNativeSession,
+    sourceSessionId: string,
+  ): Promise<NativeMessage[]> => {
+    if (sourceSession.provider === "claude" && claudeClient) {
+      const status = await getClaudeSession(claudeClient, sourceSessionId);
       if (!status) throw new Error("Claude session is unavailable");
       if (status.status !== "idle") {
         throw new Error("Wait for Claude to finish before continuing in another agent");
@@ -904,11 +912,11 @@ export function AgentInfoButton({
       const messages = normalizeClaudeMessagesForDisplay(
         await getClaudeSessionMessages(
           claudeClient,
-          currentSessionId,
+          sourceSessionId,
           { throwOnError: true },
         ),
       );
-      const statusAfterRead = await getClaudeSession(claudeClient, currentSessionId);
+      const statusAfterRead = await getClaudeSession(claudeClient, sourceSessionId);
       if (!statusAfterRead) throw new Error("Claude session is unavailable");
       if (statusAfterRead.status !== "idle") {
         throw new Error("Claude started working while its conversation was being transferred");
@@ -918,10 +926,10 @@ export function AgentInfoButton({
       }
       return messages;
     }
-    if (activeSession.provider === "opencode" && openCodeClient) {
+    if (sourceSession.provider === "opencode" && openCodeClient) {
       const status = await getOpenCodeSessionStatus(
         openCodeClient,
-        currentSessionId,
+        sourceSessionId,
         { throwOnError: true },
       );
       if (!status) throw new Error("OpenCode session is unavailable");
@@ -931,13 +939,13 @@ export function AgentInfoButton({
       const messages = (
         await getOpenCodeSessionMessages(
           openCodeClient,
-          currentSessionId,
+          sourceSessionId,
           { throwOnError: true },
         )
       ).map(normalizeOpenCodeNativeMessage);
       const statusAfterRead = await getOpenCodeSessionStatus(
         openCodeClient,
-        currentSessionId,
+        sourceSessionId,
         { throwOnError: true },
       );
       if (!statusAfterRead) throw new Error("OpenCode session is unavailable");
@@ -947,13 +955,13 @@ export function AgentInfoButton({
       const messagesAfterRead = (
         await getOpenCodeSessionMessages(
           openCodeClient,
-          currentSessionId,
+          sourceSessionId,
           { throwOnError: true },
         )
       ).map(normalizeOpenCodeNativeMessage);
       const finalStatus = await getOpenCodeSessionStatus(
         openCodeClient,
-        currentSessionId,
+        sourceSessionId,
         { throwOnError: true },
       );
       if (!finalStatus) throw new Error("OpenCode session is unavailable");
@@ -972,10 +980,10 @@ export function AgentInfoButton({
       }
       return messagesAfterRead;
     }
-    if (activeSession.provider === "codex" && codexClient) {
+    if (sourceSession.provider === "codex" && codexClient) {
       const status = await getCodexSessionStatus(
         codexClient,
-        currentSessionId,
+        sourceSessionId,
         { throwOnError: true },
       );
       if (!status) throw new Error("Codex session is unavailable");
@@ -985,13 +993,13 @@ export function AgentInfoButton({
       const messages = (
         await getCodexSessionMessages(
           codexClient,
-          currentSessionId,
+          sourceSessionId,
           { throwOnError: true },
         )
       ).map(normalizeCodexNativeMessage);
       const statusAfterRead = await getCodexSessionStatus(
         codexClient,
-        currentSessionId,
+        sourceSessionId,
         { throwOnError: true },
       );
       if (!statusAfterRead) throw new Error("Codex session is unavailable");
@@ -1015,7 +1023,7 @@ export function AgentInfoButton({
       const messagesAfterRead = (
         await getCodexSessionMessages(
           codexClient,
-          currentSessionId,
+          sourceSessionId,
           { throwOnError: true },
         )
       ).map(normalizeCodexNativeMessage);
@@ -1027,7 +1035,7 @@ export function AgentInfoButton({
       }
       return messagesAfterRead;
     }
-    throw new Error(`${activeSession.providerLabel} is not connected`);
+    throw new Error(`${sourceSession.providerLabel} is not connected`);
   };
 
   const runAction = async (
@@ -1082,16 +1090,16 @@ export function AgentInfoButton({
     }
   });
 
-  const continueIn = (destination: AgentProvider) =>
+  const continueIn = (
+    destination: AgentProvider,
+    sourceSession: ActiveNativeSession,
+    sourceSessionId: string,
+  ) =>
     runAction(`continue-${destination}`, async ({ isCurrent }) => {
-      if (!activeSession || !currentSessionId) return;
-      if (destination === activeSession.provider) return;
-      if (currentSessionLoading) {
-        throw new Error(
-          `Wait for ${AGENT_PROVIDER_LABELS[activeSession.provider]} to finish before transferring`,
-        );
-      }
-      const providerMessages = await readAuthoritativeHandoffMessages();
+      const providerMessages = await readAuthoritativeHandoffMessages(
+        sourceSession,
+        sourceSessionId,
+      );
       if (!isCurrent()) return;
       const priorHandoff = activeTab?.agentHandoffId
         ? await loadAgentHandoff(activeTab.agentHandoffId)
@@ -1102,8 +1110,8 @@ export function AgentInfoButton({
       if (
         priorHandoff
         && (
-          priorHandoff.environmentId !== activeSession.environmentId
-          || priorHandoff.destinationProvider !== activeSession.provider
+          priorHandoff.environmentId !== sourceSession.environmentId
+          || priorHandoff.destinationProvider !== sourceSession.provider
         )
       ) {
         throw new Error("The previous conversation transfer does not belong to this session");
@@ -1118,21 +1126,21 @@ export function AgentInfoButton({
       }
       const handoff = createAgentHandoffSnapshot({
         id: createUuid(),
-        environmentId: activeSession.environmentId,
-        sourceProvider: activeSession.provider,
+        environmentId: sourceSession.environmentId,
+        sourceProvider: sourceSession.provider,
         destinationProvider: destination,
-        sourceSessionId: currentSessionId,
+        sourceSessionId,
         sourceTitle:
-          activeSession.provider === "claude"
+          sourceSession.provider === "claude"
             ? claudeSession?.title
-            : activeSession.provider === "opencode"
+            : sourceSession.provider === "opencode"
               ? openCodeSession?.title
               : codexSession?.title,
         sourceModel: modelId,
         sourceAgent:
-          activeSession.provider === "claude"
+          sourceSession.provider === "claude"
             ? claudeAgent
-            : activeSession.provider === "opencode"
+            : sourceSession.provider === "opencode"
               ? openCodeAgent
               : undefined,
         messages,
@@ -1469,7 +1477,7 @@ export function AgentInfoButton({
                     Continue in…
                   </Button>
 
-                  {handoffOpen ? (
+                  {handoffOpen && currentSessionId ? (
                     <div className="col-span-2 rounded-lg border border-border/70 bg-muted/20 p-2.5">
                       <div className="mb-2 flex items-center gap-2">
                         <span className="rounded-md border border-border/70 bg-background px-2 py-1 text-[11px] font-medium">
@@ -1486,7 +1494,12 @@ export function AgentInfoButton({
                                 size="sm"
                                 className="h-8 min-w-0 px-2 text-xs"
                                 disabled={busyAction !== null || currentSessionLoading}
-                                onClick={() => void continueIn(provider)}
+                                onClick={() =>
+                                  void continueIn(
+                                    provider,
+                                    activeSession,
+                                    currentSessionId,
+                                  )}
                               >
                                 {busyAction === `continue-${provider}`
                                   ? "Preparing…"

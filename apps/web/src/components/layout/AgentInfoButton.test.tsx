@@ -721,6 +721,19 @@ describe("AgentInfoButton usage panel", () => {
     ).toBeNull();
   });
 
+  test("handles missing, non-finite, and exact weekly period boundaries", () => {
+    const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
+    const reset = new Date(resetMs).toISOString();
+    const periodStartMs = resetMs - 7 * 24 * 60 * 60 * 1_000;
+    const weeklyLimit = { label: "Weekly", resetsAt: reset };
+
+    expect(weeklyWindowPosition({ label: "Weekly" }, resetMs)).toBeNull();
+    expect(weeklyWindowPosition(weeklyLimit, Number.POSITIVE_INFINITY)).toBeNull();
+    expect(weeklyWindowPosition(weeklyLimit, periodStartMs - 1)).toBeNull();
+    expect(weeklyWindowPosition(weeklyLimit, periodStartMs)).toBe(0);
+    expect(weeklyWindowPosition(weeklyLimit, resetMs)).toBe(100);
+  });
+
   test("prompts for a first snapshot when usage is unavailable", () => {
     render(<AgentInfoButton activeTab={claudeTab()} />);
     open();
@@ -971,6 +984,132 @@ describe("AgentInfoButton usage panel", () => {
       expect((marker as HTMLElement).style.left).toBe("50%");
     } finally {
       Date.now = originalDateNow;
+    }
+  });
+
+  test("advances the weekly marker on the minute interval and clears it on unmount", () => {
+    const originalDateNow = Date.now;
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
+    const periodStartMs = resetMs - 7 * 24 * 60 * 60 * 1_000;
+    let nowMs = periodStartMs + 1.75 * 24 * 60 * 60 * 1_000;
+    let intervalCallback: (() => void) | undefined;
+    const clearIntervalMock = mock((_handle: number) => undefined);
+    Date.now = () => nowMs;
+    window.setInterval = ((callback: TimerHandler, delay?: number) => {
+      expect(delay).toBe(60_000);
+      intervalCallback = callback as () => void;
+      return 71;
+    }) as typeof window.setInterval;
+    window.clearInterval = clearIntervalMock as typeof window.clearInterval;
+
+    try {
+      useClaudeStore.setState({
+        contextUsage: new Map([[
+          CLAUDE_KEY,
+          usage({
+            rateLimits: [{
+              label: "Weekly",
+              usedPercent: 42,
+              resetsAt: new Date(resetMs).toISOString(),
+            }],
+          }),
+        ]]),
+      } as never);
+      const view = render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
+      expect(screen.getByRole("img", {
+        name: "Current point in weekly period: 25%",
+      })).toBeTruthy();
+
+      nowMs = periodStartMs + 5.25 * 24 * 60 * 60 * 1_000;
+      act(() => intervalCallback?.());
+      expect(screen.getByRole("img", {
+        name: "Current point in weekly period: 75%",
+      })).toBeTruthy();
+
+      view.unmount();
+      expect(clearIntervalMock).toHaveBeenCalledWith(71);
+    } finally {
+      Date.now = originalDateNow;
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("refreshes immediately when a weekly limit appears without restarting for usage updates", () => {
+    const originalDateNow = Date.now;
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
+    let nowMs = resetMs - 8 * 24 * 60 * 60 * 1_000;
+    let setIntervalCalls = 0;
+    const clearIntervalMock = mock((_handle: number) => undefined);
+    Date.now = () => nowMs;
+    window.setInterval = ((_callback: TimerHandler, delay?: number) => {
+      expect(delay).toBe(60_000);
+      setIntervalCalls += 1;
+      return 80 + setIntervalCalls;
+    }) as typeof window.setInterval;
+    window.clearInterval = clearIntervalMock as typeof window.clearInterval;
+
+    try {
+      useClaudeStore.setState({
+        contextUsage: new Map([[
+          CLAUDE_KEY,
+          usage({ rateLimits: [{ label: "5h window", usedPercent: 20 }] }),
+        ]]),
+      } as never);
+      const view = render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
+      expect(screen.queryByRole("img")).toBeNull();
+      expect(setIntervalCalls).toBe(0);
+
+      nowMs = resetMs - 3.5 * 24 * 60 * 60 * 1_000;
+      act(() => {
+        useClaudeStore.setState({
+          contextUsage: new Map([[
+            CLAUDE_KEY,
+            usage({
+              rateLimits: [{
+                label: "Weekly",
+                usedPercent: 40,
+                resetsAt: new Date(resetMs).toISOString(),
+              }],
+            }),
+          ]]),
+        } as never);
+      });
+      expect(screen.getByRole("img", {
+        name: "Current point in weekly period: 50%",
+      })).toBeTruthy();
+      expect(setIntervalCalls).toBe(1);
+
+      act(() => {
+        useClaudeStore.setState({
+          contextUsage: new Map([[
+            CLAUDE_KEY,
+            usage({
+              rateLimits: [{
+                label: "Weekly",
+                usedPercent: 41,
+                resetsAt: new Date(resetMs).toISOString(),
+              }],
+            }),
+          ]]),
+        } as never);
+      });
+      expect(screen.getByText("41% used")).toBeTruthy();
+      expect(setIntervalCalls).toBe(1);
+      expect(clearIntervalMock).not.toHaveBeenCalled();
+
+      view.unmount();
+      expect(clearIntervalMock).toHaveBeenCalledWith(81);
+    } finally {
+      Date.now = originalDateNow;
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
     }
   });
 

@@ -28,6 +28,7 @@ import type {
   EngineEvent,
   EngineGeneration,
   EngineRateLimitWindow,
+  EngineRateLimitWindowUpdate,
   EngineThread,
   EngineTurnConfig,
   EngineUsageSnapshot,
@@ -344,15 +345,18 @@ type AmbiguousDispatchResolution =
  */
 export function mergeRateLimitWindows(
   retained: EngineRateLimitWindow[],
-  update: EngineRateLimitWindow[],
+  update: EngineRateLimitWindowUpdate[],
 ): EngineRateLimitWindow[] {
   if (update.length === 0) return retained;
   const bySlot = new Map<string, EngineRateLimitWindow>();
   for (const window of retained) bySlot.set(window.slot, window);
   for (const window of update) {
+    const current = bySlot.get(window.slot);
     bySlot.set(window.slot, {
-      ...bySlot.get(window.slot),
+      ...current,
       ...window,
+      label: window.label ?? current?.label
+        ?? (window.slot === "primary" ? "Primary" : "Secondary"),
     });
   }
   // Stable presentation order regardless of which window the update carried.

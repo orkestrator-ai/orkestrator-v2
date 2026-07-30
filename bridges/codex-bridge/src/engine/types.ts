@@ -166,6 +166,21 @@ export interface EngineRateLimitWindow {
   windowMinutes?: number;
 }
 
+/**
+ * One sparse window from `account/rateLimits/updated`.
+ *
+ * Unlike a retained snapshot, a rolling update may omit the display label.
+ * Treating the slot fallback as newly observed metadata would overwrite the
+ * provider label retained from the last complete snapshot.
+ */
+export interface EngineRateLimitWindowUpdate {
+  slot: EngineRateLimitWindow["slot"];
+  label?: string;
+  usedPercent?: number;
+  resetsAt?: string;
+  windowMinutes?: number;
+}
+
 export interface EngineCreditSnapshot {
   hasCredits?: boolean;
   unlimited?: boolean;
@@ -358,7 +373,7 @@ export type EngineEvent = EngineEventMeta &
       }
     | {
         kind: "account.rateLimits.updated";
-        rateLimits: EngineRateLimitWindow[];
+        rateLimits: EngineRateLimitWindowUpdate[];
         credits?: EngineCreditSnapshot;
       }
     | { kind: "engine.state"; state: EngineState; detail?: string }

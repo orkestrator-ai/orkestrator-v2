@@ -123,6 +123,7 @@ import type {
   QuestionRequest,
 } from "@/lib/opencode-client";
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
+import { TURN_STOPPED_BY_USER } from "@/lib/chat/client-only-messages";
 import type {
   OpenCodeModelCatalogSnapshot,
   OpenCodeModelRef,
@@ -1700,6 +1701,59 @@ describe("OpenCodeChatTab", () => {
     ).toEqual([liveMessage]);
   });
 
+  test("does not let a repeated busy edge slip an older idle background reconcile through", async () => {
+    const messages = deferred<NativeMessage[]>();
+    const channel = eventChannel();
+    mockSubscribeToEvents.mockResolvedValue(channel.stream);
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await flushReactMicrotasks();
+    // Already busy with a start time, so the next `busy` edge leaves the
+    // session object untouched.
+    act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true));
+    mockGetSessionMessages.mockClear();
+    mockGetSessionMessages.mockImplementation(() => messages.promise);
+    mockGetSessionStatus.mockResolvedValue("idle");
+
+    const refresh = capturedBackgroundReconcile?.();
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+    const sessionBeforeLiveEdge =
+      useOpenCodeStore.getState().sessions.get(SESSION_KEY);
+    const revisionBeforeLiveEdge =
+      useOpenCodeStore.getState().sessionLoadingRevisions.get(SESSION_KEY) ?? 0;
+    channel.push({
+      type: "session.status",
+      properties: {
+        sessionID: "session-1",
+        status: { type: "busy" },
+      },
+    });
+    await waitFor(() =>
+      expect(
+        useOpenCodeStore.getState().sessionLoadingRevisions.get(SESSION_KEY),
+      ).toBe(revisionBeforeLiveEdge + 1),
+    );
+    // The session reference guard alone cannot see this edge, so without the
+    // revision the stale `idle` below would unlock a turn that is still busy.
+    expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toBe(
+      sessionBeforeLiveEdge,
+    );
+
+    await act(async () => {
+      messages.resolve([]);
+      await messages.promise;
+      await refresh;
+    });
+
+    // Background reconcile: discarded silently, no user-facing error.
+    expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(
+      true,
+    );
+
+    useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+    channel.close();
+  });
+
   test("preserves loading when a refresh returns no status", async () => {
     const refreshedMessage = nativeMessage("refresh-without-status");
     render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
@@ -1816,6 +1870,43 @@ describe("OpenCodeChatTab", () => {
           isLoading: true,
         });
       });
+    });
+
+    test("rehydrates the transcript after a frame lands during the health check", async () => {
+      const health = deferred<boolean>();
+      mockCheckClientHealth.mockImplementation(() => health.promise);
+      const snapshotMessage = nativeMessage("snapshot-after-health-check");
+      mockGetSessionMessages.mockResolvedValue([snapshotMessage]);
+      mockGetSessionStatus.mockResolvedValue("idle");
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockCheckClientHealth).toHaveBeenCalled());
+
+      /*
+       * A frame lands while the health check is still in flight — before the
+       * reconnect reads have even been issued. The session captured at the top
+       * of `initialize` is now stale, but the snapshot that follows is strictly
+       * newer than this frame, so it must still be applied. Comparing against
+       * that pre-await capture would silently skip the catch-up.
+       */
+      act(() => {
+        useOpenCodeStore.getState().addMessage(
+          SESSION_KEY,
+          nativeMessage("live-during-health-check"),
+        );
+      });
+
+      await act(async () => {
+        health.resolve(true);
+        await health.promise;
+      });
+      await flushReactMicrotasks();
+
+      await waitFor(() =>
+        expect(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages,
+        ).toEqual([snapshotMessage]),
+      );
     });
 
     test("keeps a repeated live busy edge over an older idle snapshot", async () => {
@@ -3632,6 +3723,45 @@ describe("OpenCodeChatTab", () => {
     channel.close();
   });
 
+  test("interrupts the turn before draining the queue to the draft", async () => {
+    const pendingAbort = deferred<boolean>();
+    mockAbortSession.mockImplementation(() => pendingAbort.promise);
+    useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
+    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
+      id: "queue-1",
+      text: "Promote me only after the abort lands",
+      attachments: [],
+      model: "openai/gpt-5",
+      mode: "build",
+    });
+
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    fireEvent.click(screen.getByTestId("opencode-stop"));
+    await waitFor(() => expect(mockAbortSession).toHaveBeenCalled());
+
+    /*
+     * Promoting the queue head is durable I/O and may stall, so the live turn
+     * has to be interrupted first. Nothing gates this ordering except the
+     * `await` in `handleStop` — pin it so a future refactor cannot reorder the
+     * two and leave a turn running while the queue drains.
+     */
+    expect(mockTransferPromptQueueMessageToComposeDraft).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pendingAbort.resolve(true);
+      await pendingAbort.promise;
+    });
+
+    await waitFor(() =>
+      expect(mockTransferPromptQueueMessageToComposeDraft).toHaveBeenCalled(),
+    );
+    expect(
+      useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+        (message) => message.content === TURN_STOPPED_BY_USER,
+      ),
+    ).toBe(true);
+  });
+
   test("keeps the queue intact when post-abort promotion fails", async () => {
     const consoleError = mock(() => {});
     const originalError = console.error;
@@ -5345,7 +5475,15 @@ describe("OpenCodeChatTab", () => {
       const channel = eventChannel();
       mockSubscribeToEvents.mockResolvedValue(channel.stream);
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
-      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      // Wait for the subscription to be *registered*, not merely requested.
+      // `subscribeToEvents` having been called only means the await started; a
+      // close issued before the registration lands is a no-op the registration
+      // then undoes, and the assertions below fail.
+      await waitFor(() =>
+        expect(
+          useOpenCodeStore.getState().hasActiveEventSubscription(ENVIRONMENT_ID),
+        ).toBe(true),
+      );
       useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
       channel.push({ type: "session.error", properties: { sessionID: "session-1", error: "late" } });
       channel.close();

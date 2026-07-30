@@ -251,6 +251,42 @@ describe("createNativeChatStoreSlice", () => {
     ).toBe(5);
   });
 
+  test("advances the loading revision across a session delete and its replacement", () => {
+    const store = useTestStore.getState();
+    const sessionKey = "env-env-1:tab-1";
+
+    store.setSession(sessionKey, {
+      sessionId: "session-1",
+      messages: [],
+      isLoading: true,
+    });
+    const afterFirstSession = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+
+    // `handleRetry` tears the session down with a null write. The revision has
+    // to keep advancing rather than reset: a reconcile that started against
+    // `session-1` must still read as stale once a replacement lands under the
+    // same key.
+    store.setSession(sessionKey, null);
+    const afterDelete = useTestStore
+      .getState()
+      .sessionLoadingRevisions.get(sessionKey);
+    expect(useTestStore.getState().sessions.has(sessionKey)).toBe(false);
+
+    store.setSession(sessionKey, {
+      sessionId: "session-2",
+      messages: [],
+      isLoading: false,
+    });
+
+    expect(afterFirstSession).toBe(1);
+    expect(afterDelete).toBe(2);
+    expect(
+      useTestStore.getState().sessionLoadingRevisions.get(sessionKey),
+    ).toBe(3);
+  });
+
   test("setClient with null deletes the client entry", () => {
     const store = useTestStore.getState();
 

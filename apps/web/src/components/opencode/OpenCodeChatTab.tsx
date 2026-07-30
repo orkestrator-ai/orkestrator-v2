@@ -804,6 +804,8 @@ export function OpenCodeChatTab({
 
     const stateBeforeAttempt = useOpenCodeStore.getState();
     const sessionBeforeAttempt = stateBeforeAttempt.sessions.get(sessionKey);
+    const loadingRevisionBeforeAttempt =
+      stateBeforeAttempt.sessionLoadingRevisions.get(sessionKey) ?? 0;
     if (
       stateBeforeAttempt.clients.get(environmentId) !== activeClient ||
       sessionBeforeAttempt?.sessionId !== sessionId
@@ -825,12 +827,24 @@ export function OpenCodeChatTab({
     ) {
       return;
     }
-    if (sessionAfterAttempt !== sessionBeforeAttempt) {
+    if (
+      sessionAfterAttempt !== sessionBeforeAttempt
+      || (stateAfterAttempt.sessionLoadingRevisions.get(sessionKey) ?? 0)
+        !== loadingRevisionBeforeAttempt
+    ) {
       /**
        * The snapshot is older than a frame that already landed; applying it
        * would let a stale `busy` status re-lock a session that just went idle.
        * A manual refresh reports this so the user can retry; the watchdog
        * stays silent and re-checks once activity goes stale again.
+       *
+       * Both tokens are required. The session reference catches transcript
+       * writes, which this pass would otherwise overwrite with an older
+       * `messages` snapshot. It cannot catch every lifecycle edge on its own:
+       * `updateTimedSessionLoading` returns the *same* object for a repeated
+       * `busy` edge (`lib/session-timer.ts`), so a turn restarting while these
+       * reads were in flight would slip past it and let the older `idle`
+       * response unlock it. The monotonic revision closes exactly that hole.
        */
       if (manual) {
         throw new Error("OpenCode session changed while refreshing; try again");
@@ -1050,6 +1064,18 @@ export function OpenCodeChatTab({
           backgroundRefreshSequenceRef.current += 1;
           const loadingRevisionBeforeSnapshot =
             useOpenCodeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0;
+          /*
+           * Re-read the session here rather than reusing `existingSession`.
+           * That was captured before the health check and the launch-option
+           * model fetch above, so by now it is stale by one or two round trips
+           * — and the SSE subscription this path may have just restarted
+           * delivers its first frames into exactly that window. Comparing
+           * against it would skip the transcript rehydration in the common
+           * case, which is precisely the missed-message catch-up this reconnect
+           * exists to perform.
+           */
+          const sessionBeforeSnapshot =
+            useOpenCodeStore.getState().sessions.get(sessionKey);
           void Promise.all([
             getSessionMessages(existingClient, existingSession.sessionId, {
               throwOnError: true,
@@ -1081,7 +1107,7 @@ export function OpenCodeChatTab({
             }
             // An empty reconnect response must not erase a transcript that
             // received a live update after this request started.
-            if (currentSession === existingSession && messages.length > 0) {
+            if (currentSession === sessionBeforeSnapshot && messages.length > 0) {
               setMessages(sessionKey, messages);
             }
             if (

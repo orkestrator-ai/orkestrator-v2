@@ -1891,6 +1891,70 @@ describe("ClaudeChatTab", () => {
     }
   });
 
+  test("does not let a repeated running edge slip an older idle refresh through", async () => {
+    const channel = eventChannel();
+    mockSubscribeToEvents.mockImplementation(() => channel.stream);
+    const { rerender } = render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+    );
+    try {
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      // Put the session into the state where the next `running` edge is a
+      // no-op for the session object: already loading, with a start time.
+      act(() => useClaudeStore.getState().setSessionLoading(SESSION_KEY, true));
+
+      const staleMessages = deferred<ClaudeMessageType[]>();
+      mockGetSession.mockReset();
+      mockGetSession.mockResolvedValue({ status: "idle" });
+      mockGetSessionMessages.mockReset();
+      mockGetSessionMessages.mockImplementation(() => staleMessages.promise);
+      mockToastError.mockClear();
+
+      rerender(
+        <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+      );
+      await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+      const sessionBeforeLiveEdge = useClaudeStore.getState().sessions.get(SESSION_KEY);
+      const revisionBeforeLiveEdge =
+        useClaudeStore.getState().sessionLoadingRevisions.get(SESSION_KEY) ?? 0;
+      channel.push({
+        type: "session.updated",
+        sessionId: "session-1",
+        data: { status: "running" },
+      } as any);
+      await waitFor(() =>
+        expect(
+          useClaudeStore.getState().sessionLoadingRevisions.get(SESSION_KEY),
+        ).toBe(revisionBeforeLiveEdge + 1),
+      );
+      // `updateTimedSessionLoading` preserved the object, so the session
+      // reference guard on its own would let the stale snapshot land.
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toBe(
+        sessionBeforeLiveEdge,
+      );
+
+      await act(async () => {
+        staleMessages.resolve([]);
+        await staleMessages.promise;
+      });
+
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          "Failed to refresh Claude tab",
+          {
+            description: "Claude session changed while refreshing; try again",
+          },
+        ),
+      );
+    } finally {
+      useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    }
+  });
+
   test("shows the scroll down accessory in the compose dock and scrolls to the bottom when clicked", () => {
     mockIsAtBottom = false;
     const message: ClaudeMessageType = {
@@ -3011,6 +3075,50 @@ describe("ClaudeChatTab", () => {
     });
     await waitFor(() =>
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true),
+    );
+
+    await act(async () => {
+      messagesGate.resolve([]);
+      await messagesGate.promise;
+    });
+    await flushAsyncWork();
+
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+    channel.close();
+  });
+
+  test("keeps a repeated live running edge that preserves the session object", async () => {
+    const channel = eventChannel();
+    const messagesGate = deferred<ClaudeMessageType[]>();
+    mockSubscribeToEvents.mockImplementation(() => channel.stream);
+    mockGetSession.mockResolvedValueOnce({ status: "idle" });
+    mockGetSessionMessages.mockImplementationOnce(() => messagesGate.promise);
+    // Already running with a start time, so `updateTimedSessionLoading` returns
+    // the *same* object for the next `running` edge.
+    act(() => useClaudeStore.getState().setSessionLoading(SESSION_KEY, true));
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+    const sessionBeforeLiveEdge = useClaudeStore.getState().sessions.get(SESSION_KEY);
+    const revisionBeforeLiveEdge =
+      useClaudeStore.getState().sessionLoadingRevisions.get(SESSION_KEY) ?? 0;
+    channel.push({
+      type: "session.updated",
+      sessionId: "session-1",
+      data: { status: "running" },
+    });
+    await waitFor(() =>
+      expect(
+        useClaudeStore.getState().sessionLoadingRevisions.get(SESSION_KEY),
+      ).toBe(revisionBeforeLiveEdge + 1),
+    );
+    // The whole point of the revision: the session reference is untouched, so a
+    // guard built on object identity would wave the stale `idle` snapshot
+    // through and unlock a turn that is still running.
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toBe(
+      sessionBeforeLiveEdge,
     );
 
     await act(async () => {

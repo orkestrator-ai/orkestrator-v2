@@ -218,8 +218,6 @@ export function ClaudeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
-  const [stopInProgress, setStopInProgress] = useState(false);
-  const stopPromotionPendingRef = useRef(false);
   const automaticInitRetryCountRef = useRef(0);
   const automaticInitRetryWindowStartedAtRef = useRef<number | null>(null);
   const setupPendingObservedForInitRetryRef = useRef(false);
@@ -697,6 +695,8 @@ export function ClaudeChatTab({
 
     const stateBeforeAttempt = useClaudeStore.getState();
     const sessionBeforeAttempt = stateBeforeAttempt.sessions.get(sessionKey);
+    const loadingRevisionBeforeAttempt =
+      stateBeforeAttempt.sessionLoadingRevisions.get(sessionKey) ?? 0;
     const backgroundTaskRevisionBeforeAttempt =
       stateBeforeAttempt.backgroundTaskRevisions.get(sessionKey) ?? 0;
     if (
@@ -730,12 +730,24 @@ export function ClaudeChatTab({
     ) {
       return;
     }
-    if (sessionAfterAttempt !== sessionBeforeAttempt) {
+    if (
+      sessionAfterAttempt !== sessionBeforeAttempt
+      || (stateAfterAttempt.sessionLoadingRevisions.get(sessionKey) ?? 0)
+        !== loadingRevisionBeforeAttempt
+    ) {
       /**
        * The snapshot is older than a frame that already landed; applying it
        * would let a stale `running` response re-lock a session that just went
        * idle. A manual refresh reports this so the user can retry; the
        * watchdog stays silent and re-checks once activity goes stale again.
+       *
+       * Both tokens are required. The session reference catches transcript
+       * writes, which this pass would otherwise overwrite with an older
+       * `messages` snapshot. It cannot catch every lifecycle edge on its own:
+       * `updateTimedSessionLoading` returns the *same* object for a repeated
+       * `running` edge (`lib/session-timer.ts`), so a turn restarting while
+       * these reads were in flight would slip past it and let the older `idle`
+       * response unlock it. The monotonic revision closes exactly that hole.
        */
       if (manual) {
         throw new Error("Claude session changed while refreshing; try again");
@@ -2341,11 +2353,8 @@ export function ClaudeChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    // Block queue draining before yielding to either backend request. The
-    // abort must be issued first: promoting the queue is durable I/O and may
-    // stall, while the active turn must be interrupted immediately.
-    stopPromotionPendingRef.current = true;
-    setStopInProgress(true);
+    // Issue the abort first: promoting the queue is durable I/O and may stall,
+    // while the active turn must be interrupted immediately.
     const success = await abortSession(client, session.sessionId);
     if (success) {
       // Leave a marker in the transcript. Without it an interrupted turn is
@@ -2364,21 +2373,7 @@ export function ClaudeChatTab({
     } else {
       console.error("[ClaudeChatTab] Failed to abort session");
     }
-    stopPromotionPendingRef.current = false;
-    if (useClaudeStore.getState().sessions.get(sessionKey)?.isLoading !== true) {
-      setStopInProgress(false);
-    }
   }, [client, session, sessionKey, promoteNextQueuedPromptToDraft, addMessage]);
-
-  useEffect(() => {
-    if (
-      stopInProgress
-      && !stopPromotionPendingRef.current
-      && session?.isLoading === false
-    ) {
-      setStopInProgress(false);
-    }
-  }, [session?.isLoading, stopInProgress]);
 
   const handlePlanModeChange = useCallback((enabled: boolean) => {
     if (!client || !session) return;

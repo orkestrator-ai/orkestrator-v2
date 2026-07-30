@@ -295,6 +295,30 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(state.selectedModel.get(SESSION_KEY)).toBe("claude-sonnet");
   });
 
+  test("replaceSessionIdentity advances the loading revision so an in-flight reconcile is discarded", () => {
+    const store = useClaudeStore.getState();
+    store.setSession(SESSION_KEY, {
+      sessionId: "session-old",
+      messages: [],
+      isLoading: true,
+    });
+    const revisionBeforeFork =
+      useClaudeStore.getState().sessionLoadingRevisions.get(SESSION_KEY) ?? 0;
+
+    // A fork/resume swaps the provider identity underneath the same tab. A
+    // reconcile that started against `session-old` must not be allowed to write
+    // its status onto `session-new`, so this has to read as a lifecycle edge.
+    store.replaceSessionIdentity(SESSION_KEY, {
+      sessionId: "session-new",
+      messages: [],
+      isLoading: false,
+    });
+
+    expect(
+      useClaudeStore.getState().sessionLoadingRevisions.get(SESSION_KEY),
+    ).toBe(revisionBeforeFork + 1);
+  });
+
   test("clearSession exhaustively removes every session-keyed map and only its pending requests", () => {
     const targetKey = createSessionKey("env-1", "tab-target");
     const otherKey = createSessionKey("env-1", "tab-other");

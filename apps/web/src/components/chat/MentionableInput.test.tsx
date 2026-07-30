@@ -39,7 +39,7 @@ describe("MentionableInput", () => {
     expect(input!.textContent).toBe("");
   });
 
-  test("marks the editable viewport for the iOS focus-zoom workaround", () => {
+  test("marks the editable element for the iOS focus-zoom workaround", () => {
     const { container } = render(
       <MentionableInput
         value=""
@@ -50,9 +50,100 @@ describe("MentionableInput", () => {
 
     const input = container.querySelector("[contenteditable]");
     expect(input?.classList.contains("native-compose-input")).toBe(true);
-    expect(
-      input?.parentElement?.classList.contains("native-compose-input-viewport"),
-    ).toBe(true);
+    expect(input?.parentElement?.classList.contains("native-compose-input-viewport")).toBe(false);
+  });
+
+  test("applies custom placeholder, class, and height props", () => {
+    const { container, rerender } = render(
+      <MentionableInput
+        value=""
+        mentions={[]}
+        onChange={() => {}}
+        placeholder="Describe the change"
+        className="custom-compose-class"
+        minHeight={40}
+        maxHeight={80}
+      />,
+    );
+
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+    expect(input.classList.contains("custom-compose-class")).toBe(true);
+    expect(input.style.minHeight).toBe("40px");
+    expect(input.style.maxHeight).toBe("80px");
+    expect(input.getAttribute("data-placeholder")).toBe("Describe the change");
+    expect(input.parentElement?.textContent).toContain("Describe the change");
+
+    rerender(
+      <MentionableInput
+        value="Ready"
+        mentions={[]}
+        onChange={() => {}}
+        placeholder="Describe the change"
+      />,
+    );
+    expect(input.parentElement?.querySelector("[aria-hidden='true']")).toBeNull();
+  });
+
+  test("syncs external value and mention metadata changes into the editor", () => {
+    const initialMention = {
+      id: "mention-1",
+      filename: "utils.ts",
+      relativePath: "src/utils.ts",
+    };
+    const { container, rerender } = render(
+      <MentionableInput
+        value="Check @utils.ts"
+        mentions={[initialMention]}
+        onChange={() => {}}
+      />,
+    );
+
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+    expect(input.querySelector("[data-mention='true']")?.getAttribute("data-path"))
+      .toBe("src/utils.ts");
+
+    rerender(
+      <MentionableInput
+        value="Check @utils.ts"
+        mentions={[{ ...initialMention, relativePath: "packages/utils.ts" }]}
+        onChange={() => {}}
+      />,
+    );
+    expect(input.querySelector("[data-mention='true']")?.getAttribute("data-path"))
+      .toBe("packages/utils.ts");
+
+    rerender(
+      <MentionableInput
+        value="A replacement draft"
+        mentions={[]}
+        onChange={() => {}}
+      />,
+    );
+    expect(input.textContent).toBe("A replacement draft");
+  });
+
+  test("escapes special characters in text and mention metadata", () => {
+    const filename = `a&b".ts`;
+    const draftText = `Review <script>alert("x")</script> @${filename}`;
+    const { container } = render(
+      <MentionableInput
+        value={draftText}
+        mentions={[{
+          id: `id"&<`,
+          filename,
+          relativePath: `src/"<&.ts`,
+        }]}
+        onChange={() => {}}
+      />,
+    );
+
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+    const mention = input.querySelector("[data-mention='true']");
+    expect(input.textContent).toBe(draftText);
+    expect(input.querySelector("script")).toBeNull();
+    expect(mention?.getAttribute("data-id")).toBe(`id"&<`);
+    expect(mention?.getAttribute("data-filename")).toBe(filename);
+    expect(mention?.getAttribute("data-path")).toBe(`src/"<&.ts`);
   });
 
   test("restores draft text with mentions on first render", () => {
@@ -129,6 +220,33 @@ describe("MentionableInput", () => {
     expect(focus).toHaveBeenCalledTimes(1);
     expect(blur).toHaveBeenCalledTimes(1);
     expect(inputRef.current!.getCursorPosition()).toBe(2);
+  });
+
+  test("falls back safely when the cursor selection is absent or outside the editor", () => {
+    const inputRef = createRef<MentionableInputRef>();
+    const { container, getByTestId } = render(
+      <>
+        <span data-testid="outside-selection">Outside</span>
+        <MentionableInput
+          ref={inputRef}
+          value="Hello"
+          mentions={[]}
+          onChange={() => {}}
+        />
+      </>,
+    );
+
+    window.getSelection()!.removeAllRanges();
+    expect(inputRef.current!.getCursorPosition()).toBe(0);
+
+    const outside = getByTestId("outside-selection");
+    const outsideRange = document.createRange();
+    outsideRange.setStart(outside.firstChild!, 2);
+    outsideRange.collapse(true);
+    window.getSelection()!.addRange(outsideRange);
+    expect(inputRef.current!.getCursorPosition()).toBe("Hello".length);
+
+    expect(container.querySelector("[contenteditable]")?.textContent).toBe("Hello");
   });
 
   test("prevents regular Enter while forwarding keydown events", () => {

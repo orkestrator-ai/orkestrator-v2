@@ -15,7 +15,21 @@ test("long mobile titles stay between controls and support touch and keyboard di
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
   await page.goto("/mobile-shell");
 
+  const drawer = page.getByRole("dialog", { name: "Projects and environments" });
+  const drawerCloseButton = drawer.locator("button.absolute.right-2");
+  await expect(drawer).toBeVisible();
+  await expect(drawerCloseButton).toBeFocused();
+  for (const key of ["Tab", "Tab", "Shift+Tab"]) {
+    await page.keyboard.press(key);
+    expect(
+      await drawer.evaluate((element) => element.contains(document.activeElement)),
+    ).toBe(true);
+  }
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveCount(0);
+
   const menu = page.getByRole("button", { name: "Open projects and environments" });
+  await expect(menu).toBeFocused();
   const title = page.getByRole("button", { name: mobileShellTitle });
   const agentInfo = page.getByTestId("mobile-agent-info-slot");
   const tools = page.getByRole("button", { name: "Open tools" });
@@ -77,6 +91,11 @@ test("a narrow Electron title remains a native drag region", async ({ page }, te
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop runtime coverage only");
   await page.setViewportSize({ width: 700, height: 700 });
   await page.goto("/mobile-shell?desktop");
+
+  const drawer = page.getByRole("dialog", { name: "Projects and environments" });
+  await expect(drawer.locator("button.absolute.right-2")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveCount(0);
 
   const title = page.getByRole("button", { name: mobileShellTitle });
   await expect(title).toHaveAttribute("data-backend-drag-region", "");

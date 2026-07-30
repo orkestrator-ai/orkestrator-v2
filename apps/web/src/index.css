@@ -291,26 +291,15 @@ body {
 }
 
 /*
- * iOS WebKit zooms focused editable content whose computed font size is below
- * 16px. Keep the native compose text visually at 14px while exposing a 16px
- * computed size to WebKit. The inverse width preserves the input's usable
- * inline space, and the wrapper clips that compensated width.
- *
- * `-webkit-touch-callout` narrows this to iOS WebKit; the pointer query keeps
- * desktop Safari out even if it gains support for that property.
+ * Touch browsers can zoom focused editable content whose computed font size is
+ * below 16px. Use a real 16px compose font while retaining the shared 20px
+ * line height so the editor still displays the configured twelve lines before
+ * it scrolls. The capability query leaves mouse/trackpad layouts unchanged.
  */
-@supports (-webkit-touch-callout: none) {
-  @media (hover: none) and (pointer: coarse) {
-    .native-compose-input-viewport {
-      overflow-x: hidden;
-    }
-
-    .native-compose-input {
-      width: calc(100% / 0.875);
-      font-size: 16px;
-      transform: scale(0.875);
-      transform-origin: top left;
-    }
+@media (hover: none) and (pointer: coarse) {
+  .native-compose-input {
+    font-size: 16px;
+    line-height: 1.25rem;
   }
 }
 

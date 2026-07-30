@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Menu, Wrench, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -46,6 +47,7 @@ export function MobileAppShellLayout({
   const titlePointerTypeRef = useRef<string | null>(null);
   const titleTooltipWasOpenOnPointerDownRef = useRef(false);
   const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
+  const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const toolsTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreSidebarFocusRef = useRef(false);
   const restoreToolsFocusRef = useRef(false);
@@ -54,6 +56,13 @@ export function MobileAppShellLayout({
   const closeSidebar = () => {
     restoreSidebarFocusRef.current = true;
     setSidebarOpen(false);
+  };
+
+  const handleSidebarOpenChange = (open: boolean) => {
+    if (!open) {
+      restoreSidebarFocusRef.current = true;
+    }
+    setSidebarOpen(open);
   };
 
   const closeTools = () => {
@@ -87,13 +96,6 @@ export function MobileAppShellLayout({
   }, [title]);
 
   useEffect(() => {
-    if (!sidebarOpen && restoreSidebarFocusRef.current) {
-      restoreSidebarFocusRef.current = false;
-      sidebarTriggerRef.current?.focus();
-    }
-  }, [sidebarOpen]);
-
-  useEffect(() => {
     if (!toolsOpen && restoreToolsFocusRef.current) {
       restoreToolsFocusRef.current = false;
       toolsTriggerRef.current?.focus();
@@ -112,27 +114,28 @@ export function MobileAppShellLayout({
   }, [toolsOpen]);
 
   return (
-    <>
+    <DialogPrimitive.Root open={sidebarOpen} onOpenChange={handleSidebarOpenChange}>
       <div
         className="relative flex h-11 w-full shrink-0 items-center justify-center border-b border-border/60 bg-black"
         data-backend-drag-region
         onMouseDown={onTitleBarMouseDown}
         style={{ WebkitAppRegion: "drag" } as CSSProperties}
       >
-        <Button
-          ref={sidebarTriggerRef}
-          variant="ghost"
-          size="icon"
-          className="absolute left-1.5 h-9 w-9"
-          style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
-          onMouseDown={(event) => event.stopPropagation()}
-          onClick={() => setSidebarOpen((open) => !open)}
-          aria-label={sidebarOpen ? "Close projects and environments" : "Open projects and environments"}
-          aria-expanded={sidebarOpen}
-          aria-controls="mobile-projects-drawer"
-        >
-          <Menu className="h-5 w-5" />
-        </Button>
+        <DialogPrimitive.Trigger asChild>
+          <Button
+            ref={sidebarTriggerRef}
+            variant="ghost"
+            size="icon"
+            className="absolute left-1.5 h-9 w-9"
+            style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
+            onMouseDown={(event) => event.stopPropagation()}
+            aria-label={sidebarOpen ? "Close projects and environments" : "Open projects and environments"}
+            aria-expanded={sidebarOpen}
+            aria-controls="mobile-projects-drawer"
+          >
+            <Menu className="h-5 w-5" />
+          </Button>
+        </DialogPrimitive.Trigger>
         <Tooltip open={titleTooltipOpen} onOpenChange={setTitleTooltipOpen}>
           <TooltipTrigger asChild>
             <button
@@ -243,34 +246,62 @@ export function MobileAppShellLayout({
           <main className="min-h-0 min-w-0 flex-1 overflow-hidden bg-background">{children}</main>
         </div>
 
-        {sidebarOpen && (
-          <div
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay
+            data-slot="mobile-projects-overlay"
+            className="fixed bottom-0 left-0 right-0 top-11 z-50 bg-black/70 backdrop-blur-sm"
+            style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
+            onClick={closeSidebar}
+          />
+          <DialogPrimitive.Content
             id="mobile-projects-drawer"
-            className="absolute inset-0 z-50 flex"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Projects and environments"
+            className="fixed bottom-0 left-0 top-0 z-50 w-[min(88vw,22rem)] bg-transparent outline-none"
+            style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+              sidebarCloseRef.current?.focus();
+            }}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              if (restoreSidebarFocusRef.current) {
+                restoreSidebarFocusRef.current = false;
+                sidebarTriggerRef.current?.focus();
+              }
+            }}
           >
-            <button
-              type="button"
-              className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-              onClick={closeSidebar}
-              aria-label="Close projects and environments"
-            />
-            <aside className="mobile-sidebar relative h-full w-[min(88vw,22rem)] border-r border-border bg-[#18191c] shadow-2xl">
+            <DialogPrimitive.Title className="sr-only">
+              Projects and environments
+            </DialogPrimitive.Title>
+            <DialogPrimitive.Description className="sr-only">
+              Choose a project or environment to open in the workspace.
+            </DialogPrimitive.Description>
+            <DialogPrimitive.Close asChild>
               <Button
                 variant="ghost"
                 size="icon"
-                className="absolute right-2 top-1 z-10 h-10 w-10"
-                onClick={closeSidebar}
+                className="fixed left-1.5 top-1 z-[60] h-9 w-9"
                 aria-label="Close projects and environments"
+                aria-controls="mobile-projects-drawer"
               >
-                <X className="h-4 w-4" />
+                <Menu className="h-5 w-5" />
               </Button>
+            </DialogPrimitive.Close>
+            <aside className="mobile-sidebar absolute bottom-0 left-0 top-11 w-full border-r border-border bg-[#18191c] shadow-2xl">
+              <DialogPrimitive.Close asChild>
+                <Button
+                  ref={sidebarCloseRef}
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-2 top-1 z-10 h-10 w-10"
+                  aria-label="Close projects and environments"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </DialogPrimitive.Close>
               {sidebar}
             </aside>
-          </div>
-        )}
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
 
         {filesPanelOpen && (
           <aside className="absolute inset-0 z-40" aria-label="Workspace files">
@@ -278,6 +309,6 @@ export function MobileAppShellLayout({
           </aside>
         )}
       </div>
-    </>
+    </DialogPrimitive.Root>
   );
 }

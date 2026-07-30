@@ -16,12 +16,16 @@ test("agent thinking shimmer respects motion and forced-color preferences", asyn
   await expect(indicator).toHaveCSS("color", "rgba(0, 0, 0, 0)");
   await expect(indicator).toHaveCSS("background-clip", "text");
   await expect(indicator).toHaveCSS("background-image", /linear-gradient/);
+  await expect(page.getByTestId("chat-status-row")).toHaveCSS("height", "40px");
+  await expect(page.getByTestId("chat-status-content"))
+    .toHaveCSS("animation-name", "chat-status-enter");
 
   await page.emulateMedia({ reducedMotion: "reduce" });
   expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(true);
   await expect(indicator).toHaveCSS("animation-name", "none");
   await expect(indicator).toHaveCSS("color", "rgb(161, 161, 170)");
   await expect(indicator).toHaveCSS("background-image", "none");
+  await expect(page.getByTestId("chat-status-content")).toHaveCSS("animation-name", "none");
 
   await page.emulateMedia({
     reducedMotion: "no-preference",
@@ -40,6 +44,57 @@ test("agent thinking shimmer respects motion and forced-color preferences", asyn
   expect(forcedColorStyles.animationName).toBe("none");
   expect(forcedColorStyles.backgroundImage).toBe("none");
   expect(forcedColorStyles.color).not.toBe("rgba(0, 0, 0, 0)");
+});
+
+test.describe("touch compose input geometry", () => {
+  test("uses a real 16px font and preserves the twelve-line scroll threshold", async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chromium", "mobile project only");
+    await page.goto("/styles");
+
+    const metrics = await page.evaluate(() => {
+      const readEditor = (testId: string) => {
+        const host = document.querySelector<HTMLElement>(`[data-testid="${testId}"]`)!;
+        const editor = host.querySelector<HTMLElement>("[contenteditable]")!;
+        const wrapper = editor.parentElement!;
+        const style = getComputedStyle(editor);
+        return {
+          fontSize: style.fontSize,
+          lineHeight: style.lineHeight,
+          transform: style.transform,
+          clientHeight: editor.clientHeight,
+          scrollHeight: editor.scrollHeight,
+          editorRect: editor.getBoundingClientRect().toJSON(),
+          wrapperRect: wrapper.getBoundingClientRect().toJSON(),
+        };
+      };
+      return {
+        mediaMatches: matchMedia("(hover: none) and (pointer: coarse)").matches,
+        twelveLines: readEditor("native-compose-twelve-lines"),
+        thirteenLines: readEditor("native-compose-thirteen-lines"),
+      };
+    });
+
+    expect(metrics.mediaMatches).toBe(true);
+    expect(metrics.twelveLines.fontSize).toBe("16px");
+    expect(metrics.twelveLines.lineHeight).toBe("20px");
+    expect(metrics.twelveLines.transform).toBe("none");
+    expect(metrics.twelveLines.editorRect.width).toBeCloseTo(
+      metrics.twelveLines.wrapperRect.width,
+      1,
+    );
+    expect(metrics.twelveLines.editorRect.height).toBeCloseTo(
+      metrics.twelveLines.wrapperRect.height,
+      1,
+    );
+    expect(metrics.twelveLines.scrollHeight).toBeLessThanOrEqual(
+      metrics.twelveLines.clientHeight,
+    );
+    expect(metrics.thirteenLines.scrollHeight).toBeGreaterThan(
+      metrics.thirteenLines.clientHeight,
+    );
+  });
 });
 
 test("global dark surfaces, fonts, terminal, and scrollbar rules compile into browser styles", async ({

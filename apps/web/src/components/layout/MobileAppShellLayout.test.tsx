@@ -12,7 +12,10 @@ afterEach(() => {
   window.orkestratorGateway = originalGateway;
 });
 
-function renderLayout(overrides: Partial<React.ComponentProps<typeof MobileAppShellLayout>> = {}) {
+function renderLayout(
+  overrides: Partial<React.ComponentProps<typeof MobileAppShellLayout>> = {},
+  options: { keepInitialDrawerOpen?: boolean } = {},
+) {
   const props: React.ComponentProps<typeof MobileAppShellLayout> = {
     selectedProjectId: "project-1",
     selectedEnvironmentId: "environment-1",
@@ -27,13 +30,30 @@ function renderLayout(overrides: Partial<React.ComponentProps<typeof MobileAppSh
     children: <div>Workspace</div>,
     ...overrides,
   };
-  return { ...render(<MobileAppShellLayout {...props} />), props };
+  const result = render(<MobileAppShellLayout {...props} />);
+  if (!options.keepInitialDrawerOpen) {
+    const dialog = screen.getByRole("dialog", { name: "Projects and environments" });
+    const closeButton = dialog.querySelector<HTMLButtonElement>(
+      "button[aria-controls='mobile-projects-drawer']",
+    );
+    expect(closeButton).toBeTruthy();
+    fireEvent.click(closeButton!);
+  }
+  return { ...result, props };
 }
 
 function touchTap(element: Element) {
   fireEvent.pointerDown(element, { pointerType: "touch" });
   fireEvent.pointerUp(element, { pointerType: "touch" });
   fireEvent.click(element);
+}
+
+function getTitleBarSidebarTrigger(container: HTMLElement): HTMLButtonElement {
+  const trigger = container.querySelector<HTMLButtonElement>(
+    "button[aria-controls='mobile-projects-drawer']",
+  );
+  expect(trigger).toBeTruthy();
+  return trigger!;
 }
 
 describe("MobileAppShellLayout", () => {
@@ -70,11 +90,7 @@ describe("MobileAppShellLayout", () => {
     // The bar starts a window drag on mouse-down; without the stop, tapping the
     // button drags the window instead of opening the panel.
     const { container, props } = renderLayout();
-    const sidebarTrigger = screen
-      .getAllByRole("button", { name: "Close projects and environments" })
-      .find((button) => button.hasAttribute("aria-controls"));
-    expect(sidebarTrigger).toBeTruthy();
-    fireEvent.mouseDown(sidebarTrigger!);
+    fireEvent.mouseDown(getTitleBarSidebarTrigger(container));
     fireEvent.mouseDown(screen.getByRole("button", { name: "pgstack1 - feature-auth" }));
     fireEvent.mouseDown(screen.getByRole("button", { name: "Open tools" }));
     fireEvent.mouseDown(screen.getByRole("button", { name: "Agent info" }));
@@ -200,6 +216,21 @@ describe("MobileAppShellLayout", () => {
     await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
   });
 
+  test("toggles the full title with pen taps", async () => {
+    renderLayout();
+    const titleButton = screen.getByRole("button", { name: "pgstack1 - feature-auth" });
+
+    fireEvent.pointerDown(titleButton, { pointerType: "pen" });
+    fireEvent.pointerUp(titleButton, { pointerType: "pen" });
+    fireEvent.click(titleButton);
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+
+    fireEvent.pointerDown(titleButton, { pointerType: "pen" });
+    fireEvent.pointerUp(titleButton, { pointerType: "pen" });
+    fireEvent.click(titleButton);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  });
+
   test("closes the title tooltip when its title, project, or environment changes", async () => {
     const { rerender, props } = renderLayout();
     const openTooltip = async () => {
@@ -280,52 +311,94 @@ describe("MobileAppShellLayout", () => {
     await waitFor(() => expect(document.activeElement).toBe(toolsButton));
   });
 
-  test("opens the project drawer on initial mobile entry and keeps workspace content mounted", () => {
-    renderLayout();
+  test("opens the project drawer on initial mobile entry and keeps workspace content mounted", async () => {
+    const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
+    const menuButton = getTitleBarSidebarTrigger(container);
     expect(screen.getByText("Workspace")).toBeTruthy();
-    expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
+    const dialog = screen.getByRole("dialog", { name: "Projects and environments" });
+    expect(dialog).toBeTruthy();
     expect(screen.getByText("Projects")).toBeTruthy();
-    const closeButtons = screen.getAllByRole("button", { name: "Close projects and environments" });
-    const drawerCloseButton = closeButtons.find((button) => button.classList.contains("top-1"));
+    const drawerCloseButton = dialog.querySelector<HTMLButtonElement>("button.absolute.right-2");
     expect(drawerCloseButton).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(drawerCloseButton!));
     fireEvent.click(drawerCloseButton!);
     expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
     expect(screen.getByText("Workspace")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(menuButton));
   });
 
   test("toggles the project drawer closed with a second menu-button tap", () => {
-    renderLayout();
-    const menuButton = screen
+    const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
+    const closeMenuButton = screen
       .getAllByRole("button", { name: "Close projects and environments" })
       .find((button) => button.hasAttribute("aria-controls"));
-    expect(menuButton).toBeTruthy();
+    expect(closeMenuButton).toBeTruthy();
 
-    fireEvent.click(menuButton!);
-    expect(menuButton!.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(closeMenuButton!);
     expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
 
-    fireEvent.click(menuButton!);
-    expect(menuButton!.getAttribute("aria-expanded")).toBe("true");
+    const openMenuButton = getTitleBarSidebarTrigger(container);
+    expect(openMenuButton.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(openMenuButton);
+    expect(openMenuButton.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
   });
 
   test("closes the project drawer from its backdrop and restores trigger focus", async () => {
-    const { container } = renderLayout();
-    const menuButton = screen
-      .getAllByRole("button", { name: "Close projects and environments" })
-      .find((button) => button.hasAttribute("aria-controls"));
-    expect(menuButton).toBeTruthy();
+    const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
+    const menuButton = getTitleBarSidebarTrigger(container);
 
-    const backdrop = container.querySelector("#mobile-projects-drawer > button.absolute.inset-0");
+    const backdrop = document.querySelector("[data-slot='mobile-projects-overlay']");
     expect(backdrop).toBeTruthy();
     fireEvent.click(backdrop!);
 
     expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
-    await waitFor(() => expect(document.activeElement).toBe(menuButton!));
+    await waitFor(() => expect(document.activeElement).toBe(menuButton));
+  });
+
+  test("closes the initial drawer with Escape and restores trigger focus", async () => {
+    const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
+    const menuButton = getTitleBarSidebarTrigger(container);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
+    });
+    expect(document.activeElement).toBe(menuButton);
+  });
+
+  test("keeps the initial drawer open across unchanged and partial selections", () => {
+    const { rerender, props } = renderLayout(
+      {
+        selectedProjectId: null,
+        selectedEnvironmentId: null,
+      },
+      { keepInitialDrawerOpen: true },
+    );
+    expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
+
+    rerender(
+      <MobileAppShellLayout
+        {...props}
+        selectedProjectId={null}
+        selectedEnvironmentId={null}
+      />,
+    );
+    expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
+
+    rerender(
+      <MobileAppShellLayout
+        {...props}
+        selectedProjectId="project-1"
+        selectedEnvironmentId={null}
+      />,
+    );
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
   });
 
   test("closes the drawer when project or environment selection changes", () => {
-    const { rerender, props } = renderLayout();
+    const { rerender, props } = renderLayout({}, { keepInitialDrawerOpen: true });
     rerender(<MobileAppShellLayout {...props} selectedEnvironmentId="environment-2" />);
     expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
 
@@ -338,6 +411,13 @@ describe("MobileAppShellLayout", () => {
     const { rerender, props } = renderLayout();
     fireEvent.click(screen.getByRole("button", { name: "Open tools" }));
     rerender(<MobileAppShellLayout {...props} selectedEnvironmentId="environment-2" />);
+    expect(screen.queryByRole("dialog", { name: "Tools" })).toBeNull();
+  });
+
+  test("closes the tools popover when the active project changes", () => {
+    const { rerender, props } = renderLayout();
+    fireEvent.click(screen.getByRole("button", { name: "Open tools" }));
+    rerender(<MobileAppShellLayout {...props} selectedProjectId="project-2" />);
     expect(screen.queryByRole("dialog", { name: "Tools" })).toBeNull();
   });
 

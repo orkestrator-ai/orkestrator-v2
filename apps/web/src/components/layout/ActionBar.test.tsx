@@ -318,10 +318,12 @@ mock.module("@/components/ui/tooltip", () => ({
 
 mock.module("@/components/settings", () => ({
   RepositorySettings: ({
+    onOpenChange,
     onUpdateProject,
     open,
     project,
   }: {
+    onOpenChange: (open: boolean) => void;
     onUpdateProject: (project: Project) => Promise<void>;
     open: boolean;
     project: Project;
@@ -334,6 +336,9 @@ mock.module("@/components/settings", () => ({
       >
         Update mock repository
       </button>
+      <button onClick={() => onOpenChange(false)} type="button">
+        Close mock repository settings
+      </button>
     </div>
   ) : null,
   SettingsPage: ({ open }: { open: boolean }) =>
@@ -343,11 +348,13 @@ mock.module("@/components/settings", () => ({
 mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
   EnvironmentSettingsDialog: ({
     environment,
+    onOpenChange,
     onRestart,
     onUpdate,
     open,
   }: {
     environment: Environment;
+    onOpenChange: (open: boolean) => void;
     onRestart: (environmentId: string) => Promise<void>;
     onUpdate: (environment: Environment) => void;
     open: boolean;
@@ -359,6 +366,9 @@ mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
       </button>
       <button onClick={() => void onRestart(environment.id)} type="button">
         Restart mock environment
+      </button>
+      <button onClick={() => onOpenChange(false)} type="button">
+        Close mock environment settings
       </button>
     </div>
   ) : null,
@@ -750,6 +760,30 @@ describe("ActionBar grid presentation", () => {
       "codex",
       expect.objectContaining({ displayTitle: "Git Push" }),
     );
+  });
+
+  test("keeps Push Changes disabled when the environment cannot launch an agent", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      status: "stopped",
+    };
+    const view = render(<ActionBar presentation="grid" />);
+
+    expect(
+      (screen.getByRole("button", { name: "Push Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    currentEnvironment = {
+      ...currentEnvironment,
+      status: "running",
+    };
+    currentTabCount = 10;
+    view.rerender(<ActionBar presentation="grid" />);
+
+    expect(
+      (screen.getByRole("button", { name: "Push Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   test("places the mobile file-change dot inline after the Show files label", () => {
@@ -1172,16 +1206,21 @@ describe("ActionBar editor and run commands", () => {
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
-  test("creates an agent-authored run script from the context menu", () => {
+  test("creates agent-authored run scripts with every context-menu provider", () => {
     render(<ActionBar />);
 
     const runButton = screen.getByRole("button", { name: "Run commands" });
-    fireEvent.contextMenu(runButton);
-    fireEvent.click(screen.getByRole("button", { name: "Create Script with Claude" }));
-
-    expect(createTabMock).toHaveBeenCalledWith("claude", {
-      initialPrompt: expect.any(String),
-    });
+    for (const [label, agent] of [
+      ["Claude", "claude"],
+      ["OpenCode", "opencode"],
+      ["Codex", "codex"],
+    ] as const) {
+      fireEvent.contextMenu(runButton);
+      fireEvent.click(screen.getByRole("button", { name: `Create Script with ${label}` }));
+      expect(createTabMock).toHaveBeenLastCalledWith(agent, {
+        initialPrompt: expect.any(String),
+      });
+    }
   });
 });
 
@@ -1215,6 +1254,20 @@ describe("ActionBar toolbar interactions", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Restart mock environment" }));
     await waitFor(() => expect(recreateEnvironmentMock).toHaveBeenCalledWith("env-1"));
+  });
+
+  test("dismisses repository and environment settings through onOpenChange", async () => {
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
+    expect(await screen.findByText("Repository settings for repo")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close mock repository settings" }));
+    expect(screen.queryByText("Repository settings for repo")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
+    expect(await screen.findByText("Environment settings for feature-env")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close mock environment settings" }));
+    expect(screen.queryByText("Environment settings for feature-env")).toBeNull();
   });
 
   test("keeps environment settings pinned to the environment that opened them", async () => {
@@ -1695,6 +1748,65 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
+  test("routes every PR workflow context-menu provider", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    for (const [label, agent] of [
+      ["OpenCode", "opencode"],
+      ["Codex", "codex"],
+    ] as const) {
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+      fireEvent.click(screen.getByRole("button", { name: `Create PR with ${label}` }));
+      expect(createTabMock).toHaveBeenLastCalledWith(
+        agent,
+        expect.objectContaining({ displayTitle: "PR" }),
+      );
+    }
+
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    view.rerender(<ActionBar />);
+
+    for (const [label, agent] of [
+      ["Claude", "claude"],
+      ["OpenCode", "opencode"],
+    ] as const) {
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+      fireEvent.click(screen.getByRole("button", { name: `Resolve with ${label}` }));
+      expect(createTabMock).toHaveBeenLastCalledWith(
+        agent,
+        expect.objectContaining({ displayTitle: "Resolve" }),
+      );
+    }
+
+    currentEnvironment = {
+      ...currentEnvironment,
+      hasMergeConflicts: false,
+    };
+    view.rerender(<ActionBar />);
+
+    for (const [label, agent] of [
+      ["OpenCode", "opencode"],
+      ["Codex", "codex"],
+    ] as const) {
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Push Changes" }));
+      fireEvent.click(screen.getByRole("button", { name: `Push with ${label}` }));
+      expect(createTabMock).toHaveBeenLastCalledWith(
+        agent,
+        expect.objectContaining({ displayTitle: "Git Push" }),
+      );
+    }
+  });
+
   test("opens the review modal after a mobile long press without launching the default review", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
@@ -2050,6 +2162,23 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
+  test("reports non-Error looped-review tab creation failures", () => {
+    currentWorkspaceReady = true;
+    createTabMock.mockImplementationOnce(() => {
+      throw "pane rejected the tab";
+    });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1");
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open looped review",
+      { description: "pane rejected the tab" },
+    );
+  });
+
   test("falls back from an absent environment and global workflow default to Claude", () => {
     currentEnvironment = {
       ...selectedEnvironment,
@@ -2071,6 +2200,18 @@ describe("ActionBar workflow tabs", () => {
 });
 
 describe("ActionBar pull request actions", () => {
+  test("hides Push Changes for every terminal pull request state", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "merged" };
+    const view = render(<ActionBar />);
+
+    expect(screen.queryByRole("button", { name: "Push Changes" })).toBeNull();
+
+    currentEnvironment = { ...selectedEnvironment, prState: "closed" };
+    view.rerender(<ActionBar />);
+
+    expect(screen.queryByRole("button", { name: "Push Changes" })).toBeNull();
+  });
+
   test("rehydrates an in-progress merge from the environment lifecycle marker", () => {
     currentEnvironment = {
       ...selectedEnvironment,
@@ -2394,6 +2535,21 @@ describe("ActionBar successful cleanup and merge actions", () => {
     expect(errorAlert.textContent).toContain("delete failed");
     expect(screen.getByRole("button", { name: "Delete Environment" })).toBeTruthy();
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+  });
+
+  test("uses generic cleanup guidance when the backend omits the cleanup error", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    mergeEnvironmentPrMock.mockResolvedValueOnce({
+      outcome: "merged",
+      cleanupOutcome: "failed",
+    });
+    render(<ActionBar />);
+
+    confirmMergeAndCleanup();
+
+    const errorAlert = await waitFor(() => findErrorAlert("Failed to delete environment:"));
+    expect(errorAlert.textContent).toContain("An unexpected error occurred");
+    expect(screen.getByRole("button", { name: "Delete Environment" })).toBeTruthy();
   });
 
   test("keeps a cleanup retry tied to the environment that initiated the merge", async () => {

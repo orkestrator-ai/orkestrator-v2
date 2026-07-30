@@ -16,6 +16,8 @@ import {
   isStartBuildPipelineInput,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  VERIFICATION_VERDICT_SCHEMA,
+  type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
@@ -47,15 +49,9 @@ type CommandInvoker = <T>(
   args?: Record<string, unknown>,
 ) => Promise<T>;
 
-const VERIFICATION_SCHEMA: JsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["complete", "rationale"],
-  properties: {
-    complete: { type: "boolean" },
-    rationale: { type: "string" },
-  },
-};
+// The transcript renderer recognizes a verification answer by the same contract
+// the turn is constrained to, so both read this one definition.
+const VERIFICATION_SCHEMA: JsonSchema = VERIFICATION_VERDICT_SCHEMA;
 
 const SESSION_LABELS: Record<PipelineSessionPhase, string> = {
   build: "Build Session",
@@ -1246,10 +1242,10 @@ export class BuildPipelineService {
     const resolvedRequestId = session.structuredRequestId
       ?? this.structuredRequestId(session.messages);
     if (!resolvedRequestId) throw new Error("Verification result key is missing");
-    const result = await provider.structured<{
-      complete: boolean;
-      rationale: string;
-    }>(session.sdkSessionId, resolvedRequestId);
+    const result = await provider.structured<VerificationVerdict>(
+      session.sdkSessionId,
+      resolvedRequestId,
+    );
     if (!result) {
       await this.awaitStructuredResult(pipeline, session, "verification");
       return;

@@ -36,7 +36,9 @@ function plural(count: number, noun: string): string {
 }
 
 /** One line of substance for a report whose sections are all collapsed. */
-function verdictSummary(report: StructuredReviewReport): string {
+export function structuredReviewVerdictSummary(
+  report: StructuredReviewReport,
+): string {
   return [
     `Ready: ${report.verdict.ready}`,
     plural(report.issues.length, "issue"),
@@ -156,6 +158,12 @@ export interface StructuredReviewReportViewProps {
    * messages are prose and a JSON dump reads as a rendering failure.
    */
   showRawJson?: boolean;
+  /**
+   * Draw the report's own title and verdict line. Off when the caller already
+   * names the report — a transcript fold-out repeats both on its trigger, and
+   * the card would otherwise open onto a duplicate of the row just clicked.
+   */
+  showHeading?: boolean;
 }
 
 export function StructuredReviewReportView(props: StructuredReviewReportViewProps) {
@@ -172,6 +180,7 @@ function ReportArticle({
   heading = "Structured review report",
   collapsibleSections = false,
   showRawJson = true,
+  showHeading = true,
 }: StructuredReviewReportViewProps) {
   const [showRaw, setShowRaw] = useState(false);
   const scope = report.reviewScope;
@@ -192,49 +201,55 @@ function ReportArticle({
       )}
       aria-label={heading}
     >
-      <div
-        className={cn(
-          "flex flex-wrap items-start justify-between gap-3",
-          collapsibleSections ? "mb-3" : "mb-5",
-        )}
-      >
-        <div>
-          {showRawJson && (
-            <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-cyan-400/80">
-              Validated JSON Schema
-            </p>
+      {(showHeading || showRawJson) && (
+        <div
+          className={cn(
+            "flex flex-wrap items-start justify-between gap-3",
+            collapsibleSections ? "mb-3" : "mb-5",
           )}
-          <h2
-            className={cn(
-              "text-base font-semibold text-foreground",
-              showRawJson && "mt-1",
+        >
+          <div>
+            {showRawJson && (
+              <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-cyan-400/80">
+                Validated JSON Schema
+              </p>
             )}
-          >
-            {heading}
-          </h2>
-          {collapsibleSections && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {verdictSummary(report)}
-            </p>
+            {showHeading && (
+              <>
+                <h2
+                  className={cn(
+                    "text-base font-semibold text-foreground",
+                    showRawJson && "mt-1",
+                  )}
+                >
+                  {heading}
+                </h2>
+                {collapsibleSections && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {structuredReviewVerdictSummary(report)}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+          {showRawJson && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 text-xs"
+              aria-expanded={showRaw}
+              onClick={() => setShowRaw((value) => !value)}
+            >
+              <Braces className="size-3.5" />
+              {showRaw ? "Hide raw JSON" : "Inspect raw JSON"}
+              {showRaw
+                ? <ChevronDown className="size-3.5" />
+                : <ChevronRight className="size-3.5" />}
+            </Button>
           )}
         </div>
-        {showRawJson && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 gap-1.5 text-xs"
-            aria-expanded={showRaw}
-            onClick={() => setShowRaw((value) => !value)}
-          >
-            <Braces className="size-3.5" />
-            {showRaw ? "Hide raw JSON" : "Inspect raw JSON"}
-            {showRaw
-              ? <ChevronDown className="size-3.5" />
-              : <ChevronRight className="size-3.5" />}
-          </Button>
-        )}
-      </div>
+      )}
 
       {showRawJson && showRaw && (
         <pre

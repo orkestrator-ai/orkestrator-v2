@@ -48,6 +48,46 @@ export type PipelineSessionPhase =
   | "pr"
   | "resolve-conflicts";
 
+/**
+ * The verification turn's answer: did the committed branch meet the ticket?
+ *
+ * Shared rather than declared at the point of use so the supervisor that
+ * enforces the schema and the transcript that renders the answer cannot drift
+ * apart — a renderer guessing at the shape would silently fall back to raw JSON
+ * the day a field is added.
+ */
+export interface VerificationVerdict {
+  complete: boolean;
+  rationale: string;
+}
+
+export const VERIFICATION_VERDICT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  required: ["complete", "rationale"],
+  properties: {
+    complete: { type: "boolean" },
+    rationale: { type: "string" },
+  },
+};
+
+/**
+ * Exactly the two contract fields, so an unrelated payload that happens to
+ * carry a `complete` flag is not mistaken for a verification verdict.
+ */
+export function isVerificationVerdict(
+  value: unknown,
+): value is VerificationVerdict {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  return keys.length === 2
+    && typeof record.complete === "boolean"
+    && typeof record.rationale === "string";
+}
+
 export interface PipelineSession {
   phase: PipelineSessionPhase;
   iteration: number;

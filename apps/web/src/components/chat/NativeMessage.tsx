@@ -47,6 +47,8 @@ import { isTodoTool } from "@/lib/todo-tool";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
 import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
+import { JsonPayloadPart } from "@/components/chat/JsonPayloadPart";
+import { parseJsonPayload } from "@/lib/chat/json-payload";
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
 import { formatElapsed } from "@/lib/format-elapsed";
 import {
@@ -1161,10 +1163,16 @@ function TextPart({
   content,
   showCopy = true,
   truncateUserPrompt = false,
+  renderJsonPayload = true,
 }: {
   content: string;
   showCopy?: boolean;
   truncateUserPrompt?: boolean;
+  /**
+   * Fold a block that is nothing but JSON into a structured view. Off for the
+   * user's own messages, which are shown back as written.
+   */
+  renderJsonPayload?: boolean;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const lineCount = useMemo(
@@ -1173,6 +1181,30 @@ function TextPart({
   );
   const shouldTruncate =
     truncateUserPrompt && lineCount > USER_PROMPT_COLLAPSED_LINE_COUNT;
+  const jsonPayload = useMemo(
+    () => (renderJsonPayload ? parseJsonPayload(content) : null),
+    [content, renderJsonPayload],
+  );
+
+  if (jsonPayload) {
+    return (
+      <div className="group py-1.5">
+        {/*
+          The raw document stays the search source, so the block is still found
+          by an in-transcript find; only the highlight needs it expanded.
+        */}
+        <div data-agent-chat-search-content="true">
+          <JsonPayloadPart payload={jsonPayload} />
+        </div>
+        {showCopy ? (
+          <MessageCopyButton
+            content={content}
+            wrapperClassName="opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100"
+          />
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className={cn("group", !truncateUserPrompt && "py-1.5")}>
@@ -1648,12 +1680,14 @@ function MessagePart({
   part,
   showTextCopy = true,
   truncateUserPrompt = false,
+  renderJsonPayload = true,
   containerId,
   partKey,
 }: {
   part: NativeMessagePart;
   showTextCopy?: boolean;
   truncateUserPrompt?: boolean;
+  renderJsonPayload?: boolean;
   containerId?: string;
   /** Stable identity for this part's position, used to persist expansion state. */
   partKey: string;
@@ -1669,6 +1703,7 @@ function MessagePart({
           content={part.content}
           showCopy={showTextCopy}
           truncateUserPrompt={truncateUserPrompt}
+          renderJsonPayload={renderJsonPayload}
         />
       );
     case "tool-invocation":
@@ -1887,6 +1922,7 @@ export const NativeMessage = memo(function NativeMessage({
             content={message.content}
             showCopy={false}
             truncateUserPrompt={isUser}
+            renderJsonPayload={!isUser}
           />
         )}
       </MessageShell>
@@ -1904,6 +1940,7 @@ function renderMessageParts(
         part={part}
         showTextCopy={options.showTextCopy ?? true}
         truncateUserPrompt={message.role === "user"}
+        renderJsonPayload={message.role !== "user"}
         containerId={options.containerId}
         partKey={`${message.id}-part-${index}`}
       />

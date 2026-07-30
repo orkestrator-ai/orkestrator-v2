@@ -7,6 +7,8 @@ import {
   MAX_BUILD_PIPELINE_ITERATIONS,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  isVerificationVerdict,
+  VERIFICATION_VERDICT_SCHEMA,
   type BuildPipeline,
 } from "./build-pipeline.js";
 import type { StructuredReviewReport } from "./structured-review.js";
@@ -395,5 +397,42 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline({ ...snapshot(), projectId: "" })).toBe(false);
     expect(isBuildPipeline({ ...snapshot(), id: "" })).toBe(false);
     expect(isBuildPipeline({ ...snapshot(), taskId: "" })).toBe(false);
+  });
+});
+
+describe("verification verdict contract", () => {
+  test("accepts exactly the two contract fields", () => {
+    expect(isVerificationVerdict({ complete: true, rationale: "Clean." }))
+      .toBe(true);
+    expect(isVerificationVerdict({ complete: false, rationale: "" }))
+      .toBe(true);
+  });
+
+  test("rejects anything the schema would have rejected", () => {
+    // `additionalProperties: false` is part of the contract, so a payload that
+    // merely carries these two fields is not a verdict — the transcript would
+    // otherwise render an unrelated tool result as a verification outcome.
+    expect(isVerificationVerdict({
+      complete: true,
+      rationale: "Clean.",
+      stage: "verify",
+    })).toBe(false);
+    expect(isVerificationVerdict({ complete: "yes", rationale: "Clean." }))
+      .toBe(false);
+    expect(isVerificationVerdict({ complete: true })).toBe(false);
+    expect(isVerificationVerdict([])).toBe(false);
+    expect(isVerificationVerdict(null)).toBe(false);
+  });
+
+  test("describes the shape the supervisor constrains the turn to", () => {
+    expect(VERIFICATION_VERDICT_SCHEMA).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: ["complete", "rationale"],
+      properties: {
+        complete: { type: "boolean" },
+        rationale: { type: "string" },
+      },
+    });
   });
 });

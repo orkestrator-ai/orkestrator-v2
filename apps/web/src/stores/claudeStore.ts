@@ -64,6 +64,18 @@ export interface QueuedMessage {
   effort: ClaudeEffortLevel;
   planModeEnabled: boolean;
   fastModeEnabled: boolean;
+  /**
+   * Everything the direct send path reads from live store state.
+   *
+   * A queued prompt is dispatched by the backend, which has no access to this
+   * renderer's selections, so each one has to travel with its own entry.
+   * Omitting them silently ran the prompt on the bridge's default model with no
+   * sub-agent.
+   */
+  model?: string;
+  agent?: string;
+  includeLocalSettings?: boolean;
+  promptSuggestions?: boolean;
 }
 
 /**

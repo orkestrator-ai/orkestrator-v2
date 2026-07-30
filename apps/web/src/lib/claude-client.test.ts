@@ -169,6 +169,36 @@ describe("claude-client", () => {
       const result = await createSession(client);
       expect(result).toBeNull();
     });
+
+    test("sends the client session key so the bridge can reuse a logical session", async () => {
+      // The bridge keys durable session identity on this value. If it never
+      // leaves the renderer, every remount admits a brand new Claude session for
+      // work that is already running.
+      const bodies: string[] = [];
+      globalThis.fetch = mock(async (_input, init) => {
+        bodies.push(String(init?.body));
+        return new Response(JSON.stringify({ sessionId: "s-1" }), { status: 201 });
+      }) as unknown as typeof fetch;
+
+      await createSession(client, "Review", "looped-review:w1:discovery:round-1");
+
+      expect(JSON.parse(bodies[0]!)).toEqual({
+        title: "Review",
+        clientSessionKey: "looped-review:w1:discovery:round-1",
+      });
+    });
+
+    test("omits the client session key when the caller has no logical identity", async () => {
+      const bodies: string[] = [];
+      globalThis.fetch = mock(async (_input, init) => {
+        bodies.push(String(init?.body));
+        return new Response(JSON.stringify({ sessionId: "s-1" }), { status: 201 });
+      }) as unknown as typeof fetch;
+
+      await createSession(client, "Ad hoc");
+
+      expect(JSON.parse(bodies[0]!)).toEqual({ title: "Ad hoc" });
+    });
   });
 
   describe("listSessions", () => {

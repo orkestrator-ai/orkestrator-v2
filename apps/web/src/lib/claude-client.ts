@@ -777,13 +777,14 @@ export async function getModels(client: ClaudeClient): Promise<ClaudeModel[]> {
  */
 export async function createSession(
   client: ClaudeClient,
-  title?: string
+  title?: string,
+  clientSessionKey?: string,
 ): Promise<{ sessionId: string; title?: string } | null> {
   try {
     const response = await fetchClaude(client, "/session/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, clientSessionKey }),
     });
     if (!response.ok) return null;
     return await response.json();

@@ -1801,7 +1801,9 @@ class TmuxSession {
       resumed: this.resumed,
     });
 
-    if (initialPrompt?.trim()) {
+    // A second client attaching to this stable tab must not submit the
+    // bootstrap again. The backend call that actually launched tmux owns it.
+    if (launchedNew && initialPrompt?.trim()) {
       void this.sendInitialPromptWhenReady(initialPrompt, launchedNew)
         .then(() => {
           context.emit(CLAUDE_TMUX_EVENT, {
@@ -3055,16 +3057,25 @@ export function registerTmuxBackendCommands(
     );
   });
 
-  register("claude_tmux_start", async ({ tabId, environmentId, initialPrompt, model, effort, resumeSessionId }, context) => {
+  register("claude_tmux_start", async ({
+    tabId,
+    environmentId,
+    initialPrompt,
+    model,
+    effort,
+    resumeSessionId,
+    replaceExisting,
+  }, context) => {
     const envId = asString(environmentId, "environmentId");
     const tab = asString(tabId, "tabId");
     const resumeId = asOptionalString(resumeSessionId);
+    const replace = replaceExisting === true;
     return tmuxManager.installLock(envId).runExclusive(async () => {
       const environment = await context.storage.getEnvironment(envId);
       if (!environment || environment.deletionRequestedAt) {
         throw new Error(`environment ${envId} is being deleted`);
       }
-      if (resumeId === undefined) {
+      if (replace) {
         const existing = tmuxManager.remove(envId, tab);
         if (existing) await existing.stop();
         else await killOrphanSession(context, envId, tab);
@@ -3085,10 +3096,14 @@ export function registerTmuxBackendCommands(
   register("claude_tmux_stop", async ({ tabId, environmentId }) => {
     const envId = asString(environmentId, "environmentId");
     const tab = asString(tabId, "tabId");
-    const session = tmuxManager.remove(envId, tab);
-    if (!session) return;
-    await session.stop();
     await tmuxManager.installLock(envId).runExclusive(async () => {
+      // Start inserts its session before installing hooks and probing the
+      // executables. Removing outside this lock lets stop kill "nothing" while
+      // that start is paused, after which start can launch an untracked tmux
+      // process. Serialize the complete stop transition with start/replace.
+      const session = tmuxManager.remove(envId, tab);
+      if (!session) return;
+      await session.stop();
       if (tmuxManager.sessionsInEnvironment(envId) === 0) {
         await uninstallWorkspaceHooks(session.backend, session.workspaceHookPaths).catch((error) => {
           console.warn("[tmux] uninstallWorkspaceHooks failed", error);

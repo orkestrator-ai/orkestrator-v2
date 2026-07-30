@@ -959,6 +959,74 @@ describe("App background processing mounts", () => {
     expect(screen.getByTestId("terminal-env-durable-launch").getAttribute("data-active")).toBe("false");
   });
 
+  test("keeps a backend-created startup session mounted until its tab is persisted", async () => {
+    resetStores({
+      environments: [
+        makeEnvironment("env-visible", "project-1"),
+        {
+          ...makeEnvironment("env-startup-session", "project-2"),
+          pendingAgentLaunch: false,
+          startupAgentSession: {
+            tabId: "startup-agent",
+            agent: "codex",
+            style: "native",
+            providerSessionId: "provider-session",
+            status: "running",
+            startedAt: "2026-07-29T12:00:00.000Z",
+          },
+        },
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("terminal-env-startup-session")).toBeTruthy();
+    });
+    expect(
+      screen.getByTestId("terminal-env-startup-session").getAttribute("data-active"),
+    ).toBe("false");
+  });
+
+  test.each(["starting", "error"] as const)(
+    "keeps a backend-owned %s startup session mounted without a pending flag",
+    async (status) => {
+      resetStores({
+        environments: [
+          makeEnvironment("env-visible", "project-1"),
+          {
+            ...makeEnvironment(`env-startup-${status}`, "project-2"),
+            pendingAgentLaunch: false,
+            startupAgentSession: {
+              tabId: "startup-agent",
+              agent: "codex",
+              style: "native",
+              status,
+              ...(status === "error"
+                ? { error: "Agent launch failed; the backend will retry." }
+                : {}),
+            },
+          },
+        ],
+        selectedProjectId: "project-1",
+        selectedEnvironmentId: "env-visible",
+      });
+
+      render(<App />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId(`terminal-env-startup-${status}`)).toBeTruthy();
+      });
+      expect(
+        screen
+          .getByTestId(`terminal-env-startup-${status}`)
+          .getAttribute("data-active"),
+      ).toBe("false");
+    },
+  );
+
   test("does not mount a stopped environment that still carries a durable launch", async () => {
     resetStores({
       environments: [

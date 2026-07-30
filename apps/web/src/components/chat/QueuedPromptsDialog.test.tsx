@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -230,5 +231,105 @@ describe("QueuedPromptsDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("surfaces a terminal dispatch error and retries explicitly", async () => {
+    const onRetryDispatch = mock(async () => undefined);
+    render(
+      <QueuedPromptsDialog
+        open
+        onOpenChange={() => {}}
+        messages={messages}
+        onEdit={() => {}}
+        onMove={() => {}}
+        onRemove={() => {}}
+        dispatchError={{ message: "Provider rejected this prompt." }}
+        onRetryDispatch={onRetryDispatch}
+      />,
+    );
+
+    expect(screen.getByRole("alert").textContent)
+      .toContain("Provider rejected this prompt.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(onRetryDispatch).toHaveBeenCalledTimes(1));
+  });
+
+  test("labels the in-flight retry and refuses a second dispatch until it settles", async () => {
+    let release!: () => void;
+    const inFlight = new Promise<void>((resolve) => { release = resolve; });
+    const onRetryDispatch = mock(() => inFlight);
+    render(
+      <QueuedPromptsDialog
+        open
+        onOpenChange={() => {}}
+        messages={messages}
+        onEdit={() => {}}
+        onMove={() => {}}
+        onRemove={() => {}}
+        dispatchError={{ message: "Provider rejected this prompt." }}
+        onRetryDispatch={onRetryDispatch}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    const retrying = await screen.findByRole("button", { name: "Retrying…" });
+    expect(retrying.hasAttribute("disabled")).toBe(true);
+    // Retrying clears the backend latch; a second dispatch would race the first.
+    fireEvent.click(retrying);
+    expect(onRetryDispatch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      release();
+      await inFlight;
+    });
+    expect(screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  test("reports a failed retry and allows another attempt", async () => {
+    const onRetryDispatch = mock(async () => {
+      throw new Error("backend unavailable");
+    });
+    render(
+      <QueuedPromptsDialog
+        open
+        onOpenChange={() => {}}
+        messages={messages}
+        onEdit={() => {}}
+        onMove={() => {}}
+        onRemove={() => {}}
+        dispatchError={{ message: "Provider rejected this prompt." }}
+        onRetryDispatch={onRetryDispatch}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toContain("backend unavailable");
+    });
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(retry.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(onRetryDispatch).toHaveBeenCalledTimes(2));
+  });
+
+  test("still explains the dispatch error when no retry is wired up", () => {
+    render(
+      <QueuedPromptsDialog
+        open
+        onOpenChange={() => {}}
+        messages={messages}
+        onEdit={() => {}}
+        onMove={() => {}}
+        onRemove={() => {}}
+        dispatchError={{ message: "Provider rejected this prompt." }}
+      />,
+    );
+
+    expect(screen.getByRole("alert").textContent)
+      .toContain("Queued prompt was not sent");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });

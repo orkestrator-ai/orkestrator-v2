@@ -46,6 +46,7 @@ export interface NativeStructuredAgent {
   createSession(
     phase: LoopedReviewSessionPhase,
     label: string,
+    logicalSessionKey?: string,
   ): Promise<string>;
   send(
     sessionId: string,
@@ -82,6 +83,14 @@ export function getStructuredReviewPhasePolicy(
   };
 }
 
+function backendPipelinePhase(
+  phase: LoopedReviewSessionPhase,
+): "review" | "fix" | "pr" {
+  if (phase === "fix") return "fix";
+  if (phase === "pr") return "pr";
+  return "review";
+}
+
 function sessionPhases(
   workflow: LoopedReviewWorkflow,
 ): Map<string, LoopedReviewSessionPhase> {
@@ -91,6 +100,33 @@ function sessionPhases(
       session.phase,
     ]),
   );
+}
+
+interface ClaudeAdapterDependencies {
+  createSession: typeof createClaudeSession;
+  sendStructuredPrompt: typeof sendClaudeStructuredPrompt;
+  getStructuredOutput: typeof getClaudeStructuredOutput;
+  lookupSession: typeof lookupClaudeSession;
+  abortSession: typeof abortClaudeSession;
+  ensureSession?: typeof backend.ensureNativeAgentSession;
+}
+
+interface CodexAdapterDependencies {
+  createSession: typeof createCodexSession;
+  sendPrompt: typeof sendCodexPrompt;
+  getStructuredOutput: typeof getCodexStructuredOutput;
+  lookupSessionStatus: typeof lookupCodexSessionStatus;
+  abortSession: typeof abortCodexSession;
+  ensureSession?: typeof backend.ensureNativeAgentSession;
+}
+
+interface OpenCodeAdapterDependencies {
+  createSession: typeof createOpenCodeSession;
+  sendStructuredPrompt: typeof sendOpenCodeStructuredPrompt;
+  getStructuredOutput: typeof getOpenCodeStructuredOutput;
+  lookupSessionStatus: typeof lookupOpenCodeSessionStatus;
+  abortSession: typeof abortOpenCodeSession;
+  ensureSession?: typeof backend.ensureNativeAgentSession;
 }
 
 function requireSessionPhase(
@@ -166,18 +202,34 @@ async function resolveProviderPort(
 export function claudeAdapter(
   client: ClaudeClient,
   workflow: LoopedReviewWorkflow,
-  dependencies = {
+  dependencies: ClaudeAdapterDependencies = {
     createSession: createClaudeSession,
     sendStructuredPrompt: sendClaudeStructuredPrompt,
     getStructuredOutput: getClaudeStructuredOutput,
     lookupSession: lookupClaudeSession,
     abortSession: abortClaudeSession,
+    ensureSession: backend.ensureNativeAgentSession,
   },
 ): NativeStructuredAgent {
   const phases = sessionPhases(workflow);
   return {
     provider: "claude",
-    async createSession(phase, label) {
+    async createSession(phase, label, logicalSessionKey) {
+      if (dependencies.ensureSession) {
+        const ensured = await dependencies.ensureSession({
+          environmentId: workflow.environmentId,
+          agent: "claude",
+          logicalSessionKey:
+            logicalSessionKey
+            ?? `looped-review:${workflow.id}:${phase}:${label}`,
+          title: label,
+          model: workflow.model === "default" ? undefined : workflow.model,
+          reasoningEffort: workflow.reasoningEffort,
+          phase: backendPipelinePhase(phase),
+        });
+        phases.set(ensured.providerSessionId, phase);
+        return ensured.providerSessionId;
+      }
       const result = await dependencies.createSession(client, label);
       if (!result) throw new Error("Claude failed to create a native session");
       phases.set(result.sessionId, phase);
@@ -222,19 +274,40 @@ export function claudeAdapter(
 export function codexAdapter(
   client: CodexClient,
   workflow: LoopedReviewWorkflow,
-  dependencies = {
+  dependencies: CodexAdapterDependencies = {
     createSession: createCodexSession,
     sendPrompt: sendCodexPrompt,
     getStructuredOutput: getCodexStructuredOutput,
     lookupSessionStatus: lookupCodexSessionStatus,
     abortSession: abortCodexSession,
+    ensureSession: backend.ensureNativeAgentSession,
   },
 ): NativeStructuredAgent {
   const phases = sessionPhases(workflow);
   return {
     provider: "codex",
-    async createSession(phase, label) {
+    async createSession(phase, label, logicalSessionKey) {
       const policy = getStructuredReviewPhasePolicy(phase);
+      if (dependencies.ensureSession) {
+        const ensured = await dependencies.ensureSession({
+          environmentId: workflow.environmentId,
+          agent: "codex",
+          logicalSessionKey:
+            logicalSessionKey
+            ?? `looped-review:${workflow.id}:${phase}:${label}`,
+          title: label,
+          model: workflow.model,
+          reasoningEffort: workflow.reasoningEffort,
+          phase: backendPipelinePhase(phase),
+          // The phase alone is not enough: `preparation` and `discovery` both map
+          // onto `review`, which the bridge would create read-only — but only
+          // discovery is read-only. Preparation has to commit changes and write
+          // its validation output, so the policy decides, not the phase.
+          sessionMode: policy.codexMode,
+        });
+        phases.set(ensured.providerSessionId, phase);
+        return ensured.providerSessionId;
+      }
       const result = await dependencies.createSession(client, {
         title: label,
         model: workflow.model,
@@ -278,18 +351,34 @@ export function codexAdapter(
 export function openCodeAdapter(
   client: OpencodeClient,
   workflow: LoopedReviewWorkflow,
-  dependencies = {
+  dependencies: OpenCodeAdapterDependencies = {
     createSession: createOpenCodeSession,
     sendStructuredPrompt: sendOpenCodeStructuredPrompt,
     getStructuredOutput: getOpenCodeStructuredOutput,
     lookupSessionStatus: lookupOpenCodeSessionStatus,
     abortSession: abortOpenCodeSession,
+    ensureSession: backend.ensureNativeAgentSession,
   },
 ): NativeStructuredAgent {
   const phases = sessionPhases(workflow);
   return {
     provider: "opencode",
-    async createSession(phase, label) {
+    async createSession(phase, label, logicalSessionKey) {
+      if (dependencies.ensureSession) {
+        const ensured = await dependencies.ensureSession({
+          environmentId: workflow.environmentId,
+          agent: "opencode",
+          logicalSessionKey:
+            logicalSessionKey
+            ?? `looped-review:${workflow.id}:${phase}:${label}`,
+          title: label,
+          model: workflow.model === "default" ? undefined : workflow.model,
+          reasoningEffort: workflow.reasoningEffort,
+          phase: backendPipelinePhase(phase),
+        });
+        phases.set(ensured.providerSessionId, phase);
+        return ensured.providerSessionId;
+      }
       const sessionId = (await dependencies.createSession(client, label)).id;
       phases.set(sessionId, phase);
       return sessionId;

@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useMemo, useState, type KeyboardEvent } from "react";
-import { X, FileText, ChevronDown, ArrowUp, Check, Square, Zap } from "lucide-react";
+import { AlertCircle, X, FileText, ChevronDown, ArrowUp, Check, Square, Zap } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +18,7 @@ import type { ClaudeModel } from "@/lib/claude-client";
 import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import { parseSlashCommands } from "@/lib/chat/slash-commands";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
+import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
 import {
   COMPOSE_MAX_INPUT_HEIGHT,
   COMPOSE_MIN_INPUT_HEIGHT,
@@ -155,6 +156,7 @@ export function ClaudeComposeBar({
   const queuedMessages = useClaudeStore(
     useCallback((state) => state.getQueuedMessages(sessionKey), [sessionKey]),
   );
+  const queueRecovery = usePromptQueueDispatchRecovery("claude", sessionKey);
   const applyPlanMode = useCallback((enabled: boolean) => {
     setPlanMode(sessionKey, enabled);
     void onPlanModeChange?.(enabled);
@@ -716,14 +718,32 @@ export function ClaudeComposeBar({
         {/* Spacer */}
         <div className="flex-1 sm:hidden" />
 
-        {/* Queue indicator */}
+        {/* Queue indicator. A parked queue stops draining until a human retries,
+            so the failure has to be legible without opening the dialog. */}
         {queueLength > 0 && (
           <button
             type="button"
             onClick={() => setQueueDialogOpen(true)}
-            className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground bg-muted/50 hover:bg-muted transition-colors"
-            title="View queued prompts"
+            className={cn(
+              "flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
+              queueRecovery.dispatchError
+                ? "bg-destructive/10 text-destructive hover:bg-destructive/20"
+                : "text-muted-foreground bg-muted/50 hover:bg-muted",
+            )}
+            aria-label={
+              queueRecovery.dispatchError
+                ? `${queueLength} queued prompts blocked: ${queueRecovery.dispatchError.message}`
+                : undefined
+            }
+            title={
+              queueRecovery.dispatchError
+                ? `Queued prompt was not sent: ${queueRecovery.dispatchError.message}`
+                : "View queued prompts"
+            }
           >
+            {queueRecovery.dispatchError && (
+              <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
+            )}
             <span>+{queueLength} queued</span>
           </button>
         )}
@@ -787,6 +807,8 @@ export function ClaudeComposeBar({
         onEdit={handleQueuedMessageClick}
         onMove={handleMoveQueuedMessage}
         onRemove={handleRemoveQueuedMessage}
+        dispatchError={queueRecovery.dispatchError}
+        onRetryDispatch={queueRecovery.retry}
         renderMeta={(message) => (
           <>
             <span>Effort: {EFFORT_LABELS[message.effort]}</span>

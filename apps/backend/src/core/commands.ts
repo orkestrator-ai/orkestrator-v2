@@ -133,6 +133,11 @@ import {
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
+import type { NativeAgentService } from "./native-agent-service.js";
+import {
+  assertValidPromptAttachments,
+  assertValidPromptImages,
+} from "./prompt-attachments.js";
 
 export type BackendEmit = (event: string, payload: unknown) => void;
 
@@ -152,6 +157,7 @@ export type CommandContext = {
     revokeEnvironment(environmentId: string): void;
   };
   buildPipelines?: BuildPipelineService;
+  nativeAgents?: NativeAgentService;
 };
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
@@ -3636,7 +3642,17 @@ async function completeEnvironmentSetup(
   if (!environment.createdFromCommit) {
     throw new Error(`Environment creation commit was not captured before setup completed: ${environment.id}`);
   }
-  const updated = await context.storage.updateEnvironment(environment.id, { setupScriptsComplete: true });
+  let updated = await context.storage.updateEnvironment(environment.id, {
+    setupScriptsComplete: true,
+  });
+  if (updated.pendingAgentLaunch && context.nativeAgents) {
+    await context.nativeAgents.reconcileInitialLaunch(updated.id).catch(() => {
+      // The service persists a sanitized retryable launch error. Setup itself
+      // succeeded and must not be rolled back because an agent bridge was
+      // temporarily unavailable.
+    });
+    updated = await context.storage.getEnvironment(updated.id) ?? updated;
+  }
   const session = environmentSetupSessions.get(environment.id);
   logSetupTerminal("setup completed", {
     environmentId: environment.id,
@@ -5142,6 +5158,7 @@ async function deleteEnvironment(
       );
       // Queued prompts for a deleted environment can never be dispatched.
       await storage.deletePromptQueuesByEnvironment(environmentId);
+      await storage.deleteNativeAgentSessionsByEnvironment(environmentId);
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);
@@ -7607,6 +7624,17 @@ export function createCommandRegistry(
         : clearPendingAgentLaunchUpdates()),
     });
   });
+  register(
+    "acknowledge_startup_agent_session",
+    ({ environmentId, providerSessionId, startedAt }, { storage }) =>
+      storage.acknowledgeStartupAgentSession(
+        asString(environmentId, "environmentId"),
+        providerSessionId === undefined
+          ? undefined
+          : asNonBlankString(providerSessionId, "providerSessionId"),
+        startedAt === undefined ? undefined : asNonBlankString(startedAt, "startedAt"),
+      ),
+  );
   // The renderer rewrites the initial prompt once it has uploaded the create
   // dialog's attachments and knows their in-workspace paths. Persisting that
   // rewritten text is what lets a post-eviction launch recover a prompt whose
@@ -8160,6 +8188,125 @@ export function createCommandRegistry(
     storage.deletePaneLayout(asString(environmentId, "environmentId")),
   );
 
+  register("ensure_native_agent_session", async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    return context.nativeAgents.ensureSession({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as "claude" | "codex" | "opencode",
+      logicalSessionKey: asNonBlankString(
+        args.logicalSessionKey,
+        "logicalSessionKey",
+      ),
+      title: typeof args.title === "string" ? args.title : undefined,
+      model: typeof args.model === "string" ? args.model : undefined,
+      reasoningEffort:
+        typeof args.reasoningEffort === "string"
+          ? args.reasoningEffort
+          : undefined,
+      phase:
+        typeof args.phase === "string"
+          ? args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase
+          : undefined,
+      // Only an explicit mode overrides the phase-derived default, so a caller
+      // that does not care keeps the existing behaviour.
+      sessionMode:
+        args.sessionMode === "plan" || args.sessionMode === "build"
+          ? args.sessionMode
+          : undefined,
+    });
+  });
+
+  register("adopt_native_agent_session", async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    return context.nativeAgents.adoptSession({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as "claude" | "codex" | "opencode",
+      logicalSessionKey: asNonBlankString(
+        args.logicalSessionKey,
+        "logicalSessionKey",
+      ),
+      providerSessionId: asNonBlankString(
+        args.providerSessionId,
+        "providerSessionId",
+      ),
+      expectedProviderSessionId:
+        args.expectedProviderSessionId === undefined
+          ? undefined
+          : asNonBlankString(
+              args.expectedProviderSessionId,
+              "expectedProviderSessionId",
+            ),
+      title: typeof args.title === "string" ? args.title : undefined,
+      model: typeof args.model === "string" ? args.model : undefined,
+      reasoningEffort:
+        typeof args.reasoningEffort === "string"
+          ? args.reasoningEffort
+          : undefined,
+      phase:
+        typeof args.phase === "string"
+          ? args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase
+          : undefined,
+    });
+  });
+
+  register("dispatch_native_agent_prompt", async (args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    return context.nativeAgents.dispatchPrompt({
+      environmentId: asNonBlankString(args.environmentId, "environmentId"),
+      agent: asString(args.agent, "agent") as "claude" | "codex" | "opencode",
+      logicalSessionKey: asNonBlankString(
+        args.logicalSessionKey,
+        "logicalSessionKey",
+      ),
+      title: typeof args.title === "string" ? args.title : undefined,
+      model: typeof args.model === "string" ? args.model : undefined,
+      reasoningEffort:
+        typeof args.reasoningEffort === "string"
+          ? args.reasoningEffort
+          : undefined,
+      phase:
+        typeof args.phase === "string"
+          ? args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase
+          : undefined,
+      prompt: asNonBlankString(args.prompt, "prompt"),
+      requestId: asNonBlankString(args.requestId, "requestId"),
+      // Validated rather than cast: a malformed element used to surface as a
+      // TypeError deep inside the provider, which the drain path then treated as
+      // a retryable fault and re-attempted forever.
+      images: Array.isArray(args.images)
+        ? assertValidPromptImages(args.images)
+        : undefined,
+      attachments: Array.isArray(args.attachments)
+        ? assertValidPromptAttachments(args.attachments)
+        : undefined,
+      schema:
+        args.schema
+        && typeof args.schema === "object"
+        && !Array.isArray(args.schema)
+          ? args.schema as import("@orkestrator/protocol/structured-output").JsonSchema
+          : undefined,
+      // Absent means plan: the permissive direction has to be asked for, since
+      // an unset mode otherwise resolves to bypassPermissions at the bridge.
+      mode: args.mode === "build" ? "build" : "plan",
+      fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,
+      subAgent: typeof args.subAgent === "string" ? args.subAgent : undefined,
+      includeLocalSettings:
+        typeof args.includeLocalSettings === "boolean"
+          ? args.includeLocalSettings
+          : undefined,
+      promptSuggestions:
+        typeof args.promptSuggestions === "boolean"
+          ? args.promptSuggestions
+          : undefined,
+    });
+  });
+
   register("get_looped_review_workflow", ({ workflowId }, { storage }) =>
     storage.getLoopedReviewWorkflow(asString(workflowId, "workflowId")),
   );
@@ -8168,7 +8315,15 @@ export function createCommandRegistry(
   );
   register(
     "save_looped_review_workflow",
-    ({ workflowId, environmentId, version, snapshot, expectedRevision }, { storage }) =>
+    ({
+      workflowId,
+      environmentId,
+      version,
+      snapshot,
+      expectedRevision,
+      controllerOwnerId,
+      controllerToken,
+    }, { storage }) =>
       storage.saveLoopedReviewWorkflow(
         asString(workflowId, "workflowId"),
         asString(environmentId, "environmentId"),
@@ -8177,6 +8332,39 @@ export function createCommandRegistry(
         expectedRevision === undefined
           ? undefined
           : asNumber(expectedRevision, "expectedRevision"),
+        controllerOwnerId === undefined && controllerToken === undefined
+          ? undefined
+          : {
+              ownerId: asNonBlankString(controllerOwnerId, "controllerOwnerId"),
+              token: asNonBlankString(controllerToken, "controllerToken"),
+            },
+      ),
+  );
+  register(
+    "claim_looped_review_controller",
+    ({ workflowId, ownerId, leaseMs }, { storage }) =>
+      storage.claimLoopedReviewController(
+        asNonBlankString(workflowId, "workflowId"),
+        asNonBlankString(ownerId, "ownerId"),
+        asNumber(leaseMs, "leaseMs"),
+      ),
+  );
+  register(
+    "validate_looped_review_controller",
+    ({ workflowId, ownerId, token }, { storage }) =>
+      storage.validateLoopedReviewController(
+        asNonBlankString(workflowId, "workflowId"),
+        asNonBlankString(ownerId, "ownerId"),
+        asNonBlankString(token, "token"),
+      ),
+  );
+  register(
+    "release_looped_review_controller",
+    ({ workflowId, ownerId, token }, { storage }) =>
+      storage.releaseLoopedReviewController(
+        asNonBlankString(workflowId, "workflowId"),
+        asNonBlankString(ownerId, "ownerId"),
+        asNonBlankString(token, "token"),
       ),
   );
   register("delete_looped_review_workflow", ({ workflowId }, { storage }) =>
@@ -8358,6 +8546,9 @@ export function createCommandRegistry(
           ? undefined
           : asNumber(expectedDraftRevision, "expectedDraftRevision"),
       ),
+  );
+  register("retry_prompt_queue_dispatch", ({ queueKey }, { storage }) =>
+    storage.retryPromptQueueDispatch(asString(queueKey, "queueKey")),
   );
   register("get_compose_draft", ({ draftKey }, { storage }) =>
     storage.getComposeDraft(asString(draftKey, "draftKey")),

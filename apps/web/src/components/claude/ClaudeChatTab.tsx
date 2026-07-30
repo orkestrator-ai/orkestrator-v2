@@ -7,10 +7,7 @@ import {
   useManualSessionRefresh,
   type RefreshSessionOptions,
 } from "@/hooks/useManualSessionRefresh";
-import {
-  useNativeMessageQueue,
-  type QueueDispatchOutcome,
-} from "@/hooks/useNativeMessageQueue";
+import type { QueueDispatchOutcome } from "@/hooks/useNativeMessageQueue";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
@@ -65,6 +62,8 @@ import {
   startLocalClaudeServer,
   getLocalClaudeServerStatus,
   getClaudeModelCatalog,
+  adoptNativeAgentSession,
+  ensureNativeAgentSession,
   renameEnvironmentFromPrompt,
 } from "@/lib/backend";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
@@ -83,10 +82,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import {
-  acknowledgeAgentPromptClaim,
-  claimAgentPromptQueueHead,
   enqueueAgentPrompt,
-  rejectAgentPromptClaim,
   transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
 import type { ClaudeAttachment, QueuedMessage } from "@/stores/claudeStore";
@@ -855,7 +851,29 @@ export function ClaudeChatTab({
     consumedAgentHandoffId,
   );
   const displayMessages = handoff.displayMessages;
-  const launchPrompt = initialPrompt ?? handoff.initialPrompt;
+  const backendOwnsStartupPrompt = useEnvironmentStore((state) => {
+    if (tabId !== "startup-agent") return false;
+    const environment = state.getEnvironmentById(environmentId);
+    return environment?.pendingAgentLaunch === true
+      || environment?.startupAgentSession !== undefined;
+  });
+  const launchPrompt = backendOwnsStartupPrompt
+    ? handoff.initialPrompt
+    : initialPrompt ?? handoff.initialPrompt;
+  useEffect(() => {
+    if (backendOwnsStartupPrompt && initialPrompt) {
+      // NativeAgentService owns the durable initial prompt and its images. A
+      // renderer that materializes the tab first must discard its text-only
+      // copy rather than racing the backend dispatch.
+      clearTabInitialPrompt(tabId, environmentId);
+    }
+  }, [
+    backendOwnsStartupPrompt,
+    clearTabInitialPrompt,
+    environmentId,
+    initialPrompt,
+    tabId,
+  ]);
   /*
    * Initialization is blocked while a handoff loads, so by the time the effect
    * below runs this ref holds the resolved prompt. Reading it through a ref
@@ -902,18 +920,6 @@ export function ClaudeChatTab({
   const queueLength = useClaudeStore(
     useCallback((state) => state.messageQueue.get(sessionKey)?.length ?? 0, [sessionKey])
   );
-  const queueHeadId = useClaudeStore(
-    useCallback((state) => state.messageQueue.get(sessionKey)?.[0]?.id, [sessionKey])
-  );
-  const isQueueBlockedByDraft = useClaudeStore(
-    useCallback(
-      (state) =>
-        (state.draftText.get(sessionKey)?.trim().length ?? 0) > 0 ||
-        (state.attachments.get(sessionKey)?.length ?? 0) > 0,
-      [sessionKey],
-    ),
-  );
-
   // Elapsed timer: counts up while agent is working
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
     session?.isLoading,
@@ -1154,7 +1160,12 @@ export function ClaudeChatTab({
             }
           }
 
-          const newSession = await createSession(bridgeClient);
+          const ensured = await ensureNativeAgentSession({
+            environmentId,
+            agent: "claude",
+            logicalSessionKey: sessionKey,
+          });
+          const newSession = { sessionId: ensured.providerSessionId };
           if (!mounted) return;
 
           if (!newSession) {
@@ -1343,6 +1354,23 @@ export function ClaudeChatTab({
         if (existingSessionId) {
           // Restore session from store - component may have remounted
           tabSessionIdRef.current = existingSessionId;
+          // Claim the restored id for this tab's logical key. A tab persisted
+          // before the bridge derived session ids from a client key holds a
+          // random id the backend has no record of, so the first queued prompt
+          // would otherwise be dispatched into a freshly created session.
+          // Best-effort: the tab is already usable, so a disagreement here must
+          // not break the reconnect the user is watching.
+          await adoptNativeAgentSession({
+            environmentId,
+            agent: "claude",
+            logicalSessionKey: sessionKey,
+            providerSessionId: existingSessionId,
+          }).catch((error) => {
+            console.warn(
+              "[ClaudeChatTab] Failed to adopt the restored session:",
+              error,
+            );
+          });
           updateTabNativeSessionId(tabId, existingSessionId, environmentId);
           isInitializedRef.current = true;
           console.debug("[ClaudeChatTab] Reconnecting to existing session", {
@@ -1387,7 +1415,12 @@ export function ClaudeChatTab({
             if (err instanceof SessionNotFoundError) {
               // Session expired on server - create a new one
               console.warn("[ClaudeChatTab] Session expired on server, creating new session");
-              const newSession = await createSession(bridgeClient);
+              const ensured = await ensureNativeAgentSession({
+                environmentId,
+                agent: "claude",
+                logicalSessionKey: sessionKey,
+              });
+              const newSession = { sessionId: ensured.providerSessionId };
               if (!mounted) return;
               if (newSession) {
                 seedInitialFastMode();
@@ -1416,7 +1449,12 @@ export function ClaudeChatTab({
             await syncPendingPrompts(bridgeClient, existingSessionId);
           }
         } else {
-          const newSession = await createSession(bridgeClient);
+          const ensured = await ensureNativeAgentSession({
+            environmentId,
+            agent: "claude",
+            logicalSessionKey: sessionKey,
+          });
+          const newSession = { sessionId: ensured.providerSessionId };
           if (!mounted) return;
 
           if (!newSession) {
@@ -2220,16 +2258,29 @@ export function ClaudeChatTab({
   // Handle adding a message to the queue when Claude is busy
   const handleQueue = useCallback(
     async (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => {
+      const store = useClaudeStore.getState();
+      const model = getSelectedModel(sessionKey);
+      // The backend dispatches this prompt and cannot read the renderer's
+      // selections, so capture them now. Fast mode is resolved against the model
+      // chosen for *this* entry, since the direct send path refuses it for a
+      // model that does not advertise support.
+      const modelSupportsFastMode = store
+        .getModels(environmentId)
+        .find((candidate) => candidate.id === model)?.supportsFastMode !== false;
       await enqueueAgentPrompt<QueuedMessage>("claude", sessionKey, {
         id: createUuid(),
         text,
         attachments,
         effort,
         planModeEnabled,
-        fastModeEnabled,
+        fastModeEnabled: fastModeEnabled && modelSupportsFastMode,
+        model,
+        agent: store.getSelectedAgent(sessionKey),
+        includeLocalSettings: store.includesLocalSettings(sessionKey),
+        promptSuggestions: store.promptSuggestionOptIn.get(sessionKey) === true,
       });
     },
-    [sessionKey]
+    [sessionKey, environmentId, getSelectedModel]
   );
 
   const promoteNextQueuedPromptToDraft = useCallback(async () => {
@@ -2391,52 +2442,6 @@ export function ClaudeChatTab({
       );
     }
   }, [connectionState, client, session, handoff.ready, launchPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
-
-  useNativeMessageQueue({
-    agentLabel: "Claude",
-    sessionKey,
-    store: useClaudeStore,
-    canDrain:
-      handoff.ready
-      && !setupPending
-      && connectionState === "connected"
-      && !!client
-      && !stopInProgress,
-    queueLength,
-    queueHeadId,
-    isLoading: session?.isLoading ?? false,
-    blockedByDraft: isQueueBlockedByDraft,
-    claimHead: () => claimAgentPromptQueueHead<QueuedMessage>("claude", sessionKey),
-    acknowledgeClaim: (claimToken) =>
-      acknowledgeAgentPromptClaim("claude", sessionKey, claimToken),
-    rejectClaim: (claimToken) =>
-      rejectAgentPromptClaim("claude", sessionKey, claimToken),
-    send: (entry) => {
-      const dispatch = handleSendRef.current?.(
-        entry.text,
-        entry.attachments,
-        entry.effort,
-        entry.planModeEnabled,
-        entry.fastModeEnabled,
-        entry.id,
-      );
-      return dispatch;
-    },
-    onError: (error) => {
-      const errorText = `Failed to send queued message: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`;
-      const errorMessage: ClaudeMessageType = {
-        id: `${ERROR_MESSAGE_PREFIX}${createUuid()}`,
-        role: "assistant",
-        content: errorText,
-        parts: [{ type: "text", content: errorText }],
-        timestamp: new Date().toISOString(),
-      };
-      addMessage(sessionKey, errorMessage);
-      setSessionLoading(sessionKey, false);
-    },
-  });
 
   const handleRetry = useCallback(() => {
     automaticInitRetryCountRef.current = 0;
@@ -2632,6 +2637,16 @@ export function ClaudeChatTab({
 
       const paneStore = usePaneLayoutStore.getState();
       const forkTabId = createUuid();
+      // Bind the fork to the backend's durable record before the tab exists.
+      // Without this the backend has no session for the fork's logical key, so
+      // draining a prompt queued in that tab creates a *different* provider
+      // session and the prompt lands somewhere the user cannot see.
+      await adoptNativeAgentSession({
+        environmentId,
+        agent: "claude",
+        logicalSessionKey: createSessionKey(environmentId, forkTabId),
+        providerSessionId: fork.sessionId,
+      });
       if (planned.kind === "prompt") {
         useClaudeStore.getState().setDraftText(
           createSessionKey(environmentId, forkTabId),

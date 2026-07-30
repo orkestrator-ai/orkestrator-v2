@@ -167,6 +167,7 @@ export async function startSession(
     model?: string;
     effort?: string;
     resumeSessionId?: string;
+    replaceExisting?: boolean;
   },
 ): Promise<TmuxStatus> {
   return invoke<TmuxStatus>("claude_tmux_start", {
@@ -176,6 +177,7 @@ export async function startSession(
     model: options?.model,
     effort: options?.effort,
     resumeSessionId: options?.resumeSessionId,
+    replaceExisting: options?.replaceExisting,
   });
 }
 

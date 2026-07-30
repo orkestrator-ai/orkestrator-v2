@@ -5,8 +5,14 @@ import type {
   TaskSnapshotImage,
 } from "@orkestrator/protocol/build-pipeline";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import {
+  mimeTypeForFilename,
+  promptAttachmentUrl,
+  type PromptAttachment,
+} from "./prompt-attachments.js";
 
 export type ProviderStatus = "running" | "idle" | "error" | "missing";
+export type ProviderExecutionMode = "plan" | "build";
 
 export class PromptRejectedError extends Error {
   constructor(message: string) {
@@ -24,6 +30,58 @@ export class ProviderUnavailableError extends Error {
   }
 }
 
+export interface ProviderCreateSessionOptions {
+  /** Second layer of idempotency: bridges derive a stable session id from it. */
+  clientSessionKey?: string;
+  /**
+   * Execution mode for the session, overriding what the phase implies.
+   *
+   * Several distinct phases collapse onto `review`, which would otherwise create
+   * a read-only Codex session for a phase that has to commit changes. The caller
+   * knows which; the phase alone does not.
+   */
+  mode?: ProviderExecutionMode;
+  /**
+   * Per-session model and effort.
+   *
+   * Passed per call rather than baked into the connection so one provider can
+   * serve every session in an environment. Caching a provider per model would
+   * accumulate one instance — and for OpenCode one event stream — per variant a
+   * user ever selects.
+   */
+  model?: string;
+  effort?: string;
+}
+
+export interface ProviderSendOptions {
+  requestId: string;
+  /**
+   * Attachments that already exist in the workspace.
+   *
+   * Preferred over {@link ProviderSendOptions.images}: both bridges require a
+   * `path`, so only a staged attachment can actually be delivered.
+   */
+  attachments?: PromptAttachment[];
+  /**
+   * Base64 images with no workspace path yet.
+   *
+   * Staged by the provider's `stageImages` dependency when one is configured.
+   * Without it there is nothing that can be sent, so the images are refused
+   * rather than silently dropped by the bridge.
+   */
+  images?: TaskSnapshotImage[];
+  schema?: JsonSchema;
+  mode?: ProviderExecutionMode;
+  fastMode?: boolean;
+  /** Claude sub-agent selected for this prompt. */
+  subAgent?: string;
+  includeLocalSettings?: boolean;
+  promptSuggestions?: boolean;
+  /** Overrides the connection default for this prompt only. */
+  model?: string;
+  effort?: string;
+}
+
 export interface BuildPipelineProvider {
   readonly agent: BuildPipelineAgent;
   /**
@@ -32,15 +90,15 @@ export interface BuildPipelineProvider {
    * session not registered here or created through createSession().
    */
   registerSession?(sessionId: string): void;
-  createSession(phase: PipelineSessionPhase, label: string): Promise<string>;
+  createSession(
+    phase: PipelineSessionPhase,
+    label: string,
+    options?: ProviderCreateSessionOptions,
+  ): Promise<string>;
   send(
     sessionId: string,
     prompt: string,
-    options: {
-      requestId: string;
-      images?: TaskSnapshotImage[];
-      schema?: JsonSchema;
-    },
+    options: ProviderSendOptions,
   ): Promise<void>;
   status(sessionId: string): Promise<ProviderStatus>;
   messages(sessionId: string): Promise<unknown[]>;
@@ -66,6 +124,24 @@ type ProviderDependencies = {
   fetch?: typeof fetch;
   openCodeClient?: OpencodeClient;
   monitorRetryMs?: number;
+  /**
+   * Stage base64 images into the workspace so they can be attached by path.
+   *
+   * Supplied by whichever service owns a command invoker; without it a
+   * base64-only image cannot be delivered to any bridge.
+   */
+  stageImages?: (
+    images: readonly TaskSnapshotImage[],
+  ) => Promise<PromptAttachment[]>;
+  /**
+   * Answer OpenCode permission and question requests on the user's behalf.
+   *
+   * Only correct for pipeline-owned sessions, which have no human watching.
+   * Interactive sessions must leave this off so the request reaches the tab:
+   * approving on the user's behalf would run a command they never saw, and
+   * rejecting a question cancels the card that exists to answer it.
+   */
+  autoAnswerRequests?: boolean;
 };
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
@@ -111,14 +187,6 @@ async function bridgeFetch(
   }
 }
 
-function mimeType(filename: string): string {
-  const extension = filename.split(".").at(-1)?.toLowerCase();
-  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
-  if (extension === "gif") return "image/gif";
-  if (extension === "webp") return "image/webp";
-  return "image/png";
-}
-
 function assertOk(response: Response, operation: string): void {
   if (!response.ok) {
     if (isTransientHttpStatus(response.status)) {
@@ -137,17 +205,50 @@ function isTransientHttpStatus(status: number): boolean {
     || status >= 500;
 }
 
+/**
+ * Produce the attachment list a bridge will accept.
+ *
+ * Base64-only images have no `path`, which every bridge validator requires, so
+ * they must be staged first. Refusing them outright when no stager is wired is
+ * deliberate: the alternative is a prompt that references an image the agent was
+ * never given.
+ */
+async function resolvePromptAttachments(
+  options: ProviderSendOptions,
+  stageImages: ProviderDependencies["stageImages"],
+): Promise<PromptAttachment[] | undefined> {
+  const attachments = options.attachments ? [...options.attachments] : [];
+  const images = options.images ?? [];
+  if (images.length > 0) {
+    if (!stageImages) {
+      throw new PromptRejectedError(
+        "Prompt images require workspace staging before they can be attached",
+      );
+    }
+    attachments.push(...await stageImages(images));
+  }
+  return attachments.length > 0 ? attachments : undefined;
+}
+
 class HttpBridgeProvider implements BuildPipelineProvider {
   readonly agent: "claude" | "codex";
+  private readonly stageImages?: ProviderDependencies["stageImages"];
 
   constructor(
     private readonly connection: BridgeConnection,
     private readonly fetchImpl: typeof fetch,
+    stageImages?: ProviderDependencies["stageImages"],
   ) {
     this.agent = connection.agent as "claude" | "codex";
+    this.stageImages = stageImages;
   }
 
-  async createSession(phase: PipelineSessionPhase, label: string): Promise<string> {
+  async createSession(
+    phase: PipelineSessionPhase,
+    label: string,
+    options: ProviderCreateSessionOptions = {},
+  ): Promise<string> {
+    const clientSessionKey = options.clientSessionKey;
     const response = await bridgeFetch(
       this.connection,
       "/session/create",
@@ -156,11 +257,13 @@ class HttpBridgeProvider implements BuildPipelineProvider {
         body: JSON.stringify(this.agent === "codex"
           ? {
               title: label,
-              model: this.connection.model,
-              modelReasoningEffort: this.connection.effort,
-              mode: phase === "review" || phase === "verify" ? "plan" : "build",
+              model: options.model ?? this.connection.model,
+              modelReasoningEffort: options.effort ?? this.connection.effort,
+              mode: options.mode
+                ?? (phase === "review" || phase === "verify" ? "plan" : "build"),
+              clientSessionKey,
             }
-          : { title: label }),
+          : { title: label, clientSessionKey }),
       },
       this.fetchImpl,
     );
@@ -175,26 +278,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
   async send(
     sessionId: string,
     prompt: string,
-    options: {
-      requestId: string;
-      images?: TaskSnapshotImage[];
-      schema?: JsonSchema;
-    },
+    options: ProviderSendOptions,
   ): Promise<void> {
-    const attachments = options.images?.map((image) => this.agent === "claude"
-      ? {
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: mimeType(image.filename),
-            data: image.data,
-          },
-        }
-      : {
-          type: "image",
-          filename: image.filename,
-          dataUrl: `data:${mimeType(image.filename)};base64,${image.data}`,
-        });
+    const attachments = await resolvePromptAttachments(options, this.stageImages);
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/prompt`,
@@ -207,16 +293,29 @@ class HttpBridgeProvider implements BuildPipelineProvider {
           outputSchema: options.schema,
           ...(this.agent === "claude"
             ? {
-                model: this.connection.model,
-                effort: this.connection.effort,
-                permissionMode: "bypassPermissions",
+                model: options.model ?? this.connection.model,
+                effort: options.effort ?? this.connection.effort,
+                fastMode: options.fastMode,
+                agent: options.subAgent,
+                includeLocalSettings: options.includeLocalSettings,
+                promptSuggestions: options.promptSuggestions,
+                permissionMode:
+                  options.mode === "plan" ? "plan" : "bypassPermissions",
               }
-            : {}),
+            : { fastMode: options.fastMode }),
         }),
       },
       this.fetchImpl,
     );
-    if (isTransientHttpStatus(response.status)) {
+    // A session can briefly disappear while a bridge reconciles a restarted
+    // provider, and an idle status read can race with another client starting a
+    // turn. Both are retryable dispatch races, not validation rejections that
+    // should park the user's prompt indefinitely.
+    if (
+      response.status === 404
+      || response.status === 409
+      || isTransientHttpStatus(response.status)
+    ) {
       throw new ProviderUnavailableError(
         `${this.agent} prompt dispatch is temporarily unavailable (HTTP ${response.status})`,
       );
@@ -296,6 +395,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
   private reconciliation: Promise<void> | null = null;
   private monitorPromise: Promise<void>;
   private disposed = false;
+  private readonly autoAnswerRequests: boolean;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -314,11 +414,18 @@ class OpenCodeProvider implements BuildPipelineProvider {
       1,
       dependencies.monitorRetryMs ?? DEFAULT_MONITOR_RETRY_MS,
     );
-    this.monitorPromise = this.monitorRequests();
+    this.autoAnswerRequests = dependencies.autoAnswerRequests !== false;
+    // An interactive provider has nothing to monitor: every request belongs to a
+    // tab that will answer it. Subscribing anyway would open a permanent event
+    // stream per provider for no consumer.
+    this.monitorPromise = this.autoAnswerRequests
+      ? this.monitorRequests()
+      : Promise.resolve();
   }
 
   registerSession(sessionId: string): void {
     this.ownedSessions.add(sessionId);
+    if (!this.autoAnswerRequests) return;
     const activeReconciliation = this.reconciliation;
     const reconciliation = activeReconciliation
       ? activeReconciliation
@@ -372,14 +479,19 @@ class OpenCodeProvider implements BuildPipelineProvider {
     const sessionId = typeof properties.sessionID === "string"
       ? properties.sessionID
       : undefined;
-    if (
-      !requestId
-      || !sessionId
-      || !this.ownedSessions.has(sessionId)
-      || this.answeringRequestIds.has(requestId)
-    ) {
+    if (!sessionId || !this.ownedSessions.has(sessionId)) return;
+
+    // An answered question releases the session: someone (a human in the
+    // OpenCode UI) resolved what this provider could not, so the pipeline can
+    // advance instead of reading a permanent error. `question.rejected` is
+    // deliberately not cleared — this provider's own rejection raises it, and
+    // that block is what makes the stuck attempt fail rather than hang.
+    if (event.type === "question.replied") {
+      this.blockedSessions.delete(sessionId);
       return;
     }
+    if (!this.autoAnswerRequests) return;
+    if (!requestId || this.answeringRequestIds.has(requestId)) return;
 
     this.answeringRequestIds.add(requestId);
     try {
@@ -435,7 +547,11 @@ class OpenCodeProvider implements BuildPipelineProvider {
     }
   }
 
-  async createSession(_phase: PipelineSessionPhase, label: string): Promise<string> {
+  async createSession(
+    _phase: PipelineSessionPhase,
+    label: string,
+    _options: ProviderCreateSessionOptions = {},
+  ): Promise<string> {
     try {
       const response = await this.client.session.create(
         { title: label },
@@ -455,22 +571,28 @@ class OpenCodeProvider implements BuildPipelineProvider {
   async send(
     sessionId: string,
     prompt: string,
-    options: {
-      requestId: string;
-      images?: TaskSnapshotImage[];
-      schema?: JsonSchema;
-    },
+    options: ProviderSendOptions,
   ): Promise<void> {
     const parts: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
+    // OpenCode accepts inline data, so its images need no staging. Attachments
+    // that arrive already staged are referenced by path instead.
     for (const image of options.images ?? []) {
       parts.push({
         type: "file",
-        mime: mimeType(image.filename),
+        mime: mimeTypeForFilename(image.filename),
         filename: image.filename,
-        url: `data:${mimeType(image.filename)};base64,${image.data}`,
+        url: `data:${mimeTypeForFilename(image.filename)};base64,${image.data}`,
       });
     }
-    const modelParts = this.connection.model?.split("/");
+    for (const attachment of options.attachments ?? []) {
+      parts.push({
+        type: "file",
+        mime: mimeTypeForFilename(attachment.filename ?? attachment.path),
+        filename: attachment.filename,
+        url: promptAttachmentUrl(attachment),
+      });
+    }
+    const modelParts = (options.model ?? this.connection.model)?.split("/");
     let response;
     try {
       response = await this.client.session.promptAsync({
@@ -481,8 +603,8 @@ class OpenCodeProvider implements BuildPipelineProvider {
         model: modelParts && modelParts.length > 1
           ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
           : undefined,
-        agent: "build",
-        variant: this.connection.effort,
+        agent: options.mode ?? "build",
+        variant: options.effort ?? this.connection.effort,
         format: options.schema
           ? { type: "json_schema", schema: options.schema, retryCount: 2 }
           : undefined,
@@ -496,6 +618,16 @@ class OpenCodeProvider implements BuildPipelineProvider {
       );
     }
     if ("error" in response && response.error) {
+      const status = response.response?.status;
+      if (
+        status === 404
+        || status === 409
+        || (status !== undefined && isTransientHttpStatus(status))
+      ) {
+        throw new ProviderUnavailableError(
+          `OpenCode prompt dispatch is temporarily unavailable (HTTP ${status})`,
+        );
+      }
       throw new PromptRejectedError("OpenCode rejected the prompt");
     }
   }
@@ -655,7 +787,11 @@ export function createBuildPipelineProvider(
 ): BuildPipelineProvider {
   return connection.agent === "opencode"
     ? new OpenCodeProvider(connection, dependencies)
-    : new HttpBridgeProvider(connection, dependencies.fetch ?? fetch);
+    : new HttpBridgeProvider(
+        connection,
+        dependencies.fetch ?? fetch,
+        dependencies.stageImages,
+      );
 }
 
 export type { BridgeConnection, ProviderDependencies };

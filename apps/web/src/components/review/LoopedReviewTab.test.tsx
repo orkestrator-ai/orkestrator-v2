@@ -505,10 +505,27 @@ describe("app-lifetime looped-review controller", () => {
   test("advances a restored workflow without a visible tab", async () => {
     const workflow = seedSentReconciliationWorkflow();
     const agent = agentWith(async () => successfulReconciliation);
+    const persistWorkflow = mock(async (
+      workflowId: string,
+      options?: { controllerFence?: { ownerId: string; token: string } },
+    ) => {
+      expect(options?.controllerFence).toMatchObject({
+        token: "lease-token",
+      });
+      return useLoopedReviewStore.getState().workflows.get(workflowId)!;
+    });
     render(
       <LoopedReviewSupervisor
         connectAgent={async () => agent}
         pollIntervalMs={1}
+        claimController={async () => ({
+          granted: true,
+          token: "lease-token",
+          expiresAt: new Date(Date.now() + 15_000).toISOString(),
+        })}
+        validateController={async () => true}
+        releaseController={async () => undefined}
+        persistWorkflow={persistWorkflow}
       />,
     );
 
@@ -528,6 +545,398 @@ describe("app-lifetime looped-review controller", () => {
         file: TEST_STRUCTURED_REVIEW_REPORT.testCoverageGaps[0]!.file,
       }],
     });
+    expect(persistWorkflow).toHaveBeenCalled();
+  });
+
+  test("does not connect an agent when the controller lease is denied", async () => {
+    seedSentReconciliationWorkflow();
+    const connectAgent = mock(async () => agentWith(async () => null));
+
+    render(
+      <LoopedReviewSupervisor
+        connectAgent={connectAgent}
+        pollIntervalMs={1}
+        claimController={async () => ({
+          granted: false,
+          expiresAt: new Date(Date.now() + 15_000).toISOString(),
+        })}
+        validateController={async () => false}
+        releaseController={async () => undefined}
+      />,
+    );
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(connectAgent).not.toHaveBeenCalled();
+  });
+
+  test("locally expires ownership while a renewal request is hanging", async () => {
+    seedSentReconciliationWorkflow();
+    const hangingRenewal = deferred<never>();
+    let claims = 0;
+    let reads = 0;
+    const agent = agentWith(
+      async () => {
+        reads += 1;
+        return null;
+      },
+      async () => "running",
+    );
+
+    render(
+      <LoopedReviewSupervisor
+        connectAgent={async () => agent}
+        pollIntervalMs={1}
+        controllerLeaseMs={30}
+        controllerRenewMs={5}
+        claimController={async () => {
+          claims += 1;
+          if (claims > 1) return hangingRenewal.promise;
+          return {
+            granted: true,
+            token: "lease-token",
+            expiresAt: new Date(Date.now() + 30).toISOString(),
+          };
+        }}
+        validateController={async () => true}
+        releaseController={async () => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(reads).toBeGreaterThan(0));
+    await waitFor(() => expect(claims).toBe(2));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 45));
+    });
+    const readsAfterExpiry = reads;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    });
+    expect(reads).toBe(readsAfterExpiry);
+  });
+
+  test("drops a structured result that completes after the lease is lost", async () => {
+    const workflow = seedSentReconciliationWorkflow();
+    const pending = deferred<typeof successfulReconciliation>();
+    let reads = 0;
+    let leaseValid = true;
+    const agent = agentWith(async () => {
+      reads += 1;
+      return pending.promise;
+    });
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        controllerLease={{
+          ownerId: "owner-1",
+          token: "token-1",
+          expiresAt: new Date(Date.now() + 15_000).toISOString(),
+        }}
+        validateControllerLease={async () => leaseValid}
+        connectAgent={async () => agent}
+        pollIntervalMs={1}
+      />,
+    );
+    await waitFor(() => expect(reads).toBe(1));
+
+    leaseValid = false;
+    await act(async () => {
+      pending.resolve(successfulReconciliation);
+      await pending.promise;
+    });
+
+    expect(
+      useLoopedReviewStore.getState().workflows.get(workflow.id),
+    ).toMatchObject({
+      phase: "reconciling",
+      dispatch: { id: "dispatch-1", requestId: "request-1" },
+      activePool: { issues: [], coverageGaps: [] },
+    });
+  });
+
+  /**
+   * Every step the controller takes is gated on `assertControllerLease`. Each
+   * case below is a distinct way ownership can already be gone by the time the
+   * assertion runs, and all of them must stop the turn without turning a lease
+   * problem into a workflow failure the user has to retry.
+   */
+  describe("controller lease assertions", () => {
+    const live = {
+      ownerId: "owner-1",
+      token: "token-1",
+      expiresAt: new Date(Date.now() + 15_000).toISOString(),
+    };
+
+    function phaseOf(workflowId: string): string | undefined {
+      return useLoopedReviewStore.getState().workflows.get(workflowId)?.phase;
+    }
+
+    test("does not validate or connect under a lease that already expired locally", async () => {
+      const workflow = seedSentReconciliationWorkflow();
+      const validateControllerLease = mock(async () => true);
+      const connectAgent = mock(async () => agentWith(async () => null));
+
+      render(
+        <LoopedReviewTab
+          data={data}
+          isActive={false}
+          driveWorkflow
+          controllerOnly
+          controllerLease={{
+            ...live,
+            expiresAt: new Date(Date.now() - 1_000).toISOString(),
+          }}
+          validateControllerLease={validateControllerLease}
+          connectAgent={connectAgent}
+          pollIntervalMs={10_000}
+        />,
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      // The clock alone is enough to know ownership is gone, so spending a
+      // round trip to be told so would only widen the window.
+      expect(validateControllerLease).not.toHaveBeenCalled();
+      expect(connectAgent).not.toHaveBeenCalled();
+      expect(phaseOf(workflow.id)).toBe("reconciling");
+    });
+
+    test("treats an unreachable lease validator as lost ownership, not a failure", async () => {
+      const workflow = seedSentReconciliationWorkflow();
+      const connectAgent = mock(async () => agentWith(async () => null));
+      const validateControllerLease = mock(async () => {
+        throw new Error("Controller lease service is unavailable");
+      });
+
+      render(
+        <LoopedReviewTab
+          data={data}
+          isActive={false}
+          driveWorkflow
+          controllerOnly
+          controllerLease={live}
+          validateControllerLease={validateControllerLease}
+          connectAgent={connectAgent}
+          pollIntervalMs={10_000}
+        />,
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      expect(connectAgent).not.toHaveBeenCalled();
+      // A lease this client cannot confirm is not a broken workflow: failing it
+      // would make the user retry work that may still be running elsewhere.
+      expect(phaseOf(workflow.id)).toBe("reconciling");
+      // Recognising this as lost ownership is what makes the driver abandon the
+      // turn outright. Any other error would fall into the failure-reporting
+      // path and re-diagnose the same dead lease on the way out.
+      expect(validateControllerLease).toHaveBeenCalledTimes(1);
+    });
+
+    test("refuses to drive when a validator is configured but no lease was granted", async () => {
+      const workflow = seedSentReconciliationWorkflow();
+      const validateControllerLease = mock(async () => true);
+      const connectAgent = mock(async () => agentWith(async () => null));
+
+      render(
+        <LoopedReviewTab
+          data={data}
+          isActive={false}
+          driveWorkflow
+          controllerOnly
+          validateControllerLease={validateControllerLease}
+          connectAgent={connectAgent}
+          pollIntervalMs={10_000}
+        />,
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      expect(validateControllerLease).not.toHaveBeenCalled();
+      expect(connectAgent).not.toHaveBeenCalled();
+      expect(phaseOf(workflow.id)).toBe("reconciling");
+    });
+
+    test("abandons a validated lease when the tab unmounted while validating", async () => {
+      const workflow = seedSentReconciliationWorkflow();
+      const validating = deferred<boolean>();
+      const validateControllerLease = mock(async () => validating.promise);
+      const connectAgent = mock(async () => agentWith(async () => null));
+
+      const { unmount } = render(
+        <LoopedReviewTab
+          data={data}
+          isActive={false}
+          driveWorkflow
+          controllerOnly
+          controllerLease={live}
+          validateControllerLease={validateControllerLease}
+          connectAgent={connectAgent}
+          pollIntervalMs={10_000}
+        />,
+      );
+      await waitFor(() => expect(validateControllerLease).toHaveBeenCalled());
+
+      unmount();
+      await act(async () => {
+        validating.resolve(true);
+        await validating.promise;
+      });
+
+      // The supervisor releases the lease on unmount, so a still-true answer
+      // from before that release no longer describes this client.
+      expect(connectAgent).not.toHaveBeenCalled();
+      expect(phaseOf(workflow.id)).toBe("reconciling");
+    });
+
+    test.each([
+      { swap: "token", next: { ownerId: "owner-1", token: "token-2" } },
+      { swap: "owner", next: { ownerId: "owner-2", token: "token-1" } },
+    ])(
+      "abandons a validated lease when the $swap changed while validating",
+      async ({ next }) => {
+        const workflow = seedSentReconciliationWorkflow();
+        const validating = deferred<boolean>();
+        let validations = 0;
+        const validateControllerLease = mock(async () => {
+          validations += 1;
+          return validations === 1 ? validating.promise : true;
+        });
+        const connectAgent = mock(async () => agentWith(async () => null));
+        const tab = (lease: typeof live) => (
+          <LoopedReviewTab
+            data={data}
+            isActive={false}
+            driveWorkflow
+            controllerOnly
+            controllerLease={lease}
+            validateControllerLease={validateControllerLease}
+            connectAgent={connectAgent}
+            pollIntervalMs={10_000}
+          />
+        );
+
+        const { rerender } = render(tab(live));
+        await waitFor(() => expect(validations).toBe(1));
+
+        // A renewal arrived under a new generation while the old answer was in
+        // flight; that answer says nothing about the generation now in force.
+        rerender(tab({ ...live, ...next }));
+        await act(async () => {
+          validating.resolve(true);
+          await validating.promise;
+        });
+
+        expect(connectAgent).not.toHaveBeenCalled();
+        expect(phaseOf(workflow.id)).toBe("reconciling");
+      },
+    );
+  });
+
+  test("an unfenced driving tab commits the dispatch lease without a controller fence", async () => {
+    const workflow = seedWorkflow({ phase: "preparing" });
+    const persistWorkflow = mock(async (
+      workflowId: string,
+      _options?: { controllerFence?: { ownerId: string; token: string } },
+    ) => useLoopedReviewStore.getState().workflows.get(workflowId)!);
+    const agent: NativeStructuredAgent = {
+      provider: "codex",
+      createSession: async () => "preparation-provider-session",
+      send: async (_sessionId, _prompt, _schema, requestId) => ({
+        accepted: true as const,
+        requestId,
+      }),
+      getResult: async () => null,
+      getStatus: async () => "running",
+      abort: async () => true,
+    };
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        connectAgent={async () => agent}
+        persistWorkflow={persistWorkflow}
+        pollIntervalMs={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id)?.dispatch)
+        .toMatchObject({ kind: "prepare", state: "sent" });
+    });
+
+    // Session attachment is re-derivable, so an unfenced tab skips persisting it;
+    // the dispatch lease is not, so it is committed even with no fence to carry.
+    expect(persistWorkflow).toHaveBeenCalledTimes(2);
+    for (const [workflowId, options] of persistWorkflow.mock.calls) {
+      expect(workflowId).toBe(workflow.id);
+      expect(options).toBeUndefined();
+    }
+  });
+
+  test("does not send after ownership is lost during agent connection", async () => {
+    const workflow = seedSentReconciliationWorkflow();
+    useLoopedReviewStore.setState({
+      workflows: new Map([[
+        workflow.id,
+        {
+          ...workflow,
+          dispatch: { ...workflow.dispatch!, state: "prepared" },
+        },
+      ]]),
+    });
+    const connection = deferred<NativeStructuredAgent>();
+    let leaseValid = true;
+    const send = mock(async (
+      _sessionId: string,
+      _prompt: string,
+      _schema: unknown,
+      requestId: string,
+    ) => ({ accepted: true as const, requestId }));
+    const agent: NativeStructuredAgent = {
+      ...agentWith(async () => null),
+      send,
+    };
+    const connectAgent = mock(async () => connection.promise);
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        controllerLease={{
+          ownerId: "owner-1",
+          token: "token-1",
+          expiresAt: new Date(Date.now() + 15_000).toISOString(),
+        }}
+        validateControllerLease={async () => leaseValid}
+        connectAgent={connectAgent}
+        pollIntervalMs={1}
+      />,
+    );
+
+    await waitFor(() => expect(connectAgent).toHaveBeenCalledTimes(1));
+    leaseValid = false;
+    await act(async () => {
+      connection.resolve(agent);
+      await connection.promise;
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(send).not.toHaveBeenCalled();
   });
 
   test("preserves a result lease across pause and applies it once after resume", async () => {

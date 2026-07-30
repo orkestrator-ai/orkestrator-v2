@@ -94,6 +94,142 @@ describe("StorageService prompt queues", () => {
     });
   });
 
+  test("reserves one durable in-flight dispatch across backend processes", async () => {
+    await withStorage(async (storage) => {
+      const second = new StorageService(storage.getDataDir());
+      await second.init();
+      await storage.savePromptQueue(KEY, "e1", [
+        { id: "row-1", requestId: "request-1", text: "first" },
+        { id: "row-2", text: "second" },
+      ]);
+
+      const [first, other] = await Promise.all([
+        storage.reservePromptQueueHeadForDispatch(KEY),
+        second.reservePromptQueueHeadForDispatch(KEY),
+      ]);
+
+      expect(first).toEqual(other);
+      expect(first).toMatchObject({
+        requestId: "request-1",
+        message: { id: "row-1", text: "first" },
+      });
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({
+        messages: [{ id: "row-2", text: "second" }],
+        inFlight: { requestId: "request-1" },
+      });
+    });
+  });
+
+  test("preserves in-flight work through renderer queue saves and clears it only by request id", async () => {
+    await withStorage(async (storage) => {
+      await storage.savePromptQueue(KEY, "e1", [{ id: "row-1", text: "first" }]);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+      await storage.savePromptQueue(KEY, "e1", [{ id: "row-2", text: "second" }]);
+
+      expect(await storage.acknowledgePromptQueueDispatch(KEY, "wrong")).toMatchObject({
+        inFlight: { requestId: "row-1" },
+      });
+      expect(await storage.acknowledgePromptQueueDispatch(KEY, "row-1")).toMatchObject({
+        messages: [{ id: "row-2", text: "second" }],
+      });
+      expect((await storage.getPromptQueue(KEY))?.inFlight).toBeUndefined();
+    });
+  });
+
+  test("restores a permanently rejected dispatch and requires explicit retry", async () => {
+    await withStorage(async (storage) => {
+      await storage.savePromptQueue(KEY, "e1", [
+        { id: "row-1", text: "invalid" },
+        { id: "row-2", text: "later" },
+      ]);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+
+      const failed = await storage.failPromptQueueDispatch(KEY, "row-1");
+      expect(failed).toMatchObject({
+        messages: [
+          { id: "row-1", text: "invalid" },
+          { id: "row-2", text: "later" },
+        ],
+        dispatchError: {
+          requestId: "row-1",
+          messageId: "row-1",
+          messageFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+        },
+      });
+      expect(failed?.inFlight).toBeUndefined();
+      expect(await storage.reservePromptQueueHeadForDispatch(KEY)).toBeNull();
+
+      const rendererSave = await storage.savePromptQueue(
+        KEY,
+        "e1",
+        failed!.messages,
+        failed!.revision,
+      );
+      expect(rendererSave.dispatchError).toEqual(failed!.dispatchError);
+      expect(await storage.reservePromptQueueHeadForDispatch(KEY)).toBeNull();
+
+      const retrying = await storage.retryPromptQueueDispatch(KEY);
+      expect(retrying?.dispatchError).toBeUndefined();
+      expect(await storage.reservePromptQueueHeadForDispatch(KEY)).toMatchObject({
+        requestId: "row-1",
+      });
+    });
+  });
+
+  test("clears a rejection when the failed prompt is edited or removed", async () => {
+    await withStorage(async (storage) => {
+      await storage.savePromptQueue(KEY, "e1", [
+        { id: "row-1", text: "invalid" },
+        { id: "row-2", text: "later" },
+      ]);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+      const failed = await storage.failPromptQueueDispatch(KEY, "row-1");
+
+      const edited = await storage.savePromptQueue(
+        KEY,
+        "e1",
+        [
+          { id: "row-1", text: "valid now" },
+          { id: "row-2", text: "later" },
+        ],
+        failed!.revision,
+      );
+      expect(edited.dispatchError).toBeUndefined();
+
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+      const failedAgain = await storage.failPromptQueueDispatch(KEY, "row-1");
+      const removed = await storage.savePromptQueue(
+        KEY,
+        "e1",
+        [{ id: "row-2", text: "later" }],
+        failedAgain!.revision,
+      );
+      expect(removed.dispatchError).toBeUndefined();
+    });
+  });
+
+  test("preserves a rejection on equal saves and rejects stale saves", async () => {
+    await withStorage(async (storage) => {
+      const messages = [{ id: "row-1", text: "invalid" }];
+      await storage.savePromptQueue(KEY, "e1", messages);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+      const failed = await storage.failPromptQueueDispatch(KEY, "row-1");
+
+      const equal = await storage.savePromptQueue(
+        KEY,
+        "e1",
+        messages,
+        failed!.revision,
+      );
+      expect(equal.dispatchError).toEqual(failed!.dispatchError);
+      await expect(
+        storage.savePromptQueue(KEY, "e1", messages, failed!.revision),
+      ).rejects.toThrow("revision conflict");
+      expect((await storage.getPromptQueue(KEY))?.dispatchError)
+        .toEqual(failed!.dispatchError);
+    });
+  });
+
   test("blocks a second claim until the first dispatch is acknowledged", async () => {
     await withStorage(async (storage) => {
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
@@ -554,7 +690,57 @@ describe("StorageService prompt queues", () => {
     });
   });
 
-  test("validates claim environment ownership", async () => {
+  test("refuses to claim a head while a rejection is parked", async () => {
+    await withStorage(async (storage) => {
+      await storage.savePromptQueue(KEY, "e1", [
+        { id: "m1", text: "invalid" },
+        { id: "m2", text: "later" },
+      ]);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+      const failed = await storage.failPromptQueueDispatch(KEY, "m1");
+
+      // The renderer promotes a claimed head into its composer. Handing it the
+      // rejected prompt would silently discard the error the user must see.
+      const result = await storage.claimPromptQueueHead(KEY, "e1", "m1");
+      expect(result.claimed).toBeNull();
+      expect(result.queue).toMatchObject({
+        revision: failed!.revision,
+        dispatchError: { requestId: "m1" },
+      });
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({
+        messages: [{ id: "m1" }, { id: "m2" }],
+        revision: failed!.revision,
+      });
+
+      await storage.retryPromptQueueDispatch(KEY);
+      expect((await storage.claimPromptQueueHead(KEY, "e1", "m1")).claimed)
+        .toEqual({ id: "m1", text: "invalid" });
+    });
+  });
+
+  test("keeps a durable in-flight dispatch when a later head is claimed", async () => {
+    await withStorage(async (storage) => {
+      await storage.savePromptQueue(KEY, "e1", [
+        { id: "row-1", text: "dispatching" },
+        { id: "row-2", text: "claimable" },
+      ]);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+
+      const result = await storage.claimPromptQueueHead(KEY, "e1", "row-2");
+      expect(result.claimed).toEqual({ id: "row-2", text: "claimable" });
+      // Dropping inFlight here would let the backend reserve and send row-1 a
+      // second time under a fresh request id.
+      expect(result.queue).toMatchObject({
+        messages: [],
+        inFlight: { requestId: "row-1" },
+      });
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({
+        inFlight: { requestId: "row-1", message: { id: "row-1" } },
+      });
+    });
+  });
+
+  test("validates claim candidates and environment ownership", async () => {
     await withStorage(async (storage) => {
       await expect(
         storage.claimPromptQueueHead(KEY, "missing", "m1"),
@@ -661,6 +847,27 @@ describe("StorageService prompt queues", () => {
 
       expect((await storage.listPromptQueues("e1")).map((queue) => queue.queueKey))
         .toEqual([KEY]);
+    });
+  });
+
+  test("upgrades a legacy dispatch error with the failed message fingerprint", async () => {
+    await withStorage(async (storage) => {
+      await storage.savePromptQueue(KEY, "e1", [{ id: "m1", text: "invalid" }]);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+      await storage.failPromptQueueDispatch(KEY, "m1");
+      const file = path.join(storage.getDataDir(), "prompt-queues.json");
+      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
+        string,
+        { dispatchError?: Record<string, unknown> }
+      >;
+      delete stored[KEY]?.dispatchError?.messageId;
+      delete stored[KEY]?.dispatchError?.messageFingerprint;
+      await fs.writeFile(file, JSON.stringify(stored));
+
+      expect((await storage.getPromptQueue(KEY))?.dispatchError).toMatchObject({
+        messageId: "m1",
+        messageFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
     });
   });
 

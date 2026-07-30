@@ -4,6 +4,7 @@ import {
   hydrateLoopedReviewWorkflowsForEnvironment,
   isLoopedReviewWorkflow,
   persistLoopedReviewWorkflowNow,
+  registerLoopedReviewControllerFence,
   startLoopedReviewPersistence,
   type LoopedReviewPersistenceOptions,
 } from "./looped-review-persistence";
@@ -216,6 +217,298 @@ describe("looped-review authoritative persistence", () => {
       }),
       load: mock(async () => persisted(winner, 2)),
     })).resolves.toMatchObject({ phase: "paused", backendRevision: 2 });
+  });
+
+  /**
+   * Conflict recovery adopts a snapshot the backend hands back, so the identity
+   * guards are the only thing standing between a lost race and this renderer
+   * driving somebody else's workflow.
+   */
+  describe("conflict recovery identity guards", () => {
+    /**
+     * Each forgery is internally coherent except for the single field it
+     * violates, so exactly one guard can reject it. A record that trips two at
+     * once would keep passing after either was removed.
+     */
+    const forgeries = [
+      {
+        mismatch: "the record answers for another workflow",
+        forge: (workflow: LoopedReviewWorkflow) => ({
+          ...persisted({ ...workflow, id: "another-workflow" }, 4),
+        }),
+      },
+      {
+        mismatch: "the snapshot carries a different workflow id",
+        forge: (workflow: LoopedReviewWorkflow) => ({
+          ...persisted(workflow, 4),
+          snapshot: { ...workflow, id: "another-workflow" },
+        }),
+      },
+      {
+        mismatch: "the snapshot belongs to another environment",
+        forge: (workflow: LoopedReviewWorkflow) => ({
+          ...persisted(workflow, 4),
+          snapshot: { ...workflow, environmentId: "env-2" },
+        }),
+      },
+    ];
+
+    test.each(forgeries)(
+      "rethrows an immediate conflict when $mismatch",
+      async ({ forge }) => {
+        const workflow = createWorkflow();
+        const conflict = new Error("Looped review workflow revision conflict");
+
+        await expect(persistLoopedReviewWorkflowNow(workflow.id, {
+          save: mock(async () => {
+            throw conflict;
+          }),
+          load: mock(async () => forge(workflow)) as unknown as
+            NonNullable<LoopedReviewPersistenceOptions["load"]>,
+        })).rejects.toBe(conflict);
+
+        expect(
+          useLoopedReviewStore.getState().workflows.get(workflow.id),
+        ).toMatchObject({
+          id: workflow.id,
+          environmentId: "env-1",
+          backendRevision: 0,
+        });
+      },
+    );
+
+    test.each(forgeries)(
+      "reports a persistence failure on the debounced path when $mismatch",
+      async ({ forge }) => {
+        const workflow = createWorkflow();
+        const stop = startLoopedReviewPersistence({
+          debounceMs: 0,
+          save: mock(async () => {
+            throw new Error("Looped review workflow revision conflict");
+          }),
+          load: mock(async () => forge(workflow)) as unknown as
+            NonNullable<LoopedReviewPersistenceOptions["load"]>,
+        });
+        try {
+          await waitUntil(
+            () =>
+              useLoopedReviewStore.getState().workflows.get(workflow.id)?.phase
+                === "failed",
+          );
+          expect(
+            useLoopedReviewStore.getState().workflows.get(workflow.id),
+          ).toMatchObject({
+            id: workflow.id,
+            environmentId: "env-1",
+            backendRevision: 0,
+            failure: { code: "persistence" },
+          });
+        } finally {
+          stop();
+        }
+      },
+      15_000,
+    );
+  });
+
+  test("adopts the authoritative winner when a debounced write loses the controller lease", async () => {
+    // A lease can change generations without changing the workflow revision, so
+    // the debounced path has to recover from a lease conflict too — otherwise an
+    // evicted controller reports a spurious persistence failure to the user.
+    const workflow = createWorkflow();
+    const winner: LoopedReviewWorkflow = {
+      ...workflow,
+      phase: "paused",
+      pausedFromPhase: "preparing",
+      backendRevision: 7,
+    };
+    const stop = startLoopedReviewPersistence({
+      debounceMs: 0,
+      save: mock(async () => {
+        throw new Error("Looped review controller lease conflict");
+      }),
+      load: mock(async () => persisted(winner, 7)) as unknown as
+        NonNullable<LoopedReviewPersistenceOptions["load"]>,
+    });
+    try {
+      await waitUntil(
+        () =>
+          useLoopedReviewStore.getState().workflows.get(workflow.id)?.phase
+            === "paused",
+      );
+      expect(
+        useLoopedReviewStore.getState().workflows.get(workflow.id),
+      ).toMatchObject({ phase: "paused", backendRevision: 7 });
+    } finally {
+      stop();
+    }
+  }, 15_000);
+
+  test("fences controller commits and discards a rejected equal-revision transition", async () => {
+    const authoritative = createWorkflow();
+    useLoopedReviewStore.getState().pauseWorkflow(authoritative.id);
+    const save = mock(async (
+      _id: string,
+      _environmentId: string,
+      _version: number,
+      _snapshot: LoopedReviewWorkflow,
+      _expectedRevision?: number,
+      controllerFence?: { ownerId: string; token: string },
+    ) => {
+      expect(controllerFence).toEqual({
+        ownerId: "controller-a",
+        token: "generation-a",
+      });
+      throw new Error("Looped review controller lease conflict");
+    });
+
+    await expect(persistLoopedReviewWorkflowNow(authoritative.id, {
+      save,
+      load: mock(async () => persisted(authoritative, 0)),
+      controllerFence: {
+        ownerId: "controller-a",
+        token: "generation-a",
+      },
+    })).resolves.toMatchObject({
+      phase: "preparing",
+      backendRevision: 0,
+    });
+    expect(
+      useLoopedReviewStore.getState().workflows.get(authoritative.id),
+    ).toMatchObject({
+      phase: "preparing",
+      backendRevision: 0,
+    });
+  });
+
+  test("captures the active controller fence on debounced transitions", async () => {
+    const workflow = createWorkflow();
+    const save = mock(async (
+      id: string,
+      environmentId: string,
+      version: number,
+      snapshot: LoopedReviewWorkflow,
+      _expectedRevision?: number,
+      controllerFence?: { ownerId: string; token: string },
+    ) => {
+      expect(controllerFence).toEqual({
+        ownerId: "controller-a",
+        token: "generation-a",
+      });
+      return {
+        id,
+        environmentId,
+        version,
+        snapshot,
+        updatedAt: snapshot.updatedAt,
+        revision: 1,
+      };
+    });
+    const unregister = registerLoopedReviewControllerFence(workflow.id, {
+      ownerId: "controller-a",
+      token: "generation-a",
+    });
+    const stop = startLoopedReviewPersistence({
+      debounceMs: 0,
+      save,
+      load: mock(async () => null),
+    });
+
+    await settle();
+    expect(save).toHaveBeenCalledTimes(1);
+    unregister();
+    stop();
+  });
+
+  test("stops fencing writes once the owning controller unregisters", async () => {
+    const workflow = createWorkflow();
+    const fences: Array<{ ownerId: string; token: string } | undefined> = [];
+    const save = mock(async (
+      id: string,
+      environmentId: string,
+      version: number,
+      snapshot: LoopedReviewWorkflow,
+      _expectedRevision?: number,
+      controllerFence?: { ownerId: string; token: string },
+    ) => {
+      fences.push(controllerFence);
+      return {
+        id,
+        environmentId,
+        version,
+        snapshot,
+        updatedAt: snapshot.updatedAt,
+        revision: fences.length,
+      };
+    });
+    const unregister = registerLoopedReviewControllerFence(workflow.id, {
+      ownerId: "controller-a",
+      token: "generation-a",
+    });
+    const stop = startLoopedReviewPersistence({
+      debounceMs: 0,
+      save: save as unknown as NonNullable<LoopedReviewPersistenceOptions["save"]>,
+      load: mock(async () => null),
+    });
+    await settle();
+
+    unregister();
+    useLoopedReviewStore.getState().pauseWorkflow(workflow.id);
+    await settle();
+
+    // A released controller must not keep stamping its dead generation onto
+    // later writes, or the backend would reject whoever owns the workflow next.
+    expect(fences).toEqual([
+      { ownerId: "controller-a", token: "generation-a" },
+      undefined,
+    ]);
+    stop();
+  });
+
+  test("a stale controller cannot unregister the fence that replaced it", async () => {
+    const workflow = createWorkflow();
+    const fences: Array<{ ownerId: string; token: string } | undefined> = [];
+    const save = mock(async (
+      id: string,
+      environmentId: string,
+      version: number,
+      snapshot: LoopedReviewWorkflow,
+      _expectedRevision?: number,
+      controllerFence?: { ownerId: string; token: string },
+    ) => {
+      fences.push(controllerFence);
+      return {
+        id,
+        environmentId,
+        version,
+        snapshot,
+        updatedAt: snapshot.updatedAt,
+        revision: 1,
+      };
+    });
+    const releaseStale = registerLoopedReviewControllerFence(workflow.id, {
+      ownerId: "controller-a",
+      token: "generation-a",
+    });
+    const releaseCurrent = registerLoopedReviewControllerFence(workflow.id, {
+      ownerId: "controller-b",
+      token: "generation-b",
+    });
+    // The previous owner's cleanup arrives late — after the lease has already
+    // moved on. Deleting here would silently unfence the live controller and let
+    // an unfenced write overwrite whatever it is doing.
+    releaseStale();
+
+    const stop = startLoopedReviewPersistence({
+      debounceMs: 0,
+      save: save as unknown as NonNullable<LoopedReviewPersistenceOptions["save"]>,
+      load: mock(async () => null),
+    });
+    await settle();
+
+    expect(fences).toEqual([{ ownerId: "controller-b", token: "generation-b" }]);
+    releaseCurrent();
+    stop();
   });
 
   test("reports a persistent save outage once without a self-triggering retry loop", async () => {

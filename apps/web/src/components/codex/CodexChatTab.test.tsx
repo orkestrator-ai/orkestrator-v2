@@ -4439,6 +4439,37 @@ describe("CodexChatTab", () => {
     });
   });
 
+  test("leaves the startup prompt and its images to the backend coordinator", async () => {
+    const initialPrompt = "Inspect the attached screenshots";
+    useEnvironmentStore.setState((state) => ({
+      environments: state.environments.map((environment) =>
+        environment.id === ENVIRONMENT_ID
+          ? { ...environment, pendingAgentLaunch: true }
+          : environment
+      ),
+    }));
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+
+    render(
+      <CodexChatTab
+        tabId="startup-agent"
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+      />,
+    );
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+  });
+
   test("uses one-shot review model and effort when creating a native session", async () => {
     useCodexStore.setState((state) => ({
       ...state,
@@ -4524,84 +4555,9 @@ describe("CodexChatTab", () => {
     });
   });
 
-  test("initializes and drains a queued prompt while the Codex tab is inactive", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Run the hidden queued Codex prompt",
-      attachments: [],
-      model: MOCK_MODELS[0]!.id,
-      mode: "build",
-      reasoningEffort: "medium",
-      fastMode: false,
-    });
 
-    render(
-      <CodexChatTab
-        tabId={TAB_ID}
-        data={createData()}
-        isActive={false}
-      />,
-    );
 
-    await waitFor(() => {
-      expect(mockCreateSession).toHaveBeenCalled();
-      expect(mockSendPrompt).toHaveBeenCalledWith(
-        MOCK_CLIENT,
-        SESSION_ID,
-        "Run the hidden queued Codex prompt",
-        expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
-      );
-    });
-  });
 
-  test("waits for setup readiness before draining a queued prompt while inactive", async () => {
-    useEnvironmentStore.setState({
-      workspaceReadyEnvironments: new Set(),
-    });
-    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Run after Codex setup",
-      attachments: [],
-      model: MOCK_MODELS[0]!.id,
-      mode: "build",
-      reasoningEffort: "medium",
-      fastMode: false,
-    });
-
-    render(
-      <CodexChatTab
-        tabId={TAB_ID}
-        data={createData()}
-        isActive={false}
-      />,
-    );
-
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-
-    expect(mockSendPrompt).not.toHaveBeenCalled();
-
-    act(() => {
-      useEnvironmentStore.setState({
-        workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
-      });
-    });
-
-    await waitFor(() => {
-      expect(mockSendPrompt).toHaveBeenCalledWith(
-        MOCK_CLIENT,
-        SESSION_ID,
-        "Run after Codex setup",
-        expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
-      );
-    });
-  });
 
   test("starts the SSE event subscription while the Codex tab is inactive but loading", async () => {
     seedCodexStore();
@@ -5606,86 +5562,9 @@ describe("CodexChatTab", () => {
     });
   });
 
-  test("drains queued prompts when the session is idle", async () => {
-    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Handle the queued codex prompt",
-      attachments: [],
-      model: MOCK_MODELS[0]!.id,
-      mode: "build",
-      reasoningEffort: "medium",
-      fastMode: false,
-    });
 
-    render(
-      <CodexChatTab
-        tabId={TAB_ID}
-        data={createData()}
-        isActive={false}
-      />,
-    );
 
-    await waitFor(() => {
-      expect(mockSendPrompt).toHaveBeenCalledWith(
-        MOCK_CLIENT,
-        SESSION_ID,
-        "Handle the queued codex prompt",
-        expect.objectContaining({ attachments: undefined, requestId: "queue-1" }),
-      );
-    });
-  });
 
-  test("restores a queued prompt and logs an error when queued send throws", async () => {
-    const originalError = console.error;
-    const consoleError = mock(() => {});
-    console.error = consoleError as unknown as typeof console.error;
-    seedEnvironment("review-table");
-    mockSendPrompt.mockImplementation(async () => {
-      throw new Error("bridge offline");
-    });
-    seedQueuedPrompt(useCodexStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Queued Codex failure",
-      attachments: [],
-      model: MOCK_MODELS[0]!.id,
-      mode: "build",
-      reasoningEffort: "medium",
-      fastMode: false,
-    });
-
-    try {
-      render(
-        <CodexChatTab
-          tabId={TAB_ID}
-          data={createData()}
-          isActive={false}
-        />,
-      );
-
-      await waitFor(() => {
-        expect(mockSendPrompt).toHaveBeenCalledWith(
-          MOCK_CLIENT,
-          SESSION_ID,
-          "Queued Codex failure",
-          expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
-        );
-      });
-
-      await waitFor(() => {
-        const state = useCodexStore.getState();
-        expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
-        expect(state.messageQueue.get(SESSION_KEY)).toEqual([
-          expect.objectContaining({ id: "queue-1" }),
-        ]);
-        expect(consoleError).toHaveBeenCalledWith(
-          "[CodexChatTab] Failed to send queued prompt:",
-          expect.any(Error),
-        );
-      });
-    } finally {
-      console.error = originalError;
-    }
-  });
 
   test("does not drain queued prompts while a draft exists", async () => {
     seedEnvironment("review-table");
@@ -6333,46 +6212,9 @@ describe("CodexChatTab", () => {
       };
     }
 
-    test("prefers a queued entry's persisted key over its row id", async () => {
-      // The row id and the idempotency key are not the same thing: a queue entry
-      // rewritten by a store migration must keep the key the bridge already knows.
-      seedEnvironment("review-table");
-      seedQueuedPrompt(useCodexStore.getState(),
-        SESSION_KEY,
-        queueEntry({ id: "row-1", requestId: "request-77", text: "Persisted key wins" }),
-      );
 
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
 
-      await waitFor(() =>
-        expect(mockSendPrompt).toHaveBeenCalledWith(
-          MOCK_CLIENT,
-          SESSION_ID,
-          "Persisted key wins",
-          expect.objectContaining({ requestId: "request-77" }),
-        ),
-      );
-    });
 
-    test("drains two queued prompts in order, each with its own key", async () => {
-      seedEnvironment("review-table");
-      const store = useCodexStore.getState();
-      seedQueuedPrompt(store, SESSION_KEY, queueEntry({ id: "row-1", requestId: "request-1", text: "First queued" }));
-      seedQueuedPrompt(store, SESSION_KEY, queueEntry({ id: "row-2", requestId: "request-2", text: "Second queued" }));
-
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
-
-      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
-      expect(mockSendPrompt.mock.calls.map((call) => call[2])).toEqual([
-        "First queued",
-        "Second queued",
-      ]);
-      expect(mockSendPrompt.mock.calls.map((call) => call[3]?.requestId)).toEqual([
-        "request-1",
-        "request-2",
-      ]);
-      expect(useCodexStore.getState().messageQueue.get(SESSION_KEY) ?? []).toEqual([]);
-    });
 
     test("does not drain while the bridge is still connecting", async () => {
       // No client means no session to send to; draining here would throw the
@@ -6396,93 +6238,11 @@ describe("CodexChatTab", () => {
       expect(useCodexStore.getState().messageQueue.get(SESSION_KEY)).toHaveLength(1);
     });
 
-    test("waits for the running turn to finish before draining", async () => {
-      seedEnvironment("review-table");
-      mockGetSessionStatus.mockResolvedValue({ status: "running" });
-      mockSubscribeToEvents.mockImplementation(() => (async function* () {
-        await new Promise(() => {});
-      })() as any);
-      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
-      seedQueuedPrompt(useCodexStore.getState(),
-        SESSION_KEY,
-        queueEntry({ id: "row-1", requestId: "request-1", text: "Queued behind a turn" }),
-      );
 
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
 
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
-      expect(mockSendPrompt).not.toHaveBeenCalled();
 
-      act(() => {
-        useCodexStore.getState().setSessionLoading(SESSION_KEY, false);
-      });
 
-      await waitFor(() =>
-        expect(mockSendPrompt).toHaveBeenCalledWith(
-          MOCK_CLIENT,
-          SESSION_ID,
-          "Queued behind a turn",
-          expect.objectContaining({ requestId: "request-1" }),
-        ),
-      );
-    });
 
-    test("a second mount cannot re-send the entry the first one is already sending", async () => {
-      /**
-       * Two mounts of the same tab (a background mount plus the visible one) both
-       * see the queue. The re-entrancy guard and the atomic dequeue are what stop
-       * one queued prompt from becoming two turns.
-       */
-      seedEnvironment("review-table");
-      let releaseSend!: (value: CodexPromptAcceptedResponse) => void;
-      mockSendPrompt.mockImplementation(
-        () => new Promise<CodexPromptAcceptedResponse>((resolve) => {
-          releaseSend = resolve;
-        }),
-      );
-      seedQueuedPrompt(useCodexStore.getState(),
-        SESSION_KEY,
-        queueEntry({ id: "row-1", requestId: "request-1", text: "Only once" }),
-      );
-
-      render(
-        <>
-          <CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />
-          <CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />
-        </>,
-      );
-
-      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
-
-      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
-      expect(useCodexStore.getState().messageQueue.get(SESSION_KEY) ?? []).toEqual([]);
-      releaseSend({ status: "processing" });
-    });
-
-    test("a failed backend claim does not spin or dispatch the unclaimed prompt", async () => {
-      mockClaimPromptQueueHead.mockRejectedValueOnce(new Error("claim unavailable"));
-      seedQueuedPrompt(useCodexStore.getState(),
-        SESSION_KEY,
-        queueEntry({ id: "row-1", requestId: "request-1", text: "Keep queued" }),
-      );
-
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
-
-      await waitFor(() => expect(mockClaimPromptQueueHead).toHaveBeenCalledTimes(1));
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      });
-
-      expect(mockClaimPromptQueueHead).toHaveBeenCalledTimes(1);
-      expect(mockSendPrompt).not.toHaveBeenCalled();
-      expect(useCodexStore.getState().messageQueue.get(SESSION_KEY))
-        .toEqual([expect.objectContaining({ id: "row-1" })]);
-    });
   });
 
   describe("manual refresh", () => {

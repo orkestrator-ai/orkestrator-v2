@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, ChevronDown, FileText, Square, X, Zap } from "lucide-react";
+import { AlertCircle, ArrowUp, Check, ChevronDown, FileText, Square, X, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -16,6 +16,7 @@ import { MentionableInput, type MentionableInputRef } from "@/components/chat/Me
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
 import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
+import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
 import {
   COMPOSE_MAX_INPUT_HEIGHT,
   COMPOSE_MIN_INPUT_HEIGHT,
@@ -135,6 +136,7 @@ export function CodexComposeBar({
       [sessionKey],
     ),
   );
+  const queueRecovery = usePromptQueueDispatchRecovery("codex", sessionKey);
   const contextUsage = useCodexStore(
     useCallback((state) => state.contextUsage.get(sessionKey), [sessionKey]),
   );
@@ -637,13 +639,32 @@ export function CodexComposeBar({
         {/* Spacer */}
         <div className="flex-1 sm:hidden" />
 
+        {/* A parked queue stops draining until a human retries, so the failure
+            has to be legible without opening the dialog. */}
         {queueLength > 0 && (
           <button
             type="button"
             onClick={() => setQueueDialogOpen(true)}
-            className="flex items-center gap-1 rounded bg-muted/50 px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted"
-            title="View queued prompts"
+            className={cn(
+              "flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors",
+              queueRecovery.dispatchError
+                ? "bg-destructive/10 text-destructive hover:bg-destructive/20"
+                : "bg-muted/50 text-muted-foreground hover:bg-muted",
+            )}
+            aria-label={
+              queueRecovery.dispatchError
+                ? `${queueLength} queued prompts blocked: ${queueRecovery.dispatchError.message}`
+                : undefined
+            }
+            title={
+              queueRecovery.dispatchError
+                ? `Queued prompt was not sent: ${queueRecovery.dispatchError.message}`
+                : "View queued prompts"
+            }
           >
+            {queueRecovery.dispatchError && (
+              <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
+            )}
             <span>+{queueLength} queued</span>
           </button>
         )}
@@ -710,6 +731,8 @@ export function CodexComposeBar({
         onEdit={handleQueuedMessageClick}
         onMove={handleMoveQueuedMessage}
         onRemove={handleRemoveQueuedMessage}
+        dispatchError={queueRecovery.dispatchError}
+        onRetryDispatch={queueRecovery.retry}
         renderMeta={(message) => (
           <>
             <span>{message.mode === "plan" ? "Plan" : "Build"}</span>

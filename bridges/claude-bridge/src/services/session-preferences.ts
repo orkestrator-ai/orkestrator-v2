@@ -25,6 +25,15 @@ import { claudeSessionPreferencesDir } from "./claude-home.js";
 
 /** Preferences that must survive a bridge restart. Extend here, not ad hoc. */
 export interface SessionPreferences {
+  /**
+   * Stable bridge alias for a caller-supplied client session key.
+   *
+   * The alias encodes the SDK UUID, so point reads can recover without this
+   * field. Persisting it still matters for list reconciliation: it keeps the
+   * SDK rollout under the same bridge id instead of adopting a second
+   * `session-<uuid>` view of the same conversation after restart.
+   */
+  clientSessionBridgeId?: string;
   /** Whether the UI plan-mode toggle is on. Absent = never set (defaults off). */
   planMode?: boolean;
   /**
@@ -47,6 +56,7 @@ export const MAX_DISPATCHED_REQUEST_IDS = 64;
  */
 const SDK_SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CLIENT_SESSION_BRIDGE_ID_PATTERN = /^session-client-[0-9a-f]{32}$/;
 
 function normalizedSessionId(sdkSessionId: string): string | null {
   if (!SDK_SESSION_ID_PATTERN.test(sdkSessionId)) return null;
@@ -289,6 +299,15 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
   }
   const record = parsed as Record<string, unknown>;
   if (
+    Object.hasOwn(record, "clientSessionBridgeId")
+    && (
+      typeof record.clientSessionBridgeId !== "string"
+      || !CLIENT_SESSION_BRIDGE_ID_PATTERN.test(record.clientSessionBridgeId)
+    )
+  ) {
+    return undefined;
+  }
+  if (
     Object.hasOwn(record, "planMode")
     && typeof record.planMode !== "boolean"
   ) {
@@ -301,6 +320,9 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
     return undefined;
   }
   const preferences: SessionPreferences = {};
+  if (typeof record.clientSessionBridgeId === "string") {
+    preferences.clientSessionBridgeId = record.clientSessionBridgeId;
+  }
   if (typeof record.planMode === "boolean") preferences.planMode = record.planMode;
   if (Array.isArray(record.dispatchedRequestIds)) {
     const unique = new Set<string>();

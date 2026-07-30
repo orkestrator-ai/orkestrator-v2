@@ -43,6 +43,7 @@ import type {
   PersistedPaneLayout,
   PersistedLoopedReviewWorkflow,
   PersistedBuildPipeline,
+  PersistedNativeAgentSession,
   PersistedComposeDraft,
   PersistedFileDraft,
   PersistedPromptQueue,
@@ -221,6 +222,33 @@ function isInitialPromptImageAttachment(
     && isNonBlankString(value.base64Data);
 }
 
+function isStartupAgentSession(
+  value: unknown,
+): value is NonNullable<Environment["startupAgentSession"]> {
+  return isRecord(value)
+    && value.tabId === "startup-agent"
+    && isOneOf(value.agent, ["claude", "codex", "opencode"])
+    && isOneOf(value.style, ["terminal", "native"])
+    && isOneOf(value.status, ["starting", "running", "error"])
+    && (value.model === undefined || typeof value.model === "string")
+    && (
+      value.reasoningEffort === undefined
+      || typeof value.reasoningEffort === "string"
+    )
+    && (
+      value.providerSessionId === undefined
+      || isNonBlankString(value.providerSessionId)
+    )
+    && (
+      value.startedAt === undefined
+      || (
+        typeof value.startedAt === "string"
+        && Number.isFinite(Date.parse(value.startedAt))
+      )
+    )
+    && (value.error === undefined || typeof value.error === "string");
+}
+
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   return typeof value === "string" && allowed.includes(value as T);
 }
@@ -374,7 +402,20 @@ function isPersistedLoopedReviewWorkflow(
     && isRecord(value.snapshot)
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt))
-    && isPositiveInteger(value.revision);
+    && isPositiveInteger(value.revision)
+    && (
+      value.controllerLease === undefined
+      || (
+        isRecord(value.controllerLease)
+        && isNonBlankString(value.controllerLease.ownerId)
+        && (
+          value.controllerLease.token === undefined
+          || isNonBlankString(value.controllerLease.token)
+        )
+        && typeof value.controllerLease.expiresAt === "string"
+        && Number.isFinite(Date.parse(value.controllerLease.expiresAt))
+      )
+    );
 }
 
 function isPersistedPromptQueueClaim(
@@ -399,12 +440,72 @@ function isPersistedPromptQueue(
     && isNonBlankString(value.environmentId)
     && Array.isArray(value.messages)
     && (
+      value.inFlight === undefined
+      || (
+        isRecord(value.inFlight)
+        && Object.hasOwn(value.inFlight, "message")
+        && isNonBlankString(value.inFlight.requestId)
+        && typeof value.inFlight.reservedAt === "string"
+        && Number.isFinite(Date.parse(value.inFlight.reservedAt))
+      )
+    )
+    && (
+      value.dispatchError === undefined
+      || (
+        isRecord(value.dispatchError)
+        && isNonBlankString(value.dispatchError.requestId)
+        && (
+          (
+            isNonBlankString(value.dispatchError.messageId)
+            && isNonBlankString(value.dispatchError.messageFingerprint)
+            && /^[a-f0-9]{64}$/.test(value.dispatchError.messageFingerprint)
+          )
+          || (
+            value.dispatchError.messageId === undefined
+            && value.dispatchError.messageFingerprint === undefined
+          )
+        )
+        && isNonBlankString(value.dispatchError.message)
+        && typeof value.dispatchError.failedAt === "string"
+        && Number.isFinite(Date.parse(value.dispatchError.failedAt))
+      )
+    )
+    && (
       value.outstandingClaim === undefined
       || isPersistedPromptQueueClaim(value.outstandingClaim)
     )
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt))
     && isPositiveInteger(value.revision);
+}
+
+function isPersistedNativeAgentSession(
+  value: unknown,
+  expectedKey?: string,
+): value is PersistedNativeAgentSession {
+  return isRecord(value)
+    && isNonBlankString(value.key)
+    && (expectedKey === undefined || value.key === expectedKey)
+    && isNonBlankString(value.environmentId)
+    && (
+      value.agent === "claude"
+      || value.agent === "codex"
+      || value.agent === "opencode"
+    )
+    && isNonBlankString(value.logicalSessionKey)
+    && isNonBlankString(value.providerSessionId)
+    && (
+      value.dispatchedRequestIds === undefined
+      || (
+        Array.isArray(value.dispatchedRequestIds)
+        && value.dispatchedRequestIds.length <= 1_000
+        && value.dispatchedRequestIds.every(isNonBlankString)
+      )
+    )
+    && typeof value.createdAt === "string"
+    && Number.isFinite(Date.parse(value.createdAt))
+    && typeof value.updatedAt === "string"
+    && Number.isFinite(Date.parse(value.updatedAt));
 }
 
 function isPersistedComposeDraft(
@@ -496,6 +597,14 @@ function activeGitHubBuildReservation(snapshot: unknown): string | null {
     return null;
   }
   return `${source.repositoryOwner.toLowerCase()}/${source.repositoryName.toLowerCase()}#${source.issueNumber}`;
+}
+
+function activeBuildAdmissionKey(snapshot: unknown): string | null {
+  if (!isRecord(snapshot)) return null;
+  if (snapshot.phase === "complete" || snapshot.phase === "failed") return null;
+  return isNonBlankString(snapshot.admissionKey)
+    ? snapshot.admissionKey
+    : null;
 }
 
 function isClaudeModelCatalogSnapshot(
@@ -1019,6 +1128,7 @@ export class StorageService {
   private paneLayoutMutation: Promise<unknown> = Promise.resolve();
   private loopedReviewMutation: Promise<unknown> = Promise.resolve();
   private buildPipelineMutation: Promise<unknown> = Promise.resolve();
+  private nativeAgentSessionMutation: Promise<unknown> = Promise.resolve();
   private promptQueueMutation: Promise<unknown> = Promise.resolve();
   private promptQueueClaimRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private composeDraftMutation: Promise<unknown> = Promise.resolve();
@@ -1125,6 +1235,10 @@ export class StorageService {
 
   private buildPipelinesFile(): string {
     return this.file("build-pipelines.json");
+  }
+
+  private nativeAgentSessionsFile(): string {
+    return this.file("native-agent-sessions.json");
   }
 
   private promptQueuesFile(): string {
@@ -1345,6 +1459,28 @@ export class StorageService {
     return next;
   }
 
+  private enqueueNativeAgentSessionMutation<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.nativeAgentSessionsFile(),
+        "native agent session storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.nativeAgentSessionMutation.then(run, run);
+    this.nativeAgentSessionMutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
   private enqueuePaneLayoutMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
       const release = await this.acquireMutationLock(
@@ -1412,43 +1548,10 @@ export class StorageService {
   }
 
   private async acquireEnvironmentMutationLock(): Promise<() => Promise<void>> {
-    const lockPath = `${this.environmentsFile()}.lock`;
-    const token = randomUUID();
-    const deadline = Date.now() + 20_000;
-    await fs.mkdir(path.dirname(lockPath), { recursive: true });
-
-    while (true) {
-      try {
-        const handle = await fs.open(lockPath, "wx", 0o600);
-        try {
-          await handle.writeFile(token, "utf8");
-        } catch (error) {
-          await handle.close();
-          await fs.rm(lockPath, { force: true });
-          throw error;
-        }
-        return async () => {
-          await handle.close();
-          const currentToken = await fs.readFile(lockPath, "utf8").catch(() => null);
-          if (currentToken === token) {
-            await fs.rm(lockPath, { force: true });
-          }
-        };
-      } catch (error) {
-        const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-        if (code !== "EEXIST") throw error;
-
-        const stat = await fs.stat(lockPath).catch(() => null);
-        if (stat && Date.now() - stat.mtimeMs > 15_000) {
-          await fs.rm(lockPath, { force: true });
-          continue;
-        }
-        if (Date.now() >= deadline) {
-          throw new Error("Timed out waiting for environment storage lock");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-    }
+    return this.acquireMutationLock(
+      this.environmentsFile(),
+      "environment storage",
+    );
   }
 
   private backupPath(filePath: string, index: number): string {
@@ -1914,6 +2017,15 @@ export class StorageService {
           throw new Error("Initial prompt attachments are malformed");
         }
       }
+      if ("startupAgentSession" in updates) {
+        if (updates.startupAgentSession == null) {
+          environment.startupAgentSession = undefined;
+        } else if (isStartupAgentSession(updates.startupAgentSession)) {
+          environment.startupAgentSession = updates.startupAgentSession;
+        } else {
+          throw new Error("Startup agent session is malformed");
+        }
+      }
       if ("claudeModelCatalog" in updates) {
         if (updates.claudeModelCatalog == null) {
           environment.claudeModelCatalog = undefined;
@@ -1963,6 +2075,38 @@ export class StorageService {
       if ("initialPromptAttachments" in updates) {
         await this.scrubEnvironmentBackups(environmentId, false);
       }
+      this.announce("environment", environmentId);
+      return environment;
+    });
+  }
+
+  /**
+   * Clears the backend-to-renderer startup-session projection only after the
+   * matching pane tab has been persisted. The identity checks keep a delayed
+   * acknowledgement from an old renderer from consuming a newer launch.
+   */
+  async acknowledgeStartupAgentSession(
+    environmentId: string,
+    providerSessionId: string | undefined,
+    startedAt: string | undefined,
+  ): Promise<Environment> {
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const startupSession = environment.startupAgentSession;
+      if (!startupSession) return environment;
+      if (
+        providerSessionId !== undefined
+        && startupSession.providerSessionId !== providerSessionId
+      ) {
+        return environment;
+      }
+      if (startedAt !== undefined && startupSession.startedAt !== startedAt) {
+        return environment;
+      }
+      environment.startupAgentSession = undefined;
+      await this.saveEnvironments(environments);
       this.announce("environment", environmentId);
       return environment;
     });
@@ -2588,6 +2732,7 @@ export class StorageService {
     version: number,
     snapshot: unknown,
     expectedRevision?: number,
+    controllerFence?: { ownerId: string; token: string },
   ): Promise<PersistedLoopedReviewWorkflow> {
     if (!isNonBlankString(workflowId)) {
       throw new Error("Looped review workflow ID must not be blank");
@@ -2603,6 +2748,15 @@ export class StorageService {
     }
     if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
       throw new Error("Looped review expected revision must be a non-negative integer");
+    }
+    if (
+      controllerFence !== undefined
+      && (
+        !isNonBlankString(controllerFence.ownerId)
+        || !isNonBlankString(controllerFence.token)
+      )
+    ) {
+      throw new Error("Looped review controller fence is invalid");
     }
     let serializedSnapshot: string | undefined;
     try {
@@ -2636,6 +2790,16 @@ export class StorageService {
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Looped review workflow belongs to another environment");
       }
+      if (controllerFence) {
+        const lease = previous?.controllerLease;
+        if (
+          lease?.ownerId !== controllerFence.ownerId
+          || lease.token !== controllerFence.token
+          || Date.parse(lease.expiresAt) <= Date.now()
+        ) {
+          throw new Error("Looped review controller lease conflict");
+        }
+      }
       if (
         expectedRevision !== undefined
         && (previous?.revision ?? 0) !== expectedRevision
@@ -2649,11 +2813,119 @@ export class StorageService {
         snapshot,
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,
+        ...(previous?.controllerLease
+          ? { controllerLease: previous.controllerLease }
+          : {}),
       };
       workflows[workflowId] = saved;
       await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
       this.announce("looped-review", workflowId);
       return saved;
+    });
+  }
+
+  async claimLoopedReviewController(
+    workflowId: string,
+    ownerId: string,
+    leaseMs: number,
+  ): Promise<{ granted: boolean; token: string; expiresAt: string }> {
+    if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId)) {
+      throw new Error("Looped review controller identity must not be blank");
+    }
+    if (!Number.isSafeInteger(leaseMs) || leaseMs < 2_000 || leaseMs > 60_000) {
+      throw new Error("Looped review controller lease is invalid");
+    }
+    return this.enqueueLoopedReviewMutation(async () => {
+      const workflows = await this.loadJson<
+        Record<string, PersistedLoopedReviewWorkflow>
+      >(this.loopedReviewsFile(), () => ({}));
+      const workflow = workflows[workflowId];
+      if (!isPersistedLoopedReviewWorkflow(workflow, workflowId)) {
+        throw new Error(`Looped review workflow not found: ${workflowId}`);
+      }
+      const now = Date.now();
+      const currentExpiry = workflow.controllerLease
+        ? Date.parse(workflow.controllerLease.expiresAt)
+        : 0;
+      if (
+        workflow.controllerLease
+        && workflow.controllerLease.ownerId !== ownerId
+        && currentExpiry > now
+      ) {
+        return {
+          granted: false,
+          token: "",
+          expiresAt: workflow.controllerLease.expiresAt,
+        };
+      }
+      const token =
+        workflow.controllerLease?.ownerId === ownerId
+        && currentExpiry > now
+        && isNonBlankString(workflow.controllerLease.token)
+          ? workflow.controllerLease.token
+          : randomUUID();
+      const expiresAt = new Date(now + leaseMs).toISOString();
+      workflows[workflowId] = {
+        ...workflow,
+        controllerLease: { ownerId, token, expiresAt },
+      };
+      await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
+      return { granted: true, token, expiresAt };
+    });
+  }
+
+  async validateLoopedReviewController(
+    workflowId: string,
+    ownerId: string,
+    token: string,
+  ): Promise<boolean> {
+    if (
+      !isNonBlankString(workflowId)
+      || !isNonBlankString(ownerId)
+      || !isNonBlankString(token)
+    ) {
+      return false;
+    }
+    return this.enqueueLoopedReviewMutation(async () => {
+      const workflows = await this.loadJson<
+        Record<string, PersistedLoopedReviewWorkflow>
+      >(this.loopedReviewsFile(), () => ({}));
+      const workflow = workflows[workflowId];
+      if (!isPersistedLoopedReviewWorkflow(workflow, workflowId)) return false;
+      const lease = workflow.controllerLease;
+      return lease?.ownerId === ownerId
+        && lease.token === token
+        && Date.parse(lease.expiresAt) > Date.now();
+    });
+  }
+
+  async releaseLoopedReviewController(
+    workflowId: string,
+    ownerId: string,
+    token: string,
+  ): Promise<void> {
+    if (
+      !isNonBlankString(workflowId)
+      || !isNonBlankString(ownerId)
+      || !isNonBlankString(token)
+    ) {
+      return;
+    }
+    await this.enqueueLoopedReviewMutation(async () => {
+      const workflows = await this.loadJson<
+        Record<string, PersistedLoopedReviewWorkflow>
+      >(this.loopedReviewsFile(), () => ({}));
+      const workflow = workflows[workflowId];
+      if (
+        !isPersistedLoopedReviewWorkflow(workflow, workflowId)
+        || workflow.controllerLease?.ownerId !== ownerId
+        || workflow.controllerLease.token !== token
+      ) {
+        return;
+      }
+      const { controllerLease: _lease, ...released } = workflow;
+      workflows[workflowId] = released;
+      await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
     });
   }
 
@@ -2718,6 +2990,273 @@ export class StorageService {
     });
   }
 
+  private async loadNativeAgentSessions(): Promise<
+    Record<string, PersistedNativeAgentSession>
+  > {
+    const stored = await this.loadJson<Record<string, PersistedNativeAgentSession>>(
+      this.nativeAgentSessionsFile(),
+      () => ({}),
+    );
+    return Object.fromEntries(
+      Object.entries(stored).filter(([storedKey, session]) =>
+        isPersistedNativeAgentSession(session, storedKey)
+      ),
+    ) as Record<string, PersistedNativeAgentSession>;
+  }
+
+  async getNativeAgentSession(
+    key: string,
+  ): Promise<PersistedNativeAgentSession | null> {
+    if (!isNonBlankString(key)) {
+      throw new Error("Native agent session key must not be blank");
+    }
+    return (await this.loadNativeAgentSessions())[key] ?? null;
+  }
+
+  /**
+   * Creates a provider session while holding the same cross-process lock that
+   * publishes its logical mapping. OpenCode cannot accept a caller-supplied
+   * session id, so releasing the lock between the read and external create
+   * would allow two backend processes to create two real provider sessions.
+   */
+  async getOrCreateNativeAgentSession(
+    input: Pick<
+      PersistedNativeAgentSession,
+      "key" | "environmentId" | "agent" | "logicalSessionKey"
+    >,
+    createProviderSession: () => Promise<string>,
+  ): Promise<PersistedNativeAgentSession> {
+    if (
+      !isNonBlankString(input.key)
+      || !isNonBlankString(input.environmentId)
+      || !isNonBlankString(input.logicalSessionKey)
+      || !["claude", "codex", "opencode"].includes(input.agent)
+    ) {
+      throw new Error("Native agent session input is invalid");
+    }
+
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(
+        input.environmentId,
+        "Native agent session",
+      );
+      const sessions = await this.loadNativeAgentSessions();
+      const existing = sessions[input.key];
+      if (existing) {
+        if (
+          existing.environmentId !== input.environmentId
+          || existing.agent !== input.agent
+          || existing.logicalSessionKey !== input.logicalSessionKey
+        ) {
+          throw new Error("Native agent session key collision");
+        }
+        return existing;
+      }
+
+      const providerSessionId = await createProviderSession();
+      if (!isNonBlankString(providerSessionId)) {
+        throw new Error("Provider returned an invalid native session ID");
+      }
+      await this.assertEnvironmentAcceptsBackgroundState(
+        input.environmentId,
+        "Native agent session",
+      );
+      const now = nowIso();
+      const saved: PersistedNativeAgentSession = {
+        ...input,
+        providerSessionId,
+        createdAt: now,
+        updatedAt: now,
+      };
+      sessions[input.key] = saved;
+      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      this.announce("native-agent-session", input.environmentId);
+      return saved;
+    });
+  }
+
+  async adoptNativeAgentSession(
+    input: Pick<
+      PersistedNativeAgentSession,
+      | "key"
+      | "environmentId"
+      | "agent"
+      | "logicalSessionKey"
+      | "providerSessionId"
+    > & { expectedProviderSessionId?: string },
+  ): Promise<PersistedNativeAgentSession> {
+    if (
+      !isNonBlankString(input.key)
+      || !isNonBlankString(input.environmentId)
+      || !isNonBlankString(input.logicalSessionKey)
+      || !isNonBlankString(input.providerSessionId)
+      || !["claude", "codex", "opencode"].includes(input.agent)
+      || (
+        input.expectedProviderSessionId !== undefined
+        && !isNonBlankString(input.expectedProviderSessionId)
+      )
+    ) {
+      throw new Error("Native agent session adoption input is invalid");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(
+        input.environmentId,
+        "Native agent session",
+      );
+      const sessions = await this.loadNativeAgentSessions();
+      const existing = sessions[input.key];
+      if (existing) {
+        if (
+          existing.environmentId !== input.environmentId
+          || existing.agent !== input.agent
+          || existing.logicalSessionKey !== input.logicalSessionKey
+        ) {
+          throw new Error("Native agent session key collision");
+        }
+        if (existing.providerSessionId === input.providerSessionId) {
+          return existing;
+        }
+        if (existing.providerSessionId !== input.expectedProviderSessionId) {
+          throw new Error("Native agent session provider collision");
+        }
+      } else if (input.expectedProviderSessionId !== undefined) {
+        throw new Error("Native agent session replacement target was not found");
+      }
+
+      const now = nowIso();
+      const {
+        expectedProviderSessionId: _expectedProviderSessionId,
+        ...identity
+      } = input;
+      const saved: PersistedNativeAgentSession = {
+        ...identity,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      sessions[input.key] = saved;
+      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      this.announce("native-agent-session", input.environmentId);
+      return saved;
+    });
+  }
+
+  async invalidateNativeAgentSession(
+    key: string,
+    providerSessionId: string,
+  ): Promise<boolean> {
+    if (!isNonBlankString(key) || !isNonBlankString(providerSessionId)) {
+      throw new Error("Native agent session identity must not be blank");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const sessions = await this.loadNativeAgentSessions();
+      const existing = sessions[key];
+      if (!existing || existing.providerSessionId !== providerSessionId) {
+        return false;
+      }
+      delete sessions[key];
+      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      this.announce("native-agent-session", existing.environmentId);
+      return true;
+    });
+  }
+
+  async deleteNativeAgentSessionsByEnvironment(
+    environmentId: string,
+  ): Promise<void> {
+    if (!isNonBlankString(environmentId)) return;
+    await this.enqueueNativeAgentSessionMutation(async () => {
+      const sessions = await this.loadNativeAgentSessions();
+      const retained = Object.fromEntries(
+        Object.entries(sessions).filter(
+          ([, session]) => session.environmentId !== environmentId,
+        ),
+      );
+      if (Object.keys(retained).length !== Object.keys(sessions).length) {
+        await this.saveSensitiveJson(this.nativeAgentSessionsFile(), retained);
+        this.announce("native-agent-session", environmentId);
+      }
+
+      // Rotating the primary file leaves the deleted environment's logical keys,
+      // provider session ids and dispatch journal readable in its backups. Scrub
+      // unconditionally, as every sibling delete-by-environment does: a prior
+      // failed delete may have removed the primary record while leaving a backup.
+      await this.scrubSensitiveJsonBackups(
+        this.nativeAgentSessionsFile(),
+        (storedKey, session) =>
+          isPersistedNativeAgentSession(session, storedKey)
+          && session.environmentId !== environmentId,
+      );
+    });
+  }
+
+  async dispatchNativeAgentPromptOnce(
+    key: string,
+    requestId: string,
+    dispatch: (session: PersistedNativeAgentSession) => Promise<void>,
+  ): Promise<{
+    session: PersistedNativeAgentSession;
+    dispatched: boolean;
+  }> {
+    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
+      throw new Error("Native agent dispatch key must not be blank");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const sessions = await this.loadNativeAgentSessions();
+      const session = sessions[key];
+      if (!session) throw new Error("Native agent session was not found");
+      if (session.dispatchedRequestIds?.includes(requestId)) {
+        return { session, dispatched: false };
+      }
+
+      // Keep the cross-process lock until the provider has acknowledged this
+      // stable request id. If the process dies after provider acceptance but
+      // before this write, recovery retries the same id rather than inventing a
+      // second turn.
+      await dispatch(session);
+      const updated: PersistedNativeAgentSession = {
+        ...session,
+        dispatchedRequestIds: [
+          ...(session.dispatchedRequestIds ?? []).slice(-999),
+          requestId,
+        ],
+        updatedAt: nowIso(),
+      };
+      sessions[key] = updated;
+      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      this.announce("native-agent-session", session.environmentId);
+      return { session: updated, dispatched: true };
+    });
+  }
+
+  /**
+   * Orders outbound provider work against environment deletion intent across
+   * processes. The callback intentionally runs while the environment file lock
+   * is held so deletion either becomes visible first or waits for the accepted
+   * provider operation to finish.
+   */
+  async runWithLiveEnvironment<T>(
+    environmentId: string,
+    label: string,
+    operation: (environment: Environment) => Promise<T>,
+  ): Promise<T> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error(`${label} environment ID must not be blank`);
+    }
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find(
+        (candidate) => candidate.id === environmentId,
+      );
+      if (!environment) {
+        throw new Error(`${label} environment not found: ${environmentId}`);
+      }
+      if (environment.deletionRequestedAt) {
+        throw new Error(`${label} environment is being deleted: ${environmentId}`);
+      }
+      return operation(environment);
+    });
+  }
+
   private enqueuePromptQueueMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
       const release = await this.acquireMutationLock(
@@ -2772,10 +3311,21 @@ export class StorageService {
       = previous?.outstandingClaim ?? null,
   ): Promise<PersistedPromptQueue> {
     this.validatePromptQueueMessages(messages);
+    const failedMessageStillUnchanged = previous?.dispatchError !== undefined
+      && messages.some((candidate) =>
+        isRecord(candidate)
+        && candidate.id === previous.dispatchError?.messageId
+        && this.promptQueueMessageFingerprint(candidate)
+          === previous.dispatchError?.messageFingerprint
+      );
     const saved: PersistedPromptQueue = {
       queueKey,
       environmentId,
       messages,
+      ...(previous?.inFlight ? { inFlight: previous.inFlight } : {}),
+      ...(failedMessageStillUnchanged
+        ? { dispatchError: previous!.dispatchError }
+        : {}),
       ...(outstandingClaim ? { outstandingClaim } : {}),
       updatedAt: nowIso(),
       revision: (previous?.revision ?? 0) + 1,
@@ -2865,9 +3415,39 @@ export class StorageService {
       () => ({}),
     );
     return Object.fromEntries(
-      Object.entries(stored).filter(([storedKey, queue]) =>
-        isPersistedPromptQueue(queue, storedKey)
-      ),
+      Object.entries(stored).flatMap(([storedKey, queue]) => {
+        if (!isPersistedPromptQueue(queue, storedKey)) return [];
+        if (
+          !queue.dispatchError
+          || (
+            isNonBlankString(queue.dispatchError.messageId)
+            && isNonBlankString(queue.dispatchError.messageFingerprint)
+          )
+        ) {
+          return [[storedKey, queue]];
+        }
+
+        // Records written by the first dispatch-error implementation did not
+        // identify the rejected queue item. Upgrade those in memory from the
+        // restored message so the first subsequent mutation gets the same
+        // edit/removal semantics as a newly written record.
+        const failedMessage = queue.messages.find((candidate) =>
+          isRecord(candidate)
+          && candidate.id === queue.dispatchError?.requestId
+        );
+        if (!isRecord(failedMessage) || !isNonBlankString(failedMessage.id)) {
+          const { dispatchError: _dispatchError, ...withoutError } = queue;
+          return [[storedKey, withoutError as PersistedPromptQueue]];
+        }
+        return [[storedKey, {
+          ...queue,
+          dispatchError: {
+            ...queue.dispatchError,
+            messageId: failedMessage.id,
+            messageFingerprint: this.promptQueueMessageFingerprint(failedMessage),
+          },
+        }]];
+      }),
     ) as Record<string, PersistedPromptQueue>;
   }
 
@@ -2884,6 +3464,10 @@ export class StorageService {
     }
     return Object.values(await this.loadPromptQueues())
       .filter((queue) => queue.environmentId === environmentId);
+  }
+
+  async listAllPromptQueues(): Promise<PersistedPromptQueue[]> {
+    return Object.values(await this.loadPromptQueues());
   }
 
   /**
@@ -2924,18 +3508,13 @@ export class StorageService {
       ) {
         throw new Error("Prompt queue revision conflict");
       }
-      const saved: PersistedPromptQueue = {
+      return this.savePromptQueueMutation(
+        queues,
         queueKey,
         environmentId,
         messages,
-        updatedAt: nowIso(),
-        revision: (previous?.revision ?? 0) + 1,
-      };
-      queues[queueKey] = saved;
-      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
-      this.announce("prompt-queue", environmentId);
-      this.schedulePromptQueueClaimRecovery(queues);
-      return saved;
+        previous,
+      );
     });
   }
 
@@ -3153,6 +3732,9 @@ export class StorageService {
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
       }
+      if (previous?.dispatchError) {
+        return { claimed: null, claimToken: null, queue: previous };
+      }
 
       let current = previous;
       if (current?.outstandingClaim) {
@@ -3208,6 +3790,133 @@ export class StorageService {
       );
       return { claimed: head, claimToken, queue: saved };
     });
+  }
+
+  async reservePromptQueueHeadForDispatch(
+    queueKey: string,
+  ): Promise<PersistedPromptQueue["inFlight"] | null> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    return this.enqueuePromptQueueMutation(async () => {
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (!previous) return null;
+      if (previous.dispatchError) return null;
+      if (previous.inFlight) return previous.inFlight;
+      if (previous.outstandingClaim) return null;
+      const message = previous.messages[0];
+      if (!isRecord(message) || !isNonBlankString(message.id)) return null;
+      const inFlight = {
+        message,
+        requestId:
+          isNonBlankString(message.requestId) ? message.requestId : message.id,
+        reservedAt: nowIso(),
+      };
+      const saved: PersistedPromptQueue = {
+        ...previous,
+        messages: previous.messages.slice(1),
+        inFlight,
+        updatedAt: nowIso(),
+        revision: previous.revision + 1,
+      };
+      queues[queueKey] = saved;
+      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+      this.announce("prompt-queue", previous.environmentId);
+      return inFlight;
+    });
+  }
+
+  async acknowledgePromptQueueDispatch(
+    queueKey: string,
+    requestId: string,
+  ): Promise<PersistedPromptQueue | null> {
+    return this.enqueuePromptQueueMutation(async () => {
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
+        return previous ?? null;
+      }
+      const { inFlight: _inFlight, ...withoutInFlight } = previous;
+      const saved: PersistedPromptQueue = {
+        ...withoutInFlight,
+        updatedAt: nowIso(),
+        revision: previous.revision + 1,
+      };
+      queues[queueKey] = saved;
+      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+      this.announce("prompt-queue", previous.environmentId);
+      return saved;
+    });
+  }
+
+  async failPromptQueueDispatch(
+    queueKey: string,
+    requestId: string,
+    message = "Queued prompt was rejected. Edit it or retry explicitly.",
+  ): Promise<PersistedPromptQueue | null> {
+    if (
+      !isNonBlankString(queueKey)
+      || !isNonBlankString(requestId)
+      || !isNonBlankString(message)
+    ) {
+      throw new Error("Prompt queue failure identity must not be blank");
+    }
+    return this.enqueuePromptQueueMutation(async () => {
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
+        return previous ?? null;
+      }
+      const { inFlight, ...withoutInFlight } = previous;
+      if (!isRecord(inFlight.message) || !isNonBlankString(inFlight.message.id)) {
+        return previous;
+      }
+      const saved: PersistedPromptQueue = {
+        ...withoutInFlight,
+        messages: [inFlight.message, ...previous.messages],
+        dispatchError: {
+          requestId,
+          messageId: inFlight.message.id,
+          messageFingerprint: this.promptQueueMessageFingerprint(inFlight.message),
+          message,
+          failedAt: nowIso(),
+        },
+        updatedAt: nowIso(),
+        revision: previous.revision + 1,
+      };
+      queues[queueKey] = saved;
+      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+      this.announce("prompt-queue", previous.environmentId);
+      return saved;
+    });
+  }
+
+  async retryPromptQueueDispatch(
+    queueKey: string,
+  ): Promise<PersistedPromptQueue | null> {
+    if (!isNonBlankString(queueKey)) {
+      throw new Error("Prompt queue key must not be blank");
+    }
+    return this.enqueuePromptQueueMutation(async () => {
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (!previous?.dispatchError) return previous ?? null;
+      const { dispatchError: _dispatchError, ...withoutError } = previous;
+      const saved: PersistedPromptQueue = {
+        ...withoutError,
+        updatedAt: nowIso(),
+        revision: previous.revision + 1,
+      };
+      queues[queueKey] = saved;
+      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+      this.announce("prompt-queue", previous.environmentId);
+      return saved;
+    });
+  }
+
+  private promptQueueMessageFingerprint(message: unknown): string {
+    return createHash("sha256").update(JSON.stringify(message)).digest("hex");
   }
 
   async acknowledgePromptQueueClaim(
@@ -4147,6 +4856,14 @@ export class StorageService {
         && (previous?.revision ?? 0) !== expectedRevision
       ) {
         throw new Error("Build pipeline revision conflict");
+      }
+      const admissionKey = activeBuildAdmissionKey(snapshot);
+      if (!previous && expectedRevision === 0 && admissionKey) {
+        const admitted = Object.values(pipelines).find(
+          (pipeline) =>
+            activeBuildAdmissionKey(pipeline.snapshot) === admissionKey,
+        );
+        if (admitted) return admitted;
       }
       const reservation = activeGitHubBuildReservation(snapshot);
       if (

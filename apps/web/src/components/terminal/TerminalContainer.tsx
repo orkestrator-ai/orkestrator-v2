@@ -27,6 +27,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { FilePlus2, Play, Terminal as TerminalIcon } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { markSetupScriptsComplete, preserveCompletedSetupState, shouldAutoResolveSetupCommands } from "@/lib/setup-commands";
 import * as backend from "@/lib/backend";
@@ -140,6 +141,16 @@ function createUniqueTabId(prefix: string): string {
 }
 
 /**
+ * The one-shot environment launch is shared backend intent, so every renderer
+ * must materialize it as the same logical tab. A random id lets two clients
+ * that observe `pendingAgentLaunch` together create distinct tabs, distinct
+ * Codex sessions, and distinct initial-prompt request ids before either clears
+ * the flag. The stable id makes pane-layout merging, bridge session creation,
+ * and prompt dispatch all converge on one launch.
+ */
+const STARTUP_AGENT_TAB_ID = "startup-agent";
+
+/**
  * Which tab types count as "the agent a post-setup launch was asking for".
  *
  * Exhaustive over `TabType` on purpose: this table decides when a durable
@@ -165,10 +176,26 @@ const STARTUP_AGENT_TAB_TYPES: Record<TabType, boolean> = {
   root: false,
 };
 
-function hasStartupAgentTab(state: { root: PaneNode }): boolean {
-  return getAllLeaves(state.root)
-    .some((leaf) => leaf.tabs.some((tab) => STARTUP_AGENT_TAB_TYPES[tab.type] === true));
+/**
+ * The id of the tab that already satisfies a startup agent launch, if any.
+ *
+ * Returns the id rather than a boolean because an environment carried over from
+ * before {@link STARTUP_AGENT_TAB_ID} existed holds its agent tab under a
+ * generated id. Insisting on the stable id there reported "no agent tab", so the
+ * launch effect opened a second one and the backend re-dispatched the initial
+ * prompt. The stable id still wins when both are present, so a converged launch
+ * keeps binding its provider session to the canonical tab.
+ */
+function findStartupAgentTabId(state: { root: PaneNode }): string | null {
+  const candidates = getAllLeaves(state.root)
+    .flatMap((leaf) => leaf.tabs)
+    .filter((tab) => STARTUP_AGENT_TAB_TYPES[tab.type] === true);
+  if (candidates.length === 0) return null;
+  return candidates.some((tab) => tab.id === STARTUP_AGENT_TAB_ID)
+    ? STARTUP_AGENT_TAB_ID
+    : candidates[0]!.id;
 }
+
 
 type TerminalTabDragEndAction =
   | { type: "none" }
@@ -298,6 +325,7 @@ function createClaudeNativeLikeTab({
   isReviewTab,
   initialAgentModel,
   initialReasoningEffort,
+  sessionId,
 }: {
   id: string;
   nativeBackend: ClaudeNativeBackend;
@@ -309,6 +337,7 @@ function createClaudeNativeLikeTab({
   isReviewTab?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
+  sessionId?: string;
 }): TabInfo {
   if (nativeBackend === "tmux") {
     return {
@@ -334,6 +363,7 @@ function createClaudeNativeLikeTab({
       containerId: isLocal ? undefined : containerId,
       environmentId,
       isLocal,
+      sessionId,
     },
     initialPrompt,
     displayTitle,
@@ -799,15 +829,66 @@ export function TerminalContainer({
     }
   }, [isActive, environmentId, setActiveEnvironment]);
 
+  // Report a failed startup launch. The backend records it durably and keeps
+  // retrying, but nothing else renders it: without this the user gets a plain
+  // terminal, no agent tab, and an initial prompt that never arrives.
+  const reportedStartupErrorRef = useRef<string | null>(null);
+  useEffect(() => {
+    const startupSession = environment?.startupAgentSession;
+    if (startupSession?.status !== "error") {
+      reportedStartupErrorRef.current = null;
+      return;
+    }
+    const reason = startupSession.error ?? "The agent could not be started.";
+    // Keyed on the message so a repeated retry failure does not re-toast, but a
+    // different failure still does.
+    if (reportedStartupErrorRef.current === reason) return;
+    reportedStartupErrorRef.current = reason;
+    toast.error(`${startupSession.agent} could not start in ${environment?.name ?? "this environment"}`, {
+      description: reason,
+      duration: 10_000,
+    });
+  }, [
+    environment?.name,
+    environment?.startupAgentSession?.agent,
+    environment?.startupAgentSession?.error,
+    environment?.startupAgentSession?.status,
+  ]);
+
   // Reconstruct the post-setup agent launch from backend-owned environment
   // state after a mobile page reload. The transient options store is only an
   // optimization for the uninterrupted creation path.
   useEffect(() => {
-    if (!environment?.pendingAgentLaunch || !currentEnvState) return;
+    if (!environment) return;
+    const startupSession = environment.startupAgentSession;
+    // A starting or failed launch is still owned by the backend. In particular,
+    // pendingAgentLaunch is the backend's retry intent after an error, so a
+    // renderer must not project an ordinary text-only launch and clear it.
+    if (startupSession && startupSession.status !== "running") return;
+    const backendLaunch = startupSession;
+    if (
+      (!environment.pendingAgentLaunch && !backendLaunch)
+      || !currentEnvState
+    ) {
+      return;
+    }
 
-    if (hasStartupAgentTab(currentEnvState)) {
+    const existingStartupTabId = findStartupAgentTabId(currentEnvState);
+    if (existingStartupTabId) {
       if (durableLaunchClearInFlightRef.current) return;
       durableLaunchClearInFlightRef.current = true;
+      if (backendLaunch?.providerSessionId) {
+        // Bind the backend's session to whichever tab actually satisfies this
+        // launch, including a legacy generated id.
+        usePaneLayoutStore.getState().updateTabNativeSessionId(
+          existingStartupTabId,
+          backendLaunch.providerSessionId,
+          environmentId,
+        );
+      }
+      const durablePaneState =
+        usePaneLayoutStore.getState().environments.get(environmentId)
+        ?? currentEnvState;
       // Persist the tab before clearing the launch intent. If the page is
       // evicted between these operations, the still-pending flag retries; if
       // clearing succeeds, rehydration is guaranteed to find the agent tab.
@@ -827,9 +908,13 @@ export function TerminalContainer({
       // the app.
       void flushPaneLayoutNow(
         environmentId,
-        createPersistedPaneLayoutInput(currentEnvState),
+        createPersistedPaneLayoutInput(durablePaneState),
       )
-        .then(() => backend.setEnvironmentPendingAgentLaunch(environmentId, false))
+        .then(() =>
+          backendLaunch
+            ? backend.acknowledgeStartupAgentSession(environmentId, backendLaunch)
+            : backend.setEnvironmentPendingAgentLaunch(environmentId, false)
+        )
         .then((updatedEnvironment) => {
           useEnvironmentStore.getState().updateEnvironment(
             environmentId,
@@ -848,9 +933,53 @@ export function TerminalContainer({
       return;
     }
 
+    // The uninterrupted create flow still owns this launch while its transient
+    // options exist. In particular, it may be staging initial-prompt images and
+    // rewriting the prompt with their workspace paths. Reconstructing the
+    // backend intent at the same time queues the older text-only prompt; once
+    // staging finishes, both paths create an agent tab. A renderer reload has no
+    // transient options, so durable recovery continues through the branch below.
+    if (!backendLaunch && claudeOptions?.launchAgent) return;
+    if (backendLaunch && claudeOptions?.launchAgent) {
+      // The backend has already created the provider session and consumed the
+      // initial prompt (including attachments). Discard the renderer-only
+      // launch copy so it cannot race a second direct dispatch.
+      clearOptions(environmentId);
+    }
+
+    if (backendLaunch && pendingNativeLaunch) {
+      if (
+        pendingNativeLaunch.providerSessionId !== backendLaunch.providerSessionId
+        || pendingNativeLaunch.initialPrompt !== undefined
+        || pendingNativeLaunch.agentType !== backendLaunch.agent
+        || pendingNativeLaunch.launchMode !== "native"
+      ) {
+        // A renderer can stage the old client-owned launch during the short
+        // interval between setup completion and the backend publishing its
+        // provider session. Replace that stale copy before the launch effect is
+        // allowed to materialize it.
+        setPendingNativeLaunch(environmentId, {
+          ...pendingNativeLaunch,
+          agentType: backendLaunch.agent,
+          launchMode: "native",
+          providerSessionId: backendLaunch.providerSessionId,
+          initialPrompt: undefined,
+          model: backendLaunch.model ?? pendingNativeLaunch.model,
+          reasoningEffort:
+            backendLaunch.reasoningEffort
+            ?? pendingNativeLaunch.reasoningEffort,
+        });
+      }
+      return;
+    }
+
     if (!isEnvironmentRunning || pendingNativeLaunch) return;
 
-    const agentType = environment.defaultAgent ?? config.global.defaultAgent ?? "claude";
+    const agentType =
+      backendLaunch?.agent
+      ?? environment.defaultAgent
+      ?? config.global.defaultAgent
+      ?? "claude";
     const launchMode =
       (agentType === "claude" && claudeMode === "native")
       || (agentType === "codex" && codexMode === "native")
@@ -861,7 +990,10 @@ export function TerminalContainer({
     setPendingNativeLaunch(environmentId, {
       containerId: isLocalEnvironment ? null : containerId,
       environmentId,
-      initialPrompt: environment.initialPrompt?.trim() || undefined,
+      initialPrompt:
+        backendLaunch
+          ? undefined
+          : environment.initialPrompt?.trim() || undefined,
       targetPaneId: currentEnvState.activePaneId,
       agentType,
       launchMode,
@@ -869,12 +1001,16 @@ export function TerminalContainer({
         agentType === "claude" && launchMode === "native"
           ? claudeNativeBackend
           : undefined,
-      model: environment.initialAgentModel,
-      reasoningEffort: environment.initialReasoningEffort,
+      model: backendLaunch?.model ?? environment.initialAgentModel,
+      reasoningEffort:
+        backendLaunch?.reasoningEffort
+        ?? environment.initialReasoningEffort,
+      providerSessionId: backendLaunch?.providerSessionId,
     });
   }, [
     claudeMode,
     claudeNativeBackend,
+    claudeOptions?.launchAgent,
     codexMode,
     config.global.defaultAgent,
     containerId,
@@ -885,6 +1021,7 @@ export function TerminalContainer({
     isLocalEnvironment,
     opencodeMode,
     pendingNativeLaunch,
+    clearOptions,
     setPendingNativeLaunch,
   ]);
 
@@ -1188,6 +1325,10 @@ export function TerminalContainer({
           initialPromptRef.current = pendingInitialPrompt;
         }
       }
+      const initialTabId =
+        launchAgent && initialTabType !== "plain"
+          ? STARTUP_AGENT_TAB_ID
+          : "default";
 
       // Check if we should use native mode instead of terminal
       const useNativeOpenCode = initialTabType === "opencode" && opencodeMode === "native";
@@ -1261,7 +1402,7 @@ export function TerminalContainer({
           // Then create agent tab (which becomes active)
           if (useNativeClaude) {
             const agentTab = createClaudeNativeLikeTab({
-              id: "default",
+              id: initialTabId,
               nativeBackend: claudeNativeBackend,
               environmentId,
               isLocal: true,
@@ -1272,7 +1413,7 @@ export function TerminalContainer({
             addTab("default", agentTab, environmentId);
           } else if (useNativeCodex) {
             const agentTab: TabInfo = {
-              id: "default",
+              id: initialTabId,
               type: "codex-native",
               codexNativeData: { containerId: undefined, environmentId, isLocal: true },
               initialPrompt: pendingInitialPrompt,
@@ -1282,7 +1423,7 @@ export function TerminalContainer({
             addTab("default", agentTab, environmentId);
           } else if (useNativeOpenCode) {
             const agentTab: TabInfo = {
-              id: "default",
+              id: initialTabId,
               type: "opencode-native",
               openCodeNativeData: { containerId: undefined, environmentId, isLocal: true },
               initialPrompt: pendingInitialPrompt,
@@ -1293,7 +1434,7 @@ export function TerminalContainer({
           } else {
             // Terminal mode agent (claude or opencode)
             const agentTab: TabInfo = {
-              id: "default",
+              id: initialTabId,
               type: initialTabType,
               initialPrompt: pendingInitialPrompt,
               initialAgentModel,
@@ -1325,7 +1466,7 @@ export function TerminalContainer({
           );
           if (useNativeClaude) {
             const initialTab = createClaudeNativeLikeTab({
-              id: "default",
+              id: initialTabId,
               nativeBackend: claudeNativeBackend,
               environmentId,
               isLocal: true,
@@ -1336,7 +1477,7 @@ export function TerminalContainer({
             addTab("default", initialTab, environmentId);
           } else if (useNativeCodex) {
             const initialTab: TabInfo = {
-              id: "default",
+              id: initialTabId,
               type: "codex-native",
               codexNativeData: { containerId: undefined, environmentId, isLocal: true },
               initialPrompt: pendingInitialPrompt,
@@ -1346,7 +1487,7 @@ export function TerminalContainer({
             addTab("default", initialTab, environmentId);
           } else {
             const initialTab: TabInfo = {
-              id: "default",
+              id: initialTabId,
               type: "opencode-native",
               openCodeNativeData: { containerId: undefined, environmentId, isLocal: true },
               initialPrompt: pendingInitialPrompt,
@@ -1363,7 +1504,7 @@ export function TerminalContainer({
           }
           console.log("[TerminalContainer] Local environment - creating terminal tab with initial type:", initialTabType);
           const initialTab: TabInfo = {
-            id: "default",
+            id: initialTabId,
             type: initialTabType,
             initialPrompt: pendingInitialPrompt,
             initialAgentModel,
@@ -1375,7 +1516,7 @@ export function TerminalContainer({
         setWorkspaceReady(environmentId, true);
         if (useNativeClaude) {
           const initialTab = createClaudeNativeLikeTab({
-            id: "default",
+            id: initialTabId,
             nativeBackend: claudeNativeBackend,
             containerId: containerId ?? undefined,
             environmentId,
@@ -1387,7 +1528,7 @@ export function TerminalContainer({
           addTab("default", initialTab, environmentId);
         } else if (useNativeCodex) {
           const initialTab: TabInfo = {
-            id: "default",
+            id: initialTabId,
             type: "codex-native",
             codexNativeData: { containerId: containerId ?? undefined, environmentId, isLocal: false },
             initialPrompt: pendingInitialPrompt,
@@ -1397,7 +1538,7 @@ export function TerminalContainer({
           addTab("default", initialTab, environmentId);
         } else if (useNativeOpenCode) {
           const initialTab: TabInfo = {
-            id: "default",
+            id: initialTabId,
             type: "opencode-native",
             openCodeNativeData: { containerId: containerId ?? undefined, environmentId, isLocal: false },
             initialPrompt: pendingInitialPrompt,
@@ -1407,7 +1548,7 @@ export function TerminalContainer({
           addTab("default", initialTab, environmentId);
         } else {
           const initialTab: TabInfo = {
-            id: "default",
+            id: initialTabId,
             type: initialTabType,
             initialPrompt: pendingInitialPrompt,
             initialAgentModel,
@@ -1506,7 +1647,10 @@ export function TerminalContainer({
   // Launch native tab after workspace setup completes
   useEffect(() => {
     const setupComplete = environment?.setupScriptsComplete === true;
-    const canLaunchPendingNative = (workspaceReady || setupComplete) && pendingNativeLaunch && (containerId || isLocalEnvironmentReady);
+    const canLaunchPendingNative =
+      (workspaceReady || setupComplete)
+      && pendingNativeLaunch
+      && (containerId || isLocalEnvironmentReady);
     console.log("[TerminalContainer] Native tab effect check - workspaceReady:", workspaceReady, "setupComplete:", setupComplete, "hasPending:", !!pendingNativeLaunch, "containerId:", !!containerId, "isLocalEnvironmentReady:", isLocalEnvironmentReady);
 
     // Simple logic: when workspace is ready and we have a pending launch, create the tab
@@ -1536,8 +1680,8 @@ export function TerminalContainer({
           environmentId,
         );
 
+        const newTabId = STARTUP_AGENT_TAB_ID;
         if (launchMode === "terminal") {
-          const newTabId = createUniqueTabId(pending.agentType);
           const newTab: TabInfo = {
             id: newTabId,
             type: pending.agentType,
@@ -1548,20 +1692,19 @@ export function TerminalContainer({
           addTab(pending.targetPaneId, newTab, environmentId);
         } else if (isClaudeNative) {
           const backend = pending.claudeNativeBackend ?? claudeNativeBackend;
-          const newTabId = createUniqueTabId(`claude-${backend}`);
           const newTab = createClaudeNativeLikeTab({
             id: newTabId,
             nativeBackend: backend,
             containerId: pending.containerId ?? undefined,
             environmentId: pending.environmentId,
             isLocal: isLocalEnvironment,
+            sessionId: pending.providerSessionId,
             initialPrompt: pending.initialPrompt,
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
           });
           addTab(pending.targetPaneId, newTab, environmentId);
         } else if (isCodexNative) {
-          const newTabId = createUniqueTabId("codex-native");
           const newTab: TabInfo = {
             id: newTabId,
             type: "codex-native",
@@ -1569,6 +1712,7 @@ export function TerminalContainer({
               containerId: isLocalEnvironment ? undefined : pending.containerId ?? undefined,
               environmentId: pending.environmentId,
               isLocal: isLocalEnvironment,
+              sessionId: pending.providerSessionId,
             },
             initialPrompt: pending.initialPrompt,
             initialAgentModel: pending.model,
@@ -1577,7 +1721,6 @@ export function TerminalContainer({
           addTab(pending.targetPaneId, newTab, environmentId);
         } else {
           // Create OpenCode native tab
-          const newTabId = createUniqueTabId("opencode-native");
           const newTab: TabInfo = {
             id: newTabId,
             type: "opencode-native",
@@ -1585,6 +1728,7 @@ export function TerminalContainer({
               containerId: isLocalEnvironment ? undefined : pending.containerId ?? undefined,
               environmentId: pending.environmentId,
               isLocal: isLocalEnvironment,
+              sessionId: pending.providerSessionId,
             },
             initialPrompt: pending.initialPrompt,
             initialAgentModel: pending.model,

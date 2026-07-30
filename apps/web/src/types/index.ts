@@ -174,6 +174,20 @@ export interface Environment {
   initialPrompt?: string;
   /** Images waiting to be written into the workspace before the first prompt. */
   initialPromptAttachments?: InitialPromptImageAttachment[];
+  /** Backend-owned projection of the one-shot startup agent launch. */
+  startupAgentSession?: {
+    tabId: "startup-agent";
+    agent: DefaultAgent;
+    style: "terminal" | "native";
+    providerSessionId?: string;
+    status: "starting" | "running" | "error";
+    /** One-shot model applied to the backend-created provider session. */
+    model?: string;
+    /** One-shot reasoning effort applied to the backend-created provider session. */
+    reasoningEffort?: string;
+    startedAt?: string;
+    error?: string;
+  };
   /** Prompt awaiting a backend-owned rename after the environment starts. */
   pendingRenamePrompt?: string;
 }
@@ -217,6 +231,10 @@ export interface PersistedLoopedReviewWorkflow<T = unknown> {
   snapshot: T;
   updatedAt: string;
   revision: number;
+  controllerLease?: {
+    ownerId: string;
+    expiresAt: string;
+  };
 }
 
 /**
@@ -235,6 +253,17 @@ export interface PersistedBuildPipeline<T = unknown> {
   revision: number;
 }
 
+export interface PersistedNativeAgentSession {
+  key: string;
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode";
+  logicalSessionKey: string;
+  providerSessionId: string;
+  dispatchedRequestIds?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 /**
  * A tab's undispatched prompt queue as the backend stores it. Message bodies
  * stay opaque to the backend; each agent defines its own shape.
@@ -243,6 +272,18 @@ export interface PersistedPromptQueue<T = unknown> {
   queueKey: string;
   environmentId: string;
   messages: T[];
+  inFlight?: {
+    message: T;
+    requestId: string;
+    reservedAt: string;
+  };
+  dispatchError?: {
+    requestId: string;
+    messageId: string;
+    messageFingerprint: string;
+    message: string;
+    failedAt: string;
+  };
   outstandingClaim?: {
     token: string;
     message: T;

@@ -7,6 +7,7 @@ import {
   KeyboardEvent,
 } from "react";
 import {
+  AlertCircle,
   X,
   FileText,
   ChevronDown,
@@ -45,6 +46,7 @@ import { useSlashCommandMenu } from "@/hooks/useSlashCommandMenu";
 import { useNativeComposeSubmit } from "@/hooks/useNativeComposeSubmit";
 import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
+import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
 import {
   COMPOSE_MAX_INPUT_HEIGHT,
   COMPOSE_MIN_INPUT_HEIGHT,
@@ -185,6 +187,7 @@ export function OpenCodeComposeBar({
       [sessionKey]
     )
   );
+  const queueRecovery = usePromptQueueDispatchRecovery("opencode", sessionKey);
 
   // Store getters return stable empties for absent keys, so their results are
   // safe as selector outputs (no per-render churn for untouched sessions).
@@ -883,14 +886,33 @@ export function OpenCodeComposeBar({
           {/* Spacer */}
           <div className="flex-1 sm:hidden" />
 
-          {/* Queue indicator */}
+          {/* Queue indicator. A parked queue stops draining until a human
+              retries, so the failure has to be legible without opening the
+              dialog. */}
           {queueLength > 0 && (
             <button
               type="button"
               onClick={() => setQueueDialogOpen(true)}
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground bg-muted/50 hover:bg-muted transition-colors"
-              title="View queued prompts"
+              className={cn(
+                "flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
+                queueRecovery.dispatchError
+                  ? "bg-destructive/10 text-destructive hover:bg-destructive/20"
+                  : "text-muted-foreground bg-muted/50 hover:bg-muted",
+              )}
+              aria-label={
+                queueRecovery.dispatchError
+                  ? `${queueLength} queued prompts blocked: ${queueRecovery.dispatchError.message}`
+                  : undefined
+              }
+              title={
+                queueRecovery.dispatchError
+                  ? `Queued prompt was not sent: ${queueRecovery.dispatchError.message}`
+                  : "View queued prompts"
+              }
             >
+              {queueRecovery.dispatchError && (
+                <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
+              )}
               <span>+{queueLength} queued</span>
             </button>
           )}
@@ -954,6 +976,8 @@ export function OpenCodeComposeBar({
         onEdit={handleQueuedMessageClick}
         onMove={handleMoveQueuedMessage}
         onRemove={handleRemoveQueuedMessage}
+        dispatchError={queueRecovery.dispatchError}
+        onRetryDispatch={queueRecovery.retry}
         renderMeta={(message) => (
           <>
             <span>{message.mode === "plan" ? "Planning" : "Build"}</span>

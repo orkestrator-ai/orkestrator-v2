@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   BuildPhase,
   BuildPipeline,
   BuildPipelineAgent,
+  BuildPipelineSource,
   PipelineSession,
   PipelineSessionPhase,
   ResumableBuildPhase,
@@ -30,6 +31,7 @@ import {
   type BridgeConnection,
   type BuildPipelineProvider,
 } from "./build-pipeline-provider.js";
+import { stagePromptImages } from "./prompt-attachments.js";
 import {
   addressPrompt,
   buildPrompt,
@@ -66,6 +68,42 @@ const SESSION_LABELS: Record<PipelineSessionPhase, string> = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function canonicalAdmissionSource(
+  source: BuildPipelineSource | undefined,
+): Record<string, unknown> | null {
+  if (!source) return null;
+  if (source.type === "kanban") {
+    return {
+      type: source.type,
+      taskId: source.taskId.trim(),
+    };
+  }
+  if (source.type === "linear") {
+    return {
+      type: source.type,
+      issueId: source.issueId.trim(),
+    };
+  }
+  return {
+    type: source.type,
+    repositoryOwner: source.repositoryOwner.trim().toLowerCase(),
+    repositoryName: source.repositoryName.trim().toLowerCase(),
+    issueNumber: source.issueNumber,
+  };
+}
+
+function buildAdmissionKey(input: StartBuildPipelineInput): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      projectId: input.projectId.trim(),
+      taskId: input.taskId.trim(),
+      source: canonicalAdmissionSource(input.source),
+      existingEnvironmentId: input.existingEnvironmentId?.trim() || null,
+      featurePlanId: input.featurePlanId?.trim() || null,
+    }))
+    .digest("hex");
 }
 
 function sessionForCurrentPhase(pipeline: BuildPipeline): PipelineSession | undefined {
@@ -341,6 +379,7 @@ export class BuildPipelineService {
       taskSnapshot: input.taskSnapshot,
       source: input.source,
       featurePlanId: input.featurePlanId?.trim() || undefined,
+      admissionKey: buildAdmissionKey(input),
       backendRevision: 0,
       controller: "backend",
     };
@@ -349,7 +388,15 @@ export class BuildPipelineService {
       this.provisioningPrompts.set(pipeline.id, input.namingPrompt);
     }
     try {
-      await this.save(pipeline, 0);
+      const admitted = await this.save(pipeline, 0);
+      if (admitted.id !== pipeline.id) {
+        this.provisioningPrompts.delete(pipeline.id);
+        const existing = admitted.snapshot;
+        if (!isBuildPipeline(existing)) {
+          throw new Error("Existing build pipeline admission is invalid");
+        }
+        return existing;
+      }
     } catch (error) {
       this.provisioningPrompts.delete(pipeline.id);
       throw error;
@@ -424,7 +471,15 @@ export class BuildPipelineService {
           continue;
         }
       }
-      await this.save(normalized, 0);
+      // save() short-circuits when an active pipeline already holds this
+      // admission key and returns that record instead. Treating the returned id
+      // as imported would report a pipeline that was never persisted and then
+      // schedule a supervisor pass for it.
+      const admitted = await this.save(normalized, 0);
+      if (admitted.id !== normalized.id) {
+        skipped += 1;
+        continue;
+      }
       importedIds.push(normalized.id);
       if (isActiveBuildPhase(normalized.phase) && this.options.autoAdvance !== false) {
         void this.runLocked(normalized.id);
@@ -1519,6 +1574,12 @@ export class BuildPipelineService {
         ?? (pipeline.agentType === "codex"
           ? config.global.codexReasoningEffort
           : undefined),
+    }, {
+      // Task-snapshot images arrive as base64. Both bridges require a workspace
+      // path, so they have to be written into the environment before they can be
+      // attached to a prompt.
+      stageImages: (images) =>
+        stagePromptImages(this.invoke, environment, images),
     });
     for (const session of pipeline.sessions) {
       provider.registerSession?.(session.sdkSessionId);
@@ -1652,7 +1713,10 @@ export class BuildPipelineService {
     return record;
   }
 
-  private async save(pipeline: BuildPipeline, expectedRevision: number): Promise<void> {
+  private async save(
+    pipeline: BuildPipeline,
+    expectedRevision: number,
+  ): Promise<PersistedBuildPipeline> {
     pipeline.controller = "backend";
     pipeline.backendRevision = expectedRevision + 1;
     const saved = await this.storage.saveBuildPipeline(
@@ -1664,5 +1728,6 @@ export class BuildPipelineService {
       expectedRevision,
     );
     pipeline.backendRevision = saved.revision;
+    return saved;
   }
 }

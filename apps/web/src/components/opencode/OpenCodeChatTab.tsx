@@ -7,7 +7,6 @@ import {
   useManualSessionRefresh,
   type RefreshSessionOptions,
 } from "@/hooks/useManualSessionRefresh";
-import { useNativeMessageQueue } from "@/hooks/useNativeMessageQueue";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
@@ -27,17 +26,13 @@ import { useConfigStore } from "@/stores/configStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import {
-  acknowledgeAgentPromptClaim,
-  claimAgentPromptQueueHead,
   enqueueAgentPrompt,
-  rejectAgentPromptClaim,
   transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
 import {
   checkClientHealth,
   createClient,
   getModelsWithDefaults,
-  createSession,
   getSessionMessages,
   getSessionStatus,
   listSessions,
@@ -78,6 +73,8 @@ import {
   cacheOpenCodeModelCatalog,
   startLocalOpencodeServer,
   getLocalOpencodeServerStatus,
+  adoptNativeAgentSession,
+  ensureNativeAgentSession,
   renameEnvironmentFromPrompt,
   type OpenCodeModelPreferences,
 } from "@/lib/backend";
@@ -288,7 +285,6 @@ export function OpenCodeChatTab({
   const [launchOptionsSettled, setLaunchOptionsSettled] = useState(
     () => !initialLaunchOptionsPendingRef.current,
   );
-  // Track when we are currently draining queued prompts
   const manualRefreshSequenceRef = useRef(0);
   /**
    * Bumped by *every* refresh, manual or watchdog-driven.
@@ -412,7 +408,26 @@ export function OpenCodeChatTab({
     consumedAgentHandoffId,
   );
   const displayMessages = handoff.displayMessages;
-  const launchPrompt = initialPrompt ?? handoff.initialPrompt;
+  const backendOwnsStartupPrompt = useEnvironmentStore((state) => {
+    if (tabId !== "startup-agent") return false;
+    const environment = state.getEnvironmentById(environmentId);
+    return environment?.pendingAgentLaunch === true
+      || environment?.startupAgentSession !== undefined;
+  });
+  const launchPrompt = backendOwnsStartupPrompt
+    ? handoff.initialPrompt
+    : initialPrompt ?? handoff.initialPrompt;
+  useEffect(() => {
+    if (backendOwnsStartupPrompt && initialPrompt) {
+      clearTabInitialPrompt(tabId, environmentId);
+    }
+  }, [
+    backendOwnsStartupPrompt,
+    clearTabInitialPrompt,
+    environmentId,
+    initialPrompt,
+    tabId,
+  ]);
   /*
    * Read through a ref inside the initialization effect. `launchPrompt` resolves
    * a few milliseconds after mount for a handoff tab, so listing it as a
@@ -558,21 +573,6 @@ export function OpenCodeChatTab({
       [sessionKey],
     ),
   );
-  const queueHeadId = useOpenCodeStore(
-    useCallback(
-      (state) => state.messageQueue.get(sessionKey)?.[0]?.id,
-      [sessionKey],
-    ),
-  );
-  const isQueueBlockedByDraft = useOpenCodeStore(
-    useCallback(
-      (state) =>
-        (state.draftText.get(sessionKey)?.trim().length ?? 0) > 0 ||
-        (state.attachments.get(sessionKey)?.length ?? 0) > 0,
-      [sessionKey],
-    ),
-  );
-
   const slashCommands = useOpenCodeStore(
     useCallback(
       (state) => state.slashCommands.get(environmentId) ?? EMPTY_SLASH_COMMANDS,
@@ -1104,6 +1104,12 @@ export function OpenCodeChatTab({
           if (data.sessionId) {
             const availableSessions = await listSessions(existingClient);
             if (availableSessions.some((session) => session.id === data.sessionId)) {
+              await adoptNativeAgentSession({
+                environmentId,
+                agent: "opencode",
+                logicalSessionKey: sessionKey,
+                providerSessionId: data.sessionId,
+              });
               const messages = await getSessionMessages(existingClient, data.sessionId);
               if (!mounted) return;
               tabSessionIdRef.current = data.sessionId;
@@ -1124,7 +1130,17 @@ export function OpenCodeChatTab({
             updateTabNativeSessionId(tabId, undefined, environmentId);
           }
 
-          const newSession = await createSession(existingClient);
+          const ensured = await ensureNativeAgentSession({
+            environmentId,
+            agent: "opencode",
+            logicalSessionKey: sessionKey,
+          });
+          const newSession = {
+            id: ensured.providerSessionId,
+            title: "Agent Session",
+            createdAt: ensured.createdAt,
+            updatedAt: ensured.updatedAt,
+          };
           if (!mounted) return;
 
           if (!newSession) {
@@ -1319,6 +1335,12 @@ export function OpenCodeChatTab({
         }
 
         if (existingSessionId) {
+          await adoptNativeAgentSession({
+            environmentId,
+            agent: "opencode",
+            logicalSessionKey: sessionKey,
+            providerSessionId: existingSessionId,
+          });
           // Restore session from store - component may have remounted
           tabSessionIdRef.current = existingSessionId;
           updateTabNativeSessionId(tabId, existingSessionId, environmentId);
@@ -1365,7 +1387,17 @@ export function OpenCodeChatTab({
           }
         } else {
           // First initialization - create a new session
-          const newSession = await createSession(sdkClient);
+          const ensured = await ensureNativeAgentSession({
+            environmentId,
+            agent: "opencode",
+            logicalSessionKey: sessionKey,
+          });
+          const newSession = {
+            id: ensured.providerSessionId,
+            title: "Agent Session",
+            createdAt: ensured.createdAt,
+            updatedAt: ensured.updatedAt,
+          };
           if (!mounted) return;
 
           // Store the session ID in the ref for future re-activations
@@ -2257,50 +2289,6 @@ export function OpenCodeChatTab({
     ],
   );
 
-  useNativeMessageQueue({
-    agentLabel: "OpenCode",
-    sessionKey,
-    store: useOpenCodeStore,
-    canDrain:
-      handoff.ready
-      && !setupPending
-      && connectionState === "connected"
-      && !!client
-      && !stopInProgress,
-    queueLength,
-    queueHeadId,
-    isLoading: session?.isLoading ?? false,
-    blockedByDraft: isQueueBlockedByDraft,
-    claimHead: () =>
-      claimAgentPromptQueueHead<OpenCodeQueuedMessage>("opencode", sessionKey),
-    acknowledgeClaim: (claimToken) =>
-      acknowledgeAgentPromptClaim("opencode", sessionKey, claimToken),
-    rejectClaim: (claimToken) =>
-      rejectAgentPromptClaim("opencode", sessionKey, claimToken),
-    send: (entry) => {
-      const dispatch = handleSendRef.current?.(entry.text, entry.attachments, {
-        model: entry.model,
-        variant: entry.variant,
-        mode: entry.mode,
-        requestId: entry.id,
-      });
-      return dispatch?.then((result) => result?.success ? "accepted" : "rejected");
-    },
-    onError: (error) => {
-      const errorText = `Failed to send queued prompt: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`;
-      addMessage(sessionKey, {
-        id: `${ERROR_MESSAGE_PREFIX}${createUuid()}`,
-        role: "assistant",
-        content: errorText,
-        parts: [{ type: "text", content: errorText }],
-        createdAt: new Date().toISOString(),
-      });
-      setSessionLoading(sessionKey, false);
-    },
-  });
-
   // Send initial prompt after session is ready (for code review, PR creation, etc.)
   useEffect(() => {
     const sessionHasMessages = !!session?.messages.length;
@@ -2469,6 +2457,13 @@ export function OpenCodeChatTab({
 
       try {
         const messages = await getSessionMessages(client, sessionId);
+        await adoptNativeAgentSession({
+          environmentId,
+          agent: "opencode",
+          logicalSessionKey: sessionKey,
+          providerSessionId: sessionId,
+          expectedProviderSessionId: session?.sessionId,
+        });
 
         tabSessionIdRef.current = sessionId;
         updateTabNativeSessionId(tabId, sessionId, environmentId);
@@ -2509,6 +2504,7 @@ export function OpenCodeChatTab({
       client,
       environmentId,
       models,
+      session?.sessionId,
       sessionKey,
       syncPendingRequests,
       tabId,
@@ -2542,6 +2538,12 @@ export function OpenCodeChatTab({
       );
       const paneStore = usePaneLayoutStore.getState();
       const forkTabId = createUuid();
+      await adoptNativeAgentSession({
+        environmentId,
+        agent: "opencode",
+        logicalSessionKey: createSessionKey(environmentId, forkTabId),
+        providerSessionId: fork.id,
+      });
       if (planned.kind === "prompt") {
         useOpenCodeStore.getState().setDraftText(
           createSessionKey(environmentId, forkTabId),

@@ -643,13 +643,18 @@ describe("pane-layout binding", () => {
       usePaneLayoutStore.getState().environments.get("env-1"),
     );
     let resolveLayout!: (value: unknown) => void;
+    let markLayoutRequestStarted!: () => void;
+    const layoutRequestStarted = new Promise<void>((resolve) => {
+      markLayoutRequestStarted = resolve;
+    });
     const getPaneLayout = mock(() => new Promise((resolve) => {
       resolveLayout = resolve;
+      markLayoutRequestStarted();
     }));
     detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
-    await tick();
+    await layoutRequestStarted;
     useEnvironmentStore.setState({
       environments: [containerEnvironment("container-b")],
     });
@@ -664,6 +669,15 @@ describe("pane-layout binding", () => {
       { id: "container-b-tab", type: "plain" },
       "env-1",
     );
+    // Initializing a replacement container intentionally preserves already
+    // opened tabs so that an active build or agent tab is not lost during a
+    // container restart. Capture that authoritative local state before the
+    // stale request resolves: the assertion below verifies the response does
+    // not install its own tab tree over this generation.
+    const tabsBeforeStaleResponse = usePaneLayoutStore
+      .getState()
+      .getAllTabs("env-1")
+      .map(({ id }) => id);
     resolveLayout({
       version: 1,
       environmentId: "env-1",
@@ -682,7 +696,10 @@ describe("pane-layout binding", () => {
 
     expect(
       usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
-    ).toEqual(["container-b-tab"]);
+    ).toEqual(tabsBeforeStaleResponse);
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+    ).not.toContain("stale-a-tab");
     expect(
       usePaneLayoutStore.getState().getAllTabs("env-1").some(
         ({ id }) => id === "stale-a-tab",

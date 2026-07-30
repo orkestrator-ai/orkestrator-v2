@@ -19,6 +19,16 @@ const mockCreateSession = mock(() => ({
   createdAt: new Date("2026-01-01"),
   lastActivity: new Date("2026-01-01"),
 }));
+const mockCreateOrRecoverSession = mock(async (
+  title?: string,
+  _clientSessionKey?: string,
+) => ({
+  id: "s-1",
+  title: title ?? "Test",
+  status: "idle" as const,
+  createdAt: new Date("2026-01-01"),
+  lastActivity: new Date("2026-01-01"),
+}));
 
 // A session that has run task tools, for the task-list endpoint. The registry
 // is the real one: the endpoint's whole job is to serve what it holds.
@@ -123,6 +133,7 @@ function refusal(code: "not_found" | "conflict" | "invalid", message: string): E
 
 mock.module("../services/session-manager.js", () => ({
   createSession: mockCreateSession,
+  createOrRecoverSession: mockCreateOrRecoverSession,
   getSession: mockGetSession,
   listSessions: mockListSessions,
   getSessionMessages: mockGetSessionMessages,
@@ -209,6 +220,14 @@ afterAll(() => {
 describe("session routes", () => {
   beforeEach(() => {
     mockCreateSession.mockClear();
+    mockCreateOrRecoverSession.mockReset();
+    mockCreateOrRecoverSession.mockImplementation(async (title?: string) => ({
+      id: "s-1",
+      title: title ?? "Test",
+      status: "idle" as const,
+      createdAt: new Date("2026-01-01"),
+      lastActivity: new Date("2026-01-01"),
+    }));
     mockGetSession.mockClear();
     mockListSessions.mockClear();
     mockGetSessionMessages.mockClear();
@@ -254,6 +273,20 @@ describe("session routes", () => {
       const data = await jsonBody(res);
       expect(data.sessionId).toBe("s-1");
       expect(data.title).toBe("Test");
+      expect(mockCreateOrRecoverSession).toHaveBeenCalledWith("Test", undefined);
+    });
+
+    test("passes the stable client key through durable recovery", async () => {
+      const res = await jsonRequest("POST", "/session/create", {
+        title: "Startup",
+        clientSessionKey: "env-env-1:startup-agent",
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockCreateOrRecoverSession).toHaveBeenCalledWith(
+        "Startup",
+        "env-env-1:startup-agent",
+      );
     });
 
     test("creates a session with no body", async () => {
@@ -1383,8 +1416,8 @@ describe("session routes", () => {
 
   // --- Error paths (500 branches) ---
   describe("error paths", () => {
-    test("POST /session/create returns 500 when createSession throws", async () => {
-      mockCreateSession.mockImplementationOnce(() => {
+    test("POST /session/create returns 500 when durable create throws", async () => {
+      mockCreateOrRecoverSession.mockImplementationOnce(async () => {
         throw new Error("boom");
       });
       const res = await jsonRequest("POST", "/session/create", { title: "x" });

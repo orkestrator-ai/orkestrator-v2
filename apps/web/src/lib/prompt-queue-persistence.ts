@@ -29,6 +29,11 @@ export type PromptQueueLoader = (
 export type PromptQueueListLoader = (
   environmentId: string,
 ) => Promise<Array<PersistedPromptQueue<QueuedItem>>>;
+export type PromptQueueRetrier = (
+  queueKey: string,
+) => Promise<PersistedPromptQueue<QueuedItem> | null>;
+export type PromptQueueDispatchError =
+  NonNullable<PersistedPromptQueue["dispatchError"]>;
 
 /** Composite backend key. The separator cannot appear in an agent namespace. */
 export function promptQueueKey(agent: string, sessionKey: string): string {
@@ -49,9 +54,37 @@ export function parsePromptQueueKey(
 /** Highest backend revision installed per queue. */
 const queueRevisions = new Map<string, number>();
 
+const dispatchErrors = new Map<string, PromptQueueDispatchError>();
+const dispatchErrorListeners = new Set<() => void>();
+
+export function subscribePromptQueueDispatchErrors(
+  listener: () => void,
+): () => void {
+  dispatchErrorListeners.add(listener);
+  return () => dispatchErrorListeners.delete(listener);
+}
+
+export function getPromptQueueDispatchError(
+  queueKey: string,
+): PromptQueueDispatchError | undefined {
+  return dispatchErrors.get(queueKey);
+}
+
+function observeDispatchError(
+  queueKey: string,
+  error: PromptQueueDispatchError | undefined,
+): void {
+  const previous = dispatchErrors.get(queueKey);
+  if (JSON.stringify(previous) === JSON.stringify(error)) return;
+  if (error) dispatchErrors.set(queueKey, error);
+  else dispatchErrors.delete(queueKey);
+  for (const listener of dispatchErrorListeners) listener();
+}
+
 /** Drops cached revisions. Tests use this to avoid cross-file bleed. */
 export function resetPromptQueueRevisions(): void {
   queueRevisions.clear();
+  dispatchErrors.clear();
 }
 
 export function applyPromptQueueSnapshot<TItem extends QueuedItem>(
@@ -73,6 +106,7 @@ export function applyPromptQueueSnapshot<TItem extends QueuedItem>(
       && typeof (message as QueuedItem).id === "string")
     : [];
   queueRevisions.set(persisted.queueKey, persisted.revision);
+  observeDispatchError(persisted.queueKey, persisted.dispatchError);
   source.setQueue(parsed.sessionKey, messages);
 }
 
@@ -134,6 +168,26 @@ export async function claimPromptQueueHead<TItem extends QueuedItem>(
     : null;
 }
 
+/** Clears a terminal dispatch latch and lets the backend supervisor retry it. */
+export async function retryPromptQueueDispatch<TItem extends QueuedItem>(
+  source: PromptQueueSource<TItem>,
+  sessionKey: string,
+  retry: PromptQueueRetrier = backend.retryPromptQueueDispatch,
+): Promise<void> {
+  const queueKey = promptQueueKey(source.agent, sessionKey);
+  const persisted = await retry(queueKey);
+  if (!persisted) {
+    queueRevisions.delete(queueKey);
+    observeDispatchError(queueKey, undefined);
+    source.setQueue(sessionKey, []);
+    return;
+  }
+  // A retry may clear the latch without changing a test-double's revision.
+  // Forget the observed revision so the authoritative response always wins.
+  queueRevisions.delete(queueKey);
+  applyPromptQueueSnapshot(source, persisted as PersistedPromptQueue<TItem>);
+}
+
 export async function hydratePromptQueuesForEnvironment(
   environmentId: string,
   sources: ReadonlyArray<PromptQueueSource>,
@@ -168,6 +222,7 @@ export async function hydratePromptQueue(
   const persisted = await load(queueKey);
   if (!persisted) {
     queueRevisions.delete(queueKey);
+    observeDispatchError(queueKey, undefined);
     source.setQueue(parsed.sessionKey, []);
     return;
   }

@@ -56,7 +56,7 @@ const mockSendPrompt = mock<
   ) => Promise<{ success: boolean; requestId?: string; error?: string }>
 >(async () => ({ success: true }));
 const mockAbortSession = mock(async () => true);
-const mockCreateSession = mock(async () => ({
+const mockCreateSession = mock(async (_client?: unknown) => ({
   id: "session-1",
   createdAt: "2026-04-15T10:00:00.000Z",
 }));
@@ -221,6 +221,34 @@ const mockTransferPromptQueueMessageToComposeDraft = mock(
   },
 );
 const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
+const mockAdoptNativeAgentSession = mock(async (input: {
+  environmentId: string;
+  agent: "opencode";
+  logicalSessionKey: string;
+  providerSessionId: string;
+  expectedProviderSessionId?: string;
+}) => ({
+  id: "adopted-native-session",
+  key: "adopted-key",
+  ...input,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  dispatchedRequestIds: [],
+}));
+const mockEnsureNativeAgentSession = mock(async () => {
+  const created = await mockCreateSession({ baseUrl: "http://127.0.0.1:9999" });
+  if (!created) throw new Error("Failed to create OpenCode session");
+  return {
+    id: "native-session-record",
+    environmentId: "env-1",
+    agent: "opencode" as const,
+    logicalSessionKey: "env-env-1:tab-1",
+    providerSessionId: created.id,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    dispatchedRequestIds: [],
+  };
+});
 
 const openCodeClientModuleFactory = () => ({
   ...realOpenCodeClientSnapshot,
@@ -251,6 +279,8 @@ const openCodeClientModuleFactory = () => ({
 mock.module("@/lib/opencode-client", openCodeClientModuleFactory);
 
 mock.module("@/lib/backend", () => ({
+  adoptNativeAgentSession: mockAdoptNativeAgentSession,
+  ensureNativeAgentSession: mockEnsureNativeAgentSession,
   claimPromptQueueHead: mockClaimPromptQueueHead,
   acknowledgePromptQueueClaim: mock(async (queueKey, environmentId, claimToken) => {
     mockOutstandingQueueClaims.delete(claimToken);
@@ -811,6 +841,7 @@ describe("OpenCodeChatTab", () => {
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
     mockGetAgentHandoff.mockReset();
     mockGetAgentHandoff.mockResolvedValue(null);
+    mockAdoptNativeAgentSession.mockClear();
     mockSendPrompt.mockClear();
     mockSendPrompt.mockImplementation(async () => ({
       success: true,
@@ -1815,6 +1846,12 @@ describe("OpenCodeChatTab", () => {
     );
 
     await waitFor(() => {
+      expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith({
+        environmentId: ENVIRONMENT_ID,
+        agent: "opencode",
+        logicalSessionKey: SESSION_KEY,
+        providerSessionId: restoredSessionId,
+      });
       expect(mockGetSessionMessages).toHaveBeenCalledWith(MOCK_CLIENT, restoredSessionId);
       expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
         restoredSessionId,
@@ -1861,6 +1898,12 @@ describe("OpenCodeChatTab", () => {
         sessionId: restoredSessionId,
         messages: [restoredMessage],
       });
+    });
+    expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith({
+      environmentId: ENVIRONMENT_ID,
+      agent: "opencode",
+      logicalSessionKey: SESSION_KEY,
+      providerSessionId: restoredSessionId,
     });
     expect(mockGetSessionMessages).toHaveBeenCalledWith(expect.anything(), restoredSessionId);
     expect(mockCreateSession).not.toHaveBeenCalled();
@@ -2329,6 +2372,13 @@ describe("OpenCodeChatTab", () => {
     fireEvent.click(await screen.findByTestId("opencode-resume-choice"));
 
     await waitFor(() => {
+      expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith({
+        environmentId: ENVIRONMENT_ID,
+        agent: "opencode",
+        logicalSessionKey: SESSION_KEY,
+        providerSessionId: "resumed-opencode",
+        expectedProviderSessionId: "session-1",
+      });
       expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
         sessionId: "resumed-opencode",
         messages: [resumedMessage],
@@ -2415,6 +2465,38 @@ describe("OpenCodeChatTab", () => {
       });
       expect(
         usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId,
+      ).toBe("session-1");
+      expect(screen.getByTestId("opencode-resume-choice")).toBeTruthy();
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("does not switch sessions when backend adoption rejects a manual resume", async () => {
+    const originalError = console.error;
+    const consoleError = mock(() => {});
+    console.error = consoleError as unknown as typeof console.error;
+    mockAdoptNativeAgentSession.mockRejectedValueOnce(
+      new Error("logical session belongs to another provider session"),
+    );
+
+    try {
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+      fireEvent.click(await screen.findByTestId("opencode-resume-choice"));
+
+      await waitFor(() => {
+        expect(consoleError).toHaveBeenCalledWith(
+          "[OpenCodeChatTab] Failed to resume session:",
+          expect.any(Error),
+        );
+      });
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId)
+        .toBe("session-1");
+      expect(
+        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
+          ?.openCodeNativeData?.sessionId,
       ).toBe("session-1");
       expect(screen.getByTestId("opencode-resume-choice")).toBeTruthy();
     } finally {
@@ -2909,219 +2991,13 @@ describe("OpenCodeChatTab", () => {
     expect(clearIntervalCalls).toBeGreaterThan(0);
   });
 
-  test("drains queued prompts when the session is idle", async () => {
-    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Handle the queued prompt",
-      attachments: [],
-      model: "openai/gpt-5",
-      mode: "build",
-    });
 
-    render(
-      <OpenCodeChatTab
-        tabId={TAB_ID}
-        data={createData()}
-        isActive={false}
-      />,
-    );
 
-    await waitFor(() => {
-      expect(mockSendPrompt).toHaveBeenCalledWith(
-        MOCK_CLIENT,
-        "session-1",
-        "Handle the queued prompt",
-        expect.objectContaining({
-          model: "openai/gpt-5",
-          mode: "build",
-          attachments: undefined,
-          requestId: "queue-1",
-        }),
-      );
-    });
-  });
 
-  test("retries a denied stale claim when the authoritative head changes at the same length", async () => {
-    const current = {
-      id: "queue-current",
-      text: "Dispatch the authoritative OpenCode head",
-      attachments: [],
-      model: "openai/gpt-5",
-      mode: "build" as const,
-    };
-    let attempts = 0;
-    mockClaimPromptQueueHead.mockImplementation(async (
-      queueKey,
-      environmentId,
-      _expectedMessageId,
-      candidateMessages,
-    ) => {
-      attempts += 1;
-      if (attempts === 1) {
-        return {
-          claimed: null,
-          claimToken: null,
-          queue: queueSnapshot(queueKey, environmentId, [current]),
-        };
-      }
-      const claimed = candidateMessages[0] ?? null;
-      const claimToken = claimed ? `claim-${claimed.id}` : null;
-      if (claimed && claimToken) mockOutstandingQueueClaims.set(claimToken, claimed);
-      return {
-        claimed,
-        claimToken,
-        queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
-      };
-    });
-    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
-      id: "queue-stale",
-      text: "Stale projected head",
-      attachments: [],
-      model: "openai/gpt-5",
-      mode: "build",
-    });
 
-    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
 
-    await waitFor(() => {
-      expect(mockSendPrompt).toHaveBeenCalledWith(
-        MOCK_CLIENT,
-        "session-1",
-        current.text,
-        expect.objectContaining({
-          model: current.model,
-          mode: current.mode,
-          requestId: current.id,
-        }),
-      );
-    });
-    expect(mockClaimPromptQueueHead).toHaveBeenCalledTimes(2);
-  });
 
-  test("a failed backend claim does not spin or dispatch the unclaimed prompt", async () => {
-    const originalError = console.error;
-    console.error = mock(() => undefined) as unknown as typeof console.error;
-    mockClaimPromptQueueHead.mockRejectedValueOnce(new Error("claim unavailable"));
-    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Keep queued",
-      attachments: [],
-      model: "openai/gpt-5",
-      mode: "build",
-    });
-    try {
-      render(
-        <OpenCodeChatTab
-          tabId={TAB_ID}
-          data={createData()}
-          isActive={false}
-        />,
-      );
 
-      await waitFor(() => expect(mockClaimPromptQueueHead).toHaveBeenCalledTimes(1));
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      });
-
-      expect(mockClaimPromptQueueHead).toHaveBeenCalledTimes(1);
-      expect(mockSendPrompt).not.toHaveBeenCalled();
-      expect(useOpenCodeStore.getState().messageQueue.get(SESSION_KEY))
-        .toEqual([expect.objectContaining({ id: "queue-1" })]);
-    } finally {
-      console.error = originalError;
-    }
-  });
-
-  test("restores a queued prompt and records an error when queued send fails", async () => {
-    const originalError = console.error;
-    const consoleError = mock(() => {});
-    console.error = consoleError as unknown as typeof console.error;
-    resetStores("review-table");
-    mockSendPrompt.mockImplementation(async () => ({
-      success: false,
-      error: "OpenCode unavailable",
-    }));
-    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Queued OpenCode failure",
-      attachments: [],
-      model: "openai/gpt-5",
-      mode: "build",
-    });
-
-    try {
-      render(
-        <OpenCodeChatTab
-          tabId={TAB_ID}
-          data={createData()}
-          isActive={false}
-        />,
-      );
-
-      await waitFor(() => {
-        expect(mockSendPrompt).toHaveBeenCalledWith(
-          MOCK_CLIENT,
-          "session-1",
-          "Queued OpenCode failure",
-          expect.objectContaining({ model: "openai/gpt-5", mode: "build" }),
-        );
-      });
-
-      await waitFor(() => {
-        const state = useOpenCodeStore.getState();
-        const messages = state.sessions.get(SESSION_KEY)?.messages ?? [];
-        expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
-        expect(state.messageQueue.get(SESSION_KEY)).toEqual([
-          expect.objectContaining({ id: "queue-1" }),
-        ]);
-        expect(messages.some((message) => message.content === "OpenCode unavailable")).toBe(true);
-      });
-    } finally {
-      console.error = originalError;
-    }
-  });
-
-  test("records a queue-drain rejection and clears the loading state", async () => {
-    const originalError = console.error;
-    console.error = mock(() => {}) as unknown as typeof console.error;
-    mockSendPrompt.mockRejectedValue(new Error("transport rejected"));
-    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
-      id: "queue-rejection",
-      text: "Queued rejection",
-      attachments: [],
-      model: "openai/gpt-5",
-      mode: "build",
-    });
-
-    try {
-      render(
-        <OpenCodeChatTab
-          tabId={TAB_ID}
-          data={createData()}
-          isActive={false}
-        />,
-      );
-
-      await waitFor(() => {
-        const state = useOpenCodeStore.getState();
-        expect(state.messageQueue.get(SESSION_KEY)).toEqual([
-          expect.objectContaining({ id: "queue-rejection" }),
-        ]);
-        expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
-        expect(
-          state.sessions
-            .get(SESSION_KEY)
-            ?.messages.some(
-              (message) =>
-                message.content ===
-                "Failed to send queued prompt: transport rejected",
-            ),
-        ).toBe(true);
-      });
-    } finally {
-      console.error = originalError;
-    }
-  });
 
   test("does not drain queued prompts while a draft exists", async () => {
     resetStores("review-table");
@@ -3780,79 +3656,9 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
-  test("initializes and drains a queued prompt while the OpenCode tab is inactive", async () => {
-    useOpenCodeStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Run the hidden queued OpenCode prompt",
-      attachments: [],
-      model: "openai/gpt-5",
-      mode: "build",
-    });
 
-    render(
-      <OpenCodeChatTab
-        tabId={TAB_ID}
-        data={createData()}
-        isActive={false}
-      />,
-    );
 
-    await waitFor(() => {
-      expect(mockSendPrompt).toHaveBeenCalledWith(
-        MOCK_CLIENT,
-        "session-1",
-        "Run the hidden queued OpenCode prompt",
-        expect.objectContaining({ model: "openai/gpt-5", mode: "build" }),
-      );
-    });
-  });
 
-  test("waits for setup readiness before draining a queued prompt while inactive", async () => {
-    useEnvironmentStore.setState({
-      workspaceReadyEnvironments: new Set(),
-    });
-    seedQueuedPrompt(useOpenCodeStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Run after OpenCode setup",
-      attachments: [],
-      model: "openai/gpt-5",
-      mode: "build",
-    });
-
-    render(
-      <OpenCodeChatTab
-        tabId={TAB_ID}
-        data={createData()}
-        isActive={false}
-      />,
-    );
-
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-
-    expect(mockSendPrompt).not.toHaveBeenCalled();
-
-    act(() => {
-      useEnvironmentStore.setState({
-        workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
-      });
-    });
-
-    await waitFor(() => {
-      expect(mockSendPrompt).toHaveBeenCalledWith(
-        MOCK_CLIENT,
-        "session-1",
-        "Run after OpenCode setup",
-        expect.objectContaining({ model: "openai/gpt-5", mode: "build" }),
-      );
-    });
-  });
 
   test("stop logs a failed abort without unlocking the running session", async () => {
     const originalError = console.error;
@@ -3918,6 +3724,15 @@ describe("OpenCodeChatTab", () => {
             environmentId: ENVIRONMENT_ID,
             sessionId: "fork-session",
           },
+        });
+        expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith({
+          environmentId: ENVIRONMENT_ID,
+          agent: "opencode",
+          logicalSessionKey: createOpenCodeSessionKey(
+            ENVIRONMENT_ID,
+            tabs[1]!.id,
+          ),
+          providerSessionId: "fork-session",
         });
         expect(
           useOpenCodeStore.getState().getDraftText(
@@ -4767,13 +4582,17 @@ describe("OpenCodeChatTab", () => {
       try {
         render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
+        // `accelerateWindowTimers` collapses every backoff to 0, so this budget
+        // is pure wall clock for eleven async reconnect cycles rather than part
+        // of the assertion. Keep it generous: a tighter one made the test a race
+        // against whatever else the file had already loaded.
         await waitFor(() => {
           expect(mockSubscribeToEvents.mock.calls.length).toBeGreaterThanOrEqual(11);
           expect(consoleWarn).toHaveBeenCalledWith(
             "[OpenCodeChatTab] SSE reconnect limit reached for",
             ENVIRONMENT_ID,
           );
-        }, { timeout: 2_000 });
+        }, { timeout: 15_000 });
         expect(useOpenCodeStore.getState().hasActiveEventSubscription(ENVIRONMENT_ID))
           .toBe(false);
       } finally {

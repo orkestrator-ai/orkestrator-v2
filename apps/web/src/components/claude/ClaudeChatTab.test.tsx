@@ -45,7 +45,7 @@ let lastVirtualizedFind: {
 // Typed from `createSession`'s real signature rather than inferred from the
 // default factory, so a test that stubs a title is not an excess-property error.
 type MockCreatedSession = { sessionId: string; title?: string } | null;
-const createDefaultSession = async (): Promise<MockCreatedSession> => ({
+const createDefaultSession = async (_client?: unknown): Promise<MockCreatedSession> => ({
   sessionId: "session-1",
 });
 const mockCreateSession = mock(createDefaultSession);
@@ -149,6 +149,58 @@ const mockReadFileBase64 = mock(async () => "chat-local-base64");
 const mockReadContainerFileBase64 = mock(async () => "chat-container-base64");
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
+const mockAdoptNativeAgentSession = mock(async (input: {
+  environmentId: string;
+  agent: string;
+  logicalSessionKey: string;
+  providerSessionId: string;
+}) => ({
+  id: `adopted-${input.logicalSessionKey}`,
+  environmentId: input.environmentId,
+  agent: input.agent as "claude",
+  logicalSessionKey: input.logicalSessionKey,
+  providerSessionId: input.providerSessionId,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  dispatchedRequestIds: [],
+}));
+// A claimed head must not be handed out twice: the promote-to-draft path and the
+// backend drain both go through this call, and only one of them may win.
+const claimedPromptHeads = new Set<string>();
+const mockClaimPromptQueueHead = mock(async (
+  queueKey: string,
+  environmentId: string,
+  expectedMessageId: string,
+  candidateMessages: Array<{ id: string }>,
+) => {
+  const claimKey = `${queueKey}\u0000${expectedMessageId}`;
+  const alreadyClaimed = claimedPromptHeads.has(claimKey);
+  if (!alreadyClaimed) claimedPromptHeads.add(claimKey);
+  return {
+    claimed: alreadyClaimed ? null : (candidateMessages[0] ?? null),
+    queue: {
+      queueKey,
+      environmentId,
+      messages: candidateMessages.slice(1),
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    },
+  };
+});
+const mockEnsureNativeAgentSession = mock(async () => {
+  const created = await mockCreateSession({ baseUrl: "http://127.0.0.1:9999" });
+  if (!created) throw new Error("Failed to create session");
+  return {
+    id: "native-session-record",
+    environmentId: "env-1",
+    agent: "claude" as const,
+    logicalSessionKey: "env-env-1:tab-1",
+    providerSessionId: created.sessionId,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    dispatchedRequestIds: [],
+  };
+});
 
 class MockSessionNotFoundError extends Error {}
 
@@ -283,21 +335,9 @@ const mockRejectPromptQueueClaim = mock(
 );
 
 mock.module("@/lib/backend", () => ({
-  claimPromptQueueHead: mock(async (
-    queueKey: string,
-    environmentId: string,
-    _expectedMessageId: string,
-    candidateMessages: Array<{ id: string }>,
-  ) => {
-    const claimed = candidateMessages[0] ?? null;
-    const claimToken = claimed ? `claim-${claimed.id}` : null;
-    if (claimed && claimToken) mockOutstandingQueueClaims.set(claimToken, claimed);
-    return {
-      claimed,
-      claimToken,
-      queue: queueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
-    };
-  }),
+  adoptNativeAgentSession: mockAdoptNativeAgentSession,
+  ensureNativeAgentSession: mockEnsureNativeAgentSession,
+  claimPromptQueueHead: mockClaimPromptQueueHead,
   acknowledgePromptQueueClaim: mockAcknowledgePromptQueueClaim,
   rejectPromptQueueClaim: mockRejectPromptQueueClaim,
   enqueuePromptQueueMessage: mock(async (queueKey, environmentId, message) =>
@@ -651,6 +691,9 @@ describe("ClaudeChatTab", () => {
   beforeEach(() => {
     cleanup();
     resetStores();
+    claimedPromptHeads.clear();
+    mockClaimPromptQueueHead.mockClear();
+    mockAdoptNativeAgentSession.mockClear();
     mockOutstandingQueueClaims.clear();
     mockAcknowledgePromptQueueClaim.mockClear();
     mockRejectPromptQueueClaim.mockClear();
@@ -3930,255 +3973,15 @@ describe("ClaudeChatTab", () => {
     expect(useClaudeStore.getState().models).toEqual([]);
   });
 
-  test("drains queued prompts when the session is idle", async () => {
-    mockSendPrompt.mockImplementation(async () => true as any);
-    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Run the queued review",
-      attachments: [],
-      effort: "high",
-      planModeEnabled: false,
-      fastModeEnabled: false,
-    });
 
-    render(
-      <ClaudeChatTab
-        tabId={TAB_ID}
-        data={createData()}
-        isActive={false}
-      />,
-    );
 
-    await waitFor(() => {
-      expect(mockSendPrompt).toHaveBeenCalledWith(
-        MOCK_CLIENT,
-        "session-1",
-        "Run the queued review",
-        expect.objectContaining({
-          attachments: undefined,
-          effort: "high",
-          permissionMode: "bypassPermissions",
-          requestId: "queue-1",
-        }),
-      );
-    });
-  });
 
-  test("renames compact Electron timestamp environments before draining the first queued prompt", async () => {
-    resetStores("202604151234567");
-    mockSendPrompt.mockImplementation(async () => true as any);
-    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Run the queued rename",
-      attachments: [],
-      effort: "high",
-      planModeEnabled: false,
-      fastModeEnabled: false,
-    });
 
-    render(
-      <ClaudeChatTab
-        tabId={TAB_ID}
-        data={createData()}
-        isActive={false}
-      />,
-    );
 
-    await waitFor(() => {
-      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
-        ENVIRONMENT_ID,
-        "Run the queued rename",
-      );
-      expect(mockSendPrompt).toHaveBeenCalled();
-    });
-  });
 
-  test("waits for setup readiness before draining a queued prompt while inactive", async () => {
-    mockSendPrompt.mockImplementation(async () => true as any);
-    useEnvironmentStore.setState({
-      workspaceReadyEnvironments: new Set(),
-    });
-    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Run after Claude setup",
-      attachments: [],
-      effort: "high",
-      planModeEnabled: false,
-      fastModeEnabled: false,
-    });
 
-    render(
-      <ClaudeChatTab
-        tabId={TAB_ID}
-        data={createData()}
-        isActive={false}
-      />,
-    );
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
 
-    expect(mockSendPrompt).not.toHaveBeenCalled();
-
-    act(() => {
-      useEnvironmentStore.setState({
-        workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
-      });
-    });
-
-    await waitFor(() => {
-      expect(mockSendPrompt).toHaveBeenCalledWith(
-        MOCK_CLIENT,
-        "session-1",
-        "Run after Claude setup",
-        expect.objectContaining({
-          attachments: undefined,
-          effort: "high",
-          permissionMode: "bypassPermissions",
-        }),
-      );
-    });
-  });
-
-  test("restores a queued prompt and clears loading when queued send fails", async () => {
-    const originalError = console.error;
-    const consoleError = mock(() => {});
-    console.error = consoleError as unknown as typeof console.error;
-    mockSendPrompt.mockImplementation(async () => false as any);
-    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
-      id: "queue-1",
-      text: "Queued Claude failure",
-      attachments: [],
-      effort: "high",
-      planModeEnabled: false,
-      fastModeEnabled: false,
-    });
-
-    try {
-      render(
-        <ClaudeChatTab
-          tabId={TAB_ID}
-          data={createData()}
-          isActive={false}
-        />,
-      );
-
-      await waitFor(() => {
-        expect(mockSendPrompt).toHaveBeenCalledWith(
-          MOCK_CLIENT,
-          "session-1",
-          "Queued Claude failure",
-          expect.any(Object),
-        );
-      });
-
-      await waitFor(() => {
-        const state = useClaudeStore.getState();
-        expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
-        expect(state.messageQueue.get(SESSION_KEY)).toEqual([
-          expect.objectContaining({ id: "queue-1" }),
-        ]);
-      });
-    } finally {
-      console.error = originalError;
-    }
-  });
-
-  test("retains an ambiguous queued prompt claim until dispatch reconciliation", async () => {
-    mockSendPrompt.mockResolvedValue({
-      ok: false,
-      outcome: "unknown",
-      requestId: "queue-ambiguous",
-    } as any);
-    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
-      id: "queue-ambiguous",
-      text: "Queued Claude ambiguity",
-      attachments: [],
-      effort: "high",
-      planModeEnabled: false,
-      fastModeEnabled: false,
-    });
-
-    render(
-      <ClaudeChatTab
-        tabId={TAB_ID}
-        data={createData()}
-        isActive={false}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(mockSendPrompt).toHaveBeenCalledWith(
-        MOCK_CLIENT,
-        "session-1",
-        "Queued Claude ambiguity",
-        expect.objectContaining({ requestId: "queue-ambiguous" }),
-      );
-    });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
-
-    expect(mockAcknowledgePromptQueueClaim).not.toHaveBeenCalled();
-    expect(mockRejectPromptQueueClaim).not.toHaveBeenCalled();
-    expect(mockOutstandingQueueClaims.has("claim-queue-ambiguous")).toBe(true);
-  });
-
-  test("records the rejected queued send error and clears the loading state", async () => {
-    const originalError = console.error;
-    const consoleError = mock(() => {});
-    const sendError = new Error("Claude bridge rejected the queued prompt");
-    console.error = consoleError as unknown as typeof console.error;
-    mockSendPrompt.mockRejectedValue(sendError);
-    seedQueuedPrompt(useClaudeStore.getState(), SESSION_KEY, {
-      id: "queue-rejection",
-      text: "Queued Claude rejection",
-      attachments: [],
-      effort: "high",
-      planModeEnabled: false,
-      fastModeEnabled: false,
-    });
-
-    try {
-      render(
-        <ClaudeChatTab
-          tabId={TAB_ID}
-          data={createData()}
-          isActive={false}
-        />,
-      );
-
-      await waitFor(() => {
-        const state = useClaudeStore.getState();
-        const errorMessage = state.sessions.get(SESSION_KEY)?.messages.find(
-          (message) =>
-            message.content
-              === "Failed to send queued message: Claude bridge rejected the queued prompt",
-        );
-        expect(errorMessage).toMatchObject({
-          role: "assistant",
-          parts: [{
-            type: "text",
-            content: "Failed to send queued message: Claude bridge rejected the queued prompt",
-          }],
-        });
-        expect(errorMessage?.id).toMatch(
-          /^error-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-        );
-        expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
-        expect(state.messageQueue.get(SESSION_KEY)).toEqual([
-          expect.objectContaining({ id: "queue-rejection" }),
-        ]);
-      });
-      expect(consoleError).toHaveBeenCalledWith(
-        "[ClaudeChatTab] Failed to send queued prompt:",
-        sendError,
-      );
-    } finally {
-      console.error = originalError;
-    }
-  });
 
   test("does not drain queued prompts while a draft exists", async () => {
     useClaudeStore.getState().setDraftText(SESSION_KEY, "Keep this Claude draft");
@@ -4315,6 +4118,16 @@ describe("ClaudeChatTab", () => {
       expect(state.messageQueue.get(SESSION_KEY)?.map((message) => message.text)).toEqual([
         "Second queued Claude prompt",
       ]);
+      // The queue-to-draft transfer is one backend mutation, so the supervisor
+      // cannot dispatch the prompt between removing it and restoring its draft.
+      expect(mockTransferPromptQueueMessageToComposeDraft).toHaveBeenCalledWith(
+        "claude\u0000env-env-1:tab-1",
+        "env-1",
+        "queue-1",
+        "claude:env-1:env-env-1%3Atab-1",
+        "environment",
+        "env-1",
+      );
       expect(state.attachments.get(SESSION_KEY)).toEqual([queuedAttachment]);
       expect(state.effort.get(SESSION_KEY)).toBe("high");
       expect(state.planMode.get(SESSION_KEY)).toBe(false);

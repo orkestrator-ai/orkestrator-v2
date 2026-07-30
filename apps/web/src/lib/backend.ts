@@ -39,6 +39,7 @@ import type {
   ClaudeModelCatalogSnapshot,
   PersistedLoopedReviewWorkflow,
   PersistedBuildPipeline,
+  PersistedNativeAgentSession,
   PersistedComposeDraft,
   PersistedFileDraft,
   PersistedPromptQueue,
@@ -1503,6 +1504,23 @@ export async function setEnvironmentPendingAgentLaunch(
   });
 }
 
+/** Acknowledge that the backend-created startup session now has a durable tab. */
+export async function acknowledgeStartupAgentSession(
+  environmentId: string,
+  startupSession: {
+    providerSessionId?: string;
+    startedAt?: string;
+  },
+): Promise<Environment> {
+  return invoke<Environment>("acknowledge_startup_agent_session", {
+    environmentId,
+    ...(startupSession.providerSessionId
+      ? { providerSessionId: startupSession.providerSessionId }
+      : {}),
+    ...(startupSession.startedAt ? { startedAt: startupSession.startedAt } : {}),
+  });
+}
+
 /**
  * Persist the initial prompt after the renderer has rewritten it (for example to
  * add references to uploaded attachments), so a recovered launch reads the same
@@ -1720,6 +1738,7 @@ export async function saveLoopedReviewWorkflow<T>(
   version: number,
   snapshot: T,
   expectedRevision?: number,
+  controllerFence?: { ownerId: string; token: string },
 ): Promise<PersistedLoopedReviewWorkflow<T>> {
   return invoke<PersistedLoopedReviewWorkflow<T>>(
     "save_looped_review_workflow",
@@ -1729,6 +1748,12 @@ export async function saveLoopedReviewWorkflow<T>(
       version,
       snapshot,
       ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      ...(controllerFence
+        ? {
+            controllerOwnerId: controllerFence.ownerId,
+            controllerToken: controllerFence.token,
+          }
+        : {}),
     },
   );
 }
@@ -1737,6 +1762,98 @@ export async function deleteLoopedReviewWorkflow(
   workflowId: string,
 ): Promise<void> {
   return invoke("delete_looped_review_workflow", { workflowId });
+}
+
+export async function claimLoopedReviewController(
+  workflowId: string,
+  ownerId: string,
+  leaseMs: number,
+): Promise<{ granted: boolean; token?: string; expiresAt: string }> {
+  return invoke("claim_looped_review_controller", {
+    workflowId,
+    ownerId,
+    leaseMs,
+  });
+}
+
+export async function validateLoopedReviewController(
+  workflowId: string,
+  ownerId: string,
+  token: string,
+): Promise<boolean> {
+  return invoke<boolean>("validate_looped_review_controller", {
+    workflowId,
+    ownerId,
+    token,
+  });
+}
+
+export async function releaseLoopedReviewController(
+  workflowId: string,
+  ownerId: string,
+  token: string,
+): Promise<void> {
+  return invoke("release_looped_review_controller", {
+    workflowId,
+    ownerId,
+    token,
+  });
+}
+
+export async function ensureNativeAgentSession(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode";
+  logicalSessionKey: string;
+  title?: string;
+  model?: string;
+  reasoningEffort?: string;
+  phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
+  /**
+   * Overrides the mode the phase would imply.
+   *
+   * Looped-review phases collapse onto `review`, and preparation has to commit
+   * changes — a phase-derived read-only session would fail that round.
+   */
+  sessionMode?: "plan" | "build";
+}): Promise<PersistedNativeAgentSession> {
+  return invoke<PersistedNativeAgentSession>(
+    "ensure_native_agent_session",
+    input,
+  );
+}
+
+export async function adoptNativeAgentSession(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode";
+  logicalSessionKey: string;
+  providerSessionId: string;
+  expectedProviderSessionId?: string;
+  model?: string;
+  reasoningEffort?: string;
+}): Promise<PersistedNativeAgentSession> {
+  return invoke<PersistedNativeAgentSession>(
+    "adopt_native_agent_session",
+    input,
+  );
+}
+
+export async function dispatchNativeAgentPrompt(input: {
+  environmentId: string;
+  agent: "claude" | "codex" | "opencode";
+  logicalSessionKey: string;
+  title?: string;
+  model?: string;
+  reasoningEffort?: string;
+  phase?: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
+  prompt: string;
+  requestId: string;
+  images?: Array<{ filename: string; data: string }>;
+  schema?: Record<string, unknown>;
+}): Promise<PersistedNativeAgentSession> {
+  return invoke<PersistedNativeAgentSession>(
+    "dispatch_native_agent_prompt",
+    input,
+  );
 }
 
 // --- Build Pipeline Persistence ---
@@ -1962,6 +2079,15 @@ export async function transferPromptQueueMessageToComposeDraft<T>(
     ownerId,
     ...(expectedDraftRevision === undefined ? {} : { expectedDraftRevision }),
   });
+}
+
+export async function retryPromptQueueDispatch<T = unknown>(
+  queueKey: string,
+): Promise<PersistedPromptQueue<T> | null> {
+  return invoke<PersistedPromptQueue<T> | null>(
+    "retry_prompt_queue_dispatch",
+    { queueKey },
+  );
 }
 
 // --- Unsent drafts ---

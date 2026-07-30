@@ -37,6 +37,7 @@ import type { LoopedReviewTabData } from "@/types/paneLayout";
 import {
   hydrateLoopedReviewWorkflow,
   persistLoopedReviewWorkflowNow,
+  registerLoopedReviewControllerFence,
 } from "@/lib/looped-review-persistence";
 import {
   connectStructuredReviewAgent,
@@ -80,6 +81,18 @@ interface LoopedReviewTabProps {
   verifyPr?: typeof verifyEnvironmentPr;
   pollIntervalMs?: number;
   missingSessionPollLimit?: number;
+  controllerLease?: LoopedReviewControllerLease;
+  validateControllerLease?: (
+    workflowId: string,
+    ownerId: string,
+    token: string,
+  ) => Promise<boolean>;
+}
+
+export interface LoopedReviewControllerLease {
+  ownerId: string;
+  token: string;
+  expiresAt: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -97,6 +110,13 @@ class MissingProviderSessionError extends Error {
   constructor() {
     super("The native provider session no longer exists. Retry will create a replacement.");
     this.name = "MissingProviderSessionError";
+  }
+}
+
+class LoopedReviewLeaseLostError extends Error {
+  constructor() {
+    super("Looped-review controller lease is no longer valid");
+    this.name = "LoopedReviewLeaseLostError";
   }
 }
 
@@ -516,6 +536,8 @@ export function LoopedReviewTab({
   verifyPr = verifyEnvironmentPr,
   pollIntervalMs = 1_000,
   missingSessionPollLimit = 5,
+  controllerLease,
+  validateControllerLease,
 }: LoopedReviewTabProps) {
   const workflow = useLoopedReviewStore(
     (state) => state.workflows.get(data.workflowId),
@@ -529,6 +551,88 @@ export function LoopedReviewTab({
   const agentRef = useRef<NativeStructuredAgent | null>(null);
   const nullResultPollsRef = useRef(new Map<string, number>());
   const [pollTick, setPollTick] = useState(0);
+  const controllerLeaseRef = useRef(controllerLease);
+  const controllerMountedRef = useRef(true);
+  controllerLeaseRef.current = controllerLease;
+
+  useEffect(() => {
+    controllerMountedRef.current = true;
+    return () => {
+      controllerMountedRef.current = false;
+    };
+  }, []);
+
+  const assertControllerLease = useCallback(async (): Promise<void> => {
+    const lease = controllerLeaseRef.current;
+    if (!lease && !validateControllerLease) {
+      return;
+    }
+    if (!lease || !validateControllerLease) {
+      throw new LoopedReviewLeaseLostError();
+    }
+    if (Date.parse(lease.expiresAt) <= Date.now()) {
+      throw new LoopedReviewLeaseLostError();
+    }
+    let valid = false;
+    try {
+      valid = await validateControllerLease(
+        data.workflowId,
+        lease.ownerId,
+        lease.token,
+      );
+    } catch {
+      throw new LoopedReviewLeaseLostError();
+    }
+    const current = controllerLeaseRef.current;
+    if (
+      !valid
+      || !controllerMountedRef.current
+      || current?.ownerId !== lease.ownerId
+      || current.token !== lease.token
+      || Date.parse(current.expiresAt) <= Date.now()
+    ) {
+      throw new LoopedReviewLeaseLostError();
+    }
+  }, [data.workflowId, validateControllerLease]);
+
+  const persistControllerState = useCallback(async (
+    requiredWithoutController = false,
+  ): Promise<void> => {
+    const lease = controllerLeaseRef.current;
+    if (!lease && validateControllerLease) {
+      throw new LoopedReviewLeaseLostError();
+    }
+    if (!lease && !requiredWithoutController) return;
+    await persistWorkflow(
+      data.workflowId,
+      lease
+        ? {
+            controllerFence: {
+              ownerId: lease.ownerId,
+              token: lease.token,
+            },
+          }
+        : undefined,
+    );
+    await assertControllerLease();
+  }, [
+    assertControllerLease,
+    data.workflowId,
+    persistWorkflow,
+    validateControllerLease,
+  ]);
+
+  useEffect(() => {
+    if (!controllerLease) return;
+    return registerLoopedReviewControllerFence(data.workflowId, {
+      ownerId: controllerLease.ownerId,
+      token: controllerLease.token,
+    });
+  }, [
+    controllerLease?.ownerId,
+    controllerLease?.token,
+    data.workflowId,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -595,9 +699,16 @@ export function LoopedReviewTab({
     phase: LoopedReviewSessionPhase,
     pass?: number,
   ): Promise<string> => {
+    await assertControllerLease();
     const agent = await connect(current);
+    await assertControllerLease();
     const label = sessionLabel(phase, current.currentRound, pass);
-    const providerSessionId = await agent.createSession(phase, label);
+    const providerSessionId = await agent.createSession(
+      phase,
+      label,
+      `looped-review:${current.id}:${phase}:round-${current.currentRound}:pass-${pass ?? 0}`,
+    );
+    await assertControllerLease();
     const id = useLoopedReviewStore.getState().addSession(current.id, {
       phase,
       round: current.currentRound,
@@ -605,8 +716,9 @@ export function LoopedReviewTab({
       providerSessionId,
     });
     if (!id) throw new Error(`Could not attach ${label}`);
+    await persistControllerState();
     return id;
-  }, [connect]);
+  }, [assertControllerLease, connect, persistControllerState]);
 
   const beginDispatch = useCallback(async (
     current: LoopedReviewWorkflow,
@@ -617,6 +729,7 @@ export function LoopedReviewTab({
     if (!isLoopedReviewActivePhase(phase)) return;
     const dispatchId = createUuid();
     const requestId = createUuid();
+    await assertControllerLease();
     const claimed = useLoopedReviewStore.getState().claimDispatch(current.id, {
       id: dispatchId,
       requestId,
@@ -627,8 +740,9 @@ export function LoopedReviewTab({
     if (!claimed) return;
     // The prepared lease is durable before the provider sees a byte. Recovery
     // can therefore query/resend the same request ID without duplicating a turn.
-    await persistWorkflow(current.id);
-  }, [persistWorkflow]);
+    await persistControllerState(true);
+    await assertControllerLease();
+  }, [assertControllerLease, persistControllerState]);
 
   const startCurrentPhase = useCallback(async (
     current: LoopedReviewWorkflow,
@@ -641,7 +755,9 @@ export function LoopedReviewTab({
     if (current.phase === "discovering") {
       const pass = current.currentPass + 1;
       const sessionId = await createPhaseSession(current, "discovery", pass);
+      await assertControllerLease();
       useLoopedReviewStore.getState().startPass(current.id, sessionId);
+      await persistControllerState();
       const latest = useLoopedReviewStore.getState().workflows.get(current.id)!;
       await beginDispatch(latest, "discover", sessionId);
       return;
@@ -658,11 +774,15 @@ export function LoopedReviewTab({
         throw new Error("Reconciliation lost its discovery session");
       }
       if (activeSession.status === "error" && !current.dispatch) {
+        await assertControllerLease();
         const agent = await connect(current);
+        await assertControllerLease();
         const providerSessionId = await agent.createSession(
           "discovery",
           sessionLabel("discovery", current.currentRound, current.currentPass),
+          `looped-review:${current.id}:discovery:round-${current.currentRound}:pass-${current.currentPass}`,
         );
+        await assertControllerLease();
         useLoopedReviewStore.getState().updateSession(
           current.id,
           activeSession.id,
@@ -673,6 +793,7 @@ export function LoopedReviewTab({
             completedAt: undefined,
           },
         );
+        await persistControllerState();
         current = useLoopedReviewStore.getState().workflows.get(current.id)!;
       }
       await beginDispatch(current, "reconcile", activeSessionId);
@@ -691,17 +812,26 @@ export function LoopedReviewTab({
         throw new Error("PR creation is blocked while the active pool is non-empty");
       }
       const sessionId = await createPhaseSession(current, "pr");
+      await assertControllerLease();
       useLoopedReviewStore.getState().startPr(current.id, sessionId);
+      await persistControllerState();
       const latest = useLoopedReviewStore.getState().workflows.get(current.id)!;
       await beginDispatch(latest, "pr", sessionId);
     }
-  }, [beginDispatch, connect, createPhaseSession]);
+  }, [
+    assertControllerLease,
+    beginDispatch,
+    connect,
+    createPhaseSession,
+    persistControllerState,
+  ]);
 
   const applyResult = useCallback(async (
     current: LoopedReviewWorkflow,
     dispatch: LoopedReviewDispatch,
     result: StructuredOutputResult,
   ): Promise<void> => {
+    await assertControllerLease();
     const store = useLoopedReviewStore.getState();
     const live = store.workflows.get(current.id);
     if (
@@ -723,6 +853,7 @@ export function LoopedReviewTab({
     );
     if (!session) throw new Error("Structured result belongs to an unknown workflow session");
     if (!result.ok) {
+      await assertControllerLease();
       store.updateSession(current.id, session.id, {
         status: "error",
         error: result.error.message,
@@ -733,16 +864,19 @@ export function LoopedReviewTab({
         message: result.error.message,
         retryPhase: dispatch.phase,
       });
+      await persistControllerState();
       return;
     }
 
-    store.updateSession(current.id, session.id, {
-      status: "idle",
-      completedAt:
-        dispatch.kind === "discover"
-          ? undefined
-          : new Date().toISOString(),
-    });
+    const markSessionIdle = () => {
+      store.updateSession(current.id, session.id, {
+        status: "idle",
+        completedAt:
+          dispatch.kind === "discover"
+            ? undefined
+            : new Date().toISOString(),
+      });
+    };
     if (dispatch.kind === "prepare") {
       const packageId = `review-package-${current.id}-r${current.currentRound}`;
       const preparation = parseReviewPreparationResult(result.value);
@@ -753,6 +887,7 @@ export function LoopedReviewTab({
         current.targetBranch,
         preparation,
       );
+      await assertControllerLease();
       const reviewPackage = parseReviewPackage(
         isRecord(generated)
           ? { ...generated, context: current.context ?? null }
@@ -764,17 +899,26 @@ export function LoopedReviewTab({
           context: current.context,
         },
       );
+      await assertControllerLease();
+      markSessionIdle();
       store.setPreparedPackage(current.id, reviewPackage);
+      await persistControllerState();
       return;
     }
     if (dispatch.kind === "discover") {
       const report = parseStructuredReviewReport(result.value);
+      await assertControllerLease();
+      markSessionIdle();
       store.recordReport(current.id, session.id, report);
+      await persistControllerState();
       return;
     }
     if (dispatch.kind === "reconcile") {
       const reconciliation = parseLoopedReviewReconciliation(result.value);
+      await assertControllerLease();
+      markSessionIdle();
       store.recordReconciliation(current.id, session.id, reconciliation);
+      await persistControllerState();
       return;
     }
     if (dispatch.kind === "fix") {
@@ -787,10 +931,13 @@ export function LoopedReviewTab({
           ].join("\n"),
         );
       }
+      await assertControllerLease();
+      markSessionIdle();
       store.completeFix(current.id, session.id, {
         summary: fixResult.summary,
         notes: fixResult.notes,
       });
+      await persistControllerState();
       return;
     }
     const prResult = parsePrResult(result.value);
@@ -799,8 +946,16 @@ export function LoopedReviewTab({
       prResult.url,
       current.targetBranch,
     );
+    await assertControllerLease();
+    markSessionIdle();
     store.completePr(current.id, verified.url);
-  }, [generatePackage, verifyPr]);
+    await persistControllerState();
+  }, [
+    assertControllerLease,
+    generatePackage,
+    persistControllerState,
+    verifyPr,
+  ]);
 
   const advance = useCallback(async () => {
     const current = useLoopedReviewStore.getState().workflows.get(data.workflowId);
@@ -815,7 +970,9 @@ export function LoopedReviewTab({
     advanceInFlightRef.current = true;
     try {
       setConnectionError(null);
+      await assertControllerLease();
       const agent = await connect(current);
+      await assertControllerLease();
       if (!current.dispatch) {
         await startCurrentPhase(current);
         return;
@@ -829,25 +986,30 @@ export function LoopedReviewTab({
       const material = dispatchMaterial(current, dispatch);
 
       if (dispatch.state === "prepared") {
+        await assertControllerLease();
         const accepted = await agent.send(
           session.providerSessionId,
           material.prompt,
           material.schema,
           dispatch.requestId,
         );
+        await assertControllerLease();
         if (!accepted.accepted) {
           throw new Error(accepted.error ?? "Native provider rejected the prompt");
         }
         useLoopedReviewStore.getState().markDispatchSent(current.id, dispatch.id);
-        await persistWorkflow(current.id);
+        await persistControllerState(true);
+        await assertControllerLease();
         return;
       }
 
+      await assertControllerLease();
       const result = await agent.getResult(
         session.providerSessionId,
         dispatch.requestId,
       );
       if (result) {
+        await assertControllerLease();
         nullResultPollsRef.current.delete(dispatch.id);
         try {
           await applyResult(current, dispatch, result);
@@ -858,6 +1020,7 @@ export function LoopedReviewTab({
       }
 
       const status = await agent.getStatus(session.providerSessionId);
+      await assertControllerLease();
       if (status === "error") {
         throw new Error("Native provider session failed before returning structured output");
       }
@@ -873,8 +1036,14 @@ export function LoopedReviewTab({
         throw new MissingProviderSessionError();
       }
     } catch (error) {
+      if (error instanceof LoopedReviewLeaseLostError) return;
       const latest = useLoopedReviewStore.getState().workflows.get(data.workflowId);
       if (!latest || !isLoopedReviewActivePhase(latest.phase)) return;
+      try {
+        await assertControllerLease();
+      } catch {
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       const sessionId = latest.dispatch?.sessionId ?? latest.activeSessionId;
       if (sessionId) {
@@ -904,16 +1073,28 @@ export function LoopedReviewTab({
           !(error instanceof DefiniteWorkflowResultError)
           && !(error instanceof MissingProviderSessionError),
       });
+      try {
+        await persistControllerState();
+      } catch (persistenceError) {
+        if (!(persistenceError instanceof LoopedReviewLeaseLostError)) {
+          setConnectionError(
+            persistenceError instanceof Error
+              ? persistenceError.message
+              : String(persistenceError),
+          );
+        }
+      }
     } finally {
       advanceInFlightRef.current = false;
     }
   }, [
     applyResult,
+    assertControllerLease,
     connect,
     data.workflowId,
     environment,
     missingSessionPollLimit,
-    persistWorkflow,
+    persistControllerState,
     startCurrentPhase,
   ]);
 

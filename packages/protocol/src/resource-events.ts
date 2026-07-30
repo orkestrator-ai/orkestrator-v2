@@ -20,6 +20,7 @@ export const RESOURCE_KINDS = [
   "pane-layout",
   "looped-review",
   "build-pipeline",
+  "native-agent-session",
   "prompt-queue",
   "compose-draft",
   "file-draft",

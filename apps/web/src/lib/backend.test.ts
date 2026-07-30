@@ -622,6 +622,9 @@ describe("backend setup wrappers", () => {
       "env-1",
       4,
     );
+    await backendWrappers.retryPromptQueueDispatch(
+      "codex\u0000env-1:tab-1",
+    );
 
     expect(invokeMock.mock.calls).toEqual([
       ["get_prompt_queue", { queueKey: "codex\u0000env-1:tab-1" }],
@@ -670,6 +673,9 @@ describe("backend setup wrappers", () => {
         ownerType: "environment",
         ownerId: "env-1",
         expectedDraftRevision: 4,
+      }],
+      ["retry_prompt_queue_dispatch", {
+        queueKey: "codex\u0000env-1:tab-1",
       }],
     ]);
   });
@@ -1096,6 +1102,328 @@ describe("backend web client wrappers", () => {
     await expect(resetWebClientServe()).rejects.toThrow("only available for the local desktop app");
     await expect(getGatewayTokenSettings()).rejects.toThrow("unavailable");
     await expect(setGatewayToken("replacement-token-123456")).rejects.toThrow("unavailable");
+  });
+});
+
+describe("backend native agent and looped review wrappers", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(undefined);
+  });
+
+  test("acknowledges a startup session with its durable identity", async () => {
+    const environment = {
+      id: "env-1",
+    } as Awaited<
+      ReturnType<typeof backendWrappers.acknowledgeStartupAgentSession>
+    >;
+    invokeMock.mockResolvedValueOnce(environment);
+
+    await expect(
+      backendWrappers.acknowledgeStartupAgentSession("env-1", {
+        providerSessionId: "provider-1",
+        startedAt: "2026-07-29T12:00:00.000Z",
+      }),
+    ).resolves.toBe(environment);
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      "acknowledge_startup_agent_session",
+      {
+        environmentId: "env-1",
+        providerSessionId: "provider-1",
+        startedAt: "2026-07-29T12:00:00.000Z",
+      },
+    );
+  });
+
+  test("omits absent startup session identity fields", async () => {
+    await backendWrappers.acknowledgeStartupAgentSession("env-1", {
+      providerSessionId: "",
+      startedAt: undefined,
+    });
+
+    const [[command, payload]] = invokeMock.mock.calls as [[
+      string,
+      Record<string, unknown>,
+    ]];
+    expect(command).toBe("acknowledge_startup_agent_session");
+    expect(payload).toEqual({ environmentId: "env-1" });
+    expect(payload).not.toHaveProperty("providerSessionId");
+    expect(payload).not.toHaveProperty("startedAt");
+  });
+
+  test("ensures native sessions with full and minimal payloads", async () => {
+    const session = {
+      key: "native-session-key",
+      environmentId: "env-1",
+      agent: "codex" as const,
+      logicalSessionKey: "review-1",
+      providerSessionId: "provider-1",
+      createdAt: "2026-07-29T12:00:00.000Z",
+      updatedAt: "2026-07-29T12:00:00.000Z",
+    };
+    invokeMock.mockResolvedValueOnce(session);
+
+    const fullInput = {
+      environmentId: "env-1",
+      agent: "codex" as const,
+      logicalSessionKey: "review-1",
+      title: "Review",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      phase: "review" as const,
+    };
+    await expect(
+      backendWrappers.ensureNativeAgentSession(fullInput),
+    ).resolves.toBe(session);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "ensure_native_agent_session",
+      fullInput,
+    );
+
+    const minimalInput = {
+      environmentId: "env-2",
+      agent: "opencode" as const,
+      logicalSessionKey: "build-1",
+    };
+    await backendWrappers.ensureNativeAgentSession(minimalInput);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "ensure_native_agent_session",
+      minimalInput,
+    );
+    const minimalPayload = invokeMock.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(minimalPayload).not.toHaveProperty("title");
+    expect(minimalPayload).not.toHaveProperty("model");
+    expect(minimalPayload).not.toHaveProperty("reasoningEffort");
+    expect(minimalPayload).not.toHaveProperty("phase");
+  });
+
+  test("adopts native sessions with full and minimal payloads", async () => {
+    const adopted = {
+      key: "native-session-key",
+      environmentId: "env-1",
+      agent: "opencode" as const,
+      logicalSessionKey: "fork-1",
+      providerSessionId: "provider-new",
+      createdAt: "2026-07-29T12:00:00.000Z",
+      updatedAt: "2026-07-29T12:01:00.000Z",
+    };
+    invokeMock.mockResolvedValueOnce(adopted);
+
+    const fullInput = {
+      environmentId: "env-1",
+      agent: "opencode" as const,
+      logicalSessionKey: "fork-1",
+      providerSessionId: "provider-new",
+      expectedProviderSessionId: "provider-old",
+      model: "open-model",
+      reasoningEffort: "medium",
+    };
+    await expect(
+      backendWrappers.adoptNativeAgentSession(fullInput),
+    ).resolves.toBe(adopted);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "adopt_native_agent_session",
+      fullInput,
+    );
+
+    const minimalInput = {
+      environmentId: "env-2",
+      agent: "claude" as const,
+      logicalSessionKey: "resume-1",
+      providerSessionId: "provider-2",
+    };
+    await backendWrappers.adoptNativeAgentSession(minimalInput);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "adopt_native_agent_session",
+      minimalInput,
+    );
+    const minimalPayload = invokeMock.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(minimalPayload).not.toHaveProperty("expectedProviderSessionId");
+    expect(minimalPayload).not.toHaveProperty("model");
+    expect(minimalPayload).not.toHaveProperty("reasoningEffort");
+  });
+
+  test("dispatches native prompts with full and minimal payloads", async () => {
+    const dispatched = {
+      key: "native-session-key",
+      environmentId: "env-1",
+      agent: "claude" as const,
+      logicalSessionKey: "fix-1",
+      providerSessionId: "provider-1",
+      dispatchedRequestIds: ["request-1"],
+      createdAt: "2026-07-29T12:00:00.000Z",
+      updatedAt: "2026-07-29T12:01:00.000Z",
+    };
+    invokeMock.mockResolvedValueOnce(dispatched);
+
+    const fullInput = {
+      environmentId: "env-1",
+      agent: "claude" as const,
+      logicalSessionKey: "fix-1",
+      title: "Fix review",
+      model: "claude-model",
+      reasoningEffort: "high",
+      phase: "fix" as const,
+      prompt: "Fix the finding",
+      requestId: "request-1",
+      images: [{ filename: "failure.png", data: "cGl4ZWxz" }],
+      schema: { type: "object" },
+    };
+    await expect(
+      backendWrappers.dispatchNativeAgentPrompt(fullInput),
+    ).resolves.toBe(dispatched);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "dispatch_native_agent_prompt",
+      fullInput,
+    );
+
+    const minimalInput = {
+      environmentId: "env-2",
+      agent: "codex" as const,
+      logicalSessionKey: "build-2",
+      prompt: "Continue",
+      requestId: "request-2",
+    };
+    await backendWrappers.dispatchNativeAgentPrompt(minimalInput);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "dispatch_native_agent_prompt",
+      minimalInput,
+    );
+    const minimalPayload = invokeMock.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect(minimalPayload).not.toHaveProperty("title");
+    expect(minimalPayload).not.toHaveProperty("model");
+    expect(minimalPayload).not.toHaveProperty("reasoningEffort");
+    expect(minimalPayload).not.toHaveProperty("phase");
+    expect(minimalPayload).not.toHaveProperty("images");
+    expect(minimalPayload).not.toHaveProperty("schema");
+  });
+
+  test("maps looped review controller claim, validation, and release commands", async () => {
+    const claim = {
+      granted: true,
+      token: "lease-token",
+      expiresAt: "2026-07-29T12:01:00.000Z",
+    };
+    invokeMock.mockResolvedValueOnce(claim);
+    await expect(
+      backendWrappers.claimLoopedReviewController(
+        "workflow-1",
+        "owner-1",
+        30_000,
+      ),
+    ).resolves.toBe(claim);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "claim_looped_review_controller",
+      {
+        workflowId: "workflow-1",
+        ownerId: "owner-1",
+        leaseMs: 30_000,
+      },
+    );
+
+    invokeMock.mockResolvedValueOnce(true);
+    await expect(
+      backendWrappers.validateLoopedReviewController(
+        "workflow-1",
+        "owner-1",
+        "lease-token",
+      ),
+    ).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "validate_looped_review_controller",
+      {
+        workflowId: "workflow-1",
+        ownerId: "owner-1",
+        token: "lease-token",
+      },
+    );
+
+    invokeMock.mockResolvedValueOnce(undefined);
+    await expect(
+      backendWrappers.releaseLoopedReviewController(
+        "workflow-1",
+        "owner-1",
+        "lease-token",
+      ),
+    ).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "release_looped_review_controller",
+      {
+        workflowId: "workflow-1",
+        ownerId: "owner-1",
+        token: "lease-token",
+      },
+    );
+  });
+
+  test("carries an optional controller fence on workflow saves", async () => {
+    const snapshot = {
+      id: "workflow-1",
+      environmentId: "env-1",
+      phase: "fixing",
+    };
+
+    await backendWrappers.saveLoopedReviewWorkflow(
+      "workflow-1",
+      "env-1",
+      1,
+      snapshot,
+      7,
+      { ownerId: "owner-1", token: "lease-token" },
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "save_looped_review_workflow",
+      {
+        workflowId: "workflow-1",
+        environmentId: "env-1",
+        version: 1,
+        snapshot,
+        expectedRevision: 7,
+        controllerOwnerId: "owner-1",
+        controllerToken: "lease-token",
+      },
+    );
+
+    await backendWrappers.saveLoopedReviewWorkflow(
+      "workflow-1",
+      "env-1",
+      1,
+      snapshot,
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "save_looped_review_workflow",
+      {
+        workflowId: "workflow-1",
+        environmentId: "env-1",
+        version: 1,
+        snapshot,
+      },
+    );
+  });
+
+  test("propagates native dispatch and controller errors unchanged", async () => {
+    const dispatchError = new Error("dispatch denied");
+    invokeMock.mockRejectedValueOnce(dispatchError);
+    await expect(
+      backendWrappers.dispatchNativeAgentPrompt({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "review-1",
+        prompt: "Review",
+        requestId: "request-1",
+      }),
+    ).rejects.toBe(dispatchError);
+
+    const controllerError = new Error("lease expired");
+    invokeMock.mockRejectedValueOnce(controllerError);
+    await expect(
+      backendWrappers.validateLoopedReviewController(
+        "workflow-1",
+        "owner-1",
+        "lease-token",
+      ),
+    ).rejects.toBe(controllerError);
   });
 });
 

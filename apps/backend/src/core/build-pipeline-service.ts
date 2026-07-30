@@ -14,8 +14,11 @@ import {
   isBuildPipeline,
   isActiveBuildPhase,
   isStartBuildPipelineInput,
+  isVerificationVerdict,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  VERIFICATION_VERDICT_SCHEMA,
+  type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
@@ -47,15 +50,10 @@ type CommandInvoker = <T>(
   args?: Record<string, unknown>,
 ) => Promise<T>;
 
-const VERIFICATION_SCHEMA: JsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["complete", "rationale"],
-  properties: {
-    complete: { type: "boolean" },
-    rationale: { type: "string" },
-  },
-};
+// The transcript renderer recognizes a verification answer by the same contract
+// the turn is constrained to, and the protocol package derives both that schema
+// and its type guard from one field list, so neither can drift from the other.
+const VERIFICATION_SCHEMA: JsonSchema = VERIFICATION_VERDICT_SCHEMA;
 
 const SESSION_LABELS: Record<PipelineSessionPhase, string> = {
   build: "Build Session",
@@ -1246,20 +1244,22 @@ export class BuildPipelineService {
     const resolvedRequestId = session.structuredRequestId
       ?? this.structuredRequestId(session.messages);
     if (!resolvedRequestId) throw new Error("Verification result key is missing");
-    const result = await provider.structured<{
-      complete: boolean;
-      rationale: string;
-    }>(session.sdkSessionId, resolvedRequestId);
+    const result = await provider.structured<VerificationVerdict>(
+      session.sdkSessionId,
+      resolvedRequestId,
+    );
     if (!result) {
       await this.awaitStructuredResult(pipeline, session, "verification");
       return;
     }
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
-    const complete = result.value?.complete === true;
-    const rationale = typeof result.value?.rationale === "string"
-      ? result.value.rationale
-      : "Verification returned no rationale.";
+    if (!isVerificationVerdict(result.value)) {
+      throw new Error(
+        "Verification returned malformed structured output: expected exactly a boolean complete field and a string rationale field",
+      );
+    }
+    const { complete, rationale } = result.value;
     pipeline.verificationResult = complete ? "pass" : "fail";
     pipeline.verificationFeedback = rationale;
     if (complete) {
@@ -1543,13 +1543,6 @@ export class BuildPipelineService {
   }
 
   private async provider(pipeline: BuildPipeline): Promise<BuildPipelineProvider> {
-    if (this.options.provider) {
-      const provider = await this.options.provider(pipeline);
-      for (const session of pipeline.sessions) {
-        provider.registerSession?.(session.sdkSessionId);
-      }
-      return provider;
-    }
     const providerKey = `${pipeline.environmentId}:${pipeline.agentType}`;
     const cached = this.providers.get(providerKey);
     if (cached) {
@@ -1557,6 +1550,14 @@ export class BuildPipelineService {
         cached.registerSession?.(session.sdkSessionId);
       }
       return cached;
+    }
+    if (this.options.provider) {
+      const provider = await this.options.provider(pipeline);
+      for (const session of pipeline.sessions) {
+        provider.registerSession?.(session.sdkSessionId);
+      }
+      this.providers.set(providerKey, provider);
+      return provider;
     }
     const environment = await this.storage.getEnvironment(pipeline.environmentId);
     if (!environment) throw new Error("Build environment no longer exists");

@@ -7,6 +7,8 @@ import {
   MAX_BUILD_PIPELINE_ITERATIONS,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  isVerificationVerdict,
+  VERIFICATION_VERDICT_SCHEMA,
   type BuildPipeline,
 } from "./build-pipeline.js";
 import type { StructuredReviewReport } from "./structured-review.js";
@@ -48,6 +50,103 @@ describe("build pipeline protocol", () => {
     const { controller: _controller, ...clientAuthored } = snapshot();
     expect(isBuildPipeline(clientAuthored)).toBe(false);
     expect(isBuildPipeline({ ...snapshot(), currentSessionIndex: 0 })).toBe(false);
+  });
+
+  test("rejects every malformed top-level snapshot field", () => {
+    const session = {
+      phase: "build" as const,
+      iteration: 0,
+      sessionKey: "build-0",
+      sdkSessionId: "session-1",
+      status: "running" as const,
+      startedAt: "2026-07-29T00:00:00.000Z",
+      label: "Build",
+    };
+    const withSession: BuildPipeline = {
+      ...snapshot(),
+      sessions: [session],
+      currentSessionIndex: 0,
+    };
+    const invalid: Array<[string, unknown]> = [
+      ["non-record", null],
+      ["array", []],
+      ["controller", { ...snapshot(), controller: "client" }],
+      ["id type", { ...snapshot(), id: 1 }],
+      ["taskId type", { ...snapshot(), taskId: 1 }],
+      ["projectId type", { ...snapshot(), projectId: 1 }],
+      ["environmentId type", { ...snapshot(), environmentId: 1 }],
+      ["environmentType", { ...snapshot(), environmentType: "remote" }],
+      ["agentType", { ...snapshot(), agentType: "unknown" }],
+      ["phase", { ...snapshot(), phase: "unknown" }],
+      ["sessions type", { ...snapshot(), sessions: {} }],
+      ["session item", { ...snapshot(), sessions: [{}] }],
+      ["negative iteration", { ...snapshot(), iteration: -1 }],
+      ["fractional iteration", { ...snapshot(), iteration: 0.5 }],
+      ["fractional maxIterations", { ...snapshot(), maxIterations: 1.5 }],
+      [
+        "unsafe maxIterations",
+        { ...snapshot(), maxIterations: Number.MAX_SAFE_INTEGER + 1 },
+      ],
+      ["negative backendRevision", { ...snapshot(), backendRevision: -1 }],
+      [
+        "fractional backendRevision",
+        { ...snapshot(), backendRevision: 0.5 },
+      ],
+      ["taskTitle type", { ...snapshot(), taskTitle: 1 }],
+      ["taskSnapshot", { ...snapshot(), taskSnapshot: {} }],
+      ["verificationFeedback", { ...snapshot(), verificationFeedback: 1 }],
+      ["structuredReview", { ...snapshot(), structuredReview: {} }],
+      [
+        "structuredReviewRequestId",
+        { ...snapshot(), structuredReviewRequestId: "" },
+      ],
+      ["pausedFromPhase", { ...snapshot(), pausedFromPhase: "paused" }],
+      ["error", { ...snapshot(), error: 1 }],
+      ["failureContext", { ...snapshot(), failureContext: {} }],
+      ["reconnectAttempt", { ...snapshot(), reconnectAttempt: {} }],
+      ["pendingPromptAttempt", { ...snapshot(), pendingPromptAttempt: {} }],
+      ["activePromptContext", { ...snapshot(), activePromptContext: {} }],
+      ["pendingUserMessages", { ...snapshot(), pendingUserMessages: {} }],
+      ["reviewRetryRequested", { ...snapshot(), reviewRetryRequested: 1 }],
+      ["source", { ...snapshot(), source: { type: "unknown" } }],
+      ["featurePlanId", { ...snapshot(), featurePlanId: "" }],
+      ["admissionKey", { ...snapshot(), admissionKey: "" }],
+      ["sourceLinkedAt", { ...snapshot(), sourceLinkedAt: "invalid" }],
+      [
+        "completionCommentStatus",
+        { ...snapshot(), completionCommentStatus: "unknown" },
+      ],
+      [
+        "completionCommentError",
+        { ...snapshot(), completionCommentError: 1 },
+      ],
+      [
+        "completionCommentId",
+        { ...snapshot(), completionCommentId: "" },
+      ],
+      [
+        "completionCommentPostedAt",
+        { ...snapshot(), completionCommentPostedAt: "invalid" },
+      ],
+      [
+        "fractional currentSessionIndex",
+        { ...snapshot(), currentSessionIndex: -0.5 },
+      ],
+      [
+        "negative index with sessions",
+        { ...withSession, currentSessionIndex: -1 },
+      ],
+      [
+        "out-of-range index with sessions",
+        { ...withSession, currentSessionIndex: 1 },
+      ],
+    ];
+
+    for (const [field, value] of invalid) {
+      if (isBuildPipeline(value)) {
+        throw new Error(`Accepted malformed snapshot field: ${field}`);
+      }
+    }
   });
 
   test("validates every persisted optional state branch", () => {
@@ -395,5 +494,115 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline({ ...snapshot(), projectId: "" })).toBe(false);
     expect(isBuildPipeline({ ...snapshot(), id: "" })).toBe(false);
     expect(isBuildPipeline({ ...snapshot(), taskId: "" })).toBe(false);
+  });
+});
+
+describe("verification verdict contract", () => {
+  test("accepts exactly the two contract fields", () => {
+    expect(isVerificationVerdict({ complete: true, rationale: "Clean." }))
+      .toBe(true);
+    expect(isVerificationVerdict({ complete: false, rationale: "" }))
+      .toBe(true);
+  });
+
+  test("rejects anything the schema would have rejected", () => {
+    // `additionalProperties: false` is part of the contract, so a payload that
+    // merely carries these two fields is not a verdict — the transcript would
+    // otherwise render an unrelated tool result as a verification outcome.
+    expect(isVerificationVerdict({
+      complete: true,
+      rationale: "Clean.",
+      stage: "verify",
+    })).toBe(false);
+    expect(isVerificationVerdict({ complete: "yes", rationale: "Clean." }))
+      .toBe(false);
+    expect(isVerificationVerdict({ complete: true })).toBe(false);
+    expect(isVerificationVerdict([])).toBe(false);
+    expect(isVerificationVerdict(null)).toBe(false);
+  });
+
+  test("describes the shape the supervisor constrains the turn to", () => {
+    expect(VERIFICATION_VERDICT_SCHEMA).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: ["complete", "rationale"],
+      properties: {
+        complete: { type: "boolean" },
+        rationale: { type: "string" },
+      },
+    });
+  });
+
+  // The guard and the schema are derived from one field map, and these tests
+  // fail if that ever stops being true. A guard with its own hardcoded field
+  // list would keep passing the assertion above while silently refusing every
+  // verdict the supervisor now asks for.
+  test("the guard requires exactly the fields the schema declares", () => {
+    const properties = VERIFICATION_VERDICT_SCHEMA.properties as Record<
+      string,
+      { type: string }
+    >;
+    const fields = Object.keys(properties);
+    const sample: Record<string, unknown> = {};
+    for (const [field, { type }] of Object.entries(properties)) {
+      sample[field] = type === "boolean" ? true : "text";
+    }
+
+    expect(isVerificationVerdict(sample)).toBe(true);
+    expect(VERIFICATION_VERDICT_SCHEMA.required).toEqual(fields);
+
+    // Dropping any one declared field, or adding one the schema does not
+    // declare, must fail the guard.
+    for (const field of fields) {
+      const { [field]: _omitted, ...missingOne } = sample;
+      expect(isVerificationVerdict(missingOne)).toBe(false);
+    }
+    expect(isVerificationVerdict({ ...sample, extra: 1 })).toBe(false);
+  });
+
+  test("the schema and all nested containers cannot be mutated by a consumer", () => {
+    // The supervisor hands this object straight to the provider, so a mutation
+    // here would change what every future turn is constrained to.
+    const required = VERIFICATION_VERDICT_SCHEMA.required as string[];
+    const properties = VERIFICATION_VERDICT_SCHEMA.properties as Record<
+      string,
+      { type: string }
+    >;
+
+    expect(Object.isFrozen(VERIFICATION_VERDICT_SCHEMA)).toBe(true);
+    expect(Object.isFrozen(required)).toBe(true);
+    expect(Object.isFrozen(properties)).toBe(true);
+    expect(Object.isFrozen(properties.complete)).toBe(true);
+    expect(Object.isFrozen(properties.rationale)).toBe(true);
+
+    expect(() => {
+      (VERIFICATION_VERDICT_SCHEMA as { type: string }).type = "array";
+    }).toThrow();
+    expect(() => {
+      required.push("extra");
+    }).toThrow();
+    expect(() => {
+      required.pop();
+    }).toThrow();
+    expect(() => {
+      properties.extra = { type: "number" };
+    }).toThrow();
+    expect(() => {
+      delete properties.complete;
+    }).toThrow();
+    expect(() => {
+      properties.complete.type = "string";
+    }).toThrow();
+
+    expect(VERIFICATION_VERDICT_SCHEMA.type).toBe("object");
+    expect(VERIFICATION_VERDICT_SCHEMA).toEqual({
+      type: "object",
+      additionalProperties: false,
+      required: ["complete", "rationale"],
+      properties: {
+        complete: { type: "boolean" },
+        rationale: { type: "string" },
+      },
+    });
   });
 });

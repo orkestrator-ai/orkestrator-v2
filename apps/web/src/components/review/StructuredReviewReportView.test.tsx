@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { StructuredReviewReportView } from "./StructuredReviewReportView";
 
 afterEach(cleanup);
+beforeEach(() => {
+  useMessagePartExpansionStore.getState().reset();
+});
 
 const report: StructuredReviewReport = {
   reviewScope: {
@@ -205,6 +209,39 @@ describe("StructuredReviewReportView", () => {
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
   });
 
+  test("drops its own title and verdict line when the caller already names it", () => {
+    // A transcript fold-out shows both on its trigger, so the card opening
+    // onto a duplicate of the row just clicked is what this suppresses.
+    render(
+      <StructuredReviewReportView
+        report={report}
+        collapsibleSections
+        showRawJson={false}
+        showHeading={false}
+      />,
+    );
+
+    expect(screen.queryByRole("heading", { name: "Structured review report" }))
+      .toBeNull();
+    expect(screen.queryByText(/^Ready: /)).toBeNull();
+    // The article stays named for assistive technology even with no visible
+    // heading, and the sections themselves are untouched.
+    expect(screen.getByLabelText("Structured review report")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /What Changed/ })).toBeTruthy();
+  });
+
+  test("still offers the raw inspector when only the heading is suppressed", () => {
+    render(
+      <StructuredReviewReportView report={report} showHeading={false} />,
+    );
+
+    expect(screen.queryByRole("heading", { name: "Structured review report" }))
+      .toBeNull();
+    expect(screen.getByText("Validated JSON Schema")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Inspect raw JSON/ }))
+      .toBeTruthy();
+  });
+
   test("keeps an expanded section open across a re-render of the report", () => {
     const { rerender } = render(
       <StructuredReviewReportView report={report} collapsibleSections />,
@@ -220,6 +257,29 @@ describe("StructuredReviewReportView", () => {
         report={{ ...report }}
         collapsibleSections
         className="changed"
+      />,
+    );
+
+    expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
+  });
+
+  test("keeps a persisted section open across a full unmount", () => {
+    const view = render(
+      <StructuredReviewReportView
+        report={report}
+        collapsibleSections
+        sectionExpansionKey="review-1/section"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
+    expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
+
+    view.unmount();
+    render(
+      <StructuredReviewReportView
+        report={report}
+        collapsibleSections
+        sectionExpansionKey="review-1/section"
       />,
     );
 

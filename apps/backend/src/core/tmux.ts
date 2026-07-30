@@ -2594,19 +2594,34 @@ export interface TmuxPaneUpdate {
   full: boolean;
 }
 
+/**
+ * Drops the terminator `tmux capture-pane -p` writes after the *last* row.
+ *
+ * A capture of an N-row pane contains exactly N newlines, so replaying it
+ * verbatim issues a line feed while the cursor sits on the bottom row. That
+ * scrolls the viewport by one, and every subsequent line-addressed patch then
+ * names the row below the one it meant to replace. Normalising here keeps the
+ * repaint and the patch agreed on which row holds which line.
+ */
+function paneRows(capture: string): string[] {
+  const rows = capture.split("\n");
+  if (rows.length > 1 && rows[rows.length - 1] === "") rows.pop();
+  return rows;
+}
+
 /** Build a bounded ANSI line patch, falling back to an exact pane repaint. */
 export function buildTmuxPaneUpdate(
   previous: string | undefined,
   next: string,
   force = false,
 ): TmuxPaneUpdate {
+  const after = paneRows(next);
   const full = (): TmuxPaneUpdate => ({
-    text: `\x1b[H\x1b[2J${next.replaceAll("\n", "\r\n")}`,
+    text: `\x1b[H\x1b[2J${after.join("\r\n")}`,
     full: true,
   });
   if (force || previous === undefined) return full();
-  const before = previous.split("\n");
-  const after = next.split("\n");
+  const before = paneRows(previous);
   if (before.length !== after.length) return full();
 
   const changed: number[] = [];

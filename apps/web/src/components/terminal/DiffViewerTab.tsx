@@ -43,13 +43,24 @@ export function clearDiffBaseCacheForTests(): void {
   diffBaseCache.clear();
 }
 
+/**
+ * Must stay in step with the backend's `isImmutableCommitRef`.
+ *
+ * The backend only short-circuits a fetch for a *full* object name; anything
+ * else it resolves through `origin/<ref>`, which moves. A broader test here
+ * would pin a moving branch in a module-level cache that nothing invalidates,
+ * so a hex-looking branch name (`defaced`, `1234567`) would render against a
+ * stale base for the life of the process.
+ */
+const IMMUTABLE_COMMIT_REF = /^[0-9a-f]{40}$/i;
+
 function cachedImmutableDiffBase(
   key: string,
   comparisonRef: string,
   load: () => Promise<backend.FileContent | null>,
 ): Promise<backend.FileContent | null> {
   // Branches move; only commit-addressed bases are safe across tab remounts.
-  if (!/^[0-9a-f]{7,64}$/i.test(comparisonRef)) return load();
+  if (!IMMUTABLE_COMMIT_REF.test(comparisonRef.trim())) return load();
   const existing = diffBaseCache.get(key);
   if (existing) return existing;
   const pending = load().catch((error) => {

@@ -225,6 +225,40 @@ export function applyCodexMessagePatch(
   return result.outcome === "applied" ? result.message : null;
 }
 
+/**
+ * Keeps the locally-held copy of a message when it is strictly newer.
+ *
+ * A transcript read that deliberately does not block the event stream can land
+ * *after* live frames have already advanced a message. Applying the snapshot
+ * verbatim would roll those frames back, so the higher revision wins per
+ * message and the snapshot supplies everything else. Messages absent from the
+ * snapshot are deliberately not resurrected: the snapshot is authoritative
+ * about which messages exist, and a compaction or fork must be able to remove
+ * one.
+ */
+export function preferNewerCodexRevisions(
+  incoming: CodexMessage[],
+  local: readonly CodexMessage[] | undefined,
+): CodexMessage[] {
+  if (!local?.length) return incoming;
+  const localById = new Map(local.map((message) => [message.id, message]));
+  let replaced = false;
+  const merged = incoming.map((message) => {
+    const current = localById.get(message.id);
+    if (
+      !current
+      || !Number.isInteger(current.revision)
+      || !Number.isInteger(message.revision)
+      || (current.revision as number) <= (message.revision as number)
+    ) {
+      return message;
+    }
+    replaced = true;
+    return current;
+  });
+  return replaced ? merged : incoming;
+}
+
 export interface CodexSession {
   sessionId: string;
   title?: string;
@@ -1602,6 +1636,15 @@ export function subscribeToEvents(
       let queuedBytes = 0;
       let endAfterQueue = false;
       let done = false;
+      /**
+       * Highest revision this connection has seen, including frames that were
+       * handed straight to a waiting consumer.
+       *
+       * The overflow frame needs a cursor even when the frame that tripped the
+       * bound carried no `id:`. Without one the caller's cursor would not
+       * advance and the reconnect would replay from before the drop.
+       */
+      let lastSeenRevision: number | undefined;
 
       const handleEvent = (event: MessageEvent) => {
         if (done || endAfterQueue) return;
@@ -1616,6 +1659,7 @@ export function subscribeToEvents(
             data,
             ...(Number.isSafeInteger(revision) && revision >= 0 ? { revision } : {}),
           };
+          if (codexEvent.revision !== undefined) lastSeenRevision = codexEvent.revision;
 
           if (resolver) {
             resolver({ value: codexEvent, done: false });
@@ -1625,9 +1669,21 @@ export function subscribeToEvents(
             // Conservatively charge UTF-16 storage plus object/list overhead;
             // the parsed payload, not the raw string, is what the queue retains.
             const bytes = event.data.length * 2 + event.type.length * 2 + 64;
+            /**
+             * The byte bound describes a *backlog*, so it is only consulted once
+             * something is already queued.
+             *
+             * A single frame arriving into an empty queue is admitted however
+             * large it is. Codex messages legitimately reach the bridge's
+             * `VERY_LARGE_MESSAGE_CHARS` budget, and rejecting one would close
+             * the stream and force a full transcript resync to fetch the very
+             * payload that had just been delivered. Retention stays bounded:
+             * one oversized frame can sit in the queue, and the next frame trips
+             * the bound and reconciles.
+             */
             if (
               eventQueue.length + 1 > maxQueuedEvents
-              || queuedBytes + bytes > maxQueuedBytes
+              || (eventQueue.length > 0 && queuedBytes + bytes > maxQueuedBytes)
             ) {
               // A slow consumer cannot retain an unbounded transcript/event
               // backlog. Close this connection and hand the caller one explicit
@@ -1639,9 +1695,9 @@ export function subscribeToEvents(
                 type: "session.reconcile-required",
                 sessionId: sessionId ?? codexEvent.sessionId,
                 data: { reason: "client-event-queue-overflow" },
-                ...(codexEvent.revision === undefined
+                ...(lastSeenRevision === undefined
                   ? {}
-                  : { revision: codexEvent.revision }),
+                  : { revision: lastSeenRevision }),
               };
               eventQueue.push({ event: reconcile, bytes: 0 });
               endAfterQueue = true;

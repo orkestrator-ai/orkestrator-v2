@@ -592,7 +592,7 @@ describe("DiffViewerTab immutable base cache", () => {
   test("reuses a commit-addressed base across tab remounts", async () => {
     const props = {
       ...baseProps,
-      baseBranch: "abcdef0",
+      baseBranch: "abcdef0000000000000000000000000000000000",
       containerId: "container-1",
     };
     const firstView = render(<DiffViewerTab {...props} />);
@@ -623,11 +623,51 @@ describe("DiffViewerTab immutable base cache", () => {
     expect(readFileAtBranchMock).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * The backend only short-circuits a fetch for a *full* object name; anything
+   * shorter it resolves through `origin/<ref>`, which moves. Caching a hex-
+   * looking branch name here would pin a base that the backend keeps updating,
+   * for the life of the process.
+   */
+  test("does not cache a hex-shaped ref that is not a full object name", async () => {
+    for (const baseBranch of ["abcdef0", "defaced", "abcdef00000000000000000000000000000000000"]) {
+      readFileAtBranchMock.mockClear();
+      const props = { ...baseProps, baseBranch, containerId: "container-1" };
+
+      const firstView = render(<DiffViewerTab {...props} />);
+      await screen.findByTestId("diff-editor");
+      firstView.unmount();
+
+      const secondView = render(<DiffViewerTab {...props} />);
+      await screen.findByTestId("diff-editor");
+      secondView.unmount();
+
+      expect(readFileAtBranchMock).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  test("caches a full object name regardless of case or surrounding space", async () => {
+    const props = {
+      ...baseProps,
+      baseBranch: " ABCDEF0000000000000000000000000000000000 ",
+      containerId: "container-1",
+    };
+    const firstView = render(<DiffViewerTab {...props} />);
+    await screen.findByTestId("diff-editor");
+    firstView.unmount();
+
+    const secondView = render(<DiffViewerTab {...props} />);
+    await screen.findByTestId("diff-editor");
+    secondView.unmount();
+
+    expect(readFileAtBranchMock).toHaveBeenCalledTimes(1);
+  });
+
   test("evicts a rejected commit read so the next mount can retry", async () => {
     readFileAtBranchMock.mockRejectedValueOnce(new Error("temporary base failure"));
     const props = {
       ...baseProps,
-      baseBranch: "abcdef0",
+      baseBranch: "abcdef0000000000000000000000000000000000",
       containerId: "container-1",
     };
     const firstView = render(<DiffViewerTab {...props} />);
@@ -654,28 +694,28 @@ describe("DiffViewerTab immutable base cache", () => {
 
     await loadOnce({
       ...baseProps,
-      baseBranch: "abcdef0",
+      baseBranch: "abcdef0000000000000000000000000000000000",
       containerId: "container-1",
     });
     await loadOnce({
       ...baseProps,
-      baseBranch: "abcdef0",
+      baseBranch: "abcdef0000000000000000000000000000000000",
       containerId: "container-2",
     });
     await loadOnce({
       ...baseProps,
       filePath: "src/Other.ts",
-      baseBranch: "abcdef0",
+      baseBranch: "abcdef0000000000000000000000000000000000",
       containerId: "container-1",
     });
     await loadOnce({
       ...baseProps,
-      baseBranch: "abcdef1",
+      baseBranch: "abcdef1000000000000000000000000000000000",
       containerId: "container-1",
     });
     await loadOnce({
       ...baseProps,
-      baseBranch: "abcdef0",
+      baseBranch: "abcdef0000000000000000000000000000000000",
       worktreePath: "/repo",
       isLocalEnvironment: true,
     });
@@ -684,27 +724,27 @@ describe("DiffViewerTab immutable base cache", () => {
     expect(readFileAtBranchMock).toHaveBeenCalledWith(
       "container-1",
       baseProps.filePath,
-      "abcdef0",
+      "abcdef0000000000000000000000000000000000",
     );
     expect(readFileAtBranchMock).toHaveBeenCalledWith(
       "container-2",
       baseProps.filePath,
-      "abcdef0",
+      "abcdef0000000000000000000000000000000000",
     );
     expect(readFileAtBranchMock).toHaveBeenCalledWith(
       "container-1",
       "src/Other.ts",
-      "abcdef0",
+      "abcdef0000000000000000000000000000000000",
     );
     expect(readFileAtBranchMock).toHaveBeenCalledWith(
       "container-1",
       baseProps.filePath,
-      "abcdef1",
+      "abcdef1000000000000000000000000000000000",
     );
     expect(readLocalFileAtBranchMock).toHaveBeenCalledWith(
       "/repo",
       baseProps.filePath,
-      "abcdef0",
+      "abcdef0000000000000000000000000000000000",
     );
   });
 
@@ -714,7 +754,7 @@ describe("DiffViewerTab immutable base cache", () => {
         <DiffViewerTab
           {...baseProps}
           filePath={filePath}
-          baseBranch="abcdef0"
+          baseBranch="abcdef0000000000000000000000000000000000"
           containerId="container-1"
         />,
       );
@@ -731,7 +771,7 @@ describe("DiffViewerTab immutable base cache", () => {
       ([containerId, filePath, branch]) =>
         containerId === "container-1"
         && filePath === "src/cache-0.ts"
-        && branch === "abcdef0",
+        && branch === "abcdef0000000000000000000000000000000000",
     );
     expect(firstKeyCalls).toHaveLength(2);
     expect(readFileAtBranchMock).toHaveBeenCalledTimes(130);

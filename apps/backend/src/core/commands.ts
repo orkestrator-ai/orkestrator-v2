@@ -2658,7 +2658,14 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     delete client.initialAgentModel;
     delete client.initialReasoningEffort;
   }
-  return client;
+  // The bodies stay backend-only, but their existence does not: the renderer
+  // uses this to decide whether the targeted detail read is worth making at all.
+  // Always emitted, including `false`, so a renderer can tell "this backend says
+  // there are none" apart from "this backend is too old to say".
+  return {
+    ...client,
+    hasInitialPromptAttachments: (_attachments?.length ?? 0) > 0,
+  };
 }
 
 function toClientEnvironmentSetupStartResult(

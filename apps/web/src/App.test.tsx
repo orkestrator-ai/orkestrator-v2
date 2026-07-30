@@ -1852,6 +1852,7 @@ describe("App terminal overlay actions", () => {
     const listedEnvironment = {
       ...makeEnvironment("env-visible", "project-1"),
       initialPrompt: "Resume with images",
+      hasInitialPromptAttachments: true,
     };
     mockGetEnvironment.mockResolvedValueOnce({
       ...listedEnvironment,
@@ -1949,6 +1950,7 @@ describe("App terminal overlay actions", () => {
     const environment = {
       ...makeEnvironment("env-visible", "project-1"),
       initialPrompt: "Resume safely",
+      hasInitialPromptAttachments: true,
     };
     mockGetEnvironment
       .mockRejectedValueOnce(new Error("detail read failed"))
@@ -1987,6 +1989,72 @@ describe("App terminal overlay actions", () => {
         );
       });
       expect(mockGetEnvironment).toHaveBeenCalledTimes(2);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  /**
+   * The common case: a typed or stored prompt with no images at all. The listed
+   * record already says so, so the launch must cost no detail read and must not
+   * be blocked by one.
+   */
+  test("starts without a detail read when the backend reports no attachments", async () => {
+    const environment = {
+      ...makeEnvironment("env-visible", "project-1"),
+      initialPrompt: "Resume without images",
+      hasInitialPromptAttachments: false,
+    };
+    resetStores({
+      environments: [environment],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+    act(() => screen.getByTestId("start-env-visible").click());
+
+    await waitFor(() => {
+      expect(mockStartEnvironment).toHaveBeenCalledWith(
+        "env-visible",
+        "Resume without images",
+      );
+    });
+    expect(mockGetEnvironment).not.toHaveBeenCalled();
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A backend that predates the flag cannot say either way, so the read still
+   * happens — but failing it degrades to the listed record rather than refusing
+   * the launch, which is what that backend has always done.
+   */
+  test("starts anyway when a legacy backend cannot report attachment state", async () => {
+    const environment = {
+      ...makeEnvironment("env-visible", "project-1"),
+      initialPrompt: "Resume on a legacy backend",
+    };
+    mockGetEnvironment.mockRejectedValueOnce(new Error("detail read failed"));
+    resetStores({
+      environments: [environment],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    const originalConsoleError = console.error;
+    console.error = mock(() => {});
+    try {
+      render(<App />);
+      act(() => screen.getByTestId("start-env-visible").click());
+
+      await waitFor(() => {
+        expect(mockStartEnvironment).toHaveBeenCalledWith(
+          "env-visible",
+          "Resume on a legacy backend",
+        );
+      });
+      expect(mockGetEnvironment).toHaveBeenCalledWith("env-visible");
+      expect(mockToastError).not.toHaveBeenCalled();
     } finally {
       console.error = originalConsoleError;
     }

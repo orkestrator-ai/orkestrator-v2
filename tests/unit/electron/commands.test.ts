@@ -1802,7 +1802,7 @@ printf '%s\\n' '{}' > "$out"
     const commands = createCommandRegistry();
 
     await expect(commands.get("get_environment_status")?.({ environmentId: environment.id }, context)).resolves.toBe("running");
-    await expect(commands.get("get_environments")?.({ projectId: environment.projectId }, context)).resolves.toEqual([environment]);
+    await expect(commands.get("get_environments")?.({ projectId: environment.projectId }, context)).resolves.toEqual([toClientEnvironment(environment)]);
     expect(updates).toHaveLength(0);
   });
 
@@ -2035,6 +2035,104 @@ printf '%s\\n' '{}' > "$out"
     });
   });
 
+  /**
+   * The bodies stay backend-only, but the renderer still has to know whether a
+   * targeted detail read is worth making — and whether failing that read should
+   * block a launch. `false` must be emitted, not omitted, so a client can tell
+   * "this backend says there are none" apart from "this backend cannot say".
+   */
+  test("always reports whether stripped attachment bodies exist", () => {
+    const withAttachments = createEnvironment({
+      initialPromptAttachments: [{
+        id: "image-1",
+        name: "private.png",
+        base64Data: "cHJpdmF0ZQ==",
+      }],
+    });
+    expect(toClientEnvironment(withAttachments)).toMatchObject({
+      hasInitialPromptAttachments: true,
+    });
+    expect(toClientEnvironment(withAttachments)).not.toHaveProperty(
+      "initialPromptAttachments",
+    );
+
+    expect(toClientEnvironment(createEnvironment({})).hasInitialPromptAttachments)
+      .toBe(false);
+    expect(
+      toClientEnvironment(createEnvironment({ initialPromptAttachments: [] }))
+        .hasInitialPromptAttachments,
+    ).toBe(false);
+  });
+
+  /**
+   * The setup-start commands return the environment *nested* inside a result
+   * object, so they need their own projection rather than inheriting the one
+   * applied to the flat mutation responses.
+   */
+  test("projects the environment nested inside a setup-start result", async () => {
+    const { worktree: worktreePath } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      id: "env-setup-start-projection",
+      status: "running",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      setupScriptsComplete: false,
+      opencodePid: 40,
+      pendingRenamePrompt: "backend-owned rename prompt",
+      initialPromptAttachments: [{
+        id: "image-1",
+        name: "private.png",
+        base64Data: "cHJpdmF0ZQ==",
+      }],
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("ensure_environment_setup")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { environment: Record<string, unknown> };
+
+    expect(result.environment).toMatchObject({ id: environment.id });
+    for (const field of [
+      "opencodePid",
+      "pendingRenamePrompt",
+      "initialPromptAttachments",
+      "claudeModelCatalog",
+      "agentActivitySources",
+      "frontendAgentActivityObservers",
+    ]) {
+      expect(result.environment).not.toHaveProperty(field);
+    }
+    expect(result.environment.hasInitialPromptAttachments).toBe(true);
+    // The stored record keeps everything the projection strips.
+    expect((await context.storage.getEnvironment(environment.id))?.initialPromptAttachments)
+      .toHaveLength(1);
+  });
+
+  test("passes an absent recreate result through without projecting it", async () => {
+    const environment = createEnvironment({
+      id: "env-recreate-no-container",
+      status: "running",
+      containerId: null,
+      environmentType: "local",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    // A recreate with nothing to recreate has no result to project. Projecting
+    // `undefined` would hand the renderer an object with no environment in it.
+    await expect(commands.get("recreate_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).resolves.toBeUndefined();
+    await expect(commands.get("recreate_environment")?.(
+      { environmentId: "missing-environment" },
+      context,
+    )).resolves.toBeUndefined();
+  });
+
   test("records only newer environment activity timestamps", async () => {
     const environment = createEnvironment({
       lastActivityAt: "2026-07-22T10:00:00.000Z",
@@ -2104,7 +2202,7 @@ exit 1
       await expect(commands.get("get_environments")?.(
         { projectId: environment.projectId },
         context,
-      )).resolves.toEqual([environment]);
+      )).resolves.toEqual([toClientEnvironment(environment)]);
     });
 
     expect(environment.containerId).toBe("container-existing");
@@ -2698,7 +2796,7 @@ exit 1
 `, async () => {
       const result = await commands.get("run_environment_setup")?.({ environmentId: environment.id }, context);
 
-      expect(result).toEqual(environment);
+      expect(result).toEqual(toClientEnvironment(environment));
       expect(emitted).toEqual([]);
     });
   });
@@ -13977,7 +14075,7 @@ exit 1
     const { context, updates } = createContext([local, missingContainer]);
     const commands = createCommandRegistry();
 
-    await expect(commands.get("sync_environment_status")?.({ environmentId: local.id }, context)).resolves.toEqual(local);
+    await expect(commands.get("sync_environment_status")?.({ environmentId: local.id }, context)).resolves.toEqual(toClientEnvironment(local));
     await expect(commands.get("sync_environment_status")?.({ environmentId: "unknown" }, context))
       .rejects.toThrow("Environment not found: unknown");
     await withFakeDocker(`#!/bin/sh
@@ -14995,7 +15093,10 @@ describe("storage-backed command delegation", () => {
     await expect(commands.get("reorder_environments")?.({
       projectId: "project-1",
       environmentIds: ["env-2", "env-1"],
-    }, context)).resolves.toEqual([{ id: "env-2" }, { id: "env-1" }]);
+    }, context)).resolves.toEqual([
+      { id: "env-2", hasInitialPromptAttachments: false },
+      { id: "env-1", hasInitialPromptAttachments: false },
+    ]);
     expect(storage.reorderEnvironments).toHaveBeenCalledWith(
       "project-1",
       ["env-2", "env-1"],

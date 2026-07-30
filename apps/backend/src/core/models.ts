@@ -231,7 +231,18 @@ export type ClientEnvironment = Omit<
   | "claudeBridgePid"
   | "codexBridgePid"
   | "pendingRenamePrompt"
->;
+> & {
+  /**
+   * Whether the stripped `initialPromptAttachments` array holds anything.
+   *
+   * The bodies are excluded from list hydration because they are base64 image
+   * blobs, but the renderer still has to know whether a targeted detail read is
+   * worth making — and whether failing that read should block a launch. Without
+   * this flag every launch with a stored prompt pays for the read and is
+   * blocked by any transient failure, including the common no-attachment case.
+   */
+  hasInitialPromptAttachments?: boolean;
+};
 
 export type SessionType = "plain" | "claude" | "opencode" | "codex" | "root";
 export type SessionStatus = "connected" | "disconnected";

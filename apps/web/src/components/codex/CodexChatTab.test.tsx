@@ -75,6 +75,8 @@ const MOCK_MODELS = [
 
 type TestCodexMessage = NativeMessage & {
   planReview?: boolean;
+  /** Carried by every real `CodexMessage`; patch classification branches on it. */
+  revision?: number;
 };
 
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
@@ -3667,6 +3669,92 @@ describe("CodexChatTab", () => {
       expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages[0])
         .toMatchObject({ content: "authoritative", revision: 5 });
     });
+    expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The recovery read runs *alongside* the drain loop, so the store will have
+   * moved by the time it lands — a streaming turn emits `message.updated`
+   * continuously. Discarding the snapshot on that basis would leave the gap
+   * unrepaired until `session.idle`, which is the whole reason the read was
+   * issued.
+   */
+  test("applies a gap recovery even though live frames landed during the read", async () => {
+    const gapped = { ...createMessage("gapped-message", "stale"), revision: 1 };
+    const other = { ...createMessage("other-message", "before"), revision: 1 };
+    seedCodexStore([gapped, other]);
+
+    let releaseEvents!: () => void;
+    const eventGate = new Promise<void>((resolve) => {
+      releaseEvents = resolve;
+    });
+    let resolveMessages!: (messages: TestCodexMessage[]) => void;
+    const messages = new Promise<TestCodexMessage[]>((resolve) => {
+      resolveMessages = resolve;
+    });
+    let releaseLiveFrame!: () => void;
+    const liveFrameGate = new Promise<void>((resolve) => {
+      releaseLiveFrame = resolve;
+    });
+
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockSubscribeToEvents.mockImplementation(() => (async function* () {
+      await eventGate;
+      yield {
+        type: "message.patched",
+        sessionId: SESSION_ID,
+        data: {
+          messageId: gapped.id,
+          partCount: 1,
+          changedParts: [],
+          content: "gap",
+          createdAt: gapped.createdAt,
+          revision: 4,
+        },
+      };
+      // Lands while the recovery GET is still in flight, replacing the session
+      // object and therefore breaking reference identity.
+      await liveFrameGate;
+      yield {
+        type: "message.updated",
+        sessionId: SESSION_ID,
+        data: {
+          message: { ...other, content: "during-read", revision: 2 },
+        },
+      };
+    })() as any);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    mockGetSessionMessages.mockClear();
+    mockGetSessionMessages.mockImplementation(() => messages);
+    releaseEvents();
+
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalledTimes(1));
+    releaseLiveFrame();
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages
+        .find((message) => message.id === other.id))
+        .toMatchObject({ content: "during-read", revision: 2 });
+    });
+
+    // The snapshot predates the live frame, so it still carries revision 1 for
+    // the message that moved. The gap it was fetched for must still be closed,
+    // and the newer local revision must survive.
+    resolveMessages([
+      { ...gapped, content: "authoritative", revision: 4 },
+      { ...other, content: "before", revision: 1 },
+    ]);
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages
+        .find((message) => message.id === gapped.id))
+        .toMatchObject({ content: "authoritative", revision: 4 });
+    });
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages
+      .find((message) => message.id === other.id))
+      .toMatchObject({ content: "during-read", revision: 2 });
     expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
   });
 

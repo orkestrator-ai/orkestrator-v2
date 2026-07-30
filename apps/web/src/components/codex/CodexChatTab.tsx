@@ -53,6 +53,7 @@ import {
   parseApproval,
   parseContextUsage,
   parseInteraction,
+  preferNewerCodexRevisions,
   resumeSession,
   sendPrompt,
   subscribeToEvents,
@@ -637,6 +638,19 @@ export function CodexChatTab({
       options: {
         throwOnError?: boolean;
         shouldApply?: () => boolean;
+        /**
+         * Apply even though live frames mutated the session while the read was
+         * in flight, keeping any message the store already holds at a higher
+         * revision.
+         *
+         * Required by every caller that deliberately does *not* block the event
+         * loop behind the read. The blanket identity bail below is correct for a
+         * caller that owns the loop — nothing else could have moved the session,
+         * so a difference means a newer authority won — but for a concurrent
+         * reader it is almost always true during a streaming turn, which would
+         * discard the very snapshot that was fetched to repair a gap.
+         */
+        preferNewerLocalRevisions?: boolean;
       } = {},
     ): Promise<boolean> => {
       if (!activeClient || !sessionId) return false;
@@ -650,14 +664,18 @@ export function CodexChatTab({
         return false;
       }
       const sessionAfterRequest = useCodexStore.getState().sessions.get(sessionKey);
-      if (
-        sessionAfterRequest?.sessionId !== sessionId ||
-        sessionAfterRequest !== sessionBeforeRequest
-      ) {
+      if (sessionAfterRequest?.sessionId !== sessionId) return false;
+      const mutatedDuringRequest = sessionAfterRequest !== sessionBeforeRequest;
+      if (mutatedDuringRequest && !options.preferNewerLocalRevisions) {
         return false;
       }
       refreshControllerRef.current.markActivity();
-      setMessages(sessionKey, messages);
+      setMessages(
+        sessionKey,
+        mutatedDuringRequest
+          ? preferNewerCodexRevisions(messages, sessionAfterRequest?.messages)
+          : messages,
+      );
       return true;
     },
     [client, session?.sessionId, sessionKey, setMessages],
@@ -2231,6 +2249,10 @@ export function CodexChatTab({
         const recovery = refreshMessages(client, session.sessionId, {
           throwOnError: true,
           shouldApply: () => !abortController.signal.aborted,
+          // This read runs *alongside* the drain loop, so the store will almost
+          // certainly have moved by the time it lands. Merge on revision instead
+          // of discarding the snapshot the gap was detected for.
+          preferNewerLocalRevisions: true,
         }).catch(() => false).finally(() => {
           if (patchRecovery === recovery) patchRecovery = null;
         });

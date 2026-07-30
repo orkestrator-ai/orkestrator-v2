@@ -607,9 +607,23 @@ function App() {
 
       if (launchPrompt) {
         // List hydration deliberately excludes attachment bodies. Read the
-        // targeted record only for the one launch that needs them.
+        // targeted record only for the one launch that needs them — the listed
+        // record still says whether there is anything to read, so a prompt with
+        // no attachments costs no round trip and cannot be blocked by one.
         let detailedEnvironment = environment;
-        if (existingOptions?.initialPromptAttachments === undefined) {
+        /**
+         * `undefined` means the backend predates the flag, so the read still has
+         * to happen — but a failure then degrades to the listed record rather
+         * than refusing the launch, which is what that backend always did.
+         * Only a backend that positively says "there are attachments" earns a
+         * blocking failure, because that is the only case where starting anyway
+         * would run a prompt whose images are missing.
+         */
+        const attachmentState = environment?.hasInitialPromptAttachments;
+        if (
+          existingOptions?.initialPromptAttachments === undefined
+          && attachmentState !== false
+        ) {
           try {
             const loadedEnvironment = await getEnvironment(environmentId);
             if (!loadedEnvironment) {
@@ -621,11 +635,13 @@ function App() {
               "[App] Failed to restore saved prompt attachments before startup:",
               error,
             );
-            toast.error("Could not restore saved prompt attachments", {
-              description:
-                "The environment was not started. Try again to reload its saved prompt.",
-            });
-            return false;
+            if (attachmentState === true) {
+              toast.error("Could not restore saved prompt attachments", {
+                description:
+                  "The environment was not started. Try again to reload its saved prompt.",
+              });
+              return false;
+            }
           }
         }
         const storedAttachments = detailedEnvironment?.initialPromptAttachments?.map(

@@ -166,6 +166,12 @@ export interface Environment {
   initialPrompt?: string;
   /** Images waiting to be written into the workspace before the first prompt. */
   initialPromptAttachments?: InitialPromptImageAttachment[];
+  /**
+   * Set by the backend's list projection when `initialPromptAttachments` is
+   * non-empty. The bodies themselves are stripped from list hydration, so this
+   * is the only way a listed record can say a targeted detail read is needed.
+   */
+  hasInitialPromptAttachments?: boolean;
   /** Backend-owned projection of the one-shot startup agent launch. */
   startupAgentSession?: {
     tabId: "startup-agent";

@@ -3822,7 +3822,7 @@ describe("interactive tmux terminal snapshots", () => {
       full: true,
     });
     expect(buildTmuxPaneUpdate("one\ntwo", "\n")).toEqual({
-      text: "\u001b[H\u001b[2J\r\n",
+      text: "\u001b[H\u001b[2J",
       full: true,
     });
     expect(buildTmuxPaneUpdate("same", "same")).toEqual({
@@ -3834,6 +3834,61 @@ describe("interactive tmux terminal snapshots", () => {
       full: true,
     });
   });
+  /**
+   * `tmux capture-pane -p` terminates *every* row, so a capture of an N-row
+   * pane contains N newlines. Replaying that verbatim issues a line feed with
+   * the cursor already on the bottom row, which scrolls the viewport by one and
+   * leaves every later line address naming the wrong row. Verified against tmux
+   * 3.6a: a 6-row pane showing two lines captures as "line1\nline2\n\n\n\n\n".
+   */
+  test("keeps repaint and patch row addressing agreed on a real capture", () => {
+    const before = "line1\nline2\n\n\n\n\n";
+    const after = "line1\nLINE2\n\n\n\n\n";
+
+    const repaint = buildTmuxPaneUpdate(undefined, before);
+    expect(repaint.full).toBe(true);
+    // Six rows written with five separators: the cursor finishes on the last
+    // row without ever scrolling, so row R keeps displaying capture line R.
+    expect(repaint.text).toBe(
+      "\u001b[H\u001b[2Jline1\r\nline2\r\n\r\n\r\n\r\n",
+    );
+    expect(repaint.text.split("\r\n")).toHaveLength(6);
+
+    // `line2` is capture line 2, so it must be patched at row 2.
+    expect(buildTmuxPaneUpdate(before, after)).toEqual({
+      text: "\u001b[2;1H\u001b[2KLINE2",
+      full: false,
+    });
+  });
+
+  test("treats a terminated and an unterminated capture as the same pane", () => {
+    expect(buildTmuxPaneUpdate("one\ntwo\nthree\n", "one\nTWO\nthree\n")).toEqual({
+      text: "\u001b[2;1H\u001b[2KTWO",
+      full: false,
+    });
+    // Row count is what forces a repaint, so a terminator present on only one
+    // side must not read as an extra row.
+    expect(buildTmuxPaneUpdate("one\ntwo\nthree", "one\nTWO\nthree\n")).toEqual({
+      text: "\u001b[2;1H\u001b[2KTWO",
+      full: false,
+    });
+    expect(buildTmuxPaneUpdate("one\ntwo\n", "one\ntwo\nthree\n")).toEqual({
+      text: "\u001b[H\u001b[2Jone\r\ntwo\r\nthree",
+      full: true,
+    });
+  });
+
+  test("repaints blank and empty captures without a trailing feed", () => {
+    expect(buildTmuxPaneUpdate(undefined, "\n\n\n")).toEqual({
+      text: "\u001b[H\u001b[2J\r\n\r\n",
+      full: true,
+    });
+    expect(buildTmuxPaneUpdate(undefined, "")).toEqual({
+      text: "\u001b[H\u001b[2J",
+      full: true,
+    });
+  });
+
   function createInteractiveHarness(
     captures: Array<string | Promise<string>>,
     resizes: Array<void | Promise<void>> = [],
@@ -4051,6 +4106,42 @@ describe("interactive tmux terminal snapshots", () => {
       { cols: 100, rows: 30 },
       { cols: 80, rows: 20 },
     ]);
+  });
+
+  test("resumes captures after a failed resize instead of staying suspended", async () => {
+    const failedResize = deferred<void>();
+    const harness = createInteractiveHarness(
+      ["initial", "after failed resize"],
+      [undefined, failedResize.promise],
+    );
+    await harness.manager.start(harness.id, harness.context);
+
+    const resize = harness.manager.resize(harness.id, 90, 24);
+    await waitFor(() => harness.resizeCalls.length === 2);
+    failedResize.reject(new Error("tmux resize-window failed"));
+    // The caller still sees the failure, but capture suspension must not outlive
+    // it — the pane would otherwise emit nothing for the rest of the session.
+    await expect(resize).rejects.toThrow("tmux resize-window failed");
+
+    harness.scheduled[0]!.callback();
+    await waitFor(() => harness.emitted.length === 2);
+    expect(harness.emitted[1]).toEqual({
+      event: `terminal-output-${harness.id}`,
+      payload: expect.objectContaining({
+        text: expect.stringContaining("after failed resize"),
+        full: true,
+      }),
+    });
+  });
+
+  test("does not resurrect a detached terminal from a late geometry change", async () => {
+    const harness = createInteractiveHarness(["initial"]);
+    await harness.manager.start(harness.id, harness.context);
+    harness.manager.detach(harness.id);
+
+    await expect(harness.manager.resize(harness.id, 80, 20)).rejects.toThrow();
+    expect(harness.captureCount()).toBe(1);
+    expect(harness.emitted).toHaveLength(1);
   });
 });
 

@@ -193,7 +193,7 @@ const ORDERED_EVENT_ESTIMATE_MAX_DEPTH = 8;
 const ORDERED_EVENT_ESTIMATE_NODE_BYTES = 16;
 
 /** Cheap retained-size estimate that does not allocate a second encoded payload. */
-function estimateOrderedEventBytes(value: unknown, depth = 0): number {
+export function estimateOrderedEventBytes(value: unknown, depth = 0): number {
   if (typeof value === "string") return value.length * 2 + 2;
   if (value === null || typeof value !== "object") return ORDERED_EVENT_ESTIMATE_NODE_BYTES;
   if (depth >= ORDERED_EVENT_ESTIMATE_MAX_DEPTH) return ORDERED_EVENT_ESTIMATE_NODE_BYTES;
@@ -2040,7 +2040,17 @@ export class AppServerRuntime {
     publish: () => void,
     options: { bytes?: number; coalesceKey?: "status" } = {},
   ): void {
-    const state = this.stateFor(threadId);
+    // Deliberately a lookup, not `stateFor`. An approval or interaction can
+    // resolve *during* `detachThread`, after the runtime state was released and
+    // after `engine.unsubscribeThread` was already asked for. Creating state
+    // here would re-insert a render state and coalescer for a thread nothing
+    // will ever release again. There is no transcript left to order behind, so
+    // publish inline — exactly what `emitStatus` already does.
+    const state = this.threadState.get(threadId);
+    if (!state) {
+      publish();
+      return;
+    }
     const bytes = Math.max(1, Math.ceil(options.bytes ?? 256));
     if (state.orderedReconcilePending) return;
 
@@ -2745,8 +2755,18 @@ export class AppServerRuntime {
       context.activeTurn = accumulator;
       context.dispatchInFlight = false;
       this.registry.setPhase(context, "running");
-      streamingState.render = beginTurnRenderState(streamingState.render);
-      streamingState.assistantMessageId = assistantMessage.id;
+      // Re-read: generation-change recovery can release this thread's runtime
+      // state while `startReview` is in flight, and `stateFor` then hands every
+      // later reader a *different* object. Writing the streaming identity to the
+      // pre-dispatch reference would leave the live state without an
+      // `assistantMessageId`, so `publishAssistantMessage` returns early and the
+      // turn runs without ever streaming.
+      const liveState = this.stateFor(context.threadId);
+      liveState.publishedMessageId = assistantMessage.id;
+      liveState.publishedParts = [];
+      liveState.publishedModelId = assistantMessage.modelId;
+      liveState.render = beginTurnRenderState(liveState.render);
+      liveState.assistantMessageId = assistantMessage.id;
       this.emitStatus(context);
       this.drainPendingEvents(context, review.turnId);
       return { outcome: "accepted", turnId: review.turnId };
@@ -3344,8 +3364,17 @@ export class AppServerRuntime {
       context.engineGeneration = turn.engineGeneration;
       context.dispatchInFlight = false;
       this.registry.setPhase(context, "running");
-      streamingState.render = beginTurnRenderState(streamingState.render);
-      streamingState.assistantMessageId = assistantMessage.id;
+      // Re-read: `recoverAfterGenerationChange` releases runtime state for an
+      // unmaterialized thread — precisely a first prompt in flight — so the
+      // reference captured before the dispatch may now be orphaned. Every later
+      // reader goes through `stateFor`, and writing the streaming identity to a
+      // dead object would leave the turn running but never streaming.
+      const liveState = this.stateFor(context.threadId);
+      liveState.publishedMessageId = assistantMessage.id;
+      liveState.publishedParts = [];
+      liveState.publishedModelId = assistantMessage.modelId;
+      liveState.render = beginTurnRenderState(liveState.render);
+      liveState.assistantMessageId = assistantMessage.id;
 
       // The turn is registered now, so anything that arrived while `turn/start`
       // was still in flight can be applied. A fast turn may already have

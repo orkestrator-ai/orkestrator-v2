@@ -151,6 +151,25 @@ function formatCount(value: number, singular: string): string {
   return `${value} ${singular}${value === 1 ? "" : "s"}`;
 }
 
+const RESET_DATE_TIME_FORMAT_OPTIONS = {
+  weekday: "long",
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "numeric",
+  minute: "numeric",
+  second: "numeric",
+} satisfies Intl.DateTimeFormatOptions;
+
+export function formatResetDateTime(
+  value: string,
+  locales?: Intl.LocalesArgument,
+): string | null {
+  const resetDate = new Date(value);
+  if (!Number.isFinite(resetDate.getTime())) return null;
+  return resetDate.toLocaleString(locales, RESET_DATE_TIME_FORMAT_OPTIONS);
+}
+
 function Metric({
   label,
   value,
@@ -241,7 +260,9 @@ export function summarizeRewindPreview(preview: unknown): {
     root.filesChanged,
     record(root.preview).files,
   ];
-  const list = candidates.find((value): value is unknown[] => Array.isArray(value)) ?? [];
+  const list = candidates.find(
+    (value): value is unknown[] => Array.isArray(value) && value.length > 0,
+  ) ?? candidates.find((value): value is unknown[] => Array.isArray(value)) ?? [];
   const files = list.flatMap((entry) => {
     if (typeof entry === "string") return [entry];
     const item = record(entry);
@@ -252,7 +273,8 @@ export function summarizeRewindPreview(preview: unknown): {
     return [];
   });
   const reportedCount = [root.fileCount, root.count, root.totalFiles].find(
-    (value): value is number => typeof value === "number" && Number.isFinite(value),
+    (value): value is number =>
+      typeof value === "number" && Number.isSafeInteger(value) && value >= 0,
   );
   return {
     files,
@@ -471,26 +493,29 @@ function RateLimitsSection({
       <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
         Limits
       </div>
-      {rateLimits.map((limit) => (
-        <div key={`${limit.label}:${limit.resetsAt ?? ""}`}>
-          <div className="mb-1.5 flex justify-between gap-3 text-xs">
-            <span className="text-foreground">{limit.label}</span>
-            <span className="font-mono tabular-nums text-muted-foreground">
-              {limit.usedPercent === undefined
-                ? "Available"
-                : `${limit.usedPercent.toFixed(0)}% used`}
-            </span>
-          </div>
-          {limit.usedPercent !== undefined ? (
-            <Progress value={limit.usedPercent} className="h-1" />
-          ) : null}
-          {limit.resetsAt ? (
-            <div className="mt-1 text-right text-[10px] text-muted-foreground">
-              Resets {new Date(limit.resetsAt).toLocaleString()}
+      {rateLimits.map((limit) => {
+        const resetLabel = limit.resetsAt ? formatResetDateTime(limit.resetsAt) : null;
+        return (
+          <div key={`${limit.label}:${limit.resetsAt ?? ""}`}>
+            <div className="mb-1.5 flex justify-between gap-3 text-xs">
+              <span className="text-foreground">{limit.label}</span>
+              <span className="font-mono tabular-nums text-muted-foreground">
+                {limit.usedPercent === undefined
+                  ? "Available"
+                  : `${limit.usedPercent.toFixed(0)}% used`}
+              </span>
             </div>
-          ) : null}
-        </div>
-      ))}
+            {limit.usedPercent !== undefined ? (
+              <Progress value={limit.usedPercent} className="h-1" />
+            ) : null}
+            {resetLabel ? (
+              <div className="mt-1 text-right text-[10px] text-muted-foreground">
+                Resets {resetLabel}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

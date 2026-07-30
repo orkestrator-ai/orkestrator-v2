@@ -37,10 +37,11 @@ describe("remote gateway documentation", () => {
     }
   });
 
-  test("documents compression modes, precedence, the body default, and milestone-zero history", async () => {
-    const [guide, milestone] = await Promise.all([
+  test("documents compression modes, precedence, the body default, and milestone history", async () => {
+    const [guide, milestoneZero, milestoneTwo] = await Promise.all([
       readFile(path.join(root, "docs", "remote-gateway.md"), "utf8"),
       readFile(path.join(root, "docs", "efficiency", "milestone-0.md"), "utf8"),
+      readFile(path.join(root, "docs", "efficiency", "milestone-2.md"), "utf8"),
     ]);
 
     expect(guide).toContain("ORKESTRATOR_GATEWAY_COMPRESSION");
@@ -57,10 +58,19 @@ describe("remote gateway documentation", () => {
     expect(guide).toContain("Already encoded upstream responses are passed through");
     expect(guide.replace(/\s+/g, " ")).toContain("`body` remains the default");
 
-    expect(milestone).toContain("CLI compression overrides the environment");
-    expect(milestone).toContain("defaults to `off`");
-    expect(milestone).toContain("`off`, `body`, and `on` do not add response compression");
-    expect(milestone).toContain("- [x] No production response path has changed encoding yet.");
+    expect(milestoneZero).toContain("CLI compression overrides the environment");
+    expect(milestoneZero).toContain("defaults to `off`");
+    expect(milestoneZero).toContain("`off`, `body`, and `on` do not add response compression");
+    expect(milestoneZero).toContain("- [x] No production response path has changed encoding yet.");
+
+    const normalizedMilestoneTwo = milestoneTwo.replace(/\s+/g, " ");
+    expect(normalizedMilestoneTwo).toContain("Ship initially in `body` mode");
+    expect(normalizedMilestoneTwo).toContain(
+      "Reserve one of eight proxy-buffer slots and declared source bytes against a shared 64 MiB budget before buffering",
+    );
+    expect(normalizedMilestoneTwo).toContain(
+      "Concurrent near-limit proxy responses remain within the eight-buffer and 64 MiB source-byte budgets",
+    );
   });
 
   test("documents listener-role compression semantics independently of bind address", async () => {
@@ -75,9 +85,10 @@ describe("remote gateway documentation", () => {
   });
 
   test("documents authenticated metrics methods, bounds, and privacy exclusions", async () => {
-    const [guide, milestone] = await Promise.all([
+    const [guide, milestoneZero, milestoneTwo] = await Promise.all([
       readFile(path.join(root, "docs", "remote-gateway.md"), "utf8"),
       readFile(path.join(root, "docs", "efficiency", "milestone-0.md"), "utf8"),
+      readFile(path.join(root, "docs", "efficiency", "milestone-2.md"), "utf8"),
     ]);
     const normalizedGuide = guide.replace(/\s+/g, " ");
 
@@ -106,12 +117,62 @@ describe("remote gateway documentation", () => {
     expect(normalizedGuide).toContain("retained only when the backend registry actually contains");
     expect(normalizedGuide).toContain("collapsed to a fixed category");
     expect(normalizedGuide).toContain("Event counters are per delivery, not per emit");
+    expect(normalizedGuide).toContain(
+      "route-level `responseBytes` counter records the encoded chunks actually written",
+    );
+    expect(normalizedGuide).toContain(
+      "`configuredMode` reports the configured browser-listener rollout mode",
+    );
+    expect(normalizedGuide).toContain(
+      "fallbacks are recorded as identity rather than as the encoding that was merely negotiated",
+    );
 
-    expect(milestone).toContain("Both metrics routes require authentication");
-    expect(milestone).toContain("Client metric reports are allowlisted and bounded");
-    expect(milestone).toContain(
+    expect(milestoneZero).toContain("Both metrics routes require authentication");
+    expect(milestoneZero).toContain("Client metric reports are allowlisted and bounded");
+    expect(milestoneZero).toContain(
       "The coordinated gateway/docs, backend option/standalone,",
     );
-    expect(milestone).toContain("- [x] Focused tests and typechecks pass.");
+    expect(milestoneZero).toContain("- [x] Focused tests and typechecks pass.");
+    expect(milestoneTwo).toContain("body and event-stream transfer reduction");
+  });
+
+  test("documents proxy transformation exclusions and pending manual evidence", async () => {
+    const [guide, milestoneTwo] = await Promise.all([
+      readFile(path.join(root, "docs", "remote-gateway.md"), "utf8"),
+      readFile(path.join(root, "docs", "efficiency", "milestone-2.md"), "utf8"),
+    ]);
+    const normalizedGuide = guide.replace(/\s+/g, " ");
+    const normalizedMilestoneTwo = milestoneTwo.replace(/\s+/g, " ");
+
+    expect(normalizedGuide).toContain(
+      "does not transform responses to `HEAD`, bodyless status responses, `206 Partial Content` responses, or responses carrying `Content-Range`",
+    );
+    expect(normalizedGuide).toContain(
+      "`Vary: Accept-Encoding` and the valid identity representation length, but omits identity-only validators, digests, and range metadata",
+    );
+    for (const field of [
+      "`ETag`",
+      "`Content-MD5`",
+      "`Content-Digest`",
+      "`Repr-Digest`",
+      "legacy `Digest`",
+      "`Accept-Ranges`",
+    ]) {
+      expect(normalizedGuide).toContain(field);
+    }
+
+    expect(normalizedMilestoneTwo).toContain(
+      "Proxy `HEAD`, `1xx`, `204`, `304`, `206`, and `Content-Range` responses preserve bodyless/range semantics",
+    );
+    expect(normalizedMilestoneTwo).toContain(
+      "Automated tests and simulator runs do not complete these manual items",
+    );
+    expect(milestoneTwo).toContain("- [ ] Test through raw tailnet HTTP and Tailscale Serve.");
+    expect(milestoneTwo).toContain(
+      "- [ ] Test iOS foreground, background, screen lock, and foreground recovery.",
+    );
+    expect(normalizedMilestoneTwo).toContain(
+      "implementation evidence only and do not replace the unchecked tailnet and physical-device manual evidence",
+    );
   });
 });

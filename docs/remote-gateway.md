@@ -108,7 +108,23 @@ Already encoded upstream responses are passed through without another encoding.
 Browser-preview HTML, CSS, and JavaScript are decoded within fixed encoded and
 decoded byte and chunk-count limits, rewritten, and then optionally
 recompressed. Dynamic compression also has bounded source/output sizes and a
-fixed concurrency limit; saturation falls back to identity.
+fixed concurrency limit. Before buffering a proxied non-streaming body, the
+gateway reserves one of eight proxy-buffer slots and the declared body size
+against a shared 64 MiB aggregate source-buffer budget. Those reservations are
+held until the downstream response finishes or closes and released after every
+success, failure, abort, or client disconnect; a response that cannot reserve
+both limits is streamed as identity.
+
+The gateway does not transform responses to `HEAD`, bodyless status responses,
+`206 Partial Content` responses, or responses carrying `Content-Range`. This
+preserves empty-body and selected-range semantics. When an eligible `HEAD` or
+`304 Not Modified` could describe a coded `GET`, the gateway keeps
+`Vary: Accept-Encoding` and the valid identity representation length, but omits
+identity-only validators, digests, and range metadata that cannot describe the
+selected cached variant. Whenever preview rewriting or compression changes
+representation bytes, the gateway removes stale `ETag`, `Content-MD5`,
+`Content-Digest`, `Repr-Digest`, legacy `Digest`, and `Accept-Ranges` fields
+rather than forwarding metadata calculated for the upstream bytes.
 
 Compressed event streams use the same terminal soft-limit desync recovery,
 authoritative-event hard-limit disconnect, and keepalive behavior as identity
@@ -225,7 +241,11 @@ subscribers counts three frames and three frames' worth of `wireBytes`, and an
 event with no matching subscriber is not recorded at all. For identity streams,
 `wireBytes` is also the transport size. For compressed streams it records
 uncompressed application-frame bytes; the route-level `responseBytes` counter
-records the encoded chunks actually written to the client.
+records the encoded chunks actually written to the client. The compression
+snapshot's `configuredMode` reports the configured browser-listener rollout
+mode. Route encoding buckets and recent route samples report the actual
+downstream encoding, so admission, codec, and not-beneficial fallbacks are
+recorded as identity rather than as the encoding that was merely negotiated.
 
 ## Vercel-hosted public client
 

@@ -121,7 +121,8 @@ export const COMPRESSION_MIN_BYTES = 1024;
 export const MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES = 48 * 1024 * 1024;
 const MAX_DYNAMIC_COMPRESSION_OUTPUT_OVERHEAD_BYTES = 64 * 1024;
 export const MAX_CONCURRENT_DYNAMIC_COMPRESSIONS = 8;
-const MAX_BUFFERED_BODY_CHUNKS = 8192;
+export const MAX_DYNAMIC_PROXY_BUFFERED_SOURCE_BYTES = 64 * 1024 * 1024;
+export const MAX_BUFFERED_BODY_CHUNKS = 8192;
 const SSE_COMPRESSION_CHUNK_BYTES = 64 * 1024;
 export const MAX_STATIC_FALLBACK_SOURCE_BYTES = 8 * 1024 * 1024;
 const MAX_STATIC_FALLBACK_OUTPUT_BYTES = MAX_STATIC_FALLBACK_SOURCE_BYTES + 64 * 1024;
@@ -1266,6 +1267,89 @@ export function canStartDynamicCompression(activeCount: number): boolean {
   return activeCount >= 0 && activeCount < MAX_CONCURRENT_DYNAMIC_COMPRESSIONS;
 }
 
+export function isDynamicCompressionSizeEligible(byteLength: number): boolean {
+  return Number.isSafeInteger(byteLength)
+    && byteLength >= COMPRESSION_MIN_BYTES
+    && byteLength <= MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES;
+}
+
+export function canBufferBodyChunk(
+  currentBytes: number,
+  currentChunks: number,
+  nextChunkBytes: number,
+  maxBytes: number,
+): boolean {
+  return Number.isSafeInteger(currentBytes)
+    && currentBytes >= 0
+    && Number.isSafeInteger(currentChunks)
+    && currentChunks >= 0
+    && Number.isSafeInteger(nextChunkBytes)
+    && nextChunkBytes >= 0
+    && Number.isSafeInteger(maxBytes)
+    && maxBytes >= 0
+    && currentChunks < MAX_BUFFERED_BODY_CHUNKS
+    && currentBytes + nextChunkBytes <= maxBytes;
+}
+
+export type DynamicCompressionBufferBudgetSnapshot = {
+  activeCount: number;
+  activeBytes: number;
+};
+
+export class DynamicCompressionBufferBudget {
+  private activeCount = 0;
+  private activeBytes = 0;
+
+  constructor(
+    private readonly maxCount = MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
+    private readonly maxBytes = MAX_DYNAMIC_PROXY_BUFFERED_SOURCE_BYTES,
+  ) {}
+
+  tryReserve(sourceBytes: number): (() => void) | null {
+    if (
+      !isDynamicCompressionSizeEligible(sourceBytes)
+      || this.activeCount >= this.maxCount
+      || this.activeBytes + sourceBytes > this.maxBytes
+    ) {
+      return null;
+    }
+    this.activeCount += 1;
+    this.activeBytes += sourceBytes;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.activeCount = Math.max(0, this.activeCount - 1);
+      this.activeBytes = Math.max(0, this.activeBytes - sourceBytes);
+    };
+  }
+
+  snapshot(): DynamicCompressionBufferBudgetSnapshot {
+    return {
+      activeCount: this.activeCount,
+      activeBytes: this.activeBytes,
+    };
+  }
+}
+
+const dynamicProxyCompressionBufferBudget = new DynamicCompressionBufferBudget();
+
+export function releaseReservationOnResponseSettled(
+  response: ServerResponse,
+  release: () => void,
+): void {
+  let settled = false;
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    response.removeListener("finish", settle);
+    response.removeListener("close", settle);
+    release();
+  };
+  response.once("finish", settle);
+  response.once("close", settle);
+}
+
 const staticFallbackCompressions = new Map<string, Promise<StaticCompressionOutcome>>();
 
 export async function readStaticFileWithinLimit(
@@ -1389,24 +1473,30 @@ export function canStartStaticFallbackCompression(activeCount: number): boolean 
     && activeCount < MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS;
 }
 
-type ResponseCompressionContext = {
+export type ResponseCompressionContext = {
   mode: GatewayCompressionMode;
   acceptEncoding: string | null;
 };
 
 const responseCompressionContexts = new WeakMap<ServerResponse, ResponseCompressionContext>();
 
-type PreparedBody = {
+export type PreparedBody = {
   body: Buffer;
   encoding: ContentEncoding;
   variesByEncoding: boolean;
 };
 
-async function prepareCompressedBody(
+export type DynamicBodyCompressor = (
+  source: Buffer | string,
+  encoding: CompressionEncoding,
+) => Promise<Buffer>;
+
+export async function prepareCompressedBody(
   source: Buffer | string,
   contentType: string | null,
   context: ResponseCompressionContext | undefined,
   existingContentEncoding: string | null = null,
+  compressor: DynamicBodyCompressor = compressBody,
 ): Promise<PreparedBody> {
   const body = Buffer.isBuffer(source) ? source : Buffer.from(source);
   const canNegotiate = context?.mode !== undefined
@@ -1415,8 +1505,7 @@ async function prepareCompressedBody(
     && normalizeContentEncoding(existingContentEncoding) === "identity";
   if (
     !canNegotiate
-    || body.byteLength < COMPRESSION_MIN_BYTES
-    || body.byteLength > MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES
+    || !isDynamicCompressionSizeEligible(body.byteLength)
   ) {
     return { body, encoding: "identity", variesByEncoding: canNegotiate };
   }
@@ -1430,7 +1519,7 @@ async function prepareCompressedBody(
   }
   activeDynamicCompressions += 1;
   try {
-    const compressed = await compressBody(body, encoding);
+    const compressed = await compressor(body, encoding);
     if (compressed.byteLength >= body.byteLength) {
       return { body, encoding: "identity", variesByEncoding: true };
     }
@@ -1467,6 +1556,40 @@ function writePreparedBody(
   response.end(prepared.body);
 }
 
+export function recoverBodyResponseError(
+  response: ServerResponse,
+  statusCode: number,
+  headers: OutgoingHttpHeaders,
+  source: Buffer,
+  error: unknown,
+): void {
+  if (!response.headersSent) {
+    writePreparedBody(response, statusCode, headers, {
+      body: source,
+      encoding: "identity",
+      variesByEncoding: true,
+    });
+  } else {
+    response.destroy(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
+export function settlePreparedBodyResponse(
+  response: ServerResponse,
+  statusCode: number,
+  headers: OutgoingHttpHeaders,
+  source: Buffer,
+  preparation: Promise<PreparedBody>,
+): void {
+  void preparation
+    .then((prepared) => {
+      if (!response.destroyed) writePreparedBody(response, statusCode, headers, prepared);
+    })
+    .catch((error: unknown) => {
+      recoverBodyResponseError(response, statusCode, headers, source, error);
+    });
+}
+
 function bodyResponse(
   response: ServerResponse,
   statusCode: number,
@@ -1481,8 +1604,7 @@ function bodyResponse(
   const source = Buffer.isBuffer(body) ? body : Buffer.from(body);
   const shouldCompress = context?.mode !== undefined
     && context.mode !== "off"
-    && source.byteLength >= COMPRESSION_MIN_BYTES
-    && source.byteLength <= MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES
+    && isDynamicCompressionSizeEligible(source.byteLength)
     && isCompressibleContentType(contentType)
     && normalizeContentEncoding(existingContentEncoding) === "identity";
 
@@ -1499,21 +1621,13 @@ function bodyResponse(
     return;
   }
 
-  void prepareCompressedBody(source, contentType, context, existingContentEncoding)
-    .then((prepared) => {
-      if (!response.destroyed) writePreparedBody(response, statusCode, headers, prepared);
-    })
-    .catch((error: unknown) => {
-      if (!response.headersSent) {
-        writePreparedBody(response, statusCode, headers, {
-          body: source,
-          encoding: "identity",
-          variesByEncoding: true,
-        });
-      } else {
-        response.destroy(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
+  settlePreparedBodyResponse(
+    response,
+    statusCode,
+    headers,
+    source,
+    prepareCompressedBody(source, contentType, context, existingContentEncoding),
+  );
 }
 
 function jsonResponse(
@@ -1863,6 +1977,39 @@ function sanitizeProxyResponseHeaders(headers: IncomingHttpHeaders, target: URL,
     }
   }
   return sanitized;
+}
+
+export function responseStatusCanHaveBody(method: string | undefined, statusCode: number): boolean {
+  return method !== "HEAD"
+    && statusCode >= 200
+    && statusCode !== 204
+    && statusCode !== 205
+    && statusCode !== 304;
+}
+
+export function canTransformProxyRepresentation(
+  method: string | undefined,
+  statusCode: number,
+  contentRange: string | null,
+): boolean {
+  return responseStatusCanHaveBody(method, statusCode)
+    && statusCode !== 206
+    && contentRange === null;
+}
+
+export function parseStrictContentLengthHeader(value: string | null): number | null {
+  if (!/^(?:0|[1-9]\d*)$/.test(value ?? "")) return null;
+  const parsed = Number.parseInt(value!, 10);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function stripTransformedRepresentationHeaders(headers: OutgoingHttpHeaders): void {
+  delete headers.etag;
+  delete headers["content-md5"];
+  delete headers["content-digest"];
+  delete headers["repr-digest"];
+  delete headers.digest;
+  delete headers["accept-ranges"];
 }
 
 export type BrowserPreviewContentKind = "html" | "css" | "js";
@@ -3166,6 +3313,13 @@ export class OrkestratorGateway {
       }, (proxyResponse) => {
         activeProxyResponse = proxyResponse;
         const responseHeaders = sanitizeProxyResponseHeaders(proxyResponse.headers, target, proxyPrefix);
+        const responseStatus = proxyResponse.statusCode ?? 502;
+        const contentRange = headerValueToString(proxyResponse.headers["content-range"]);
+        const transformableRepresentation = canTransformProxyRepresentation(
+          request.method,
+          responseStatus,
+          contentRange,
+        );
         const compressionContext = responseCompressionContexts.get(response);
         const upstreamContentEncoding = headerValueToString(proxyResponse.headers["content-encoding"]);
         const upstreamIsIdentity = normalizeContentEncoding(upstreamContentEncoding) === "identity";
@@ -3188,7 +3342,7 @@ export class OrkestratorGateway {
           }
         }
 
-        const previewContentKind = browserPreview && proxyPrefix && request.method !== "HEAD"
+        const previewContentKind = browserPreview && proxyPrefix && transformableRepresentation
           ? browserPreviewContentKind(proxyResponse.headers["content-type"])
           : null;
         if (browserPreview && proxyPrefix && previewContentKind) {
@@ -3234,14 +3388,16 @@ export class OrkestratorGateway {
           bodyStream.on("data", (chunk: Buffer | string) => {
             if (bodySettled) return;
             const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-            decodedBytes += buffer.byteLength;
-            if (
-              decodedBytes > MAX_BROWSER_PREVIEW_BODY_BYTES
-              || chunks.length >= MAX_BUFFERED_BODY_CHUNKS
-            ) {
+            if (!canBufferBodyChunk(
+              decodedBytes,
+              chunks.length,
+              buffer.byteLength,
+              MAX_BROWSER_PREVIEW_BODY_BYTES,
+            )) {
               abortBody(new Error(`Browser preview response exceeded ${MAX_BROWSER_PREVIEW_BODY_BYTES} decoded bytes`));
               return;
             }
+            decodedBytes += buffer.byteLength;
             chunks.push(buffer);
           });
           bodyStream.once("end", () => {
@@ -3261,9 +3417,7 @@ export class OrkestratorGateway {
             }
             bodySettled = true;
             delete responseHeaders["content-encoding"];
-            delete responseHeaders.etag;
-            delete responseHeaders["content-md5"];
-            delete responseHeaders["accept-ranges"];
+            stripTransformedRepresentationHeaders(responseHeaders);
             void prepareCompressedBody(
               rewritten,
               contentType,
@@ -3293,12 +3447,31 @@ export class OrkestratorGateway {
           ?.split(";", 1)[0]
           ?.trim()
           .toLowerCase() === "text/event-stream";
+        const contentLengthValue = headerValueToString(proxyResponse.headers["content-length"]);
+        const contentLength = parseStrictContentLengthHeader(contentLengthValue);
         const canTransform = upstreamIsIdentity
           && transformAllowed
           && compressionContext?.mode !== undefined
           && compressionContext.mode !== "off";
+        const canTransformBody = canTransform && transformableRepresentation;
+        const bodylessMetadataCouldDescribeCodedBytes = canTransform
+          && (request.method === "HEAD" || responseStatus === 304)
+          && !isEventStream
+          && isCompressibleContentType(contentType)
+          && contentLength !== null
+          && isDynamicCompressionSizeEligible(contentLength)
+          && negotiateEncoding(compressionContext.acceptEncoding) !== "identity";
+        if (bodylessMetadataCouldDescribeCodedBytes) {
+          // The loopback hop is forced to identity, but a corresponding GET
+          // could select a coded representation. Do not let a bodyless
+          // response overwrite that cached variant with identity-only
+          // validators, digests, or range metadata. Retain the upstream
+          // identity length: Bun otherwise synthesizes Content-Length: 0,
+          // which cannot describe the selected representation.
+          stripTransformedRepresentationHeaders(responseHeaders);
+        }
 
-        if (canTransform && isEventStream && compressionContext.mode === "on") {
+        if (canTransformBody && isEventStream && compressionContext.mode === "on") {
           appendHeadersVary(responseHeaders, "Accept-Encoding");
           if (
             negotiateEncoding(
@@ -3307,11 +3480,9 @@ export class OrkestratorGateway {
             ) === "gzip"
           ) {
             delete responseHeaders["content-length"];
-            delete responseHeaders.etag;
-            delete responseHeaders["content-md5"];
-            delete responseHeaders["accept-ranges"];
+            stripTransformedRepresentationHeaders(responseHeaders);
             responseHeaders["content-encoding"] = "gzip";
-            response.writeHead(proxyResponse.statusCode ?? 502, responseHeaders);
+            response.writeHead(responseStatus, responseHeaders);
             const compressor = createGzip({
               level: DYNAMIC_GZIP_LEVEL,
               flush: zlibConstants.Z_SYNC_FLUSH,
@@ -3333,51 +3504,77 @@ export class OrkestratorGateway {
           }
         }
 
-        const contentLengthValue = headerValueToString(proxyResponse.headers["content-length"]);
-        const contentLength = /^(?:0|[1-9]\d*)$/.test(contentLengthValue ?? "")
-          ? Number.parseInt(contentLengthValue!, 10)
-          : null;
-        const shouldBufferBody = canTransform
+        const shouldBufferBody = canTransformBody
           && !isEventStream
-          && request.method !== "HEAD"
           && isCompressibleContentType(contentType)
           && contentLength !== null
-          && contentLength >= COMPRESSION_MIN_BYTES
-          && contentLength <= MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES;
+          && isDynamicCompressionSizeEligible(contentLength);
 
         if (canTransform && !isEventStream && isCompressibleContentType(contentType)) {
           appendHeadersVary(responseHeaders, "Accept-Encoding");
         }
 
-        if (shouldBufferBody) {
-          const chunks: Buffer[] = [];
+        const releaseBufferReservation = shouldBufferBody
+          ? dynamicProxyCompressionBufferBudget.tryReserve(contentLength!)
+          : null;
+        if (releaseBufferReservation) {
+          // The declared length is validated before admission, and the aggregate
+          // budget is reserved before allocating. A single contiguous source
+          // buffer avoids retaining a chunk list and then duplicating it with
+          // Buffer.concat while the codec is running.
+          let sourceBuffer: Buffer;
+          try {
+            sourceBuffer = Buffer.allocUnsafe(contentLength!);
+          } catch (error) {
+            releaseBufferReservation();
+            proxyResponse.destroy();
+            fail(error instanceof Error ? error : new Error(String(error)));
+            return;
+          }
           let bytes = 0;
           let bodySettled = false;
+          let reservationReleased = false;
+          let reservationOwnedByResponse = false;
+          const releaseReservation = () => {
+            if (reservationReleased) return;
+            reservationReleased = true;
+            releaseBufferReservation();
+          };
+          const releaseWhileBuffering = () => {
+            if (bodySettled) return;
+            bodySettled = true;
+            releaseReservation();
+          };
+          response.once("close", releaseWhileBuffering);
           const abortBody = (error: Error) => {
             if (bodySettled) return;
             bodySettled = true;
+            response.removeListener("close", releaseWhileBuffering);
+            releaseReservation();
             proxyResponse.destroy();
             fail(error);
           };
           proxyResponse.on("data", (chunk: Buffer | string) => {
             if (bodySettled) return;
             const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-            bytes += buffer.byteLength;
-            if (
-              bytes > MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES
-              || chunks.length >= MAX_BUFFERED_BODY_CHUNKS
-            ) {
+            if (bytes + buffer.byteLength > sourceBuffer.byteLength) {
               abortBody(new Error(
-                `Proxied response exceeded ${MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES} bytes`,
+                `Proxied response exceeded its declared ${sourceBuffer.byteLength} bytes`,
               ));
               return;
             }
-            chunks.push(buffer);
+            buffer.copy(sourceBuffer, bytes);
+            bytes += buffer.byteLength;
           });
           proxyResponse.once("end", () => {
             if (bodySettled) return;
             bodySettled = true;
-            const source = Buffer.concat(chunks, bytes);
+            response.removeListener("close", releaseWhileBuffering);
+            if (reservationReleased || settled || response.destroyed) {
+              releaseReservation();
+              return;
+            }
+            const source = sourceBuffer.subarray(0, bytes);
             void prepareCompressedBody(
               source,
               contentType,
@@ -3390,15 +3587,17 @@ export class OrkestratorGateway {
                 delete responseHeaders["content-encoding"];
               } else {
                 responseHeaders["content-encoding"] = prepared.encoding;
-                delete responseHeaders.etag;
-                delete responseHeaders["content-md5"];
-                delete responseHeaders["accept-ranges"];
+                stripTransformedRepresentationHeaders(responseHeaders);
               }
-              response.writeHead(proxyResponse.statusCode ?? 502, responseHeaders);
+              reservationOwnedByResponse = true;
+              releaseReservationOnResponseSettled(response, releaseReservation);
+              response.writeHead(responseStatus, responseHeaders);
               response.end(prepared.body);
               finish();
             }).catch((error: unknown) => {
               fail(error instanceof Error ? error : new Error(String(error)));
+            }).finally(() => {
+              if (!reservationOwnedByResponse) releaseReservation();
             });
           });
           proxyResponse.once("error", (error) => abortBody(error));
@@ -3406,7 +3605,7 @@ export class OrkestratorGateway {
           return;
         }
 
-        response.writeHead(proxyResponse.statusCode ?? 502, responseHeaders);
+        response.writeHead(responseStatus, responseHeaders);
         pipeline(proxyResponse, response, (error) => {
           if (error) {
             proxyRequest.destroy(error);

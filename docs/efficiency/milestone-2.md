@@ -70,6 +70,15 @@ Primary files:
 - [x] Use pipeline backpressure for a proxied client.
 - [x] Use gzip sync-flush for proxied SSE.
 - [x] Use threshold Brotli/gzip for eligible non-streaming proxy bodies.
+- [x] Reserve one of eight proxy-buffer slots and declared source bytes against
+      a shared 64 MiB budget before buffering; stream identity on saturation
+      and hold each reservation until downstream finish/close or another
+      success, failure, abort, or disconnect terminal path.
+- [x] Leave `HEAD`, bodyless status, `206 Partial Content`, and
+      `Content-Range` responses untransformed.
+- [x] Remove stale `ETag`, `Content-MD5`, `Content-Digest`, `Repr-Digest`,
+      legacy `Digest`, and `Accept-Ranges` fields whenever rewriting or
+      compression changes representation bytes.
 - [x] Do not double-encode already encoded upstream bodies.
 - [x] Keep browser-preview rewriting as a separate decoded path.
 
@@ -97,6 +106,17 @@ Primary files:
 - [x] Already encoded bodies are not double encoded.
 - [x] Browser-preview rewriting and limits remain correct.
 - [x] `off`, `body`, and `on` behave as documented.
+- [x] Concurrent near-limit proxy responses remain within the eight-buffer and
+      64 MiB source-byte budgets; excess responses stream identity and
+      reservations return to zero after every terminal path.
+- [x] Proxy `HEAD`, `1xx`, `204`, `304`, `206`, and `Content-Range` responses
+      preserve bodyless/range semantics without gateway compression.
+- [x] Rewritten or compressed responses do not retain upstream validators,
+      content digests, or range support for different representation bytes.
+- [x] Exact threshold and maximum-size boundaries, non-beneficial output,
+      codec failure, and admission fallback are covered.
+- [x] Dynamic response rejection, compressor error, proxy abort, `no-transform`,
+      malformed length, and preview chunk/post-rewrite limits are covered.
 
 ## Manual verification
 
@@ -107,6 +127,10 @@ Primary files:
 - [ ] Test through raw tailnet HTTP and Tailscale Serve.
 - [ ] Test iOS foreground, background, screen lock, and foreground recovery.
 - [ ] Complete the inactive-environment path.
+
+Automated tests and simulator runs do not complete these manual items. Each box
+remains unchecked until results are captured from the named tailnet transport or
+physical-device workflow.
 
 ## Commands
 
@@ -163,9 +187,17 @@ Implementation evidence recorded on 2026-07-30:
 - Rollback is covered for `off`; `body` is the shipped default. `on` is
   implemented and tested but is not the default pending real iPhone and iPad
   `WKWebView` evidence.
-- Validation passed: backend and web typechecks, 105 focused gateway tests,
-  five remote-gateway documentation tests, all four repository test groups,
-  the Codex protocol lockfile check, and 40 iOS simulator tests. The full test
+- Proxy body admission reserves one of eight buffer slots and the declared
+  source size against a 64 MiB aggregate budget before collection. Saturated
+  responses stream identity, and automated success/error/abort/disconnect tests
+  verify that reservations are returned.
+- Automated validation covers bodyless and ranged proxy semantics, transformed
+  metadata removal, exact compression boundaries, fallbacks, error paths, and
+  preview limits. These results are implementation evidence only and do not
+  replace the unchecked tailnet and physical-device manual evidence above.
+- Validation passed: backend and web typechecks, focused gateway and
+  remote-gateway documentation tests, all four repository test groups, the
+  Codex protocol lockfile check, and the iOS simulator suite. The full test
   command completed successfully.
 
 Still required before promoting `on`: real-device low-volume SSE latency,

@@ -5,6 +5,11 @@ import type {
 import { buildReviewBody } from "@orkestrator/protocol/review-workflow";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
+const ADDRESS_REVIEW_FINDINGS_PREFIX =
+  "Address all the above issues and coverage gaps, making sensible assumptions and without asking questions.";
+const ADDRESS_REVIEW_FINDINGS_TAIL =
+  "Run the relevant validation. Stage only related safe files and commit every relevant fix before finishing.";
+
 function ticketContext(task: TaskSnapshot): string {
   return [
     `**Title**: ${task.title}`,
@@ -52,13 +57,16 @@ export function reviewPrompt(
 }
 
 export function addressPrompt(report: StructuredReviewReport): string {
-  return `Address every issue and test-coverage gap in this validated report:
+  return `${ADDRESS_REVIEW_FINDINGS_PREFIX}
 
 <structured-review-findings>
-${JSON.stringify({ issues: report.issues, testCoverageGaps: report.testCoverageGaps }, null, 2)}
+${JSON.stringify({
+    issues: report.issues,
+    testCoverageGaps: report.testCoverageGaps,
+  }, null, 2)}
 </structured-review-findings>
 
-Run the relevant validation. Stage only related safe files and commit every relevant fix before finishing. Do not ask questions.`;
+${ADDRESS_REVIEW_FINDINGS_TAIL}`;
 }
 
 export function verificationPrompt(

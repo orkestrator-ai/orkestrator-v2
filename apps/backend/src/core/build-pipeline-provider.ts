@@ -30,6 +30,20 @@ export class ProviderUnavailableError extends Error {
   }
 }
 
+/**
+ * A prompt transport failed without proving whether the provider accepted it.
+ *
+ * Callers retain the durable request id and reconcile provider status before
+ * retrying this error. Preflight and explicit HTTP failures must use
+ * ProviderUnavailableError instead so bounded reconnect handling can run.
+ */
+export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "AmbiguousPromptDispatchError";
+  }
+}
+
 export interface ProviderCreateSessionOptions {
   /** Second layer of idempotency: bridges derive a stable session id from it. */
   clientSessionKey?: string;
@@ -123,6 +137,8 @@ type BridgeConnection = {
 type ProviderDependencies = {
   fetch?: typeof fetch;
   openCodeClient?: OpencodeClient;
+  /** Injectable factory for testing the production OpenCode client wiring. */
+  openCodeClientFactory?: typeof createOpencodeClient;
   monitorRetryMs?: number;
   /**
    * Stage base64 images into the workspace so they can be attached by path.
@@ -280,33 +296,47 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     prompt: string,
     options: ProviderSendOptions,
   ): Promise<void> {
+    if (this.agent === "codex" && options.mode) {
+      await this.ensureCodexMode(sessionId, options.mode);
+    }
     const attachments = await resolvePromptAttachments(options, this.stageImages);
-    const response = await bridgeFetch(
-      this.connection,
-      `/session/${encodeURIComponent(sessionId)}/prompt`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          prompt,
-          requestId: options.requestId,
-          attachments,
-          outputSchema: options.schema,
-          ...(this.agent === "claude"
-            ? {
-                model: options.model ?? this.connection.model,
-                effort: options.effort ?? this.connection.effort,
-                fastMode: options.fastMode,
-                agent: options.subAgent,
-                includeLocalSettings: options.includeLocalSettings,
-                promptSuggestions: options.promptSuggestions,
-                permissionMode:
-                  options.mode === "plan" ? "plan" : "bypassPermissions",
-              }
-            : { fastMode: options.fastMode }),
-        }),
-      },
-      this.fetchImpl,
-    );
+    let response: Response;
+    try {
+      response = await bridgeFetch(
+        this.connection,
+        `/session/${encodeURIComponent(sessionId)}/prompt`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            prompt,
+            requestId: options.requestId,
+            attachments,
+            outputSchema: options.schema,
+            ...(this.agent === "claude"
+              ? {
+                  model: options.model ?? this.connection.model,
+                  effort: options.effort ?? this.connection.effort,
+                  fastMode: options.fastMode,
+                  agent: options.subAgent,
+                  includeLocalSettings: options.includeLocalSettings,
+                  promptSuggestions: options.promptSuggestions,
+                  permissionMode:
+                    options.mode === "plan" ? "plan" : "bypassPermissions",
+                }
+              : { fastMode: options.fastMode }),
+          }),
+        },
+        this.fetchImpl,
+      );
+    } catch (error) {
+      if (error instanceof ProviderUnavailableError) {
+        throw new AmbiguousPromptDispatchError(
+          `${this.agent} prompt dispatch outcome is unknown`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
     // A session can briefly disappear while a bridge reconciles a restarted
     // provider, and an idle status read can race with another client starting a
     // turn. Both are retryable dispatch races, not validation rejections that
@@ -323,6 +353,86 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     if (!response.ok) {
       throw new PromptRejectedError(
         `${this.agent} rejected the prompt (HTTP ${response.status})`,
+      );
+    }
+  }
+
+  /**
+   * Codex stores execution mode on the session rather than accepting it on the
+   * prompt route. A review's addressing turn deliberately stays in the same
+   * thread for context, so switch that idle thread from read-only plan mode to
+   * build mode before dispatching the fixes.
+   */
+  private async ensureCodexMode(
+    sessionId: string,
+    mode: ProviderExecutionMode,
+  ): Promise<void> {
+    const path = `/session/${encodeURIComponent(sessionId)}/config`;
+    const currentResponse = await bridgeFetch(
+      this.connection,
+      path,
+      {},
+      this.fetchImpl,
+    );
+    if (
+      currentResponse.status === 404
+      || currentResponse.status === 409
+      || isTransientHttpStatus(currentResponse.status)
+    ) {
+      throw new ProviderUnavailableError(
+        `Codex mode reconciliation is temporarily unavailable (HTTP ${currentResponse.status})`,
+      );
+    }
+    assertOk(currentResponse, "Codex config read");
+    const current = await currentResponse.json() as {
+      model?: unknown;
+      modelReasoningEffort?: unknown;
+      mode?: unknown;
+      fastMode?: unknown;
+      durable?: unknown;
+    };
+    if (
+      (current.mode !== "plan" && current.mode !== "build")
+      || (current.model !== undefined && typeof current.model !== "string")
+      || (
+        current.modelReasoningEffort !== undefined
+        && typeof current.modelReasoningEffort !== "string"
+      )
+      || typeof current.fastMode !== "boolean"
+      || typeof current.durable !== "boolean"
+    ) {
+      throw new Error("Codex returned a malformed session config");
+    }
+    if (current.mode === mode && current.durable) return;
+
+    const updateResponse = await bridgeFetch(
+      this.connection,
+      path,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          model: current.model,
+          modelReasoningEffort: current.modelReasoningEffort,
+          mode,
+          fastMode: current.fastMode,
+        }),
+      },
+      this.fetchImpl,
+    );
+    if (
+      updateResponse.status === 404
+      || updateResponse.status === 409
+      || isTransientHttpStatus(updateResponse.status)
+    ) {
+      throw new ProviderUnavailableError(
+        `Codex mode update is temporarily unavailable (HTTP ${updateResponse.status})`,
+      );
+    }
+    assertOk(updateResponse, "Codex config update");
+    const update = await updateResponse.json() as { durable?: unknown };
+    if (update.durable !== true) {
+      throw new ProviderUnavailableError(
+        "Codex mode update was not durably persisted",
       );
     }
   }
@@ -402,7 +512,8 @@ class OpenCodeProvider implements BuildPipelineProvider {
     dependencies: ProviderDependencies,
   ) {
     const basic = Buffer.from(`opencode:${connection.authToken}`).toString("base64");
-    this.client = dependencies.openCodeClient ?? createOpencodeClient({
+    const createClient = dependencies.openCodeClientFactory ?? createOpencodeClient;
+    this.client = dependencies.openCodeClient ?? createClient({
       baseUrl: connection.baseUrl,
       directory: connection.directory,
       headers: {
@@ -612,8 +723,8 @@ class OpenCodeProvider implements BuildPipelineProvider {
     } catch (error) {
       // The request may have reached OpenCode before the response was lost.
       // The durable message ID lets the supervisor reconcile and safely retry.
-      throw new ProviderUnavailableError(
-        "OpenCode prompt dispatch is unavailable",
+      throw new AmbiguousPromptDispatchError(
+        "OpenCode prompt dispatch outcome is unknown",
         { cause: error },
       );
     }
@@ -643,7 +754,8 @@ class OpenCodeProvider implements BuildPipelineProvider {
       if (!response.data) throw new Error("OpenCode returned no status");
       const status = response.data[sessionId];
       if (!status) return "missing";
-      return status.type === "busy" || status.type === "retry" ? "running" : "idle";
+      if (status.type === "busy" || status.type === "retry") return "running";
+      return status.type === "idle" ? "idle" : "error";
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode status is unavailable", {
         cause: error,

@@ -284,6 +284,16 @@ async function resolvePromptAttachments(
 class HttpBridgeProvider implements BuildPipelineProvider {
   readonly agent: "claude" | "codex";
   private readonly stageImages?: ProviderDependencies["stageImages"];
+  /**
+   * The Codex mode each session was last known to be in.
+   *
+   * Codex binds its mode to the session rather than the prompt, so re-asserting
+   * the mode a session was just created with costs a config round trip and
+   * changes nothing. A session this provider did not create — one restored
+   * through {@link registerSession} after a restart — is absent here, and those
+   * do have to be reconciled against the bridge.
+   */
+  private readonly codexModes = new Map<string, ProviderExecutionMode>();
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -300,6 +310,8 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     options: ProviderCreateSessionOptions = {},
   ): Promise<string> {
     const clientSessionKey = options.clientSessionKey;
+    const mode = options.mode
+      ?? (phase === "review" || phase === "verify" ? "plan" : "build");
     const response = await bridgeFetch(
       this.connection,
       "/session/create",
@@ -310,8 +322,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
               title: label,
               model: options.model ?? this.connection.model,
               modelReasoningEffort: options.effort ?? this.connection.effort,
-              mode: options.mode
-                ?? (phase === "review" || phase === "verify" ? "plan" : "build"),
+              mode,
               clientSessionKey,
             }
           : { title: label, clientSessionKey }),
@@ -323,6 +334,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     if (typeof body.sessionId !== "string") {
       throw new Error(`${this.agent} returned a malformed session`);
     }
+    if (this.agent === "codex") this.codexModes.set(body.sessionId, mode);
     return body.sessionId;
   }
 
@@ -331,8 +343,13 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     prompt: string,
     options: ProviderSendOptions,
   ): Promise<void> {
-    if (this.agent === "codex" && options.mode) {
+    if (
+      this.agent === "codex"
+      && options.mode
+      && this.codexModes.get(sessionId) !== options.mode
+    ) {
       await this.ensureCodexMode(sessionId, options.mode);
+      this.codexModes.set(sessionId, options.mode);
     }
     const attachments = await resolvePromptAttachments(options, this.stageImages);
     let response: Response;

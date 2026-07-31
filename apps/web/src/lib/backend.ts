@@ -3,6 +3,10 @@ import { getGatewayBaseUrl } from "@/lib/gateway-url";
 import type { EnvironmentDiffStatsSnapshot } from "@orkestrator/protocol/diff-stats";
 import type { PrMonitorMode, PrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
 import type {
+  AgentInteractionOrigin,
+  AgentInteractionPolicy,
+} from "@orkestrator/protocol/agent-interactions";
+import type {
   BuildPipeline as BackendBuildPipeline,
   StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
@@ -1947,6 +1951,8 @@ export async function ensureNativeAgentSession(input: {
   environmentId: string;
   agent: "claude" | "codex" | "opencode";
   logicalSessionKey: string;
+  origin?: AgentInteractionOrigin;
+  interactionPolicy?: AgentInteractionPolicy;
   title?: string;
   model?: string;
   reasoningEffort?: string;
@@ -1969,6 +1975,8 @@ export async function adoptNativeAgentSession(input: {
   environmentId: string;
   agent: "claude" | "codex" | "opencode";
   logicalSessionKey: string;
+  origin?: AgentInteractionOrigin;
+  interactionPolicy?: AgentInteractionPolicy;
   providerSessionId: string;
   expectedProviderSessionId?: string;
   model?: string;
@@ -1984,6 +1992,8 @@ export async function dispatchNativeAgentPrompt(input: {
   environmentId: string;
   agent: "claude" | "codex" | "opencode";
   logicalSessionKey: string;
+  origin?: AgentInteractionOrigin;
+  interactionPolicy?: AgentInteractionPolicy;
   title?: string;
   model?: string;
   reasoningEffort?: string;

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -21,14 +21,27 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Trash2, Send, CheckCircle2, Container, FolderGit2, ExternalLink, Loader2, Paperclip, ImageIcon, X } from "lucide-react";
+import { Trash2, Send, CheckCircle2, Hammer, ExternalLink, Loader2, Paperclip, ImageIcon, X } from "lucide-react";
 import { toast } from "sonner";
 import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
+import { useConfigStore, useProjectStore } from "@/stores";
+import {
+  BuildLaunchDialog,
+  type BuildLaunchSelection,
+} from "@/components/build/BuildLaunchDialog";
+import { buildLaunchDefaults } from "@/lib/build-launch-options";
+import { buildReviewModelCatalog } from "@/lib/review-launch-options";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useCodexStore } from "@/stores/codexStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { readImage } from "@/lib/native/clipboard";
 import {
+  type CachedOpenCodeModel,
+  getCachedOpenCodeModelCatalog,
   getKanbanImageData,
   openInBrowser,
 } from "@/lib/backend";
@@ -102,6 +115,26 @@ function isKanbanCreateDraft(value: unknown): value is KanbanCreateDraft {
     );
 }
 
+function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | null {
+  if (!Array.isArray(value)) return null;
+  if (!value.every((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+    const record = candidate as Record<string, unknown>;
+    return typeof record.id === "string"
+      && record.id.trim().length > 0
+      && typeof record.name === "string"
+      && record.name.trim().length > 0
+      && typeof record.provider === "string"
+      && record.provider.trim().length > 0
+      && (record.variants === undefined
+        || (Array.isArray(record.variants)
+          && record.variants.every(
+            (variant) => typeof variant === "string" && variant.trim().length > 0,
+          )));
+  })) return null;
+  return value as CachedOpenCodeModel[];
+}
+
 /** Renders comment text with clickable URLs */
 function CommentText({ text }: { text: string }) {
   const parts = text.split(/(https?:\/\/[^\s]+)/g);
@@ -149,10 +182,107 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
   const { startBuild, navigateToBuild } = useBuildPipeline();
   const getPipelineByTaskId = useBuildPipelineStore((s) => s.getPipelineByTaskId);
+  const config = useConfigStore((s) => s.config);
+  const projects = useProjectStore((s) => s.projects);
   const [isBuildStarting, setIsBuildStarting] = useState(false);
-  const [confirmBuildType, setConfirmBuildType] = useState<"containerized" | "local" | null>(null);
+  const [buildDialogOpen, setBuildDialogOpen] = useState(false);
+  const [createdTaskForBuild, setCreatedTaskForBuild] = useState<KanbanTask | null>(null);
+  // Held rather than started immediately: a task that already owns an
+  // environment asks for confirmation first, and the answer must not lose the
+  // configuration the user just made.
+  const [confirmBuildSelection, setConfirmBuildSelection] =
+    useState<BuildLaunchSelection | null>(null);
 
   const isCreateMode = !!createForProjectId;
+  const buildProjectId = createForProjectId ?? task?.projectId ?? "";
+  const buildProjectHasLocalPath = Boolean(
+    projects.find((project) => project.id === buildProjectId)?.localPath,
+  );
+  const launchDefaults = useMemo(
+    () => buildLaunchDefaults(config, buildProjectId, buildProjectHasLocalPath),
+    [buildProjectHasLocalPath, buildProjectId, config],
+  );
+  // Subscribed rather than read through `getState()` inside the render: this
+  // dialog's title, description and comment fields are controlled, so every
+  // keystroke re-renders it and would otherwise rebuild the whole catalog —
+  // including an O(n²) de-dupe across every environment's OpenCode models. The
+  // subscription is also what makes a catalog that arrives after mount reach the
+  // launcher at all.
+  const claudeModels = useClaudeStore((s) => s.models);
+  const codexModels = useCodexStore((s) => s.models);
+  const openCodeModels = useOpenCodeStore((s) => s.models);
+  const openCodeModelSources = useOpenCodeStore((s) => s.modelSource);
+  const environments = useEnvironmentStore((s) => s.environments);
+  const [cachedOpenCodeCatalog, setCachedOpenCodeCatalog] = useState<{
+    projectId: string;
+    models: CachedOpenCodeModel[];
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCachedOpenCodeCatalog(null);
+    if (!open || !buildProjectId) return () => { cancelled = true; };
+    void getCachedOpenCodeModelCatalog(buildProjectId)
+      .then((snapshot) => {
+        const models = normalizeCachedOpenCodeModels(snapshot?.models);
+        if (
+          !cancelled
+          && snapshot?.projectId === buildProjectId
+          && models
+        ) {
+          setCachedOpenCodeCatalog({ projectId: buildProjectId, models });
+        }
+      })
+      .catch((error) => {
+        console.warn(
+          "[KanbanTaskDialog] Failed to load cached OpenCode models:",
+          error,
+        );
+      });
+    return () => { cancelled = true; };
+  }, [buildProjectId, open]);
+
+  // OpenCode catalogues are repository-scoped. Only a live environment that is
+  // known to belong to this project may supersede its durable project cache.
+  // A catalogue from another project can contain a model the new environment
+  // cannot start, so it must never be used as a convenient global fallback.
+  const projectOpenCodeModels = useMemo(() => {
+    const projectEnvironmentIds = new Set(
+      environments
+        .filter((environment) => environment.projectId === buildProjectId)
+        .map((environment) => environment.id),
+    );
+    const live = Array.from(projectEnvironmentIds)
+      .filter((environmentId) => openCodeModelSources.get(environmentId) === "server")
+      .flatMap((environmentId) => openCodeModels.get(environmentId) ?? []);
+    const cached = cachedOpenCodeCatalog?.projectId === buildProjectId
+      ? cachedOpenCodeCatalog.models
+      : [];
+    const selected = live.length > 0 ? live : cached;
+    return selected.filter(
+      (model, index, models) =>
+        models.findIndex((candidate) => candidate.id === model.id) === index,
+    );
+  }, [buildProjectId, cachedOpenCodeCatalog, environments, openCodeModelSources, openCodeModels]);
+
+  const launchCatalog = useMemo(
+    () => {
+      // `null` retains the standard Claude/Codex catalogues and the unpinned
+      // OpenCode placeholder without aggregating another project's models.
+      const catalog = buildReviewModelCatalog(null);
+      if (projectOpenCodeModels.length === 0) return catalog;
+      return {
+        ...catalog,
+        opencode: projectOpenCodeModels.map((model) => ({
+          id: model.id,
+          name: model.name,
+          description: model.provider,
+          reasoningEfforts: [...(model.variants ?? [])],
+        })),
+      };
+    },
+    [claudeModels, codexModels, projectOpenCodeModels],
+  );
 
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -306,6 +436,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       setIsEditing(false);
       setIsEditingAC(false);
       setPendingImages([]);
+      setCreatedTaskForBuild(null);
       setPreviewImage(null);
       setImageUrlCache({});
     }
@@ -563,19 +694,39 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
     }
   };
 
-  const handleStartBuild = async (type: "containerized" | "local") => {
+  const handleStartBuild = async (selection: BuildLaunchSelection) => {
     if (!task) return;
     setIsBuildStarting(true);
     try {
-      await startBuild(task, type);
+      const pipelineId = await startBuild(task, selection.environmentType, selection.steps.build.agent, {
+        steps: selection.steps,
+      });
+      if (!pipelineId) return;
       handleOpenChange(false);
+    } catch (error) {
+      // Both call sites are `void`-ed click handlers, so an escaping rejection
+      // would surface as an unhandled one with nothing to attach it to. The
+      // hook reports its own failures; this only covers a throw it did not.
+      console.error("[KanbanTaskDialog] Failed to start build:", error);
+      toast.error("Failed to start build");
     } finally {
       setIsBuildStarting(false);
     }
   };
 
-  const handleCreateAndBuild = async (type: "containerized" | "local") => {
+  /** Confirms first when the task already owns an environment. */
+  const handleBuildConfirmed = (selection: BuildLaunchSelection) => {
+    setBuildDialogOpen(false);
+    if (task?.environmentId) {
+      setConfirmBuildSelection(selection);
+      return;
+    }
+    void handleStartBuild(selection);
+  };
+
+  const handleCreateAndBuild = async (selection: BuildLaunchSelection) => {
     if (!editTitle.trim() || !createForProjectId) return;
+    setBuildDialogOpen(false);
 
     const title = editTitle.trim();
     const description = editDescription.trim();
@@ -584,32 +735,57 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
     setIsBuildStarting(true);
     try {
-      const newTaskId = await addTaskStore(createForProjectId, title, description);
-      if (!newTaskId) {
-        toast.error("Failed to create task");
-        return;
-      }
-
-      if (ac) {
-        try {
-          await updateTask(newTaskId, { acceptanceCriteria: ac });
-        } catch {
-          toast.error("Task created but acceptance criteria could not be saved");
-        }
-      }
-
-      // Save pending images in parallel
-      await Promise.allSettled(imagesToSave.map((img) => addImage(newTaskId, img.filename, img.data)));
-
-      const newTask = useKanbanStore.getState().tasks.find((t) => t.id === newTaskId);
+      let newTask = createdTaskForBuild;
       if (!newTask) {
-        toast.error("Task created but could not start build");
-        handleOpenChange(false);
-        return;
+        const newTaskId = await addTaskStore(createForProjectId, title, description);
+        if (!newTaskId) {
+          toast.error("Failed to create task");
+          return;
+        }
+
+        if (ac) {
+          try {
+            await updateTask(newTaskId, { acceptanceCriteria: ac });
+          } catch {
+            toast.error("Task created but acceptance criteria could not be saved");
+          }
+        }
+
+        // Save pending images in parallel. A failed attachment should be visible
+        // to the user but does not make the already-created task unusable.
+        const imageResults = await Promise.allSettled(
+          imagesToSave.map((img) => addImage(newTaskId, img.filename, img.data)),
+        );
+        const failedImages = imageResults.filter((result) => result.status === "rejected").length;
+        if (failedImages > 0) {
+          toast.error(
+            `Failed to save ${failedImages} image${failedImages > 1 ? "s" : ""}`,
+          );
+        }
+
+        newTask = useKanbanStore.getState().tasks.find((candidate) => candidate.id === newTaskId) ?? null;
+        if (!newTask) {
+          toast.error("Task created but could not start build");
+          handleOpenChange(false);
+          return;
+        }
+        setCreatedTaskForBuild(newTask);
       }
 
-      await startBuild(newTask, type);
+      const pipelineId = await startBuild(
+        newTask,
+        selection.environmentType,
+        selection.steps.build.agent,
+        { steps: selection.steps },
+      );
+      if (!pipelineId) return;
       handleOpenChange(false);
+    } catch (error) {
+      // `addTaskStore`, `addImage` and `startBuild` are all awaited from a
+      // `void`-ed click handler; without this an escaping rejection would go
+      // unhandled and the user would see the dialog stall with no explanation.
+      console.error("[KanbanTaskDialog] Failed to create task and build:", error);
+      toast.error("Failed to create task and start build");
     } finally {
       setIsBuildStarting(false);
     }
@@ -804,28 +980,14 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                 variant="outline"
                 className="gap-1.5"
                 disabled={!editTitle.trim() || isBuildStarting}
-                onClick={() => void handleCreateAndBuild("containerized")}
+                onClick={() => setBuildDialogOpen(true)}
               >
                 {isBuildStarting ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <Container className="h-3.5 w-3.5" />
+                  <Hammer className="h-3.5 w-3.5" />
                 )}
-                Build Container
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5"
-                disabled={!editTitle.trim() || isBuildStarting}
-                onClick={() => void handleCreateAndBuild("local")}
-              >
-                {isBuildStarting ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <FolderGit2 className="h-3.5 w-3.5" />
-                )}
-                Build Local
+                Build…
               </Button>
               <Button size="sm" variant="ghost" onClick={() => handleOpenChange(false)}>
                 Cancel
@@ -833,6 +995,14 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
             </div>
           </DialogContent>
         </Dialog>
+        <BuildLaunchDialog
+          open={buildDialogOpen}
+          onOpenChange={setBuildDialogOpen}
+          catalog={launchCatalog}
+          busy={isBuildStarting}
+          {...launchDefaults}
+          onConfirm={(selection) => void handleCreateAndBuild(selection)}
+        />
         {renderPreviewDialog()}
       </>
     );
@@ -965,40 +1135,14 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                           variant="outline"
                           className="gap-1.5 flex-1"
                           disabled={isBuildStarting || !!hasActiveBuild}
-                          onClick={() => {
-                            if (task.environmentId) {
-                              setConfirmBuildType("containerized");
-                            } else {
-                              void handleStartBuild("containerized");
-                            }
-                          }}
+                          onClick={() => setBuildDialogOpen(true)}
                         >
                           {isBuildStarting ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           ) : (
-                            <Container className="h-3.5 w-3.5" />
+                            <Hammer className="h-3.5 w-3.5" />
                           )}
-                          Build Container
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="gap-1.5 flex-1"
-                          disabled={isBuildStarting || !!hasActiveBuild}
-                          onClick={() => {
-                            if (task.environmentId) {
-                              setConfirmBuildType("local");
-                            } else {
-                              void handleStartBuild("local");
-                            }
-                          }}
-                        >
-                          {isBuildStarting ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <FolderGit2 className="h-3.5 w-3.5" />
-                          )}
-                          Build Local
+                          Build…
                         </Button>
                         {task.environmentId && (
                           <Button
@@ -1081,7 +1225,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
           </div>
         </DialogContent>
 
-        <AlertDialog open={!!confirmBuildType} onOpenChange={(open) => { if (!open) setConfirmBuildType(null); }}>
+        <AlertDialog
+          open={!!confirmBuildSelection}
+          onOpenChange={(open) => { if (!open) setConfirmBuildSelection(null); }}
+        >
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Environment Already Exists</AlertDialogTitle>
@@ -1089,7 +1236,11 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                 This task already has an environment linked to it. Starting a new build will create an additional environment.
                 <span className="block mt-2">
                   Are you sure you want to start a new{" "}
-                  <strong>{confirmBuildType === "containerized" ? "container" : "local"}</strong> build?
+                  <strong>
+                    {confirmBuildSelection?.environmentType === "containerized"
+                      ? "container"
+                      : "local"}
+                  </strong> build?
                 </span>
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -1097,10 +1248,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 onClick={() => {
-                  if (confirmBuildType) {
-                    void handleStartBuild(confirmBuildType);
+                  if (confirmBuildSelection) {
+                    void handleStartBuild(confirmBuildSelection);
                   }
-                  setConfirmBuildType(null);
+                  setConfirmBuildSelection(null);
                 }}
               >
                 Start Build
@@ -1109,6 +1260,14 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
           </AlertDialogContent>
         </AlertDialog>
       </Dialog>
+      <BuildLaunchDialog
+        open={buildDialogOpen}
+        onOpenChange={setBuildDialogOpen}
+        catalog={launchCatalog}
+        busy={isBuildStarting}
+        {...launchDefaults}
+        onConfirm={handleBuildConfirmed}
+      />
       {renderPreviewDialog()}
     </>
   );

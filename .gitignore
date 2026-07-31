@@ -11,7 +11,9 @@ dist-electron/
 .turbo/
 out/
 release/
-build/
+# Root-anchored: an unanchored `build/` also swallows source directories named
+# `build`, such as apps/web/src/components/build.
+/build/
 
 # Packaged Bun bootstrap (downloaded only for desktop packaging)
 binaries/

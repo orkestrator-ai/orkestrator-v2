@@ -231,6 +231,17 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function epochSecondsToIso(value: unknown): string | undefined {
+  const seconds = finiteNumber(value);
+  if (seconds === undefined) return undefined;
+  const date = new Date(seconds * 1_000);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
 function inventoryCount(value: unknown): number {
   if (Array.isArray(value)) return value.length;
   const data = record(value).data;
@@ -332,20 +343,24 @@ function codexLimitsFromHealth(health: unknown): {
   for (const [key, fallback] of [["primary", "Primary"], ["secondary", "Secondary"]] as const) {
     const window = record(snapshot[key]);
     if (Object.keys(window).length === 0) continue;
-    const reset = typeof window.resetsAt === "number" ? window.resetsAt : undefined;
-    const windowMinutes = typeof window.windowDurationMins === "number"
-      ? window.windowDurationMins
+    const rawUsedPercent = finiteNumber(window.usedPercent);
+    const usedPercent = rawUsedPercent === undefined
+      ? undefined
+      : Math.max(0, Math.min(100, rawUsedPercent));
+    const resetsAt = epochSecondsToIso(window.resetsAt);
+    const rawWindowMinutes = finiteNumber(window.windowDurationMins);
+    const windowMinutes = rawWindowMinutes !== undefined && rawWindowMinutes >= 0
+      ? rawWindowMinutes
       : undefined;
+    if (usedPercent === undefined && resetsAt === undefined && windowMinutes === undefined) {
+      continue;
+    }
     rateLimits.push({
       label: typeof snapshot.limitName === "string" && key === "primary"
         ? snapshot.limitName
         : fallback,
-      usedPercent: typeof window.usedPercent === "number"
-        ? window.usedPercent
-        : undefined,
-      ...(reset !== undefined
-        ? { resetsAt: new Date(reset * 1_000).toISOString() }
-        : {}),
+      ...(usedPercent !== undefined ? { usedPercent } : {}),
+      ...(resetsAt !== undefined ? { resetsAt } : {}),
       ...(windowMinutes !== undefined ? { windowMinutes } : {}),
     });
   }
@@ -379,6 +394,19 @@ function CodexRuntimePanel({ health }: { health: unknown }) {
         return typeof item.message === "string" ? [item] : [];
       })
     : [];
+  const groupedNotices = new Map<string, { message: string; count: number }>();
+  for (const notice of notices) {
+    const message = String(notice.message);
+    const existing = groupedNotices.get(message);
+    // Reinsert repeated notices so the five-item limit is based on the most
+    // recent occurrence of each distinct announcement.
+    if (existing) groupedNotices.delete(message);
+    groupedNotices.set(message, {
+      message,
+      count: (existing?.count ?? 0) + 1,
+    });
+  }
+  const recentNotices = [...groupedNotices.values()].slice(-5);
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
@@ -392,14 +420,14 @@ function CodexRuntimePanel({ health }: { health: unknown }) {
           ? `Codex ${engine.codexVersion}`
           : "version unavailable"}</span>
       </div>
-      {notices.length > 0 ? (
+      {recentNotices.length > 0 ? (
         <div className="space-y-1.5">
-          {notices.slice(-5).map((notice, index) => (
+          {recentNotices.map((notice) => (
             <div
-              key={`${String(notice.method)}-${index}`}
+              key={notice.message}
               className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-xs text-amber-100/80"
             >
-              {String(notice.message)}
+              {notice.message}{notice.count > 1 ? ` (${notice.count})` : ""}
             </div>
           ))}
         </div>

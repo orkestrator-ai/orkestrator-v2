@@ -249,6 +249,77 @@ describe("ReviewLaunchDialog", () => {
     });
   });
 
+  test("spells xhigh out rather than showing the wire value", () => {
+    const { onConfirm } = renderDialog();
+
+    fireEvent.click(screen.getByRole("option", { name: /Claude B/ }));
+
+    // "Xhigh" is what a naive capitalisation would produce; the provider still
+    // has to be sent the raw value.
+    expect(screen.getByRole("option", { name: "Extra high" })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Xhigh" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("option", { name: "Extra high" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude-native",
+      model: "claude-b",
+      reasoningEffort: "xhigh",
+    });
+  });
+
+  test("restores a preferred effort when a model that offers it is chosen", () => {
+    const { onConfirm } = renderDialog({
+      preferredModels: { claude: "claude-a" },
+      preferredReasoningEfforts: { claude: "xhigh" },
+    });
+
+    // Claude A does not offer the preferred effort, so it starts at default.
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      .toContain("default");
+
+    fireEvent.click(screen.getByRole("option", { name: /Claude B/ }));
+
+    // Claude B does. Leaving it on default here would quietly downgrade the run
+    // the user configured a preference for.
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      .toContain("xhigh");
+    expect(screen.getByText(/Claude Native · Claude B · xhigh effort · one pass/))
+      .toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude-native",
+      model: "claude-b",
+      reasoningEffort: "xhigh",
+    });
+  });
+
+  test("applies the OpenCode preferences when OpenCode is chosen", () => {
+    const { onConfirm } = renderDialog({
+      preferredModels: { opencode: "provider/model-a" },
+      preferredReasoningEfforts: { opencode: "deep" },
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      .toContain("OpenCode A");
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      .toContain("deep");
+    expect(screen.getByText(/OpenCode Native · OpenCode A · deep effort · one pass/))
+      .toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    // The preferences are per provider, so switching must read OpenCode's own
+    // rather than carrying Claude's forward or falling back to a default.
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "opencode-native",
+      model: "provider/model-a",
+      reasoningEffort: "deep",
+    });
+  });
+
   test("closes without launching when cancelled", () => {
     const onOpenChange = mock((_open: boolean) => undefined);
     const { onConfirm } = renderDialog({ onOpenChange });
@@ -307,6 +378,25 @@ describe("ReviewLaunchDialog step markers", () => {
     const { container } = renderDialog({ kind: "looped" });
 
     expect(container.querySelectorAll('[class~="bg-gradient-to-b"]')).toHaveLength(3);
+  });
+
+  test("captions every provider card with its own description", () => {
+    renderDialog();
+
+    const cards = screen.getAllByRole("radio")
+      .map((radio) => radio.parentElement!.querySelector("label")!);
+    expect(cards).toHaveLength(REVIEW_TAB_OPTIONS.length);
+
+    // The card is the only place the review modes are told apart, so each one
+    // carries the description declared beside its tab type rather than a
+    // duplicate string maintained in the group.
+    REVIEW_TAB_OPTIONS.forEach((option, index) => {
+      expect(option.description.length).toBeGreaterThan(0);
+      expect(cards[index]!.textContent).toContain(option.description);
+      expect(screen.getByText(option.description)).toBeTruthy();
+    });
+    expect(new Set(REVIEW_TAB_OPTIONS.map((option) => option.description)).size)
+      .toBe(REVIEW_TAB_OPTIONS.length);
   });
 
   test("renders a distinct icon for each provider", () => {
@@ -393,6 +483,41 @@ describe("ReviewLaunchDialog provider keyboard navigation", () => {
 });
 
 describe("ReviewLaunchDialog reopen behaviour", () => {
+  test("configures itself on a first open, not only on a reopen", () => {
+    // Mounted closed is the real lifecycle: the dialog lives in the toolbar and
+    // is rendered long before it is opened, so the false -> true edge is the
+    // only one that ever runs for most users.
+    const { onConfirm, props, rerender } = renderDialog({
+      open: false,
+      preferredModels: { claude: "claude-b" },
+      preferredReasoningEfforts: { claude: "xhigh" },
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    rerender(<ReviewLaunchDialog {...props} open />);
+
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      .toContain("Claude B");
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" }).textContent)
+      .toContain("xhigh");
+
+    // And a cold-mounted dialog still resets what the user changed in it.
+    fireEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      .toContain("Codex A");
+    rerender(<ReviewLaunchDialog {...props} open={false} />);
+    rerender(<ReviewLaunchDialog {...props} open />);
+
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      .toContain("Claude B");
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude-native",
+      model: "claude-b",
+      reasoningEffort: "xhigh",
+    });
+  });
+
   test("resets the selection when it is reopened", () => {
     const { props, rerender } = renderDialog({
       preferredModels: { claude: "claude-a" },

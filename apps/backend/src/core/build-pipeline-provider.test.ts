@@ -1633,10 +1633,15 @@ describe("HTTP build pipeline provider (codex)", () => {
       requestId: "request-address",
       mode: "build",
     });
+    await provider.send("review-1", "Continue addressing", {
+      requestId: "request-continue",
+      mode: "build",
+    });
 
     expect(requests.map((request) => request.url)).toEqual([
       "http://codex.test/session/review-1/config",
       "http://codex.test/session/review-1/config",
+      "http://codex.test/session/review-1/prompt",
       "http://codex.test/session/review-1/prompt",
     ]);
     expect(JSON.parse(String(requests[1]!.init.body))).toEqual({
@@ -1649,6 +1654,33 @@ describe("HTTP build pipeline provider (codex)", () => {
       prompt: "Address the findings",
       requestId: "request-address",
     });
+    // A successful durable reconciliation becomes authoritative local state;
+    // repeating the same mode must not pay another config read/write round trip.
+    expect(JSON.parse(String(requests[3]!.init.body))).toMatchObject({
+      prompt: "Continue addressing",
+      requestId: "request-continue",
+    });
+  });
+
+  test("sends immediately when a newly created codex session keeps its mode", async () => {
+    const { provider, requests } = httpProvider((url) => {
+      if (url.endsWith("/session/create")) {
+        return Response.json({ sessionId: "build-1" });
+      }
+      return new Response(null, { status: 204 });
+    }, codexConnection);
+
+    const sessionId = await provider.createSession("build", "Build");
+    await provider.send(sessionId, "Implement it", {
+      requestId: "request-build",
+      mode: "build",
+    });
+
+    expect(requests.map(({ url }) => url)).toEqual([
+      "http://codex.test/session/create",
+      "http://codex.test/session/build-1/prompt",
+    ]);
+    expect(requests.some(({ url }) => url.endsWith("/config"))).toBe(false);
   });
 
   test("skips a durable mode update when the codex session already matches", async () => {

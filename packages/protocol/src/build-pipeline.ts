@@ -6,6 +6,11 @@ import {
 export const BUILD_PIPELINE_VERSION = 2;
 
 export type BuildPipelineAgent = "claude" | "opencode" | "codex";
+
+/** The one list every agent check is built from. */
+export const BUILD_PIPELINE_AGENTS: readonly BuildPipelineAgent[] =
+  Object.freeze(["claude", "opencode", "codex"]);
+
 export type BuildPipelineEnvironmentType = "containerized" | "local";
 
 export type TaskSnapshotImage = {
@@ -47,6 +52,77 @@ export type PipelineSessionPhase =
   | "fix"
   | "pr"
   | "resolve-conflicts";
+
+/** The steps a launcher can configure independently. */
+export type BuildStepKey =
+  | "build"
+  | "review"
+  | "verify"
+  | "pr"
+  | "resolve-conflicts";
+
+export const BUILD_STEP_KEYS: readonly BuildStepKey[] = Object.freeze([
+  "build",
+  "review",
+  "verify",
+  "pr",
+  "resolve-conflicts",
+]);
+
+/**
+ * The harness, model and reasoning effort one step runs under.
+ *
+ * Held per step rather than per pipeline because a build may run one agent and
+ * its review another. {@link BuildPipeline.agentType} stays the build step's
+ * agent: that is the one the environment's default is configured for.
+ */
+export interface BuildStepConfig {
+  agent: BuildPipelineAgent;
+  model?: string;
+  reasoningEffort?: string;
+}
+
+export type BuildStepConfigs = Partial<Record<BuildStepKey, BuildStepConfig>>;
+
+/**
+ * Which configured step owns a session phase.
+ *
+ * Every phase maps to its own step except `fix`: it re-implements against
+ * verification feedback, which is build work, and it has no launcher control of
+ * its own. Falling back to a repository default there would ignore the harness
+ * the user just chose for the build.
+ */
+export function stepKeyForSessionPhase(
+  phase: PipelineSessionPhase,
+): BuildStepKey {
+  if (phase === "fix") return "build";
+  return phase;
+}
+
+/** How much of the workspace a stage may touch. */
+export type BuildExecutionMode = "plan" | "build";
+
+/**
+ * The execution mode a session phase runs under on one harness.
+ *
+ * `review` and `verify` only need to read the workspace, and Codex enforces that
+ * with a read-only sandbox. Claude cannot be held to the same guarantee: its
+ * `plan` permission mode injects the `ExitPlanMode` approval protocol, which
+ * waits for a human to approve before work continues — in a pipeline with nobody
+ * to answer, a plan-mode review would simply stall. OpenCode's `plan` agent is
+ * likewise a chat-oriented surface rather than a sandbox.
+ *
+ * The difference is therefore real and cannot be flattened by forcing a mode. It
+ * lives here so the supervisor that applies it and the launcher that discloses
+ * it read the same definition and cannot drift.
+ */
+export function executionModeForSessionPhase(
+  phase: PipelineSessionPhase,
+  agent: BuildPipelineAgent,
+): BuildExecutionMode {
+  const readOnly = phase === "review" || phase === "verify";
+  return readOnly && agent === "codex" ? "plan" : "build";
+}
 
 /**
  * The one declaration both the schema and the guard are built from.
@@ -128,6 +204,15 @@ export function isVerificationVerdict(
 
 export interface PipelineSession {
   phase: PipelineSessionPhase;
+  /**
+   * The harness this session was created on.
+   *
+   * Recorded because steps may run different agents: status, transcript and
+   * abort calls have to reach the provider that actually owns the session, and
+   * `agentType` alone only describes the build step. Absent on snapshots written
+   * before per-step harnesses existed, which fall back to `agentType`.
+   */
+  agent?: BuildPipelineAgent;
   iteration: number;
   sessionKey: string;
   sdkSessionId: string;
@@ -188,7 +273,10 @@ export type BuildPipelineSource =
     };
 
 export type CompletionCommentStatus = "posting" | "posted" | "failed";
-export type PipelineFailureKind = "prompt-dispatch" | "stage-transition";
+export type PipelineFailureKind =
+  | "prompt-dispatch"
+  | "stage-transition"
+  | "interactive-request";
 
 export interface PipelineFailureContext {
   phase: ResumableBuildPhase;
@@ -203,6 +291,18 @@ export interface PipelineFailureContext {
 export interface PipelineReconnectAttempt extends PipelineFailureContext {
   id: string;
   startedAt: string;
+  /**
+   * The harness that was unreachable.
+   *
+   * Recorded because steps may run different agents: a stage transition
+   * resolves the *next* step's provider before it records that step's session,
+   * so the failure belongs to a harness no session names yet. Without this the
+   * supervisor clears the attempt as soon as the *previous* stage's still-healthy
+   * harness answers, which restarts the reconnect deadline on every retry and
+   * leaves the pipeline retrying an unreachable bridge forever. Absent on
+   * attempts written before per-step harnesses existed.
+   */
+  agent?: BuildPipelineAgent;
 }
 
 export interface PipelinePromptAttempt {
@@ -223,6 +323,11 @@ export interface BuildPipeline {
   environmentId: string;
   environmentType: BuildPipelineEnvironmentType;
   agentType: BuildPipelineAgent;
+  /**
+   * Per-step launch configuration. A missing step, or a missing field within
+   * one, falls back to the repository and global defaults.
+   */
+  steps?: BuildStepConfigs;
   phase: BuildPhase;
   sessions: PipelineSession[];
   currentSessionIndex: number;
@@ -270,6 +375,8 @@ export interface StartBuildPipelineInput {
   projectId: string;
   environmentType: BuildPipelineEnvironmentType;
   agentType: BuildPipelineAgent;
+  /** Per-step harness, model and reasoning chosen in the build launcher. */
+  steps?: BuildStepConfigs;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
   source?: BuildPipelineSource;
@@ -298,7 +405,7 @@ const BUILD_PHASES = new Set<BuildPhase>([
   "complete",
   "failed",
 ]);
-const AGENTS = new Set<BuildPipelineAgent>(["claude", "codex", "opencode"]);
+const AGENTS = new Set<BuildPipelineAgent>(BUILD_PIPELINE_AGENTS);
 const ENVIRONMENT_TYPES = new Set<BuildPipelineEnvironmentType>([
   "containerized",
   "local",
@@ -320,6 +427,7 @@ const RESUMABLE_PHASES = new Set<ResumableBuildPhase>(
 const FAILURE_KINDS = new Set<PipelineFailureKind>([
   "prompt-dispatch",
   "stage-transition",
+  "interactive-request",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -355,9 +463,30 @@ function isIsoDate(value: unknown): value is string {
     && Number.isFinite(Date.parse(value));
 }
 
+function isBuildStepConfig(value: unknown): value is BuildStepConfig {
+  if (!isRecord(value)) return false;
+  return AGENTS.has(value.agent as BuildPipelineAgent)
+    && isOptionalNonBlankString(value.model)
+    && isOptionalNonBlankString(value.reasoningEffort);
+}
+
+/**
+ * Only the keys in {@link BUILD_STEP_KEYS} are accepted. An unknown key would be
+ * carried through the snapshot and silently never consulted, which reads as a
+ * setting that was applied when it was not.
+ */
+export function isBuildStepConfigs(value: unknown): value is BuildStepConfigs {
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(([key, config]) =>
+    BUILD_STEP_KEYS.includes(key as BuildStepKey)
+    && (config === undefined || isBuildStepConfig(config)));
+}
+
 function isPipelineSession(value: unknown): value is PipelineSession {
   if (!isRecord(value)) return false;
   return SESSION_PHASES.has(value.phase as PipelineSessionPhase)
+    && (value.agent === undefined
+      || AGENTS.has(value.agent as BuildPipelineAgent))
     && isNonNegativeInteger(value.iteration)
     && typeof value.sessionKey === "string"
     && value.sessionKey.length > 0
@@ -418,7 +547,10 @@ function isFailureContext(value: unknown): value is PipelineFailureContext {
 
 function isReconnectAttempt(value: unknown): value is PipelineReconnectAttempt {
   if (!isRecord(value) || !isFailureContext(value)) return false;
-  return isNonBlankString(value.id) && isIsoDate(value.startedAt);
+  return isNonBlankString(value.id)
+    && isIsoDate(value.startedAt)
+    && (value.agent === undefined
+      || AGENTS.has(value.agent as BuildPipelineAgent));
 }
 
 function isPromptAttempt(value: unknown): value is PipelinePromptAttempt {
@@ -457,6 +589,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     || typeof value.environmentId !== "string"
     || !ENVIRONMENT_TYPES.has(value.environmentType as BuildPipelineEnvironmentType)
     || !AGENTS.has(value.agentType as BuildPipelineAgent)
+    || (value.steps !== undefined && !isBuildStepConfigs(value.steps))
     || !BUILD_PHASES.has(value.phase as BuildPhase)
     || !Array.isArray(value.sessions)
     || !value.sessions.every(isPipelineSession)
@@ -560,6 +693,7 @@ export function isStartBuildPipelineInput(
       value.environmentType as BuildPipelineEnvironmentType,
     )
     && AGENTS.has(value.agentType as BuildPipelineAgent)
+    && (value.steps === undefined || isBuildStepConfigs(value.steps))
     && isTaskSnapshot(value.taskSnapshot)
     && (value.source === undefined || isPipelineSource(value.source))
     && (value.namingPrompt === undefined

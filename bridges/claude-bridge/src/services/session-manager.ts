@@ -107,11 +107,20 @@ const pendingPromptDispatchClaims = new Map<
 export const IDLE_TRANSCRIPT_EVICTION_MS = 30 * 60 * 1000;
 const IDLE_TRANSCRIPT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 /**
- * Structured usage is best-effort enrichment after Claude has already
- * produced a result. Keep it off the critical path when the experimental SDK
- * control request stops responding.
+ * Structured usage is best-effort enrichment during and after a Claude turn.
+ * Keep the experimental SDK control request off the live message-consumer path
+ * and bound the one final await when the endpoint stops responding.
  */
 export const STRUCTURED_USAGE_REQUEST_TIMEOUT_MS = 1_000;
+
+class StructuredUsageRequestTimeoutError extends Error {
+  constructor() {
+    super(
+      `Structured usage control request timed out after ${STRUCTURED_USAGE_REQUEST_TIMEOUT_MS}ms`,
+    );
+    this.name = "StructuredUsageRequestTimeoutError";
+  }
+}
 
 /** Record that a caller read or hydrated this session's state. */
 function touchSession(session: SessionState): void {
@@ -525,9 +534,7 @@ async function getStructuredUsageWithTimeout(
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
-      reject(new Error(
-        `Structured usage control request timed out after ${STRUCTURED_USAGE_REQUEST_TIMEOUT_MS}ms`,
-      ));
+      reject(new StructuredUsageRequestTimeoutError());
     }, STRUCTURED_USAGE_REQUEST_TIMEOUT_MS);
     timeout.unref?.();
   });
@@ -540,6 +547,143 @@ async function getStructuredUsageWithTimeout(
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+type StructuredUsageRefreshResult =
+  | "updated"
+  | "unchanged"
+  | "timed-out";
+
+/**
+ * Refresh the authoritative plan-allocation windows on a live Query control.
+ *
+ * This is deliberately separate from context/token accounting. Claude can
+ * answer `get_usage` before it produces the turn's final `result`, and the
+ * first turn has no context snapshot to hang quota data from yet. The session
+ * owns the result and republishes it so an inactive renderer can rehydrate it
+ * through the ordinary session snapshot later.
+ */
+async function refreshStructuredRateLimits(
+  session: SessionState,
+  queryControl: NonNullable<SessionState["queryControl"]>,
+  isCurrent: () => boolean,
+): Promise<StructuredUsageRefreshResult> {
+  const getStructuredUsage =
+    queryControl.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+  if (!getStructuredUsage) return "unchanged";
+
+  try {
+    const structuredUsage = await getStructuredUsageWithTimeout(
+      getStructuredUsage,
+      queryControl,
+    );
+    const rateLimits = rateLimitsFromStructuredUsage(structuredUsage);
+    if (rateLimits === undefined) return "unchanged";
+
+    // A response from a query that was aborted, deleted, or superseded must
+    // never overwrite the authoritative state of a newer turn.
+    if (
+      sessions.get(session.id) !== session
+      || session.deleting
+      || session.queryControl !== queryControl
+      || !isCurrent()
+    ) {
+      return "unchanged";
+    }
+
+    session.rateLimits = rateLimits;
+    if (session.usage) {
+      session.usage = {
+        ...session.usage,
+        rateLimits,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    eventEmitter.emit({
+      type: "session.updated",
+      sessionId: session.id,
+      data: {
+        rateLimits,
+        ...(session.usage ? { contextUsage: session.usage } : {}),
+      },
+    });
+    return "updated";
+  } catch (error) {
+    // The API is explicitly experimental. A failure must not discard the
+    // sparse windows already retained from rate_limit_event notifications.
+    console.debug("[session-manager] Structured usage control request failed:", error);
+    return error instanceof StructuredUsageRequestTimeoutError
+      ? "timed-out"
+      : "unchanged";
+  }
+}
+
+interface StructuredUsageRefreshCoordinator {
+  /** Queue at most one follow-up behind the request currently in flight. */
+  trigger: () => Promise<void>;
+}
+
+/**
+ * Bound structured-usage refresh work for one Claude turn.
+ *
+ * The SDK message iterator must keep draining while a control response is
+ * pending, so callers fire `trigger()` without awaiting it for live updates.
+ * A boolean follow-up latch coalesces any number of events into one additional
+ * request. After a timeout the coordinator disables itself: the SDK exposes no
+ * cancellation primitive for `get_usage`, so retrying could otherwise retain
+ * one unresolved control request per event for the rest of a long turn.
+ */
+function createStructuredUsageRefreshCoordinator(
+  session: SessionState,
+  queryControl: NonNullable<SessionState["queryControl"]>,
+): StructuredUsageRefreshCoordinator {
+  let workerActive = false;
+  let workerPromise = Promise.resolve();
+  let requestedRevision = 0;
+  let completedRevision = 0;
+  let timedOut = false;
+
+  const run = async (): Promise<void> => {
+    try {
+      while (
+        !timedOut
+        && completedRevision < requestedRevision
+        && sessions.get(session.id) === session
+        && session.queryControl === queryControl
+      ) {
+        const requestRevision = requestedRevision;
+        const result = await refreshStructuredRateLimits(
+          session,
+          queryControl,
+          // A rate-limit event or final-result trigger that arrived after this
+          // request began has newer timing information. Let the queued refresh
+          // publish instead of briefly regressing the session to this response.
+          () => requestRevision === requestedRevision,
+        );
+        completedRevision = requestRevision;
+        if (result === "timed-out") {
+          timedOut = true;
+        }
+      }
+    } finally {
+      // Clear the worker before its promise settles. A trigger in the next
+      // microtask then starts a new worker instead of attaching to a completed
+      // promise and leaving its refresh request stranded.
+      workerActive = false;
+    }
+  };
+
+  return {
+    trigger: () => {
+      if (timedOut) return Promise.resolve();
+      requestedRevision += 1;
+      if (!workerActive) {
+        workerActive = true;
+        workerPromise = run();
+      }
+      return workerPromise;
+    },
+  };
 }
 
 async function buildClaudeUsageSnapshot(
@@ -624,23 +768,6 @@ async function buildClaudeUsageSnapshot(
       }
     } catch (error) {
       console.debug("[session-manager] Context usage control request failed:", error);
-    }
-  }
-
-  const getStructuredUsage =
-    queryControl?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
-  if (getStructuredUsage) {
-    try {
-      const structuredUsage = await getStructuredUsageWithTimeout(
-        getStructuredUsage,
-        queryControl,
-      );
-      const rateLimits = rateLimitsFromStructuredUsage(structuredUsage);
-      if (rateLimits !== undefined) session.rateLimits = rateLimits;
-    } catch (error) {
-      // The API is explicitly experimental. A failure must not discard the
-      // sparse windows already retained from rate_limit_event notifications.
-      console.debug("[session-manager] Structured usage control request failed:", error);
     }
   }
 
@@ -4372,6 +4499,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   let earlyWarningTimeout: ReturnType<typeof setTimeout> | null = null;
   let streamEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
   let queryIteratorControl: SessionState["queryControl"];
+  let structuredUsageRefresh: StructuredUsageRefreshCoordinator | undefined;
   let queryStarted = false;
   let closeSdkInput: (() => void) | undefined;
   let finishTurnInputForThisTurn: (() => void) | undefined;
@@ -4771,6 +4899,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         console.debug("[session-manager] Agent discovery unavailable:", error);
       }
     }
+
+    structuredUsageRefresh = createStructuredUsageRefreshCoordinator(
+      session,
+      queryIterator,
+    );
+    // Prime the limits panel as soon as the live control channel is ready.
+    // This intentionally runs off the SDK message-consumer path.
+    void structuredUsageRefresh.trigger();
 
     // Log an early warning if SDK doesn't respond within 5 seconds
     earlyWarningTimeout = setTimeout(() => {
@@ -5342,6 +5478,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
               ...(session.usage ? { contextUsage: session.usage } : {}),
             },
           });
+          // The notification is often only a threshold edge with no
+          // utilization. Use it as a signal to fetch the complete `/usage`
+          // snapshot, but never pause the SDK iterator while doing so.
+          void structuredUsageRefresh?.trigger();
         }
       } else if (message.type === "system") {
         // Handle other system messages (log for debugging)
@@ -5721,6 +5861,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           });
         }
 
+        // Account allocation can advance during the last model request. Queue
+        // one final coalesced refresh before publishing the completed token
+        // snapshot, preserving the previous end-of-turn exactness.
+        await structuredUsageRefresh?.trigger();
         const exactUsage = await buildClaudeUsageSnapshot(
           session,
           resultMsg,

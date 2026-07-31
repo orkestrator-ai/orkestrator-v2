@@ -4,6 +4,7 @@ import type {
   BuildPipeline,
   BuildPipelineAgent,
   BuildPipelineSource,
+  BuildStepConfigs,
   PipelineSession,
   PipelineSessionPhase,
   ResumableBuildPhase,
@@ -11,9 +12,12 @@ import type {
 } from "@orkestrator/protocol/build-pipeline";
 import {
   BUILD_PIPELINE_VERSION,
+  BUILD_STEP_KEYS,
+  executionModeForSessionPhase,
   isBuildPipeline,
   isActiveBuildPhase,
   isStartBuildPipelineInput,
+  stepKeyForSessionPhase,
   isVerificationVerdict,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
@@ -25,7 +29,7 @@ import {
   parseStructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
-import type { Environment, PersistedBuildPipeline } from "./models.js";
+import type { AppConfig, Environment, PersistedBuildPipeline } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
   AmbiguousPromptDispatchError,
@@ -113,6 +117,28 @@ function resumablePhase(phase: BuildPhase): ResumableBuildPhase | null {
   return isActiveBuildPhase(phase) ? phase as ResumableBuildPhase : null;
 }
 
+/**
+ * The agent a repository's `defaultModel` and `defaultEffort` were chosen for.
+ *
+ * Both are stored as a single value per repository rather than one per agent, so
+ * they only describe the repository's own default agent. Since steps may now run
+ * a harness the repository was never configured for, every read of them has to
+ * be gated on this.
+ */
+function repositoryAgent(
+  global: { defaultAgent?: BuildPipelineAgent },
+  repository: { defaultAgent?: BuildPipelineAgent },
+): BuildPipelineAgent {
+  return repository.defaultAgent ?? global.defaultAgent ?? "claude";
+}
+
+/**
+ * The default model for one harness.
+ *
+ * `repositoryDefault` is only passed when the caller has established that
+ * `agent` is the repository's default agent; handing a Codex model id to the
+ * Claude bridge is what happens otherwise.
+ */
 function modelFor(
   agent: BuildPipelineAgent,
   global: {
@@ -129,6 +155,106 @@ function modelFor(
       ? global.codexModel
       : global.opencodeModel;
   return model && model !== "default" ? model : undefined;
+}
+
+/**
+ * The connection-level model and reasoning effort for one harness.
+ *
+ * The repository defaults apply only to the repository's own default agent. A
+ * step that pinned a different harness falls back to that harness's global
+ * default instead, which is exactly what the launcher displayed for it.
+ */
+function connectionDefaultsFor(
+  agent: BuildPipelineAgent,
+  config: Pick<AppConfig, "global">,
+  repository: {
+    defaultAgent?: BuildPipelineAgent;
+    defaultModel?: string;
+    defaultEffort?: string;
+  },
+): { model?: string; effort?: string } {
+  const owns = agent === repositoryAgent(config.global, repository);
+  return {
+    model: modelFor(
+      agent,
+      config.global,
+      owns ? repository.defaultModel : undefined,
+    ),
+    effort: (owns ? repository.defaultEffort : undefined)
+      ?? (agent === "codex" ? config.global.codexReasoningEffort : undefined),
+  };
+}
+
+/**
+ * The harness a session runs on.
+ *
+ * Falls back to the pipeline agent for sessions recorded before steps could
+ * choose their own, which all ran on that one agent.
+ */
+function sessionAgent(
+  pipeline: BuildPipeline,
+  session: PipelineSession,
+): BuildPipelineAgent {
+  return session.agent ?? pipeline.agentType;
+}
+
+/** Every harness a pipeline may hold a provider for. */
+function pipelineAgents(pipeline: BuildPipeline): Set<BuildPipelineAgent> {
+  const agents = new Set<BuildPipelineAgent>([pipeline.agentType]);
+  for (const key of BUILD_STEP_KEYS) {
+    const agent = pipeline.steps?.[key]?.agent;
+    if (agent) agents.add(agent);
+  }
+  for (const session of pipeline.sessions) {
+    agents.add(sessionAgent(pipeline, session));
+  }
+  return agents;
+}
+
+/**
+ * The model a step actually pinned, or `undefined` for "no selection".
+ *
+ * `"default"` is a **real Claude catalog id** — the bridge resolves it to Opus
+ * with a 1M context — so discarding it there silently downgrades the run to the
+ * global default and contradicts the model the launcher displayed. For Codex and
+ * OpenCode the same string is only ever the placeholder the launcher shows when
+ * that harness has no catalog yet, and no server would recognise it, so there it
+ * does mean "unset". The same asymmetry is documented at the other consumer,
+ * `CreateEnvironmentDialog`.
+ */
+function stepModel(
+  agent: BuildPipelineAgent,
+  model: string | undefined,
+): string | undefined {
+  const trimmed = model?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed === "default" && agent !== "claude") return undefined;
+  return trimmed;
+}
+
+/**
+ * Drops empty selections so a step that only pinned a harness does not also pin
+ * a placeholder as a model id or the string "default" as a reasoning effort.
+ */
+function normalizeSteps(
+  steps: BuildStepConfigs | undefined,
+): BuildStepConfigs | undefined {
+  if (!steps) return undefined;
+  const normalized: BuildStepConfigs = {};
+  for (const key of BUILD_STEP_KEYS) {
+    const step = steps[key];
+    if (!step) continue;
+    const model = stepModel(step.agent, step.model);
+    const reasoningEffort = step.reasoningEffort?.trim();
+    normalized[key] = {
+      agent: step.agent,
+      ...(model ? { model } : {}),
+      ...(reasoningEffort && reasoningEffort !== "default"
+        ? { reasoningEffort }
+        : {}),
+    };
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function sessionPhaseFor(
@@ -251,6 +377,16 @@ export class BuildPipelineService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly locks = new Map<string, Promise<void>>();
   private readonly providers = new Map<string, BuildPipelineProvider>();
+  /**
+   * The harness whose provider each pipeline last resolved.
+   *
+   * A stage transition resolves and caches the *next* step's provider before it
+   * records that step's session, so a failure there cannot be attributed by
+   * reading the stored snapshot — it still describes the previous stage. Passes
+   * are serialised per pipeline by {@link runLocked}, so the last agent handed
+   * to {@link provider} is the one that failed.
+   */
+  private readonly lastProviderAgent = new Map<string, BuildPipelineAgent>();
   private readonly provisioningPrompts = new Map<string, string | undefined>();
   private tickPromise: Promise<void> | null = null;
   private tickRequested = false;
@@ -261,7 +397,10 @@ export class BuildPipelineService {
     private readonly invoke: CommandInvoker,
     private readonly options: {
       autoAdvance?: boolean;
-      provider?: (pipeline: BuildPipeline) => Promise<BuildPipelineProvider>;
+      provider?: (
+        pipeline: BuildPipeline,
+        agent: BuildPipelineAgent,
+      ) => Promise<BuildPipelineProvider>;
       reconnectDeadlineMs?: number;
       structuredResultDeadlineMs?: number;
       transcriptPersistIntervalMs?: number;
@@ -347,6 +486,7 @@ export class BuildPipelineService {
     }));
     this.providers.clear();
     this.provisioningPrompts.clear();
+    this.lastProviderAgent.clear();
   }
 
   async start(input: StartBuildPipelineInput): Promise<BuildPipeline> {
@@ -365,13 +505,18 @@ export class BuildPipelineService {
         throw new Error("The selected build environment does not belong to this project");
       }
     }
+    const steps = normalizeSteps(input.steps);
     const pipeline: BuildPipeline = {
       id: randomUUID(),
       taskId: input.taskId,
       projectId: input.projectId,
       environmentId: existingEnvironmentId,
       environmentType: existingEnvironment?.environmentType ?? input.environmentType,
-      agentType: input.agentType,
+      // The build step's harness is the pipeline's agent: it is what the
+      // environment default is configured for and what every stage without its
+      // own configuration falls back to.
+      agentType: steps?.build?.agent ?? input.agentType,
+      ...(steps ? { steps } : {}),
       phase: existingEnvironment
         ? "starting-environment"
         : "creating-environment",
@@ -508,7 +653,10 @@ export class BuildPipelineService {
       const session = sessionForCurrentPhase(pipeline);
       if (session?.status === "running") {
         try {
-          const provider = await this.provider(pipeline);
+          const provider = await this.provider(
+            pipeline,
+            sessionAgent(pipeline, session),
+          );
           await provider.abort(session.sdkSessionId);
           session.status = "idle";
         } catch (error) {
@@ -653,7 +801,8 @@ export class BuildPipelineService {
       const session = sessionForCurrentPhase(pipeline);
       if (session?.status === "running" && pipeline.environmentId) {
         try {
-          await (await this.provider(pipeline)).abort(session.sdkSessionId);
+          await (await this.provider(pipeline, sessionAgent(pipeline, session)))
+            .abort(session.sdkSessionId);
           session.status = "idle";
         } catch (error) {
           abortError = error;
@@ -668,6 +817,10 @@ export class BuildPipelineService {
       delete pipeline.pendingUserMessages;
       delete pipeline.reviewRetryRequested;
     });
+    // `provider()` records attribution for reconnect handling while a pipeline
+    // is active. Cancellation is a terminal transition, so retaining the id
+    // here would grow the map for every cancelled build until shutdown.
+    this.lastProviderAgent.delete(pipelineId);
     await this.reconcileTerminalState(pipeline);
     if (abortError) throw abortError;
     return pipeline;
@@ -683,22 +836,32 @@ export class BuildPipelineService {
       await this.cancel(pipelineId);
     }
     await this.storage.deleteBuildPipeline(pipelineId);
+    this.lastProviderAgent.delete(pipelineId);
     if (!record || !isBuildPipeline(record.snapshot)) return;
-    const providerKey = `${record.snapshot.environmentId}:${record.snapshot.agentType}`;
+    const removed = record.snapshot;
     // Providers are keyed by environment and agent, so a sibling pipeline in
     // the same environment shares this one. Disposing it there would tear down
     // the OpenCode request monitor out from under a build that is still running.
-    const stillInUse = (await this.storage.listAllBuildPipelines()).some(
-      (candidate) =>
-        candidate.id !== pipelineId
-        && isBuildPipeline(candidate.snapshot)
-        && `${candidate.snapshot.environmentId}:${candidate.snapshot.agentType}`
-          === providerKey,
+    // A pipeline whose steps chose different harnesses holds one provider per
+    // harness, so every one of them has to be checked, not just its build agent.
+    const providerKeys = new Set(
+      [...pipelineAgents(removed)].map(
+        (agent) => `${removed.environmentId}:${agent}`,
+      ),
     );
-    if (stillInUse) return;
-    const provider = this.providers.get(providerKey);
-    this.providers.delete(providerKey);
-    await provider?.dispose?.();
+    for (const candidate of await this.storage.listAllBuildPipelines()) {
+      if (candidate.id === pipelineId || !isBuildPipeline(candidate.snapshot)) {
+        continue;
+      }
+      for (const agent of pipelineAgents(candidate.snapshot)) {
+        providerKeys.delete(`${candidate.snapshot.environmentId}:${agent}`);
+      }
+    }
+    for (const providerKey of providerKeys) {
+      const provider = this.providers.get(providerKey);
+      this.providers.delete(providerKey);
+      await provider?.dispose?.();
+    }
   }
 
   async retryCompletionComment(pipelineId: string): Promise<BuildPipeline> {
@@ -842,9 +1005,23 @@ export class BuildPipelineService {
       await this.restartMissingStage(pipeline);
       return;
     }
-    const provider = await this.provider(pipeline);
+    const currentAgent = sessionAgent(pipeline, session);
+    const provider = await this.provider(pipeline, currentAgent);
     const status = await provider.status(session.sdkSessionId);
-    if (pipeline.reconnectAttempt && !pipeline.pendingPromptAttempt) {
+    // Only the harness that was recorded as unreachable can clear its own
+    // reconnect attempt. A stage transition resolves the *next* step's provider
+    // before it records that step's session, so a failure there belongs to a
+    // harness this session does not name — and clearing it on this session's
+    // evidence would reset `startedAt` on every retry, so the reconnect deadline
+    // would never elapse and the pipeline would retry a dead bridge forever.
+    // An attempt written before the agent was recorded has no harness to
+    // disagree with, so it keeps the original behaviour.
+    if (
+      pipeline.reconnectAttempt
+      && !pipeline.pendingPromptAttempt
+      && (pipeline.reconnectAttempt.agent === undefined
+        || pipeline.reconnectAttempt.agent === currentAgent)
+    ) {
       delete pipeline.reconnectAttempt;
       delete pipeline.error;
       await this.save(pipeline, record.revision);
@@ -1063,14 +1240,26 @@ export class BuildPipelineService {
         comment: "🔨 Build started",
       });
     }
-    const provider = await this.provider(pipeline);
+    const { agent, model, effort } = await this.stepSettings(pipeline, sessionPhase);
+    const provider = await this.provider(pipeline, agent);
     const label = SESSION_LABELS[sessionPhase];
-    const sessionId = await provider.createSession(sessionPhase, label);
+    // Stated rather than left to each provider's own default, so the sandbox a
+    // stage runs under is one decision in one place and does not move when a
+    // step pins a different harness.
+    const mode = executionModeForSessionPhase(sessionPhase, agent);
+    // Codex binds model and effort at session creation, Claude and OpenCode at
+    // prompt dispatch, so a per-step selection has to be supplied at both.
+    const sessionId = await provider.createSession(sessionPhase, label, {
+      model,
+      effort,
+      mode,
+    });
     provider.registerSession?.(sessionId);
     const { prompt, schema, images } = await this.promptFor(pipeline, sessionPhase);
     const requestId = randomUUID();
     const session: PipelineSession = {
       phase: sessionPhase,
+      agent,
       iteration: pipeline.iteration,
       sessionKey: `${pipeline.id}:${sessionPhase}:${pipeline.iteration}:${randomUUID()}`,
       sdkSessionId: sessionId,
@@ -1112,7 +1301,14 @@ export class BuildPipelineService {
     }
     await this.save(pipeline, pipeline.backendRevision);
     try {
-      await provider.send(sessionId, prompt, { requestId, images, schema });
+      await provider.send(sessionId, prompt, {
+        requestId,
+        images,
+        schema,
+        model,
+        effort,
+        mode,
+      });
       delete pipeline.pendingPromptAttempt;
       await this.save(pipeline, pipeline.backendRevision);
     } catch (error) {
@@ -1140,6 +1336,21 @@ export class BuildPipelineService {
           ? VERIFICATION_SCHEMA
           : undefined
       : undefined;
+    // Redispatch has to carry the same step selection the session was opened
+    // with: Claude and OpenCode take the model per prompt, so omitting it here
+    // would quietly retry the turn on the connection default instead.
+    const sessionPhase = sessionPhaseFor(attempt.phase);
+    const step = sessionPhase
+      ? await this.stepSettings(pipeline, sessionPhase)
+      : undefined;
+    // `addressing` re-uses the review session to write code, so its override
+    // wins over the phase's own read-only mode. Everything else re-states the
+    // mode the session was opened with, so a redispatch cannot land a turn in a
+    // different sandbox than the one that was interrupted.
+    const mode = executionModeOverrideForPhase(attempt.phase)
+      ?? (sessionPhase && step
+        ? executionModeForSessionPhase(sessionPhase, step.agent)
+        : undefined);
     try {
       await provider.send(attempt.sessionId, attempt.prompt, {
         requestId: attempt.requestId,
@@ -1147,7 +1358,9 @@ export class BuildPipelineService {
           ? pipeline.taskSnapshot.images
           : [],
         schema,
-        mode: executionModeOverrideForPhase(attempt.phase),
+        mode,
+        model: step?.model,
+        effort: step?.effort,
       });
       const session = pipeline.sessions.find((candidate) =>
         candidate.sdkSessionId === attempt.sessionId);
@@ -1423,6 +1636,8 @@ export class BuildPipelineService {
   private async complete(pipeline: BuildPipeline): Promise<void> {
     pipeline.phase = "complete";
     delete pipeline.error;
+    this.provisioningPrompts.delete(pipeline.id);
+    this.lastProviderAgent.delete(pipeline.id);
     await this.save(pipeline, pipeline.backendRevision);
     await this.reconcileTerminalState(pipeline);
   }
@@ -1559,18 +1774,66 @@ export class BuildPipelineService {
     });
   }
 
-  private async provider(pipeline: BuildPipeline): Promise<BuildPipelineProvider> {
-    const providerKey = `${pipeline.environmentId}:${pipeline.agentType}`;
+  /**
+   * The harness, model and reasoning a step runs under.
+   *
+   * A step's own selections win. A field it left unset resolves to that
+   * harness's default — the same value the launcher displayed for it — which
+   * `connectionDefaultsFor` supplies one layer down when these are `undefined`.
+   * The repository defaults never cross to a harness they were not chosen for.
+   */
+  private async stepSettings(
+    pipeline: BuildPipeline,
+    sessionPhase: PipelineSessionPhase,
+  ): Promise<{
+    agent: BuildPipelineAgent;
+    model?: string;
+    effort?: string;
+  }> {
+    const step = pipeline.steps?.[stepKeyForSessionPhase(sessionPhase)];
+    if (step) {
+      const effort = step.reasoningEffort?.trim();
+      return {
+        agent: step.agent,
+        // Normalised on read as well as on write: `start()` is not the only way
+        // a snapshot gets here — `importLegacy` accepts one straight from disk,
+        // where a placeholder could otherwise be sent as a real model id.
+        model: stepModel(step.agent, step.model),
+        effort: effort && effort !== "default" ? effort : undefined,
+      };
+    }
+    const config = await this.storage.loadConfig();
+    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
+    return {
+      agent: pipeline.agentType,
+      ...connectionDefaultsFor(pipeline.agentType, config, repository),
+    };
+  }
+
+  private async provider(
+    pipeline: BuildPipeline,
+    agent: BuildPipelineAgent = pipeline.agentType,
+  ): Promise<BuildPipelineProvider> {
+    // Recorded before anything that can throw, so a bridge that is unreachable
+    // during connection setup is still attributed to the right harness.
+    this.lastProviderAgent.set(pipeline.id, agent);
+    const providerKey = `${pipeline.environmentId}:${agent}`;
+    // Only this harness's own sessions. Registering a sibling step's session id
+    // would put a foreign session into an environment-wide monitor that is
+    // supposed to ignore everything it does not own.
+    const ownSessions = pipeline.sessions.filter(
+      (session) => sessionAgent(pipeline, session) === agent,
+    );
     const cached = this.providers.get(providerKey);
     if (cached) {
-      for (const session of pipeline.sessions) {
+      for (const session of ownSessions) {
         cached.registerSession?.(session.sdkSessionId);
       }
       return cached;
     }
     if (this.options.provider) {
-      const provider = await this.options.provider(pipeline);
-      for (const session of pipeline.sessions) {
+      const provider = await this.options.provider(pipeline, agent);
+      for (const session of ownSessions) {
         provider.registerSession?.(session.sdkSessionId);
       }
       this.providers.set(providerKey, provider);
@@ -1580,18 +1843,13 @@ export class BuildPipelineService {
     if (!environment) throw new Error("Build environment no longer exists");
     const config = await this.storage.loadConfig();
     const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
-    const connection = await this.bridgeConnection(pipeline.agentType, environment);
+    const connection = await this.bridgeConnection(agent, environment);
     const provider = createBuildPipelineProvider({
       ...connection,
-      model: modelFor(
-        pipeline.agentType,
-        config.global,
-        repository.defaultModel,
-      ),
-      effort: repository.defaultEffort
-        ?? (pipeline.agentType === "codex"
-          ? config.global.codexReasoningEffort
-          : undefined),
+      // Connection-level defaults only, and only this harness's own. Every
+      // pipeline turn passes the step's model and effort per call, which take
+      // precedence; these fill in whatever the step left unset.
+      ...connectionDefaultsFor(agent, config, repository),
     }, {
       // Task-snapshot images arrive as base64. Both bridges require a workspace
       // path, so they have to be written into the environment before they can be
@@ -1599,7 +1857,7 @@ export class BuildPipelineService {
       stageImages: (images) =>
         stagePromptImages(this.invoke, environment, images),
     });
-    for (const session of pipeline.sessions) {
+    for (const session of ownSessions) {
       provider.registerSession?.(session.sdkSessionId);
     }
     this.providers.set(providerKey, provider);
@@ -1658,6 +1916,7 @@ export class BuildPipelineService {
     pipeline.phase = "failed";
     delete pipeline.pendingPromptAttempt;
     this.provisioningPrompts.delete(pipeline.id);
+    this.lastProviderAgent.delete(pipeline.id);
     await this.save(pipeline, record.revision);
     await this.reconcileTerminalState(pipeline);
   }
@@ -1671,11 +1930,25 @@ export class BuildPipelineService {
     const pipeline = record.snapshot;
     const phase = resumablePhase(pipeline.phase);
     if (!phase) return;
-    const providerKey = `${pipeline.environmentId}:${pipeline.agentType}`;
+    // Evict the harness that actually failed. The stored snapshot cannot answer
+    // that on its own: a stage transition resolves the next step's provider
+    // before it records that step's session, so a `createSession` failure on the
+    // review harness would look like a failure on the build harness here — and
+    // dropping the healthy one would leave the unreachable one cached forever.
+    const session = sessionForCurrentPhase(pipeline);
+    const agent = this.lastProviderAgent.get(pipelineId)
+      ?? (session ? sessionAgent(pipeline, session) : pipeline.agentType);
+    const providerKey = `${pipeline.environmentId}:${agent}`;
     const provider = this.providers.get(providerKey);
     this.providers.delete(providerKey);
     await provider?.dispose?.();
-    const startedAt = pipeline.reconnectAttempt?.startedAt
+    // Only an attempt for this same harness carries its start time forward. A
+    // different harness failing is a new outage and gets its own deadline,
+    // rather than inheriting an elapsed time it did not accumulate.
+    const previous = pipeline.reconnectAttempt;
+    const continues = previous !== undefined
+      && (previous.agent === undefined || previous.agent === agent);
+    const startedAt = (continues ? previous.startedAt : undefined)
       ?? new Date().toISOString();
     const elapsed = elapsedSince(startedAt);
     if (elapsed !== null && elapsed >= this.reconnectDeadlineMs) {
@@ -1685,20 +1958,26 @@ export class BuildPipelineService {
       await this.fail(
         pipelineId,
         new Error(
-          `${pipeline.agentType} stayed unreachable for ${Math.round(elapsed / 1000)}s: ${error.message}`,
+          `${agent} stayed unreachable for ${Math.round(elapsed / 1000)}s: ${error.message}`,
         ),
       );
       return;
     }
     pipeline.backendRevision = record.revision;
     pipeline.reconnectAttempt = {
-      id: pipeline.reconnectAttempt?.id ?? randomUUID(),
+      id: (continues ? previous.id : undefined) ?? randomUUID(),
       phase,
       kind: "stage-transition",
-      sessionId: sessionForCurrentPhase(pipeline)?.sdkSessionId,
+      // Only when this harness owns the current session. A stage transition
+      // fails before its own session exists, and naming the previous stage's
+      // session there would point recovery at a session on a healthy bridge.
+      sessionId: session && sessionAgent(pipeline, session) === agent
+        ? session.sdkSessionId
+        : undefined,
       startedAt,
+      agent,
     };
-    pipeline.error = `Reconnecting to ${pipeline.agentType}: ${error.message}`;
+    pipeline.error = `Reconnecting to ${agent}: ${error.message}`;
     await this.save(pipeline, record.revision);
   }
 

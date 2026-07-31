@@ -19,6 +19,7 @@ import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelin
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
 const realBackendSnapshot = { ...realBackend };
@@ -170,6 +171,7 @@ describe("BuildChatTab backend projection", () => {
     cancelBuildPipelineMock.mockClear();
     sendMessageMock.mockClear();
     retryReviewMock.mockClear();
+    mockToastError.mockClear();
     getBuildPipelineConditionalMock.mockClear();
     getBuildPipelineConditionalMock.mockImplementation(async () => null);
     useBuildPipelineStore.setState({
@@ -293,6 +295,63 @@ describe("BuildChatTab backend projection", () => {
     fireEvent.click(pause);
     await waitFor(() => expect(pauseBuildPipelineMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(pause.disabled).toBe(false));
+    expect(mockToastError).toHaveBeenCalledWith("Failed to pause build", {
+      description: "pause unavailable",
+    });
+    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe(
+      "building",
+    );
+  });
+
+  test("reports a non-Error resume rejection and re-enables the control", async () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      phase: "paused",
+      backendRevision: 9,
+    });
+    resumeBuildPipelineMock.mockRejectedValueOnce("resume unavailable");
+    render(<BuildChatTab data={{
+      pipelineId: pipeline.id,
+      environmentId: pipeline.environmentId,
+      taskId: pipeline.taskId,
+      isLocal: true,
+    }} />);
+
+    const resume = screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement;
+    fireEvent.click(resume);
+
+    await waitFor(() => expect(resumeBuildPipelineMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(resume.disabled).toBe(false));
+    expect(mockToastError).toHaveBeenCalledWith("Failed to resume build", {
+      description: "resume unavailable",
+    });
+    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe(
+      "paused",
+    );
+  });
+
+  test("reports a cancelled-control failure without replacing the snapshot", async () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      phase: "building",
+      backendRevision: 9,
+    });
+    cancelBuildPipelineMock.mockRejectedValueOnce(503);
+    render(<BuildChatTab data={{
+      pipelineId: pipeline.id,
+      environmentId: pipeline.environmentId,
+      taskId: pipeline.taskId,
+      isLocal: true,
+    }} />);
+
+    const cancel = screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
+    fireEvent.click(cancel);
+
+    await waitFor(() => expect(cancelBuildPipelineMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(cancel.disabled).toBe(false));
+    expect(mockToastError).toHaveBeenCalledWith("Failed to cancel build", {
+      description: "503",
+    });
     expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe(
       "building",
     );
@@ -750,6 +809,174 @@ describe("BuildChatTab transcript wiring", () => {
   });
 });
 
+describe("BuildChatTab per-step harnesses", () => {
+  /**
+   * A Codex turn that delegated to a subagent.
+   *
+   * `subagent` is one of the part types the Claude adapter drops, so decoding
+   * this through the pipeline's build agent rather than the session's own would
+   * silently lose the delegation entirely.
+   */
+  const codexReview: BuildPipeline["sessions"][number] = {
+    phase: "review",
+    agent: "codex",
+    iteration: 0,
+    sessionKey: "codex-review-key",
+    sdkSessionId: "codex-review-session",
+    status: "idle",
+    startedAt: "2026-07-29T00:02:00.000Z",
+    label: "Codex Review Session",
+    messages: [{
+      id: "codex-review-answer",
+      role: "assistant",
+      parts: [
+        { type: "text", content: "Reviewed the diff" },
+        {
+          type: "subagent",
+          content: "diff-auditor",
+          subagentId: "sub-1",
+          subagentName: "diff-auditor",
+          subagentActions: [],
+        },
+      ],
+    }],
+  };
+
+  /**
+   * A Claude turn whose child tool is grouped under the Task that spawned it.
+   *
+   * Only the Claude adapter performs that grouping, so this stage tells the two
+   * decoders apart in the opposite direction from the Codex one.
+   */
+  const claudeBuild: BuildPipeline["sessions"][number] = {
+    phase: "build",
+    agent: "claude",
+    iteration: 0,
+    sessionKey: "claude-build-key",
+    sdkSessionId: "claude-build-session",
+    status: "idle",
+    startedAt: "2026-07-29T00:00:00.000Z",
+    label: "Claude Build Session",
+    messages: [{
+      id: "claude-build-answer",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-07-29T00:00:10.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "Task",
+          toolUseId: "task-1",
+          toolArgs: { description: "Audit the diff" },
+        },
+        {
+          type: "tool-invocation",
+          toolName: "Bash",
+          parentTaskUseId: "task-1",
+          toolArgs: { command: "git diff" },
+        },
+      ],
+    }],
+  };
+
+  // The build ran on Claude; the launcher configured the review step on Codex,
+  // so `agentType` describes only the build stage.
+  const mixed: BuildPipeline = {
+    ...pipeline,
+    id: "mixed",
+    agentType: "claude",
+    steps: { build: { agent: "claude" }, review: { agent: "codex" } },
+    sessions: [claudeBuild, codexReview],
+    currentSessionIndex: 1,
+    backendRevision: 60,
+  };
+
+  function renderTab(next: BuildPipeline) {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[next.id, next]]),
+      buildEnvironmentIds: new Set([next.environmentId]),
+    });
+    render(<BuildChatTab data={{
+      pipelineId: next.id,
+      environmentId: next.environmentId,
+      taskId: next.taskId,
+      isLocal: true,
+    }} />);
+  }
+
+  function partTypes(): string[] {
+    return (listProps.messages as Array<{ parts: Array<{ type: string }> }>)
+      .flatMap((message) => message.parts.map((part) => part.type));
+  }
+
+  beforeEach(() => {
+    cleanup();
+    listProps = null;
+  });
+
+  test("decodes a Codex stage with the Codex adapter on a Claude-built pipeline", () => {
+    renderTab(mixed);
+
+    // Decoded through the pipeline's `agentType` the subagent part would be
+    // filtered out by the Claude adapter, and the delegation would vanish.
+    expect(partTypes()).toEqual(["text", "subagent"]);
+    expect(screen.getByText("diff-auditor")).toBeTruthy();
+    expect(screen.getByText("Reviewed the diff")).toBeTruthy();
+  });
+
+  test("names the harness of the stage on screen, not the build agent", async () => {
+    renderTab(mixed);
+
+    // The status line and the transcript's assistant label both describe the
+    // session being read, which per-step configuration makes different from the
+    // pipeline's build agent.
+    expect(screen.getByText("codex")).toBeTruthy();
+    expect(screen.queryByText("claude")).toBeNull();
+    expect(listProps.renderMessage(0, listProps.messages[0], null).props)
+      .toMatchObject({ assistantLabel: "Codex" });
+
+    fireEvent.click(screen.getByText("Claude Build Session"));
+    await waitFor(() => expect(screen.getByText("claude")).toBeTruthy());
+    expect(screen.queryByText("codex")).toBeNull();
+    expect(listProps.renderMessage(0, listProps.messages[0], null).props)
+      .toMatchObject({ assistantLabel: "Claude" });
+  });
+
+  test("re-decodes with the right adapter each time the stage changes", async () => {
+    renderTab(mixed);
+    expect(partTypes()).toEqual(["text", "subagent"]);
+
+    // Only the Claude adapter groups a child tool under its Task.
+    fireEvent.click(screen.getByText("Claude Build Session"));
+    await waitFor(() => expect(partTypes()).toEqual(["task-group"]));
+
+    // And switching back must not leave the Claude decoder in place.
+    fireEvent.click(screen.getByText("Codex Review Session"));
+    await waitFor(() => expect(partTypes()).toEqual(["text", "subagent"]));
+  });
+
+  test("falls back to the build agent for a stage recorded before per-step harnesses", () => {
+    const { agent: _agent, ...legacySession } = codexReview;
+    renderTab({
+      ...pipeline,
+      id: "legacy",
+      agentType: "opencode",
+      sessions: [legacySession],
+      currentSessionIndex: 0,
+      backendRevision: 61,
+    });
+
+    // A snapshot written before sessions recorded their harness still renders:
+    // `agentType` is the only answer available, and no answer at all would blank
+    // the transcript.
+    expect(partTypes()).toEqual(["text", "subagent"]);
+    expect(screen.getByText("Reviewed the diff")).toBeTruthy();
+    expect(screen.getByText("opencode")).toBeTruthy();
+    expect(listProps.renderMessage(0, listProps.messages[0], null).props)
+      .toMatchObject({ assistantLabel: "OpenCode" });
+  });
+});
+
 describe("BuildChatTab rehydration", () => {
   beforeEach(() => {
     cleanup();
@@ -807,6 +1034,48 @@ describe("BuildChatTab rehydration", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Loading build pipeline…")).toBeTruthy();
+  });
+
+  test("warns once when hydration rejects and does not retry on store changes", async () => {
+    const hydrationError = new Error("snapshot unavailable");
+    const warnMock = mock(() => {});
+    const realWarn = console.warn;
+    console.warn = warnMock;
+    getBuildPipelineConditionalMock.mockRejectedValueOnce(hydrationError);
+
+    try {
+      render(<BuildChatTab data={{
+        environmentId: "env-1",
+        pipelineId: pipeline.id,
+        taskId: "task-1",
+        isLocal: true,
+      }} />);
+
+      await waitFor(() => {
+        expect(warnMock).toHaveBeenCalledWith(
+          "[BuildChatTab] Failed to hydrate build pipeline:",
+          hydrationError,
+        );
+      });
+
+      // Make the effect observe both a present and then absent snapshot. The
+      // per-pipeline attempt guard must still prevent a second backend read.
+      act(() => {
+        useBuildPipelineStore.getState().replacePipeline(pipeline);
+      });
+      act(() => {
+        useBuildPipelineStore.setState({
+          pipelines: new Map(),
+          buildEnvironmentIds: new Set(),
+        });
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1);
+      expect(warnMock).toHaveBeenCalledTimes(1);
+    } finally {
+      console.warn = realWarn;
+    }
   });
 
   test("does not fetch when the store already has the snapshot", async () => {
@@ -916,6 +1185,7 @@ describe("BuildChatTab agent messaging", () => {
     cleanup();
     sendMessageMock.mockClear();
     retryReviewMock.mockClear();
+    mockToastError.mockClear();
     useBuildPipelineStore.setState({
       pipelines: new Map([[running.id, running]]),
       buildEnvironmentIds: new Set(["env-1"]),
@@ -1007,8 +1277,27 @@ describe("BuildChatTab agent messaging", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
     await waitFor(() => expect(sendMessageMock).toHaveBeenCalled());
+    expect(mockToastError).toHaveBeenCalledWith("Failed to send the message", {
+      description: "queue is full",
+    });
     // Losing the user's typing on a transient failure is worse than the failure.
     expect(box.value).toBe("do not lose me");
+  });
+
+  test("formats a non-Error message rejection in the failure toast", async () => {
+    sendMessageMock.mockRejectedValueOnce("queue disconnected");
+    renderTab();
+    const box = screen.getByLabelText("Send a message to the agent") as HTMLTextAreaElement;
+
+    fireEvent.change(box, { target: { value: "keep this draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send the message", {
+        description: "queue disconnected",
+      });
+    });
+    expect(box.value).toBe("keep this draft");
   });
 
   test("refuses to send an empty or whitespace-only message", () => {
@@ -1102,6 +1391,24 @@ describe("BuildChatTab agent messaging", () => {
 
     await waitFor(() => expect(retryReviewMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(retry.disabled).toBe(false));
+    expect(mockToastError).toHaveBeenCalledWith("Failed to restart the review", {
+      description: "no review stage",
+    });
+    expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase)
+      .toBe("building");
+  });
+
+  test("formats a non-Error review restart rejection", async () => {
+    retryReviewMock.mockRejectedValueOnce("review provider offline");
+    renderTab();
+
+    fireEvent.click(screen.getByRole("button", { name: /Retry Review/ }));
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith("Failed to restart the review", {
+        description: "review provider offline",
+      });
+    });
     expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase)
       .toBe("building");
   });

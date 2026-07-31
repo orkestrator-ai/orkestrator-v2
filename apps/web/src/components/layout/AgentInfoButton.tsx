@@ -379,6 +379,19 @@ function CodexRuntimePanel({ health }: { health: unknown }) {
         return typeof item.message === "string" ? [item] : [];
       })
     : [];
+  const groupedNotices = new Map<string, { message: string; count: number }>();
+  for (const notice of notices) {
+    const message = String(notice.message);
+    const existing = groupedNotices.get(message);
+    // Reinsert repeated notices so the five-item limit is based on the most
+    // recent occurrence of each distinct announcement.
+    if (existing) groupedNotices.delete(message);
+    groupedNotices.set(message, {
+      message,
+      count: (existing?.count ?? 0) + 1,
+    });
+  }
+  const recentNotices = [...groupedNotices.values()].slice(-5);
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
@@ -392,14 +405,14 @@ function CodexRuntimePanel({ health }: { health: unknown }) {
           ? `Codex ${engine.codexVersion}`
           : "version unavailable"}</span>
       </div>
-      {notices.length > 0 ? (
+      {recentNotices.length > 0 ? (
         <div className="space-y-1.5">
-          {notices.slice(-5).map((notice, index) => (
+          {recentNotices.map((notice) => (
             <div
-              key={`${String(notice.method)}-${index}`}
+              key={notice.message}
               className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-xs text-amber-100/80"
             >
-              {String(notice.message)}
+              {notice.message}{notice.count > 1 ? ` (${notice.count})` : ""}
             </div>
           ))}
         </div>

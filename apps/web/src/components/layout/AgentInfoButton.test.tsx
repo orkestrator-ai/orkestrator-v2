@@ -1256,6 +1256,32 @@ describe("AgentInfoButton Codex runtime panel", () => {
     expect(screen.getByText("notice two")).toBeTruthy();
   });
 
+  test("groups repeated notices and shows their total count", async () => {
+    seedCodex();
+    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
+      engine: { state: "ready" },
+      notices: [
+        ...Array.from({ length: 8 }, () => ({
+          method: "mcpServer/startupStatus/updated",
+          message: "Codex reported mcpServer startupStatus updated",
+        })),
+        { method: "warning", message: "Codex reported warning" },
+      ],
+    }));
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Codex reported mcpServer startupStatus updated (8)"),
+      ).toBeTruthy(),
+    );
+    expect(
+      screen.queryByText("Codex reported mcpServer startupStatus updated"),
+    ).toBeNull();
+    expect(screen.getByText("Codex reported warning")).toBeTruthy();
+  });
+
   test("falls back to an error snapshot when the health request rejects", async () => {
     seedCodex();
     mockGetCodexRuntimeHealth.mockImplementation(async () => {

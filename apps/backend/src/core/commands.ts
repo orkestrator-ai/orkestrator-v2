@@ -5380,7 +5380,11 @@ async function deleteEnvironment(
       );
       // Queued prompts for a deleted environment can never be dispatched.
       await storage.deletePromptQueuesByEnvironment(environmentId);
-      await storage.deleteNativeAgentSessionsByEnvironment(environmentId);
+      // Best-effort, like its siblings: leaving a stale session mapping behind
+      // is recoverable, but aborting here would strand the environment record
+      // itself because `removeEnvironment` below would never run.
+      await storage.deleteNativeAgentSessionsByEnvironment(environmentId)
+        .catch(() => undefined);
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);

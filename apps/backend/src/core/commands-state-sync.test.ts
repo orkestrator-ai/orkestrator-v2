@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { isPrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
-import { UNATTENDED_AGENT_INTERACTION_POLICY } from
-  "@orkestrator/protocol/agent-interactions";
+import {
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+} from "@orkestrator/protocol/agent-interactions";
 import {
   __testing as commandTesting,
   createCommandRegistry,
@@ -629,8 +631,34 @@ describe("native agent and looped-review controller commands", () => {
           authorization: "await-user",
         },
       })).rejects.toThrow("valid agent interaction policy");
+      // The third registration site coerces the same two arguments and must
+      // reject them just as the other two do.
+      await expect(invoke("adopt_native_agent_session", {
+        environmentId: "e1",
+        agent: "opencode",
+        logicalSessionKey: "env-e1:invalid-origin",
+        providerSessionId: "provider-new",
+        origin: "scheduled-task",
+      })).rejects.toThrow("supported agent interaction origin");
+      await expect(invoke("adopt_native_agent_session", {
+        environmentId: "e1",
+        agent: "opencode",
+        logicalSessionKey: "env-e1:invalid-policy",
+        providerSessionId: "provider-new",
+        interactionPolicy: {
+          ...INTERACTIVE_AGENT_INTERACTION_POLICY,
+          unknown: "await-user",
+        },
+      })).rejects.toThrow("valid agent interaction policy");
+      await expect(invoke("ensure_native_agent_session", {
+        environmentId: "e1",
+        agent: "codex",
+        logicalSessionKey: "env-e1:non-string-origin",
+        origin: 7,
+      })).rejects.toThrow("supported agent interaction origin");
       expect(ensureSession).toHaveBeenCalledTimes(1);
       expect(dispatchPrompt).toHaveBeenCalledTimes(1);
+      expect(adoptSession).toHaveBeenCalledTimes(1);
     }, { nativeAgents });
   });
 

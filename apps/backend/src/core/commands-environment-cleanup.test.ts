@@ -83,6 +83,41 @@ describe("delete_environment durable child-state cleanup", () => {
     );
   });
 
+  test("deletes the environment even when a native session record is unreadable", async () => {
+    await withDeleteCommand(
+      async (storage) => {
+        await storage.addEnvironment(environment());
+        // A record written by a newer build. Nothing in this delete path can
+        // read it, and refusing to finish here would strand the environment
+        // itself — leaving the user no way to clear the record at all.
+        await fs.writeFile(
+          path.join(storage.getDataDir(), "native-agent-sessions.json"),
+          JSON.stringify({
+            "poisoned-key": {
+              version: 2,
+              key: "poisoned-key",
+              environmentId: "e2",
+              agent: "codex",
+              logicalSessionKey: "env-e2:tab-1",
+              providerSessionId: "future-provider-session",
+              createdAt: new Date(0).toISOString(),
+              updatedAt: new Date(0).toISOString(),
+            },
+          }),
+        );
+      },
+      async (invokeDelete, storage) => {
+        await expect(invokeDelete()).resolves.toBeUndefined();
+        expect(await storage.getEnvironment("e1")).toBeNull();
+        const remaining = JSON.parse(await fs.readFile(
+          path.join(storage.getDataDir(), "native-agent-sessions.json"),
+          "utf8",
+        ));
+        expect(remaining["poisoned-key"]).toMatchObject({ version: 2 });
+      },
+    );
+  });
+
   test("retains a deleting environment when pipeline cleanup fails", async () => {
     await withDeleteCommand(
       async (storage) => storage.addEnvironment(environment()).then(() => undefined),

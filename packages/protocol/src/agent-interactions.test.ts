@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  AGENT_INTERACTION_AUTHORIZATION_KINDS,
+  AGENT_INTERACTION_CLAIM_RETENTION_MS,
   AGENT_INTERACTION_CONTRACT_VERSION,
+  AGENT_INTERACTION_INPUT_KINDS,
   AGENT_INTERACTION_JOURNAL_RETENTION_MS,
   AGENT_INTERACTION_JOURNAL_VERSION,
   AGENT_INTERACTION_KINDS,
@@ -216,6 +219,76 @@ describe("agent interaction request contract", () => {
     expect(isAgentInteractionSnapshot(snapshot)).toBe(false);
   });
 
+  test("rejects a per-field-legal payload that overflows the budget by option count", () => {
+    // The per-field maximums permit roughly 19 MB in aggregate. Rejection must
+    // not require building that string first, so this also guards the cheap
+    // lower-bound check that runs before serialization.
+    const oversized = clone(request());
+    oversized.presentation.questions = Array.from(
+      { length: AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest },
+      (_, questionIndex) => ({
+        id: `question-${questionIndex}`,
+        prompt: "Prompt",
+        required: false,
+        multiple: true,
+        secret: false,
+        allowFreeText: false,
+        options: Array.from(
+          { length: AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion },
+          (_unused, optionIndex) => ({
+            id: `o-${questionIndex}-${optionIndex}`,
+            label: "x".repeat(AGENT_INTERACTION_LIMITS.maxTextLength),
+            providerValue: "y".repeat(
+              AGENT_INTERACTION_LIMITS.maxProviderValueLength,
+            ),
+            description: "z".repeat(AGENT_INTERACTION_LIMITS.maxTextLength),
+          }),
+        ),
+      }),
+    );
+    const started = performance.now();
+    expect(isAgentInteractionRequest(oversized)).toBe(false);
+    // Serializing ~19 MB takes far longer than this; the bound is loose enough
+    // to survive a slow CI box but tight enough to fail if it ever regresses.
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  test("rejects an answer whose option references overflow the budget", () => {
+    const wide = clone(request());
+    wide.presentation.questions = [{
+      id: "question-1",
+      prompt: "Which values?",
+      required: true,
+      multiple: true,
+      secret: false,
+      allowFreeText: false,
+      options: Array.from(
+        { length: AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion },
+        (_, index) => ({
+          id: `${index}-`.padEnd(AGENT_INTERACTION_LIMITS.maxIdLength, "o"),
+          label: "Option",
+          providerValue: "value",
+        }),
+      ),
+    }];
+    expect(isAgentInteractionRequest(wide)).toBe(true);
+    const huge = {
+      version: AGENT_INTERACTION_CONTRACT_VERSION,
+      interactionId: wide.id,
+      sessionId: wide.sessionId,
+      answers: Array.from(
+        { length: AGENT_INTERACTION_LIMITS.maxAnswerCount },
+        (_, index) => ({
+          questionId: `question-${index}`,
+          optionIds: wide.presentation.questions[0]!.options.map(
+            (option) => option.id,
+          ),
+        }),
+      ),
+    };
+    expect(isAgentInteractionAnswer(huge, wide)).toBe(false);
+  });
+
   test("validates bounded snapshots and rejects duplicate request IDs", () => {
     expect(isAgentInteractionSnapshot({
       version: AGENT_INTERACTION_CONTRACT_VERSION,
@@ -399,6 +472,27 @@ describe("interaction policy", () => {
       unknown: "await-user",
     })).toBe(false);
   });
+
+  test("classifies every kind, so the deny-by-default fallback stays unreachable", () => {
+    // `policy.unknown` is the safety net for a kind added to the vocabulary but
+    // to neither routing list. It cannot be exercised while the two lists
+    // partition the kinds — which is the property worth pinning, because a new
+    // kind that slipped through would silently deny instead of being routed.
+    const input = new Set<string>(AGENT_INTERACTION_INPUT_KINDS);
+    const authorization = new Set<string>(AGENT_INTERACTION_AUTHORIZATION_KINDS);
+    expect(input.size + authorization.size).toBe(AGENT_INTERACTION_KINDS.length);
+    for (const kind of AGENT_INTERACTION_KINDS) {
+      expect(input.has(kind) !== authorization.has(kind)).toBe(true);
+      expect(agentInteractionPolicyAction(
+        INTERACTIVE_AGENT_INTERACTION_POLICY,
+        kind,
+      )).toBe("await-user");
+      expect(agentInteractionPolicyAction(
+        UNATTENDED_AGENT_INTERACTION_POLICY,
+        kind,
+      )).toBe(input.has(kind) ? "decline-and-continue" : "deny-and-fail");
+    }
+  });
 });
 
 describe("resolution journal and summaries", () => {
@@ -487,21 +581,82 @@ describe("resolution journal and summaries", () => {
     })).toBe(true);
   });
 
-  test("cleanup preserves unfinished claims and removes expired terminal records", () => {
-    const unfinished = {
+  function claimedAt(at: number) {
+    return {
       ...journal.entries[0]!,
       id: "journal-pending",
       interactionId: "interaction-pending",
       state: "claimed" as const,
+      claim: { ...journal.entries[0]!.claim, claimedAt: at },
       outcome: undefined,
       providerResolvedAt: undefined,
       workflowRecordedAt: undefined,
     };
+  }
+
+  test("cleanup preserves live unfinished claims and removes expired terminal records", () => {
+    const now = CREATED_AT + AGENT_INTERACTION_JOURNAL_RETENTION_MS + 3;
+    const unfinished = claimedAt(now - 1);
     const cleaned = pruneAgentInteractionResolutionJournal({
       version: AGENT_INTERACTION_JOURNAL_VERSION,
       entries: [journal.entries[0]!, unfinished],
-    }, CREATED_AT + AGENT_INTERACTION_JOURNAL_RETENTION_MS + 3);
+    }, now);
     expect(cleaned.entries).toEqual([unfinished]);
+  });
+
+  test("cleanup reclaims an abandoned claim as a terminal stale record", () => {
+    const now = CREATED_AT + AGENT_INTERACTION_CLAIM_RETENTION_MS + 1;
+    const abandoned = claimedAt(CREATED_AT);
+    const cleaned = pruneAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [abandoned],
+    }, now);
+    expect(cleaned.entries).toEqual([{
+      ...abandoned,
+      state: "workflow-recorded",
+      outcome: "stale",
+      providerResolvedAt: CREATED_AT,
+      workflowRecordedAt: now,
+    }]);
+    // The pair survives, so a second claim on the same interaction is still
+    // rejected rather than silently allowed by the entry disappearing.
+    expect(isAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [...cleaned.entries, abandoned],
+    })).toBe(false);
+  });
+
+  test("cleanup finishes a half-resolved claim without inventing an outcome", () => {
+    const now = CREATED_AT + AGENT_INTERACTION_CLAIM_RETENTION_MS + 10;
+    const halfResolved = {
+      ...journal.entries[0]!,
+      id: "journal-half",
+      interactionId: "interaction-half",
+      state: "provider-resolved" as const,
+      outcome: "answered" as const,
+      providerResolvedAt: CREATED_AT + 1,
+      workflowRecordedAt: undefined,
+    };
+    const cleaned = pruneAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [halfResolved],
+    }, now);
+    expect(cleaned.entries).toEqual([{
+      ...halfResolved,
+      state: "workflow-recorded",
+      outcome: "answered",
+      workflowRecordedAt: now,
+    }]);
+  });
+
+  test("cleanup is stable: reclaiming twice does not move the record again", () => {
+    const now = CREATED_AT + AGENT_INTERACTION_CLAIM_RETENTION_MS + 1;
+    const once = pruneAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [claimedAt(CREATED_AT)],
+    }, now);
+    expect(pruneAgentInteractionResolutionJournal(once, now + 1_000).entries)
+      .toEqual(once.entries);
   });
 
   test("cleanup evicts oldest terminal records at the entry limit", () => {
@@ -543,7 +698,8 @@ describe("resolution journal and summaries", () => {
     expect(isAgentInteractionResolutionJournal(cleaned)).toBe(true);
   });
 
-  test("cleanup fails when unfinished claims alone exceed the hard bound", () => {
+  test("cleanup reclaims the oldest live claims rather than refusing to prune", () => {
+    const now = CREATED_AT + 1_000;
     const entries = Array.from(
       { length: AGENT_INTERACTION_LIMITS.maxJournalEntries + 1 },
       (_, index) => ({
@@ -551,15 +707,50 @@ describe("resolution journal and summaries", () => {
         id: `claim-${index}`,
         interactionId: `interaction-${index}`,
         state: "claimed" as const,
+        claim: { ...journal.entries[0]!.claim, claimedAt: now - index },
         outcome: undefined,
         providerResolvedAt: undefined,
         workflowRecordedAt: undefined,
       }),
     );
-    expect(() => pruneAgentInteractionResolutionJournal({
+    // Every claim is live, so the entry bound — not the retention window — is
+    // what forces a decision. It must still produce a readable journal.
+    const cleaned = pruneAgentInteractionResolutionJournal({
       version: AGENT_INTERACTION_JOURNAL_VERSION,
       entries,
-    })).toThrow("Unfinished interaction claims exceed");
+    }, now);
+    expect(cleaned.entries).toHaveLength(AGENT_INTERACTION_LIMITS.maxJournalEntries);
+    expect(isAgentInteractionResolutionJournal(cleaned)).toBe(true);
+    // The newest claims are kept intact. The oldest is reclaimed as terminal
+    // and then evicted, because a saturated journal has no room to record it —
+    // unlike the retention path, where the stale record does survive.
+    expect(cleaned.entries[0]).toEqual(entries[0]!);
+    expect(cleaned.entries.some((entry) => entry.id === "claim-512")).toBe(false);
+  });
+
+  test("cleanup never throws for a journal it can legally be handed", () => {
+    const now = CREATED_AT + 1_000;
+    const entries = Array.from(
+      { length: AGENT_INTERACTION_LIMITS.maxJournalEntries + 1 },
+      (_, index) => ({
+        ...journal.entries[0]!,
+        id: `${index}-`.padEnd(AGENT_INTERACTION_LIMITS.maxIdLength, "i"),
+        interactionId: `${index}-`.padEnd(AGENT_INTERACTION_LIMITS.maxIdLength, "j"),
+        sessionId: `${index}-`.padEnd(AGENT_INTERACTION_LIMITS.maxIdLength, "s"),
+        state: "claimed" as const,
+        claim: { ...journal.entries[0]!.claim, claimedAt: now - index },
+        outcome: undefined,
+        providerResolvedAt: undefined,
+        workflowRecordedAt: undefined,
+      }),
+    );
+    // Oversized ids make the byte budget bind well before the entry count does.
+    const cleaned = pruneAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries,
+    }, now);
+    expect(cleaned.entries.length).toBeLessThan(entries.length);
+    expect(isAgentInteractionResolutionJournal(cleaned)).toBe(true);
   });
 
   test("rejects malformed workflow summary bounds and timestamps", () => {

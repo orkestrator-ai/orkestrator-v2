@@ -28,6 +28,17 @@ export const AGENT_INTERACTION_LIMITS = Object.freeze({
 /** Terminal journal records are retained for seven days during normal cleanup. */
 export const AGENT_INTERACTION_JOURNAL_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 
+/**
+ * Unfinished claims are reclaimed as `stale` after one day.
+ *
+ * A blocking interaction is answered, declined, denied or abandoned in seconds;
+ * one that is still unfinished a day later belongs to a workflow, generation or
+ * process that no longer exists. Without this the only entries that ever expire
+ * are the terminal ones, so a single crash between claiming and recording leaks
+ * a permanent record and enough leaks make the journal unreadable forever.
+ */
+export const AGENT_INTERACTION_CLAIM_RETENTION_MS = 24 * 60 * 60 * 1_000;
+
 export const AGENT_INTERACTION_PROVIDERS = [
   "claude",
   "opencode",
@@ -283,19 +294,33 @@ export interface AgentInteractionWorkflowSummary {
   entries: AgentInteractionWorkflowSummaryEntry[];
 }
 
-const INPUT_KINDS = new Set<AgentInteractionKind>([
+/**
+ * Kinds routed by {@link AgentInteractionPolicy.input}. Together with
+ * {@link AGENT_INTERACTION_AUTHORIZATION_KINDS} these must partition
+ * {@link AGENT_INTERACTION_KINDS}; a kind in neither list falls through to
+ * `policy.unknown`, which denies. A test pins the partition so a kind added
+ * without being classified fails loudly instead of silently denying.
+ */
+export const AGENT_INTERACTION_INPUT_KINDS = [
   "question",
   "mcp-form",
   "mcp-url",
   "elicitation",
   "terminal-selection",
-]);
-const AUTHORIZATION_KINDS = new Set<AgentInteractionKind>([
+] as const satisfies readonly AgentInteractionKind[];
+
+/** Kinds routed by {@link AgentInteractionPolicy.authorization}. */
+export const AGENT_INTERACTION_AUTHORIZATION_KINDS = [
   "plan-approval",
   "command-approval",
   "file-approval",
   "permission",
-]);
+] as const satisfies readonly AgentInteractionKind[];
+
+const INPUT_KINDS = new Set<AgentInteractionKind>(AGENT_INTERACTION_INPUT_KINDS);
+const AUTHORIZATION_KINDS = new Set<AgentInteractionKind>(
+  AGENT_INTERACTION_AUTHORIZATION_KINDS,
+);
 const PROVIDERS = new Set<string>(AGENT_INTERACTION_PROVIDERS);
 const KINDS = new Set<string>(AGENT_INTERACTION_KINDS);
 const ORIGINS = new Set<string>(AGENT_INTERACTION_ORIGINS);
@@ -374,6 +399,53 @@ function serializedBytes(value: unknown): number {
 
 function isWithinSerializedLimit(value: unknown): boolean {
   return serializedBytes(value) <= AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes;
+}
+
+/**
+ * A string's UTF-16 code-unit length is never greater than its UTF-8 byte
+ * length, so these sums are a lower bound on the serialized size.
+ *
+ * The per-field maximums alone permit a structurally valid request of roughly
+ * 19 MB (16 questions x 32 options x ~37 KB of text). Serializing that just to
+ * discover it overflows a 256 KB budget is exactly the amplification these
+ * guards exist to prevent, and the payload arrives from a provider. Checking
+ * the lower bound first rejects it without ever building the string, and can
+ * never reject a value that would have passed: for anything within the byte
+ * limit the lower bound is within it too.
+ */
+function presentationTextLength(
+  presentation: AgentInteractionPresentation,
+): number {
+  let total = presentation.title.length
+    + (presentation.body?.length ?? 0)
+    + (presentation.url?.length ?? 0)
+    + (presentation.confirmLabel?.length ?? 0)
+    + (presentation.declineLabel?.length ?? 0);
+  for (const question of presentation.questions) {
+    total += question.id.length
+      + question.prompt.length
+      + (question.description?.length ?? 0);
+    for (const option of question.options) {
+      total += option.id.length
+        + option.label.length
+        + option.providerValue.length
+        + (option.description?.length ?? 0);
+    }
+  }
+  return total;
+}
+
+function answerTextLength(answers: readonly AgentInteractionQuestionAnswer[]): number {
+  let total = 0;
+  for (const answer of answers) {
+    total += answer.questionId.length + (answer.freeText?.length ?? 0);
+    for (const optionId of answer.optionIds ?? []) total += optionId.length;
+  }
+  return total;
+}
+
+function isWithinTextLowerBound(length: number): boolean {
+  return length <= AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes;
 }
 
 function hasUniqueStrings(values: readonly string[]): boolean {
@@ -466,7 +538,9 @@ export function isAgentInteractionRequest(
   ) {
     return false;
   }
-  return isPresentation(value.presentation, value.kind as AgentInteractionKind)
+  const presentation = value.presentation;
+  if (!isPresentation(presentation, value.kind as AgentInteractionKind)) return false;
+  return isWithinTextLowerBound(presentationTextLength(presentation))
     && isWithinSerializedLimit(value);
 }
 
@@ -507,12 +581,15 @@ function isQuestionAnswer(value: unknown): value is AgentInteractionQuestionAnsw
     && ((value.optionIds?.length ?? 0) > 0 || value.freeText !== undefined);
 }
 
-/** Validates identity, option references, required answers, and all size bounds. */
-export function isAgentInteractionAnswer(
+/**
+ * The answer half of {@link isAgentInteractionAnswer}, for callers that have
+ * already validated `request`. Re-validating it would re-walk and re-serialize
+ * a payload of up to the full 256 KB budget on every nested guard.
+ */
+function isAnswerForValidatedRequest(
   value: unknown,
   request: AgentInteractionRequest,
 ): value is AgentInteractionAnswer {
-  if (!isAgentInteractionRequest(request)) return false;
   if (
     !isRecord(value)
     || !hasOnlyKeys(value, ANSWER_KEYS)
@@ -545,7 +622,17 @@ export function isAgentInteractionAnswer(
   ))) {
     return false;
   }
-  return isWithinSerializedLimit(value);
+  return isWithinTextLowerBound(answerTextLength(answers))
+    && isWithinSerializedLimit(value);
+}
+
+/** Validates identity, option references, required answers, and all size bounds. */
+export function isAgentInteractionAnswer(
+  value: unknown,
+  request: AgentInteractionRequest,
+): value is AgentInteractionAnswer {
+  return isAgentInteractionRequest(request)
+    && isAnswerForValidatedRequest(value, request);
 }
 
 export function isAgentInteractionResolution(
@@ -567,7 +654,7 @@ export function isAgentInteractionResolution(
     return false;
   }
   if (value.action === "answer") {
-    return isAgentInteractionAnswer(value.answer, request)
+    return isAnswerForValidatedRequest(value.answer, request)
       && isWithinSerializedLimit(value);
   }
   return value.answer === undefined && isWithinSerializedLimit(value);
@@ -742,7 +829,54 @@ export function isAgentInteractionWorkflowSummary(
     && isWithinSerializedLimit(value);
 }
 
-/** Normal cleanup preserves every unfinished claim and bounds terminal history. */
+/** The moment an unfinished entry last made progress. */
+function unfinishedProgressAt(
+  entry: AgentInteractionResolutionJournalEntry,
+): number {
+  return entry.providerResolvedAt ?? entry.claim.claimedAt;
+}
+
+/**
+ * Turns an unfinished claim into a terminal record instead of dropping it.
+ *
+ * Whenever there is room, the `(sessionId, interactionId)` pair stays in the
+ * journal, so the exact-once uniqueness check still rejects a second claim on
+ * the same interaction — which dropping the entry outright would silently
+ * allow. Only a journal already saturated with live claims evicts the record
+ * as well, and at that point every bound is being enforced at once.
+ */
+function abandonUnfinishedEntry(
+  entry: AgentInteractionResolutionJournalEntry,
+  now: number,
+): AgentInteractionResolutionJournalEntry {
+  const providerResolvedAt = entry.providerResolvedAt ?? entry.claim.claimedAt;
+  return {
+    ...entry,
+    state: TERMINAL_JOURNAL_STATE,
+    outcome: entry.outcome ?? "stale",
+    providerResolvedAt,
+    // Clock skew can leave a claim stamped ahead of `now`; the guard requires a
+    // non-decreasing sequence, so never record before the resolve it follows.
+    workflowRecordedAt: Math.max(now, providerResolvedAt),
+  };
+}
+
+const JOURNAL_ENVELOPE_BYTES = serializedBytes({
+  version: AGENT_INTERACTION_JOURNAL_VERSION,
+  entries: [],
+});
+
+/**
+ * Bounds the journal without ever refusing to produce one.
+ *
+ * Unfinished claims are the exact-once fences, so recent ones are kept ahead of
+ * terminal history. The ones that age out — and, in the pathological case where
+ * recent claims alone would overflow the bound, the oldest of those — are
+ * reclaimed as terminal `stale` records rather than retained forever or
+ * dropped. Throwing here instead would turn a leaked claim into a permanent
+ * read outage for the whole journal, which is strictly worse than recording
+ * that a long-dead claim was abandoned.
+ */
 export function pruneAgentInteractionResolutionJournal(
   journal: AgentInteractionResolutionJournal,
   now = Date.now(),
@@ -753,29 +887,55 @@ export function pruneAgentInteractionResolutionJournal(
   ) {
     throw new Error("Invalid interaction resolution journal cleanup input");
   }
-  const cutoff = now - AGENT_INTERACTION_JOURNAL_RETENTION_MS;
-  const unfinished = journal.entries.filter(
-    (entry) => entry.state !== TERMINAL_JOURNAL_STATE,
-  );
-  const terminal = journal.entries
-    .filter((entry) => entry.state === TERMINAL_JOURNAL_STATE)
-    .filter((entry) => (entry.workflowRecordedAt ?? 0) >= cutoff)
+  const terminalCutoff = now - AGENT_INTERACTION_JOURNAL_RETENTION_MS;
+  const claimCutoff = now - AGENT_INTERACTION_CLAIM_RETENTION_MS;
+  const unfinished = journal.entries
+    .filter((entry) => entry.state !== TERMINAL_JOURNAL_STATE)
+    .sort((a, b) => unfinishedProgressAt(b) - unfinishedProgressAt(a));
+
+  const kept: AgentInteractionResolutionJournalEntry[] = [];
+  const reclaimed: AgentInteractionResolutionJournalEntry[] = [];
+  let usedBytes = JOURNAL_ENVELOPE_BYTES;
+  for (const entry of unfinished) {
+    // `+ 1` covers the separator this entry adds, keeping the running total at
+    // or above what the finished array actually serializes to.
+    const entryBytes = serializedBytes(entry) + 1;
+    if (
+      unfinishedProgressAt(entry) >= claimCutoff
+      && kept.length < AGENT_INTERACTION_LIMITS.maxJournalEntries
+      && usedBytes + entryBytes <= AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
+    ) {
+      kept.push(entry);
+      usedBytes += entryBytes;
+      continue;
+    }
+    reclaimed.push(abandonUnfinishedEntry(entry, now));
+  }
+
+  const terminal = [
+    ...journal.entries.filter((entry) => entry.state === TERMINAL_JOURNAL_STATE),
+    ...reclaimed,
+  ]
+    .filter((entry) => (entry.workflowRecordedAt ?? 0) >= terminalCutoff)
     .sort((a, b) => (b.workflowRecordedAt ?? 0) - (a.workflowRecordedAt ?? 0));
+
+  const entries = [...kept];
+  for (const entry of terminal) {
+    if (entries.length >= AGENT_INTERACTION_LIMITS.maxJournalEntries) break;
+    const entryBytes = serializedBytes(entry) + 1;
+    if (usedBytes + entryBytes > AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes) {
+      break;
+    }
+    entries.push(entry);
+    usedBytes += entryBytes;
+  }
+
   const pruned: AgentInteractionResolutionJournal = {
     version: AGENT_INTERACTION_JOURNAL_VERSION,
-    entries: [...unfinished],
+    entries,
   };
   if (!isAgentInteractionResolutionJournal(pruned)) {
-    throw new Error("Unfinished interaction claims exceed the journal limit");
-  }
-  for (const entry of terminal) {
-    if (pruned.entries.length >= AGENT_INTERACTION_LIMITS.maxJournalEntries) break;
-    const candidate: AgentInteractionResolutionJournal = {
-      ...pruned,
-      entries: [...pruned.entries, entry],
-    };
-    if (!isWithinSerializedLimit(candidate)) break;
-    pruned.entries.push(entry);
+    throw new Error("Interaction resolution journal cleanup produced an invalid journal");
   }
   return pruned;
 }

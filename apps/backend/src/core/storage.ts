@@ -561,6 +561,15 @@ function migratePersistedNativeAgentSession(
     : null;
 }
 
+interface LoadedNativeAgentSessions {
+  /** Records this build can read, already migrated in memory. */
+  sessions: Record<string, PersistedNativeAgentSession>;
+  /** Records this build cannot read, preserved verbatim and never reused. */
+  opaque: Record<string, unknown>;
+  /** True when at least one readable record was upgraded and needs persisting. */
+  migrated: boolean;
+}
+
 function resolveNativeAgentInteractionMetadata(input: {
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;
@@ -3398,11 +3407,19 @@ export class StorageService {
     return stored;
   }
 
+  /**
+   * Reads under the same lock the writers take. Cleanup is not idempotent
+   * against a concurrent update — it reclaims claims by wall-clock age — so an
+   * unsynchronized read could return a journal that disagrees with the one an
+   * in-flight update is about to persist.
+   */
   async getAgentInteractionResolutionJournal(): Promise<
     AgentInteractionResolutionJournal
   > {
-    return pruneAgentInteractionResolutionJournal(
-      await this.loadAgentInteractionResolutionJournal(),
+    return this.enqueueAgentInteractionJournalMutation(async () =>
+      pruneAgentInteractionResolutionJournal(
+        await this.loadAgentInteractionResolutionJournal(),
+      )
     );
   }
 
@@ -3429,10 +3446,17 @@ export class StorageService {
     });
   }
 
-  private async loadNativeAgentSessions(): Promise<{
-    sessions: Record<string, PersistedNativeAgentSession>;
-    migrated: boolean;
-  }> {
+  /**
+   * Splits the store into records this build understands and records it does
+   * not. Both halves matter: an unreadable record must never be reused, reused
+   * as a mapping, or quietly discarded — the latter would destroy a session a
+   * newer build wrote and the user could still downgrade back into.
+   *
+   * Failing the *whole file* on one bad record would take down every native
+   * tab in every environment, and would block the environment deletion that is
+   * the user's only way to clear it. So the refusal is scoped to the key.
+   */
+  private async loadNativeAgentSessions(): Promise<LoadedNativeAgentSessions> {
     const stored = await this.loadJson<unknown>(
       this.nativeAgentSessionsFile(),
       () => ({}),
@@ -3441,20 +3465,43 @@ export class StorageService {
       throw new Error("Stored native agent sessions are invalid");
     }
     const sessions: Record<string, PersistedNativeAgentSession> = {};
+    const opaque: Record<string, unknown> = {};
     let migratedAny = false;
     for (const [storedKey, session] of Object.entries(stored)) {
-      if (!isPersistedNativeAgentSession(session, storedKey)) {
-        migratedAny = true;
-      }
       const migrated = migratePersistedNativeAgentSession(session, storedKey);
       if (!migrated) {
-        throw new Error(
-          "Stored native agent session metadata is invalid or uses an unsupported version",
-        );
+        opaque[storedKey] = session;
+        continue;
       }
+      if (!isPersistedNativeAgentSession(session, storedKey)) migratedAny = true;
       sessions[storedKey] = migrated;
     }
-    return { sessions, migrated: migratedAny };
+    return { sessions, opaque, migrated: migratedAny };
+  }
+
+  /**
+   * Writes the readable records back while preserving every unreadable one
+   * byte-for-byte. Persisting `sessions` alone would erase them.
+   */
+  private async saveNativeAgentSessions(
+    sessions: Record<string, PersistedNativeAgentSession>,
+    opaque: Record<string, unknown>,
+  ): Promise<void> {
+    await this.saveSensitiveJson(this.nativeAgentSessionsFile(), {
+      ...opaque,
+      ...sessions,
+    });
+  }
+
+  private assertReadableNativeAgentSession(
+    loaded: LoadedNativeAgentSessions,
+    key: string,
+  ): void {
+    if (key in loaded.opaque) {
+      throw new Error(
+        "Stored native agent session metadata is invalid or uses an unsupported version",
+      );
+    }
   }
 
   async getNativeAgentSession(
@@ -3463,12 +3510,23 @@ export class StorageService {
     if (!isNonBlankString(key)) {
       throw new Error("Native agent session key must not be blank");
     }
+    // Read without the cross-process lock. `getOrCreateNativeAgentSession`
+    // deliberately holds that lock across an external provider create, so
+    // taking it here would make a routine tab reattach wait on — and, past the
+    // 20s lock deadline, fail against — an unrelated session being created.
+    // Only a load that actually migrated something needs to write.
+    const loaded = await this.loadNativeAgentSessions();
+    if (!loaded.migrated) {
+      this.assertReadableNativeAgentSession(loaded, key);
+      return loaded.sessions[key] ?? null;
+    }
     return this.enqueueNativeAgentSessionMutation(async () => {
-      const { sessions, migrated } = await this.loadNativeAgentSessions();
-      if (migrated) {
-        await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      const current = await this.loadNativeAgentSessions();
+      if (current.migrated) {
+        await this.saveNativeAgentSessions(current.sessions, current.opaque);
       }
-      return sessions[key] ?? null;
+      this.assertReadableNativeAgentSession(current, key);
+      return current.sessions[key] ?? null;
     });
   }
 
@@ -3504,7 +3562,9 @@ export class StorageService {
         input.environmentId,
         "Native agent session",
       );
-      const { sessions, migrated } = await this.loadNativeAgentSessions();
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, input.key);
       const existing = sessions[input.key];
       if (existing) {
         if (
@@ -3519,9 +3579,7 @@ export class StorageService {
         ) {
           throw new Error("Native agent session key collision");
         }
-        if (migrated) {
-          await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
-        }
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return existing;
       }
 
@@ -3543,7 +3601,7 @@ export class StorageService {
         updatedAt: now,
       };
       sessions[input.key] = saved;
-      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      await this.saveNativeAgentSessions(sessions, opaque);
       this.announce("native-agent-session", input.environmentId);
       return saved;
     });
@@ -3582,7 +3640,9 @@ export class StorageService {
         input.environmentId,
         "Native agent session",
       );
-      const { sessions, migrated } = await this.loadNativeAgentSessions();
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, input.key);
       const existing = sessions[input.key];
       if (existing) {
         if (
@@ -3598,9 +3658,7 @@ export class StorageService {
           throw new Error("Native agent session key collision");
         }
         if (existing.providerSessionId === input.providerSessionId) {
-          if (migrated) {
-            await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
-          }
+          if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
           return existing;
         }
         if (existing.providerSessionId !== input.expectedProviderSessionId) {
@@ -3628,7 +3686,7 @@ export class StorageService {
         updatedAt: now,
       };
       sessions[input.key] = saved;
-      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      await this.saveNativeAgentSessions(sessions, opaque);
       this.announce("native-agent-session", input.environmentId);
       return saved;
     });
@@ -3642,16 +3700,16 @@ export class StorageService {
       throw new Error("Native agent session identity must not be blank");
     }
     return this.enqueueNativeAgentSessionMutation(async () => {
-      const { sessions, migrated } = await this.loadNativeAgentSessions();
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
       const existing = sessions[key];
       if (!existing || existing.providerSessionId !== providerSessionId) {
-        if (migrated) {
-          await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
-        }
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return false;
       }
       delete sessions[key];
-      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      await this.saveNativeAgentSessions(sessions, opaque);
       this.announce("native-agent-session", existing.environmentId);
       return true;
     });
@@ -3662,19 +3720,23 @@ export class StorageService {
   ): Promise<void> {
     if (!isNonBlankString(environmentId)) return;
     await this.enqueueNativeAgentSessionMutation(async () => {
-      const { sessions, migrated } = await this.loadNativeAgentSessions();
+      // Deliberately does not refuse an unreadable record. This is the path a
+      // user takes to clear one, so it must always complete; unreadable records
+      // are simply carried across untouched, since nothing here can prove which
+      // environment they belong to.
+      const { sessions, opaque, migrated } = await this.loadNativeAgentSessions();
       const retained = Object.fromEntries(
         Object.entries(sessions).filter(
           ([, session]) => session.environmentId !== environmentId,
         ),
       );
-      if (
-        migrated
-        || Object.keys(retained).length !== Object.keys(sessions).length
-      ) {
-        await this.saveSensitiveJson(this.nativeAgentSessionsFile(), retained);
-        this.announce("native-agent-session", environmentId);
+      const removed =
+        Object.keys(retained).length !== Object.keys(sessions).length;
+      if (migrated || removed) {
+        await this.saveNativeAgentSessions(retained, opaque);
       }
+      // Only a real deletion is worth waking every client for.
+      if (removed) this.announce("native-agent-session", environmentId);
 
       // Rotating the primary file leaves the deleted environment's logical keys,
       // provider session ids and dispatch journal readable in its backups. Scrub
@@ -3683,8 +3745,15 @@ export class StorageService {
       await this.scrubSensitiveJsonBackups(
         this.nativeAgentSessionsFile(),
         (storedKey, session) => {
-          const migrated = migratePersistedNativeAgentSession(session, storedKey);
-          return migrated !== null && migrated.environmentId !== environmentId;
+          const readable = migratePersistedNativeAgentSession(session, storedKey);
+          if (readable) return readable.environmentId !== environmentId;
+          // An unreadable backup record still names its environment in the
+          // clear often enough to attribute. Keep the ones that provably belong
+          // elsewhere; drop the rest, because a backup that cannot be proven
+          // free of the deleted environment's content is not safe to retain.
+          return isRecord(session)
+            && isNonBlankString(session.environmentId)
+            && session.environmentId !== environmentId;
         },
       );
     });
@@ -3702,13 +3771,13 @@ export class StorageService {
       throw new Error("Native agent dispatch key must not be blank");
     }
     return this.enqueueNativeAgentSessionMutation(async () => {
-      const { sessions, migrated } = await this.loadNativeAgentSessions();
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
       const session = sessions[key];
       if (!session) throw new Error("Native agent session was not found");
       if (session.dispatchedRequestIds?.includes(requestId)) {
-        if (migrated) {
-          await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
-        }
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return { session, dispatched: false };
       }
 
@@ -3726,7 +3795,7 @@ export class StorageService {
         updatedAt: nowIso(),
       };
       sessions[key] = updated;
-      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      await this.saveNativeAgentSessions(sessions, opaque);
       this.announce("native-agent-session", session.environmentId);
       return { session: updated, dispatched: true };
     });

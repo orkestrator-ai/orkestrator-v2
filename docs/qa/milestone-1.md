@@ -66,6 +66,13 @@ Primary files:
 - [x] Define bounded attempt/workflow summaries: provider, kind, phase, session
       ID, timestamps, outcome, and count—never full request content.
 - [x] Add normal cleanup rules for terminal journal records.
+- [x] Expire unfinished claims too, so a workflow that dies between claiming and
+      recording cannot leak a permanent entry. Cleanup reclaims them as terminal
+      `stale` records rather than retaining them forever or refusing to prune,
+      which would make the journal unreadable for every reader.
+- [x] Keep persisted-session refusals scoped to the record. An entry this build
+      cannot read is preserved verbatim and never reused, but it must not fail
+      reads of other keys or block the environment deletion that clears it.
 
 ## Baseline and fact-finding checklist
 

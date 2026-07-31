@@ -281,4 +281,53 @@ describe("Claude Agent SDK runtime compatibility", () => {
       await rm(fixtureDir, { recursive: true, force: true });
     }
   }, 15_000);
+
+  test("contract fixture records one response and refuses to run unconfigured", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-fixture-"));
+    const fixture = join(import.meta.dir, "testing", "fake-ask-user-question-cli.ts");
+    const responseFile = join(fixtureDir, "response.json");
+
+    try {
+      // Without a destination it must exit rather than silently discard the
+      // capture the assertions depend on.
+      const unconfigured = Bun.spawn([process.execPath, fixture], {
+        env: Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([key]) => key !== "CLAUDE_SDK_CONTRACT_RESPONSE_FILE",
+          ),
+        ) as Record<string, string>,
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      expect(await unconfigured.exited).toBe(2);
+
+      // Two identical control responses must leave one parseable document, not
+      // two concatenated ones that fail with an opaque syntax error.
+      const duplicate = {
+        type: "control_response",
+        response: {
+          request_id: "contract-question-request",
+          subtype: "success",
+          response: { behavior: "allow" },
+        },
+      };
+      const recorder = Bun.spawn([process.execPath, fixture], {
+        env: { ...process.env, CLAUDE_SDK_CONTRACT_RESPONSE_FILE: responseFile },
+        stdin: new TextEncoder().encode(
+          `${JSON.stringify(duplicate)}\n${JSON.stringify(duplicate)}\n`,
+        ),
+        stdout: "ignore",
+        stderr: "pipe",
+      });
+      const stderr = await new Response(recorder.stderr).text();
+      expect(await recorder.exited, stderr).toBe(0);
+      const captured = JSON.parse(await readFile(responseFile, "utf8")) as {
+        response: { request_id: string };
+      };
+      expect(captured.response.request_id).toBe("contract-question-request");
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });

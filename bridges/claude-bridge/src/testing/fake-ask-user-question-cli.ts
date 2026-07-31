@@ -1,11 +1,15 @@
 #!/usr/bin/env bun
-import { appendFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const responseFile = process.env.CLAUDE_SDK_CONTRACT_RESPONSE_FILE;
 if (!responseFile) process.exit(2);
 
 let questionSent = false;
+// The test parses the response file as one JSON document. Recording a second
+// response would concatenate two, so a duplicate would surface as an opaque
+// syntax error exactly when the SDK contract this pins has changed.
+let responseRecorded = false;
 let sessionId = "contract-session";
 const lines = createInterface({ input: process.stdin });
 
@@ -63,7 +67,9 @@ lines.on("line", (line) => {
   if (message.type === "control_response") {
     const response = message.response as Record<string, unknown>;
     if (response?.request_id !== "contract-question-request") return;
-    appendFileSync(responseFile, JSON.stringify({
+    if (responseRecorded) return;
+    responseRecorded = true;
+    writeFileSync(responseFile, JSON.stringify({
       argv: process.argv.slice(2),
       response,
     }));

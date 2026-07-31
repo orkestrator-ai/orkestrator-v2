@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
 import {
   claudeAdapter,
@@ -12,6 +13,7 @@ function workflow(
   model = "default",
 ): LoopedReviewWorkflow {
   return {
+    version: 1 as const,
     id: "workflow-1",
     environmentId: "env-1",
     agent,
@@ -29,6 +31,8 @@ function admitted(agent: LoopedReviewWorkflow["agent"]) {
     agent,
     logicalSessionKey: "key-1",
     providerSessionId: `${agent}-provider-session`,
+    origin: "looped-review" as const,
+    interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
   };
@@ -36,6 +40,8 @@ function admitted(agent: LoopedReviewWorkflow["agent"]) {
 
 type AdmissionInput = {
   logicalSessionKey: string;
+  origin?: string;
+  interactionPolicy?: unknown;
   model?: string;
   phase?: string;
   sessionMode?: string;
@@ -189,12 +195,15 @@ describe("structured review phase permissions", () => {
 
   test("routes looped-review session creation through backend logical admission", async () => {
     const ensureSession = mock(async () => ({
+      version: 1 as const,
       id: "record-1",
       key: "key-1",
       environmentId: "env-1",
       agent: "codex" as const,
       logicalSessionKey: "looped-review:workflow-1:discovery:round-1:pass-1",
       providerSessionId: "provider-session",
+      origin: "looped-review" as const,
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
     }));
@@ -229,6 +238,8 @@ describe("structured review phase permissions", () => {
       logicalSessionKey:
         "looped-review:workflow-1:discovery:round-1:pass-1",
       phase: "review",
+      origin: "looped-review",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
     }));
   });
 
@@ -300,6 +311,8 @@ describe("structured review phase permissions", () => {
         logicalSessionKey:
           "looped-review:workflow-1:discovery:round-1:pass-1",
         phase: "review",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       }));
     },
   );

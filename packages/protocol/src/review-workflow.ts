@@ -10,6 +10,22 @@
 
 import { getReviewInstructionValidationError } from "./review-prompt.js";
 
+/** Shared failure vocabulary for current renderer-owned and future backend-owned reviews. */
+export const REVIEW_WORKFLOW_FAILURE_KINDS = [
+  "connection",
+  "dispatch",
+  "provider",
+  "structured-output",
+  "package",
+  "reconciliation",
+  "fix",
+  "pr",
+  "persistence",
+  "interactive-request",
+] as const;
+export type ReviewWorkflowFailureKind =
+  (typeof REVIEW_WORKFLOW_FAILURE_KINDS)[number];
+
 /** Token available in the shared editable review instruction. */
 export const REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN = "{{targetBranch}}";
 

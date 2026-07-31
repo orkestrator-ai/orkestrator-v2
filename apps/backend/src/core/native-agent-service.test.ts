@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import {
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+} from "@orkestrator/protocol/agent-interactions";
+import {
   PromptRejectedError,
   ProviderUnavailableError,
   type BridgeConnection,
@@ -362,6 +366,81 @@ describe("NativeAgentService", () => {
       await service.shutdown();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
+  });
+
+  test("persists default and workflow interaction metadata through the service", async () => {
+    const { provider } = createProviderStub("codex", {
+      createSession: async () => "provider-session",
+    });
+    await withService({
+      prefix: "orkestrator-native-interaction-metadata-",
+      provider: async () => provider,
+    }, async ({ service }) => {
+      const interactive = await service.ensureSession({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:interactive",
+      });
+      expect(interactive).toMatchObject({
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      });
+
+      const unattended = await service.ensureSession({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "looped-review:workflow-1:review:round-1",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      expect(unattended).toMatchObject({
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+    });
+  });
+
+  test("rehydrates a legacy looped-review mapping without replacing its provider", async () => {
+    const { provider, createSession, status } = createProviderStub("codex");
+    await withService({
+      prefix: "orkestrator-native-legacy-looped-review-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const logicalSessionKey = "looped-review:workflow-1:review:round-1";
+      const key = nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey);
+      const file = path.join(storage.getDataDir(), "native-agent-sessions.json");
+      await fs.writeFile(file, JSON.stringify({
+        [key]: {
+          key,
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey,
+          providerSessionId: "legacy-provider-session",
+          createdAt: new Date(1).toISOString(),
+          updatedAt: new Date(2).toISOString(),
+        },
+      }));
+
+      const session = await service.ensureSession({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey,
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      expect(session).toMatchObject({
+        providerSessionId: "legacy-provider-session",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      expect(createSession).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith("legacy-provider-session");
+      expect(JSON.parse(await fs.readFile(file, "utf8"))[key]).toMatchObject({
+        version: 1,
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+    });
   });
 
   test("does not drain a queue until the authoritative provider is idle", async () => {
@@ -1556,6 +1635,22 @@ describe("NativeAgentService", () => {
       ["a blank environment ID", { environmentId: " " }],
       ["a blank logical session key", { logicalSessionKey: "" }],
       ["an unknown agent", { agent: "gemini" as unknown as "codex" }],
+      ["an unknown interaction origin", {
+        origin: "scheduled-task" as unknown as "interactive-native",
+      }],
+      ["a malformed interaction policy", {
+        interactionPolicy: {
+          ...INTERACTIVE_AGENT_INTERACTION_POLICY,
+          unknown: "await-user",
+        } as unknown as typeof INTERACTIVE_AGENT_INTERACTION_POLICY,
+      }],
+      ["an interactive policy for a workflow origin", {
+        origin: "looped-review" as const,
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      }],
+      ["an unattended policy without a workflow origin", {
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      }],
     ])("refuses a session request with %s", async (_label, override) => {
       const { provider, createSession } = createProviderStub("codex");
       await withService({

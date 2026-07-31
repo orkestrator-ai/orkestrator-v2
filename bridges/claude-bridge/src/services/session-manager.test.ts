@@ -4579,14 +4579,18 @@ describe("sendPrompt", () => {
 // ---------------------------------------------------------------------------
 
 describe("AskUserQuestion flow", () => {
-  test("canUseTool registers a pending question, answerQuestion resolves it with allow", async () => {
+  test("pins AskUserQuestion as parked in canUseTool under bypassPermissions", async () => {
     const session = createSession("question-flow");
     track(session.id);
 
-    const promptPromise = sendPrompt(session.id, "ask me");
+    const promptPromise = sendPrompt(session.id, "ask me", {
+      permissionMode: "bypassPermissions",
+    });
     const call = await nextQueryCall();
 
     expect(typeof call.options.canUseTool).toBe("function");
+    expect(call.options.permissionMode).toBe("bypassPermissions");
+    expect(call.options.allowDangerouslySkipPermissions).toBe(true);
 
     const requestedAt = Date.now();
     const canUseToolPromise = call.options.canUseTool!("AskUserQuestion", {

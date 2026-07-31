@@ -8,6 +8,10 @@ import {
   type ReviewReconciliation,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
+import {
+  REVIEW_WORKFLOW_FAILURE_KINDS,
+  type ReviewWorkflowFailureKind,
+} from "@orkestrator/protocol/review-workflow";
 import type { DefaultAgent } from "@/types";
 import { createUuid } from "@/lib/uuid";
 
@@ -170,16 +174,7 @@ export interface LoopedReviewDispatch {
 }
 
 export interface LoopedReviewFailure {
-  code:
-    | "connection"
-    | "dispatch"
-    | "provider"
-    | "structured-output"
-    | "package"
-    | "reconciliation"
-    | "fix"
-    | "pr"
-    | "persistence";
+  code: ReviewWorkflowFailureKind;
   message: string;
   retryPhase: ActiveLoopedReviewPhase;
   /**
@@ -808,17 +803,7 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
       workflow.failure === undefined
       || (
         isRecord(workflow.failure)
-        && isOneOf(workflow.failure.code, [
-          "connection",
-          "dispatch",
-          "provider",
-          "structured-output",
-          "package",
-          "reconciliation",
-          "fix",
-          "pr",
-          "persistence",
-        ])
+        && isOneOf(workflow.failure.code, REVIEW_WORKFLOW_FAILURE_KINDS)
         && typeof workflow.failure.message === "string"
         && isOneOf(workflow.failure.retryPhase, [
           "preparing",

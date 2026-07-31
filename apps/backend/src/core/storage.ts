@@ -11,6 +11,17 @@ import {
   parseUsableAgentActivityTime,
 } from "@orkestrator/protocol/agent-activity";
 import {
+  AGENT_INTERACTION_JOURNAL_VERSION,
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+  isAgentInteractionPolicy,
+  isAgentInteractionResolutionJournal,
+  pruneAgentInteractionResolutionJournal,
+  type AgentInteractionOrigin,
+  type AgentInteractionPolicy,
+  type AgentInteractionResolutionJournal,
+} from "@orkestrator/protocol/agent-interactions";
+import {
   parseStoredDesktopConnections,
   type StoredDesktopConnections,
 } from "@orkestrator/protocol/connections";
@@ -26,6 +37,7 @@ import {
   MAX_CODEX_CONCURRENT_THREADS,
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
+import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
 import type {
   AgentActivityState,
   AgentActivitySource,
@@ -488,6 +500,7 @@ function isPersistedNativeAgentSession(
   expectedKey?: string,
 ): value is PersistedNativeAgentSession {
   return isRecord(value)
+    && value.version === NATIVE_AGENT_SESSION_VERSION
     && isNonBlankString(value.key)
     && (expectedKey === undefined || value.key === expectedKey)
     && isNonBlankString(value.environmentId)
@@ -498,6 +511,13 @@ function isPersistedNativeAgentSession(
     )
     && isNonBlankString(value.logicalSessionKey)
     && isNonBlankString(value.providerSessionId)
+    && (
+      value.origin === "interactive-native"
+      || value.origin === "interactive-tmux"
+      || value.origin === "build-pipeline"
+      || value.origin === "looped-review"
+    )
+    && isAgentInteractionPolicy(value.interactionPolicy)
     && (
       value.dispatchedRequestIds === undefined
       || (
@@ -510,6 +530,71 @@ function isPersistedNativeAgentSession(
     && Number.isFinite(Date.parse(value.createdAt))
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt));
+}
+
+/** Restores pre-policy records without changing provider or dispatch identity. */
+function migratePersistedNativeAgentSession(
+  value: unknown,
+  expectedKey: string,
+): PersistedNativeAgentSession | null {
+  if (isPersistedNativeAgentSession(value, expectedKey)) return value;
+  if (!isRecord(value)) return null;
+  if (
+    value.version !== undefined
+    || value.origin !== undefined
+    || value.interactionPolicy !== undefined
+  ) {
+    return null;
+  }
+  const legacyLoopedReview = typeof value.logicalSessionKey === "string"
+    && value.logicalSessionKey.startsWith("looped-review:");
+  const migrated = {
+    ...value,
+    version: NATIVE_AGENT_SESSION_VERSION,
+    origin: legacyLoopedReview ? "looped-review" : "interactive-native",
+    interactionPolicy: legacyLoopedReview
+      ? UNATTENDED_AGENT_INTERACTION_POLICY
+      : INTERACTIVE_AGENT_INTERACTION_POLICY,
+  };
+  return isPersistedNativeAgentSession(migrated, expectedKey)
+    ? migrated
+    : null;
+}
+
+interface LoadedNativeAgentSessions {
+  /** Records this build can read, already migrated in memory. */
+  sessions: Record<string, PersistedNativeAgentSession>;
+  /** Records this build cannot read, preserved verbatim and never reused. */
+  opaque: Record<string, unknown>;
+  /** True when at least one readable record was upgraded and needs persisting. */
+  migrated: boolean;
+}
+
+function resolveNativeAgentInteractionMetadata(input: {
+  origin?: AgentInteractionOrigin;
+  interactionPolicy?: AgentInteractionPolicy;
+}): Pick<PersistedNativeAgentSession, "origin" | "interactionPolicy"> | null {
+  const origin = input.origin ?? "interactive-native";
+  const interactionPolicy = input.interactionPolicy
+    ?? (origin === "build-pipeline" || origin === "looped-review"
+      ? UNATTENDED_AGENT_INTERACTION_POLICY
+      : INTERACTIVE_AGENT_INTERACTION_POLICY);
+  if (
+    ![
+      "interactive-native",
+      "interactive-tmux",
+      "build-pipeline",
+      "looped-review",
+    ].includes(origin)
+    || !isAgentInteractionPolicy(interactionPolicy)
+    || (
+      (origin === "build-pipeline" || origin === "looped-review")
+        !== (interactionPolicy.mode === "unattended")
+    )
+  ) {
+    return null;
+  }
+  return { origin, interactionPolicy };
 }
 
 function isPersistedComposeDraft(
@@ -1344,6 +1429,7 @@ export class StorageService {
   private loopedReviewMutation: Promise<unknown> = Promise.resolve();
   private buildPipelineMutation: Promise<unknown> = Promise.resolve();
   private nativeAgentSessionMutation: Promise<unknown> = Promise.resolve();
+  private agentInteractionJournalMutation: Promise<unknown> = Promise.resolve();
   private promptQueueMutation: Promise<unknown> = Promise.resolve();
   private promptQueueClaimRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private composeDraftMutation: Promise<unknown> = Promise.resolve();
@@ -1458,6 +1544,10 @@ export class StorageService {
 
   private nativeAgentSessionsFile(): string {
     return this.file("native-agent-sessions.json");
+  }
+
+  private agentInteractionJournalFile(): string {
+    return this.file("agent-interaction-resolution-journal.json");
   }
 
   private promptQueuesFile(): string {
@@ -1694,6 +1784,28 @@ export class StorageService {
     };
     const next = this.nativeAgentSessionMutation.then(run, run);
     this.nativeAgentSessionMutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  private enqueueAgentInteractionJournalMutation<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.agentInteractionJournalFile(),
+        "agent interaction journal storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.agentInteractionJournalMutation.then(run, run);
+    this.agentInteractionJournalMutation = next.then(
       () => undefined,
       () => undefined,
     );
@@ -3282,18 +3394,114 @@ export class StorageService {
     });
   }
 
-  private async loadNativeAgentSessions(): Promise<
-    Record<string, PersistedNativeAgentSession>
+  private async loadAgentInteractionResolutionJournal(): Promise<
+    AgentInteractionResolutionJournal
   > {
-    const stored = await this.loadJson<Record<string, PersistedNativeAgentSession>>(
+    const stored = await this.loadJson<unknown>(
+      this.agentInteractionJournalFile(),
+      () => ({ version: AGENT_INTERACTION_JOURNAL_VERSION, entries: [] }),
+    );
+    if (!isAgentInteractionResolutionJournal(stored)) {
+      throw new Error("Stored agent interaction resolution journal is invalid");
+    }
+    return stored;
+  }
+
+  /**
+   * Reads under the same lock the writers take. Cleanup is not idempotent
+   * against a concurrent update — it reclaims claims by wall-clock age — so an
+   * unsynchronized read could return a journal that disagrees with the one an
+   * in-flight update is about to persist.
+   */
+  async getAgentInteractionResolutionJournal(): Promise<
+    AgentInteractionResolutionJournal
+  > {
+    return this.enqueueAgentInteractionJournalMutation(async () =>
+      pruneAgentInteractionResolutionJournal(
+        await this.loadAgentInteractionResolutionJournal(),
+      )
+    );
+  }
+
+  /**
+   * Serializes cross-process journal transitions under one file lock. Callers
+   * cannot persist request or answer content because the protocol guard accepts
+   * only bounded identities, fences, timestamps, states, and outcomes.
+   */
+  async updateAgentInteractionResolutionJournal(
+    update: (
+      journal: AgentInteractionResolutionJournal,
+    ) => AgentInteractionResolutionJournal,
+  ): Promise<AgentInteractionResolutionJournal> {
+    return this.enqueueAgentInteractionJournalMutation(async () => {
+      const current = pruneAgentInteractionResolutionJournal(
+        await this.loadAgentInteractionResolutionJournal(),
+      );
+      const next = pruneAgentInteractionResolutionJournal(update(current));
+      if (!isAgentInteractionResolutionJournal(next)) {
+        throw new Error("Agent interaction resolution journal update is invalid");
+      }
+      await this.saveSensitiveJson(this.agentInteractionJournalFile(), next);
+      return next;
+    });
+  }
+
+  /**
+   * Splits the store into records this build understands and records it does
+   * not. Both halves matter: an unreadable record must never be reused, reused
+   * as a mapping, or quietly discarded — the latter would destroy a session a
+   * newer build wrote and the user could still downgrade back into.
+   *
+   * Failing the *whole file* on one bad record would take down every native
+   * tab in every environment, and would block the environment deletion that is
+   * the user's only way to clear it. So the refusal is scoped to the key.
+   */
+  private async loadNativeAgentSessions(): Promise<LoadedNativeAgentSessions> {
+    const stored = await this.loadJson<unknown>(
       this.nativeAgentSessionsFile(),
       () => ({}),
     );
-    return Object.fromEntries(
-      Object.entries(stored).filter(([storedKey, session]) =>
-        isPersistedNativeAgentSession(session, storedKey)
-      ),
-    ) as Record<string, PersistedNativeAgentSession>;
+    if (!isRecord(stored)) {
+      throw new Error("Stored native agent sessions are invalid");
+    }
+    const sessions: Record<string, PersistedNativeAgentSession> = {};
+    const opaque: Record<string, unknown> = {};
+    let migratedAny = false;
+    for (const [storedKey, session] of Object.entries(stored)) {
+      const migrated = migratePersistedNativeAgentSession(session, storedKey);
+      if (!migrated) {
+        opaque[storedKey] = session;
+        continue;
+      }
+      if (!isPersistedNativeAgentSession(session, storedKey)) migratedAny = true;
+      sessions[storedKey] = migrated;
+    }
+    return { sessions, opaque, migrated: migratedAny };
+  }
+
+  /**
+   * Writes the readable records back while preserving every unreadable one
+   * byte-for-byte. Persisting `sessions` alone would erase them.
+   */
+  private async saveNativeAgentSessions(
+    sessions: Record<string, PersistedNativeAgentSession>,
+    opaque: Record<string, unknown>,
+  ): Promise<void> {
+    await this.saveSensitiveJson(this.nativeAgentSessionsFile(), {
+      ...opaque,
+      ...sessions,
+    });
+  }
+
+  private assertReadableNativeAgentSession(
+    loaded: LoadedNativeAgentSessions,
+    key: string,
+  ): void {
+    if (key in loaded.opaque) {
+      throw new Error(
+        "Stored native agent session metadata is invalid or uses an unsupported version",
+      );
+    }
   }
 
   async getNativeAgentSession(
@@ -3302,7 +3510,24 @@ export class StorageService {
     if (!isNonBlankString(key)) {
       throw new Error("Native agent session key must not be blank");
     }
-    return (await this.loadNativeAgentSessions())[key] ?? null;
+    // Read without the cross-process lock. `getOrCreateNativeAgentSession`
+    // deliberately holds that lock across an external provider create, so
+    // taking it here would make a routine tab reattach wait on — and, past the
+    // 20s lock deadline, fail against — an unrelated session being created.
+    // Only a load that actually migrated something needs to write.
+    const loaded = await this.loadNativeAgentSessions();
+    if (!loaded.migrated) {
+      this.assertReadableNativeAgentSession(loaded, key);
+      return loaded.sessions[key] ?? null;
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const current = await this.loadNativeAgentSessions();
+      if (current.migrated) {
+        await this.saveNativeAgentSessions(current.sessions, current.opaque);
+      }
+      this.assertReadableNativeAgentSession(current, key);
+      return current.sessions[key] ?? null;
+    });
   }
 
   /**
@@ -3315,14 +3540,19 @@ export class StorageService {
     input: Pick<
       PersistedNativeAgentSession,
       "key" | "environmentId" | "agent" | "logicalSessionKey"
-    >,
+    > & Partial<Pick<
+      PersistedNativeAgentSession,
+      "origin" | "interactionPolicy"
+    >>,
     createProviderSession: () => Promise<string>,
   ): Promise<PersistedNativeAgentSession> {
+    const interactionMetadata = resolveNativeAgentInteractionMetadata(input);
     if (
       !isNonBlankString(input.key)
       || !isNonBlankString(input.environmentId)
       || !isNonBlankString(input.logicalSessionKey)
       || !["claude", "codex", "opencode"].includes(input.agent)
+      || !interactionMetadata
     ) {
       throw new Error("Native agent session input is invalid");
     }
@@ -3332,16 +3562,24 @@ export class StorageService {
         input.environmentId,
         "Native agent session",
       );
-      const sessions = await this.loadNativeAgentSessions();
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, input.key);
       const existing = sessions[input.key];
       if (existing) {
         if (
           existing.environmentId !== input.environmentId
           || existing.agent !== input.agent
           || existing.logicalSessionKey !== input.logicalSessionKey
+          || (input.origin !== undefined && existing.origin !== input.origin)
+          || (
+            input.interactionPolicy !== undefined
+            && existing.interactionPolicy.mode !== input.interactionPolicy.mode
+          )
         ) {
           throw new Error("Native agent session key collision");
         }
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return existing;
       }
 
@@ -3356,12 +3594,14 @@ export class StorageService {
       const now = nowIso();
       const saved: PersistedNativeAgentSession = {
         ...input,
+        ...interactionMetadata,
+        version: NATIVE_AGENT_SESSION_VERSION,
         providerSessionId,
         createdAt: now,
         updatedAt: now,
       };
       sessions[input.key] = saved;
-      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      await this.saveNativeAgentSessions(sessions, opaque);
       this.announce("native-agent-session", input.environmentId);
       return saved;
     });
@@ -3375,14 +3615,19 @@ export class StorageService {
       | "agent"
       | "logicalSessionKey"
       | "providerSessionId"
-    > & { expectedProviderSessionId?: string },
+    > & Partial<Pick<
+      PersistedNativeAgentSession,
+      "origin" | "interactionPolicy"
+    >> & { expectedProviderSessionId?: string },
   ): Promise<PersistedNativeAgentSession> {
+    const interactionMetadata = resolveNativeAgentInteractionMetadata(input);
     if (
       !isNonBlankString(input.key)
       || !isNonBlankString(input.environmentId)
       || !isNonBlankString(input.logicalSessionKey)
       || !isNonBlankString(input.providerSessionId)
       || !["claude", "codex", "opencode"].includes(input.agent)
+      || !interactionMetadata
       || (
         input.expectedProviderSessionId !== undefined
         && !isNonBlankString(input.expectedProviderSessionId)
@@ -3395,17 +3640,25 @@ export class StorageService {
         input.environmentId,
         "Native agent session",
       );
-      const sessions = await this.loadNativeAgentSessions();
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, input.key);
       const existing = sessions[input.key];
       if (existing) {
         if (
           existing.environmentId !== input.environmentId
           || existing.agent !== input.agent
           || existing.logicalSessionKey !== input.logicalSessionKey
+          || (input.origin !== undefined && existing.origin !== input.origin)
+          || (
+            input.interactionPolicy !== undefined
+            && existing.interactionPolicy.mode !== input.interactionPolicy.mode
+          )
         ) {
           throw new Error("Native agent session key collision");
         }
         if (existing.providerSessionId === input.providerSessionId) {
+          if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
           return existing;
         }
         if (existing.providerSessionId !== input.expectedProviderSessionId) {
@@ -3422,11 +3675,18 @@ export class StorageService {
       } = input;
       const saved: PersistedNativeAgentSession = {
         ...identity,
+        ...(existing
+          ? {
+              origin: existing.origin,
+              interactionPolicy: existing.interactionPolicy,
+            }
+          : interactionMetadata),
+        version: NATIVE_AGENT_SESSION_VERSION,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };
       sessions[input.key] = saved;
-      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      await this.saveNativeAgentSessions(sessions, opaque);
       this.announce("native-agent-session", input.environmentId);
       return saved;
     });
@@ -3440,13 +3700,16 @@ export class StorageService {
       throw new Error("Native agent session identity must not be blank");
     }
     return this.enqueueNativeAgentSessionMutation(async () => {
-      const sessions = await this.loadNativeAgentSessions();
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
       const existing = sessions[key];
       if (!existing || existing.providerSessionId !== providerSessionId) {
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return false;
       }
       delete sessions[key];
-      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      await this.saveNativeAgentSessions(sessions, opaque);
       this.announce("native-agent-session", existing.environmentId);
       return true;
     });
@@ -3457,16 +3720,23 @@ export class StorageService {
   ): Promise<void> {
     if (!isNonBlankString(environmentId)) return;
     await this.enqueueNativeAgentSessionMutation(async () => {
-      const sessions = await this.loadNativeAgentSessions();
+      // Deliberately does not refuse an unreadable record. This is the path a
+      // user takes to clear one, so it must always complete; unreadable records
+      // are simply carried across untouched, since nothing here can prove which
+      // environment they belong to.
+      const { sessions, opaque, migrated } = await this.loadNativeAgentSessions();
       const retained = Object.fromEntries(
         Object.entries(sessions).filter(
           ([, session]) => session.environmentId !== environmentId,
         ),
       );
-      if (Object.keys(retained).length !== Object.keys(sessions).length) {
-        await this.saveSensitiveJson(this.nativeAgentSessionsFile(), retained);
-        this.announce("native-agent-session", environmentId);
+      const removed =
+        Object.keys(retained).length !== Object.keys(sessions).length;
+      if (migrated || removed) {
+        await this.saveNativeAgentSessions(retained, opaque);
       }
+      // Only a real deletion is worth waking every client for.
+      if (removed) this.announce("native-agent-session", environmentId);
 
       // Rotating the primary file leaves the deleted environment's logical keys,
       // provider session ids and dispatch journal readable in its backups. Scrub
@@ -3474,9 +3744,17 @@ export class StorageService {
       // failed delete may have removed the primary record while leaving a backup.
       await this.scrubSensitiveJsonBackups(
         this.nativeAgentSessionsFile(),
-        (storedKey, session) =>
-          isPersistedNativeAgentSession(session, storedKey)
-          && session.environmentId !== environmentId,
+        (storedKey, session) => {
+          const readable = migratePersistedNativeAgentSession(session, storedKey);
+          if (readable) return readable.environmentId !== environmentId;
+          // An unreadable backup record still names its environment in the
+          // clear often enough to attribute. Keep the ones that provably belong
+          // elsewhere; drop the rest, because a backup that cannot be proven
+          // free of the deleted environment's content is not safe to retain.
+          return isRecord(session)
+            && isNonBlankString(session.environmentId)
+            && session.environmentId !== environmentId;
+        },
       );
     });
   }
@@ -3493,10 +3771,13 @@ export class StorageService {
       throw new Error("Native agent dispatch key must not be blank");
     }
     return this.enqueueNativeAgentSessionMutation(async () => {
-      const sessions = await this.loadNativeAgentSessions();
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
       const session = sessions[key];
       if (!session) throw new Error("Native agent session was not found");
       if (session.dispatchedRequestIds?.includes(requestId)) {
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
         return { session, dispatched: false };
       }
 
@@ -3514,7 +3795,7 @@ export class StorageService {
         updatedAt: nowIso(),
       };
       sessions[key] = updated;
-      await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      await this.saveNativeAgentSessions(sessions, opaque);
       this.announce("native-agent-session", session.environmentId);
       return { session: updated, dispatched: true };
     });

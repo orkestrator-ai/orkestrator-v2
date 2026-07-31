@@ -6,6 +6,12 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
 import {
+  AGENT_INTERACTION_ORIGINS,
+  isAgentInteractionPolicy,
+  type AgentInteractionOrigin,
+  type AgentInteractionPolicy,
+} from "@orkestrator/protocol/agent-interactions";
+import {
   reviewArtifactDirectory,
   reviewValidationArtifactPaths,
 } from "@orkestrator/protocol/review-artifacts";
@@ -892,6 +898,29 @@ function asRecord(value: unknown, name: string): JsonRecord {
     throw new Error(`Expected ${name} to be an object`);
   }
   return value as JsonRecord;
+}
+
+function asOptionalAgentInteractionOrigin(
+  value: unknown,
+): AgentInteractionOrigin | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string"
+    || !AGENT_INTERACTION_ORIGINS.includes(value as AgentInteractionOrigin)
+  ) {
+    throw new Error("Expected origin to be a supported agent interaction origin");
+  }
+  return value as AgentInteractionOrigin;
+}
+
+function asOptionalAgentInteractionPolicy(
+  value: unknown,
+): AgentInteractionPolicy | undefined {
+  if (value === undefined) return undefined;
+  if (!isAgentInteractionPolicy(value)) {
+    throw new Error("Expected interactionPolicy to be a valid agent interaction policy");
+  }
+  return value;
 }
 
 function assertOnlyKeys(
@@ -5351,7 +5380,11 @@ async function deleteEnvironment(
       );
       // Queued prompts for a deleted environment can never be dispatched.
       await storage.deletePromptQueuesByEnvironment(environmentId);
-      await storage.deleteNativeAgentSessionsByEnvironment(environmentId);
+      // Best-effort, like its siblings: leaving a stale session mapping behind
+      // is recoverable, but aborting here would strand the environment record
+      // itself because `removeEnvironment` below would never run.
+      await storage.deleteNativeAgentSessionsByEnvironment(environmentId)
+        .catch(() => undefined);
       await storage.deleteComposeDraftsByEnvironment(environmentId);
       await storage.deleteFileDraftsByEnvironment(environmentId);
       await storage.deleteAgentHandoffsByEnvironment(environmentId);
@@ -8475,6 +8508,8 @@ export function createCommandRegistry(
         args.logicalSessionKey,
         "logicalSessionKey",
       ),
+      origin: asOptionalAgentInteractionOrigin(args.origin),
+      interactionPolicy: asOptionalAgentInteractionPolicy(args.interactionPolicy),
       title: typeof args.title === "string" ? args.title : undefined,
       model: typeof args.model === "string" ? args.model : undefined,
       reasoningEffort:
@@ -8505,6 +8540,8 @@ export function createCommandRegistry(
         args.logicalSessionKey,
         "logicalSessionKey",
       ),
+      origin: asOptionalAgentInteractionOrigin(args.origin),
+      interactionPolicy: asOptionalAgentInteractionPolicy(args.interactionPolicy),
       providerSessionId: asNonBlankString(
         args.providerSessionId,
         "providerSessionId",
@@ -8540,6 +8577,8 @@ export function createCommandRegistry(
         args.logicalSessionKey,
         "logicalSessionKey",
       ),
+      origin: asOptionalAgentInteractionOrigin(args.origin),
+      interactionPolicy: asOptionalAgentInteractionPolicy(args.interactionPolicy),
       title: typeof args.title === "string" ? args.title : undefined,
       model: typeof args.model === "string" ? args.model : undefined,
       reasoningEffort:

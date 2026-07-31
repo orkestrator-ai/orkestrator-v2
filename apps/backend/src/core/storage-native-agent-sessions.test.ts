@@ -2,6 +2,14 @@ import { describe, expect, jest, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  AGENT_INTERACTION_CLAIM_RETENTION_MS,
+  AGENT_INTERACTION_JOURNAL_VERSION,
+  AGENT_INTERACTION_LIMITS,
+  AGENT_INTERACTION_JOURNAL_RETENTION_MS,
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+} from "@orkestrator/protocol/agent-interactions";
 import { StorageService } from "./storage.js";
 
 async function withStorage(
@@ -41,7 +49,501 @@ const input = {
   logicalSessionKey: "env-env-1:startup-agent",
 };
 
+function terminalJournalEntry(index: number, resolvedAt = Date.now()) {
+  return {
+    id: `claim-${index}`,
+    interactionId: `interaction-${index}`,
+    provider: "codex" as const,
+    kind: "command-approval" as const,
+    sessionId: "provider-session",
+    state: "workflow-recorded" as const,
+    claim: {
+      workflowType: "build-pipeline" as const,
+      workflowId: "pipeline-1",
+      phase: "building",
+      fence: index,
+      claimedAt: resolvedAt - 2,
+    },
+    outcome: "denied" as const,
+    providerResolvedAt: resolvedAt - 1,
+    workflowRecordedAt: resolvedAt,
+  };
+}
+
 describe("StorageService native agent sessions", () => {
+  test("migrates legacy sessions to interactive without losing identity or dispatch history", async () => {
+    await withStorage(async (first) => {
+      const dataDir = (await first.getEnvironment("env-1"))!.worktreePath!;
+      const legacy = {
+        [input.key]: {
+          ...input,
+          providerSessionId: "legacy-provider-session",
+          dispatchedRequestIds: ["legacy-request"],
+          createdAt: new Date(1).toISOString(),
+          updatedAt: new Date(2).toISOString(),
+        },
+      };
+      await fs.writeFile(
+        path.join(dataDir, "native-agent-sessions.json"),
+        JSON.stringify(legacy),
+      );
+
+      expect(await first.getNativeAgentSession(input.key)).toEqual({
+        ...input,
+        providerSessionId: "legacy-provider-session",
+        dispatchedRequestIds: ["legacy-request"],
+        createdAt: new Date(1).toISOString(),
+        updatedAt: new Date(2).toISOString(),
+        version: 1,
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      });
+    });
+  });
+
+  test("migrates legacy looped-review sessions to unattended without replacing the provider", async () => {
+    await withStorage(async (first, second) => {
+      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const legacyInput = {
+        ...input,
+        logicalSessionKey: "looped-review:workflow-1:discovery:round-1",
+      };
+      await fs.writeFile(file, JSON.stringify({
+        [input.key]: {
+          ...legacyInput,
+          providerSessionId: "legacy-provider-session",
+          createdAt: new Date(1).toISOString(),
+          updatedAt: new Date(2).toISOString(),
+        },
+      }));
+
+      const migrated = await first.getOrCreateNativeAgentSession(
+        {
+          ...legacyInput,
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        },
+        async () => "must-not-be-created",
+      );
+      expect(migrated).toMatchObject({
+        providerSessionId: "legacy-provider-session",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      expect(JSON.parse(await fs.readFile(file, "utf8"))[input.key]).toMatchObject({
+        version: 1,
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      expect(await second.getNativeAgentSession(input.key)).toEqual(migrated);
+    });
+  });
+
+  test("persists unattended origin and policy on newly created logical sessions", async () => {
+    await withStorage(async (first) => {
+      const saved = await first.getOrCreateNativeAgentSession({
+        ...input,
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      }, async () => "provider-session");
+      expect(saved).toMatchObject({
+        version: 1,
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      expect(await first.getNativeAgentSession(input.key)).toEqual(saved);
+    });
+  });
+
+  test("fails closed for malformed versioned metadata", async () => {
+    await withStorage(async (first) => {
+      const dataDir = (await first.getEnvironment("env-1"))!.worktreePath!;
+      await fs.writeFile(
+        path.join(dataDir, "native-agent-sessions.json"),
+        JSON.stringify({
+          [input.key]: {
+            ...input,
+            version: 1,
+            providerSessionId: "provider-session",
+            origin: "looped-review",
+            interactionPolicy: { version: 1, mode: "unattended" },
+            createdAt: new Date(1).toISOString(),
+            updatedAt: new Date(2).toISOString(),
+          },
+        }),
+      );
+      await expect(first.getNativeAgentSession(input.key)).rejects.toThrow(
+        "invalid or uses an unsupported version",
+      );
+    });
+  });
+
+  test("does not overwrite an unknown future session version", async () => {
+    await withStorage(async (first) => {
+      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const future = {
+        [input.key]: {
+          ...input,
+          version: 2,
+          providerSessionId: "future-provider-session",
+          origin: "interactive-native",
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+          createdAt: new Date(1).toISOString(),
+          updatedAt: new Date(2).toISOString(),
+        },
+      };
+      const original = JSON.stringify(future);
+      await fs.writeFile(file, original);
+      const create = mock(async () => "replacement-provider-session");
+
+      await expect(first.getOrCreateNativeAgentSession(input, create))
+        .rejects.toThrow("invalid or uses an unsupported version");
+      expect(create).not.toHaveBeenCalled();
+      expect(await fs.readFile(file, "utf8")).toBe(original);
+    });
+  });
+
+  test("reads a session while another process holds the lock for a provider create", async () => {
+    await withStorage(async (first, second) => {
+      let releaseCreate!: () => void;
+      const createBarrier = new Promise<void>((resolve) => {
+        releaseCreate = resolve;
+      });
+      let signalCreating!: () => void;
+      const creating = new Promise<void>((resolve) => {
+        signalCreating = resolve;
+      });
+
+      // `getOrCreateNativeAgentSession` deliberately holds the cross-process
+      // lock across the external create. A reattach read must not queue behind
+      // it — the lock has a 20s deadline, so queuing would turn a slow provider
+      // into a failed read for every other tab.
+      const create = first.getOrCreateNativeAgentSession(input, async () => {
+        signalCreating();
+        await createBarrier;
+        return "slow-provider-session";
+      });
+      await creating;
+
+      expect(await second.getNativeAgentSession("unrelated-key")).toBeNull();
+      releaseCreate();
+      expect((await create).providerSessionId).toBe("slow-provider-session");
+    });
+  });
+
+  test("persists a migration discovered on the read path", async () => {
+    await withStorage(async (first) => {
+      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      await fs.writeFile(file, JSON.stringify({
+        [input.key]: {
+          ...input,
+          providerSessionId: "legacy-provider-session",
+          createdAt: new Date(1).toISOString(),
+          updatedAt: new Date(2).toISOString(),
+        },
+      }));
+
+      // The read is lock-free until it finds something to migrate; then it must
+      // take the lock and write, so the next process does not repeat the work.
+      const migrated = await first.getNativeAgentSession(input.key);
+      expect(migrated).toMatchObject({
+        version: 1,
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      });
+      expect(JSON.parse(await fs.readFile(file, "utf8"))[input.key]).toEqual(migrated);
+    });
+  });
+
+  test("confines an unreadable record to its own key", async () => {
+    await withStorage(async (first) => {
+      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const readable = {
+        ...input,
+        key: "readable-key",
+        version: 1 as const,
+        providerSessionId: "readable-provider-session",
+        origin: "interactive-native" as const,
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        createdAt: new Date(1).toISOString(),
+        updatedAt: new Date(2).toISOString(),
+      };
+      // Written by a newer build the user has since downgraded from, and
+      // belonging to an environment this call knows nothing about.
+      const future = {
+        ...input,
+        key: "poisoned-key",
+        environmentId: "env-other",
+        version: 2,
+        providerSessionId: "future-provider-session",
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        createdAt: new Date(1).toISOString(),
+        updatedAt: new Date(2).toISOString(),
+      };
+      await fs.writeFile(file, JSON.stringify({
+        "readable-key": readable,
+        "poisoned-key": future,
+      }));
+
+      expect(await first.getNativeAgentSession("readable-key")).toEqual(readable);
+      expect(await first.getNativeAgentSession("absent-key")).toBeNull();
+      await expect(first.getNativeAgentSession("poisoned-key")).rejects.toThrow(
+        "invalid or uses an unsupported version",
+      );
+      // The unreadable record must survive a write to a neighbouring key.
+      await first.getOrCreateNativeAgentSession(
+        { ...input, key: "new-key" },
+        async () => "new-provider-session",
+      );
+      expect(JSON.parse(await fs.readFile(file, "utf8"))["poisoned-key"])
+        .toEqual(future);
+    });
+  });
+
+  test("deletes an environment while an unreadable record is present", async () => {
+    await withStorage(async (first) => {
+      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const future = {
+        ...input,
+        key: "poisoned-key",
+        environmentId: "env-other",
+        version: 2,
+        providerSessionId: "future-provider-session",
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        createdAt: new Date(1).toISOString(),
+        updatedAt: new Date(2).toISOString(),
+      };
+      const doomed = await first.getOrCreateNativeAgentSession(
+        input,
+        async () => "doomed-provider-session",
+      );
+      await fs.writeFile(file, JSON.stringify({
+        [input.key]: doomed,
+        "poisoned-key": future,
+      }));
+
+      // Deleting an environment is how a user clears a poisoned store, so it
+      // must never be the operation that the poisoned record blocks.
+      await first.deleteNativeAgentSessionsByEnvironment("env-1");
+      const remaining = JSON.parse(await fs.readFile(file, "utf8"));
+      expect(remaining[input.key]).toBeUndefined();
+      expect(remaining["poisoned-key"]).toEqual(future);
+    });
+  });
+
+  test("announces only a delete that removed something", async () => {
+    await withStorage(async (first) => {
+      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      const announced: string[] = [];
+      first.setResourceChangeListener((change) => {
+        if (change.resource === "native-agent-session") announced.push(change.id);
+      });
+
+      await first.deleteNativeAgentSessionsByEnvironment("env-absent");
+      expect(announced).toEqual([]);
+      await first.deleteNativeAgentSessionsByEnvironment("env-1");
+      expect(announced).toEqual(["env-1"]);
+      expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({});
+    });
+  });
+
+  test("rejects origin and policy combinations that weaken workflow authority", async () => {
+    await withStorage(async (first) => {
+      await expect(first.getOrCreateNativeAgentSession({
+        ...input,
+        origin: "looped-review",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      }, async () => "provider-session")).rejects.toThrow("input is invalid");
+      await expect(first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-session",
+        origin: "interactive-native",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      })).rejects.toThrow("adoption input is invalid");
+    });
+  });
+
+  test("keeps a logical session policy fixed across provider replacement", async () => {
+    await withStorage(async (first) => {
+      await first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-old",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      const replacement = await first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-new",
+        expectedProviderSessionId: "provider-old",
+      });
+      expect(replacement).toMatchObject({
+        providerSessionId: "provider-new",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+    });
+  });
+
+  test("round-trips a bounded content-free interaction resolution journal", async () => {
+    await withStorage(async (first, second) => {
+      const saved = await first.updateAgentInteractionResolutionJournal(
+        (journal) => ({
+          ...journal,
+          entries: [{
+            id: "claim-1",
+            interactionId: "interaction-1",
+            provider: "codex",
+            kind: "command-approval",
+            sessionId: "provider-session",
+            state: "claimed",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: "pipeline-1",
+              phase: "building",
+              fence: 4,
+              claimedAt: Date.now(),
+            },
+          }],
+        }),
+      );
+      expect(saved.version).toBe(AGENT_INTERACTION_JOURNAL_VERSION);
+      expect(await second.getAgentInteractionResolutionJournal()).toEqual(saved);
+      expect(JSON.stringify(saved)).not.toContain("prompt");
+      expect(JSON.stringify(saved)).not.toContain("answer");
+    });
+  });
+
+  test("serializes concurrent journal updates across storage instances", async () => {
+    await withStorage(async (first, second) => {
+      await Promise.all([
+        first.updateAgentInteractionResolutionJournal((journal) => ({
+          ...journal,
+          entries: [...journal.entries, terminalJournalEntry(1)],
+        })),
+        second.updateAgentInteractionResolutionJournal((journal) => ({
+          ...journal,
+          entries: [...journal.entries, terminalJournalEntry(2)],
+        })),
+      ]);
+      expect((await first.getAgentInteractionResolutionJournal()).entries
+        .map((entry) => entry.id).sort()).toEqual(["claim-1", "claim-2"]);
+    });
+  });
+
+  test("orders a journal read against an in-flight update", async () => {
+    await withStorage(async (first, second) => {
+      let releaseUpdate!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        releaseUpdate = resolve;
+      });
+      const update = first.updateAgentInteractionResolutionJournal((journal) => {
+        // The updater runs while the lock is held; the read must not observe
+        // the pre-update journal after this point.
+        queueMicrotask(releaseUpdate);
+        return {
+          ...journal,
+          entries: [...journal.entries, terminalJournalEntry(7)],
+        };
+      });
+      await barrier;
+      const [updated, read] = await Promise.all([
+        update,
+        second.getAgentInteractionResolutionJournal(),
+      ]);
+      expect(updated.entries.map((entry) => entry.id)).toEqual(["claim-7"]);
+      expect(read).toEqual(updated);
+    });
+  });
+
+  test("reclaims an abandoned claim rather than wedging the journal", async () => {
+    await withStorage(async (first) => {
+      const file = path.join(
+        first.getDataDir(),
+        "agent-interaction-resolution-journal.json",
+      );
+      const claimedAt = Date.now() - AGENT_INTERACTION_CLAIM_RETENTION_MS - 1;
+      await fs.writeFile(file, JSON.stringify({
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [{
+          ...terminalJournalEntry(1),
+          state: "claimed",
+          claim: { ...terminalJournalEntry(1).claim, claimedAt },
+          outcome: undefined,
+          providerResolvedAt: undefined,
+          workflowRecordedAt: undefined,
+        }],
+      }));
+      const read = await first.getAgentInteractionResolutionJournal();
+      expect(read.entries).toHaveLength(1);
+      expect(read.entries[0]).toMatchObject({
+        state: "workflow-recorded",
+        outcome: "stale",
+      });
+    });
+  });
+
+  test("rolls terminal journal history over at the configured bound", async () => {
+    await withStorage(async (first) => {
+      const entries = Array.from(
+        { length: AGENT_INTERACTION_LIMITS.maxJournalEntries },
+        (_, index) => terminalJournalEntry(index, Date.now() + index),
+      );
+      await first.updateAgentInteractionResolutionJournal((journal) => ({
+        ...journal,
+        entries,
+      }));
+      const rolled = await first.updateAgentInteractionResolutionJournal((journal) => ({
+        ...journal,
+        entries: [...journal.entries, terminalJournalEntry(entries.length, Date.now() + entries.length)],
+      }));
+      expect(rolled.entries).toHaveLength(AGENT_INTERACTION_LIMITS.maxJournalEntries);
+      expect(rolled.entries.some((entry) => entry.id === "claim-0")).toBe(false);
+      expect(rolled.entries.some((entry) => entry.id === `claim-${entries.length}`))
+        .toBe(true);
+    });
+  });
+
+  test("rejects malformed journals and invalid updater results", async () => {
+    await withStorage(async (first) => {
+      const file = path.join(
+        first.getDataDir(),
+        "agent-interaction-resolution-journal.json",
+      );
+      await fs.writeFile(file, JSON.stringify({ version: 1, entries: [{}] }));
+      await expect(first.getAgentInteractionResolutionJournal()).rejects.toThrow(
+        "journal is invalid",
+      );
+      await fs.writeFile(file, JSON.stringify({ version: 1, entries: [] }));
+      await expect(first.updateAgentInteractionResolutionJournal(() => ({
+        version: 2,
+        entries: [],
+      } as never))).rejects.toThrow("cleanup input");
+    });
+  });
+
+  test("persists journal cleanup with restricted permissions", async () => {
+    await withStorage(async (first) => {
+      const file = path.join(
+        first.getDataDir(),
+        "agent-interaction-resolution-journal.json",
+      );
+      const expiredAt = Date.now() - AGENT_INTERACTION_JOURNAL_RETENTION_MS - 1;
+      await fs.writeFile(file, JSON.stringify({
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [terminalJournalEntry(1, expiredAt)],
+      }));
+      await first.updateAgentInteractionResolutionJournal((journal) => journal);
+      expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [],
+      });
+      expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+    });
+  });
+
   test("heartbeats a long-held environment mutation lock across backend processes", async () => {
     await withStorage(async (first, second) => {
       let signalEntered!: () => void;
@@ -366,6 +868,32 @@ describe("StorageService native agent sessions", () => {
       expect(all).toContain("KEEP-ME");
       expect(all).not.toContain("DROP-ME");
       expect(all).not.toContain("provider-drop");
+    });
+  });
+
+  test("drops unrecognized session records from sensitive backups", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-current");
+      const backup = path.join(first.getDataDir(), "native-agent-sessions.json.bak.1");
+      await fs.writeFile(backup, JSON.stringify({
+        future: {
+          ...input,
+          key: "future",
+          version: 2,
+          logicalSessionKey: "DROP-FUTURE-METADATA",
+          providerSessionId: "provider-future",
+          origin: "interactive-native",
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+          createdAt: new Date(1).toISOString(),
+          updatedAt: new Date(2).toISOString(),
+        },
+      }));
+
+      await first.deleteNativeAgentSessionsByEnvironment("env-1");
+      const scrubbed = await fs.readFile(backup, "utf8");
+      expect(scrubbed).not.toContain("DROP-FUTURE-METADATA");
+      expect(scrubbed).not.toContain("provider-future");
+      expect(JSON.parse(scrubbed)).toEqual({});
     });
   });
 

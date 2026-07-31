@@ -273,7 +273,10 @@ export type BuildPipelineSource =
     };
 
 export type CompletionCommentStatus = "posting" | "posted" | "failed";
-export type PipelineFailureKind = "prompt-dispatch" | "stage-transition";
+export type PipelineFailureKind =
+  | "prompt-dispatch"
+  | "stage-transition"
+  | "interactive-request";
 
 export interface PipelineFailureContext {
   phase: ResumableBuildPhase;
@@ -424,6 +427,7 @@ const RESUMABLE_PHASES = new Set<ResumableBuildPhase>(
 const FAILURE_KINDS = new Set<PipelineFailureKind>([
   "prompt-dispatch",
   "stage-transition",
+  "interactive-request",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

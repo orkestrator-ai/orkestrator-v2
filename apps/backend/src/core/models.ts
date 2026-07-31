@@ -6,6 +6,12 @@ import type {
   AgentActivityState,
   FrontendAgentActivityObserverSnapshot,
 } from "@orkestrator/protocol/agent-activity";
+import type {
+  AgentInteractionOrigin,
+  AgentInteractionPolicy,
+  AgentInteractionResolutionJournal,
+  AgentInteractionWorkflowSummary,
+} from "@orkestrator/protocol/agent-interactions";
 
 export type {
   AgentActivitySource,
@@ -360,6 +366,7 @@ export interface PersistedBuildPipeline {
 }
 
 export type NativeAgentProvider = "claude" | "codex" | "opencode";
+export const NATIVE_AGENT_SESSION_VERSION = 1 as const;
 
 /**
  * Durable mapping between a logical UI tab and the provider session that owns
@@ -367,15 +374,24 @@ export type NativeAgentProvider = "claude" | "codex" | "opencode";
  * renderers asking for the same tab receive the same provider session.
  */
 export interface PersistedNativeAgentSession {
+  version: typeof NATIVE_AGENT_SESSION_VERSION;
   key: string;
   environmentId: string;
   agent: NativeAgentProvider;
   logicalSessionKey: string;
   providerSessionId: string;
+  origin: AgentInteractionOrigin;
+  interactionPolicy: AgentInteractionPolicy;
   dispatchedRequestIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
+
+/** Content-free exact-once interaction records owned by backend workflows. */
+export type PersistedAgentInteractionResolutionJournal =
+  AgentInteractionResolutionJournal;
+export type PersistedAgentInteractionWorkflowSummary =
+  AgentInteractionWorkflowSummary;
 
 /**
  * Prompts a user has committed to sending but which have not been dispatched

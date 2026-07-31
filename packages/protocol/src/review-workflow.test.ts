@@ -5,9 +5,15 @@ import {
   DEFAULT_REVIEW_INSTRUCTION,
   resolveReviewInstruction,
   REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN,
+  REVIEW_WORKFLOW_FAILURE_KINDS,
 } from "./review-workflow";
 
 describe("review workflow contract", () => {
+  test("includes the fail-closed interactive request failure kind", () => {
+    expect(REVIEW_WORKFLOW_FAILURE_KINDS).toContain("interactive-request");
+    expect(new Set(REVIEW_WORKFLOW_FAILURE_KINDS).size)
+      .toBe(REVIEW_WORKFLOW_FAILURE_KINDS.length);
+  });
   test("resolves the default and target-branch token", () => {
     expect(DEFAULT_REVIEW_INSTRUCTION).toContain(
       REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN,

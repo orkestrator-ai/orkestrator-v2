@@ -35,6 +35,11 @@ const POLL_INTERVAL_MS = 250;
  * already stopped — runs on this slower cadence.
  */
 export const LIVENESS_CHECK_EVERY_TICKS = 8;
+// Milestone 1 baseline: blocking hooks currently wait ten minutes. The hook
+// polls its response file four times per second and the backend polls pending
+// files every 250 ms, so transport latency does not justify the extra five
+// minutes. Milestone 2 will move this authority to the shared five-minute
+// deadline while publishing its absolute expiresAt to clients.
 const HOOK_TIMEOUT_SECS = 600;
 const COMMAND_IDLE_TIMEOUT_MS = 8_000;
 const COMMAND_NO_HOOK_SETTLE_MS = 2_000;

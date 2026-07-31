@@ -1,4 +1,13 @@
-import { afterAll, afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  mock,
+  spyOn,
+} from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import {
   listen,
@@ -63,8 +72,7 @@ afterAll(() => {
 });
 
 describe("useTerminal reconnect behavior", () => {
-  afterEach(() => {
-    cleanup();
+  beforeEach(() => {
     getTerminalSessionMock.mockClear();
     createLocalTerminalSessionMock.mockClear();
     startLocalTerminalSessionMock.mockClear();
@@ -104,6 +112,10 @@ describe("useTerminal reconnect behavior", () => {
     writeLocalTerminalMock.mockImplementation(async () => undefined);
     writeTerminalMock.mockImplementation(async () => undefined);
     listenMock.mockImplementation(async () => unlistenMock);
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it("reconnects to a running existing local terminal session without restarting it", async () => {
@@ -1688,6 +1700,41 @@ describe("useTerminal reconnect behavior", () => {
     expect(received).toEqual(["native base64 output"]);
   });
 
+  it("delivers both Uint8Array wire payload forms without cursors", async () => {
+    let outputHandler:
+      | ((event: { payload: Uint8Array | { bytes: Uint8Array } }) => void)
+      | undefined;
+    listenMock.mockImplementation(async (event, handler) => {
+      if (event === "terminal-output-session-old") outputHandler = handler;
+      return unlistenMock;
+    });
+    const received: string[] = [];
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "session-old",
+        persistSession: true,
+        onData: (data) => received.push(new TextDecoder().decode(data)),
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    act(() => {
+      outputHandler?.({
+        payload: new TextEncoder().encode("direct bytes"),
+      });
+      outputHandler?.({
+        payload: { bytes: new TextEncoder().encode("nested bytes") },
+      });
+    });
+
+    // Cursorless payloads cannot be deduplicated, so both forms must be
+    // delivered in arrival order even though neither carries a revision.
+    expect(received).toEqual(["direct bytes", "nested bytes"]);
+  });
+
   it("rehydrates the authoritative snapshot after a gateway desync notice", async () => {
     let outputHandler:
       | ((event: { payload: { desynced: true } }) => void)
@@ -1962,6 +2009,27 @@ describe("useTerminal reconnect behavior", () => {
     expect(detachTerminalMock).not.toHaveBeenCalled();
     expect(closeLocalTerminalSessionMock).not.toHaveBeenCalled();
   });
+
+  it("releases only renderer consumption when a local ephemeral terminal unmounts", async () => {
+    const { result, unmount } = renderHook(() =>
+      useTerminal({
+        containerId: null,
+        environmentId: "env-1",
+        isLocal: true,
+        persistSession: false,
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+    await waitFor(() => expect(result.current.sessionId).toBe("session-new-local"));
+
+    unmount();
+
+    expect(unlistenMock).toHaveBeenCalledTimes(1);
+    expect(detachTerminalMock).not.toHaveBeenCalled();
+    expect(closeLocalTerminalSessionMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("decodeTerminalOutputPayload", () => {
@@ -1971,6 +2039,10 @@ describe("decodeTerminalOutputPayload", () => {
       decodeTerminalOutputPayload({ bytesBase64: btoa("object base64") })!,
     )).toBe("object base64");
     expect([...decodeTerminalOutputPayload([0, 127, 255])!]).toEqual([0, 127, 255]);
+    const directBytes = new Uint8Array([4, 5, 6]);
+    expect(decodeTerminalOutputPayload(directBytes)).toBe(directBytes);
+    const nestedBytes = new Uint8Array([7, 8, 9]);
+    expect(decodeTerminalOutputPayload({ bytes: nestedBytes })).toBe(nestedBytes);
     expect([...decodeTerminalOutputPayload({ bytes: [1, 2, 3] })!]).toEqual([1, 2, 3]);
     expect(decodeTerminalOutputPayload({ desynced: true })).toBeNull();
   });

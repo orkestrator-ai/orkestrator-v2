@@ -2739,7 +2739,12 @@ export class OrkestratorGateway {
       socket.once("close", () => this.sockets.delete(socket));
     });
     server.on("upgrade", (request, socket, head) => {
-      if (!this.terminalWebSocket.handleUpgrade(request, socket, head)) socket.destroy();
+      try {
+        if (!this.terminalWebSocket.handleUpgrade(request, socket, head)) socket.destroy();
+      } catch {
+        this.logger.warn("[RemoteGateway] WebSocket upgrade failed");
+        socket.destroy();
+      }
     });
 
     try {
@@ -2791,6 +2796,10 @@ export class OrkestratorGateway {
       await persistGatewayToken(authFile, token);
       this.token = token;
       this.authFile = authFile;
+      // Authentication is latched when a WebSocket becomes ready. Rotating
+      // the credential must therefore revoke every connection authenticated
+      // with the previous value rather than waiting for a reconnect.
+      this.terminalWebSocket.revokeConnections();
       return { token, editable: true, source: "file" };
     });
   }

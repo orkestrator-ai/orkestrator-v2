@@ -3536,7 +3536,8 @@ export class StorageService {
    * sensitive implementation details and never need to reach a renderer.
    */
   async listNativeAgentSessions(): Promise<PersistedNativeAgentSession[]> {
-    return Object.values(await this.loadNativeAgentSessions());
+    const loaded = await this.loadNativeAgentSessions();
+    return Object.values(loaded.sessions);
   }
 
   /**

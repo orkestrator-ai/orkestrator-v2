@@ -84,6 +84,62 @@ describe("remote gateway documentation", () => {
     expect(guide).toContain("never adds response compression on desktop IPC/control traffic");
   });
 
+  test("documents the terminal WebSocket endpoint, opt-in, fallback, and removal floor", async () => {
+    const [guide, milestoneFive] = await Promise.all([
+      readFile(path.join(root, "docs", "remote-gateway.md"), "utf8"),
+      readFile(path.join(root, "docs", "efficiency", "milestone-5.md"), "utf8"),
+    ]);
+    const normalizedGuide = guide.replace(/\s+/g, " ");
+    const normalizedMilestoneFive = milestoneFive.replace(/\s+/g, " ");
+
+    expect(normalizedGuide).toContain("`/__orkestrator/terminal`");
+    expect(normalizedGuide).toContain("`orkestrator-terminal.v1`");
+    expect(guide).toContain(
+      'localStorage.setItem("orkestrator-terminal-transport", "websocket")',
+    );
+    expect(normalizedGuide).toContain('`terminalTransport: "websocket"`');
+    expect(normalizedGuide).toContain('Use `"http-sse"` (or remove the key)');
+    expect(normalizedGuide).toContain(
+      "HTTP/SSE compatibility transport remains active until each WebSocket channel",
+    );
+    expect(normalizedGuide).toContain(
+      "WebSocket input and resize calls complete only after the backend acknowledges the operation",
+    );
+    expect(normalizedGuide).toContain(
+      "cannot overtake accepted input",
+    );
+    expect(normalizedGuide).toContain(
+      "will not be removed before v2.9.0",
+    );
+
+    expect(normalizedMilestoneFive).toContain("Start with opt-in WebSocket use");
+    expect(normalizedMilestoneFive).toContain("HTTP/SSE remains the default");
+    expect(normalizedMilestoneFive).toContain(
+      "fallback removal is no earlier than v2.9.0",
+    );
+    expect(normalizedMilestoneFive).toContain(
+      "token rotation, malformed targets, and shutdown cleanup",
+    );
+    expect(normalizedMilestoneFive).toContain(
+      "inbound operation count and byte limits reject saturation",
+    );
+    expect(normalizedMilestoneFive).toContain(
+      "including multi-delta and caught-up empty responses",
+    );
+    expect(normalizedMilestoneFive).toContain(
+      "physical-device and network measurements remain manual and are intentionally unchecked",
+    );
+    expect(milestoneFive).toContain(
+      "- [ ] Make WebSocket the default only after target-client verification.",
+    );
+    expect(milestoneFive).toContain(
+      "- [ ] Run a 1 MiB terminal output workload and compare wire bytes.",
+    );
+    expect(milestoneFive).toContain(
+      "- [ ] Disconnect, background iOS, lock the screen, and restart the gateway.",
+    );
+  });
+
   test("documents authenticated metrics methods, bounds, and privacy exclusions", async () => {
     const [guide, milestoneZero, milestoneTwo] = await Promise.all([
       readFile(path.join(root, "docs", "remote-gateway.md"), "utf8"),

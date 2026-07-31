@@ -3325,12 +3325,39 @@ exit 0
 
     expect(commands.get("get_terminal_output_snapshot")?.({
       sessionId,
+      sinceRevision: 0,
+      sinceGeneration: 1,
+    }, context)).toEqual({
+      mode: "delta",
+      output: "first second",
+      deltas: [
+        { revision: 1, text: "first" },
+        { revision: 2, text: " second" },
+      ],
+      revision: 2,
+      generation: 1,
+      truncated: false,
+    });
+    expect(commands.get("get_terminal_output_snapshot")?.({
+      sessionId,
       sinceRevision: 1,
       sinceGeneration: 1,
     }, context)).toEqual({
       mode: "delta",
       output: " second",
       deltas: [{ revision: 2, text: " second" }],
+      revision: 2,
+      generation: 1,
+      truncated: false,
+    });
+    expect(commands.get("get_terminal_output_snapshot")?.({
+      sessionId,
+      sinceRevision: 2,
+      sinceGeneration: 1,
+    }, context)).toEqual({
+      mode: "delta",
+      output: "",
+      deltas: [],
       revision: 2,
       generation: 1,
       truncated: false,

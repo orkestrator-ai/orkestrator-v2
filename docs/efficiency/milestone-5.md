@@ -51,14 +51,17 @@ Primary areas:
 
 - [x] Open one socket per gateway client.
 - [x] Multiplex every client terminal over that socket.
-- [x] Authorize every terminal subscription.
+- [x] Authorize every terminal subscription and revoke existing sockets when
+      the gateway credential rotates.
 - [x] Preserve session filtering.
 - [x] Apply soft and hard byte limits per socket.
 - [x] Apply limits and fairness per terminal channel.
+- [x] Bound queued inbound operations by count and payload bytes.
 - [x] Prevent one slow terminal from starving other channels.
 - [x] Emit an explicit desync for dropped terminal output.
 - [x] Preserve generation and revision gap detection.
 - [x] Keep snapshot commands as the reconnect authority.
+- [x] Reject malformed upgrade targets without escaping the listener callback.
 - [x] Clean up socket resources without stopping backend terminal processes.
 
 ### Browser adapter
@@ -69,6 +72,11 @@ Primary areas:
 - [x] Resubscribe after reconnect and iOS foreground transitions.
 - [x] Reconcile every channel from its known generation and revision.
 - [x] Route binary bytes without base64 conversion.
+- [x] Preserve UTF-8 code points when splitting maximum-size input frames.
+- [x] Bound output held while an authoritative snapshot is pending.
+- [x] Wait for channel readiness before retiring per-channel HTTP/SSE fallback.
+- [x] Surface operation failures and wait for acknowledgements before dependent
+      terminal lifecycle commands.
 - [x] Preserve HTTP/SSE fallback for unsupported or failed WebSocket sessions.
 - [x] Ensure component unmount only updates consumption, not backend lifetime.
 
@@ -83,18 +91,26 @@ Primary areas:
 
 ## Required tests
 
-- [x] Authentication and origin rejection.
-- [x] Protocol version and malformed-frame rejection.
-- [x] Channel subscribe, unsubscribe, resize, input, and output.
+- [x] Upgrade authentication timeout, cookie authentication, origin rejection,
+      token rotation, malformed targets, and shutdown cleanup.
+- [x] Protocol version plus malformed and oversized frame rejection.
+- [x] Channel subscribe, duplicate subscribe, unavailable session, unsubscribe,
+      resize, input, output, and unknown-channel handling.
 - [x] Multiple terminals share one socket without cross-session bytes.
 - [x] Input order survives batching and reconnect boundaries.
-- [x] Generation and revision gaps trigger snapshot recovery.
-- [x] Retained gaps recover incrementally.
+- [x] Input rejection is acknowledged, and inbound operation count and byte
+      limits reject saturation without unbounded retention.
+- [x] Generation and revision gaps, subscription errors, snapshot failures, and
+      reconciliation overflow trigger bounded recovery or fallback.
+- [x] Retained gaps recover incrementally with exact revision boundaries,
+      including multi-delta and caught-up empty responses.
 - [x] One slow channel does not starve another.
 - [x] A non-reading socket is bounded and disconnected at the hard limit.
 - [x] Socket close releases adapter resources but not terminal processes.
 - [x] Reconnect rebuilds the desired subscription set.
-- [x] HTTP/SSE fallback remains functional.
+- [x] Explicit and stored opt-in select WebSocket; HTTP/SSE remains the default
+      and stays active until each channel is ready.
+- [x] Large UTF-8 input preserves code points at frame boundaries.
 
 ## Manual verification
 
@@ -167,12 +183,12 @@ Initial implementation evidence:
   output but silently refuses every keystroke.
 - A close marks the input queue closed only once it reaches the backend. A close
   that fails leaves a live terminal behind, and that terminal stays writable.
-- Automated verification on 2026-07-31:
-  - terminal batcher plus browser gateway: 114 passed;
-  - shared protocol package: 185 passed;
-  - terminal hook recovery suite: 49 passed;
-  - backend, web, desktop, and protocol TypeScript checks: passed;
-  - renderer production build: passed.
+- Automated coverage includes the gateway upgrade/authentication boundary,
+  channel multiplexing and recovery, client reconnect and buffer bounds, public
+  adapter opt-in and fallback transitions, lifecycle ordering, command delta
+  replay, terminal-hook lifetime behavior, and protocol codec bounds. The
+  required verification commands are listed above; physical-device and network
+  measurements remain manual and are intentionally unchecked.
 - WebSocket is not yet the default. Baseline latency/transfer measurements,
   real-device compatibility results, and the default-promotion decision remain
   to be recorded.
@@ -191,6 +207,3 @@ Initial implementation evidence:
   `orkestrator-terminal-transport=websocket`; fallback removal is no earlier
   than v2.9.0 and still requires one full compatibility release after default
   promotion.
-- Final automated verification: 161 gateway tests, 31 terminal protocol tests,
-  133 focused browser/terminal tests, backend and web TypeScript checks, and the
-  3,574-test root suite (3,573 passed, 1 environment-dependent test skipped).

@@ -198,11 +198,16 @@ Embedded clients can instead pass `terminalTransport: "websocket"` to
 
 One adapter-owned socket serves every consumed PTY. Terminal components update
 the adapter's desired-subscription registry; they do not own the connection or
-the backend process. A failed or unsupported socket automatically restores the
-HTTP input batcher and filtered terminal SSE streams while bounded reconnects
-continue. Reconnects, foreground transitions, revision gaps, generation
-changes, and slow-channel desyncs reconcile through
-`get_terminal_output_snapshot`.
+the backend process. The HTTP/SSE compatibility transport remains active until
+each WebSocket channel has subscribed and reconciled an authoritative snapshot.
+A failed or unsupported socket, rejected subscription, or failed snapshot keeps
+or restores the HTTP input batcher and filtered terminal SSE stream while
+bounded reconnects continue. Reconnects, foreground transitions, revision gaps,
+generation changes, and slow-channel desyncs reconcile through
+`get_terminal_output_snapshot`; buffered WebSocket output is bounded while that
+snapshot is pending. WebSocket input and resize calls complete only after the
+backend acknowledges the operation. Later HTTP start, detach, or close calls for
+the same terminal share that ordering tail and cannot overtake accepted input.
 
 The fallback will remain available for at least one release after WebSocket is
 made the default and will not be removed before v2.9.0.

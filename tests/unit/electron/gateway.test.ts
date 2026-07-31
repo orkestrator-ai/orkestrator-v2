@@ -28,7 +28,10 @@ import {
   encodeTerminalBinaryFrame,
   parseTerminalWebSocketServerControlFrame,
   TERMINAL_BINARY_FRAME_TYPE,
+  TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES,
   TERMINAL_WEBSOCKET_CLOSE,
+  TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
+  TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES,
   TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES,
   TERMINAL_WEBSOCKET_SUBPROTOCOL,
   type TerminalWebSocketServerControlFrame,
@@ -484,6 +487,27 @@ function websocketInbox(socket: WebSocket): WebSocketInbox {
   };
 }
 
+async function openTerminalSocket(
+  info: { url: string; token: string },
+  options: { authenticate?: boolean; headers?: Record<string, string> } = {},
+): Promise<{ socket: WebSocket; inbox: WebSocketInbox }> {
+  const socket = new WebSocket(
+    `${info.url.replace(/^http/, "ws")}__orkestrator/terminal`,
+    TERMINAL_WEBSOCKET_SUBPROTOCOL,
+    options.headers ? { headers: options.headers } : undefined,
+  );
+  const inbox = websocketInbox(socket);
+  await new Promise<void>((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  if (options.authenticate !== false) {
+    socket.send(JSON.stringify({ type: "authenticate", version: 1, token: info.token }));
+    expect(await nextTerminalControl(inbox, "ready")).toMatchObject({ type: "ready", version: 1 });
+  }
+  return { socket, inbox };
+}
+
 async function nextTerminalControl(
   inbox: WebSocketInbox,
   type: TerminalWebSocketServerControlFrame["type"],
@@ -518,8 +542,334 @@ describe("gateway terminal WebSocket", () => {
     };
 
     expect(rejectedStatus(TERMINAL_WEBSOCKET_SUBPROTOCOL, { cookie: "auth-cookie" })).toBe(403);
+    const deniedOriginGateway = new TerminalWebSocketGateway({
+      backend: { invoke: async () => undefined },
+      tokenMatches: () => false,
+      originAllowed: () => false,
+      logger: createLogger(),
+    });
+    let deniedOriginResponse = "";
+    const deniedOriginSocket = {
+      end: mock((chunk: string) => { deniedOriginResponse = chunk; }),
+      destroy: mock(() => undefined),
+    } as unknown as Duplex;
+    deniedOriginGateway.handleUpgrade({
+      url: "/__orkestrator/terminal",
+      headers: {
+        origin: "https://attacker.invalid",
+        "sec-websocket-protocol": TERMINAL_WEBSOCKET_SUBPROTOCOL,
+      },
+    } as IncomingMessage, deniedOriginSocket, Buffer.alloc(0));
+    expect(deniedOriginResponse).toStartWith("HTTP/1.1 403");
+    deniedOriginGateway.close();
     expect(rejectedStatus("orkestrator-terminal.v999")).toBe(426);
+    let malformedResponse = "";
+    const malformedSocket = {
+      end: mock((chunk: string) => { malformedResponse = chunk; }),
+      destroy: mock(() => undefined),
+    } as unknown as Duplex;
+    expect(() => terminalGateway.handleUpgrade({
+      url: "//[",
+      headers: {},
+    } as IncomingMessage, malformedSocket, Buffer.alloc(0))).not.toThrow();
+    expect(malformedResponse).toStartWith("HTTP/1.1 400");
     terminalGateway.close();
+  });
+
+  test("bounds unauthenticated sockets and accepts a same-origin auth cookie", async () => {
+    const { gateway, info } = await startGateway();
+    const terminalWebSocket = (gateway as unknown as {
+      terminalWebSocket: { authTimeoutMs: number };
+    }).terminalWebSocket;
+    terminalWebSocket.authTimeoutMs = 15;
+
+    const unauthenticated = await openTerminalSocket(info, { authenticate: false });
+    const timedOut = new Promise<number>((resolve) => unauthenticated.socket.once("close", resolve));
+    expect(await timedOut).toBe(TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
+
+    const origin = new URL(info.url).origin;
+    const cookieAuthenticated = await openTerminalSocket(info, {
+      authenticate: false,
+      headers: {
+        Origin: origin,
+        Cookie: `orkestrator_gateway_auth=${info.token}`,
+      },
+    });
+    expect(await nextTerminalControl(cookieAuthenticated.inbox, "ready"))
+      .toMatchObject({ type: "ready", version: 1 });
+    cookieAuthenticated.socket.terminate();
+  });
+
+  test("rejects malformed, oversized, and wrong-direction frames with assigned close codes", async () => {
+    const { info } = await startGateway();
+    for (const [payload, expected] of [
+      ["{", TERMINAL_WEBSOCKET_CLOSE.protocolError],
+      ["x".repeat(TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES + 1), TERMINAL_WEBSOCKET_CLOSE.messageTooLarge],
+    ] as const) {
+      const { socket } = await openTerminalSocket(info);
+      const closed = new Promise<number>((resolve) => socket.once("close", resolve));
+      socket.send(payload);
+      expect(await closed).toBe(expected);
+    }
+
+    const { socket } = await openTerminalSocket(info);
+    const closed = new Promise<number>((resolve) => socket.once("close", resolve));
+    socket.send(encodeTerminalBinaryFrame({
+      type: TERMINAL_BINARY_FRAME_TYPE.output,
+      channelId: 1,
+      generation: 1,
+      revision: 1,
+      bytes: new Uint8Array(),
+    }));
+    expect(await closed).toBe(TERMINAL_WEBSOCKET_CLOSE.protocolError);
+
+    const truncated = await openTerminalSocket(info);
+    const truncatedClose = new Promise<number>((resolve) => truncated.socket.once("close", resolve));
+    truncated.socket.send(new Uint8Array([TERMINAL_BINARY_FRAME_TYPE.input]));
+    expect(await truncatedClose).toBe(TERMINAL_WEBSOCKET_CLOSE.protocolError);
+
+    const unsupported = await openTerminalSocket(info, { authenticate: false });
+    const unsupportedClose = new Promise<number>((resolve) => unsupported.socket.once("close", resolve));
+    unsupported.socket.send(JSON.stringify({ type: "authenticate", version: 2, token: info.token }));
+    expect(await unsupportedClose).toBe(TERMINAL_WEBSOCKET_CLOSE.unsupportedVersion);
+
+    const repeated = await openTerminalSocket(info);
+    const repeatedClose = new Promise<number>((resolve) => repeated.socket.once("close", resolve));
+    repeated.socket.send(JSON.stringify({ type: "authenticate", version: 1, token: info.token }));
+    expect(await repeatedClose).toBe(TERMINAL_WEBSOCKET_CLOSE.protocolError);
+  });
+
+  test("escalates repeated unknown channels and reports generation and oversized-output desync", async () => {
+    const backend = {
+      invoke: mock(async (command: string, args: Record<string, unknown>) => {
+        if (command === "get_terminal_session") return { id: args.sessionId, running: true };
+        if (command === "get_terminal_output_snapshot") return { output: "", generation: 1, revision: 0 };
+        return undefined;
+      }),
+    };
+    const { gateway, info } = await startGateway({ backend });
+    const generationSocket = await openTerminalSocket(info);
+    generationSocket.socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "generation" }));
+    const generationChannel = await nextTerminalControl(generationSocket.inbox, "subscribed");
+    if (generationChannel.type !== "subscribed") throw new Error("Expected subscribed frame");
+    gateway.emit("terminal-output-generation", { text: "new generation", generation: 2, revision: 1 });
+    expect(await nextTerminalControl(generationSocket.inbox, "desync"))
+      .toMatchObject({ reason: "generation-changed", generation: 2 });
+    generationSocket.socket.terminate();
+
+    const oversizedSocket = await openTerminalSocket(info);
+    oversizedSocket.socket.send(JSON.stringify({ type: "subscribe", requestId: 2, sessionId: "oversized" }));
+    await nextTerminalControl(oversizedSocket.inbox, "subscribed");
+    gateway.emit("terminal-output-oversized", {
+      text: "x".repeat(TERMINAL_WEBSOCKET_MAX_BINARY_BYTES), generation: 1, revision: 1,
+    });
+    expect(await nextTerminalControl(oversizedSocket.inbox, "desync"))
+      .toMatchObject({ reason: "slow-consumer" });
+    oversizedSocket.socket.terminate();
+
+    const unknownSocket = await openTerminalSocket(info);
+    const unknownClose = new Promise<number>((resolve) => unknownSocket.socket.once("close", resolve));
+    unknownSocket.socket.send(JSON.stringify({
+      type: "resize", channelId: 99, operationId: 1, cols: 80, rows: 24,
+    }));
+    expect(await nextTerminalControl(unknownSocket.inbox, "operation-result"))
+      .toMatchObject({ channelId: 99, operationId: 1, operation: "resize", ok: false });
+    for (let operationId = 2; operationId <= 3; operationId += 1) {
+      unknownSocket.socket.send(JSON.stringify({
+        type: "resize", channelId: 99, operationId, cols: 80, rows: 24,
+      }));
+    }
+    expect(await unknownClose).toBe(TERMINAL_WEBSOCKET_CLOSE.policyViolation);
+  });
+
+  test("reports current, duplicate, unavailable, failed, unsubscribe, and desync subscription paths", async () => {
+    const backend = {
+      invoke: mock(async (command: string, args: Record<string, unknown>) => {
+        const sessionId = String(args.sessionId);
+        if (sessionId === "failed") throw new Error("backend failed");
+        if (command === "get_terminal_session") return { id: sessionId, running: sessionId !== "missing" };
+        if (command === "get_terminal_output_snapshot") {
+          if (sessionId === "missing") return { output: "", generation: 0, revision: 0 };
+          return { mode: "delta", output: "", deltas: [], generation: 3, revision: 4 };
+        }
+        return undefined;
+      }),
+    };
+    const { gateway, info } = await startGateway({ backend });
+    const { socket, inbox } = await openTerminalSocket(info);
+    socket.send(JSON.stringify({
+      type: "subscribe", requestId: 1, sessionId: "current", knownGeneration: 3, knownRevision: 4,
+    }));
+    const current = await nextTerminalControl(inbox, "subscribed");
+    expect(current).toMatchObject({ requestId: 1, recovery: "current" });
+    if (current.type !== "subscribed") throw new Error("Expected subscribed frame");
+
+    socket.send(JSON.stringify({ type: "subscribe", requestId: 2, sessionId: "current" }));
+    expect(await nextTerminalControl(inbox, "error"))
+      .toMatchObject({ code: "subscription-denied", requestId: 2 });
+    socket.send(JSON.stringify({ type: "subscribe", requestId: 3, sessionId: "missing" }));
+    expect(await nextTerminalControl(inbox, "error"))
+      .toMatchObject({ code: "subscription-denied", requestId: 3 });
+    socket.send(JSON.stringify({ type: "subscribe", requestId: 4, sessionId: "failed" }));
+    expect(await nextTerminalControl(inbox, "error"))
+      .toMatchObject({ code: "terminal-unavailable", requestId: 4 });
+
+    gateway.emit("terminal-output-current", { text: "gap", generation: 3, revision: 6 });
+    expect(await nextTerminalControl(inbox, "desync"))
+      .toMatchObject({ channelId: current.channelId, reason: "revision-gap", revision: 6 });
+    socket.send(JSON.stringify({ type: "unsubscribe", channelId: current.channelId }));
+    expect(await nextTerminalControl(inbox, "unsubscribed"))
+      .toMatchObject({ channelId: current.channelId });
+    socket.send(JSON.stringify({
+      type: "subscribe", requestId: 5, sessionId: "current", knownGeneration: 3, knownRevision: 4,
+    }));
+    expect(await nextTerminalControl(inbox, "subscribed"))
+      .toMatchObject({ requestId: 5, sessionId: "current", recovery: "current" });
+    socket.terminate();
+  });
+
+  test("announces reconciliation overflow only after the channel mapping", async () => {
+    let releaseSnapshot!: () => void;
+    const snapshotBlocked = new Promise<void>((resolve) => { releaseSnapshot = resolve; });
+    let snapshotStarted = false;
+    const backend = {
+      invoke: mock(async (command: string) => {
+        if (command === "get_terminal_session") return { id: "race", running: true };
+        if (command === "get_terminal_output_snapshot") {
+          snapshotStarted = true;
+          await snapshotBlocked;
+          return { output: "", generation: 1, revision: 0 };
+        }
+        return undefined;
+      }),
+    };
+    const { gateway, info } = await startGateway({ backend });
+    const { socket, inbox } = await openTerminalSocket(info);
+    socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "race" }));
+    await waitUntil(() => snapshotStarted, "snapshot did not start");
+    for (let revision = 1; revision <= 40; revision += 1) {
+      gateway.emit("terminal-output-race", {
+        text: "x".repeat(16 * 1024), generation: 1, revision,
+      });
+    }
+    releaseSnapshot();
+    expect(await nextTerminalControl(inbox, "subscribed"))
+      .toMatchObject({ requestId: 1, sessionId: "race" });
+    expect(await nextTerminalControl(inbox, "desync"))
+      .toMatchObject({ reason: "slow-consumer" });
+    socket.terminate();
+  });
+
+  test("acknowledges rejected operations and bounds a blocked per-session queue", async () => {
+    let releaseWrite!: () => void;
+    const blockedWrite = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const backend = {
+      invoke: mock(async (command: string) => {
+        if (command === "get_terminal_session") return { id: "ops", running: true };
+        if (command === "get_terminal_output_snapshot") return { output: "", generation: 1, revision: 0 };
+        if (command === "terminal_resize") throw new Error("sensitive backend detail");
+        if (command === "terminal_write") await blockedWrite;
+        return undefined;
+      }),
+    };
+    const { info } = await startGateway({ backend });
+    const { socket, inbox } = await openTerminalSocket(info);
+    socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "ops" }));
+    const subscribed = await nextTerminalControl(inbox, "subscribed");
+    if (subscribed.type !== "subscribed") throw new Error("Expected subscribed frame");
+
+    socket.send(JSON.stringify({
+      type: "resize", channelId: subscribed.channelId, operationId: 9, cols: 80, rows: 24,
+    }));
+    expect(await nextTerminalControl(inbox, "operation-result")).toEqual({
+      type: "operation-result",
+      channelId: subscribed.channelId,
+      operationId: 9,
+      operation: "resize",
+      ok: false,
+      message: "Terminal operation failed",
+    });
+
+    for (let revision = 1; revision <= 257; revision += 1) {
+      socket.send(encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.input,
+        channelId: subscribed.channelId,
+        generation: 1,
+        revision,
+        bytes: new Uint8Array(),
+      }));
+    }
+    let saturated: TerminalWebSocketServerControlFrame | undefined;
+    while (!saturated) {
+      const frame = await nextTerminalControl(inbox, "operation-result");
+      if (frame.type === "operation-result" && frame.operationId === 257) saturated = frame;
+    }
+    expect(saturated).toMatchObject({ operation: "input", ok: false, message: "Terminal operation queue is full" });
+    releaseWrite();
+    socket.terminate();
+  });
+
+  test("bounds aggregate operation bytes across independently blocked sessions", async () => {
+    let releaseWrites!: () => void;
+    const blockedWrites = new Promise<void>((resolve) => { releaseWrites = resolve; });
+    const backend = {
+      invoke: mock(async (command: string, args: Record<string, unknown>) => {
+        if (command === "get_terminal_session") return { id: args.sessionId, running: true };
+        if (command === "get_terminal_output_snapshot") return { output: "", generation: 1, revision: 0 };
+        if (command === "terminal_write") await blockedWrites;
+        return undefined;
+      }),
+    };
+    const { info } = await startGateway({ backend });
+    const { socket, inbox } = await openTerminalSocket(info);
+    const channels: number[] = [];
+    for (let requestId = 1; requestId <= 33; requestId += 1) {
+      socket.send(JSON.stringify({ type: "subscribe", requestId, sessionId: `aggregate-${requestId}` }));
+      const subscribed = await nextTerminalControl(inbox, "subscribed");
+      if (subscribed.type !== "subscribed") throw new Error("Expected subscribed frame");
+      channels.push(subscribed.channelId);
+    }
+    const payload = new Uint8Array(
+      TERMINAL_WEBSOCKET_MAX_BINARY_BYTES - TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES,
+    );
+    for (const channelId of channels) {
+      socket.send(encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.input,
+        channelId,
+        generation: 1,
+        revision: 1,
+        bytes: payload,
+      }));
+    }
+    let aggregateResult: TerminalWebSocketServerControlFrame | undefined;
+    while (!aggregateResult) {
+      const frame = await nextTerminalControl(inbox, "operation-result");
+      if (frame.type === "operation-result" && frame.channelId === channels.at(-1)) {
+        aggregateResult = frame;
+      }
+    }
+    expect(aggregateResult).toMatchObject({
+      operation: "input",
+      operationId: 1,
+      ok: false,
+      message: "Terminal operation queue is full",
+    });
+    releaseWrites();
+    socket.terminate();
+  });
+
+  test("closes active sockets on credential rotation and gateway shutdown", async () => {
+    const { gateway, info } = await startGateway({ env: {} });
+    const active = await openTerminalSocket(info);
+    const revoked = new Promise<void>((resolve) => active.socket.once("close", () => resolve()));
+    const replacement = "replacement-token-123456";
+    await gateway.setToken(replacement);
+    await revoked;
+
+    const replacementSocket = await openTerminalSocket({ ...info, token: replacement });
+    const stopped = new Promise<void>((resolve) => replacementSocket.socket.once("close", () => resolve()));
+    await gateway.stop();
+    await stopped;
   });
 
   test("authenticates direct sockets and rejects a bad first credential", async () => {
@@ -620,13 +970,23 @@ describe("gateway terminal WebSocket", () => {
       revision: 1,
       bytes: new TextEncoder().encode("pwd\r"),
     }));
-    first.socket.send(JSON.stringify({ type: "resize", channelId: subscribedA.channelId, cols: 120, rows: 40 }));
+    first.socket.send(JSON.stringify({
+      type: "resize",
+      channelId: subscribedA.channelId,
+      operationId: 2,
+      cols: 120,
+      rows: 40,
+    }));
     await waitUntil(
       () => operations.some((entry) => entry.command === "terminal_resize"),
       "terminal input and resize were not routed",
     );
     expect(operations).toContainEqual({ command: "terminal_write", args: { sessionId: "session-a", data: "pwd\r" } });
     expect(operations).toContainEqual({ command: "terminal_resize", args: { sessionId: "session-a", cols: 120, rows: 40 } });
+    expect(await nextTerminalControl(first.inbox, "operation-result"))
+      .toMatchObject({ operation: "input", operationId: 1, ok: true });
+    expect(await nextTerminalControl(first.inbox, "operation-result"))
+      .toMatchObject({ operation: "resize", operationId: 2, ok: true });
 
     first.socket.terminate();
     expect(operations.some((entry) => entry.command === "detach_terminal" || entry.command === "close_local_terminal_session")).toBe(false);

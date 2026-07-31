@@ -77,9 +77,10 @@ describe("terminal WebSocket client control protocol", () => {
     expect(parseTerminalWebSocketClientControlFrame(encodeJson({
       type: "resize",
       channelId: 0,
+      operationId: 3,
       cols: 1,
       rows: 0xffff,
-    }))).toEqual({ type: "resize", channelId: 0, cols: 1, rows: 0xffff });
+    }))).toEqual({ type: "resize", channelId: 0, operationId: 3, cols: 1, rows: 0xffff });
     expect(parseTerminalWebSocketClientControlFrame(encodeJson({
       type: "ack",
       channelId: 4,
@@ -174,8 +175,10 @@ describe("terminal WebSocket client control protocol", () => {
       { type: "subscribe", requestId: 1, sessionId: "s", knownGeneration: 1, knownRevision: Number.MAX_SAFE_INTEGER + 1 },
       { type: "unsubscribe", channelId: -1 },
       { type: "unsubscribe", channelId: 0x1_0000 },
-      { type: "resize", channelId: 1, cols: 0, rows: 10 },
-      { type: "resize", channelId: 1, cols: 10, rows: 0x1_0000 },
+      { type: "resize", channelId: 1, operationId: 1, cols: 0, rows: 10 },
+      { type: "resize", channelId: 1, operationId: 1, cols: 10, rows: 0x1_0000 },
+      { type: "resize", channelId: 1, cols: 10, rows: 10 },
+      { type: "resize", channelId: 1, operationId: -1, cols: 10, rows: 10 },
       { type: "ack", channelId: 1, generation: -1, revision: 1 },
       { type: "ack", channelId: 1, generation: 1, revision: -1 },
       { type: "ack", channelId: "1", generation: 1, revision: 1 },
@@ -277,6 +280,28 @@ describe("terminal WebSocket server control protocol", () => {
       channelId: 1,
     }))).toEqual({ type: "unsubscribed", channelId: 1 });
     expect(parseTerminalWebSocketServerControlFrame(encodeJson({
+      type: "operation-result",
+      channelId: 1,
+      operationId: 7,
+      operation: "input",
+      ok: true,
+    }))).toEqual({ type: "operation-result", channelId: 1, operationId: 7, operation: "input", ok: true });
+    expect(parseTerminalWebSocketServerControlFrame(encodeJson({
+      type: "operation-result",
+      channelId: 1,
+      operationId: 8,
+      operation: "resize",
+      ok: false,
+      message: "backend unavailable",
+    }))).toEqual({
+      type: "operation-result",
+      channelId: 1,
+      operationId: 8,
+      operation: "resize",
+      ok: false,
+      message: "backend unavailable",
+    });
+    expect(parseTerminalWebSocketServerControlFrame(encodeJson({
       type: "lifecycle",
       channelId: 2,
       state: "running",
@@ -339,6 +364,11 @@ describe("terminal WebSocket server control protocol", () => {
       { type: "ready", version: 1, socketId: "" },
       { type: "ready", version: 1, socketId: "s".repeat(TERMINAL_WEBSOCKET_MAX_IDENTIFIER_BYTES + 1) },
       { type: "unsubscribed", channelId: 65_536 },
+      { type: "operation-result", channelId: 1, operationId: 1, operation: "write", ok: true },
+      { type: "operation-result", channelId: 1, operationId: -1, operation: "input", ok: true },
+      { type: "operation-result", channelId: 1, operationId: 1, operation: "input", ok: 1 },
+      { type: "operation-result", channelId: 1, operationId: 1, operation: "input", ok: false },
+      { type: "operation-result", channelId: 1, operationId: 1, operation: "input", ok: false, message: "x".repeat(TERMINAL_WEBSOCKET_MAX_ERROR_MESSAGE_BYTES + 1) },
       { type: "lifecycle", channelId: 1, state: "paused", generation: 1, revision: 1 },
       { type: "lifecycle", channelId: 1, state: "exited", generation: 1, revision: 1, exitCode: 2_147_483_648 },
       { type: "desync", channelId: 1, generation: 1, revision: 1, reason: "other" },

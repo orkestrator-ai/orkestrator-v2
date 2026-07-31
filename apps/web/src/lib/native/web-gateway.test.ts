@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   createBrowserGatewayApi,
   installBrowserGatewayApi,
+  TERMINAL_TRANSPORT_STORAGE_KEY,
 } from "./web-gateway";
 import { TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES } from "./terminal-input-batcher";
 import {
@@ -9,9 +10,11 @@ import {
   configureDirectGatewayTransport,
 } from "./gateway-auth-transport";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "./events";
+import { decodeTerminalBinaryFrame, TERMINAL_BINARY_FRAME_TYPE } from "@orkestrator/protocol/terminal-websocket";
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
+const originalWebSocket = globalThis.WebSocket;
 const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 const originalGetEntriesByType = performance.getEntriesByType;
 const originalDocumentReadyStateDescriptor = Object.getOwnPropertyDescriptor(document, "readyState");
@@ -86,6 +89,104 @@ class MockEventSource {
   }
 }
 
+class MockWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  static instances: MockWebSocket[] = [];
+  readonly sent: Array<string | ArrayBufferLike | Blob | ArrayBufferView> = [];
+  binaryType: BinaryType = "blob";
+  bufferedAmount = 0;
+  extensions = "";
+  protocol = "orkestrator-terminal.v1";
+  readyState = MockWebSocket.CONNECTING;
+  onopen: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
+  closeCode: number | undefined;
+  closeReason: string | undefined;
+
+  constructor(
+    readonly url: string | URL,
+    readonly protocols?: string | string[],
+  ) {
+    MockWebSocket.instances.push(this);
+  }
+
+  open(): void {
+    this.readyState = MockWebSocket.OPEN;
+    this.onopen?.(new Event("open"));
+  }
+
+  receive(data: string | ArrayBuffer | Uint8Array): void {
+    this.onmessage?.(new MessageEvent("message", { data }));
+  }
+
+  send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+    if (this.readyState !== MockWebSocket.OPEN) throw new Error("Socket is not open");
+    this.sent.push(data);
+  }
+
+  close(code = 1000, reason = ""): void {
+    if (this.readyState === MockWebSocket.CLOSED) return;
+    this.closeCode = code;
+    this.closeReason = reason;
+    this.readyState = MockWebSocket.CLOSED;
+    this.onclose?.(new CloseEvent("close", { code, reason }));
+  }
+
+  addEventListener(): void {}
+  removeEventListener(): void {}
+  dispatchEvent(): boolean { return true; }
+}
+
+function sentControlFrames(socket: MockWebSocket): Array<Record<string, unknown>> {
+  return socket.sent
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => JSON.parse(value) as Record<string, unknown>);
+}
+
+function decodeSentBinaryFrame(value: ArrayBufferLike | ArrayBufferView) {
+  if (value instanceof ArrayBuffer) return decodeTerminalBinaryFrame(value);
+  if (ArrayBuffer.isView(value)) {
+    return decodeTerminalBinaryFrame(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+  }
+  throw new TypeError("Unsupported mock WebSocket binary frame");
+}
+
+function openTerminalSocket(socket: MockWebSocket): void {
+  socket.open();
+  socket.receive(JSON.stringify({ type: "ready", version: 1, socketId: "socket-test" }));
+}
+
+function subscribeTerminalSocket(
+  socket: MockWebSocket,
+  sessionId: string,
+  recovery: "current" | "snapshot-required" = "snapshot-required",
+  channelId = 1,
+): number {
+  const request = sentControlFrames(socket).findLast((frame) =>
+    frame.type === "subscribe" && frame.sessionId === sessionId
+  );
+  if (!request || typeof request.requestId !== "number") {
+    throw new Error(`No subscription request for ${sessionId}`);
+  }
+  socket.receive(JSON.stringify({
+    type: "subscribed",
+    requestId: request.requestId,
+    sessionId,
+    channelId,
+    recovery,
+    baseGeneration: recovery === "snapshot-required" ? null : 1,
+    baseRevision: recovery === "snapshot-required" ? null : 0,
+    targetGeneration: 1,
+    targetRevision: 0,
+  }));
+  return channelId;
+}
+
 async function waitForCondition(
   condition: () => boolean,
   message = "Condition was not met",
@@ -105,12 +206,16 @@ beforeEach(() => {
   delete window.orkestrator;
   delete window.orkestratorGateway;
   MockEventSource.instances = [];
+  MockWebSocket.instances = [];
+  localStorage.removeItem(TERMINAL_TRANSPORT_STORAGE_KEY);
 });
 
 afterEach(() => {
   clearDirectGatewayTransport();
   globalThis.fetch = originalFetch;
   globalThis.EventSource = originalEventSource;
+  globalThis.WebSocket = originalWebSocket;
+  localStorage.removeItem(TERMINAL_TRANSPORT_STORAGE_KEY);
   Object.defineProperty(performance, "getEntriesByType", {
     configurable: true,
     value: originalGetEntriesByType,
@@ -1025,6 +1130,313 @@ describe("web gateway browser API", () => {
       authorization: "Bearer direct-token-123456",
       data: "dir\r",
     }]);
+  });
+
+  test("opts into the terminal WebSocket explicitly or from storage and forwards URL and token", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    globalThis.fetch = mock(async () => new Response("", { status: 200 })) as unknown as typeof fetch;
+    const createSocket = (url: string, protocols: string | string[]) =>
+      new MockWebSocket(url, protocols) as unknown as WebSocket;
+    const direct = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+      terminalTransport: "websocket",
+      terminalWebSocketFactory: createSocket,
+    });
+
+    const stopDirect = direct.listen("terminal-output-direct", () => undefined);
+    const directSocket = MockWebSocket.instances[0];
+    if (!directSocket) throw new Error("Direct terminal socket was not created");
+    expect(String(directSocket.url)).toBe("wss://workstation.tailnet.ts.net/__orkestrator/terminal");
+    expect(directSocket.protocols).toBe("orkestrator-terminal.v1");
+    directSocket.open();
+    expect(sentControlFrames(directSocket)[0]).toEqual({
+      type: "authenticate",
+      version: 1,
+      token: "direct-token-123456",
+    });
+    stopDirect();
+
+    localStorage.setItem(TERMINAL_TRANSPORT_STORAGE_KEY, "websocket");
+    const stored = createBrowserGatewayApi({
+      baseUrl: "http://localhost:4319",
+      terminalWebSocketFactory: createSocket,
+    });
+    const stopStored = stored.listen("terminal-output-stored", () => undefined);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    stopStored();
+
+    const forcedHttp = createBrowserGatewayApi({
+      terminalTransport: "http-sse",
+      terminalWebSocketFactory: createSocket,
+    });
+    const stopHttp = forcedHttp.listen("terminal-output-http", () => undefined);
+    await Promise.resolve();
+    expect(MockWebSocket.instances).toHaveLength(2);
+    stopHttp();
+  });
+
+  test("keeps fallback per channel until its WebSocket snapshot succeeds", async () => {
+    const createSocket = (url: string, protocols: string | string[]) =>
+      new MockWebSocket(url, protocols) as unknown as WebSocket;
+    const fallbackSignals = new Map<string, AbortSignal>();
+    globalThis.fetch = mock(async (input, init) => {
+      if (String(input).includes("/__orkestrator/events?")) {
+        const event = new URL(String(input)).searchParams.get("includeEvents");
+        if (event && init?.signal) fallbackSignals.set(event, init.signal);
+        return new Response(new ReadableStream({ start() {} }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { command: string };
+      expect(body.command).toBe("get_terminal_output_snapshot");
+      return new Response(JSON.stringify({
+        result: { generation: 1, revision: 0, data: "" },
+      }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "http://localhost:4319",
+      terminalTransport: "websocket",
+      terminalWebSocketFactory: createSocket,
+    });
+
+    const stopFirst = api.listen("terminal-output-session-1", () => undefined);
+    const stopSecond = api.listen("terminal-output-session-2", () => undefined);
+    await waitForCondition(() => fallbackSignals.size === 2);
+    const socket = MockWebSocket.instances[0]!;
+    openTerminalSocket(socket);
+    subscribeTerminalSocket(socket, "session-1");
+    expect(fallbackSignals.get("terminal-output-session-1")?.aborted).toBe(false);
+    expect(fallbackSignals.get("terminal-output-session-2")?.aborted).toBe(false);
+
+    await api.invoke("get_terminal_output_snapshot", { sessionId: "session-1" });
+    await waitForCondition(
+      () => fallbackSignals.get("terminal-output-session-1")?.aborted === true,
+      "Snapshot completion did not retire fallback",
+    );
+    expect(fallbackSignals.get("terminal-output-session-2")?.aborted).toBe(false);
+    stopFirst();
+    stopSecond();
+  });
+
+  test("retains fallback and retries a channel when its snapshot fails", async () => {
+    let fallbackSignal: AbortSignal | undefined;
+    globalThis.fetch = mock(async (input, init) => {
+      if (String(input).includes("/__orkestrator/events?")) {
+        fallbackSignal = init?.signal ?? undefined;
+        return new Response(new ReadableStream({ start() {} }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: "snapshot unavailable" }), { status: 503 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "http://localhost:4319",
+      terminalTransport: "websocket",
+      terminalWebSocketFactory: (url, protocols) =>
+        new MockWebSocket(url, protocols) as unknown as WebSocket,
+    });
+
+    const stop = api.listen("terminal-output-session-1", () => undefined);
+    await waitForCondition(() => fallbackSignal !== undefined);
+    const socket = MockWebSocket.instances[0]!;
+    openTerminalSocket(socket);
+    subscribeTerminalSocket(socket, "session-1");
+
+    await expect(api.invoke("get_terminal_output_snapshot", { sessionId: "session-1" }))
+      .rejects.toThrow("snapshot unavailable");
+    await waitForCondition(
+      () => sentControlFrames(socket).some((frame) => frame.type === "unsubscribe"),
+      "Snapshot failure did not reset the WebSocket subscription",
+    );
+    expect(fallbackSignal?.aborted).toBe(false);
+    stop();
+  });
+
+  test("waits for WebSocket input and resize acknowledgements before HTTP close and restart", async () => {
+    const invokes: string[] = [];
+    globalThis.fetch = mock(async (input, init) => {
+      if (String(input).includes("/__orkestrator/events?")) {
+        return new Response(new ReadableStream({ start() {} }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { command: string };
+      invokes.push(body.command);
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "http://localhost:4319",
+      terminalTransport: "websocket",
+      terminalWebSocketFactory: (url, protocols) =>
+        new MockWebSocket(url, protocols) as unknown as WebSocket,
+    });
+    const stop = api.listen("terminal-output-ordered", () => undefined);
+    const socket = MockWebSocket.instances[0]!;
+    openTerminalSocket(socket);
+    const channelId = subscribeTerminalSocket(socket, "ordered", "current");
+
+    const input = api.invoke("terminal_write", { sessionId: "ordered", data: "final" });
+    await waitForCondition(
+      () => socket.sent.some((frame) => typeof frame !== "string"),
+      "WebSocket input was not sent",
+    );
+    const binary = socket.sent.find((frame) => typeof frame !== "string");
+    if (!binary || binary instanceof Blob) throw new Error("Input frame was not binary");
+    const inputFrame = decodeSentBinaryFrame(binary as ArrayBufferLike | ArrayBufferView);
+    expect(inputFrame.type).toBe(TERMINAL_BINARY_FRAME_TYPE.input);
+
+    const resize = api.invoke("terminal_resize", { sessionId: "ordered", cols: 100, rows: 30 });
+    const close = api.invoke("detach_terminal", { sessionId: "ordered" });
+    const restart = api.invoke("start_terminal_session", { sessionId: "ordered" });
+    await Promise.resolve();
+    expect(sentControlFrames(socket).some((frame) => frame.type === "resize")).toBe(false);
+    expect(invokes).toEqual([]);
+
+    socket.receive(JSON.stringify({
+      type: "operation-result",
+      channelId,
+      operationId: inputFrame.revision,
+      operation: "input",
+      ok: true,
+    }));
+    await waitForCondition(
+      () => sentControlFrames(socket).some((frame) => frame.type === "resize"),
+      "Resize did not follow acknowledged input",
+    );
+    const resizeFrame = sentControlFrames(socket).find((frame) => frame.type === "resize")!;
+    expect(invokes).toEqual([]);
+    socket.receive(JSON.stringify({
+      type: "operation-result",
+      channelId,
+      operationId: resizeFrame.operationId,
+      operation: "resize",
+      ok: true,
+    }));
+
+    await Promise.all([input, resize, close, restart]);
+    expect(invokes).toEqual(["detach_terminal", "start_terminal_session"]);
+    stop();
+  });
+
+  test("disposes an opted-in terminal socket when the browser adapter is replaced", () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    globalThis.fetch = mock(async () =>
+      new Response(new ReadableStream({ start() {} }), { status: 200 })) as unknown as typeof fetch;
+    const fakeWindow: TestGatewayWindow = {
+      location: { protocol: "http:" },
+      orkestrator: undefined,
+      orkestratorGateway: undefined,
+    };
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+      {
+        baseUrl: "http://localhost:4319",
+        terminalTransport: "websocket",
+        terminalWebSocketFactory: (url, protocols) =>
+          new MockWebSocket(url, protocols) as unknown as WebSocket,
+      },
+    );
+    const stop = fakeWindow.orkestrator!.listen("terminal-output-dispose", () => undefined);
+    const socket = MockWebSocket.instances[0]!;
+
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+      { replaceExisting: true },
+    );
+
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+    expect(socket.closeReason).toBe("Gateway adapter disposed");
+    stop();
+  });
+
+  test("reconnects an active terminal socket with a rotated gateway token", async () => {
+    globalThis.fetch = mock(async (input) => {
+      if (String(input).includes("/gateway-settings")) {
+        return new Response(JSON.stringify({
+          token: "rotated-token-654321",
+          configured: true,
+        }), { status: 200 });
+      }
+      return new Response(new ReadableStream({ start() {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "http://localhost:4319",
+      token: "initial-token-123456",
+      terminalTransport: "websocket",
+      terminalWebSocketReconnectDelayMs: 0,
+      terminalWebSocketFactory: (url, protocols) =>
+        new MockWebSocket(url, protocols) as unknown as WebSocket,
+    });
+    const stop = api.listen("terminal-output-token", () => undefined);
+    const first = MockWebSocket.instances[0]!;
+    first.open();
+    expect(sentControlFrames(first)[0]?.token).toBe("initial-token-123456");
+
+    await api.webClient.setToken("rotated-token-654321");
+    expect(first.closeReason).toBe("Gateway credential changed");
+    await waitForCondition(() => MockWebSocket.instances.length === 2);
+    const second = MockWebSocket.instances[1]!;
+    second.open();
+    expect(sentControlFrames(second)[0]?.token).toBe("rotated-token-654321");
+    stop();
+  });
+
+  test("keeps SSE fallback when terminal WebSocket construction fails", async () => {
+    let fallbackSignal: AbortSignal | undefined;
+    globalThis.fetch = mock(async (_input, init) => {
+      fallbackSignal = init?.signal ?? undefined;
+      return new Response(new ReadableStream({ start() {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "http://localhost:4319",
+      terminalTransport: "websocket",
+      terminalWebSocketReconnectDelayMs: 60_000,
+      terminalWebSocketFactory: () => {
+        throw new Error("WebSocket unavailable");
+      },
+    });
+
+    const stop = api.listen("terminal-output-fallback", () => undefined);
+    const ready = api.eventStreamReady("terminal-output-fallback");
+    await expect(ready).resolves.toBeUndefined();
+    expect(fallbackSignal?.aborted).toBe(false);
+    stop();
+    expect(fallbackSignal?.aborted).toBe(true);
+  });
+
+  test("surfaces a rejected WebSocket input operation without an ambiguous HTTP retry", async () => {
+    const invokes: string[] = [];
+    globalThis.fetch = mock(async (input, init) => {
+      if (String(input).includes("/__orkestrator/events?")) {
+        return new Response(new ReadableStream({ start() {} }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { command: string };
+      invokes.push(body.command);
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "http://localhost:4319",
+      terminalTransport: "websocket",
+      terminalWebSocketFactory: (url, protocols) =>
+        new MockWebSocket(url, protocols) as unknown as WebSocket,
+    });
+    const stop = api.listen("terminal-output-rejected", () => undefined);
+    const socket = MockWebSocket.instances[0]!;
+    openTerminalSocket(socket);
+    const channelId = subscribeTerminalSocket(socket, "rejected", "current");
+
+    const input = api.invoke("terminal_write", { sessionId: "rejected", data: "dangerous" });
+    await waitForCondition(() => socket.sent.some((frame) => typeof frame !== "string"));
+    const binary = socket.sent.find((frame) => typeof frame !== "string");
+    if (!binary || binary instanceof Blob) throw new Error("Input frame was not binary");
+    const inputFrame = decodeSentBinaryFrame(binary as ArrayBufferLike | ArrayBufferView);
+    socket.receive(JSON.stringify({
+      type: "operation-result",
+      channelId,
+      operationId: inputFrame.revision,
+      operation: "input",
+      ok: false,
+      message: "terminal write rejected",
+    }));
+
+    await expect(input).rejects.toThrow("terminal write rejected");
+    expect(invokes).toEqual([]);
+    stop();
   });
 
   test("connects directly to a configured backend with bearer authentication", async () => {

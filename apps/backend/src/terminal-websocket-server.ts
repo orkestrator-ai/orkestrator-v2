@@ -38,7 +38,11 @@ type TerminalEvent = {
   bytes: Uint8Array;
 };
 
-const MAX_PENDING_TERMINAL_OPERATION_SESSIONS = 4_096;
+export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_SESSIONS = 4_096;
+export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS_PER_SESSION = 256;
+export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES_PER_SESSION = 1024 * 1024;
+export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS = 4_096;
+export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES = 8 * 1024 * 1024;
 
 type QueuedFrame = { data: string | Uint8Array; bytes: number };
 
@@ -53,6 +57,17 @@ type Channel = {
   desynced: boolean;
   reconciling: boolean;
   bufferedLive: TerminalEvent[];
+  pendingDesync: {
+    reason: "revision-gap" | "generation-changed" | "slow-consumer";
+    generation: number;
+    revision: number;
+  } | null;
+};
+
+type OperationSequence = {
+  tail: Promise<void>;
+  count: number;
+  bytes: number;
 };
 
 type SocketState = {
@@ -120,7 +135,9 @@ export class TerminalWebSocketGateway {
   });
   private readonly sockets = new Set<SocketState>();
   private readonly upgradeSockets = new Set<Duplex>();
-  private readonly sessionOperationTails = new Map<string, Promise<void>>();
+  private readonly sessionOperations = new Map<string, OperationSequence>();
+  private pendingOperationCount = 0;
+  private pendingOperationBytes = 0;
   private readonly encoder = new TextEncoder();
   private readonly authTimeoutMs: number;
 
@@ -129,7 +146,13 @@ export class TerminalWebSocketGateway {
   }
 
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): boolean {
-    const url = new URL(request.url ?? "/", "http://orkestrator.local");
+    let url: URL;
+    try {
+      url = new URL(request.url ?? "/", "http://orkestrator.local");
+    } catch {
+      this.rejectUpgrade(socket, 400, "Bad Request");
+      return true;
+    }
     if (url.pathname !== "/__orkestrator/terminal") return false;
     // Browsers always send Origin. A non-browser/direct client may omit it, but
     // then it must authenticate in-band; accepting a cookie-authenticated
@@ -149,11 +172,17 @@ export class TerminalWebSocketGateway {
       });
       return true;
     }
-    this.server.handleUpgrade(request, socket, head, (ws) => {
-      this.accept(ws, request);
-    });
     this.upgradeSockets.add(socket);
     socket.once("close", () => this.upgradeSockets.delete(socket));
+    try {
+      this.server.handleUpgrade(request, socket, head, (ws) => {
+        this.accept(ws, request);
+      });
+    } catch {
+      this.upgradeSockets.delete(socket);
+      this.options.logger.debug("[TerminalWebSocket] Upgrade rejected");
+      if (!socket.destroyed) this.rejectUpgrade(socket, 400, "Bad Request");
+    }
     return true;
   }
 
@@ -164,7 +193,7 @@ export class TerminalWebSocketGateway {
     if (!output) return;
     for (const state of this.sockets) {
       const channel = state.sessions.get(sessionId);
-      if (!channel || channel.desynced) continue;
+      if (!channel || channel.desynced || channel.pendingDesync) continue;
       if (channel.reconciling) {
         const frameBytes = output.bytes.byteLength + 16;
         const projected = channel.queuedBytes
@@ -172,7 +201,13 @@ export class TerminalWebSocketGateway {
           + frameBytes;
         if (projected > TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES) {
           channel.bufferedLive = [];
-          this.desync(state, channel, "slow-consumer", output.generation, output.revision);
+          // The client cannot interpret a channel-scoped frame until it has
+          // received `subscribed`. Defer the desync until that mapping exists.
+          channel.pendingDesync = {
+            reason: "slow-consumer",
+            generation: output.generation,
+            revision: output.revision,
+          };
         } else {
           channel.bufferedLive.push(output);
         }
@@ -186,11 +221,15 @@ export class TerminalWebSocketGateway {
     // Shutdown must not wait for a peer to answer the WebSocket close handshake;
     // the backend HTTP listener cannot finish closing while an upgraded socket
     // remains attached. Reconnect recovery is snapshot-authoritative anyway.
-    for (const state of this.sockets) state.ws.terminate();
-    for (const socket of this.upgradeSockets) socket.destroy();
-    this.upgradeSockets.clear();
-    this.sockets.clear();
+    this.revokeConnections();
     this.server.close();
+  }
+
+  /** Revoke every credential latched by an existing or in-flight upgrade. */
+  revokeConnections(): void {
+    for (const state of [...this.sockets]) state.ws.terminate();
+    for (const socket of [...this.upgradeSockets]) socket.destroy();
+    this.upgradeSockets.clear();
   }
 
   private accept(ws: WebSocket, request: IncomingMessage): void {
@@ -282,11 +321,23 @@ export class TerminalWebSocketGateway {
         break;
       case "resize": {
         const channel = this.channel(state, frame.channelId);
-        if (channel) this.enqueueOperation(state, channel.sessionId, () => this.options.backend.invoke("terminal_resize", {
+        if (!channel) {
+          this.operationResult(state, frame.channelId, frame.operationId, "resize", false, "Unknown terminal channel");
+          break;
+        }
+        this.enqueueOperation({
+          state,
+          channelId: channel.id,
           sessionId: channel.sessionId,
-          cols: frame.cols,
-          rows: frame.rows,
-        }));
+          operationId: frame.operationId,
+          operation: "resize",
+          bytes: 16,
+          invoke: () => this.options.backend.invoke("terminal_resize", {
+            sessionId: channel.sessionId,
+            cols: frame.cols,
+            rows: frame.rows,
+          }),
+        });
         break;
       }
       case "ack": {
@@ -312,17 +363,28 @@ export class TerminalWebSocketGateway {
       return;
     }
     const channel = this.channel(state, frame.channelId);
-    if (!channel) return;
+    if (!channel) {
+      this.operationResult(state, frame.channelId, frame.revision, "input", false, "Unknown terminal channel");
+      return;
+    }
     if (frame.generation !== channel.generation || frame.revision <= channel.inputSequence) {
       this.fatal(state, "malformed-frame", "Terminal input sequence or generation is invalid", TERMINAL_WEBSOCKET_CLOSE.protocolError);
       return;
     }
     channel.inputSequence = frame.revision;
     const data = new TextDecoder().decode(frame.bytes);
-    this.enqueueOperation(state, channel.sessionId, () => this.options.backend.invoke("terminal_write", {
+    this.enqueueOperation({
+      state,
+      channelId: channel.id,
       sessionId: channel.sessionId,
-      data,
-    }));
+      operationId: frame.revision,
+      operation: "input",
+      bytes: frame.bytes.byteLength,
+      invoke: () => this.options.backend.invoke("terminal_write", {
+        sessionId: channel.sessionId,
+        data,
+      }),
+    });
   }
 
   private async subscribe(
@@ -351,6 +413,7 @@ export class TerminalWebSocketGateway {
       desynced: false,
       reconciling: true,
       bufferedLive: [],
+      pendingDesync: null,
     };
     // Register before reading the snapshot so concurrent terminal output is
     // buffered and can never fall between reconciliation and live delivery.
@@ -427,6 +490,18 @@ export class TerminalWebSocketGateway {
         channel.revision = snapshotValue.revision;
       }
       channel.reconciling = false;
+      const pendingDesync = channel.pendingDesync;
+      channel.pendingDesync = null;
+      if (pendingDesync) {
+        this.desync(
+          state,
+          channel,
+          pendingDesync.reason,
+          pendingDesync.generation,
+          pendingDesync.revision,
+        );
+        return;
+      }
       const buffered = channel.bufferedLive.splice(0).sort((a, b) => a.revision - b.revision);
       for (const output of buffered) {
         if (output.generation === channel.generation && output.revision <= snapshotValue.revision) continue;
@@ -591,37 +666,102 @@ export class TerminalWebSocketGateway {
     channel.queue = [];
     channel.queuedBytes = 0;
     channel.bufferedLive = [];
+    channel.pendingDesync = null;
   }
 
-  private enqueueOperation(
-    state: SocketState,
-    sessionId: string,
-    operation: () => Promise<unknown> | unknown,
-  ): void {
+  private enqueueOperation(options: {
+    state: SocketState;
+    channelId: number;
+    sessionId: string;
+    operationId: number;
+    operation: "input" | "resize";
+    bytes: number;
+    invoke: () => Promise<unknown> | unknown;
+  }): void {
     // The ordering tail is gateway-owned rather than socket-owned. A reconnect
     // can therefore create a new channel while an accepted write from the old
     // socket is still completing without allowing the new write to overtake it.
-    const previous = this.sessionOperationTails.get(sessionId) ?? Promise.resolve();
-    if (
-      !this.sessionOperationTails.has(sessionId)
-      && this.sessionOperationTails.size >= MAX_PENDING_TERMINAL_OPERATION_SESSIONS
-    ) {
-      this.sendControl(state, {
-        type: "error",
-        code: "internal-error",
-        message: "Too many pending terminal operation sequences",
-        fatal: true,
-      });
-      this.closeSocket(state, TERMINAL_WEBSOCKET_CLOSE.internalError, "Terminal operation queue is full");
+    const existing = this.sessionOperations.get(options.sessionId);
+    const sequence = existing ?? { tail: Promise.resolve(), count: 0, bytes: 0 };
+    const saturated = (!existing
+        && this.sessionOperations.size >= TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_SESSIONS)
+      || sequence.count >= TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS_PER_SESSION
+      || sequence.bytes + options.bytes > TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES_PER_SESSION
+      || this.pendingOperationCount >= TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS
+      || this.pendingOperationBytes + options.bytes > TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES;
+    if (saturated) {
+      this.operationResult(
+        options.state,
+        options.channelId,
+        options.operationId,
+        options.operation,
+        false,
+        "Terminal operation queue is full",
+      );
       return;
     }
+    sequence.count += 1;
+    sequence.bytes += options.bytes;
+    this.pendingOperationCount += 1;
+    this.pendingOperationBytes += options.bytes;
+    const previous = sequence.tail;
     const next = previous
-      .then(() => operation())
-      .then(() => undefined)
-      .catch((error) => this.options.logger.warn("[TerminalWebSocket] Terminal operation failed", error));
-    this.sessionOperationTails.set(sessionId, next);
+      .then(() => options.invoke())
+      .then(
+        () => this.operationResult(
+          options.state,
+          options.channelId,
+          options.operationId,
+          options.operation,
+          true,
+        ),
+        () => {
+          this.options.logger.warn("[TerminalWebSocket] Terminal operation failed");
+          this.operationResult(
+            options.state,
+            options.channelId,
+            options.operationId,
+            options.operation,
+            false,
+            "Terminal operation failed",
+          );
+        },
+      )
+      .then(() => undefined);
+    sequence.tail = next;
+    this.sessionOperations.set(options.sessionId, sequence);
     void next.finally(() => {
-      if (this.sessionOperationTails.get(sessionId) === next) this.sessionOperationTails.delete(sessionId);
+      sequence.count -= 1;
+      sequence.bytes -= options.bytes;
+      this.pendingOperationCount -= 1;
+      this.pendingOperationBytes -= options.bytes;
+      if (this.sessionOperations.get(options.sessionId) === sequence && sequence.count === 0) {
+        this.sessionOperations.delete(options.sessionId);
+      }
+    });
+  }
+
+  private operationResult(
+    state: SocketState,
+    channelId: number,
+    operationId: number,
+    operation: "input" | "resize",
+    ok: boolean,
+    message?: string,
+  ): void {
+    this.sendControl(state, ok ? {
+      type: "operation-result",
+      channelId,
+      operationId,
+      operation,
+      ok: true,
+    } : {
+      type: "operation-result",
+      channelId,
+      operationId,
+      operation,
+      ok: false,
+      message: message ?? "Terminal operation failed",
     });
   }
 

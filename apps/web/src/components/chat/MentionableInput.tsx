@@ -88,20 +88,44 @@ function setCursorOffset(element: HTMLElement, offset: number): void {
   if (!selection) return;
 
   let currentOffset = 0;
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null);
+  const walker = document.createTreeWalker(
+    element,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+    null,
+  );
 
-  let node: Text | null;
-  while ((node = walker.nextNode() as Text | null)) {
-    const nodeLength = node.textContent?.length || 0;
-    if (currentOffset + nodeLength >= offset) {
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const textNode = node as Text;
+      const nodeText = textNode.textContent || "";
+      if (currentOffset + nodeText.length >= offset) {
+        const range = document.createRange();
+        range.setStart(textNode, Math.max(0, offset - currentOffset));
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return;
+      }
+      currentOffset += nodeText.length;
+      continue;
+    }
+
+    if (!(node instanceof HTMLElement) || node.tagName !== "BR") continue;
+
+    const newlineEnd = currentOffset + 1;
+    if (newlineEnd >= offset) {
+      const parent = node.parentNode;
+      if (!parent) continue;
+      const childIndex = Array.prototype.indexOf.call(parent.childNodes, node);
       const range = document.createRange();
-      range.setStart(node, offset - currentOffset);
+      range.setStart(parent, childIndex + Math.max(0, Math.min(1, offset - currentOffset)));
       range.collapse(true);
       selection.removeAllRanges();
       selection.addRange(range);
       return;
     }
-    currentOffset += nodeLength;
+    currentOffset = newlineEnd;
   }
 
   const range = document.createRange();
@@ -109,6 +133,10 @@ function setCursorOffset(element: HTMLElement, offset: number): void {
   range.collapse(false);
   selection.removeAllRanges();
   selection.addRange(range);
+}
+
+function renderMentionHtml(pattern: string, mention: FileMention): string {
+  return `<span class="text-blue-500 font-medium" data-mention="true" data-id="${escapeAttr(mention.id)}" data-filename="${escapeAttr(mention.filename)}" data-path="${escapeAttr(mention.relativePath)}" contenteditable="false">${escapeHtml(pattern)}</span>`;
 }
 
 function renderContent(text: string, mentions: FileMention[]): string {
@@ -122,16 +150,21 @@ function renderContent(text: string, mentions: FileMention[]): string {
   }
 
   const sortedPatterns = Array.from(mentionMap.keys()).sort((a, b) => b.length - a.length);
-  let result = escapeHtml(text);
+  const matcher = new RegExp(sortedPatterns.map(escapeRegExp).join("|"), "g");
+  let result = "";
+  let previousEnd = 0;
 
-  for (const pattern of sortedPatterns) {
-    const mention = mentionMap.get(pattern);
-    if (!mention) continue;
-    const escapedPattern = escapeHtml(pattern);
-    const mentionHtml = `<span class="text-blue-500 font-medium" data-mention="true" data-id="${escapeAttr(mention.id)}" data-filename="${escapeAttr(mention.filename)}" data-path="${escapeAttr(mention.relativePath)}" contenteditable="false">${escapedPattern}</span>`;
-    result = result.replace(new RegExp(escapeRegExp(escapedPattern), "g"), mentionHtml);
+  for (const match of text.matchAll(matcher)) {
+    const matchStart = match.index;
+    const pattern = match[0];
+    const mention = mentionMap.get(pattern)!;
+
+    result += escapeHtml(text.slice(previousEnd, matchStart));
+    result += renderMentionHtml(pattern, mention);
+    previousEnd = matchStart + pattern.length;
   }
 
+  result += escapeHtml(text.slice(previousEnd));
   return result.replace(/\n/g, "<br>");
 }
 
@@ -422,9 +455,6 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
           onKeyDown={handleKeyDown}
           className={cn(
             "native-compose-input w-full resize-none overflow-y-auto border-none bg-transparent px-1 py-1 text-sm text-foreground outline-none transition-colors",
-            "[&:empty]:before:pointer-events-none",
-            "[&:empty]:before:content-[attr(data-placeholder)]",
-            "[&:empty]:before:text-muted-foreground",
             disabled && "cursor-not-allowed opacity-50",
             className
           )}
@@ -438,7 +468,8 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         />
         {showPlaceholder && (
           <div
-            className="pointer-events-none absolute top-1 left-1 text-sm text-muted-foreground"
+            className="native-compose-placeholder pointer-events-none absolute top-1 left-1 text-sm text-muted-foreground"
+            data-native-compose-placeholder
             aria-hidden="true"
           >
             {placeholder}

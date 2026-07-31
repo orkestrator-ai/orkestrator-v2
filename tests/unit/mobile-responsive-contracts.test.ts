@@ -55,12 +55,18 @@ describe("mobile responsive layout contracts", () => {
     const iosComposeRule = css.match(
       /@media \(hover: none\) and \(pointer: coarse\) \{[\s\S]*?\.native-compose-input \{([\s\S]*?)\n  \}/,
     )?.[1];
+    const iosPlaceholderRule = css.match(
+      /@media \(hover: none\) and \(pointer: coarse\) \{[\s\S]*?\.native-compose-placeholder \{([\s\S]*?)\n  \}/,
+    )?.[1];
 
     expect(iosComposeRule).toBeTruthy();
     expect(iosComposeRule).toContain("font-size: 16px");
     expect(iosComposeRule).toContain("line-height: 1.25rem");
     expect(iosComposeRule).not.toContain("transform");
     expect(iosComposeRule).not.toContain("width:");
+    expect(iosPlaceholderRule).toBeTruthy();
+    expect(iosPlaceholderRule).toContain("font-size: 16px");
+    expect(iosPlaceholderRule).toContain("line-height: 1.25rem");
     expect(css).not.toContain(".native-compose-input-viewport");
   });
 

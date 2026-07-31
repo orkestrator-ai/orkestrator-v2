@@ -34,9 +34,15 @@ describe("MentionableInput", () => {
       />,
     );
 
-    const input = container.querySelector("[contenteditable]");
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
     expect(input).not.toBeNull();
-    expect(input!.textContent).toBe("");
+    expect(input.textContent).toBe("");
+    expect(input.style.minHeight).toBe("28px");
+    expect(input.style.maxHeight).toBe("216px");
+    expect(input.getAttribute("data-placeholder")).toBe("Type a message...");
+    expect(
+      input.parentElement?.querySelector("[data-native-compose-placeholder]")?.textContent,
+    ).toBe("Type a message...");
   });
 
   test("marks the editable element for the iOS focus-zoom workaround", () => {
@@ -77,6 +83,7 @@ describe("MentionableInput", () => {
     );
     expect(placeholders?.length).toBe(1);
     expect(placeholders?.[0]?.textContent).toBe("Describe the change");
+    expect(placeholders?.[0]?.classList.contains("native-compose-placeholder")).toBe(true);
 
     rerender(
       <MentionableInput
@@ -121,12 +128,75 @@ describe("MentionableInput", () => {
 
     rerender(
       <MentionableInput
+        value="Check @utils.ts"
+        mentions={[{
+          ...initialMention,
+          id: "mention-2",
+          relativePath: "packages/utils.ts",
+        }]}
+        onChange={() => {}}
+      />,
+    );
+    expect(input.querySelector("[data-mention='true']")?.getAttribute("data-id"))
+      .toBe("mention-2");
+
+    rerender(
+      <MentionableInput
+        value="Check @utils.ts"
+        mentions={[{
+          ...initialMention,
+          id: "mention-2",
+          filename: "helpers.ts",
+          relativePath: "packages/utils.ts",
+        }]}
+        onChange={() => {}}
+      />,
+    );
+    expect(input.querySelector("[data-mention='true']")).toBeNull();
+
+    rerender(
+      <MentionableInput
         value="A replacement draft"
         mentions={[]}
         onChange={() => {}}
       />,
     );
     expect(input.textContent).toBe("A replacement draft");
+  });
+
+  test("preserves live content and selection across an unchanged-value rerender", () => {
+    const inputRef = createRef<MentionableInputRef>();
+    const initialMentions: FileMention[] = [];
+    const { container, rerender } = render(
+      <MentionableInput
+        ref={inputRef}
+        value="Alpha"
+        mentions={initialMentions}
+        onChange={() => {}}
+      />,
+    );
+
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+    const selection = window.getSelection()!;
+    const range = document.createRange();
+    range.setStart(input.firstChild!, 2);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    rerender(
+      <MentionableInput
+        ref={inputRef}
+        value="Alpha"
+        mentions={[]}
+        onChange={() => {}}
+        className="rerendered"
+      />,
+    );
+
+    expect(input.textContent).toBe("Alpha");
+    expect(input.classList.contains("rerendered")).toBe(true);
+    expect(inputRef.current!.getCursorPosition()).toBe(2);
   });
 
   test("escapes special characters in text and mention metadata", () => {
@@ -173,6 +243,91 @@ describe("MentionableInput", () => {
     const mentionSpan = input!.querySelector("[data-mention='true']");
     expect(mentionSpan).not.toBeNull();
     expect(mentionSpan!.textContent).toBe("@utils.ts");
+  });
+
+  test("renders overlapping and duplicate mention filenames without rewriting generated markup", () => {
+    const { container } = render(
+      <MentionableInput
+        value="@utils.tsx and @utils.ts then @utils.ts"
+        mentions={[
+          { id: "old-short", filename: "utils.ts", relativePath: "old/utils.ts" },
+          { id: "long", filename: "utils.tsx", relativePath: "src/utils.tsx" },
+          { id: "new-short", filename: "utils.ts", relativePath: "src/utils.ts" },
+        ]}
+        onChange={() => {}}
+      />,
+    );
+
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+    const renderedMentions = Array.from(
+      input.querySelectorAll<HTMLElement>("[data-mention='true']"),
+    );
+    expect(input.textContent).toBe("@utils.tsx and @utils.ts then @utils.ts");
+    expect(renderedMentions.map((mention) => mention.dataset.id)).toEqual([
+      "long",
+      "new-short",
+      "new-short",
+    ]);
+    expect(renderedMentions.every(
+      (mention) => mention.querySelector("[data-mention='true']") === null,
+    )).toBe(true);
+  });
+
+  test("renders multiline drafts and restores a caret after a line break", () => {
+    const inputRef = createRef<MentionableInputRef>();
+    const { container, rerender } = render(
+      <MentionableInput
+        ref={inputRef}
+        value={"Alpha\nBeta"}
+        mentions={[]}
+        onChange={() => {}}
+      />,
+    );
+
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+    expect(input.querySelector("br")).not.toBeNull();
+    expect(input.innerHTML).toBe("Alpha<br>Beta");
+
+    let betaText = input.lastChild!;
+    const selection = window.getSelection()!;
+    let range = document.createRange();
+    range.setStart(betaText, 0);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    expect(inputRef.current!.getCursorPosition()).toBe("Alpha\n".length);
+
+    rerender(
+      <MentionableInput
+        ref={inputRef}
+        value={"Alpha\nBeta!"}
+        mentions={[]}
+        onChange={() => {}}
+      />,
+    );
+
+    expect(input.innerHTML).toBe("Alpha<br>Beta!");
+    expect(inputRef.current!.getCursorPosition()).toBe("Alpha\n".length);
+
+    betaText = input.lastChild!;
+    range = document.createRange();
+    range.setStart(betaText, 1);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    expect(inputRef.current!.getCursorPosition()).toBe("Alpha\nB".length);
+
+    rerender(
+      <MentionableInput
+        ref={inputRef}
+        value={"Alpha\nBeta!!"}
+        mentions={[]}
+        onChange={() => {}}
+      />,
+    );
+
+    expect(input.innerHTML).toBe("Alpha<br>Beta!!");
+    expect(inputRef.current!.getCursorPosition()).toBe("Alpha\nB".length);
   });
 
   test("reports the current editable text with cursor changes after input", () => {
@@ -969,5 +1124,27 @@ describe("MentionableInput", () => {
     fireEvent.input(input);
 
     expect(onChange).toHaveBeenCalledWith("Check utils.ts", []);
+  });
+
+  test("retains mention metadata when surrounding text changes", () => {
+    const onChange = mock(() => {});
+    const mention = {
+      id: "1",
+      filename: "utils.ts",
+      relativePath: "src/utils.ts",
+    };
+    const { container } = render(
+      <MentionableInput
+        value="Check @utils.ts"
+        mentions={[mention]}
+        onChange={onChange}
+      />,
+    );
+
+    const input = container.querySelector("[contenteditable]")!;
+    input.insertBefore(document.createTextNode("Please "), input.firstChild);
+    fireEvent.input(input);
+
+    expect(onChange).toHaveBeenCalledWith("Please Check @utils.ts", [mention]);
   });
 });

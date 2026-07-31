@@ -1180,11 +1180,20 @@ describe("backend native agent and looped review wrappers", () => {
 
   test("ensures native sessions with full and minimal payloads", async () => {
     const session = {
+      version: 1 as const,
       key: "native-session-key",
       environmentId: "env-1",
       agent: "codex" as const,
       logicalSessionKey: "review-1",
       providerSessionId: "provider-1",
+      origin: "interactive-native" as const,
+      interactionPolicy: {
+        version: 1 as const,
+        mode: "interactive" as const,
+        input: "await-user" as const,
+        authorization: "await-user" as const,
+        unknown: "deny-and-fail" as const,
+      },
       createdAt: "2026-07-29T12:00:00.000Z",
       updatedAt: "2026-07-29T12:00:00.000Z",
     };
@@ -1226,11 +1235,20 @@ describe("backend native agent and looped review wrappers", () => {
 
   test("adopts native sessions with full and minimal payloads", async () => {
     const adopted = {
+      version: 1 as const,
       key: "native-session-key",
       environmentId: "env-1",
       agent: "opencode" as const,
       logicalSessionKey: "fork-1",
       providerSessionId: "provider-new",
+      origin: "interactive-native" as const,
+      interactionPolicy: {
+        version: 1 as const,
+        mode: "interactive" as const,
+        input: "await-user" as const,
+        authorization: "await-user" as const,
+        unknown: "deny-and-fail" as const,
+      },
       createdAt: "2026-07-29T12:00:00.000Z",
       updatedAt: "2026-07-29T12:01:00.000Z",
     };
@@ -1272,11 +1290,20 @@ describe("backend native agent and looped review wrappers", () => {
 
   test("dispatches native prompts with full and minimal payloads", async () => {
     const dispatched = {
+      version: 1 as const,
       key: "native-session-key",
       environmentId: "env-1",
       agent: "claude" as const,
       logicalSessionKey: "fix-1",
       providerSessionId: "provider-1",
+      origin: "interactive-native" as const,
+      interactionPolicy: {
+        version: 1 as const,
+        mode: "interactive" as const,
+        input: "await-user" as const,
+        authorization: "await-user" as const,
+        unknown: "deny-and-fail" as const,
+      },
       dispatchedRequestIds: ["request-1"],
       createdAt: "2026-07-29T12:00:00.000Z",
       updatedAt: "2026-07-29T12:01:00.000Z",

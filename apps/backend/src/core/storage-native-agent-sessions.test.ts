@@ -2,6 +2,11 @@ import { describe, expect, jest, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  AGENT_INTERACTION_JOURNAL_VERSION,
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+} from "@orkestrator/protocol/agent-interactions";
 import { StorageService } from "./storage.js";
 
 async function withStorage(
@@ -42,6 +47,123 @@ const input = {
 };
 
 describe("StorageService native agent sessions", () => {
+  test("migrates legacy sessions to interactive without losing identity or dispatch history", async () => {
+    await withStorage(async (first) => {
+      const dataDir = (await first.getEnvironment("env-1"))!.worktreePath!;
+      const legacy = {
+        [input.key]: {
+          ...input,
+          providerSessionId: "legacy-provider-session",
+          dispatchedRequestIds: ["legacy-request"],
+          createdAt: new Date(1).toISOString(),
+          updatedAt: new Date(2).toISOString(),
+        },
+      };
+      await fs.writeFile(
+        path.join(dataDir, "native-agent-sessions.json"),
+        JSON.stringify(legacy),
+      );
+
+      expect(await first.getNativeAgentSession(input.key)).toEqual({
+        ...input,
+        providerSessionId: "legacy-provider-session",
+        dispatchedRequestIds: ["legacy-request"],
+        createdAt: new Date(1).toISOString(),
+        updatedAt: new Date(2).toISOString(),
+        version: 1,
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      });
+    });
+  });
+
+  test("persists unattended origin and policy on newly created logical sessions", async () => {
+    await withStorage(async (first) => {
+      const saved = await first.getOrCreateNativeAgentSession({
+        ...input,
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      }, async () => "provider-session");
+      expect(saved).toMatchObject({
+        version: 1,
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      expect(await first.getNativeAgentSession(input.key)).toEqual(saved);
+    });
+  });
+
+  test("does not reinterpret malformed versioned metadata as a legacy interactive session", async () => {
+    await withStorage(async (first) => {
+      const dataDir = (await first.getEnvironment("env-1"))!.worktreePath!;
+      await fs.writeFile(
+        path.join(dataDir, "native-agent-sessions.json"),
+        JSON.stringify({
+          [input.key]: {
+            ...input,
+            version: 1,
+            providerSessionId: "provider-session",
+            origin: "looped-review",
+            interactionPolicy: { version: 1, mode: "unattended" },
+            createdAt: new Date(1).toISOString(),
+            updatedAt: new Date(2).toISOString(),
+          },
+        }),
+      );
+      expect(await first.getNativeAgentSession(input.key)).toBeNull();
+    });
+  });
+
+  test("keeps a logical session policy fixed across provider replacement", async () => {
+    await withStorage(async (first) => {
+      await first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-old",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      const replacement = await first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-new",
+        expectedProviderSessionId: "provider-old",
+      });
+      expect(replacement).toMatchObject({
+        providerSessionId: "provider-new",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+    });
+  });
+
+  test("round-trips a bounded content-free interaction resolution journal", async () => {
+    await withStorage(async (first, second) => {
+      const saved = await first.updateAgentInteractionResolutionJournal(
+        (journal) => ({
+          ...journal,
+          entries: [{
+            id: "claim-1",
+            interactionId: "interaction-1",
+            provider: "codex",
+            kind: "command-approval",
+            sessionId: "provider-session",
+            state: "claimed",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: "pipeline-1",
+              phase: "building",
+              fence: 4,
+              claimedAt: Date.now(),
+            },
+          }],
+        }),
+      );
+      expect(saved.version).toBe(AGENT_INTERACTION_JOURNAL_VERSION);
+      expect(await second.getAgentInteractionResolutionJournal()).toEqual(saved);
+      expect(JSON.stringify(saved)).not.toContain("prompt");
+      expect(JSON.stringify(saved)).not.toContain("answer");
+    });
+  });
+
   test("heartbeats a long-held environment mutation lock across backend processes", async () => {
     await withStorage(async (first, second) => {
       let signalEntered!: () => void;

@@ -11,6 +11,17 @@ import {
   parseUsableAgentActivityTime,
 } from "@orkestrator/protocol/agent-activity";
 import {
+  AGENT_INTERACTION_JOURNAL_VERSION,
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+  isAgentInteractionPolicy,
+  isAgentInteractionResolutionJournal,
+  pruneAgentInteractionResolutionJournal,
+  type AgentInteractionOrigin,
+  type AgentInteractionPolicy,
+  type AgentInteractionResolutionJournal,
+} from "@orkestrator/protocol/agent-interactions";
+import {
   parseStoredDesktopConnections,
   type StoredDesktopConnections,
 } from "@orkestrator/protocol/connections";
@@ -26,6 +37,7 @@ import {
   MAX_CODEX_CONCURRENT_THREADS,
   resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
+import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
 import type {
   AgentActivityState,
   AgentActivitySource,
@@ -488,6 +500,7 @@ function isPersistedNativeAgentSession(
   expectedKey?: string,
 ): value is PersistedNativeAgentSession {
   return isRecord(value)
+    && value.version === NATIVE_AGENT_SESSION_VERSION
     && isNonBlankString(value.key)
     && (expectedKey === undefined || value.key === expectedKey)
     && isNonBlankString(value.environmentId)
@@ -498,6 +511,13 @@ function isPersistedNativeAgentSession(
     )
     && isNonBlankString(value.logicalSessionKey)
     && isNonBlankString(value.providerSessionId)
+    && (
+      value.origin === "interactive-native"
+      || value.origin === "interactive-tmux"
+      || value.origin === "build-pipeline"
+      || value.origin === "looped-review"
+    )
+    && isAgentInteractionPolicy(value.interactionPolicy)
     && (
       value.dispatchedRequestIds === undefined
       || (
@@ -510,6 +530,58 @@ function isPersistedNativeAgentSession(
     && Number.isFinite(Date.parse(value.createdAt))
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt));
+}
+
+/**
+ * Records written before interaction policies existed were all user-created
+ * logical native sessions. Restore them as interactive without changing any
+ * provider identity, timestamps, or dispatch deduplication data.
+ */
+function migratePersistedNativeAgentSession(
+  value: unknown,
+  expectedKey: string,
+): PersistedNativeAgentSession | null {
+  if (isPersistedNativeAgentSession(value, expectedKey)) return value;
+  if (!isRecord(value)) return null;
+  if (
+    value.version !== undefined
+    || value.origin !== undefined
+    || value.interactionPolicy !== undefined
+  ) {
+    return null;
+  }
+  const migrated = {
+    ...value,
+    version: NATIVE_AGENT_SESSION_VERSION,
+    origin: "interactive-native",
+    interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+  };
+  return isPersistedNativeAgentSession(migrated, expectedKey)
+    ? migrated
+    : null;
+}
+
+function resolveNativeAgentInteractionMetadata(input: {
+  origin?: AgentInteractionOrigin;
+  interactionPolicy?: AgentInteractionPolicy;
+}): Pick<PersistedNativeAgentSession, "origin" | "interactionPolicy"> | null {
+  const origin = input.origin ?? "interactive-native";
+  const interactionPolicy = input.interactionPolicy
+    ?? (origin === "build-pipeline" || origin === "looped-review"
+      ? UNATTENDED_AGENT_INTERACTION_POLICY
+      : INTERACTIVE_AGENT_INTERACTION_POLICY);
+  if (
+    ![
+      "interactive-native",
+      "interactive-tmux",
+      "build-pipeline",
+      "looped-review",
+    ].includes(origin)
+    || !isAgentInteractionPolicy(interactionPolicy)
+  ) {
+    return null;
+  }
+  return { origin, interactionPolicy };
 }
 
 function isPersistedComposeDraft(
@@ -1344,6 +1416,7 @@ export class StorageService {
   private loopedReviewMutation: Promise<unknown> = Promise.resolve();
   private buildPipelineMutation: Promise<unknown> = Promise.resolve();
   private nativeAgentSessionMutation: Promise<unknown> = Promise.resolve();
+  private agentInteractionJournalMutation: Promise<unknown> = Promise.resolve();
   private promptQueueMutation: Promise<unknown> = Promise.resolve();
   private promptQueueClaimRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private composeDraftMutation: Promise<unknown> = Promise.resolve();
@@ -1458,6 +1531,10 @@ export class StorageService {
 
   private nativeAgentSessionsFile(): string {
     return this.file("native-agent-sessions.json");
+  }
+
+  private agentInteractionJournalFile(): string {
+    return this.file("agent-interaction-resolution-journal.json");
   }
 
   private promptQueuesFile(): string {
@@ -1694,6 +1771,28 @@ export class StorageService {
     };
     const next = this.nativeAgentSessionMutation.then(run, run);
     this.nativeAgentSessionMutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  private enqueueAgentInteractionJournalMutation<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.agentInteractionJournalFile(),
+        "agent interaction journal storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.agentInteractionJournalMutation.then(run, run);
+    this.agentInteractionJournalMutation = next.then(
       () => undefined,
       () => undefined,
     );
@@ -3282,6 +3381,50 @@ export class StorageService {
     });
   }
 
+  private async loadAgentInteractionResolutionJournal(): Promise<
+    AgentInteractionResolutionJournal
+  > {
+    const stored = await this.loadJson<unknown>(
+      this.agentInteractionJournalFile(),
+      () => ({ version: AGENT_INTERACTION_JOURNAL_VERSION, entries: [] }),
+    );
+    if (!isAgentInteractionResolutionJournal(stored)) {
+      throw new Error("Stored agent interaction resolution journal is invalid");
+    }
+    return stored;
+  }
+
+  async getAgentInteractionResolutionJournal(): Promise<
+    AgentInteractionResolutionJournal
+  > {
+    return pruneAgentInteractionResolutionJournal(
+      await this.loadAgentInteractionResolutionJournal(),
+    );
+  }
+
+  /**
+   * Serializes cross-process journal transitions under one file lock. Callers
+   * cannot persist request or answer content because the protocol guard accepts
+   * only bounded identities, fences, timestamps, states, and outcomes.
+   */
+  async updateAgentInteractionResolutionJournal(
+    update: (
+      journal: AgentInteractionResolutionJournal,
+    ) => AgentInteractionResolutionJournal,
+  ): Promise<AgentInteractionResolutionJournal> {
+    return this.enqueueAgentInteractionJournalMutation(async () => {
+      const current = pruneAgentInteractionResolutionJournal(
+        await this.loadAgentInteractionResolutionJournal(),
+      );
+      const next = pruneAgentInteractionResolutionJournal(update(current));
+      if (!isAgentInteractionResolutionJournal(next)) {
+        throw new Error("Agent interaction resolution journal update is invalid");
+      }
+      await this.saveSensitiveJson(this.agentInteractionJournalFile(), next);
+      return next;
+    });
+  }
+
   private async loadNativeAgentSessions(): Promise<
     Record<string, PersistedNativeAgentSession>
   > {
@@ -3290,9 +3433,10 @@ export class StorageService {
       () => ({}),
     );
     return Object.fromEntries(
-      Object.entries(stored).filter(([storedKey, session]) =>
-        isPersistedNativeAgentSession(session, storedKey)
-      ),
+      Object.entries(stored).flatMap(([storedKey, session]) => {
+        const migrated = migratePersistedNativeAgentSession(session, storedKey);
+        return migrated ? [[storedKey, migrated]] : [];
+      }),
     ) as Record<string, PersistedNativeAgentSession>;
   }
 
@@ -3315,14 +3459,19 @@ export class StorageService {
     input: Pick<
       PersistedNativeAgentSession,
       "key" | "environmentId" | "agent" | "logicalSessionKey"
-    >,
+    > & Partial<Pick<
+      PersistedNativeAgentSession,
+      "origin" | "interactionPolicy"
+    >>,
     createProviderSession: () => Promise<string>,
   ): Promise<PersistedNativeAgentSession> {
+    const interactionMetadata = resolveNativeAgentInteractionMetadata(input);
     if (
       !isNonBlankString(input.key)
       || !isNonBlankString(input.environmentId)
       || !isNonBlankString(input.logicalSessionKey)
       || !["claude", "codex", "opencode"].includes(input.agent)
+      || !interactionMetadata
     ) {
       throw new Error("Native agent session input is invalid");
     }
@@ -3356,6 +3505,8 @@ export class StorageService {
       const now = nowIso();
       const saved: PersistedNativeAgentSession = {
         ...input,
+        ...interactionMetadata,
+        version: NATIVE_AGENT_SESSION_VERSION,
         providerSessionId,
         createdAt: now,
         updatedAt: now,
@@ -3375,14 +3526,19 @@ export class StorageService {
       | "agent"
       | "logicalSessionKey"
       | "providerSessionId"
-    > & { expectedProviderSessionId?: string },
+    > & Partial<Pick<
+      PersistedNativeAgentSession,
+      "origin" | "interactionPolicy"
+    >> & { expectedProviderSessionId?: string },
   ): Promise<PersistedNativeAgentSession> {
+    const interactionMetadata = resolveNativeAgentInteractionMetadata(input);
     if (
       !isNonBlankString(input.key)
       || !isNonBlankString(input.environmentId)
       || !isNonBlankString(input.logicalSessionKey)
       || !isNonBlankString(input.providerSessionId)
       || !["claude", "codex", "opencode"].includes(input.agent)
+      || !interactionMetadata
       || (
         input.expectedProviderSessionId !== undefined
         && !isNonBlankString(input.expectedProviderSessionId)
@@ -3422,6 +3578,13 @@ export class StorageService {
       } = input;
       const saved: PersistedNativeAgentSession = {
         ...identity,
+        ...(existing
+          ? {
+              origin: existing.origin,
+              interactionPolicy: existing.interactionPolicy,
+            }
+          : interactionMetadata),
+        version: NATIVE_AGENT_SESSION_VERSION,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };
@@ -3475,8 +3638,8 @@ export class StorageService {
       await this.scrubSensitiveJsonBackups(
         this.nativeAgentSessionsFile(),
         (storedKey, session) =>
-          isPersistedNativeAgentSession(session, storedKey)
-          && session.environmentId !== environmentId,
+          migratePersistedNativeAgentSession(session, storedKey)?.environmentId
+            !== environmentId,
       );
     });
   }

@@ -4,6 +4,12 @@ import type {
   PipelineSessionPhase,
   TaskSnapshotImage,
 } from "@orkestrator/protocol/build-pipeline";
+import {
+  AGENT_INTERACTION_ORIGINS,
+  isAgentInteractionPolicy,
+  type AgentInteractionOrigin,
+  type AgentInteractionPolicy,
+} from "@orkestrator/protocol/agent-interactions";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import type { StorageService } from "./storage.js";
@@ -30,6 +36,10 @@ export interface EnsureNativeAgentSessionInput {
   environmentId: string;
   agent: BuildPipelineAgent;
   logicalSessionKey: string;
+  /** Persisted once with the logical session; omitted callers are interactive. */
+  origin?: AgentInteractionOrigin;
+  /** Metadata only in Milestone 1; enforcement is introduced later. */
+  interactionPolicy?: AgentInteractionPolicy;
   title?: string;
   model?: string;
   reasoningEffort?: string;
@@ -171,6 +181,10 @@ export class NativeAgentService {
       !nonBlank(input.environmentId)
       || !nonBlank(input.logicalSessionKey)
       || !["claude", "codex", "opencode"].includes(input.agent)
+      || (input.origin !== undefined
+        && !AGENT_INTERACTION_ORIGINS.includes(input.origin))
+      || (input.interactionPolicy !== undefined
+        && !isAgentInteractionPolicy(input.interactionPolicy))
     ) {
       throw new Error("Invalid native agent session request");
     }
@@ -204,6 +218,8 @@ export class NativeAgentService {
             environmentId: input.environmentId,
             agent: input.agent,
             logicalSessionKey: input.logicalSessionKey,
+            origin: input.origin,
+            interactionPolicy: input.interactionPolicy,
           },
           () => this.createProviderSession(provider, input),
         ),
@@ -219,6 +235,10 @@ export class NativeAgentService {
       || !nonBlank(input.logicalSessionKey)
       || !nonBlank(input.providerSessionId)
       || !["claude", "codex", "opencode"].includes(input.agent)
+      || (input.origin !== undefined
+        && !AGENT_INTERACTION_ORIGINS.includes(input.origin))
+      || (input.interactionPolicy !== undefined
+        && !isAgentInteractionPolicy(input.interactionPolicy))
       || (
         input.expectedProviderSessionId !== undefined
         && !nonBlank(input.expectedProviderSessionId)
@@ -245,6 +265,8 @@ export class NativeAgentService {
       agent: input.agent,
       logicalSessionKey: input.logicalSessionKey,
       providerSessionId: input.providerSessionId,
+      origin: input.origin,
+      interactionPolicy: input.interactionPolicy,
       expectedProviderSessionId: input.expectedProviderSessionId,
     });
   }

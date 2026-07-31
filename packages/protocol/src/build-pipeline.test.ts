@@ -46,6 +46,18 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline(snapshot())).toBe(true);
   });
 
+  test("accepts interactive-request as a fail-closed workflow failure", () => {
+    expect(isBuildPipeline({
+      ...snapshot(),
+      phase: "failed",
+      failureContext: {
+        phase: "building",
+        kind: "interactive-request",
+        sessionId: "session-1",
+      },
+    })).toBe(true);
+  });
+
   test("rejects a client-authored or malformed snapshot", () => {
     const { controller: _controller, ...clientAuthored } = snapshot();
     expect(isBuildPipeline(clientAuthored)).toBe(false);

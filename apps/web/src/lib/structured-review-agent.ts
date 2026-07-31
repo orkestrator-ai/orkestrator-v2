@@ -2,6 +2,7 @@ import type {
   JsonSchema,
   StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { Environment } from "@/types";
 import type {
   LoopedReviewSessionPhase,
@@ -222,6 +223,8 @@ export function claudeAdapter(
           logicalSessionKey:
             logicalSessionKey
             ?? `looped-review:${workflow.id}:${phase}:${label}`,
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           title: label,
           model: workflow.model === "default" ? undefined : workflow.model,
           reasoningEffort: workflow.reasoningEffort,
@@ -295,6 +298,8 @@ export function codexAdapter(
           logicalSessionKey:
             logicalSessionKey
             ?? `looped-review:${workflow.id}:${phase}:${label}`,
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           title: label,
           model: workflow.model,
           reasoningEffort: workflow.reasoningEffort,
@@ -371,6 +376,8 @@ export function openCodeAdapter(
           logicalSessionKey:
             logicalSessionKey
             ?? `looped-review:${workflow.id}:${phase}:${label}`,
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           title: label,
           model: workflow.model === "default" ? undefined : workflow.model,
           reasoningEffort: workflow.reasoningEffort,

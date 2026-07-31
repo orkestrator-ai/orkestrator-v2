@@ -14,6 +14,10 @@ export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "
 // Shared with the backend: both sides order the same activity reports, so a
 // second definition of the vocabulary is a drift waiting to happen.
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
+import type {
+  AgentInteractionOrigin,
+  AgentInteractionPolicy,
+} from "@orkestrator/protocol/agent-interactions";
 
 export type { AgentActivityState };
 
@@ -251,11 +255,14 @@ export interface PersistedBuildPipeline<T = unknown> {
 }
 
 export interface PersistedNativeAgentSession {
+  version: 1;
   key: string;
   environmentId: string;
   agent: "claude" | "codex" | "opencode";
   logicalSessionKey: string;
   providerSessionId: string;
+  origin: AgentInteractionOrigin;
+  interactionPolicy: AgentInteractionPolicy;
   dispatchedRequestIds?: string[];
   createdAt: string;
   updatedAt: string;

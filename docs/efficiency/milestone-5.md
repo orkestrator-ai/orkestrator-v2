@@ -1,6 +1,6 @@
 # Milestone 5 — Multiplexed terminal WebSocket
 
-Status: In progress — protocol and HTTP input batching implemented
+Status: In progress — implementation complete; opt-in measurement rollout remains
 
 Depends on: Milestone 4
 
@@ -49,52 +49,82 @@ Primary areas:
 
 ### Gateway implementation
 
-- [ ] Open one socket per gateway client.
-- [ ] Multiplex every client terminal over that socket.
-- [ ] Authorize every terminal subscription.
-- [ ] Preserve session filtering.
-- [ ] Apply soft and hard byte limits per socket.
-- [ ] Apply limits and fairness per terminal channel.
-- [ ] Prevent one slow terminal from starving other channels.
-- [ ] Emit an explicit desync for dropped terminal output.
-- [ ] Preserve generation and revision gap detection.
-- [ ] Keep snapshot commands as the reconnect authority.
-- [ ] Clean up socket resources without stopping backend terminal processes.
+- [x] Open one socket per gateway client.
+- [x] Multiplex every client terminal over that socket.
+- [x] Authorize every terminal subscription and revoke existing sockets when
+      the gateway credential rotates.
+- [x] Preserve session filtering.
+- [x] Apply soft and hard byte limits per socket.
+- [x] Apply limits and fairness per terminal channel.
+- [x] Bound queued inbound operations by count and payload bytes.
+- [x] Prevent one slow terminal from starving other channels.
+- [x] Emit an explicit desync for dropped terminal output.
+- [x] Preserve generation and revision gap detection.
+- [x] Keep snapshot commands as the reconnect authority.
+- [x] Reject malformed upgrade targets without escaping the listener callback.
+- [x] Clean up socket resources without stopping backend terminal processes.
 
 ### Browser adapter
 
-- [ ] Own the socket in the gateway adapter, not a terminal React component.
-- [ ] Maintain an authoritative registry of desired terminal subscriptions.
-- [ ] Reconnect with bounded backoff.
-- [ ] Resubscribe after reconnect and iOS foreground transitions.
-- [ ] Reconcile every channel from its known generation and revision.
-- [ ] Route binary bytes without base64 conversion.
-- [ ] Preserve HTTP/SSE fallback for unsupported or failed WebSocket sessions.
-- [ ] Ensure component unmount only updates consumption, not backend lifetime.
+- [x] Own the socket in the gateway adapter, not a terminal React component.
+- [x] Maintain an authoritative registry of desired terminal subscriptions.
+- [x] Reconnect with bounded backoff.
+- [x] Resubscribe after reconnect and iOS foreground transitions.
+- [x] Reconcile every channel from its known generation and revision.
+- [x] Route binary bytes without base64 conversion.
+- [x] Preserve UTF-8 code points when splitting maximum-size input frames.
+- [x] Bound output held while an authoritative snapshot is pending.
+- [x] Wait for channel readiness before retiring per-channel HTTP/SSE fallback.
+- [x] Surface operation failures and wait for acknowledgements before dependent
+      terminal lifecycle commands.
+- [x] Preserve HTTP/SSE fallback for unsupported or failed WebSocket sessions.
+- [x] Ensure component unmount only updates consumption, not backend lifetime.
 
 ### Compatibility rollout
 
-- [ ] Add a transport option or negotiated fallback.
-- [ ] Start with opt-in WebSocket use.
+- [x] Add a transport option or negotiated fallback.
+- [x] Start with opt-in WebSocket use.
 - [ ] Compare bytes, latency, memory, and reconnect correctness.
 - [ ] Make WebSocket the default only after target-client verification.
-- [ ] Keep HTTP/SSE available for one compatibility release.
-- [ ] Set and document the earliest fallback-removal release.
+- [x] Keep HTTP/SSE available for one compatibility release.
+- [x] Set and document the earliest fallback-removal release.
 
 ## Required tests
 
-- [ ] Authentication and origin rejection.
-- [ ] Protocol version and malformed-frame rejection.
-- [ ] Channel subscribe, unsubscribe, resize, input, and output.
-- [ ] Multiple terminals share one socket without cross-session bytes.
-- [ ] Input order survives batching and reconnect boundaries.
-- [ ] Generation and revision gaps trigger snapshot recovery.
-- [ ] Retained gaps recover incrementally.
-- [ ] One slow channel does not starve another.
-- [ ] A non-reading socket is bounded and disconnected at the hard limit.
-- [ ] Socket close releases adapter resources but not terminal processes.
-- [ ] Reconnect rebuilds the desired subscription set.
-- [ ] HTTP/SSE fallback remains functional.
+- [x] Upgrade authentication timeout, cookie authentication, origin rejection,
+      token rotation, malformed targets, and shutdown cleanup.
+- [x] Protocol version plus malformed and oversized frame rejection.
+- [x] Channel subscribe, duplicate subscribe, unavailable session, unsubscribe,
+      resize, input, output, and unknown-channel handling.
+- [x] Multiple terminals share one socket without cross-session bytes.
+- [x] Input order survives batching and reconnect boundaries.
+- [x] Input rejection is acknowledged, and inbound operation count and byte
+      limits reject saturation without unbounded retention.
+- [x] Generation and revision gaps, subscription errors, snapshot failures, and
+      reconciliation overflow trigger bounded recovery or fallback.
+- [x] Retained gaps recover incrementally with exact revision boundaries,
+      including multi-delta and caught-up empty responses.
+- [x] One slow channel does not starve another.
+- [x] A non-reading socket is bounded and disconnected at the hard limit.
+- [x] Socket close releases adapter resources but not terminal processes.
+- [x] Reconnect rebuilds the desired subscription set.
+- [x] Explicit and stored opt-in select WebSocket; HTTP/SSE remains the default
+      and stays active until each channel is ready.
+- [x] Large UTF-8 input preserves code points at frame boundaries.
+- [x] A stale generation or input sequence is answered per channel and never
+      closes the shared socket.
+- [x] Input the backend could not hand to a running shell is reported as failed
+      rather than acknowledged.
+- [x] Consecutive writes pipeline instead of waiting for each acknowledgement.
+- [x] A retired fallback is not re-armed by its own abort, and a channel with no
+      live subscription never retires one.
+- [x] A snapshot older than applied output is ignored; one reporting a new
+      generation forces a resubscribe before further input.
+- [x] A latched HTTP input queue does not block a healthy socket write, and a
+      refused socket resize still reaches the backend over HTTP.
+- [x] Denied subscriptions back off instead of polling at a fixed interval.
+- [x] An unresponsive peer is force-released, and a refused upgrade never
+      escapes the listener callback.
 
 ## Manual verification
 
@@ -120,16 +150,16 @@ bun run test
 
 ## Exit criteria
 
-- [ ] Ordinary typing uses neither one request per character nor base64 on the
+- [x] Ordinary typing uses neither one request per character nor base64 on the
       WebSocket path.
 - [ ] Key-to-echo p95 does not regress on LAN.
 - [ ] Key-to-echo p95 improves or remains stable at 100 ms RTT.
 - [ ] A 1 MiB output workload transfers materially fewer bytes.
-- [ ] Socket and per-channel memory remain bounded under slow readers.
+- [x] Socket and per-channel memory remain bounded under slow readers.
 - [ ] All disconnect and restart cases recover from authoritative state.
-- [ ] Multiple terminals remain isolated and fair.
-- [ ] HTTP/SSE fallback remains available and tested.
-- [ ] Focused tests, typechecks, and the full suite pass.
+- [x] Multiple terminals remain isolated and fair.
+- [x] HTTP/SSE fallback remains available and tested.
+- [x] Focused tests, typechecks, and the full root suite pass.
 
 ## Evidence and decisions
 
@@ -167,12 +197,43 @@ Initial implementation evidence:
   output but silently refuses every keystroke.
 - A close marks the input queue closed only once it reaches the backend. A close
   that fails leaves a live terminal behind, and that terminal stays writable.
-- Automated verification on 2026-07-31:
-  - terminal batcher plus browser gateway: 114 passed;
-  - shared protocol package: 185 passed;
-  - terminal hook recovery suite: 49 passed;
-  - backend, web, desktop, and protocol TypeScript checks: passed;
-  - renderer production build: passed.
+- Automated coverage includes the gateway upgrade/authentication boundary,
+  channel multiplexing and recovery, client reconnect and buffer bounds, public
+  adapter opt-in and fallback transitions, lifecycle ordering, command delta
+  replay, terminal-hook lifetime behavior, and protocol codec bounds. The
+  required verification commands are listed above; physical-device and network
+  measurements remain manual and are intentionally unchecked.
 - WebSocket is not yet the default. Baseline latency/transfer measurements,
-  gateway implementation, browser socket ownership, and compatibility results
-  remain to be recorded.
+  real-device compatibility results, and the default-promotion decision remain
+  to be recorded.
+- Gateway implementation: `apps/backend/src/terminal-websocket-server.ts`,
+  attached to each existing HTTP listener from `apps/backend/src/gateway.ts`.
+- Accepted input and resize operations use a gateway-owned per-session ordering
+  tail, so reconnecting onto a new channel cannot overtake work accepted from
+  the previous socket. Hard-limit closure has a bounded forced-termination
+  backstop for peers that do not complete the close handshake.
+- Browser ownership and opt-in fallback:
+  `apps/web/src/lib/native/terminal-websocket-client.ts` and
+  `apps/web/src/lib/native/web-gateway.ts`.
+- Retained snapshot deltas now preserve revision boundaries for binary replay;
+  the additive `deltas` field is ignored by older HTTP clients.
+- Sends are serialized per terminal; acknowledgements are only tracked. Chaining
+  each write on the previous acknowledgement made typing cost one round trip per
+  character, which is the opposite of this milestone's latency goal. Lifecycle
+  commands drain the outstanding acknowledgements instead, which preserves the
+  ordering guarantee without the per-keystroke barrier.
+- Nothing about one channel may close the shared socket. A stale generation or
+  input sequence is a state divergence the design permits — the client adopts a
+  new generation from an authoritative snapshot before the gateway hears of the
+  restart — so both are answered per channel.
+- Retiring a channel's fallback aborts its stream, and that abort is what runs
+  the stream's own reconnect bookkeeping. The reconnect is therefore gated on
+  the fallback still being wanted; otherwise stopping it schedules its
+  replacement and both transports carry the same terminal.
+- Channel readiness requires a live subscription. A snapshot arriving while a
+  channel has none (during a reconnect) must not retire the transport that is
+  currently the only one carrying that terminal.
+- Rollout: `http-sse` remains the default. Browser profiles opt in through
+  `orkestrator-terminal-transport=websocket`; fallback removal is no earlier
+  than v2.9.0 and still requires one full compatibility release after default
+  promotion.

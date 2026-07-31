@@ -163,6 +163,7 @@ The gateway reserves the `/__orkestrator` path prefix.
 | `/__orkestrator/status` | Small authenticated connection check used by the public client. |
 | `/__orkestrator/invoke` | Authenticated backend command bridge used by the browser renderer. |
 | `/__orkestrator/events` | Server-sent event stream for backend events. |
+| `/__orkestrator/terminal` | Authenticated multiplexed terminal WebSocket (`orkestrator-terminal.v1`); HTTP/SSE remains the compatibility fallback. |
 | `GET /__orkestrator/metrics` | Returns authenticated privacy-safe gateway counters, byte totals, timings, and recent sanitized samples for milestone measurements. |
 | `POST /__orkestrator/client-metrics` | Accepts authenticated, sanitized browser and `WKWebView` boot/resource timing reports. |
 | `/__orkestrator/proxy/loopback/<port>/...` | Authenticated proxy to `http://127.0.0.1:<port>/...` on the desktop host. |
@@ -179,6 +180,52 @@ That browser implementation:
 - subscribes to backend events through `/__orkestrator/events`
 - falls back to browser clipboard APIs where available
 - returns limited browser-safe fallbacks for desktop-only APIs such as native file dialogs and window dragging
+
+### Terminal transport rollout
+
+The multiplexed terminal WebSocket is implemented but remains opt-in while the
+real-device latency and transfer measurements in
+[`efficiency/milestone-5.md`](efficiency/milestone-5.md) are collected. To opt a
+browser profile in, run this once in its developer console and reload:
+
+```js
+localStorage.setItem("orkestrator-terminal-transport", "websocket")
+```
+
+Use `"http-sse"` (or remove the key) to return to the compatibility transport.
+Embedded clients can instead pass `terminalTransport: "websocket"` to
+`createBrowserGatewayApi`.
+
+One adapter-owned socket serves every consumed PTY. Terminal components update
+the adapter's desired-subscription registry; they do not own the connection or
+the backend process. The HTTP/SSE compatibility transport remains active until
+each WebSocket channel has subscribed and reconciled an authoritative snapshot.
+A failed or unsupported socket, rejected subscription, or failed snapshot keeps
+or restores the HTTP input batcher and filtered terminal SSE stream while
+bounded reconnects continue. Reconnects, foreground transitions, revision gaps,
+generation changes, and slow-channel desyncs reconcile through
+`get_terminal_output_snapshot`; buffered WebSocket output is bounded while that
+snapshot is pending. WebSocket input and resize calls complete only after the
+backend acknowledges the operation. Later HTTP start, detach, or close calls for
+the same terminal share that ordering tail and cannot overtake accepted input.
+
+Acknowledgement is an ordering boundary, not a send barrier. Input frames are
+serialized onto the socket in the order they were issued, but a keystroke is
+never held waiting for the previous keystroke's acknowledgement — that would
+cost one network round trip per character. A write the backend could not hand to
+a running shell is reported as a failed operation rather than acknowledged, and
+a channel that cannot carry a payload (no live subscription, or an operation
+bound reached) declines it so the HTTP batcher takes it instead.
+
+Channel readiness means the channel itself can carry the terminal, not merely
+that the socket authenticated or that a snapshot arrived. A channel with no live
+subscription never retires its compatibility transport, and a snapshot that is
+older than output already applied is ignored rather than rewinding the cursor. A
+snapshot reporting a new PTY generation forces a resubscribe before any further
+input, because the gateway pins a channel's generation when it is created.
+
+The fallback will remain available for at least one release after WebSocket is
+made the default and will not be removed before v2.9.0.
 
 Loopback service URLs are rewritten only in gateway mode. For example:
 

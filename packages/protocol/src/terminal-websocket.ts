@@ -71,7 +71,14 @@ export type TerminalWebSocketClientControlFrame =
       sessionId: string;
     } & TerminalSubscriptionCursor)
   | { type: "unsubscribe"; channelId: number }
-  | { type: "resize"; channelId: number; cols: number; rows: number }
+  | {
+      type: "resize";
+      channelId: number;
+      /** Connection-local operation identifier used to correlate completion. */
+      operationId: number;
+      cols: number;
+      rows: number;
+    }
   | { type: "ack"; channelId: number; generation: number; revision: number };
 
 type TerminalSubscribedFrameBase = {
@@ -109,6 +116,21 @@ export type TerminalWebSocketServerControlFrame =
     }
   | TerminalSubscribedFrame
   | { type: "unsubscribed"; channelId: number }
+  | {
+      type: "operation-result";
+      channelId: number;
+      operationId: number;
+      operation: "input" | "resize";
+      ok: true;
+    }
+  | {
+      type: "operation-result";
+      channelId: number;
+      operationId: number;
+      operation: "input" | "resize";
+      ok: false;
+      message: string;
+    }
   | {
       type: "lifecycle";
       channelId: number;
@@ -306,6 +328,7 @@ export function parseTerminalWebSocketClientControlFrame(
       return {
         type,
         channelId: readChannelId(object),
+        operationId: readInteger(object, "operationId", 0, Number.MAX_SAFE_INTEGER) as number,
         cols: readInteger(object, "cols", 1, 0xffff) as number,
         rows: readInteger(object, "rows", 1, 0xffff) as number,
       };
@@ -338,7 +361,7 @@ export function parseTerminalWebSocketServerControlFrame(
   const type = readLiteral(
     object,
     "type",
-    ["ready", "subscribed", "unsubscribed", "lifecycle", "desync", "error"],
+    ["ready", "subscribed", "unsubscribed", "operation-result", "lifecycle", "desync", "error"],
   );
   switch (type) {
     case "ready":
@@ -382,6 +405,26 @@ export function parseTerminalWebSocketServerControlFrame(
     }
     case "unsubscribed":
       return { type, channelId: readChannelId(object) };
+    case "operation-result": {
+      const common = {
+        type,
+        channelId: readChannelId(object),
+        operationId: readInteger(object, "operationId", 0, Number.MAX_SAFE_INTEGER) as number,
+        operation: readLiteral(object, "operation", ["input", "resize"]),
+      };
+      const ok = readBoolean(object, "ok") as boolean;
+      if (ok) return { ...common, ok };
+      return {
+        ...common,
+        ok,
+        message: readString(
+          object,
+          "message",
+          TERMINAL_WEBSOCKET_MAX_ERROR_MESSAGE_BYTES,
+          { allowEmpty: true },
+        ) as string,
+      };
+    }
     case "lifecycle": {
       const exitCodeValue = object.exitCode;
       let exitCode: number | null | undefined;

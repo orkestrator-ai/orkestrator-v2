@@ -9,6 +9,7 @@ import {
   type BridgeConnection,
   type BuildPipelineProvider,
   type ProviderSendOptions,
+  type ProviderActivityState,
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
 import type { Environment } from "./models.js";
@@ -37,6 +38,7 @@ function createProviderStub(
       options: ProviderSendOptions,
     ) => Promise<void>;
     status?: () => Promise<ProviderStatus>;
+    activity?: (sessionId: string) => Promise<ProviderActivityState>;
   } = {},
 ) {
   const createSession = mock(
@@ -44,6 +46,7 @@ function createProviderStub(
   );
   const send = mock(behaviour.send ?? (async () => undefined));
   const status = mock(behaviour.status ?? (async () => "idle" as ProviderStatus));
+  const activity = behaviour.activity ? mock(behaviour.activity) : undefined;
   const dispose = mock(async () => undefined);
   const provider = {
     agent,
@@ -51,12 +54,13 @@ function createProviderStub(
     registerSession: () => undefined,
     send,
     status,
+    activity,
     messages: async () => [],
     structured: async () => null,
     abort: async () => undefined,
     dispose,
   } as unknown as BuildPipelineProvider;
-  return { provider, createSession, send, status, dispose };
+  return { provider, createSession, send, status, activity, dispose };
 }
 
 /** Reach the timer-driven scans and backoff bookkeeping the service keeps private. */
@@ -139,6 +143,85 @@ async function addEnvironment(
 }
 
 describe("NativeAgentService", () => {
+  test("rehydrates environment activity from backend-owned native sessions without a renderer", async () => {
+    const sessionActivity = new Map<string, ProviderActivityState>([
+      ["provider-1", "idle"],
+      ["provider-2", "working"],
+    ]);
+    const { provider } = createProviderStub("codex", {
+      activity: async (sessionId) => sessionActivity.get(sessionId) ?? "missing",
+    });
+    await withService({
+      prefix: "orkestrator-native-activity-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const firstKey = nativeAgentSessionStorageKey(
+        "env-1",
+        "codex",
+        "env-env-1:tab-1",
+      );
+      const secondKey = nativeAgentSessionStorageKey(
+        "env-1",
+        "codex",
+        "env-env-1:tab-2",
+      );
+      const staleKey = nativeAgentSessionStorageKey(
+        "env-1",
+        "codex",
+        "env-env-1:deleted-tab",
+      );
+      await storage.adoptNativeAgentSession({
+        key: firstKey,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:tab-1",
+        providerSessionId: "provider-1",
+      });
+      await storage.adoptNativeAgentSession({
+        key: secondKey,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:tab-2",
+        providerSessionId: "provider-2",
+      });
+      await storage.adoptNativeAgentSession({
+        key: staleKey,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:deleted-tab",
+        providerSessionId: "provider-missing",
+      });
+
+      await service.reconcileAgentActivity();
+      expect(await storage.getNativeAgentSession(staleKey)).toBeNull();
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivityState: "working",
+        agentActivitySources: {
+          "native-agent": { state: "working" },
+        },
+      });
+
+      sessionActivity.set("provider-1", "idle");
+      sessionActivity.set("provider-2", "waiting");
+      await service.reconcileAgentActivity();
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivityState: "waiting",
+        agentActivitySources: {
+          "native-agent": { state: "waiting" },
+        },
+      });
+
+      sessionActivity.set("provider-2", "idle");
+      await service.reconcileAgentActivity();
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivityState: "idle",
+        agentActivitySources: {
+          "native-agent": { state: "idle" },
+        },
+      });
+    });
+  });
+
   test("two supervisors drain a queued prompt through one provider dispatch", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-service-"));
     const firstStorage = await createStorage(dataDir);

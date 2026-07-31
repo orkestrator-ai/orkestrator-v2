@@ -5,6 +5,7 @@ import type {
   TaskSnapshotImage,
 } from "@orkestrator/protocol/build-pipeline";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import {
   mimeTypeForFilename,
   promptAttachmentUrl,
@@ -12,6 +13,7 @@ import {
 } from "./prompt-attachments.js";
 
 export type ProviderStatus = "running" | "idle" | "error" | "missing";
+export type ProviderActivityState = AgentActivityState | "missing";
 export type ProviderExecutionMode = "plan" | "build";
 
 export class PromptRejectedError extends Error {
@@ -115,6 +117,12 @@ export interface BuildPipelineProvider {
     options: ProviderSendOptions,
   ): Promise<void>;
   status(sessionId: string): Promise<ProviderStatus>;
+  /**
+   * Authoritative activity including input parked at the provider. Optional so
+   * narrow test providers and non-interactive integrations can fall back to
+   * the coarser status contract.
+   */
+  activity?(sessionId: string): Promise<ProviderActivityState>;
   messages(sessionId: string): Promise<unknown[]>;
   structured<T>(
     sessionId: string,
@@ -455,6 +463,47 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       : "error";
   }
 
+  async activity(sessionId: string): Promise<ProviderActivityState> {
+    const status = await this.status(sessionId);
+    if (status === "missing") return "missing";
+    if (status !== "running") return "idle";
+
+    const encodedSessionId = encodeURIComponent(sessionId);
+    const pendingPaths = this.agent === "claude"
+      ? [
+          `/session/${encodedSessionId}/questions`,
+          `/session/${encodedSessionId}/plan-approvals`,
+        ]
+      : [
+          `/session/${encodedSessionId}/approvals`,
+          `/session/${encodedSessionId}/interactions`,
+        ];
+    const pendingKeys = this.agent === "claude"
+      ? ["questions", "approvals"] as const
+      : ["approvals", "interactions"] as const;
+    const responses = await Promise.all(
+      pendingPaths.map((path) => bridgeFetch(
+        this.connection,
+        path,
+        {},
+        this.fetchImpl,
+      )),
+    );
+    for (let index = 0; index < responses.length; index += 1) {
+      const response = responses[index]!;
+      assertOk(response, `${this.agent} pending-input read`);
+      const body = await response.json() as Record<string, unknown>;
+      const pending = body[pendingKeys[index]!];
+      if (!Array.isArray(pending)) {
+        throw new ProviderUnavailableError(
+          `${this.agent} returned malformed pending input`,
+        );
+      }
+      if (pending.length > 0) return "waiting";
+    }
+    return "working";
+  }
+
   async messages(sessionId: string): Promise<unknown[]> {
     const response = await bridgeFetch(
       this.connection,
@@ -758,6 +807,41 @@ class OpenCodeProvider implements BuildPipelineProvider {
       return status.type === "idle" ? "idle" : "error";
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode status is unavailable", {
+        cause: error,
+      });
+    }
+  }
+
+  async activity(sessionId: string): Promise<ProviderActivityState> {
+    try {
+      const status = await this.status(sessionId);
+      if (status === "missing") return "missing";
+      if (status !== "running") return "idle";
+      const [questions, permissions] = await Promise.all([
+        this.client.question.list(
+          { directory: this.connection.directory },
+          this.requestOptions(),
+        ),
+        this.client.permission.list(
+          { directory: this.connection.directory },
+          this.requestOptions(),
+        ),
+      ]);
+      assertSdkResponse(questions, "OpenCode pending question read");
+      assertSdkResponse(permissions, "OpenCode pending permission read");
+      const isForSession = (request: unknown): boolean => (
+        Boolean(request)
+        && typeof request === "object"
+        && !Array.isArray(request)
+        && (request as { sessionID?: unknown }).sessionID === sessionId
+      );
+      return (questions.data ?? []).some(isForSession)
+        || (permissions.data ?? []).some(isForSession)
+        ? "waiting"
+        : "working";
+    } catch (error) {
+      if (error instanceof ProviderUnavailableError) throw error;
+      throw new ProviderUnavailableError("OpenCode activity is unavailable", {
         cause: error,
       });
     }

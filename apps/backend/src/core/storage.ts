@@ -2385,7 +2385,7 @@ export class StorageService {
       throw new Error("occurredAt must not be more than 5 minutes in the future");
     }
     if (!isOneOf(source, AGENT_ACTIVITY_SOURCES)) {
-      throw new Error("source must be frontend or claude-terminal");
+      throw new Error("source must be frontend, claude-terminal, or native-agent");
     }
     if (
       observerId !== undefined
@@ -3303,6 +3303,15 @@ export class StorageService {
       throw new Error("Native agent session key must not be blank");
     }
     return (await this.loadNativeAgentSessions())[key] ?? null;
+  }
+
+  /**
+   * Backend-owned native session catalogue used by background reconcilers.
+   * Keep this internal to the backend command surface: provider session IDs are
+   * sensitive implementation details and never need to reach a renderer.
+   */
+  async listNativeAgentSessions(): Promise<PersistedNativeAgentSession[]> {
+    return Object.values(await this.loadNativeAgentSessions());
   }
 
   /**

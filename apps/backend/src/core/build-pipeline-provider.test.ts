@@ -238,6 +238,34 @@ describe("HTTP build pipeline provider", () => {
     });
   });
 
+  test.each([
+    ["claude" as const, claudeConnection, "questions"],
+    ["codex" as const, codexConnection, "approvals"],
+  ])("reports %s running sessions as waiting when provider input is pending", async (
+    agent,
+    connection,
+    pendingKey,
+  ) => {
+    let hasPendingInput = true;
+    const { provider } = httpProvider((url) => {
+      const isStatus = agent === "claude"
+        ? url.endsWith("/session/session%2F1")
+        : url.endsWith("/session/session%2F1/status");
+      if (isStatus) return Response.json({ status: "running" });
+      if (url.endsWith(`/${pendingKey}`)) {
+        return Response.json({
+          [pendingKey]: hasPendingInput ? [{ id: "pending-1" }] : [],
+        });
+      }
+      const otherKey = agent === "claude" ? "approvals" : "interactions";
+      return Response.json({ [otherKey]: [] });
+    }, connection);
+
+    await expect(provider.activity?.("session/1")).resolves.toBe("waiting");
+    hasPendingInput = false;
+    await expect(provider.activity?.("session/1")).resolves.toBe("working");
+  });
+
   test("lets an explicit session mode override the one the phase implies", async () => {
     const { provider, requests } = httpProvider(
       () => Response.json({ sessionId: "codex-1" }),
@@ -668,6 +696,36 @@ function openCodeProvider(fake: OpenCodeFake, monitorRetryMs = 1) {
 }
 
 describe("OpenCode build pipeline provider", () => {
+  test("reports busy OpenCode sessions with pending input as waiting", async () => {
+    const fake = openCodeFake();
+    fake.setStatusResponse({
+      data: { "owned-session": { type: "busy" } },
+    });
+    fake.setPending(
+      [{ id: "permission-other", sessionID: "other-session" }],
+      [{ id: "question-owned", sessionID: "owned-session" }],
+    );
+    const provider = createBuildPipelineProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+      },
+      { openCodeClient: fake.client, autoAnswerRequests: false },
+    );
+    try {
+      await expect(provider.activity?.("owned-session")).resolves.toBe("waiting");
+      fake.setPending(
+        [{ id: "permission-other", sessionID: "other-session" }],
+        [],
+      );
+      await expect(provider.activity?.("owned-session")).resolves.toBe("working");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("constructs the OpenCode SDK client with bridge auth and directory", async () => {
     const fake = openCodeFake();
     const factoryCalls: unknown[] = [];

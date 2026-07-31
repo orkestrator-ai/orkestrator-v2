@@ -4,6 +4,10 @@ import type {
   PipelineSessionPhase,
   TaskSnapshotImage,
 } from "@orkestrator/protocol/build-pipeline";
+import {
+  aggregateAgentActivityState,
+  type AgentActivityState,
+} from "@orkestrator/protocol/agent-activity";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import type { StorageService } from "./storage.js";
@@ -77,6 +81,7 @@ const QUEUE_RETRY_BASE_MS = 2_000;
 const QUEUE_RETRY_CEILING_MS = 60_000;
 const MAX_QUEUE_DISPATCH_ATTEMPTS = 5;
 const LAUNCH_RETRY_MS = 10_000;
+const ACTIVITY_STATUS_CONCURRENCY = 8;
 
 function nonBlank(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -139,6 +144,7 @@ export class NativeAgentService {
   private readonly queueRetryAt = new Map<string, number>();
   private readonly queueAttempts = new Map<string, number>();
   private readonly scanTasks = new Set<Promise<void>>();
+  private activityScan: Promise<void> | null = null;
   private launchTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
 
@@ -301,6 +307,138 @@ export class NativeAgentService {
       [...this.providers.values()].map((provider) => provider.dispose?.()),
     );
     this.providers.clear();
+  }
+
+  /**
+   * Rebuild the durable environment activity projection from provider-owned
+   * session state. This does not depend on a mounted tab or a renderer event.
+   */
+  reconcileAgentActivity(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    if (this.activityScan) return this.activityScan;
+    const scan = this.trackScan(this.reconcileAgentActivityOnce())
+      .finally(() => {
+        if (this.activityScan === scan) this.activityScan = null;
+      });
+    this.activityScan = scan;
+    return scan;
+  }
+
+  private async reconcileAgentActivityOnce(): Promise<void> {
+    const [environments, sessions] = await Promise.all([
+      this.storage.loadEnvironments(),
+      this.storage.listNativeAgentSessions(),
+    ]);
+    if (this.stopped) return;
+
+    const environmentsById = new Map(
+      environments.map((environment) => [environment.id, environment]),
+    );
+    const sessionsByEnvironment = new Map<
+      string,
+      PersistedNativeAgentSession[]
+    >();
+    for (const session of sessions) {
+      if (!environmentsById.has(session.environmentId)) continue;
+      const grouped = sessionsByEnvironment.get(session.environmentId) ?? [];
+      grouped.push(session);
+      sessionsByEnvironment.set(session.environmentId, grouped);
+    }
+
+    const activityByEnvironment = new Map<
+      string,
+      Record<string, { state: AgentActivityState; updatedAt: string }>
+    >();
+    const failedEnvironments = new Set<string>();
+    const groups = new Map<string, PersistedNativeAgentSession[]>();
+    for (const [environmentId, environmentSessions] of sessionsByEnvironment) {
+      const environment = environmentsById.get(environmentId)!;
+      const canRun = environment.environmentType === "local"
+        || environment.status === "running";
+      if (!canRun || environment.setupScriptsComplete !== true) continue;
+      for (const session of environmentSessions) {
+        const key = `${environmentId}\0${session.agent}`;
+        const grouped = groups.get(key) ?? [];
+        grouped.push(session);
+        groups.set(key, grouped);
+      }
+    }
+
+    const pendingGroups = [...groups.values()];
+    let nextGroup = 0;
+    const worker = async (): Promise<void> => {
+      while (!this.stopped) {
+        const group = pendingGroups[nextGroup++];
+        if (!group) return;
+        const first = group[0]!;
+        try {
+          const provider = await this.provider(first);
+          for (const session of group) {
+            provider.registerSession?.(session.providerSessionId);
+            const activity = provider.activity
+              ? await provider.activity(session.providerSessionId)
+              : await provider.status(session.providerSessionId).then((status) =>
+                  status === "running" ? "working" : "idle"
+                );
+            if (activity === "missing") {
+              await this.storage.invalidateNativeAgentSession(
+                session.key,
+                session.providerSessionId,
+              );
+              continue;
+            }
+            const sources = activityByEnvironment.get(session.environmentId)
+              ?? {};
+            sources[session.key] = {
+              state: activity,
+              // Only the state matters for this in-memory aggregate. A real
+              // timestamp is supplied once per committed environment below.
+              updatedAt: "1970-01-01T00:00:00.000Z",
+            };
+            activityByEnvironment.set(session.environmentId, sources);
+          }
+        } catch (error) {
+          failedEnvironments.add(first.environmentId);
+          console.warn(
+            `[native-agent] Activity reconciliation for ${first.environmentId} failed:`,
+            error instanceof Error ? error.name : "unknown error",
+          );
+        }
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(ACTIVITY_STATUS_CONCURRENCY, pendingGroups.length) },
+        () => worker(),
+      ),
+    );
+    if (this.stopped) return;
+
+    for (const environment of environments) {
+      if (failedEnvironments.has(environment.id)) continue;
+      const hasRegisteredSessions = sessionsByEnvironment.has(environment.id);
+      const previous = environment.agentActivitySources?.["native-agent"];
+      if (!hasRegisteredSessions && !previous) continue;
+      const canRun = environment.environmentType === "local"
+        || environment.status === "running";
+      const desiredState = canRun && environment.setupScriptsComplete === true
+        ? aggregateAgentActivityState(
+            activityByEnvironment.get(environment.id) ?? {},
+          )
+        : "idle";
+      if (previous?.state === desiredState) continue;
+      await this.storage.setEnvironmentAgentActivity(
+        environment.id,
+        desiredState,
+        new Date().toISOString(),
+        "native-agent",
+      ).catch((error) => {
+        console.warn(
+          `[native-agent] Failed to persist activity for ${environment.id}:`,
+          error instanceof Error ? error.name : "unknown error",
+        );
+      });
+    }
   }
 
   async reconcileInitialLaunch(environmentId: string): Promise<void> {

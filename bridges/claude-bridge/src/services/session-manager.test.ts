@@ -340,6 +340,8 @@ const {
   getPendingQuestions,
   respondToPlanApproval,
   getPendingPlanApprovals,
+  getSessionActivity,
+  resetSessionActivityProbeCacheForTesting,
   getSessionInitData,
   getAvailableModelCatalog,
   getAvailableModels,
@@ -478,6 +480,9 @@ afterEach(() => {
   mockGetPluginsForSdk.mockReset();
   mockGetPluginsForSdk.mockImplementation(async () => []);
   resetSdkSessionStoreMocks();
+  // The probe memo is keyed by SDK session id and outlives a test, so without
+  // this one test's "this rollout exists" answer could serve another's.
+  resetSessionActivityProbeCacheForTesting();
   queryControlOverrides = {};
 });
 
@@ -6842,6 +6847,170 @@ describe("evictIdleHydratedTranscripts", () => {
     } finally {
       clearInterval(timer);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Activity state (the backend's two-second per-session sweep)
+// ---------------------------------------------------------------------------
+
+describe("getSessionActivity", () => {
+  let activitySessionSequence = 0;
+
+  /** A rollout id no other test in this file has materialized. */
+  function freshSdkId(): string {
+    activitySessionSequence += 1;
+    return `cccccccc-dddd-4eee-8fff-${activitySessionSequence
+      .toString(16)
+      .padStart(12, "0")}`;
+  }
+
+  /** On disk and known to this process, but with nothing read from it yet. */
+  async function persistedSession() {
+    return materializePersistedSession({ sessionId: freshSdkId() });
+  }
+
+  test("reports missing for an id no rollout could ever exist for", async () => {
+    expect(await getSessionActivity("not-a-session-id")).toBe("missing");
+    // No rollout id can be derived, so there is nothing to look for on disk.
+    expect(mockSdkGetSessionInfo).not.toHaveBeenCalled();
+  });
+
+  test("reports missing for a well-formed id whose rollout is gone", async () => {
+    mockSdkGetSessionInfo.mockImplementation(async () => undefined);
+
+    expect(await getSessionActivity(`session-${freshSdkId()}`)).toBe("missing");
+  });
+
+  test("reports idle for a resident session that is not running", async () => {
+    const state = createSession("idle session");
+    track(state.id);
+
+    expect(await getSessionActivity(state.id)).toBe("idle");
+  });
+
+  test("reports idle, not missing, for a non-resident session still on disk", async () => {
+    // The data-loss guard. A bridge restart leaves every persisted session
+    // absent from the map until something materializes it, and this endpoint
+    // deliberately is not that something — but the backend deletes its session
+    // mapping on "missing", so answering from residency alone would cut the
+    // user's link to an intact conversation.
+    const sdkId = freshSdkId();
+    const info = sdkSessionInfo({ sessionId: sdkId });
+    mockSdkGetSessionInfo.mockImplementation(async () => info);
+    const bridgeId = `session-${sdkId}`;
+    expect(getSession(bridgeId)).toBeUndefined();
+
+    expect(await getSessionActivity(bridgeId)).toBe("idle");
+    // Answering must not have made it resident either.
+    expect(getSession(bridgeId)).toBeUndefined();
+  });
+
+  test("reports working for a running turn with nothing parked", async () => {
+    const state = createSession("running");
+    track(state.id);
+
+    const promptPromise = sendPrompt(state.id, "go");
+    const call = await nextQueryCall();
+    expect(await getSessionActivity(state.id)).toBe("working");
+
+    call.finish();
+    await promptPromise;
+    expect(await getSessionActivity(state.id)).toBe("idle");
+  });
+
+  test("reports waiting while a question is parked", async () => {
+    const state = createSession("asking");
+    track(state.id);
+
+    const promptPromise = sendPrompt(state.id, "ask me something");
+    const call = await nextQueryCall();
+    const toolPromise = call.options.canUseTool!("AskUserQuestion", {
+      questions: [{ question: "Which one?" }],
+    });
+    await waitFor(() => getPendingQuestions(state.id).length === 1);
+
+    // Still `running` as far as the session is concerned; the difference is
+    // that the turn is blocked on the user, not on Claude.
+    expect(state.status).toBe("running");
+    expect(await getSessionActivity(state.id)).toBe("waiting");
+
+    const [question] = getPendingQuestions(state.id);
+    expect(dismissQuestion(question!.id)).toBe(true);
+    await toolPromise;
+    expect(await getSessionActivity(state.id)).toBe("working");
+
+    call.finish();
+    await promptPromise;
+  });
+
+  test("reports waiting while a plan approval is parked", async () => {
+    const state = createSession("planning");
+    track(state.id);
+
+    const promptPromise = sendPrompt(state.id, "make a plan", {
+      permissionMode: "plan",
+    });
+    const call = await nextQueryCall();
+    const toolPromise = call.options.canUseTool!("ExitPlanMode", {
+      plan: "do stuff",
+    });
+    await waitFor(() => getPendingPlanApprovals(state.id).length === 1);
+
+    expect(await getSessionActivity(state.id)).toBe("waiting");
+
+    const [approval] = getPendingPlanApprovals(state.id);
+    expect(respondToPlanApproval(approval!.id, true)).toBe(true);
+    await toolPromise;
+
+    call.finish();
+    await promptPromise;
+  });
+
+  test("does not refresh the idle clock, unlike getSession", async () => {
+    const state = await persistedSession();
+    const readAt = Date.now() - 60_000;
+    state.lastAccessedAt = readAt;
+
+    expect(await getSessionActivity(state.id)).toBe("idle");
+    expect(state.lastAccessedAt).toBe(readAt);
+
+    // The contrast is the point: `GET /:id` goes through `getSession`, which
+    // touches, and that is exactly why the backend sweep must not use it.
+    getSession(state.id);
+    expect(state.lastAccessedAt).toBeGreaterThan(readAt);
+  });
+
+  test("polling every two seconds still lets a stale transcript be evicted", async () => {
+    mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
+    const state = await persistedSession();
+    await hydratePersistedSessionMessages(state.id);
+    expect(state.messages.length).toBeGreaterThan(0);
+
+    const hydratedAt = state.lastAccessedAt!;
+    const expiresAt = hydratedAt + IDLE_TRANSCRIPT_EVICTION_MS;
+    for (let at = hydratedAt; at <= expiresAt + 2_000; at += 2_000) {
+      expect(await getSessionActivity(state.id)).toBe("idle");
+    }
+
+    // The regression this endpoint exists to prevent: a poll on `GET /:id`
+    // every two seconds kept `now - lastAccessedAt` under the threshold
+    // forever, so this sweep could never reach any polled session again.
+    expect(evictIdleHydratedTranscripts(expiresAt + 2_001)).toContain(state.id);
+    expect(state.messages).toEqual([]);
+    expect(state.persistedMessagesLoaded).toBe(false);
+  });
+
+  test("does not hydrate the persisted transcript", async () => {
+    const state = await persistedSession();
+    expect(state.persistedMessagesLoaded).toBe(false);
+
+    expect(await getSessionActivity(state.id)).toBe("idle");
+
+    // `GET /:id` hydrates on a metadata-only session, which is what turned the
+    // sweep into a "read every persisted transcript into memory" loop.
+    expect(state.persistedMessagesLoaded).toBe(false);
+    expect(mockSdkGetSessionMessages).not.toHaveBeenCalled();
   });
 });
 

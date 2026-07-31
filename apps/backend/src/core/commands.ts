@@ -4891,6 +4891,86 @@ function openCodeHealthHeaders(password: string): Record<string, string> {
   };
 }
 
+function asLocalServerKind(value: unknown, field: string): LocalServerKind {
+  if (!LOCAL_SERVER_KINDS.includes(value as LocalServerKind)) {
+    throw new Error(`${field} must be one of: ${LOCAL_SERVER_KINDS.join(", ")}`);
+  }
+  return value as LocalServerKind;
+}
+
+/** Where each container bridge publishes its port and its renderer credential. */
+const CONTAINER_BRIDGE_PEEK: Record<
+  LocalServerKind,
+  { containerPort: number; tokenFile: string }
+> = {
+  claude: { containerPort: CLAUDE_BRIDGE_PORT, tokenFile: "/tmp/claude-bridge-token" },
+  codex: { containerPort: CODEX_BRIDGE_PORT, tokenFile: "/tmp/codex-bridge-token" },
+  opencode: {
+    containerPort: OPENCODE_SERVER_PORT,
+    tokenFile: "/tmp/opencode-server-password",
+  },
+};
+
+/**
+ * Report a live local bridge without starting one.
+ *
+ * The read-only twin of `startLocalServer`, for background observers such as
+ * the activity sweep. `start_local_*_server_cmd` spawns a process when none is
+ * running, so polling through it would make the backend launch a bridge for
+ * every environment that has ever held a session — and then keep them all warm
+ * forever. An environment with no bridge simply has nothing running, which is
+ * an answer the caller can use.
+ */
+async function peekLocalAgentBridge(
+  environmentId: string,
+  context: CommandContext,
+  kind: LocalServerKind,
+): Promise<{ port: number; authToken: string } | null> {
+  const child = localServerProcesses.get(`${kind}:${environmentId}`);
+  if (!child || child.killed || !child.pid) return null;
+  const authToken = localBridgeTokens(kind).get(environmentId);
+  if (!authToken) return null;
+  const environment = await context.storage.getEnvironment(environmentId);
+  const port = kind === "opencode"
+    ? environment?.localOpencodePort
+    : kind === "claude"
+      ? environment?.localClaudePort
+      : environment?.localCodexPort;
+  if (!port) return null;
+  const healthy = await checkHttpHealth(
+    port,
+    "/global/health",
+    kind === "opencode" ? openCodeHealthHeaders(authToken) : undefined,
+  );
+  return healthy ? { port, authToken } : null;
+}
+
+/**
+ * Report a live container bridge without starting one.
+ *
+ * Deliberately does not reconcile agent-tool wiring the way
+ * `get_*_server_status` does — that path re-invokes the start command, which is
+ * exactly the side effect an observer must not have.
+ */
+async function peekContainerAgentBridge(
+  containerId: string,
+  kind: LocalServerKind,
+): Promise<{ hostPort: number; authToken: string } | null> {
+  const { containerPort, tokenFile } = CONTAINER_BRIDGE_PEEK[kind];
+  const hostPort = await getHostPort(containerId, containerPort);
+  if (!hostPort) return null;
+  const authToken = (
+    await dockerExec(containerId, `cat ${tokenFile} 2>/dev/null || true`)
+  ).trim();
+  if (!BRIDGE_TOKEN_PATTERN.test(authToken)) return null;
+  const healthy = await checkHttpHealth(
+    hostPort,
+    "/global/health",
+    kind === "opencode" ? openCodeHealthHeaders(authToken) : undefined,
+  );
+  return healthy ? { hostPort, authToken } : null;
+}
+
 async function configureOpenCodeAgentTools(
   port: number,
   password: string,
@@ -9734,6 +9814,25 @@ export function createCommandRegistry(
   register("stop_local_codex_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "codex"));
   register("get_local_codex_server_status", ({ environmentId }, context) => getLocalServerStatus(asString(environmentId, "environmentId"), context, "codex"));
   register("cleanup_stale_local_servers_cmd", () => undefined);
+
+  // Backend-internal observation surface. Never starts a bridge, so a
+  // background reconciler can read activity without spawning one process per
+  // environment or keeping every bridge alive on a poll.
+  register("peek_local_agent_bridge", (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "agent"], "arguments");
+    return peekLocalAgentBridge(
+      asNonBlankString(args.environmentId, "environmentId"),
+      context,
+      asLocalServerKind(args.agent, "agent"),
+    );
+  });
+  register("peek_container_agent_bridge", (args) => {
+    assertOnlyKeys(args, ["containerId", "agent"], "arguments");
+    return peekContainerAgentBridge(
+      asNonBlankString(args.containerId, "containerId"),
+      asLocalServerKind(args.agent, "agent"),
+    );
+  });
 
   register("get_kanban_tasks", ({ projectId }, { storage }) => storage.getKanbanTasks(asString(projectId, "projectId")));
   register("add_kanban_task", ({ projectId, title, description }, { storage }) => storage.addKanbanTask(asString(projectId, "projectId"), asString(title, "title"), asString(description, "description")));

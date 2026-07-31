@@ -380,6 +380,24 @@ describe("session detail route outcomes", () => {
     });
   });
 
+  test("answers the activity poll with 200 even for a session it has never seen", async () => {
+    // The real runtime, not a stub: an unknown session must reach the in-band
+    // `missing` answer rather than a 404. The backend reads a 404 from this path
+    // as "the bridge predates this route" and fails the whole environment, so the
+    // two cases have to stay distinguishable.
+    const response = await app.request("/session/session-never-existed/activity");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ activity: "missing" });
+  });
+
+  test("serves the activity state for a known session", async () => {
+    await withRuntimeMethod("getActivity", () => "waiting", async () => {
+      const response = await app.request("/session/session-1/activity");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ activity: "waiting" });
+    });
+  });
+
   test("serves structured output and trims the optional request identifier", async () => {
     const calls: Array<{ sessionId: string; requestId?: string }> = [];
     let outcome: unknown = {

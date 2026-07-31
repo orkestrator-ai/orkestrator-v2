@@ -2951,6 +2951,58 @@ export class AppServerRuntime {
     };
   }
 
+  /**
+   * Whether a session is doing work, waiting on a human, idle, or gone.
+   *
+   * Deliberately synchronous and side-effect free: it must never call
+   * `touchSession`, `registry.touch` or `ensureAttached`. The backend polls this
+   * for *every* persisted session every couple of seconds, and a touch on that
+   * cadence keeps `lastAccessed` permanently inside the idle window, so
+   * `detachableThreads` never yields and `sweepIdle` never frees anything — the
+   * bridge would accumulate every transcript, render state and app-server
+   * subscription it has ever touched. For the same reason a detached thread is
+   * read as detached rather than transparently re-attached: a poll must not
+   * resurrect a conversation nobody is looking at.
+   */
+  getActivity(sessionId: string): "idle" | "working" | "waiting" | "missing" {
+    const session = this.registry.getSession(sessionId);
+    // In-band, so the caller can tell "this session is gone" apart from "this
+    // bridge does not have the route" (see the /session/:id/activity handler).
+    if (!session) return "missing";
+
+    const context = this.registry.getThreadForSession(sessionId);
+    // Same rule as `getStatus`: a restored thread whose journal record has not
+    // been settled yet may still be executing its last turn.
+    const awaitingRecovery =
+      session.threadId !== null
+      && this.threadsAwaitingDispatchRecovery.has(session.threadId);
+    const phase = context?.phase ?? (awaitingRecovery ? "recovering" : "idle");
+
+    // `starting`, `cancelling` and `recovering` all map to `running`. Reporting
+    // any of them as idle would let the build pipeline advance on a turn that
+    // may still be executing.
+    if (phaseToExternalStatus(phase) !== "running") return "idle";
+    return this.hasParkedInput(session) ? "waiting" : "working";
+  }
+
+  /**
+   * Whether a card is parked on this session's thread awaiting a human.
+   *
+   * Same thread-matching rule as `listApprovals`/`listInteractions`, without
+   * materializing their arrays — this runs on the backend's activity poll, once
+   * per session, every couple of seconds.
+   */
+  private hasParkedInput(session: BridgeSession): boolean {
+    if (!session.threadId) return false;
+    for (const entry of this.pendingApprovals.values()) {
+      if (entry.request.threadId === session.threadId) return true;
+    }
+    for (const entry of this.pendingInteractions.values()) {
+      if (entry.request.threadId === session.threadId) return true;
+    }
+    return false;
+  }
+
   getStructuredOutput(
     sessionId: string,
     requestId?: string,

@@ -117,6 +117,32 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("lists nothing before any native session has been persisted", async () => {
+    await withStorage(async (first) => {
+      // The activity sweep lists on every tick from the very first backend
+      // start, when no session file exists yet. A missing file has to read as
+      // "no sessions" rather than as the failure that would make the sweep
+      // warn every two seconds on a fresh install.
+      await expect(fs.access(
+        path.join(first.getDataDir(), "native-agent-sessions.json"),
+      )).rejects.toThrow();
+      await expect(first.listNativeAgentSessions()).resolves.toEqual([]);
+    });
+  });
+
+  test("lists a session written by another backend process", async () => {
+    await withStorage(async (first, second) => {
+      const created = await first.getOrCreateNativeAgentSession(
+        input,
+        async () => "provider-session",
+      );
+
+      // The sweep reads durable state rather than a warm in-process cache, so
+      // a second instance must see a session it never created itself.
+      await expect(second.listNativeAgentSessions()).resolves.toEqual([created]);
+    });
+  });
+
   test("lists every valid provider session and filters malformed persisted entries", async () => {
     await withStorage(async (first) => {
       const inputs = [

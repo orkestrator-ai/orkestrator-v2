@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AppServerRuntime,
+  DEFAULT_THREAD_IDLE_MS,
   estimateOrderedEventBytes,
   MAX_PENDING_EVENTS_PER_TURN,
   MAX_PENDING_TURNS,
@@ -4967,6 +4968,185 @@ describe("idle detach and transparent re-attach", () => {
 
     clock += 24 * 60 * 60 * 1000;
     expect(await h.runtime.sweepIdle()).toMatchObject({ detached: 0 });
+  });
+});
+
+describe("activity polling", () => {
+  /** A session mid-turn: its thread is materialized and running. */
+  async function workingSession() {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    await h.drain();
+    return { h, sessionId };
+  }
+
+  /** The scripted child asks for approval on the session's live turn. */
+  async function parkApproval(h: Harness): Promise<void> {
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 9101,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        startedAtMs: 1,
+        command: "rm -rf build",
+        cwd: "/tmp/ws",
+      },
+    });
+    await h.drain();
+  }
+
+  test("an unknown session is reported in band as missing", async () => {
+    const h = await harness();
+    // Not an error: the caller has to be able to tell "this session is gone"
+    // apart from "this bridge is too old to answer".
+    expect(h.runtime.getActivity("session-never-existed")).toBe("missing");
+  });
+
+  test("a session with no thread, and one whose turn finished, are both idle", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    // Never prompted, so no thread has been materialized at all.
+    expect(h.runtime.getActivity(sessionId)).toBe("idle");
+
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(h.runtime.getActivity(sessionId)).toBe("idle");
+  });
+
+  test("a running turn with nothing parked is working", async () => {
+    const { h, sessionId } = await workingSession();
+    expect(h.runtime.getStatus(sessionId)?.status).toBe("running");
+    expect(h.runtime.getActivity(sessionId)).toBe("working");
+  });
+
+  test("a parked approval is waiting rather than working", async () => {
+    const { h, sessionId } = await workingSession();
+    await parkApproval(h);
+
+    expect(h.runtime.listApprovals(sessionId)).toHaveLength(1);
+    expect(h.runtime.getActivity(sessionId)).toBe("waiting");
+  });
+
+  test("a parked interaction is waiting rather than working", async () => {
+    const { h, sessionId } = await workingSession();
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 7101,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        questions: [{
+          id: "language",
+          header: "Language",
+          question: "Which language?",
+          options: [{ label: "TypeScript" }],
+        }],
+      },
+    });
+    await h.drain();
+
+    expect(h.runtime.listInteractions(sessionId)).toHaveLength(1);
+    expect(h.runtime.getActivity(sessionId)).toBe("waiting");
+  });
+
+  test("cancelling, recovering and starting are never reported idle", async () => {
+    const { h, sessionId } = await workingSession();
+    const context = h.runtime.getRegistry().getThread("thread-1")!;
+
+    for (const phase of ["starting", "cancelling", "recovering"] as const) {
+      context.phase = phase;
+      // All three map to `running`. Reporting them idle would let the build
+      // pipeline advance on a turn that may still be executing.
+      expect(phaseToExternalStatus(phase)).toBe("running");
+      expect(h.runtime.getActivity(sessionId)).toBe("working");
+    }
+
+    await parkApproval(h);
+    for (const phase of ["starting", "cancelling", "recovering"] as const) {
+      context.phase = phase;
+      expect(h.runtime.getActivity(sessionId)).toBe("waiting");
+    }
+  });
+
+  test("a session awaiting dispatch recovery is working, never idle", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-awaiting",
+        threadId: "thread-awaiting",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "Awaiting",
+        titleSource: "prompt",
+        lastAcceptedRequestId: "req-live",
+      }),
+    );
+    const h = await harness();
+    // Startup clears the claim once recovery has run; re-arm it to model the
+    // window where a restored thread's last turn may still be executing.
+    (h.runtime as unknown as { threadsAwaitingDispatchRecovery: Set<string> })
+      .threadsAwaitingDispatchRecovery.add("thread-awaiting");
+
+    // Restored lazily, so there is no thread context — the recovery claim is the
+    // only thing standing between this session and a misleading `idle`.
+    expect(h.runtime.getRegistry().getThread("thread-awaiting")).toBeUndefined();
+    expect(h.runtime.getActivity("session-awaiting")).toBe("working");
+  });
+
+  /**
+   * The regression this endpoint exists for.
+   *
+   * The backend polls every persisted session every two seconds. Doing that
+   * through `getStatus` touches `lastAccessed` on each poll, which keeps
+   * `detachableThreads` permanently false, so the idle sweep never frees a
+   * transcript, its render state or its app-server subscription.
+   */
+  test("polling activity still lets the sweep detach; polling status does not", async () => {
+    async function pollPastTheIdleWindow(
+      poll: (runtime: AppServerRuntime, sessionId: string) => void,
+    ): Promise<{ detached: number; forgotten: number }> {
+      let clock = 1_000_000;
+      const h = await harness({}, { now: () => clock, sweepIntervalMs: 0 });
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed" },
+      });
+      await h.drain();
+
+      // The backend's own cadence, run past the production idle window.
+      for (let elapsed = 0; elapsed <= DEFAULT_THREAD_IDLE_MS + 60_000; elapsed += 2_000) {
+        clock += 2_000;
+        poll(h.runtime, sessionId);
+      }
+      return h.runtime.sweepIdle();
+    }
+
+    expect(
+      await pollPastTheIdleWindow((runtime, sessionId) => {
+        runtime.getActivity(sessionId);
+      }),
+    ).toMatchObject({ detached: 1 });
+
+    // The control: this is exactly what the sweep used to call, and why nothing
+    // was ever detached.
+    expect(
+      await pollPastTheIdleWindow((runtime, sessionId) => {
+        runtime.getStatus(sessionId);
+      }),
+    ).toMatchObject({ detached: 0 });
   });
 });
 

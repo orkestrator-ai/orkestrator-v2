@@ -229,6 +229,21 @@ When touching the app-server engine:
 - Idle threads are detached (`thread/unsubscribe` + state freed) and re-attached
   transparently on the next request. Detaching an **unmaterialized** thread must
   clear its id: it has no rollout, so `thread/resume` would fail forever.
+- Never poll a tab-facing route from a background reconciler. `/session/:id` and
+  `/session/:id/status` are liveness touches — the codex bridge refreshes
+  `lastAccessed` (which is what `detachableThreads` reads) and the claude bridge
+  additionally hydrates the transcript. The backend's activity sweep runs every
+  two seconds for every persisted session, so polling those would put idle
+  detaching and transcript eviction permanently out of reach. Both bridges
+  expose `GET /session/:id/activity` for exactly this: no touch, no hydration,
+  no re-attach. Anything else the backend wants to poll needs the same
+  treatment.
+- `/session/:id/activity` answers an unknown session **in band** as
+  `{"activity":"missing"}` and never 404s. The backend reads a 404 there as "this
+  bridge predates the route" and fails the environment; if 404 also meant "session
+  gone" it would delete a live session mapping against an older bridge. For the
+  same reason the claude bridge answers a failed existence probe `idle`, never
+  `missing` — an error is not evidence of deletion.
 - Codex version bumps follow [`docs/codex-upgrade-guide.md`](docs/codex-upgrade-guide.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,

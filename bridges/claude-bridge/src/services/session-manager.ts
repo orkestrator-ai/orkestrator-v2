@@ -1241,6 +1241,124 @@ export function getSession(sessionId: string): SessionState | undefined {
 }
 
 /**
+ * What a session is doing, as far as anything outside this bridge needs to know.
+ *
+ * `missing` means this bridge can prove the session no longer exists, which is
+ * a destructive signal: the backend deletes its persisted mapping on it.
+ */
+export type SessionActivity = "idle" | "working" | "waiting" | "missing";
+
+/** How long an affirmative on-disk existence probe is trusted for. */
+const PERSISTED_EXISTENCE_MEMO_MS = 60_000;
+/** Hard cap on the memo; an environment's session count is unbounded. */
+const PERSISTED_EXISTENCE_MEMO_MAX = 512;
+
+/**
+ * SDK session id → epoch millis after which its existence must be re-probed.
+ *
+ * Only the *affirmative* answer is memoized. "Missing" is what makes the
+ * backend drop a mapping, so it is always re-derived from a fresh probe rather
+ * than served stale; a session that came back would otherwise stay "missing"
+ * for a whole TTL.
+ */
+const persistedSessionExistence = new Map<string, number>();
+
+/**
+ * Does a rollout for this SDK session id still exist under the current cwd?
+ *
+ * Uses the same oracle {@link materializePersistedSessionState} does, so
+ * activity's notion of "gone" cannot disagree with the rest of the bridge: an
+ * id this returns false for is one `ensurePersistedSession` also refuses to
+ * materialize and every other route already 404s.
+ *
+ * Any failure — no SDK, an unreadable Claude home — answers true. An error is
+ * not evidence of deletion, and reporting one as `missing` would cost the user
+ * their conversation.
+ */
+async function persistedSessionExistsOnDisk(sdkSessionId: string): Promise<boolean> {
+  const memoized = persistedSessionExistence.get(sdkSessionId);
+  if (memoized !== undefined && memoized > Date.now()) return true;
+  try {
+    const sdk = await claudeSdk();
+    if (typeof sdk.getSessionInfo !== "function") return true;
+    const info = await sdk.getSessionInfo(sdkSessionId, {
+      dir: currentWorkingDirectory(),
+    });
+    if (!info) {
+      persistedSessionExistence.delete(sdkSessionId);
+      return false;
+    }
+  } catch (error) {
+    debugLog("[session-manager] Activity existence probe failed", {
+      sessionId: sdkSessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return true;
+  }
+  // Re-inserted rather than updated so the map stays ordered least-recently-
+  // refreshed first, which is what makes the eviction below the right victim.
+  persistedSessionExistence.delete(sdkSessionId);
+  if (persistedSessionExistence.size >= PERSISTED_EXISTENCE_MEMO_MAX) {
+    const oldest = persistedSessionExistence.keys().next();
+    if (!oldest.done) persistedSessionExistence.delete(oldest.value);
+  }
+  persistedSessionExistence.set(sdkSessionId, Date.now() + PERSISTED_EXISTENCE_MEMO_MS);
+  return true;
+}
+
+/** Drop the existence memo so one test's probe cannot answer another's. */
+export function resetSessionActivityProbeCacheForTesting(): void {
+  persistedSessionExistence.clear();
+}
+
+/**
+ * Read-only activity state for the backend's per-session sweep.
+ *
+ * Deliberately side-effect free. The backend polls this every two seconds for
+ * *every* session it has persisted, so any liveness side effect here is
+ * permanent, not transient:
+ *
+ * - It must not {@link touchSession}. `lastAccessedAt` is the clock
+ *   {@link evictIdleHydratedTranscripts} reads, and a touch every two seconds
+ *   keeps `now - lastAccessedAt` below {@link IDLE_TRANSCRIPT_EVICTION_MS}
+ *   forever, putting eviction permanently out of reach.
+ * - It must not hydrate. Materializing a transcript to answer a poll pulls
+ *   every persisted session's full history into memory — and, with the clock
+ *   pinned by the same poll, leaves it there for the life of the process.
+ *
+ * Hence the direct `sessions` lookup rather than {@link getSession}, and no
+ * call to `ensurePersistedSession` / `hydratePersistedSessionMessages`.
+ *
+ * Not resident is not `missing`. A session is absent from the map after a
+ * bridge restart until something materializes it, and this function
+ * deliberately is not that something. Since the backend deletes its session
+ * mapping when it sees `missing`, answering from residency alone would cut the
+ * user's link to a conversation that is sitting intact on disk. Only a
+ * malformed id or a rollout that is provably gone is `missing`; a well-formed,
+ * on-disk, non-resident id is `idle`, because nothing can be running for a
+ * session this process is not holding.
+ *
+ * Async only for that on-disk probe, which the resident fast path skips
+ * entirely.
+ */
+export async function getSessionActivity(sessionId: string): Promise<SessionActivity> {
+  const session = sessions.get(sessionId);
+  if (session) {
+    if (session.status !== "running") return "idle";
+    // A running turn that has parked a question or a plan approval is blocked
+    // on the user, not on Claude. The backend renders those differently and
+    // must not treat them as progress it should wait out.
+    return sessionHasPendingInteractions(sessionId) ? "waiting" : "working";
+  }
+
+  const sdkSessionId = sdkSessionIdFromBridgeId(sessionId);
+  // No rollout id can be derived, so no rollout can exist. This is the one
+  // cheap, certain `missing`.
+  if (!sdkSessionId) return "missing";
+  return (await persistedSessionExistsOnDisk(sdkSessionId)) ? "idle" : "missing";
+}
+
+/**
  * At-most-once prompt dispatch.
  *
  * A turn can run shell commands and edit files, so executing one twice is
@@ -1589,13 +1707,29 @@ function cleanupPendingInteractions(sessionId: string): void {
   cleanupPendingPlanApprovals(sessionId);
 }
 
+/**
+ * The single rule mapping a parked prompt to the session that raised it.
+ *
+ * `getPendingQuestions`, `getPendingPlanApprovals`, the eviction guard and
+ * {@link getSessionActivity} all ask some form of "is anything of this
+ * session's waiting on the user". Routing every one of them through this
+ * predicate is what stops the `waiting` activity state from disagreeing with
+ * the cards `/questions` and `/plan-approvals` actually serve.
+ */
+function isPendingInteractionFor(
+  entry: QuestionRequest | PlanApprovalRequest,
+  sessionId: string,
+): boolean {
+  return entry.sessionId === sessionId;
+}
+
 /** True while a question or plan approval is waiting on the user. */
 function sessionHasPendingInteractions(sessionId: string): boolean {
   for (const question of pendingQuestions.values()) {
-    if (question.sessionId === sessionId) return true;
+    if (isPendingInteractionFor(question, sessionId)) return true;
   }
   for (const approval of pendingPlanApprovals.values()) {
-    if (approval.sessionId === sessionId) return true;
+    if (isPendingInteractionFor(approval, sessionId)) return true;
   }
   return false;
 }
@@ -5828,7 +5962,7 @@ export function getPendingQuestions(
 ): QuestionRequest[] {
   const questions = Array.from(pendingQuestions.values());
   if (sessionId) {
-    return questions.filter((q) => q.sessionId === sessionId);
+    return questions.filter((q) => isPendingInteractionFor(q, sessionId));
   }
   return questions;
 }
@@ -5880,7 +6014,7 @@ export function getPendingPlanApprovals(
 ): PlanApprovalRequest[] {
   const approvals = Array.from(pendingPlanApprovals.values());
   if (sessionId) {
-    return approvals.filter((a) => a.sessionId === sessionId);
+    return approvals.filter((a) => isPendingInteractionFor(a, sessionId));
   }
   return approvals;
 }

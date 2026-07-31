@@ -1191,6 +1191,22 @@ app.get("/session/:id/status", (c) => {
   return c.json(status);
 });
 
+/**
+ * Side-effect-free activity poll for the backend's session sweep.
+ *
+ * Always 200, including for a session this bridge has never heard of. The
+ * backend reads a 404 from this path as "the bridge predates this route" and
+ * fails the whole environment, so a 404 for an unknown session would be
+ * indistinguishable from an old bridge — and could have the backend drop the
+ * mapping for a session that is merely detached. `"missing"` in the body is the
+ * in-band signal for that one session instead.
+ *
+ * Unlike `/status` this must never touch the session: see `getActivity`.
+ */
+app.get("/session/:id/activity", (c) => {
+  return c.json({ activity: appServerRuntime.getActivity(c.req.param("id")) });
+});
+
 app.get("/session/:id/structured-output", (c) => {
   const result = appServerRuntime.getStructuredOutput(
     c.req.param("id"),

@@ -816,6 +816,57 @@ describe("Electron StorageService", () => {
     )).rejects.toThrow(
       "observerId must be a non-blank string of at most 256 characters for frontend activity",
     );
+    // A renderer supplying an observer id is claiming a lease only `frontend`
+    // can hold. The rejected call must leave no trace: accepting it under any
+    // other source would let a renderer drive the backend-owned projection.
+    await expect(storage.getEnvironment(environment.id)).resolves.toMatchObject({
+      agentActivityState: "waiting",
+      agentActivitySources: {
+        "native-agent": { state: "waiting", updatedAt: occurredAt },
+      },
+    });
+  });
+
+  test("aggregates native-agent and frontend observations as a max", async () => {
+    // Neither source can retire the other's indicator: the backend sweep runs
+    // whether or not a tab is mounted, and a mounted tab sees turns the sweep
+    // has not polled yet. Taking either one alone would blank a live turn.
+    const dataDir = await createTempDir("ork-storage-agent-native-aggregate-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const createdTime = Date.parse(environment.agentActivityUpdatedAt!);
+    let elapsed = 0;
+    const next = () => new Date(createdTime + (elapsed += 1_000)).toISOString();
+
+    for (const [nativeState, frontendState, aggregate] of [
+      ["working", "idle", "working"],
+      ["idle", "working", "working"],
+      ["waiting", "idle", "waiting"],
+      ["idle", "waiting", "waiting"],
+      ["idle", "idle", "idle"],
+    ] as const) {
+      await storage.setEnvironmentAgentActivity(
+        environment.id,
+        nativeState,
+        next(),
+        "native-agent",
+      );
+      await expect(storage.setEnvironmentAgentActivity(
+        environment.id,
+        frontendState,
+        next(),
+        "frontend",
+      )).resolves.toMatchObject({
+        agentActivityState: aggregate,
+        agentActivitySources: {
+          "native-agent": { state: nativeState },
+          frontend: { state: frontendState },
+        },
+      });
+    }
   });
 
   test("aggregates independently leased renderer observations", async () => {
@@ -1297,6 +1348,48 @@ describe("Electron StorageService", () => {
     await expect(storage.getEnvironment(untouched.id)).resolves.toMatchObject({
       agentActivityState: "working",
     });
+  });
+
+  test("clears renderer activity without disturbing the native-agent projection", async () => {
+    // This runs at every backend start, immediately before the first reconcile
+    // sweep. Wiping `native-agent` here would blank the sidebar for every
+    // environment until a sweep succeeded — and a bridge that is slow to come
+    // back would leave it blank for much longer than that.
+    const dataDir = await createTempDir("ork-storage-agent-clear-native-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const createdTime = Date.parse(environment.agentActivityUpdatedAt!);
+    const nativeWaitingAt = new Date(createdTime + 1_000).toISOString();
+    const frontendWorkingAt = new Date(createdTime + 2_000).toISOString();
+
+    await storage.setEnvironmentAgentActivity(
+      environment.id,
+      "waiting",
+      nativeWaitingAt,
+      "native-agent",
+    );
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      frontendWorkingAt,
+      "frontend",
+      "renderer-to-clear",
+    )).resolves.toMatchObject({ agentActivityState: "working" });
+
+    await expect(storage.clearFrontendAgentActivity())
+      .resolves.toEqual([environment.id]);
+
+    const cleared = (await storage.getEnvironment(environment.id))!;
+    // State and token both survive intact; only `frontend` is dropped, and the
+    // recomputed aggregate is the survivor's own state.
+    expect(cleared.agentActivitySources).toEqual({
+      "native-agent": { state: "waiting", updatedAt: nativeWaitingAt },
+    });
+    expect(cleared.agentActivityState).toBe("waiting");
+    expect(cleared.frontendAgentActivityObservers).toEqual({});
   });
 
   test("clearing renderer activity is a no-op when nothing was reported", async () => {

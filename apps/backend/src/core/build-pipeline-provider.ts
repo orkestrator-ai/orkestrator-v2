@@ -5,7 +5,10 @@ import type {
   TaskSnapshotImage,
 } from "@orkestrator/protocol/build-pipeline";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
-import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
+import {
+  AGENT_ACTIVITY_STATES,
+  type AgentActivityState,
+} from "@orkestrator/protocol/agent-activity";
 import {
   mimeTypeForFilename,
   promptAttachmentUrl,
@@ -15,6 +18,22 @@ import {
 export type ProviderStatus = "running" | "idle" | "error" | "missing";
 export type ProviderActivityState = AgentActivityState | "missing";
 export type ProviderExecutionMode = "plan" | "build";
+
+const PROVIDER_ACTIVITY_STATES: readonly ProviderActivityState[] = [
+  ...AGENT_ACTIVITY_STATES,
+  "missing",
+];
+
+/**
+ * Validate a bridge-supplied activity token before it can reach the durable
+ * projection. An unrecognized value must fail loudly: coercing it to `idle`
+ * would silently retire a spinner for a turn that is still running.
+ */
+function isProviderActivityState(
+  value: unknown,
+): value is ProviderActivityState {
+  return PROVIDER_ACTIVITY_STATES.includes(value as ProviderActivityState);
+}
 
 export class PromptRejectedError extends Error {
   constructor(message: string) {
@@ -471,45 +490,37 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       : "error";
   }
 
+  /**
+   * Read activity from the bridge's dedicated observation route.
+   *
+   * This deliberately does not reuse `status()` plus the pending-input routes.
+   * Those are the routes a *tab* reads, so each one is a liveness touch: the
+   * codex bridge refreshes `lastAccessed` (blocking idle thread detaching) and
+   * the claude bridge additionally hydrates the persisted transcript. This
+   * method is polled every couple of seconds for every session in every
+   * environment, so it must have no side effect at all — `/activity` exists
+   * only to answer it.
+   *
+   * The route reports an unknown session in-band as `missing` and never 404s.
+   * A 404 here therefore means the route itself is absent — an older bridge —
+   * and must surface as a failure rather than as "this session is gone", which
+   * the caller would act on by deleting the user's session mapping.
+   */
   async activity(sessionId: string): Promise<ProviderActivityState> {
-    const status = await this.status(sessionId);
-    if (status === "missing") return "missing";
-    if (status !== "running") return "idle";
-
-    const encodedSessionId = encodeURIComponent(sessionId);
-    const pendingPaths = this.agent === "claude"
-      ? [
-          `/session/${encodedSessionId}/questions`,
-          `/session/${encodedSessionId}/plan-approvals`,
-        ]
-      : [
-          `/session/${encodedSessionId}/approvals`,
-          `/session/${encodedSessionId}/interactions`,
-        ];
-    const pendingKeys = this.agent === "claude"
-      ? ["questions", "approvals"] as const
-      : ["approvals", "interactions"] as const;
-    const responses = await Promise.all(
-      pendingPaths.map((path) => bridgeFetch(
-        this.connection,
-        path,
-        {},
-        this.fetchImpl,
-      )),
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/activity`,
+      {},
+      this.fetchImpl,
     );
-    for (let index = 0; index < responses.length; index += 1) {
-      const response = responses[index]!;
-      assertOk(response, `${this.agent} pending-input read`);
-      const body = await response.json() as Record<string, unknown>;
-      const pending = body[pendingKeys[index]!];
-      if (!Array.isArray(pending)) {
-        throw new ProviderUnavailableError(
-          `${this.agent} returned malformed pending input`,
-        );
-      }
-      if (pending.length > 0) return "waiting";
+    assertOk(response, `${this.agent} activity read`);
+    const body = await response.json() as { activity?: unknown };
+    if (!isProviderActivityState(body.activity)) {
+      throw new ProviderUnavailableError(
+        `${this.agent} returned a malformed activity snapshot`,
+      );
     }
-    return "working";
+    return body.activity;
   }
 
   async messages(sessionId: string): Promise<unknown[]> {
@@ -822,7 +833,16 @@ class OpenCodeProvider implements BuildPipelineProvider {
 
   async activity(sessionId: string): Promise<ProviderActivityState> {
     const activity = await this.activityBatch([sessionId]);
-    return activity.get(sessionId) ?? "missing";
+    const state = activity.get(sessionId);
+    // `activityBatch` answers for every id it is given, so a gap is a broken
+    // provider rather than a missing session. Defaulting to `missing` here
+    // would turn that bug into a deleted session mapping.
+    if (!state) {
+      throw new ProviderUnavailableError(
+        `OpenCode activity snapshot omitted ${sessionId}`,
+      );
+    }
+    return state;
   }
 
   async activityBatch(
@@ -832,7 +852,12 @@ class OpenCodeProvider implements BuildPipelineProvider {
       const activity = new Map<string, ProviderActivityState>();
       const sessionIdsToRead = [...new Set(sessionIds)].filter((sessionId) => {
         if (!this.blockedSessions.has(sessionId)) return true;
-        activity.set(sessionId, "idle");
+        // A blocked session asked a question this provider will not answer, so
+        // it is parked on a human. `status()` calls that `error` because a
+        // pipeline must stop advancing on it; for the sidebar the honest
+        // answer is `waiting`. `idle` is the one answer that is certainly
+        // wrong — it retires the indicator on a turn nobody has resolved.
+        activity.set(sessionId, "waiting");
         return false;
       });
       if (sessionIdsToRead.length === 0) return activity;

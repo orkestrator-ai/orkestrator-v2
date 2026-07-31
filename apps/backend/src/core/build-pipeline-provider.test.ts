@@ -239,130 +239,58 @@ describe("HTTP build pipeline provider", () => {
   });
 
   test.each([
-    ["claude" as const, claudeConnection, "questions"],
-    ["codex" as const, codexConnection, "approvals"],
-  ])("reports %s running sessions as waiting when provider input is pending", async (
-    agent,
+    ["claude" as const, claudeConnection],
+    ["codex" as const, codexConnection],
+  ])("reads %s activity from one dedicated observation request", async (
+    _agent,
     connection,
-    pendingKey,
   ) => {
-    let hasPendingInput = true;
-    const { provider } = httpProvider((url) => {
-      const isStatus = agent === "claude"
-        ? url.endsWith("/session/session%2F1")
-        : url.endsWith("/session/session%2F1/status");
-      if (isStatus) return Response.json({ status: "running" });
-      if (url.endsWith(`/${pendingKey}`)) {
-        return Response.json({
-          [pendingKey]: hasPendingInput ? [{ id: "pending-1" }] : [],
-        });
-      }
-      const otherKey = agent === "claude" ? "approvals" : "interactions";
-      return Response.json({ [otherKey]: [] });
-    }, connection);
+    for (const state of ["idle", "working", "waiting", "missing"] as const) {
+      const { provider, requests } = httpProvider(
+        () => Response.json({ activity: state }),
+        connection,
+      );
 
-    await expect(provider.activity?.("session/1")).resolves.toBe("waiting");
-    hasPendingInput = false;
-    await expect(provider.activity?.("session/1")).resolves.toBe("working");
-  });
-
-  test.each([
-    ["claude" as const, claudeConnection, "plan-approvals", "approvals"],
-    ["codex" as const, codexConnection, "interactions", "interactions"],
-  ])("reports %s secondary pending input as waiting", async (
-    agent,
-    connection,
-    pendingPath,
-    pendingKey,
-  ) => {
-    const { provider } = httpProvider((url) => {
-      const isStatus = agent === "claude"
-        ? url.endsWith("/session/session%2F1")
-        : url.endsWith("/session/session%2F1/status");
-      if (isStatus) return Response.json({ status: "running" });
-      if (url.endsWith(`/${pendingPath}`)) {
-        return Response.json({ [pendingKey]: [{ id: "pending-1" }] });
-      }
-      const emptyKey = agent === "claude" ? "questions" : "approvals";
-      return Response.json({ [emptyKey]: [] });
-    }, connection);
-
-    await expect(provider.activity?.("session/1")).resolves.toBe("waiting");
+      await expect(provider.activity?.("session/1")).resolves.toBe(state);
+      // One request, and specifically not the tab-facing status or
+      // pending-input routes: those refresh the bridge's liveness clocks, which
+      // a two-second poll would use to pin every transcript in memory forever.
+      expect(requests.map((request) => request.url)).toEqual([
+        `${connection.baseUrl}/session/session%2F1/activity`,
+      ]);
+    }
   });
 
   test.each([
     ["claude" as const, claudeConnection],
     ["codex" as const, codexConnection],
-  ])("short-circuits %s pending reads for missing and non-running sessions", async (
-    _agent,
-    connection,
-  ) => {
-    for (const [status, expected] of [
-      ["missing", "missing"],
-      ["idle", "idle"],
-      ["error", "idle"],
-    ] as const) {
-      const responseStatus = status === "missing" ? 404 : 200;
-      const { provider, requests } = httpProvider(() => responseStatus === 404
-        ? new Response(null, { status: responseStatus })
-        : Response.json({ status }), connection);
-
-      await expect(provider.activity?.("session/1")).resolves.toBe(expected);
-      expect(requests).toHaveLength(1);
+  ])("rejects a malformed %s activity snapshot", async (_agent, connection) => {
+    for (const body of [{}, { activity: "busy" }, { activity: null }]) {
+      const { provider } = httpProvider(() => Response.json(body), connection);
+      // Coercing an unrecognized token to `idle` would retire the indicator on
+      // a turn that is still running.
+      await expect(provider.activity?.("session-1"))
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
     }
   });
 
   test.each([
-    ["claude", "questions", claudeConnection],
-    ["claude", "plan-approvals", claudeConnection],
-    ["codex", "approvals", codexConnection],
-    ["codex", "interactions", codexConnection],
-  ])("rejects malformed pending input from %s %s", async (
+    ["claude" as const, 404, false, claudeConnection],
+    ["claude" as const, 400, false, claudeConnection],
+    ["claude" as const, 503, true, claudeConnection],
+    ["codex" as const, 404, false, codexConnection],
+    ["codex" as const, 400, false, codexConnection],
+    ["codex" as const, 503, true, codexConnection],
+  ])("surfaces a non-success %s activity read (HTTP %i)", async (
     _agent,
-    malformedPath,
-    connection,
-  ) => {
-    const { provider } = httpProvider((url) => {
-      const isStatus = connection.agent === "claude"
-        ? url.endsWith("/session/session-1")
-        : url.endsWith("/session/session-1/status");
-      if (isStatus) return Response.json({ status: "running" });
-      if (url.endsWith(`/${malformedPath}`)) return Response.json({});
-      const validKey = connection.agent === "claude"
-        ? malformedPath === "questions" ? "approvals" : "questions"
-        : malformedPath === "approvals" ? "interactions" : "approvals";
-      return Response.json({ [validKey]: [] });
-    }, connection);
-
-    await expect(provider.activity?.("session-1"))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
-  });
-
-  test.each([
-    ["claude", "questions", 400, false, claudeConnection],
-    ["claude", "plan-approvals", 503, true, claudeConnection],
-    ["codex", "approvals", 400, false, codexConnection],
-    ["codex", "interactions", 503, true, codexConnection],
-  ])("surfaces a non-success %s %s read (HTTP %i)", async (
-    _agent,
-    failedPath,
     status,
     isUnavailable,
     connection,
   ) => {
-    const { provider } = httpProvider((url) => {
-      const isStatus = connection.agent === "claude"
-        ? url.endsWith("/session/session-1")
-        : url.endsWith("/session/session-1/status");
-      if (isStatus) return Response.json({ status: "running" });
-      if (url.endsWith(`/${failedPath}`)) {
-        return new Response(null, { status });
-      }
-      const validKey = connection.agent === "claude"
-        ? failedPath === "questions" ? "approvals" : "questions"
-        : failedPath === "approvals" ? "interactions" : "approvals";
-      return Response.json({ [validKey]: [] });
-    }, connection);
+    const { provider } = httpProvider(
+      () => new Response(null, { status }),
+      connection,
+    );
 
     let caught: unknown;
     try {
@@ -370,6 +298,9 @@ describe("HTTP build pipeline provider", () => {
     } catch (error) {
       caught = error;
     }
+    // 404 must throw rather than resolve to `missing`. The route reports an
+    // unknown session in-band, so a 404 means the route is absent — an older
+    // bridge — and resolving it as `missing` would delete a live mapping.
     expect(caught).toBeInstanceOf(Error);
     expect(caught instanceof ProviderUnavailableError).toBe(isUnavailable);
   });
@@ -962,6 +893,54 @@ describe("OpenCode build pipeline provider", () => {
     }
   });
 
+  test("reports a blocked OpenCode session as waiting while status calls it an error", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await provider.createSession("build", "Build task");
+      await waitUntil(() => fake.subscriptions.length === 1);
+      fake.subscriptions[0]!.push({
+        type: "question.asked",
+        properties: { id: "owned-q", sessionID: "owned-session" },
+      });
+      await waitUntil(() => fake.questionRejections.length === 1);
+
+      // The two answers disagree on purpose. `status()` says `error` because a
+      // build pipeline must stop advancing on a question this provider refused
+      // to answer; the sidebar's honest answer is `waiting`, because a human
+      // still has to resolve it. `idle` — what this used to report — is the one
+      // answer that is certainly wrong: it retires the indicator on a turn
+      // nobody has resolved.
+      await expect(provider.activityBatch?.(["owned-session"])).resolves.toEqual(
+        new Map([["owned-session", "waiting"]]),
+      );
+      await expect(provider.activity?.("owned-session")).resolves.toBe("waiting");
+      await expect(provider.status("owned-session")).resolves.toBe("error");
+
+      // A wholly-blocked batch is answered from local state. Reading the global
+      // session map anyway would be a round trip per sweep that cannot change
+      // the answer.
+      expect(fake.statusCallCount).toBe(0);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("rejects an OpenCode activity snapshot that omits the requested session", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeActivityProvider(fake);
+    try {
+      // `activityBatch` answers for every id it is given, so a gap is a broken
+      // provider rather than a missing session. Defaulting to `missing` would
+      // turn that bug into a deleted session mapping.
+      provider.activityBatch = async () => new Map();
+      await expect(provider.activity?.("owned-session"))
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test.each([
     ["question", "envelope"],
     ["permission", "envelope"],
@@ -1357,6 +1336,10 @@ describe("OpenCode build pipeline provider", () => {
     const provider = openCodeProvider(fake);
     try {
       await expect(provider.status("owned-session")).resolves.toBe("idle");
+      // OpenCode keys its session map by directory. Reading it without this
+      // connection's own worktree returns another workspace's map, in which
+      // every live session of this one looks missing.
+      expect(fake.statusCalls).toEqual([{ directory: "/workspace" }]);
       fake.setStatusResponse({
         data: { "owned-session": { type: "busy" } },
       });
@@ -1370,6 +1353,10 @@ describe("OpenCode build pipeline provider", () => {
       });
       await expect(provider.status("owned-session")).resolves.toBe("error");
       await expect(provider.status("missing-session")).resolves.toBe("missing");
+      // Not just the first read: every status read is scoped to the worktree.
+      expect(fake.statusCalls).toEqual(
+        Array.from({ length: 5 }, () => ({ directory: "/workspace" })),
+      );
 
       fake.setPromptResponse({ error: { message: "rejected" } });
       await expect(provider.send("owned-session", "prompt", {
@@ -1980,15 +1967,21 @@ describe("HTTP build pipeline provider (codex)", () => {
 
   test("escapes session ids in every codex route", async () => {
     const { provider, requests } = httpProvider(
-      () => Response.json({ messages: [] }),
+      () => Response.json({ messages: [], activity: "idle", structuredOutput: null }),
       codexConnection,
     );
 
     await provider.messages("codex/../admin");
+    // The activity route is polled for every session in every environment, so
+    // it is the route most likely to be reached with an id no bridge vetted.
+    await provider.activity?.("codex/../admin");
+    await provider.structured("codex/../admin", "request-1");
 
-    expect(requests[0]!.url).toBe(
+    expect(requests.map(({ url }) => url)).toEqual([
       "http://codex.test/session/codex%2F..%2Fadmin/messages",
-    );
+      "http://codex.test/session/codex%2F..%2Fadmin/activity",
+      "http://codex.test/session/codex%2F..%2Fadmin/structured-output?requestId=request-1",
+    ]);
   });
 });
 

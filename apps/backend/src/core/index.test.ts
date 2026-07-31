@@ -338,6 +338,52 @@ test("native-agent restore failure leaves commands available and shutdown still 
   }
 });
 
+type ControlledInterval = {
+  active: boolean;
+  callback: () => void;
+  delay: number;
+  handle: ReturnType<typeof setInterval>;
+  unref: ReturnType<typeof mock>;
+};
+
+/**
+ * Replace the global interval timers so a sweep can be driven by hand.
+ *
+ * The sweep under test fires every two seconds and must keep firing for the
+ * life of the backend, which no real-time test can observe without either
+ * sleeping or accepting flakiness.
+ */
+function controlledIntervals() {
+  const intervals: ControlledInterval[] = [];
+  const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(
+    ((callback: () => void, delay = 0) => {
+      const unref = mock(() => undefined);
+      const handle = { unref } as unknown as ReturnType<typeof setInterval>;
+      intervals.push({ active: true, callback, delay, handle, unref });
+      return handle;
+    }) as typeof setInterval,
+  );
+  const clearIntervalSpy = spyOn(globalThis, "clearInterval").mockImplementation(
+    ((handle: ReturnType<typeof setInterval>) => {
+      const interval = intervals.find((candidate) => candidate.handle === handle);
+      if (interval) interval.active = false;
+    }) as typeof clearInterval,
+  );
+  return {
+    intervals,
+    clearIntervalSpy,
+    tick(delay: number): void {
+      for (const interval of intervals) {
+        if (interval.active && interval.delay === delay) interval.callback();
+      }
+    },
+    restore(): void {
+      clearIntervalSpy.mockRestore();
+      setIntervalSpy.mockRestore();
+    },
+  };
+}
+
 describe("native-agent activity reconciliation lifecycle", () => {
   test("awaits initial activity hydration before startup completes", async () => {
     const dataDir = await fs.mkdtemp(
@@ -473,33 +519,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
     internals.nativeAgents.init = mock(async () => undefined);
     internals.nativeAgents.reconcileAgentActivity = mock(async () => undefined);
 
-    type ControlledInterval = {
-      active: boolean;
-      callback: () => void;
-      delay: number;
-      handle: ReturnType<typeof setInterval>;
-      unref: ReturnType<typeof mock>;
-    };
-    const intervals: ControlledInterval[] = [];
-    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(
-      ((callback: () => void, delay = 0) => {
-        const unref = mock(() => undefined);
-        const handle = { unref } as unknown as ReturnType<typeof setInterval>;
-        intervals.push({ active: true, callback, delay, handle, unref });
-        return handle;
-      }) as typeof setInterval,
-    );
-    const clearIntervalSpy = spyOn(globalThis, "clearInterval").mockImplementation(
-      ((handle: ReturnType<typeof setInterval>) => {
-        const interval = intervals.find((candidate) => candidate.handle === handle);
-        if (interval) interval.active = false;
-      }) as typeof clearInterval,
-    );
-    const tick = (delay: number): void => {
-      for (const interval of intervals) {
-        if (interval.active && interval.delay === delay) interval.callback();
-      }
-    };
+    const { intervals, clearIntervalSpy, tick, restore } = controlledIntervals();
 
     try {
       await backend.init();
@@ -524,8 +544,178 @@ describe("native-agent activity reconciliation lifecycle", () => {
         .toHaveBeenCalledTimes(2);
     } finally {
       await backend.shutdown().catch(() => undefined);
-      clearIntervalSpy.mockRestore();
-      setIntervalSpy.mockRestore();
+      restore();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("isolates a rejected sweep and keeps reconciling on the next tick", async () => {
+    // The interval callback is a separate failure boundary from the awaited
+    // hydration at startup: a bridge that is briefly unreachable rejects here
+    // every two seconds, and an unhandled rejection would tear the backend
+    // down rather than simply skipping one sweep.
+    const dataDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ork-backend-native-activity-tick-failure-"),
+    );
+    const backend = new OrkestratorBackend({
+      dataDir,
+      toolchainBinDir: "",
+      appRoot: "",
+      resourceRoot: "",
+      emit: () => undefined,
+      agentTools: fakeAgentTools(),
+      startupReapers: {
+        localServers: async () => [],
+        claudeTmuxRuntimes: async () => [],
+      },
+    });
+    const internals = backend as unknown as {
+      buildPipelines: { init: () => Promise<void> };
+      nativeAgents: {
+        init: () => Promise<void>;
+        reconcileAgentActivity: () => Promise<void>;
+      };
+    };
+    internals.buildPipelines.init = mock(async () => undefined);
+    internals.nativeAgents.init = mock(async () => undefined);
+    let sweeps = 0;
+    internals.nativeAgents.reconcileAgentActivity = mock(async () => {
+      sweeps += 1;
+      // The first call is the awaited startup hydration, which is covered by
+      // its own test; only the interval callback fails here.
+      if (sweeps > 1) throw new Error("activity sweep unavailable");
+    });
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const { tick, restore } = controlledIntervals();
+
+    try {
+      await backend.init();
+      expect(sweeps).toBe(1);
+
+      tick(2_000);
+      await waitForCondition(
+        () => warn.mock.calls.some(([message]) =>
+          message === "[backend] Failed to reconcile native agent activity:"
+        ),
+        "the failed sweep to be reported",
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "[backend] Failed to reconcile native agent activity:",
+        expect.objectContaining({ message: "activity sweep unavailable" }),
+      );
+
+      // The backend is still serving commands, and the interval survived its
+      // own callback throwing.
+      await expect(backend.invoke("get_environment_snapshots", {
+        projectId: "project-1",
+      })).resolves.toEqual([]);
+      tick(2_000);
+      await waitForCondition(
+        () => sweeps === 3,
+        "a later sweep after the failed one",
+      );
+    } finally {
+      await backend.shutdown().catch(() => undefined);
+      restore();
+      warn.mockRestore();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("arms the activity sweep once across repeated init calls", async () => {
+    // `init()` is re-entered by supervisors that retry a partially failed
+    // startup. A second interval would double every bridge poll for the life
+    // of the process, and only the newest handle would be cleared on shutdown.
+    const dataDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ork-backend-native-activity-idempotent-"),
+    );
+    const backend = new OrkestratorBackend({
+      dataDir,
+      toolchainBinDir: "",
+      appRoot: "",
+      resourceRoot: "",
+      emit: () => undefined,
+      agentTools: fakeAgentTools(),
+      startupReapers: {
+        localServers: async () => [],
+        claudeTmuxRuntimes: async () => [],
+      },
+    });
+    const internals = backend as unknown as {
+      buildPipelines: { init: () => Promise<void> };
+      nativeAgents: {
+        init: () => Promise<void>;
+        reconcileAgentActivity: () => Promise<void>;
+      };
+    };
+    internals.buildPipelines.init = mock(async () => undefined);
+    internals.nativeAgents.init = mock(async () => undefined);
+    internals.nativeAgents.reconcileAgentActivity = mock(async () => undefined);
+    const { intervals, tick, restore } = controlledIntervals();
+
+    try {
+      await backend.init();
+      await backend.init();
+
+      expect(intervals.filter((interval) => interval.delay === 2_000))
+        .toHaveLength(1);
+      tick(2_000);
+      await Promise.resolve();
+      // Two init calls, one interval: three reconciles, not four.
+      expect(internals.nativeAgents.reconcileAgentActivity)
+        .toHaveBeenCalledTimes(3);
+    } finally {
+      await backend.shutdown().catch(() => undefined);
+      restore();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("hydrates activity only after native agent launches are restored", async () => {
+    // Reconciling first would read an empty launch registry and publish `idle`
+    // for every environment whose agent is about to be restored.
+    const dataDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ork-backend-native-activity-order-"),
+    );
+    const calls: string[] = [];
+    const backend = new OrkestratorBackend({
+      dataDir,
+      toolchainBinDir: "",
+      appRoot: "",
+      resourceRoot: "",
+      emit: () => undefined,
+      agentTools: fakeAgentTools(),
+      startupReapers: {
+        localServers: async () => [],
+        claudeTmuxRuntimes: async () => [],
+      },
+    });
+    const internals = backend as unknown as {
+      buildPipelines: { init: () => Promise<void> };
+      nativeAgents: {
+        init: () => Promise<void>;
+        reconcileAgentActivity: () => Promise<void>;
+      };
+    };
+    internals.buildPipelines.init = mock(async () => {
+      calls.push("pipelines:init");
+    });
+    internals.nativeAgents.init = mock(async () => {
+      calls.push("native:init");
+    });
+    internals.nativeAgents.reconcileAgentActivity = mock(async () => {
+      calls.push("native:reconcile");
+    });
+
+    try {
+      await backend.init();
+      expect(calls).toEqual([
+        "pipelines:init",
+        "native:init",
+        "native:reconcile",
+      ]);
+    } finally {
+      await backend.shutdown().catch(() => undefined);
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });

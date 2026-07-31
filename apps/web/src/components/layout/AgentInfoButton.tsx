@@ -231,6 +231,17 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function epochSecondsToIso(value: unknown): string | undefined {
+  const seconds = finiteNumber(value);
+  if (seconds === undefined) return undefined;
+  const date = new Date(seconds * 1_000);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
 function inventoryCount(value: unknown): number {
   if (Array.isArray(value)) return value.length;
   const data = record(value).data;
@@ -332,20 +343,24 @@ function codexLimitsFromHealth(health: unknown): {
   for (const [key, fallback] of [["primary", "Primary"], ["secondary", "Secondary"]] as const) {
     const window = record(snapshot[key]);
     if (Object.keys(window).length === 0) continue;
-    const reset = typeof window.resetsAt === "number" ? window.resetsAt : undefined;
-    const windowMinutes = typeof window.windowDurationMins === "number"
-      ? window.windowDurationMins
+    const rawUsedPercent = finiteNumber(window.usedPercent);
+    const usedPercent = rawUsedPercent === undefined
+      ? undefined
+      : Math.max(0, Math.min(100, rawUsedPercent));
+    const resetsAt = epochSecondsToIso(window.resetsAt);
+    const rawWindowMinutes = finiteNumber(window.windowDurationMins);
+    const windowMinutes = rawWindowMinutes !== undefined && rawWindowMinutes >= 0
+      ? rawWindowMinutes
       : undefined;
+    if (usedPercent === undefined && resetsAt === undefined && windowMinutes === undefined) {
+      continue;
+    }
     rateLimits.push({
       label: typeof snapshot.limitName === "string" && key === "primary"
         ? snapshot.limitName
         : fallback,
-      usedPercent: typeof window.usedPercent === "number"
-        ? window.usedPercent
-        : undefined,
-      ...(reset !== undefined
-        ? { resetsAt: new Date(reset * 1_000).toISOString() }
-        : {}),
+      ...(usedPercent !== undefined ? { usedPercent } : {}),
+      ...(resetsAt !== undefined ? { resetsAt } : {}),
       ...(windowMinutes !== undefined ? { windowMinutes } : {}),
     });
   }

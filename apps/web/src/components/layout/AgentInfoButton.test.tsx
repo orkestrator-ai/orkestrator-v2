@@ -1282,6 +1282,29 @@ describe("AgentInfoButton Codex runtime panel", () => {
     expect(screen.getByText("Codex reported warning")).toBeTruthy();
   });
 
+  test("uses the latest occurrence when limiting distinct notices", async () => {
+    seedCodex();
+    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
+      engine: { state: "ready" },
+      notices: [
+        { method: "m1", message: "notice one" },
+        { method: "m2", message: "notice two" },
+        { method: "m3", message: "notice three" },
+        { method: "m4", message: "notice four" },
+        { method: "m5", message: "notice five" },
+        { method: "m6", message: "notice six" },
+        { method: "m1", message: "notice one" },
+      ],
+    }));
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    await waitFor(() => expect(screen.getByText("notice one (2)")).toBeTruthy());
+    expect(screen.queryByText("notice two")).toBeNull();
+    expect(screen.getByText("notice three")).toBeTruthy();
+    expect(screen.getByText("notice six")).toBeTruthy();
+  });
+
   test("falls back to an error snapshot when the health request rejects", async () => {
     seedCodex();
     mockGetCodexRuntimeHealth.mockImplementation(async () => {
@@ -1324,6 +1347,127 @@ describe("AgentInfoButton Codex runtime panel", () => {
         rateLimits: { rateLimits: { primary: { usedPercent: 10 } } },
       });
     });
+    expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toBeUndefined();
+  });
+
+  test("drops stale health after the same tab resumes another session", async () => {
+    seedCodex();
+    useCodexStore.setState({
+      contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
+    } as never);
+    let releaseOld: (value: unknown) => void = () => {};
+    mockGetCodexRuntimeHealth.mockImplementation((_client, sessionId) => {
+      if (sessionId === "codex-session-1") {
+        return new Promise((resolve) => {
+          releaseOld = resolve;
+        });
+      }
+      return Promise.resolve({
+        engine: { state: "replacement-ready" },
+        rateLimits: { rateLimits: { primary: { usedPercent: 20 } } },
+      });
+    });
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    await waitFor(() =>
+      expect(mockGetCodexRuntimeHealth).toHaveBeenCalledWith(
+        CODEX_CLIENT,
+        "codex-session-1",
+      )
+    );
+    act(() => {
+      useCodexStore.setState({
+        sessions: new Map([[
+          CODEX_KEY,
+          {
+            sessionId: "codex-session-2",
+            messages: [],
+            isLoading: false,
+            title: "Replacement session",
+          },
+        ]]),
+      } as never);
+    });
+
+    expect(isPopoverOpen()).toBe(false);
+    open();
+    await waitFor(() => expect(screen.getByText("replacement-ready")).toBeTruthy());
+    expect(mockGetCodexRuntimeHealth).toHaveBeenCalledWith(
+      CODEX_CLIENT,
+      "codex-session-2",
+    );
+    await act(async () => {
+      releaseOld({
+        engine: { state: "stale-session" },
+        rateLimits: { rateLimits: { primary: { usedPercent: 90 } } },
+      });
+    });
+
+    expect(screen.queryByText("stale-session")).toBeNull();
+    expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
+      { label: "Primary", usedPercent: 20 },
+    ]);
+  });
+
+  test("refreshes health when switching between tabs for the same Codex session", async () => {
+    const nextTabId = "tab-2";
+    const nextKey = createSessionKey(ENVIRONMENT_ID, nextTabId);
+    useCodexStore.setState({
+      clients: new Map([[ENVIRONMENT_ID, CODEX_CLIENT]]),
+      sessions: new Map([
+        [CODEX_KEY, {
+          sessionId: "shared-codex-session",
+          messages: [],
+          isLoading: false,
+          title: "First tab",
+        }],
+        [nextKey, {
+          sessionId: "shared-codex-session",
+          messages: [],
+          isLoading: false,
+          title: "Second tab",
+        }],
+      ]),
+      contextUsage: new Map([
+        [CODEX_KEY, usage({ source: "codex" })],
+        [nextKey, usage({ source: "codex" })],
+      ]),
+    } as never);
+    let releaseOld: (value: unknown) => void = () => {};
+    let requestCount = 0;
+    mockGetCodexRuntimeHealth.mockImplementation(() => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return new Promise((resolve) => {
+          releaseOld = resolve;
+        });
+      }
+      return Promise.resolve({
+        engine: { state: "second-tab-ready" },
+        rateLimits: { rateLimits: { primary: { usedPercent: 30 } } },
+      });
+    });
+    const { rerender } = render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    await waitFor(() => expect(mockGetCodexRuntimeHealth).toHaveBeenCalledTimes(1));
+    rerender(<AgentInfoButton activeTab={codexTab({ id: nextTabId })} />);
+    expect(isPopoverOpen()).toBe(false);
+    open();
+    await waitFor(() => expect(screen.getByText("second-tab-ready")).toBeTruthy());
+    expect(mockGetCodexRuntimeHealth).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      releaseOld({
+        engine: { state: "stale-first-tab" },
+        rateLimits: { rateLimits: { primary: { usedPercent: 90 } } },
+      });
+    });
+
+    expect(screen.queryByText("stale-first-tab")).toBeNull();
+    expect(useCodexStore.getState().contextUsage.get(nextKey)?.rateLimits).toEqual([
+      { label: "Primary", usedPercent: 30 },
+    ]);
     expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toBeUndefined();
   });
 
@@ -1381,6 +1525,40 @@ describe("AgentInfoButton Codex runtime panel", () => {
     ).toBeTruthy();
     // The rest of the snapshot survives the merge.
     expect(stored.usedTokens).toBe(25_000);
+  });
+
+  test("drops malformed rate-limit numbers without discarding valid fields", async () => {
+    seedCodex();
+    useCodexStore.setState({
+      contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
+    } as never);
+    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
+      engine: { state: "ready" },
+      rateLimits: {
+        rateLimits: {
+          primary: {
+            usedPercent: 125,
+            resetsAt: Number.MAX_SAFE_INTEGER,
+            windowDurationMins: Number.NaN,
+          },
+          secondary: {
+            usedPercent: Number.POSITIVE_INFINITY,
+            resetsAt: Number.NEGATIVE_INFINITY,
+            windowDurationMins: -1,
+          },
+        },
+      },
+    }));
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    await waitFor(() =>
+      expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
+        { label: "Primary", usedPercent: 100 },
+      ])
+    );
+    expect(screen.getByText("ready")).toBeTruthy();
+    expect(screen.queryByText(/Runtime health unavailable/)).toBeNull();
   });
 
   test("skips a window the health payload does not report at all", async () => {
@@ -2481,6 +2659,38 @@ describe("AgentInfoButton session actions", () => {
     );
   });
 
+  test("passes no message id when undoing without a user message", async () => {
+    seedOpenCodeSession();
+    useOpenCodeStore.setState({
+      sessions: new Map([[
+        OPENCODE_KEY,
+        {
+          sessionId: "opencode-session-1",
+          messages: [{
+            id: "a1",
+            role: "assistant",
+            content: "hello",
+            parts: [],
+            createdAt: "",
+          }],
+          isLoading: false,
+        },
+      ]]),
+    } as never);
+    render(<AgentInfoButton activeTab={openCodeTab()} />);
+    open();
+
+    fireEvent.click(screen.getByRole("button", { name: /Undo turn/ }));
+    await waitFor(() =>
+      expect(mockRevertOpenCodeSession).toHaveBeenCalledWith(
+        openCodeClient,
+        "opencode-session-1",
+        undefined,
+      )
+    );
+    expect(mockToastSuccess).toHaveBeenCalledWith("OpenCode session reverted");
+  });
+
   test("reports an OpenCode undo rejection and re-enables actions", async () => {
     seedOpenCodeSession();
     mockRevertOpenCodeSession.mockImplementation(async () => {
@@ -2578,36 +2788,41 @@ describe("AgentInfoButton session actions", () => {
     expect(screen.queryByText("Background tasks")).toBeNull();
   });
 
-  test("keeps paused background tasks visible and stoppable", async () => {
-    seedClaudeSession();
-    useClaudeStore.setState({
-      backgroundTasks: new Map([[
-        CLAUDE_KEY,
-        {
-          "task-paused": {
-            id: "task-paused",
-            description: "Paused review",
-            status: "paused",
+  test.each(["pending", "paused"] as const)(
+    "keeps %s background tasks visible and stoppable",
+    async (status) => {
+      seedClaudeSession();
+      const taskId = `task-${status}`;
+      const description = `${status[0]!.toUpperCase()}${status.slice(1)} review`;
+      useClaudeStore.setState({
+        backgroundTasks: new Map([[
+          CLAUDE_KEY,
+          {
+            [taskId]: {
+              id: taskId,
+              description,
+              status,
+            },
           },
-        },
-      ]]),
-    } as never);
+        ]]),
+      } as never);
 
-    render(<AgentInfoButton activeTab={claudeTab()} />);
-    open();
+      render(<AgentInfoButton activeTab={claudeTab()} />);
+      open();
 
-    expect(screen.getByText("Paused review")).toBeTruthy();
+      expect(screen.getByText(description)).toBeTruthy();
 
-    mockStopClaudeBackgroundTask.mockImplementation(async () => true);
-    fireEvent.click(screen.getByRole("button", { name: /Stop/ }));
-    await waitFor(() =>
-      expect(mockStopClaudeBackgroundTask).toHaveBeenCalledWith(
-        CLAUDE_CLIENT,
-        "claude-session-1",
-        "task-paused",
-      ),
-    );
-  });
+      mockStopClaudeBackgroundTask.mockImplementation(async () => true);
+      fireEvent.click(screen.getByRole("button", { name: /Stop/ }));
+      await waitFor(() =>
+        expect(mockStopClaudeBackgroundTask).toHaveBeenCalledWith(
+          CLAUDE_CLIENT,
+          "claude-session-1",
+          taskId,
+        ),
+      );
+    },
+  );
 
   test.each(["completed", "failed", "killed"] as const)(
     "hides the background-task section when every task is %s",

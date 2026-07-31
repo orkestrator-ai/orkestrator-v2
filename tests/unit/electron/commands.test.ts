@@ -3330,6 +3330,7 @@ exit 0
     }, context)).toEqual({
       mode: "delta",
       output: " second",
+      deltas: [{ revision: 2, text: " second" }],
       revision: 2,
       generation: 1,
       truncated: false,

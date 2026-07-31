@@ -9314,12 +9314,15 @@ export function createCommandRegistry(
         && requestedRevision <= revision
         && requestedRevision >= oldestRevision - 1
       ) {
+        const retainedDeltas = deltas
+          .filter((entry) => entry.revision > requestedRevision)
+          .map((entry) => ({ revision: entry.revision, text: entry.text }));
         return {
           mode: "delta",
-          output: deltas
-            .filter((entry) => entry.revision > requestedRevision)
-            .map((entry) => entry.text)
-            .join(""),
+          output: retainedDeltas.map((entry) => entry.text).join(""),
+          // The WebSocket gateway preserves revision boundaries when replaying
+          // raw binary output. Existing HTTP clients ignore this additive field.
+          deltas: retainedDeltas,
           revision,
           generation,
           truncated: false,

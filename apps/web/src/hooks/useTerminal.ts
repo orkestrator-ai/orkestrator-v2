@@ -17,13 +17,14 @@ import * as backend from "@/lib/backend";
  * the authoritative buffer must be replayed.
  */
 export type TerminalOutputPayload =
+  | Uint8Array
   | number[]
   | string
   | {
       bytesBase64?: string;
       text?: string;
       full?: boolean;
-      bytes?: number[];
+      bytes?: number[] | Uint8Array;
       data?: number[];
       desynced?: boolean;
       revision?: number;
@@ -41,12 +42,14 @@ function decodeBase64Bytes(base64: string): Uint8Array {
 
 /** Returns the frame's bytes, or `null` when it is a desync notice. */
 export function decodeTerminalOutputPayload(payload: TerminalOutputPayload): Uint8Array | null {
+  if (payload instanceof Uint8Array) return payload;
   if (typeof payload === "string") return decodeBase64Bytes(payload);
   if (Array.isArray(payload)) return new Uint8Array(payload);
   if (!payload || typeof payload !== "object") return new Uint8Array(0);
   if (payload.desynced) return null;
   if (typeof payload.text === "string") return new TextEncoder().encode(payload.text);
   if (typeof payload.bytesBase64 === "string") return decodeBase64Bytes(payload.bytesBase64);
+  if (payload.bytes instanceof Uint8Array) return payload.bytes;
   if (Array.isArray(payload.bytes)) return new Uint8Array(payload.bytes);
   if (Array.isArray(payload.data)) return new Uint8Array(payload.data);
   return new Uint8Array(0);
@@ -58,6 +61,7 @@ function terminalOutputCursor(
   if (
     !payload
     || typeof payload !== "object"
+    || payload instanceof Uint8Array
     || Array.isArray(payload)
   ) {
     return { revision: null, generation: null };
@@ -258,8 +262,9 @@ export function useTerminal({
     setError(null);
   }, [terminalTargetIdentity, existingSessionId, cleanupEventListener]);
 
-  // Clean up on unmount - use ref to get current sessionId
-  // If persistSession is true, only clean up the listener (keep session alive)
+  // Unmount means "not currently visible", not "stop the terminal". Always
+  // release only renderer consumption here; explicit disconnect/tab-close
+  // actions own backend process teardown.
   useEffect(() => {
     return () => {
       console.log("[useTerminal] Cleanup on unmount, sessionId:", sessionIdRef.current, "persist:", persistSessionRef.current);
@@ -268,19 +273,6 @@ export function useTerminal({
         console.log("[useTerminal] Unlistening from events");
       }
       cleanupEventListener();
-      // Only detach if we're NOT persisting the session
-      if (sessionIdRef.current && !persistSessionRef.current) {
-        console.log("[useTerminal] Detaching terminal session:", sessionIdRef.current, "isLocal:", activeSessionLocalRef.current);
-        if (activeSessionLocalRef.current) {
-          backend.closeLocalTerminalSession(sessionIdRef.current).catch((err) => {
-            console.error("[useTerminal] Error closing local terminal:", err);
-          });
-        } else {
-          backend.detachTerminal(sessionIdRef.current).catch((err) => {
-            console.error("[useTerminal] Error detaching terminal:", err);
-          });
-        }
-      }
       isConnectedRef.current = false;
       isConnectingRef.current = false;
     };

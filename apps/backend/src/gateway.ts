@@ -36,6 +36,7 @@ import {
   type GatewayCursorParseResult,
   type GatewayReplayFrame,
 } from "./gateway-event-replay.js";
+import { TerminalWebSocketGateway } from "./terminal-websocket-server.js";
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
@@ -2546,6 +2547,7 @@ export class OrkestratorGateway {
   private readonly replayHandshakeFrameCapacity: number;
   private readonly replayHandshakeMaxBytes: number;
   private readonly metrics: GatewayMetricsStore;
+  private readonly terminalWebSocket: TerminalWebSocketGateway;
   private servers = new Set<Server>();
   private token = "";
   private authFile = "";
@@ -2604,6 +2606,17 @@ export class OrkestratorGateway {
       .map((origin) => origin.trim().replace(/\/$/, ""))
       .filter(Boolean);
     this.metrics = new GatewayMetricsStore(this.compression);
+    this.terminalWebSocket = new TerminalWebSocketGateway({
+      backend: this.backend,
+      tokenMatches: (request, suppliedToken) => tokenMatches(
+        this.token,
+        suppliedToken ?? getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE),
+      ),
+      originAllowed: (request) => Boolean(
+        request.headers.origin && this.isOriginAllowed(request, request.headers.origin),
+      ),
+      logger: this.logger,
+    });
   }
 
   async start(): Promise<GatewayStartInfo | null> {
@@ -2725,6 +2738,9 @@ export class OrkestratorGateway {
       this.sockets.add(socket);
       socket.once("close", () => this.sockets.delete(socket));
     });
+    server.on("upgrade", (request, socket, head) => {
+      if (!this.terminalWebSocket.handleUpgrade(request, socket, head)) socket.destroy();
+    });
 
     try {
       await new Promise<void>((resolve, reject) => {
@@ -2795,6 +2811,7 @@ export class OrkestratorGateway {
     }
     this.clients.clear();
     this.eventReplay.releaseRetained();
+    this.terminalWebSocket.close();
     for (const proxyRequest of this.proxyRequests) {
       proxyRequest.destroy(new Error("Remote gateway stopped"));
     }
@@ -2805,7 +2822,22 @@ export class OrkestratorGateway {
     // response can otherwise keep a listener's close callback pending forever.
     for (const socket of this.sockets) socket.destroy();
     await Promise.all(servers.map((server) => new Promise<void>((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
+      let settled = false;
+      const settle = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(callbackFallback);
+        if (error) reject(error);
+        else resolve();
+      };
+      // Bun's Node-HTTP compatibility layer can omit the close callback after a
+      // WebSocket upgrade even once every tracked raw socket is destroyed. The
+      // listener has already stopped accepting and all connections below are
+      // force-closed, so bound that bookkeeping wait instead of hanging backend
+      // shutdown forever.
+      const callbackFallback = setTimeout(() => settle(), 250);
+      callbackFallback.unref?.();
+      server.close((error) => settle(error ?? undefined));
       // Explicitly disabling remote access must also revoke active keep-alive,
       // static-file, and streaming proxy connections. `server.close()` alone
       // waits indefinitely for active responses to finish.
@@ -2816,6 +2848,7 @@ export class OrkestratorGateway {
   }
 
   emit(event: string, payload: unknown): void {
+    this.terminalWebSocket.emit(event, payload);
     const droppable = event.startsWith(DROPPABLE_EVENT_PREFIX);
     // Authoritative state is revisioned and retained even while no renderer is
     // mounted. Terminal bytes have their own generation/revision snapshot

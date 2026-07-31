@@ -163,6 +163,7 @@ The gateway reserves the `/__orkestrator` path prefix.
 | `/__orkestrator/status` | Small authenticated connection check used by the public client. |
 | `/__orkestrator/invoke` | Authenticated backend command bridge used by the browser renderer. |
 | `/__orkestrator/events` | Server-sent event stream for backend events. |
+| `/__orkestrator/terminal` | Authenticated multiplexed terminal WebSocket (`orkestrator-terminal.v1`); HTTP/SSE remains the compatibility fallback. |
 | `GET /__orkestrator/metrics` | Returns authenticated privacy-safe gateway counters, byte totals, timings, and recent sanitized samples for milestone measurements. |
 | `POST /__orkestrator/client-metrics` | Accepts authenticated, sanitized browser and `WKWebView` boot/resource timing reports. |
 | `/__orkestrator/proxy/loopback/<port>/...` | Authenticated proxy to `http://127.0.0.1:<port>/...` on the desktop host. |
@@ -179,6 +180,32 @@ That browser implementation:
 - subscribes to backend events through `/__orkestrator/events`
 - falls back to browser clipboard APIs where available
 - returns limited browser-safe fallbacks for desktop-only APIs such as native file dialogs and window dragging
+
+### Terminal transport rollout
+
+The multiplexed terminal WebSocket is implemented but remains opt-in while the
+real-device latency and transfer measurements in
+[`efficiency/milestone-5.md`](efficiency/milestone-5.md) are collected. To opt a
+browser profile in, run this once in its developer console and reload:
+
+```js
+localStorage.setItem("orkestrator-terminal-transport", "websocket")
+```
+
+Use `"http-sse"` (or remove the key) to return to the compatibility transport.
+Embedded clients can instead pass `terminalTransport: "websocket"` to
+`createBrowserGatewayApi`.
+
+One adapter-owned socket serves every consumed PTY. Terminal components update
+the adapter's desired-subscription registry; they do not own the connection or
+the backend process. A failed or unsupported socket automatically restores the
+HTTP input batcher and filtered terminal SSE streams while bounded reconnects
+continue. Reconnects, foreground transitions, revision gaps, generation
+changes, and slow-channel desyncs reconcile through
+`get_terminal_output_snapshot`.
+
+The fallback will remain available for at least one release after WebSocket is
+made the default and will not be removed before v2.9.0.
 
 Loopback service URLs are rewritten only in gateway mode. For example:
 

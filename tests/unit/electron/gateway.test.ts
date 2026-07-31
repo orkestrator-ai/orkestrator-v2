@@ -4,10 +4,12 @@ import {
   createServer,
   request as httpRequest,
   type IncomingHttpHeaders,
+  type IncomingMessage,
   type OutgoingHttpHeaders,
   type Server,
   type ServerResponse,
 } from "node:http";
+import type { Duplex } from "node:stream";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
@@ -20,6 +22,17 @@ import {
   gzipSync,
 } from "node:zlib";
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { WebSocket } from "ws";
+import {
+  decodeTerminalBinaryFrame,
+  encodeTerminalBinaryFrame,
+  parseTerminalWebSocketServerControlFrame,
+  TERMINAL_BINARY_FRAME_TYPE,
+  TERMINAL_WEBSOCKET_CLOSE,
+  TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES,
+  TERMINAL_WEBSOCKET_SUBPROTOCOL,
+  type TerminalWebSocketServerControlFrame,
+} from "@orkestrator/protocol/terminal-websocket";
 import {
   activeDynamicCompressionCount,
   AggregateByteBudget,
@@ -92,6 +105,7 @@ import {
   parseGatewayCursor,
 } from "../../../apps/backend/src/gateway-event-replay";
 import { createCommandRegistry } from "../../../apps/backend/src/core/commands";
+import { TerminalWebSocketGateway } from "../../../apps/backend/src/terminal-websocket-server";
 
 const tempDirs: string[] = [];
 const gateways: OrkestratorGateway[] = [];
@@ -447,6 +461,329 @@ afterEach(async () => {
     server.close(() => resolve());
   })));
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+type WebSocketInbox = {
+  next(): Promise<{ data: Buffer; binary: boolean }>;
+};
+
+function websocketInbox(socket: WebSocket): WebSocketInbox {
+  const queued: Array<{ data: Buffer; binary: boolean }> = [];
+  const waiting: Array<(message: { data: Buffer; binary: boolean }) => void> = [];
+  socket.on("message", (data, binary) => {
+    const message = { data: Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer), binary };
+    const resolve = waiting.shift();
+    if (resolve) resolve(message);
+    else queued.push(message);
+  });
+  return {
+    next: () => {
+      const message = queued.shift();
+      return message ? Promise.resolve(message) : new Promise((resolve) => waiting.push(resolve));
+    },
+  };
+}
+
+async function nextTerminalControl(
+  inbox: WebSocketInbox,
+  type: TerminalWebSocketServerControlFrame["type"],
+): Promise<TerminalWebSocketServerControlFrame> {
+  while (true) {
+    const message = await inbox.next();
+    if (message.binary) continue;
+    const frame = parseTerminalWebSocketServerControlFrame(message.data.toString("utf8"));
+    if (frame.type === type) return frame;
+  }
+}
+
+describe("gateway terminal WebSocket", () => {
+  test("rejects missing origins and unsupported protocol versions before upgrade", async () => {
+    const terminalGateway = new TerminalWebSocketGateway({
+      backend: { invoke: async () => undefined },
+      tokenMatches: (request) => Boolean(request.headers.cookie),
+      originAllowed: () => true,
+      logger: createLogger(),
+    });
+    const rejectedStatus = (protocol: string, headers: IncomingHttpHeaders = {}) => {
+      let response = "";
+      const socket = {
+        end: mock((chunk: string) => { response = chunk; }),
+        destroy: mock(() => undefined),
+      } as unknown as Duplex;
+      terminalGateway.handleUpgrade({
+        url: "/__orkestrator/terminal",
+        headers: { "sec-websocket-protocol": protocol, ...headers },
+      } as IncomingMessage, socket, Buffer.alloc(0));
+      return Number.parseInt(response.split("\r\n", 1)[0]?.split(" ")[1] ?? "0", 10);
+    };
+
+    expect(rejectedStatus(TERMINAL_WEBSOCKET_SUBPROTOCOL, { cookie: "auth-cookie" })).toBe(403);
+    expect(rejectedStatus("orkestrator-terminal.v999")).toBe(426);
+    terminalGateway.close();
+  });
+
+  test("authenticates direct sockets and rejects a bad first credential", async () => {
+    const { info } = await startGateway();
+    const socketUrl = `${info.url.replace(/^http/, "ws")}__orkestrator/terminal`;
+    const socket = new WebSocket(socketUrl, TERMINAL_WEBSOCKET_SUBPROTOCOL);
+    const inbox = websocketInbox(socket);
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    socket.send(JSON.stringify({ type: "authenticate", version: 1, token: "wrong-token-value" }));
+    const error = await nextTerminalControl(inbox, "error");
+    expect(error).toMatchObject({ type: "error", code: "authentication-required", fatal: true });
+    socket.terminate();
+  });
+
+  test("multiplexes isolated terminal channels, raw input, resize, and retained replay", async () => {
+    const terminalState = new Map([
+      ["session-a", { generation: 1, revision: 0, deltas: [] as Array<{ revision: number; text: string }> }],
+      ["session-b", { generation: 7, revision: 0, deltas: [] as Array<{ revision: number; text: string }> }],
+    ]);
+    const operations: Array<{ command: string; args: Record<string, unknown> }> = [];
+    const backend = {
+      invoke: mock(async (command: string, args: Record<string, unknown>) => {
+        operations.push({ command, args });
+        const state = terminalState.get(String(args.sessionId));
+        if (command === "get_terminal_session") return { id: args.sessionId, running: Boolean(state) };
+        if (command === "get_terminal_output_snapshot") {
+          if (!state) return { output: "", generation: 0, revision: 0, truncated: false };
+          const knownGeneration = args.sinceGeneration;
+          const knownRevision = args.sinceRevision;
+          if (knownGeneration === state.generation && typeof knownRevision === "number") {
+            const deltas = state.deltas.filter((entry) => entry.revision > knownRevision);
+            return {
+              mode: "delta",
+              output: deltas.map((entry) => entry.text).join(""),
+              deltas,
+              generation: state.generation,
+              revision: state.revision,
+              truncated: false,
+            };
+          }
+          return { output: "", generation: state.generation, revision: state.revision, truncated: false };
+        }
+        return undefined;
+      }),
+    };
+    const { gateway, info } = await startGateway({ backend });
+    const connect = async () => {
+      const socket = new WebSocket(
+        `${info.url.replace(/^http/, "ws")}__orkestrator/terminal`,
+        TERMINAL_WEBSOCKET_SUBPROTOCOL,
+      );
+      const inbox = websocketInbox(socket);
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once("error", reject);
+      });
+      socket.send(JSON.stringify({ type: "authenticate", version: 1, token: info.token }));
+      expect(await nextTerminalControl(inbox, "ready")).toMatchObject({ type: "ready", version: 1 });
+      return { socket, inbox };
+    };
+
+    const first = await connect();
+    first.socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "session-a" }));
+    const subscribedA = await nextTerminalControl(first.inbox, "subscribed");
+    expect(subscribedA).toMatchObject({ type: "subscribed", sessionId: "session-a", recovery: "snapshot-required" });
+    if (subscribedA.type !== "subscribed") throw new Error("Expected subscribed frame");
+
+    first.socket.send(JSON.stringify({ type: "subscribe", requestId: 2, sessionId: "session-b" }));
+    const subscribedB = await nextTerminalControl(first.inbox, "subscribed");
+    if (subscribedB.type !== "subscribed") throw new Error("Expected subscribed frame");
+
+    const outputA = { text: "alpha", generation: 1, revision: 1 };
+    const outputB = { text: "beta", generation: 7, revision: 1 };
+    terminalState.get("session-a")!.revision = 1;
+    terminalState.get("session-a")!.deltas.push({ revision: 1, text: "alpha" });
+    terminalState.get("session-b")!.revision = 1;
+    terminalState.get("session-b")!.deltas.push({ revision: 1, text: "beta" });
+    gateway.emit("terminal-output-session-a", outputA);
+    gateway.emit("terminal-output-session-b", outputB);
+    const binaryFrames = [];
+    while (binaryFrames.length < 2) {
+      const message = await first.inbox.next();
+      if (message.binary) binaryFrames.push(decodeTerminalBinaryFrame(message.data));
+    }
+    expect(binaryFrames.map((frame) => [frame.channelId, new TextDecoder().decode(frame.bytes)]).sort())
+      .toEqual([
+        [subscribedA.channelId, "alpha"],
+        [subscribedB.channelId, "beta"],
+      ].sort());
+
+    first.socket.send(encodeTerminalBinaryFrame({
+      type: TERMINAL_BINARY_FRAME_TYPE.input,
+      channelId: subscribedA.channelId,
+      generation: 1,
+      revision: 1,
+      bytes: new TextEncoder().encode("pwd\r"),
+    }));
+    first.socket.send(JSON.stringify({ type: "resize", channelId: subscribedA.channelId, cols: 120, rows: 40 }));
+    await waitUntil(
+      () => operations.some((entry) => entry.command === "terminal_resize"),
+      "terminal input and resize were not routed",
+    );
+    expect(operations).toContainEqual({ command: "terminal_write", args: { sessionId: "session-a", data: "pwd\r" } });
+    expect(operations).toContainEqual({ command: "terminal_resize", args: { sessionId: "session-a", cols: 120, rows: 40 } });
+
+    first.socket.terminate();
+    expect(operations.some((entry) => entry.command === "detach_terminal" || entry.command === "close_local_terminal_session")).toBe(false);
+
+    const second = await connect();
+    second.socket.send(JSON.stringify({
+      type: "subscribe",
+      requestId: 3,
+      sessionId: "session-a",
+      knownGeneration: 1,
+      knownRevision: 0,
+    }));
+    expect(await nextTerminalControl(second.inbox, "subscribed")).toMatchObject({ recovery: "delta", baseRevision: 0, targetRevision: 1 });
+    let replay;
+    do {
+      const message = await second.inbox.next();
+      if (message.binary) replay = decodeTerminalBinaryFrame(message.data);
+    } while (!replay);
+    expect(new TextDecoder().decode(replay.bytes)).toBe("alpha");
+    expect(replay.revision).toBe(1);
+
+    second.socket.send(JSON.stringify({ type: "subscribe", requestId: 4, sessionId: "session-b" }));
+    const secondSubscribedB = await nextTerminalControl(second.inbox, "subscribed");
+    if (secondSubscribedB.type !== "subscribed") throw new Error("Expected subscribed frame");
+    // Fill only A's application queue before its scheduled flush. Crossing the
+    // per-channel soft limit must desync A without preventing B's next frame.
+    for (let revision = 2; revision <= 40; revision += 1) {
+      const text = "x".repeat(16 * 1024);
+      terminalState.get("session-a")!.revision = revision;
+      terminalState.get("session-a")!.deltas.push({ revision, text });
+      gateway.emit("terminal-output-session-a", { text, generation: 1, revision });
+    }
+    terminalState.get("session-b")!.revision = 2;
+    terminalState.get("session-b")!.deltas.push({ revision: 2, text: "still-fast" });
+    gateway.emit("terminal-output-session-b", { text: "still-fast", generation: 7, revision: 2 });
+    let sawSlowDesync = false;
+    let sawFastOutput = false;
+    while (!sawSlowDesync || !sawFastOutput) {
+      const message = await second.inbox.next();
+      if (message.binary) {
+        const frame = decodeTerminalBinaryFrame(message.data);
+        if (frame.channelId === secondSubscribedB.channelId && new TextDecoder().decode(frame.bytes) === "still-fast") {
+          sawFastOutput = true;
+        }
+      } else {
+        const frame = parseTerminalWebSocketServerControlFrame(message.data.toString("utf8"));
+        if (frame.type === "desync" && frame.reason === "slow-consumer") sawSlowDesync = true;
+      }
+    }
+    expect(sawSlowDesync).toBe(true);
+    expect(sawFastOutput).toBe(true);
+    second.socket.terminate();
+  });
+
+  test("preserves accepted input order across a socket reconnect", async () => {
+    let releaseFirstWrite!: () => void;
+    const firstWriteBlocked = new Promise<void>((resolve) => { releaseFirstWrite = resolve; });
+    const writes: string[] = [];
+    const backend = {
+      invoke: mock(async (command: string, args: Record<string, unknown>) => {
+        if (command === "get_terminal_session") return { id: args.sessionId, running: true };
+        if (command === "get_terminal_output_snapshot") {
+          return { output: "", generation: 1, revision: 0, truncated: false };
+        }
+        if (command === "terminal_write") {
+          writes.push(String(args.data));
+          if (args.data === "first") await firstWriteBlocked;
+        }
+        return undefined;
+      }),
+    };
+    const { info } = await startGateway({ backend });
+    const connect = async (requestId: number) => {
+      const socket = new WebSocket(
+        `${info.url.replace(/^http/, "ws")}__orkestrator/terminal`,
+        TERMINAL_WEBSOCKET_SUBPROTOCOL,
+      );
+      const inbox = websocketInbox(socket);
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once("error", reject);
+      });
+      socket.send(JSON.stringify({ type: "authenticate", version: 1, token: info.token }));
+      await nextTerminalControl(inbox, "ready");
+      socket.send(JSON.stringify({ type: "subscribe", requestId, sessionId: "ordered-session" }));
+      const subscribed = await nextTerminalControl(inbox, "subscribed");
+      if (subscribed.type !== "subscribed") throw new Error("Expected subscribed frame");
+      return { socket, channelId: subscribed.channelId };
+    };
+
+    const first = await connect(1);
+    first.socket.send(encodeTerminalBinaryFrame({
+      type: TERMINAL_BINARY_FRAME_TYPE.input,
+      channelId: first.channelId,
+      generation: 1,
+      revision: 1,
+      bytes: new TextEncoder().encode("first"),
+    }));
+    await waitUntil(() => writes.length === 1, "first terminal write did not begin");
+    first.socket.terminate();
+
+    const second = await connect(2);
+    second.socket.send(encodeTerminalBinaryFrame({
+      type: TERMINAL_BINARY_FRAME_TYPE.input,
+      channelId: second.channelId,
+      generation: 1,
+      revision: 1,
+      bytes: new TextEncoder().encode("second"),
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(writes).toEqual(["first"]);
+    releaseFirstWrite();
+    await waitUntil(() => writes.length === 2, "reconnected terminal write did not run");
+    expect(writes).toEqual(["first", "second"]);
+    second.socket.terminate();
+  });
+
+  test("disconnects a non-reading socket when its aggregate queue reaches the hard limit", async () => {
+    const backend = {
+      invoke: mock(async (command: string, args: Record<string, unknown>) => {
+        if (command === "get_terminal_session") return { id: args.sessionId, running: true };
+        if (command === "get_terminal_output_snapshot") {
+          return { output: "", generation: 1, revision: 0, truncated: false };
+        }
+        return undefined;
+      }),
+    };
+    const { gateway, info } = await startGateway({ backend });
+    const socket = new WebSocket(
+      `${info.url.replace(/^http/, "ws")}__orkestrator/terminal`,
+      TERMINAL_WEBSOCKET_SUBPROTOCOL,
+    );
+    const inbox = websocketInbox(socket);
+    await new Promise<void>((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    socket.send(JSON.stringify({ type: "authenticate", version: 1, token: info.token }));
+    await nextTerminalControl(inbox, "ready");
+    socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "flood" }));
+    await nextTerminalControl(inbox, "subscribed");
+
+    const close = new Promise<number>((resolve) => socket.once("close", resolve));
+    // Model a non-reading transport whose kernel/write backlog has reached the
+    // hard cap. The next frame must disconnect instead of growing the queue.
+    const terminalWebSocket = (gateway as unknown as {
+      terminalWebSocket: { sockets: Set<{ ws: WebSocket }> };
+    }).terminalWebSocket;
+    const serverState = [...terminalWebSocket.sockets][0];
+    if (!serverState) throw new Error("Expected terminal WebSocket state");
+    Object.defineProperty(serverState.ws, "bufferedAmount", {
+      configurable: true,
+      value: TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES,
+    });
+    gateway.emit("terminal-output-flood", { text: "x", generation: 1, revision: 1 });
+    expect(await close).toBe(TERMINAL_WEBSOCKET_CLOSE.slowConsumer);
+  });
 });
 
 describe("remote gateway", () => {

@@ -1,6 +1,6 @@
 # Milestone 5 — Multiplexed terminal WebSocket
 
-Status: In progress — protocol and HTTP input batching implemented
+Status: In progress — implementation complete; opt-in measurement rollout remains
 
 Depends on: Milestone 4
 
@@ -49,52 +49,52 @@ Primary areas:
 
 ### Gateway implementation
 
-- [ ] Open one socket per gateway client.
-- [ ] Multiplex every client terminal over that socket.
-- [ ] Authorize every terminal subscription.
-- [ ] Preserve session filtering.
-- [ ] Apply soft and hard byte limits per socket.
-- [ ] Apply limits and fairness per terminal channel.
-- [ ] Prevent one slow terminal from starving other channels.
-- [ ] Emit an explicit desync for dropped terminal output.
-- [ ] Preserve generation and revision gap detection.
-- [ ] Keep snapshot commands as the reconnect authority.
-- [ ] Clean up socket resources without stopping backend terminal processes.
+- [x] Open one socket per gateway client.
+- [x] Multiplex every client terminal over that socket.
+- [x] Authorize every terminal subscription.
+- [x] Preserve session filtering.
+- [x] Apply soft and hard byte limits per socket.
+- [x] Apply limits and fairness per terminal channel.
+- [x] Prevent one slow terminal from starving other channels.
+- [x] Emit an explicit desync for dropped terminal output.
+- [x] Preserve generation and revision gap detection.
+- [x] Keep snapshot commands as the reconnect authority.
+- [x] Clean up socket resources without stopping backend terminal processes.
 
 ### Browser adapter
 
-- [ ] Own the socket in the gateway adapter, not a terminal React component.
-- [ ] Maintain an authoritative registry of desired terminal subscriptions.
-- [ ] Reconnect with bounded backoff.
-- [ ] Resubscribe after reconnect and iOS foreground transitions.
-- [ ] Reconcile every channel from its known generation and revision.
-- [ ] Route binary bytes without base64 conversion.
-- [ ] Preserve HTTP/SSE fallback for unsupported or failed WebSocket sessions.
-- [ ] Ensure component unmount only updates consumption, not backend lifetime.
+- [x] Own the socket in the gateway adapter, not a terminal React component.
+- [x] Maintain an authoritative registry of desired terminal subscriptions.
+- [x] Reconnect with bounded backoff.
+- [x] Resubscribe after reconnect and iOS foreground transitions.
+- [x] Reconcile every channel from its known generation and revision.
+- [x] Route binary bytes without base64 conversion.
+- [x] Preserve HTTP/SSE fallback for unsupported or failed WebSocket sessions.
+- [x] Ensure component unmount only updates consumption, not backend lifetime.
 
 ### Compatibility rollout
 
-- [ ] Add a transport option or negotiated fallback.
-- [ ] Start with opt-in WebSocket use.
+- [x] Add a transport option or negotiated fallback.
+- [x] Start with opt-in WebSocket use.
 - [ ] Compare bytes, latency, memory, and reconnect correctness.
 - [ ] Make WebSocket the default only after target-client verification.
-- [ ] Keep HTTP/SSE available for one compatibility release.
-- [ ] Set and document the earliest fallback-removal release.
+- [x] Keep HTTP/SSE available for one compatibility release.
+- [x] Set and document the earliest fallback-removal release.
 
 ## Required tests
 
-- [ ] Authentication and origin rejection.
-- [ ] Protocol version and malformed-frame rejection.
-- [ ] Channel subscribe, unsubscribe, resize, input, and output.
-- [ ] Multiple terminals share one socket without cross-session bytes.
-- [ ] Input order survives batching and reconnect boundaries.
-- [ ] Generation and revision gaps trigger snapshot recovery.
-- [ ] Retained gaps recover incrementally.
-- [ ] One slow channel does not starve another.
-- [ ] A non-reading socket is bounded and disconnected at the hard limit.
-- [ ] Socket close releases adapter resources but not terminal processes.
-- [ ] Reconnect rebuilds the desired subscription set.
-- [ ] HTTP/SSE fallback remains functional.
+- [x] Authentication and origin rejection.
+- [x] Protocol version and malformed-frame rejection.
+- [x] Channel subscribe, unsubscribe, resize, input, and output.
+- [x] Multiple terminals share one socket without cross-session bytes.
+- [x] Input order survives batching and reconnect boundaries.
+- [x] Generation and revision gaps trigger snapshot recovery.
+- [x] Retained gaps recover incrementally.
+- [x] One slow channel does not starve another.
+- [x] A non-reading socket is bounded and disconnected at the hard limit.
+- [x] Socket close releases adapter resources but not terminal processes.
+- [x] Reconnect rebuilds the desired subscription set.
+- [x] HTTP/SSE fallback remains functional.
 
 ## Manual verification
 
@@ -120,16 +120,16 @@ bun run test
 
 ## Exit criteria
 
-- [ ] Ordinary typing uses neither one request per character nor base64 on the
+- [x] Ordinary typing uses neither one request per character nor base64 on the
       WebSocket path.
 - [ ] Key-to-echo p95 does not regress on LAN.
 - [ ] Key-to-echo p95 improves or remains stable at 100 ms RTT.
 - [ ] A 1 MiB output workload transfers materially fewer bytes.
-- [ ] Socket and per-channel memory remain bounded under slow readers.
+- [x] Socket and per-channel memory remain bounded under slow readers.
 - [ ] All disconnect and restart cases recover from authoritative state.
-- [ ] Multiple terminals remain isolated and fair.
-- [ ] HTTP/SSE fallback remains available and tested.
-- [ ] Focused tests, typechecks, and the full suite pass.
+- [x] Multiple terminals remain isolated and fair.
+- [x] HTTP/SSE fallback remains available and tested.
+- [x] Focused tests, typechecks, and the full root suite pass.
 
 ## Evidence and decisions
 
@@ -174,5 +174,23 @@ Initial implementation evidence:
   - backend, web, desktop, and protocol TypeScript checks: passed;
   - renderer production build: passed.
 - WebSocket is not yet the default. Baseline latency/transfer measurements,
-  gateway implementation, browser socket ownership, and compatibility results
-  remain to be recorded.
+  real-device compatibility results, and the default-promotion decision remain
+  to be recorded.
+- Gateway implementation: `apps/backend/src/terminal-websocket-server.ts`,
+  attached to each existing HTTP listener from `apps/backend/src/gateway.ts`.
+- Accepted input and resize operations use a gateway-owned per-session ordering
+  tail, so reconnecting onto a new channel cannot overtake work accepted from
+  the previous socket. Hard-limit closure has a bounded forced-termination
+  backstop for peers that do not complete the close handshake.
+- Browser ownership and opt-in fallback:
+  `apps/web/src/lib/native/terminal-websocket-client.ts` and
+  `apps/web/src/lib/native/web-gateway.ts`.
+- Retained snapshot deltas now preserve revision boundaries for binary replay;
+  the additive `deltas` field is ignored by older HTTP clients.
+- Rollout: `http-sse` remains the default. Browser profiles opt in through
+  `orkestrator-terminal-transport=websocket`; fallback removal is no earlier
+  than v2.9.0 and still requires one full compatibility release after default
+  promotion.
+- Final automated verification: 161 gateway tests, 31 terminal protocol tests,
+  133 focused browser/terminal tests, backend and web TypeScript checks, and the
+  3,574-test root suite (3,573 passed, 1 environment-dependent test skipped).

@@ -1946,6 +1946,22 @@ describe("useTerminal reconnect behavior", () => {
     expect(unlistenMock).toHaveBeenCalledTimes(1);
     expect(result.current.sessionId).toBeNull();
   });
+
+  it("releases only renderer consumption when an ephemeral terminal unmounts", async () => {
+    const { result, unmount } = renderHook(() =>
+      useTerminal({ containerId: "container-1", persistSession: false }),
+    );
+    await act(async () => {
+      await result.current.connect();
+    });
+    await waitFor(() => expect(result.current.sessionId).toBe("session-new-container"));
+
+    unmount();
+
+    expect(unlistenMock).toHaveBeenCalledTimes(1);
+    expect(detachTerminalMock).not.toHaveBeenCalled();
+    expect(closeLocalTerminalSessionMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("decodeTerminalOutputPayload", () => {

@@ -16,6 +16,11 @@ import {
   TerminalHttpInputBatcher,
   type TerminalInputCommand,
 } from "@/lib/native/terminal-input-batcher";
+import {
+  TerminalWebSocketClient,
+  terminalWebSocketUrl,
+  type TerminalSocketPayload,
+} from "@/lib/native/terminal-websocket-client";
 
 const GATEWAY_PREFIX = "/__orkestrator";
 /** How many recently closed terminal input queues stay rejected. */
@@ -32,6 +37,7 @@ const GATEWAY_CURSOR_EVENT = "gateway.cursor";
  * still retrying for us.
  */
 const EVENT_SOURCE_CLOSED = 2;
+export const TERMINAL_TRANSPORT_STORAGE_KEY = "orkestrator-terminal-transport";
 
 type EventCallback<T> = (payload: T) => void;
 type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
@@ -70,10 +76,23 @@ export interface BrowserGatewayOptions {
   terminalInputMaxBatchBytes?: number;
   terminalInputMaxQueuedBytes?: number;
   terminalInputSendTimeoutMs?: number;
+  /** Opt-in during the compatibility release; failures fall back to HTTP/SSE. */
+  terminalTransport?: "http-sse" | "websocket";
+  terminalWebSocketFactory?: (url: string, protocols: string | string[]) => WebSocket;
+  terminalWebSocketReconnectDelayMs?: number;
 }
 
 function normalizedBaseUrl(value: string | undefined): string | undefined {
   return value?.trim().replace(/\/+$/, "") || undefined;
+}
+
+function terminalTransportEnabled(options: BrowserGatewayOptions): boolean {
+  if (options.terminalTransport) return options.terminalTransport === "websocket";
+  try {
+    return localStorage.getItem(TERMINAL_TRANSPORT_STORAGE_KEY) === "websocket";
+  } catch {
+    return false;
+  }
 }
 
 function parseEventBlock(block: string): { data: string | null; id: string | null } {
@@ -112,6 +131,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     source: EventSource | null;
     controller: AbortController | null;
     reconnectTimer: ReturnType<typeof setTimeout> | null;
+    socketUnlisten: (() => void) | null;
     ready: Promise<void>;
     resolveReady: () => void;
     readyResolved: boolean;
@@ -152,6 +172,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   const credentials = bearerToken || baseUrl ? "omit" as const : "same-origin" as const;
+  const websocketTerminalsEnabled = terminalTransportEnabled(options);
+  let terminalFallbackActive = !websocketTerminalsEnabled;
+  let terminalSocket: TerminalWebSocketClient | null = null;
 
   /**
    * Receive every authoritative state event, but only terminal byte streams
@@ -594,7 +617,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     });
   };
 
-  const startTerminalEventStream = (stream: TerminalEventStream) => {
+  const startTerminalEventFallback = (stream: TerminalEventStream) => {
     if (stream.closed || stream.source || stream.controller) return;
     if (bearerToken || baseUrl) {
       const controller = new AbortController();
@@ -625,7 +648,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           ) {
             stream.reconnectTimer = setTimeout(() => {
               stream.reconnectTimer = null;
-              startTerminalEventStream(stream);
+              startTerminalEventFallback(stream);
             }, options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS);
           }
         }
@@ -633,6 +656,57 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       return;
     }
     refreshBrowserTerminalEventSource();
+  };
+
+  const stopTerminalEventFallbacks = () => {
+    terminalFallbackActive = false;
+    clearBrowserTerminalReconnectTimer();
+    browserTerminalEventSource?.close();
+    browserTerminalEventSource = null;
+    browserTerminalSubscribedEvents = null;
+    browserTerminalEventSourceOpen = false;
+    for (const stream of terminalEventStreams.values()) {
+      stream.source?.close();
+      stream.source = null;
+      stream.controller?.abort();
+      stream.controller = null;
+      if (stream.reconnectTimer) clearTimeout(stream.reconnectTimer);
+      stream.reconnectTimer = null;
+    }
+  };
+
+  const ensureTerminalSocket = (): TerminalWebSocketClient => {
+    if (terminalSocket) return terminalSocket;
+    terminalSocket = new TerminalWebSocketClient({
+      url: terminalWebSocketUrl(baseUrl),
+      token: bearerToken,
+      reconnectDelayMs: options.terminalWebSocketReconnectDelayMs,
+      createSocket: options.terminalWebSocketFactory,
+      onFallbackRequired: () => {
+        terminalFallbackActive = true;
+        for (const stream of terminalEventStreams.values()) {
+          if (!stream.closed) startTerminalEventFallback(stream);
+        }
+      },
+      onSocketReady: stopTerminalEventFallbacks,
+    });
+    return terminalSocket;
+  };
+
+  const startTerminalEventStream = (stream: TerminalEventStream) => {
+    if (!websocketTerminalsEnabled) {
+      startTerminalEventFallback(stream);
+      return;
+    }
+    if (stream.closed || stream.socketUnlisten) return;
+    const sessionId = stream.event.slice(TERMINAL_OUTPUT_EVENT_PREFIX.length);
+    const socket = ensureTerminalSocket();
+    stream.socketUnlisten = socket.subscribe(sessionId, (payload: TerminalSocketPayload) => {
+      const callbacks = listeners.get(stream.event);
+      if (!callbacks) return;
+      for (const callback of callbacks) callback(payload);
+    });
+    void socket.ready(sessionId).then(() => announceTerminalStreamOpen(stream));
   };
 
   const ensureTerminalEventStream = (event: string): TerminalEventStream => {
@@ -647,6 +721,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       source: null,
       controller: null,
       reconnectTimer: null,
+      socketUnlisten: null,
       ready,
       resolveReady,
       readyResolved: false,
@@ -666,11 +741,13 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     stream.source = null;
     stream.controller?.abort();
     stream.controller = null;
+    stream.socketUnlisten?.();
+    stream.socketUnlisten = null;
     if (stream.reconnectTimer) clearTimeout(stream.reconnectTimer);
     stream.reconnectTimer = null;
     resolveTerminalStreamReady(stream);
     terminalEventStreams.delete(event);
-    if (!bearerToken && !baseUrl) refreshBrowserTerminalEventSource();
+    if (terminalFallbackActive && !bearerToken && !baseUrl) refreshBrowserTerminalEventSource();
   };
 
   const readGatewayResponse = async <T>(response: Response, fallback: string): Promise<T> => {
@@ -700,7 +777,20 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       signal,
     });
     const payload = await readGatewayResponse<{ result?: T }>(response, "Gateway command failed");
-    return payload.result as T;
+    const result = payload.result as T;
+    if (
+      command === "get_terminal_output_snapshot"
+      && typeof args?.sessionId === "string"
+      && result && typeof result === "object"
+      && Number.isSafeInteger((result as { generation?: unknown }).generation)
+      && Number.isSafeInteger((result as { revision?: unknown }).revision)
+    ) {
+      terminalSocket?.observeSnapshot(
+        args.sessionId,
+        result as unknown as { generation: number; revision: number },
+      );
+    }
+    return result;
   };
 
   const terminalInputBatcher = new TerminalHttpInputBatcher(async (request, signal) => {
@@ -830,6 +920,14 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         }
         const lifecycle = terminalLifecycleTails.get(key);
         if (lifecycle) await lifecycle;
+        if (websocketTerminalsEnabled && terminalSocket) {
+          // Drain any fallback HTTP prefix before moving this session back to
+          // the ordered socket stream.
+          await terminalInputBatcher.flush(terminalInput.command, terminalInput.sessionId);
+          if (terminalSocket.sendInput(terminalInput.sessionId, terminalInput.data)) {
+            return undefined as T;
+          }
+        }
         // Replacement can occur while this write is waiting behind a lifecycle
         // barrier, before it has entered the batcher itself.
         if (terminalInputDisposedReason) throw terminalInputDisposedReason;
@@ -837,6 +935,18 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         return undefined as T;
       }
       const queue = terminalInputQueue(command, args);
+      if (
+        queue
+        && !queue.closes
+        && !queue.starts
+        && websocketTerminalsEnabled
+        && terminalSocket
+        && typeof args?.cols === "number"
+        && typeof args.rows === "number"
+      ) {
+        await terminalInputBatcher.flush(queue.command, queue.sessionId).catch(() => undefined);
+        if (terminalSocket.resize(queue.sessionId, args.cols, args.rows)) return undefined as T;
+      }
       if (queue) return invokeWithTerminalOrdering<T>(command, args, queue);
       return invokeImmediately<T>(command, args);
     },
@@ -923,6 +1033,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           "Gateway settings request failed",
         );
         bearerToken = settings.token;
+        terminalSocket?.updateToken(settings.token);
         updateDirectGatewayToken(settings.token);
         options.onTokenChanged?.(settings.token);
         return settings;
@@ -950,6 +1061,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   browserGatewayDisposers.set(api, (reason = new Error("Browser gateway disposed")) => {
     terminalInputDisposedReason = reason;
     terminalInputBatcher.dispose(reason);
+    terminalSocket?.dispose();
+    terminalSocket = null;
+    stopTerminalEventFallbacks();
   });
   return api;
 }

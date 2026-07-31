@@ -18,17 +18,38 @@ export function ContextUsageWheel({ usage, className }: ContextUsageWheelProps) 
       <TooltipTrigger asChild>
         <button
           type="button"
-          className={cn("inline-flex items-center justify-center rounded-full", className)}
+          className={cn(
+            "inline-flex items-center justify-center rounded-full text-foreground",
+            className,
+          )}
           aria-label={`Context window ${percentRounded}% used`}
         >
-          <span
-            className="relative h-5 w-5 rounded-full"
-            style={{
-              background: `conic-gradient(hsl(var(--foreground) / 0.85) ${percentRounded}%, hsl(var(--muted-foreground) / 0.25) ${percentRounded}% 100%)`,
-            }}
+          <svg
+            aria-hidden="true"
+            className="h-5 w-5 -rotate-90"
+            viewBox="0 0 20 20"
           >
-            <span className="absolute inset-[3px] rounded-full bg-background" />
-          </span>
+            <circle
+              cx="10"
+              cy="10"
+              r="8"
+              fill="none"
+              stroke="currentColor"
+              strokeOpacity="0.2"
+              strokeWidth="3"
+            />
+            <circle
+              data-context-usage-progress
+              cx="10"
+              cy="10"
+              r="8"
+              fill="none"
+              pathLength="100"
+              stroke="currentColor"
+              strokeDasharray={`${percentRounded} ${100 - percentRounded}`}
+              strokeWidth="3"
+            />
+          </svg>
         </button>
       </TooltipTrigger>
       <TooltipContent side="top" sideOffset={8} className="px-3 py-2 text-xs leading-relaxed">

@@ -110,4 +110,73 @@ describe("BlockingPromptCard", () => {
     expect(screen.getByRole("button", { name: "Dismiss" }).parentElement?.className)
       .toContain("flex-wrap");
   });
+
+  test("fails closed automatically for a non-finite deadline", () => {
+    render(
+      <BlockingPromptCard
+        title="Approval required"
+        expiresAt={Number.NaN}
+        actions={<Button>Approve</Button>}
+      >
+        Approve command?
+      </BlockingPromptCard>,
+    );
+
+    expect(screen.getByText(/invalid deadline/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  });
+
+  test("marks a retry in progress as busy and disables only the retry control", () => {
+    render(
+      <BlockingPromptCard
+        title="Approval required"
+        state="retryable-error"
+        error="Delivery failed."
+        onRetry={() => {}}
+        retrying
+        actions={<Button>Dismiss</Button>}
+      >
+        Approve command?
+      </BlockingPromptCard>,
+    );
+
+    expect(screen.getByRole("group", { name: "Approval required" }).getAttribute("aria-busy"))
+      .toBe("true");
+    expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect((screen.getByRole("button", { name: "Dismiss" }) as HTMLButtonElement).disabled)
+      .toBe(false);
+  });
+
+  test("keeps terminal controls hidden when an error overrides the status copy", () => {
+    render(
+      <BlockingPromptCard
+        title="Approval required"
+        description="Review the command."
+        icon={<span>Custom icon</span>}
+        meta="Terminal"
+        state="withdrawn"
+        error="The provider disconnected."
+        actions={<Button>Approve</Button>}
+      >
+        Approve command?
+      </BlockingPromptCard>,
+    );
+
+    expect(screen.getByRole("alert").textContent).toContain("The provider disconnected.");
+    expect(screen.queryByText(/withdrawn and is no longer actionable/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.getByText("Review the command.")).toBeTruthy();
+    expect(screen.getByText("Custom icon")).toBeTruthy();
+    expect(screen.getByText("Terminal")).toBeTruthy();
+  });
+
+  test("derives its label and arrival announcement from a string title", () => {
+    render(
+      <BlockingPromptCard title="Approval required">Approve command?</BlockingPromptCard>,
+    );
+
+    expect(screen.getByRole("group", { name: "Approval required" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("Approval required");
+  });
 });

@@ -300,10 +300,26 @@ function patchTab(
 function tabPromptDraftKeys(tab: TmuxTabState | undefined, sessionKey: string): string[] {
   if (!tab) return [];
   return [
-    ...tab.pendingQuestions.map((q) => tmuxQuestionDraftKey(sessionKey, q.eventId)),
-    ...tab.pendingPlans.map((p) => tmuxPlanDraftKey(sessionKey, p.eventId)),
-    ...tab.pendingElicitations.map((e) => tmuxElicitationDraftKey(sessionKey, e.eventId)),
+    ...tab.pendingQuestions.flatMap((q) => [
+      tmuxQuestionDraftKey(sessionKey, q.eventId),
+      tmuxQuestionDraftKey(q.eventId),
+    ]),
+    ...tab.pendingPlans.flatMap((p) => [
+      tmuxPlanDraftKey(sessionKey, p.eventId),
+      tmuxPlanDraftKey(p.eventId),
+    ]),
+    ...tab.pendingElicitations.flatMap((e) => [
+      tmuxElicitationDraftKey(sessionKey, e.eventId),
+      tmuxElicitationDraftKey(e.eventId),
+    ]),
   ];
+}
+
+function clearTmuxPromptDraft(
+  scopedKey: string,
+  legacyKey: string,
+): void {
+  usePromptDraftStore.getState().clearDrafts([scopedKey, legacyKey]);
 }
 
 export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
@@ -402,7 +418,10 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     // The question is resolved (answered, rejected, or withdrawn), so its
     // in-progress answer draft goes with it.
     const stateKey = resolveStateKey(get().tabs, tabId);
-    usePromptDraftStore.getState().clearDraft(tmuxQuestionDraftKey(stateKey, eventId));
+    clearTmuxPromptDraft(
+      tmuxQuestionDraftKey(stateKey, eventId),
+      tmuxQuestionDraftKey(eventId),
+    );
   },
 
   addPendingPlan: (tabId, plan) =>
@@ -423,7 +442,10 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     );
     // The plan request is resolved, so its feedback draft goes with it.
     const stateKey = resolveStateKey(get().tabs, tabId);
-    usePromptDraftStore.getState().clearDraft(tmuxPlanDraftKey(stateKey, eventId));
+    clearTmuxPromptDraft(
+      tmuxPlanDraftKey(stateKey, eventId),
+      tmuxPlanDraftKey(eventId),
+    );
   },
 
   addPendingPermission: (tabId, permission) =>
@@ -465,7 +487,10 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     );
     // The elicitation is resolved, so its typed field values go with it.
     const stateKey = resolveStateKey(get().tabs, tabId);
-    usePromptDraftStore.getState().clearDraft(tmuxElicitationDraftKey(stateKey, eventId));
+    clearTmuxPromptDraft(
+      tmuxElicitationDraftKey(stateKey, eventId),
+      tmuxElicitationDraftKey(eventId),
+    );
   },
 
   replacePendingHooks: (tabId, pending) => {

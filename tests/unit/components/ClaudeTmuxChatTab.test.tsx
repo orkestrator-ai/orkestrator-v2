@@ -19,7 +19,10 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useUIStore } from "@/stores/uiStore";
-import { usePromptDraftStore } from "@/stores/promptDraftStore";
+import {
+  tmuxElicitationDraftKey,
+  usePromptDraftStore,
+} from "@/stores/promptDraftStore";
 import { clearPersistedVirtuosoState } from "@/hooks/useVirtuosoScrollState";
 import * as realTmuxClient from "@/lib/claude-tmux-client";
 import * as realBackend from "@/lib/backend";
@@ -2253,6 +2256,45 @@ Running 1 Explore agent...
     });
     expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingPermissions).toEqual([]);
     expect(screen.queryByText("Claude needs permission")).toBeNull();
+  });
+
+  test("hydrates ExitPlanMode with its authoritative deadline", async () => {
+    const requestedAt = 1_900_000_000_000;
+    dateNowSpy = spyOn(Date, "now").mockReturnValue(requestedAt);
+    getStatusMock.mockImplementation(async () => ({
+      tab_id: "tab-1",
+      environment_id: "env-1",
+      session_id: "session-existing",
+      tmux_session: "orkestrator-env1-tab1",
+      running: true,
+      transcript_path: "/tmp/session-existing.jsonl",
+      resumed: false,
+      busy: true,
+    }));
+    getPendingHooksMock.mockImplementation(async () => [{
+      id: "plan-hydrated",
+      kind: "PreToolUse",
+      requestedAt,
+      expiresAt: requestedAt + 90_000,
+      payload: {
+        tool_name: "ExitPlanMode",
+        tool_input: { plan: "Ship it" },
+      },
+    }]);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await within(
+      await screen.findByRole("group", { name: "Claude plan ready for review" }),
+    ).findByLabelText("Time remaining 1:30")).toBeTruthy();
+    expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingPlans[0])
+      .toMatchObject({ requestedAt, expiresAt: requestedAt + 90_000 });
   });
 
   test("keeps a recoverable permission card when hydrated AskUserQuestion PermissionRequest auto-allow fails", async () => {
@@ -6732,7 +6774,7 @@ Enter to confirm · Esc to cancel
     expect(prompt?.question).toBe("Choose the deployment strategy.");
   });
 
-  test("answers AskUserQuestion hooks with PreToolUse updatedInput", async () => {
+  test("preserves an AskUserQuestion option plus custom answer in updatedInput", async () => {
     useClaudeTmuxStore
       .getState()
       .setRunning("tab-1", true, {
@@ -6772,6 +6814,9 @@ Enter to confirm · Esc to cancel
     );
 
     fireEvent.click(screen.getByRole("button", { name: /React/ }));
+    fireEvent.change(screen.getByPlaceholderText(/Type your own answer/i), {
+      target: { value: "React, with strict TypeScript 🦊" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
@@ -6784,7 +6829,12 @@ Enter to confirm · Esc to cancel
             hookEventName: "PreToolUse",
             permissionDecision: "allow",
             updatedInput: expect.objectContaining({
-              answers: { "Which framework?": "React" },
+              answers: {
+                "Which framework?": JSON.stringify([
+                  "React",
+                  "React, with strict TypeScript 🦊",
+                ]),
+              },
             }),
           }),
         }),
@@ -7516,6 +7566,76 @@ Enter to confirm · Esc to cancel
         "env-1",
       );
     });
+  });
+
+  test("keeps sensitive MCP elicitation fields out of remountable drafts", async () => {
+    const scopedKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    useClaudeTmuxStore.getState().addPendingElicitation("tab-1", {
+      eventId: "elicit-secret",
+      mcpServerName: "credentials-mcp",
+      message: "Provide credentials",
+      mode: "form",
+      url: null,
+      requestedSchema: {
+        type: "object",
+        properties: {
+          username: { type: "string", title: "Username" },
+          apiKey: { type: "string", title: "API key" },
+          opaque: { type: "string", title: "Opaque secret", writeOnly: true },
+          passphrase: { type: "string", title: "Passphrase" },
+        },
+      },
+      payload: {},
+      receivedAt: new Date().toISOString(),
+    });
+    const draftKey = tmuxElicitationDraftKey(scopedKey, "elicit-secret");
+    usePromptDraftStore.getState().setDraftValue(draftKey, "values", {
+      username: "alice",
+      opaque: "legacy-secret",
+    });
+
+    const rendered = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    const apiKey = await screen.findByLabelText(/^API key/) as HTMLInputElement;
+    const opaque = screen.getByLabelText(/^Opaque secret/) as HTMLInputElement;
+    const passphrase = screen.getByLabelText(/^Passphrase/) as HTMLInputElement;
+    expect(apiKey.type).toBe("password");
+    expect(opaque.type).toBe("password");
+    expect(passphrase.type).toBe("password");
+    await waitFor(() => {
+      expect(usePromptDraftStore.getState().drafts.get(draftKey)).toEqual({
+        values: { username: "alice" },
+      });
+    });
+
+    fireEvent.change(apiKey, { target: { value: "live-api-secret" } });
+    fireEvent.change(opaque, { target: { value: "live-opaque-secret" } });
+    expect(usePromptDraftStore.getState().drafts.get(draftKey)).toEqual({
+      values: { username: "alice" },
+    });
+
+    rendered.unmount();
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+    expect((await screen.findByLabelText("Username") as HTMLInputElement).value)
+      .toBe("alice");
+    expect((screen.getByLabelText(/^API key/) as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText(/^Opaque secret/) as HTMLInputElement).value).toBe("");
   });
 
   test("keeps an MCP Elicitation pending when delivery fails", async () => {

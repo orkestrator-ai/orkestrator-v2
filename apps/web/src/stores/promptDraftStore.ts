@@ -122,10 +122,30 @@ export function usePromptDraftField<T>(
   field: string,
   initial: () => T,
 ): [T, Dispatch<SetStateAction<T>>] {
-  // Fallback state; also the stable once-per-mount initial value used when the
-  // store has no draft yet.
-  const [localValue, setLocalValue] = useState<T>(initial);
-  const initialRef = useRef(localValue);
+  type FieldIdentity = {
+    draftKey: string | undefined;
+    field: string;
+    value: T;
+  };
+
+  // Keep one initializer result per key/field identity. Components can be
+  // reused in-place for a different authoritative request, so carrying the old
+  // identity's fallback into the new request would leak its initial answer or
+  // navigation index.
+  const identityRef = useRef<FieldIdentity | null>(null);
+  if (
+    identityRef.current === null
+    || identityRef.current.draftKey !== draftKey
+    || identityRef.current.field !== field
+  ) {
+    identityRef.current = { draftKey, field, value: initial() };
+  }
+  const fallbackValue = identityRef.current.value;
+  const [localField, setLocalField] = useState<FieldIdentity>(() => ({
+    draftKey,
+    field,
+    value: fallbackValue,
+  }));
 
   const stored = usePromptDraftStore((state) =>
     draftKey === undefined ? undefined : state.drafts.get(draftKey)?.[field],
@@ -134,13 +154,22 @@ export function usePromptDraftField<T>(
   const setValue = useCallback<Dispatch<SetStateAction<T>>>(
     (action) => {
       if (draftKey === undefined) {
-        setLocalValue(action);
+        setLocalField((previousField) => {
+          const previous = previousField.draftKey === draftKey
+            && previousField.field === field
+            ? previousField.value
+            : identityRef.current!.value;
+          const value = typeof action === "function"
+            ? (action as (prev: T) => T)(previous)
+            : action;
+          return { draftKey, field, value };
+        });
         return;
       }
       const store = usePromptDraftStore.getState();
       const current = store.drafts.get(draftKey)?.[field];
       const previous =
-        current === undefined ? initialRef.current : (current as T);
+        current === undefined ? identityRef.current!.value : (current as T);
       const next =
         typeof action === "function"
           ? (action as (prev: T) => T)(previous)
@@ -151,7 +180,12 @@ export function usePromptDraftField<T>(
   );
 
   if (draftKey === undefined) {
-    return [localValue, setValue];
+    return [
+      localField.draftKey === draftKey && localField.field === field
+        ? localField.value
+        : fallbackValue,
+      setValue,
+    ];
   }
-  return [stored === undefined ? initialRef.current : (stored as T), setValue];
+  return [stored === undefined ? fallbackValue : (stored as T), setValue];
 }

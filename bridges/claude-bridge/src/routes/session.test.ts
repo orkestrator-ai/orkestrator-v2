@@ -1298,6 +1298,33 @@ describe("session routes", () => {
       });
     });
 
+    test("preserves a single-select option plus custom answer without ambiguity", async () => {
+      mockGetPendingQuestions.mockImplementationOnce(() => [
+        {
+          id: "q-option-custom",
+          sessionId: "s-1",
+          questions: [
+            {
+              question: "Pick a color",
+              header: "Color",
+              options: [{ label: "Red" }],
+              multiSelect: false,
+            },
+          ],
+        },
+      ]);
+
+      const res = await jsonRequest(
+        "POST",
+        "/session/s-1/questions/q-option-custom/answer",
+        { answers: [["Red", "Magenta, with sparkle 🦊"]] },
+      );
+      expect(res.status).toBe(200);
+      expect(mockAnswerQuestion.mock.calls[0]?.[1]).toEqual({
+        "Pick a color": JSON.stringify(["Red", "Magenta, with sparkle 🦊"]),
+      });
+    });
+
     test("maps answers to multiple questions in order", async () => {
       mockGetPendingQuestions.mockImplementationOnce(() => [
         {
@@ -1320,7 +1347,7 @@ describe("session routes", () => {
       expect(callArgs[1]).toEqual({ "First?": "a", "Second?": "b" });
     });
 
-    test("handles missing answer slots as empty strings", async () => {
+    test("rejects missing answer slots instead of resolving a partial response", async () => {
       mockGetPendingQuestions.mockImplementationOnce(() => [
         {
           id: "q-4",
@@ -1337,9 +1364,8 @@ describe("session routes", () => {
         "/session/s-1/questions/q-4/answer",
         { answers: [["a"]] }, // only one answer for two questions
       );
-      expect(res.status).toBe(200);
-      const callArgs = mockAnswerQuestion.mock.calls[0];
-      expect(callArgs[1]).toEqual({ "Q1?": "a", "Q2?": "" });
+      expect(res.status).toBe(400);
+      expect(mockAnswerQuestion).not.toHaveBeenCalled();
     });
 
     test("returns 400 when answers is missing", async () => {
@@ -1358,6 +1384,78 @@ describe("session routes", () => {
         { answers: "not-an-array" },
       );
       expect(res.status).toBe(400);
+    });
+
+    test("rejects malformed nested answers without resolving the question", async () => {
+      const pending = {
+        id: "q-malformed",
+        sessionId: "s-1",
+        questions: [
+          { question: "Pick?", header: "P", options: [{ label: "a" }] },
+        ],
+      };
+      for (const answers of [
+        ["not-an-array"],
+        [["valid", 42]],
+        [[{ label: "forged" }]],
+      ]) {
+        mockGetPendingQuestions.mockImplementationOnce(() => [pending]);
+        const res = await jsonRequest(
+          "POST",
+          "/session/s-1/questions/q-malformed/answer",
+          { answers },
+        );
+        expect(res.status).toBe(400);
+      }
+      expect(mockAnswerQuestion).not.toHaveBeenCalled();
+    });
+
+    test("rejects extra question rows and bounded-answer overflows", async () => {
+      const pending = {
+        id: "q-bounded",
+        sessionId: "s-1",
+        questions: [
+          { question: "Pick?", header: "P", options: [{ label: "a" }] },
+        ],
+      };
+      const invalidAnswers = [
+        [[]],
+        [["a"], ["extra"]],
+        [Array.from({ length: 17 }, (_, index) => `answer-${index}`)],
+        [["x".repeat(16_385)]],
+      ];
+      for (const answers of invalidAnswers) {
+        mockGetPendingQuestions.mockImplementationOnce(() => [pending]);
+        const res = await jsonRequest(
+          "POST",
+          "/session/s-1/questions/q-bounded/answer",
+          { answers },
+        );
+        expect(res.status).toBe(400);
+      }
+      expect(mockAnswerQuestion).not.toHaveBeenCalled();
+    });
+
+    test("rejects a collectively oversized answer payload", async () => {
+      const questions = Array.from({ length: 16 }, (_, index) => ({
+        question: `Question ${index}?`,
+        header: String(index),
+        options: [],
+      }));
+      mockGetPendingQuestions.mockImplementationOnce(() => [{
+        id: "q-oversized",
+        sessionId: "s-1",
+        questions,
+      }]);
+      const answers = questions.map(() =>
+        Array.from({ length: 16 }, () => "x".repeat(1_100)));
+      const res = await jsonRequest(
+        "POST",
+        "/session/s-1/questions/q-oversized/answer",
+        { answers },
+      );
+      expect(res.status).toBe(400);
+      expect(mockAnswerQuestion).not.toHaveBeenCalled();
     });
 
     /**

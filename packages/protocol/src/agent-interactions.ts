@@ -22,7 +22,13 @@ export function serializeClaudeQuestionAnswer(
   values: readonly string[],
   multiple: boolean,
 ): string {
-  return multiple ? JSON.stringify(values) : values[0] ?? "";
+  // Claude's UI deliberately permits a single-select option and an additional
+  // custom answer. Preserve that long-standing pair instead of silently
+  // dropping everything after the first value. JSON is also the only lossless
+  // representation when a value itself contains commas, quotes, or unicode.
+  return multiple || values.length > 1
+    ? JSON.stringify(values)
+    : values[0] ?? "";
 }
 
 export const AGENT_INTERACTION_LIMITS = Object.freeze({

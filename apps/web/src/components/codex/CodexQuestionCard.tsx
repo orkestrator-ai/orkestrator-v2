@@ -34,9 +34,10 @@ export function CodexQuestionCard({
       id: question.id,
       header: question.header,
       question: question.question,
-      // The app-server response is an array and permits more than one selected
-      // option. Keep that fidelity instead of forcing a radio-button answer.
-      multiSelect: true,
+      // Codex request_user_input choices are mutually exclusive. The app-server
+      // wraps the selected value in an array on the wire, but that response
+      // shape does not make the question multi-select.
+      multiSelect: false,
       allowCustomAnswer: question.isOther || !question.options?.length,
       secret: question.isSecret,
       options: question.options?.map((option, index) => ({
@@ -113,6 +114,11 @@ export function CodexQuestionCard({
       } catch {
         // Keep the authoritative card until the normal snapshot path can
         // establish whether the cancel reached Codex.
+        return {
+          applied: false,
+          retryable: false,
+          message: "The cancellation outcome is unknown. Reconnect or refresh Codex before trying again.",
+        };
       }
     }
     return false;
@@ -129,6 +135,7 @@ export function CodexQuestionCard({
       customAnswerPlaceholder="Type your answer"
       draftKey={codexInteractionDraftKey(sessionKey, interaction.interactionId)}
       expiresAt={interaction.expiresAt}
+      exclusiveSingleSelect
     />
   );
 }

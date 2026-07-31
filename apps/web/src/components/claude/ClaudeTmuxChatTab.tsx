@@ -2235,7 +2235,10 @@ function TmuxElicitationCard({
     content?: Record<string, string>,
   ) => Promise<void> | void;
 }) {
-  const fields = elicitationSchemaFields(elicitation.requestedSchema);
+  const fields = useMemo(
+    () => elicitationSchemaFields(elicitation.requestedSchema),
+    [elicitation.requestedSchema],
+  );
   // Typed field values survive the tab unmounting; claudeTmuxStore clears the
   // draft when the elicitation resolves or is withdrawn.
   const [values, setValues] = usePromptDraftField<Record<string, string>>(
@@ -2245,7 +2248,27 @@ function TmuxElicitationCard({
   );
   const [secretValues, setSecretValues] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
-  const resolvedValues = { ...values, ...secretValues };
+  // A draft created by an older renderer may contain a value whose schema now
+  // marks it secret. Scrub that legacy copy as soon as the card mounts; current
+  // secret edits never enter the draft store in the first place.
+  useEffect(() => {
+    const sensitiveKeys = fields
+      .filter((field) => field.sensitive)
+      .map((field) => field.key);
+    if (!sensitiveKeys.some((key) => Object.hasOwn(values, key))) return;
+    setValues((previous) => {
+      const next = { ...previous };
+      for (const key of sensitiveKeys) delete next[key];
+      return next;
+    });
+  }, [fields, setValues, values]);
+  const resolvedValues = {
+    ...Object.fromEntries(
+      Object.entries(values).filter(([key]) =>
+        !fields.some((field) => field.key === key && field.sensitive)),
+    ),
+    ...secretValues,
+  };
   const respond = async (
     action: "accept" | "decline" | "cancel",
     content?: Record<string, string>,
@@ -2711,13 +2734,15 @@ function elicitationSchemaFields(schema: Record<string, unknown> | null): Array<
     const field = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
     const title = typeof field.title === "string" ? field.title : key;
     const format = typeof field.format === "string" ? field.format : "";
+    const sensitiveMarker = `${key} ${format}`;
     return {
       key,
       label: title,
       sensitive:
-        format.toLowerCase().includes("password") ||
-        key.toLowerCase().includes("password") ||
-        key.toLowerCase().includes("token"),
+        field.writeOnly === true
+        || field.sensitive === true
+        || /password|passphrase|secret|token|credential|api[\s_-]*key|private[\s_-]*key/i
+          .test(sensitiveMarker),
     };
   });
 }

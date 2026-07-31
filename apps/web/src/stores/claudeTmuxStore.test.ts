@@ -1077,6 +1077,33 @@ describe("prompt draft clearing", () => {
     expect(drafts().drafts.has(tmuxQuestionDraftKey("evt-1"))).toBe(false);
   });
 
+  test("scoped cleanup preserves another session that reused the same event id", () => {
+    const store = useClaudeTmuxStore.getState();
+    const firstKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    const secondKey = createClaudeTmuxStateKey("env-2", "tab-1");
+    store.addPendingQuestion(firstKey, payloadToQuestion("shared-event", {}));
+    store.addPendingQuestion(secondKey, payloadToQuestion("shared-event", {}));
+    drafts().setDraftValue(
+      tmuxQuestionDraftKey(firstKey, "shared-event"),
+      "answers",
+      [["first"]],
+    );
+    drafts().setDraftValue(
+      tmuxQuestionDraftKey(secondKey, "shared-event"),
+      "answers",
+      [["second"]],
+    );
+
+    store.removePendingQuestion(firstKey, "shared-event");
+
+    expect(drafts().drafts.has(
+      tmuxQuestionDraftKey(firstKey, "shared-event"),
+    )).toBe(false);
+    expect(drafts().drafts.get(
+      tmuxQuestionDraftKey(secondKey, "shared-event"),
+    )).toEqual({ answers: [["second"]] });
+  });
+
   test("replacePendingHooks drops drafts for withdrawn prompts and keeps live ones", () => {
     const store = useClaudeTmuxStore.getState();
     const keptPlan = payloadToPlan("evt-kept", { tool_input: { plan: "p" } });
@@ -1122,6 +1149,21 @@ describe("payloadToApproval", () => {
     });
     expect(a.toolName).toBe("Bash");
     expect(a.toolInput).toEqual({ cmd: "ls" });
+  });
+
+  test("preserves authoritative timing and falls back safely when it is absent", () => {
+    const timed = payloadToApproval(
+      "e1",
+      { tool_name: "Bash" },
+      { requestedAt: 1_900_000_000_000, expiresAt: 1_900_000_300_000 },
+    );
+    expect(timed).toMatchObject({
+      requestedAt: 1_900_000_000_000,
+      expiresAt: 1_900_000_300_000,
+      receivedAt: "2030-03-17T17:46:40.000Z",
+    });
+    expect(payloadToApproval("legacy", {}).requestedAt).toBeUndefined();
+    expect(payloadToApproval("legacy", {}).expiresAt).toBeUndefined();
   });
 
   test("accepts camelCase variants", () => {

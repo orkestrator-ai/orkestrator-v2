@@ -3018,12 +3018,21 @@ describe("opencode-client events and pending requests", () => {
     expect(await replyToQuestion(client, "question-1", [["Yes"]])).toBe(true);
     expect(await replyToPermission(client, "permission-1", "always", "remember")).toBe(true);
     expect(await rejectQuestion(client, "question-1")).toBe(true);
-    expect(questionReply).toHaveBeenCalledWith({ requestID: "question-1", answers: [["Yes"]] });
-    expect(permissionReply).toHaveBeenCalledWith({ requestID: "permission-1", reply: "always", message: "remember" });
-    expect(questionReject).toHaveBeenCalledWith({ requestID: "question-1" });
+    expect(questionReply).toHaveBeenCalledWith(
+      { requestID: "question-1", answers: [["Yes"]] },
+      { throwOnError: true },
+    );
+    expect(permissionReply).toHaveBeenCalledWith(
+      { requestID: "permission-1", reply: "always", message: "remember" },
+      { throwOnError: true },
+    );
+    expect(questionReject).toHaveBeenCalledWith(
+      { requestID: "question-1" },
+      { throwOnError: true },
+    );
   });
 
-  test("returns false when replying to or rejecting requests fails", async () => {
+  test("returns false when a failed response remains authoritatively pending", async () => {
     const failed = {
       question: {
         reply: async () => { throw new Error("reply failed"); },
@@ -3049,6 +3058,48 @@ describe("opencode-client events and pending requests", () => {
     expect(await replyToQuestion(failed, "question-1", [])).toBe(false);
     expect(await replyToPermission(failed, "permission-1", "reject")).toBe(false);
     expect(await rejectQuestion(failed, "question-1")).toBe(false);
+  });
+
+  test("treats a failed response as applied when reconciliation finds no pending request", async () => {
+    const reconciled = {
+      question: {
+        reply: async () => { throw new Error("reply outcome unknown"); },
+        reject: async () => { throw new Error("reject outcome unknown"); },
+        list: async () => ({ data: [] }),
+      },
+      permission: {
+        reply: async () => { throw new Error("permission outcome unknown"); },
+        list: async () => ({ data: [] }),
+      },
+    } as unknown as OpencodeClient;
+
+    expect(await replyToQuestion(reconciled, "question-1", [["Yes"]])).toBe(true);
+    expect(await replyToPermission(reconciled, "permission-1", "once")).toBe(true);
+    expect(await rejectQuestion(reconciled, "question-1")).toBe(true);
+  });
+
+  test("propagates failed reconciliation so callers can block an unsafe retry", async () => {
+    const unavailable = {
+      question: {
+        reply: async () => { throw new Error("reply outcome unknown"); },
+        reject: async () => { throw new Error("reject outcome unknown"); },
+        list: async () => { throw new Error("question reconciliation unavailable"); },
+      },
+      permission: {
+        reply: async () => { throw new Error("permission outcome unknown"); },
+        list: async () => { throw new Error("permission reconciliation unavailable"); },
+      },
+    } as unknown as OpencodeClient;
+
+    await expect(
+      replyToQuestion(unavailable, "question-1", [["Yes"]]),
+    ).rejects.toThrow("question reconciliation unavailable");
+    await expect(
+      replyToPermission(unavailable, "permission-1", "reject"),
+    ).rejects.toThrow("permission reconciliation unavailable");
+    await expect(
+      rejectQuestion(unavailable, "question-1"),
+    ).rejects.toThrow("question reconciliation unavailable");
   });
 });
 

@@ -343,6 +343,27 @@ describe("ClaudePlanApprovalCard", () => {
     }
   });
 
+  test("blocks retry when a plan dismissal has an unknown outcome", async () => {
+    respondToPlanApprovalMock.mockImplementation(async () => "unknown");
+    const consoleError = console.error;
+    console.error = (() => {}) as typeof console.error;
+    try {
+      renderCard();
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled"))
+          .toBe(true),
+      );
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
+      expect(mockToastError).toHaveBeenCalledWith("Failed to dismiss plan", {
+        description: "The dismissal outcome is unknown. Reconnect or refresh Claude before trying again.",
+      });
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
   test("removes the card without a toast when a dismissal is stale", async () => {
     // Stale is resolved-not-failed: the approval is gone, so there is nothing to
     // retry and nothing to warn the user about.

@@ -61,6 +61,15 @@ function mockFetchStatus(status: number) {
   ) as unknown as typeof fetch;
 }
 
+function mockFetchSequence(steps: Array<Response | Error>) {
+  globalThis.fetch = mock(async () => {
+    const next = steps.shift();
+    if (!next) throw new Error("Unexpected fetch");
+    if (next instanceof Error) throw next;
+    return next;
+  }) as unknown as typeof fetch;
+}
+
 describe("claude-client", () => {
   let client: ClaudeClient;
 
@@ -1790,6 +1799,20 @@ describe("claude-client", () => {
       expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("unknown");
     });
 
+    test("reconciles an ambiguous answer against the pending snapshot", async () => {
+      mockFetchSequence([
+        new Error("network error"),
+        new Response(JSON.stringify({ questions: [{ id: "q-1" }] })),
+      ]);
+      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("error");
+
+      mockFetchSequence([
+        new Error("network error"),
+        new Response(JSON.stringify({ questions: [] })),
+      ]);
+      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("applied");
+    });
+
     // 409 is the bridge saying the window closed; 404 is "no such session",
     // which is a genuine failure the user can act on. Collapsing the two is what
     // made a closed window look like a broken bridge.
@@ -1827,6 +1850,20 @@ describe("claude-client", () => {
       mockFetchError();
       expect(await dismissQuestion(client, "s-1", "q-1")).toBe("unknown");
     });
+
+    test("reconciles an ambiguous dismissal against the pending snapshot", async () => {
+      mockFetchSequence([
+        new Error("network error"),
+        new Response(JSON.stringify({ questions: [{ id: "q-1" }] })),
+      ]);
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe("error");
+
+      mockFetchSequence([
+        new Error("network error"),
+        new Response(JSON.stringify({ questions: [] })),
+      ]);
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe("applied");
+    });
   });
 
   describe("respondToPlanApproval", () => {
@@ -1853,6 +1890,20 @@ describe("claude-client", () => {
 
       mockFetchError();
       expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("unknown");
+    });
+
+    test("reconciles an ambiguous plan response against the pending snapshot", async () => {
+      mockFetchSequence([
+        new Error("network error"),
+        new Response(JSON.stringify({ approvals: [{ id: "a-1" }] })),
+      ]);
+      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("error");
+
+      mockFetchSequence([
+        new Error("network error"),
+        new Response(JSON.stringify({ approvals: [] })),
+      ]);
+      expect(await respondToPlanApproval(client, "s-1", "a-1", false)).toBe("applied");
     });
   });
 

@@ -24,6 +24,7 @@ import type {
   OpencodeClient,
   QuestionRequest,
 } from "@/lib/opencode-client";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 import * as realOpenCodeClient from "@/lib/opencode-client";
 const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
@@ -74,6 +75,7 @@ beforeEach(() => {
   replyMock.mockResolvedValue(true);
   rejectMock.mockReset();
   rejectMock.mockResolvedValue(true);
+  mockToastError.mockClear();
   useOpenCodeStore.setState({
     pendingQuestions: new Map(),
   });
@@ -101,6 +103,34 @@ describe("OpenCodeQuestionCard", () => {
         CLIENT,
         "question-1",
         [["Web", "Desktop"]],
+      );
+    });
+  });
+
+  test("keeps duplicate option labels independently selectable", async () => {
+    const question = makeQuestion({
+      questions: [{
+        question: "Choose both matching targets",
+        header: "Targets",
+        options: [
+          { label: "Same", description: "First target" },
+          { label: "Same", description: "Second target" },
+        ],
+        multiple: true,
+        custom: false,
+      }],
+    });
+    render(<OpenCodeQuestionCard question={question} client={CLIENT} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /First target/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Second target/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => {
+      expect(replyMock).toHaveBeenCalledWith(
+        CLIENT,
+        question.id,
+        [["Same", "Same"]],
       );
     });
   });
@@ -234,6 +264,7 @@ describe("OpenCodeQuestionCard", () => {
     });
 
     cleanup();
+    rejectMock.mockClear();
     rejectMock.mockResolvedValue(false);
     useOpenCodeStore.getState().addPendingQuestion(question);
     render(<OpenCodeQuestionCard question={question} client={CLIENT} />);
@@ -241,5 +272,19 @@ describe("OpenCodeQuestionCard", () => {
       fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     });
     expect(useOpenCodeStore.getState().getPendingQuestion(question.id)).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "OpenCode is still waiting for a response. Please try again.",
+    );
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to dismiss this question",
+      {
+        description: "OpenCode is still waiting for a response. Please try again.",
+      },
+    );
+
+    const dismiss = screen.getByRole("button", { name: "Dismiss" });
+    expect(dismiss.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(dismiss);
+    await waitFor(() => expect(rejectMock).toHaveBeenCalledTimes(2));
   });
 });

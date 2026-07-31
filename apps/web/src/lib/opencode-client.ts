@@ -2687,10 +2687,13 @@ export async function replyToQuestion(
   answers: QuestionAnswer[]
 ): Promise<boolean> {
   try {
-    await client.question.reply({
-      requestID: requestId,
-      answers,
-    });
+    await client.question.reply(
+      {
+        requestID: requestId,
+        answers,
+      },
+      { throwOnError: true },
+    );
     return true;
   } catch (error) {
     console.error("[opencode-client] Failed to reply to question:", error);
@@ -2709,11 +2712,14 @@ export async function replyToPermission(
   message?: string
 ): Promise<boolean> {
   try {
-    await client.permission.reply({
-      requestID: requestId,
-      reply,
-      message,
-    });
+    await client.permission.reply(
+      {
+        requestID: requestId,
+        reply,
+        message,
+      },
+      { throwOnError: true },
+    );
     return true;
   } catch (error) {
     console.error("[opencode-client] Failed to reply to permission:", error);
@@ -2730,9 +2736,10 @@ export async function rejectQuestion(
   requestId: string
 ): Promise<boolean> {
   try {
-    await client.question.reject({
-      requestID: requestId,
-    });
+    await client.question.reject(
+      { requestID: requestId },
+      { throwOnError: true },
+    );
     return true;
   } catch (error) {
     console.error("[opencode-client] Failed to reject question:", error);

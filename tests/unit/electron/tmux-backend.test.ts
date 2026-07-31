@@ -1950,16 +1950,43 @@ exit 0
       await fs.mkdir(pendingDir, { recursive: true });
       const hookEventId = "1700000000-event-1";
       await fs.writeFile(path.join(pendingDir, `PreToolUse-${hookEventId}.json`), JSON.stringify({ tool_name: "Edit" }));
+      const invalidTimingEventIds = [
+        "event-legacy",
+        "1700000000oops-malformed",
+        "0-zero",
+        "-1-negative",
+        "9007199254740992-unsafe-seconds",
+        "9007199254740-unsafe-milliseconds",
+      ];
+      await Promise.all(invalidTimingEventIds.map((eventId) =>
+        fs.writeFile(
+          path.join(pendingDir, `PermissionRequest-${eventId}.json`),
+          JSON.stringify({ tool_name: "Edit" }),
+        )
+      ));
 
-      await expect(invoke(handlers, "claude_tmux_pending_hooks", { tabId: "tab-1", environmentId: environment.id })).resolves.toEqual([
-        {
-          id: hookEventId,
-          kind: "PreToolUse",
+      const pendingHooks = await invoke(
+        handlers,
+        "claude_tmux_pending_hooks",
+        { tabId: "tab-1", environmentId: environment.id },
+      ) as Array<Record<string, unknown>>;
+      expect(pendingHooks).toContainEqual({
+        id: hookEventId,
+        kind: "PreToolUse",
+        payload: { tool_name: "Edit" },
+        requestedAt: 1_700_000_000_000,
+        expiresAt: 1_700_000_300_000,
+      });
+      for (const eventId of invalidTimingEventIds) {
+        expect(pendingHooks).toContainEqual({
+          id: eventId,
+          kind: "PermissionRequest",
           payload: { tool_name: "Edit" },
-          requestedAt: 1_700_000_000_000,
-          expiresAt: 1_700_000_300_000,
-        },
-      ]);
+        });
+        const pending = pendingHooks.find((hook) => hook.id === eventId);
+        expect(pending).not.toHaveProperty("requestedAt");
+        expect(pending).not.toHaveProperty("expiresAt");
+      }
 
       await invoke(
         handlers,

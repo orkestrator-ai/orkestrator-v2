@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // Snapshot the real modules BEFORE installing per-file stubs. Bun's mock.module
 // is global at the module-cache level, so top-level mocks here would otherwise
@@ -570,6 +570,26 @@ test("dismiss releases the server question before removing it locally", async ()
     }
   });
 
+  test("an unknown answer outcome stays visible but blocks an unsafe retry", async () => {
+    mockAnswerQuestion.mockImplementationOnce(async () => "unknown");
+    render(
+      <ClaudeQuestionCard
+        question={singleQuestionWithOptions()}
+        client={client}
+        sessionId="s-1"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Red" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    expect(await screen.findByText(
+      "The response outcome is unknown. Reconnect or refresh Claude before trying again.",
+    )).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(mockRemovePendingQuestion).not.toHaveBeenCalled();
+  });
+
   test("a stale dismissal removes the question", async () => {
     mockDismissQuestion.mockImplementationOnce(async () => "stale");
     render(
@@ -585,6 +605,27 @@ test("dismiss releases the server question before removing it locally", async ()
     });
 
     expect(mockRemovePendingQuestion).toHaveBeenCalledWith("q-1");
+  });
+
+  test("an unknown dismissal stays visible but blocks an unsafe retry", async () => {
+    mockDismissQuestion.mockImplementationOnce(async () => "unknown");
+    render(
+      <ClaudeQuestionCard
+        question={singleQuestionWithOptions()}
+        client={client}
+        sessionId="s-1"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    expect(await screen.findByText(
+      "The dismissal outcome is unknown. Reconnect or refresh Claude before trying again.",
+    )).toBeTruthy();
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Dismiss" }) as HTMLButtonElement).disabled)
+        .toBe(true);
+    });
+    expect(mockRemovePendingQuestion).not.toHaveBeenCalled();
   });
 
   test("dismiss keeps the question pending when the server rejects it", async () => {

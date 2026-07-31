@@ -868,12 +868,16 @@ type PendingHookEvent = {
 };
 
 function blockingHookTiming(id: string): { requestedAt: number; expiresAt: number } | null {
-  const seconds = Number.parseInt(id.split("-", 1)[0] ?? "", 10);
+  const timestamp = id.split("-", 1)[0] ?? "";
+  if (!/^\d+$/.test(timestamp)) return null;
+  const seconds = Number.parseInt(timestamp, 10);
   if (!Number.isSafeInteger(seconds) || seconds <= 0) return null;
   const requestedAt = seconds * 1_000;
+  const expiresAt = requestedAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
+  if (!Number.isSafeInteger(requestedAt) || !Number.isSafeInteger(expiresAt)) return null;
   return {
     requestedAt,
-    expiresAt: requestedAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
+    expiresAt,
   };
 }
 

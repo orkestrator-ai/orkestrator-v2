@@ -848,6 +848,7 @@ describe("interactive questions and MCP elicitation", () => {
     expect(h.answers[0]!.result).toEqual({ answers: {} });
     expect(h.resolved[0]!.resolution).toBe("session-closed");
     expect(h.router.getParkedInteractions()).toHaveLength(0);
+    expect(h.transcript.at(-1)?.message).toContain("session closed");
   });
 
   test("abandonThread ignores interactions on other threads", async () => {

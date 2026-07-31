@@ -55,6 +55,7 @@ export function OpenCodeQuestionCard({
       // The loading state is cleared by SSE events in OpenCodeChatTab.
       removePendingQuestion(question.id);
     }
+    return success;
   }, [client, question.id, removePendingQuestion]);
 
   return (

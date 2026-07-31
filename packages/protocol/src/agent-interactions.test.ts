@@ -40,13 +40,21 @@ import {
 
 const CREATED_AT = 1_800_000_000_000;
 
-test("uses one five-minute product timeout and preserves Claude comma labels", () => {
+test("uses one five-minute product timeout and serializes Claude answers losslessly", () => {
   expect(AGENT_INTERACTION_DEFAULT_TIMEOUT_MS).toBe(300_000);
   expect(serializeClaudeQuestionAnswer(["A, with comma", "B"], true)).toBe(
     JSON.stringify(["A, with comma", "B"]),
   );
   expect(serializeClaudeQuestionAnswer(["A, with comma", "B"], false)).toBe(
-    "A, with comma",
+    JSON.stringify(["A, with comma", "B"]),
+  );
+  expect(serializeClaudeQuestionAnswer([], false)).toBe("");
+  expect(serializeClaudeQuestionAnswer([], true)).toBe("[]");
+  expect(serializeClaudeQuestionAnswer(['say "yes" 🦊'], false)).toBe(
+    'say "yes" 🦊',
+  );
+  expect(serializeClaudeQuestionAnswer(['say "yes"', "東京 🦊"], false)).toBe(
+    JSON.stringify(['say "yes"', "東京 🦊"]),
   );
 });
 

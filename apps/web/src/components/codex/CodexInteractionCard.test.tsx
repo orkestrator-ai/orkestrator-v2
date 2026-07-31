@@ -209,7 +209,7 @@ describe("CodexInteractionCard question branch", () => {
     });
   });
 
-  test("submits a selected option together with custom text", async () => {
+  test("custom text replaces a selected option for a mutually-exclusive question", async () => {
     const interaction = createInteraction({
       questions: [
         {
@@ -234,7 +234,7 @@ describe("CodexInteractionCard question branch", () => {
     await waitFor(() => expect(mockRespondToInteraction).toHaveBeenCalledTimes(1));
     expect(mockRespondToInteraction.mock.calls[0]?.[3]).toEqual({
       action: "accept",
-      answers: { q1: ["no", "actually yes"] },
+      answers: { q1: ["actually yes"] },
     });
   });
 
@@ -259,7 +259,36 @@ describe("CodexInteractionCard question branch", () => {
     expect(screen.queryAllByRole("button", { name: /Submit|Cancel/ })).toHaveLength(2);
   });
 
-  test("requires an answer for every question before submitting", () => {
+  test("keeps a secret answer out of drafts and loses it on unmount", () => {
+    const interaction = createInteraction({
+      questions: [
+        {
+          id: "q1",
+          header: "Token",
+          question: "Paste the deploy token",
+          isOther: false,
+          isSecret: true,
+        },
+      ],
+    });
+    seedPending(interaction);
+    const { unmount } = renderCard(interaction);
+
+    const input = screen.getByPlaceholderText("Type your answer") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "sensitive-value" } });
+    expect(input.value).toBe("sensitive-value");
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        codexInteractionDraftKey(SESSION_KEY, interaction.interactionId),
+      ),
+    ).toBe(false);
+
+    unmount();
+    renderCard(interaction);
+    expect((screen.getByPlaceholderText("Type your answer") as HTMLInputElement).value).toBe("");
+  });
+
+  test("submits a complete answer map keyed by each provider question id", async () => {
     const interaction = createInteraction({
       questions: [
         {
@@ -289,6 +318,16 @@ describe("CodexInteractionCard question branch", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /also yes/ }));
     expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => expect(mockRespondToInteraction).toHaveBeenCalledTimes(1));
+    expect(mockRespondToInteraction.mock.calls[0]?.[3]).toEqual({
+      action: "accept",
+      answers: {
+        q1: ["yes"],
+        q2: ["also yes"],
+      },
+    });
   });
 });
 
@@ -366,6 +405,22 @@ describe("CodexInteractionCard failure handling", () => {
     await waitFor(() =>
       expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY) ?? []).toEqual([]),
     );
+  });
+
+  test("blocks question submission when an unknown outcome cannot be reconciled", async () => {
+    mockRespondToInteraction.mockResolvedValue("unknown");
+    mockFetchPendingInteractions.mockRejectedValue(new Error("bridge offline"));
+    const interaction = createInteraction();
+    seedPending(interaction);
+    renderCard(interaction);
+
+    fireEvent.click(screen.getByRole("button", { name: /staging/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/outcome is unknown/i);
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true);
   });
 
   test("a stale response still clears the card", async () => {
@@ -469,6 +524,51 @@ describe("CodexInteractionCard failure handling", () => {
 
     await waitFor(() => expect(mockRespondToInteraction).toHaveBeenCalledTimes(1));
     expect(mockRespondToInteraction.mock.calls[0]?.[3]).toEqual({ action: "cancel" });
+  });
+
+  test("keeps cancel retryable when reconciliation shows the question still pending", async () => {
+    mockRespondToInteraction.mockResolvedValue("unknown");
+    const interaction = createInteraction();
+    mockFetchPendingInteractions.mockResolvedValue([interaction]);
+    seedPending(interaction);
+    renderCard(interaction);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() =>
+      expect(mockFetchPendingInteractions).toHaveBeenCalledWith(CLIENT, SESSION_ID),
+    );
+    expect((await screen.findByRole("alert")).textContent).toMatch(/still waiting/i);
+    expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  test("removes the question when cancel reconciliation shows it absent", async () => {
+    mockRespondToInteraction.mockResolvedValue("unknown");
+    mockFetchPendingInteractions.mockResolvedValue([]);
+    const interaction = createInteraction();
+    seedPending(interaction);
+    renderCard(interaction);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() =>
+      expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY) ?? []).toEqual([]),
+    );
+  });
+
+  test("blocks question controls when cancel reconciliation fails", async () => {
+    mockRespondToInteraction.mockResolvedValue("unknown");
+    mockFetchPendingInteractions.mockRejectedValue(new Error("bridge offline"));
+    const interaction = createInteraction();
+    seedPending(interaction);
+    renderCard(interaction);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/cancellation outcome is unknown/i);
+    expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
   });
 });
 
@@ -684,6 +784,91 @@ describe("CodexInteractionCard mcp-form branch", () => {
       Object.keys(mockRespondToInteraction.mock.calls[0]?.[3] as object),
     ).toEqual(["action", "content"]);
   });
+
+  test("keeps sensitive MCP values out of drafts, loses them on unmount, and submits them", async () => {
+    const sensitiveInteraction = createInteraction({
+      interactionId: "interaction-sensitive-form",
+      kind: "mcp-form",
+      questions: undefined,
+      schema: {
+        required: ["apiToken"],
+        properties: {
+          apiToken: { type: "string", title: "API token", writeOnly: true },
+        },
+      },
+    });
+    seedPending(sensitiveInteraction);
+    const { unmount } = renderCard(sensitiveInteraction);
+
+    const password = document.querySelector('input[type="password"]') as HTMLInputElement;
+    fireEvent.change(password, { target: { value: "sensitive-value" } });
+    expect(password.value).toBe("sensitive-value");
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        codexInteractionDraftKey(SESSION_KEY, sensitiveInteraction.interactionId),
+      ),
+    ).toBe(false);
+
+    unmount();
+    renderCard(sensitiveInteraction);
+    const remountedPassword = document.querySelector('input[type="password"]') as HTMLInputElement;
+    expect(remountedPassword.value).toBe("");
+    fireEvent.change(remountedPassword, { target: { value: "replacement-value" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => expect(mockRespondToInteraction).toHaveBeenCalledTimes(1));
+    expect(mockRespondToInteraction.mock.calls[0]?.[3]).toEqual({
+      action: "accept",
+      content: { apiToken: "replacement-value" },
+    });
+  });
+
+  test("keeps an MCP form retryable when unknown-outcome reconciliation finds it pending", async () => {
+    mockRespondToInteraction.mockResolvedValue("unknown");
+    mockFetchPendingInteractions.mockResolvedValue([formInteraction]);
+    seedPending(formInteraction);
+    const { container } = renderCard(formInteraction);
+    fireEvent.change(container.querySelectorAll('input[type="text"]')[0]!, {
+      target: { value: "v1" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(/safe to retry/i);
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  test("removes an MCP form when unknown-outcome reconciliation shows it absent", async () => {
+    mockRespondToInteraction.mockResolvedValue("unknown");
+    mockFetchPendingInteractions.mockResolvedValue([]);
+    seedPending(formInteraction);
+    const { container } = renderCard(formInteraction);
+    fireEvent.change(container.querySelectorAll('input[type="text"]')[0]!, {
+      target: { value: "v1" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() =>
+      expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY) ?? []).toEqual([]),
+    );
+  });
+
+  test("blocks an MCP form retry when unknown-outcome reconciliation fails", async () => {
+    mockRespondToInteraction.mockResolvedValue("unknown");
+    mockFetchPendingInteractions.mockRejectedValue(new Error("bridge offline"));
+    seedPending(formInteraction);
+    const { container } = renderCard(formInteraction);
+    fireEvent.change(container.querySelectorAll('input[type="text"]')[0]!, {
+      target: { value: "v1" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(/outcome is unknown/i);
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true);
+  });
 });
 
 describe("CodexInteractionCard mcp-url branch", () => {
@@ -766,5 +951,50 @@ describe("CodexInteractionCard mcp-url branch", () => {
     fireEvent.click(screen.getByRole("button", { name: /I.?ve completed it/ }));
     await waitFor(() => expect(mockRespondToInteraction).toHaveBeenCalledTimes(1));
     expect(mockRespondToInteraction.mock.calls[0]?.[3]).toEqual({ action: "accept" });
+  });
+
+  test("removes an MCP URL interaction when unknown reconciliation proves it resolved", async () => {
+    mockRespondToInteraction.mockResolvedValue("unknown");
+    mockFetchPendingInteractions.mockResolvedValue([]);
+    const interaction = urlInteraction("https://example.com/form");
+    seedPending(interaction);
+    renderCard(interaction);
+
+    fireEvent.click(screen.getByRole("button", { name: /I.?ve completed it/ }));
+
+    await waitFor(() =>
+      expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY) ?? []).toEqual([]),
+    );
+  });
+
+  test("keeps an MCP URL interaction retryable when unknown reconciliation finds it pending", async () => {
+    mockRespondToInteraction.mockResolvedValue("unknown");
+    const interaction = urlInteraction("https://example.com/form");
+    mockFetchPendingInteractions.mockResolvedValue([interaction]);
+    seedPending(interaction);
+    renderCard(interaction);
+
+    fireEvent.click(screen.getByRole("button", { name: /I.?ve completed it/ }));
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(/safe to retry/i);
+    expect(
+      screen.getByRole("button", { name: /I.?ve completed it/ }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  test("blocks an MCP URL retry when unknown-outcome reconciliation fails", async () => {
+    mockRespondToInteraction.mockResolvedValue("unknown");
+    mockFetchPendingInteractions.mockRejectedValue(new Error("bridge offline"));
+    const interaction = urlInteraction("https://example.com/form");
+    seedPending(interaction);
+    renderCard(interaction);
+
+    fireEvent.click(screen.getByRole("button", { name: /I.?ve completed it/ }));
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(/outcome is unknown/i);
+    expect(
+      screen.getByRole("button", { name: /I.?ve completed it/ }).hasAttribute("disabled"),
+    ).toBe(true);
+    expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true);
   });
 });

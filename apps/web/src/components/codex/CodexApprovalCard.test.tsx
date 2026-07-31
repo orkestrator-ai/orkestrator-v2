@@ -267,6 +267,32 @@ describe("CodexApprovalCard", () => {
     expect(screen.getByRole("button", { name: "Approve" }).hasAttribute("disabled")).toBe(false);
   });
 
+  test("removes an approval when reconciliation proves an unknown response resolved", async () => {
+    respondMock.mockResolvedValue("unknown");
+    fetchPendingApprovalsMock.mockResolvedValue([]);
+    renderCard(makeApproval());
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() =>
+      expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false),
+    );
+  });
+
+  test("blocks retry when an unknown outcome cannot be reconciled", async () => {
+    respondMock.mockResolvedValue("unknown");
+    fetchPendingApprovalsMock.mockRejectedValue(new Error("bridge offline"));
+    renderCard(makeApproval());
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/outcome is unknown/i);
+    for (const label of ["Decline", "Cancel turn", "Approve for session", "Approve"]) {
+      expect(screen.getByRole("button", { name: label }).hasAttribute("disabled")).toBe(true);
+    }
+  });
+
   test("a second click while in flight does not send twice", async () => {
     let release: ((value: CodexApprovalResponseResult) => void) | undefined;
     respondMock.mockImplementation(

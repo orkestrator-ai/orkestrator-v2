@@ -27,7 +27,10 @@ import {
   setSessionPreferences,
   clearPromptSuggestion,
 } from "../services/session-manager.js";
-import { serializeClaudeQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
+import {
+  AGENT_INTERACTION_LIMITS,
+  serializeClaudeQuestionAnswer,
+} from "@orkestrator/protocol/agent-interactions";
 import type {
   CreateSessionResponse,
   SessionListResponse,
@@ -87,6 +90,26 @@ function isValidImageDataUrl(value: string): boolean {
     && /^[A-Za-z0-9+/]+={0,2}$/.test(data)
     && decodedBytes <= MAX_IMAGE_ATTACHMENT_BYTES
   );
+}
+
+function isBoundedClaudeQuestionAnswers(
+  value: unknown,
+  questionCount: number,
+): value is string[][] {
+  if (!Array.isArray(value) || value.length !== questionCount) return false;
+  if (value.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest) return false;
+  if (Buffer.byteLength(JSON.stringify(value), "utf8")
+    > AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes) {
+    return false;
+  }
+  return value.every((answers) =>
+    Array.isArray(answers)
+    && answers.length > 0
+    && answers.length <= AGENT_INTERACTION_LIMITS.maxAnswerCount
+    && answers.every((answer) =>
+      typeof answer === "string"
+      && Buffer.byteLength(answer, "utf8")
+        <= AGENT_INTERACTION_LIMITS.maxFreeTextBytes));
 }
 
 // Create a new session
@@ -762,7 +785,7 @@ session.post("/:id/questions/:questionId/answer", async (c) => {
 
   try {
     const body = await c.req.json();
-    const answersArray = body.answers as string[][];
+    const answersArray: unknown = body.answers;
 
     if (!answersArray || !Array.isArray(answersArray)) {
       return c.json({ error: "Answers array is required" }, 400);
@@ -778,6 +801,13 @@ session.post("/:id/questions/:questionId/answer", async (c) => {
         stalePrompt("Question is no longer pending"),
         STALE_PROMPT_STATUS,
       );
+    }
+
+    if (!isBoundedClaudeQuestionAnswers(
+      answersArray,
+      pendingQuestion.questions.length,
+    )) {
+      return c.json({ error: "Answers must be a bounded string array for every question" }, 400);
     }
 
     // Convert string[][] to Record<string, string>

@@ -99,22 +99,30 @@ function optionToken(option: QuestionCardOption, index: number): string {
   return `__orkestrator_option__:${index}:${option.id ?? ""}`;
 }
 
+type AnswerEntry =
+  | { kind: "option"; token: string; value: string }
+  | { kind: "custom"; value: string };
+
 function questionDraftId(question: QuestionCardQuestion, index: number): string {
   return question.id ?? `question-${index}`;
 }
 
-function initialAnswerTokens(
+function initialAnswerEntries(
   question: QuestionCardQuestion,
   initial: string[],
-): string[] {
+): AnswerEntry[] {
   const unused = new Set((question.options ?? []).map((_, index) => index));
   return initial.map((answer) => {
     const match = (question.options ?? []).findIndex(
       (option, index) => unused.has(index) && optionValue(option) === answer,
     );
-    if (match < 0) return answer;
+    if (match < 0) return { kind: "custom", value: answer };
     unused.delete(match);
-    return optionToken(question.options![match]!, match);
+    return {
+      kind: "option",
+      token: optionToken(question.options![match]!, match),
+      value: answer,
+    };
   });
 }
 
@@ -133,11 +141,11 @@ function QuestionItem({
   customAnswerPlaceholder,
 }: {
   info: QuestionCardQuestion;
-  answer: string[];
+  answer: AnswerEntry[];
   customText: string;
-  onAnswerChange: (newAnswer: string[]) => void;
+  onAnswerChange: (newAnswer: AnswerEntry[]) => void;
   onCustomTextChange: (newText: string) => void;
-  onOptionSelect?: (label: string, nextAnswer: string[]) => void;
+  onOptionSelect?: (label: string, nextAnswer: AnswerEntry[]) => void;
   allowCustomAnswer: boolean;
   allowOptionDeselect: boolean;
   exclusiveSingleSelect: boolean;
@@ -146,14 +154,13 @@ function QuestionItem({
 }) {
   const hasOptions = !!info.options && info.options.length > 0;
   const isMultiple = info.multiSelect ?? false;
-  const optionTokens = useMemo(
-    () => new Set((info.options ?? []).map(optionToken)),
-    [info.options],
-  );
   // Custom answers committed via Enter that are not in the option list.
   const committedCustomAnswers = useMemo(
-    () => answer.filter((a) => !optionTokens.has(a)),
-    [answer, optionTokens],
+    () => answer.filter(
+      (entry): entry is Extract<AnswerEntry, { kind: "custom" }> =>
+        entry.kind === "custom",
+    ),
+    [answer],
   );
 
   /**
@@ -168,25 +175,28 @@ function QuestionItem({
     exclusiveSingleSelect && !isMultiple && customText.trim().length > 0;
 
   const handleOptionClick = useCallback(
-    (value: string) => {
-      let nextAnswer: string[];
+    (token: string, value: string) => {
+      let nextAnswer: AnswerEntry[];
+      const isSelected = answer.some(
+        (entry) => entry.kind === "option" && entry.token === token,
+      );
       if (isMultiple) {
-        nextAnswer = answer.includes(value)
-          ? answer.filter((a) => a !== value)
-          : [...answer, value];
+        nextAnswer = isSelected
+          ? answer.filter((entry) => entry.kind !== "option" || entry.token !== token)
+          : [...answer, { kind: "option", token, value }];
       } else if (draftSupersedesAnswer) {
         // The draft is the current answer and the selection is drawn as
         // cleared, so a click picks the option rather than toggling a
         // selection the user cannot see.
-        nextAnswer = [value];
+        nextAnswer = [{ kind: "option", token, value }];
         onCustomTextChange("");
-      } else if (answer.includes(value)) {
+      } else if (isSelected) {
         nextAnswer = allowOptionDeselect ? [] : answer;
       } else if (exclusiveSingleSelect) {
-        nextAnswer = [value];
+        nextAnswer = [{ kind: "option", token, value }];
       } else {
         // Preserve committed custom answers when switching option in single-select.
-        nextAnswer = [...committedCustomAnswers, value];
+        nextAnswer = [...committedCustomAnswers, { kind: "option", token, value }];
       }
       onAnswerChange(nextAnswer);
       onOptionSelect?.(value, nextAnswer);
@@ -208,21 +218,21 @@ function QuestionItem({
   const handleCustomSubmit = useCallback(() => {
     const trimmed = customText.trim();
     if (!trimmed) return;
-    if (answer.includes(trimmed)) {
+    if (committedCustomAnswers.some((entry) => entry.value === trimmed)) {
       onCustomTextChange("");
       return;
     }
     if (isMultiple) {
-      onAnswerChange([...answer, trimmed]);
+      onAnswerChange([...answer, { kind: "custom", value: trimmed }]);
     } else if (exclusiveSingleSelect) {
       // The question asked for one answer, so the custom text replaces the
       // selected option rather than joining it.
-      onAnswerChange([trimmed]);
+      onAnswerChange([{ kind: "custom", value: trimmed }]);
     } else {
       // Single-select allows one custom chip at a time; keep the selected
       // option alongside it, mirroring handleOptionClick.
-      const selectedOption = answer.filter((a) => optionTokens.has(a));
-      onAnswerChange([...selectedOption, trimmed]);
+      const selectedOption = answer.filter((entry) => entry.kind === "option");
+      onAnswerChange([...selectedOption, { kind: "custom", value: trimmed }]);
     }
     onCustomTextChange("");
   }, [
@@ -232,12 +242,12 @@ function QuestionItem({
     exclusiveSingleSelect,
     onAnswerChange,
     onCustomTextChange,
-    optionTokens,
+    committedCustomAnswers,
   ]);
 
   const handleRemoveCustomAnswer = useCallback(
-    (label: string) => {
-      onAnswerChange(answer.filter((a) => a !== label));
+    (target: Extract<AnswerEntry, { kind: "custom" }>) => {
+      onAnswerChange(answer.filter((entry) => entry !== target));
     },
     [answer, onAnswerChange],
   );
@@ -267,13 +277,16 @@ function QuestionItem({
         <div className="space-y-1">
           {info.options!.map((option, optIndex) => {
             const token = optionToken(option, optIndex);
-            const isSelected = !draftSupersedesAnswer && answer.includes(token);
+            const value = optionValue(option);
+            const isSelected = !draftSupersedesAnswer && answer.some(
+              (entry) => entry.kind === "option" && entry.token === token,
+            );
             return (
               <button
                 key={optIndex}
                 type="button"
                 disabled={disabled}
-                onClick={() => handleOptionClick(token)}
+                onClick={() => handleOptionClick(token, value)}
                 aria-pressed={isSelected}
                 className={cn(
                   "w-full rounded-md px-3 py-2.5 text-left transition-colors",
@@ -317,22 +330,24 @@ function QuestionItem({
       {/* Committed custom answers, so the user can see what will be submitted. */}
       {committedCustomAnswers.length > 0 && !draftSupersedesAnswer && (
         <div className="flex flex-wrap gap-1.5 pt-1">
-          {committedCustomAnswers.map((label) => (
+          {committedCustomAnswers.map((entry, index) => (
             <span
-              key={label}
+              key={info.secret ? index : `${index}:${entry.value}`}
               className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs text-primary"
             >
               <Check className="h-3 w-3" />
-              <span className="max-w-[28ch] truncate">{label}</span>
+              <span className="max-w-[28ch] truncate">
+                {info.secret ? "Secret entered" : entry.value}
+              </span>
               <button
                 type="button"
                 disabled={disabled}
-                onClick={() => handleRemoveCustomAnswer(label)}
+                onClick={() => handleRemoveCustomAnswer(entry)}
                 className={cn(
                   "-mr-0.5 ml-0.5 rounded-full p-0.5 hover:bg-primary/20",
                   disabled && "cursor-not-allowed opacity-60 hover:bg-transparent",
                 )}
-                aria-label={`Remove ${label}`}
+                aria-label={info.secret ? "Remove secret answer" : `Remove ${entry.value}`}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -398,7 +413,7 @@ export function QuestionCard({
   draftKey,
   expiresAt,
 }: QuestionCardProps) {
-  const [answers, setAnswers] = usePromptDraftField<Record<string, string[]>>(
+  const [answers, setAnswers] = usePromptDraftField<Record<string, AnswerEntry[]>>(
     draftKey,
     "answersByQuestion",
     () => Object.fromEntries(questions.flatMap((question, i) =>
@@ -406,7 +421,7 @@ export function QuestionCard({
         ? []
         : [[
             questionDraftId(question, i),
-            initialAnswerTokens(question, initialAnswers?.[i] ?? []),
+            initialAnswerEntries(question, initialAnswers?.[i] ?? []),
           ]],
     )),
   );
@@ -424,10 +439,10 @@ export function QuestionCard({
   );
   // Secrets intentionally use component state only. They survive navigation
   // inside this mounted wizard, but not tab/environment unmount or restart.
-  const [secretAnswers, setSecretAnswers] = useState<string[][]>(() =>
+  const [secretAnswers, setSecretAnswers] = useState<AnswerEntry[][]>(() =>
     questions.map((question, i) =>
       question.secret
-        ? initialAnswerTokens(question, initialAnswers?.[i] ?? [])
+        ? initialAnswerEntries(question, initialAnswers?.[i] ?? [])
         : []),
   );
   const [secretCustomTexts, setSecretCustomTexts] = useState<string[]>(() =>
@@ -436,11 +451,16 @@ export function QuestionCard({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [retryBlocked, setRetryBlocked] = useState(false);
-  const [currentQuestionIndex, setCurrentQuestionIndex] =
+  const [storedQuestionIndex, setCurrentQuestionIndex] =
     usePromptDraftField<number>(draftKey, "currentQuestionIndex", () => 0);
   const { expired } = usePromptDeadline(expiresAt);
 
   const questionCount = questions.length;
+  const currentQuestionIndex = Number.isInteger(storedQuestionIndex)
+    && storedQuestionIndex >= 0
+    && storedQuestionIndex < questionCount
+    ? storedQuestionIndex
+    : 0;
   const currentQuestion = questions[currentQuestionIndex];
   const answerForIndex = useCallback(
     (i: number) => {
@@ -466,31 +486,27 @@ export function QuestionCard({
   const currentCustomText = customTextForIndex(currentQuestionIndex);
 
   const mergeAnswerForIndex = useCallback(
-    (i: number): string[] => {
+    (i: number): AnswerEntry[] => {
       const committed = answerForIndex(i);
       const draft = customTextForIndex(i).trim();
-      if (!draft || committed.includes(draft)) return committed;
+      if (!draft || committed.some(
+        (entry) => entry.kind === "custom" && entry.value === draft,
+      )) return committed;
       // Uncommitted text obeys the same exclusivity rule as a committed chip,
       // or a never-pressed-Enter draft would smuggle a second answer through.
       // `QuestionItem` draws the superseded option and chip as cleared while the
       // draft is present, so the card shows exactly what this returns.
       if (exclusiveSingleSelect && !(questions[i]?.multiSelect ?? false)) {
-        return [draft];
+        return [{ kind: "custom", value: draft }];
       }
-      return [...committed, draft];
+      return [...committed, { kind: "custom", value: draft }];
     },
     [answerForIndex, customTextForIndex, exclusiveSingleSelect, questions],
   );
 
-  const serializeAnswerForIndex = useCallback(
-    (i: number, answer: string[]): string[] => {
-      const options = questions[i]?.options ?? [];
-      const values = new Map(
-        options.map((option, index) => [optionToken(option, index), optionValue(option)]),
-      );
-      return answer.map((entry) => values.get(entry) ?? entry);
-    },
-    [questions],
+  const serializeAnswer = useCallback(
+    (answer: AnswerEntry[]): string[] => answer.map((entry) => entry.value),
+    [],
   );
 
   const questionHasAnswer = useCallback(
@@ -512,7 +528,7 @@ export function QuestionCard({
   );
 
   const handleAnswerChange = useCallback(
-    (newAnswer: string[]) => {
+    (newAnswer: AnswerEntry[]) => {
       if (questions[currentQuestionIndex]?.secret) {
         setSecretAnswers((prev) => {
           const updated = [...prev];
@@ -552,14 +568,14 @@ export function QuestionCard({
   );
 
   const submitAnswers = useCallback(
-    async (effectiveAnswers: string[][]) => {
+    async (effectiveAnswers: AnswerEntry[][]) => {
       if (expired) return;
       setInlineError(null);
       setRetryBlocked(false);
       setIsSubmitting(true);
       try {
         const submitted = await onSubmit(
-          effectiveAnswers.map((answer, i) => serializeAnswerForIndex(i, answer)),
+          effectiveAnswers.map(serializeAnswer),
         );
         const applied = typeof submitted === "object" ? submitted.applied : submitted !== false;
         if (!applied) {
@@ -585,12 +601,12 @@ export function QuestionCard({
         setIsSubmitting(false);
       }
     },
-    [agentLabel, expired, onSubmit, serializeAnswerForIndex],
+    [agentLabel, expired, onSubmit, serializeAnswer],
   );
 
   const handleNext = useCallback(async () => {
     if (currentQuestionIndex < questionCount - 1) {
-      setCurrentQuestionIndex((prev) => prev + 1);
+      setCurrentQuestionIndex(currentQuestionIndex + 1);
       return;
     }
     /**
@@ -617,7 +633,7 @@ export function QuestionCard({
   ]);
 
   const handleOptionSelect = useCallback(
-    (_label: string, nextAnswer: string[]) => {
+    (_label: string, nextAnswer: AnswerEntry[]) => {
       if (!submitOnOptionSelect || isSubmitting || expired || nextAnswer.length === 0) return;
       if (questionCount !== 1) return;
       void submitAnswers([nextAnswer]);
@@ -701,7 +717,7 @@ export function QuestionCard({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setCurrentQuestionIndex((prev) => prev - 1)}
+              onClick={() => setCurrentQuestionIndex(currentQuestionIndex - 1)}
               disabled={isSubmitting || expired || retryBlocked}
             >
               Back

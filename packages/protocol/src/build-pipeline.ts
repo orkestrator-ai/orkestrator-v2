@@ -425,7 +425,7 @@ function isBuildStepConfig(value: unknown): value is BuildStepConfig {
 }
 
 /**
- * Only the three configurable step keys are accepted. An unknown key would be
+ * Only the keys in {@link BUILD_STEP_KEYS} are accepted. An unknown key would be
  * carried through the snapshot and silently never consulted, which reads as a
  * setting that was applied when it was not.
  */

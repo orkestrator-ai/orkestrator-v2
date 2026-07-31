@@ -28,7 +28,7 @@ import {
   parseStructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
-import type { Environment, PersistedBuildPipeline } from "./models.js";
+import type { AppConfig, Environment, PersistedBuildPipeline } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
   AmbiguousPromptDispatchError,
@@ -116,6 +116,28 @@ function resumablePhase(phase: BuildPhase): ResumableBuildPhase | null {
   return isActiveBuildPhase(phase) ? phase as ResumableBuildPhase : null;
 }
 
+/**
+ * The agent a repository's `defaultModel` and `defaultEffort` were chosen for.
+ *
+ * Both are stored as a single value per repository rather than one per agent, so
+ * they only describe the repository's own default agent. Since steps may now run
+ * a harness the repository was never configured for, every read of them has to
+ * be gated on this.
+ */
+function repositoryAgent(
+  global: { defaultAgent?: BuildPipelineAgent },
+  repository: { defaultAgent?: BuildPipelineAgent },
+): BuildPipelineAgent {
+  return repository.defaultAgent ?? global.defaultAgent ?? "claude";
+}
+
+/**
+ * The default model for one harness.
+ *
+ * `repositoryDefault` is only passed when the caller has established that
+ * `agent` is the repository's default agent; handing a Codex model id to the
+ * Claude bridge is what happens otherwise.
+ */
 function modelFor(
   agent: BuildPipelineAgent,
   global: {
@@ -132,6 +154,34 @@ function modelFor(
       ? global.codexModel
       : global.opencodeModel;
   return model && model !== "default" ? model : undefined;
+}
+
+/**
+ * The connection-level model and reasoning effort for one harness.
+ *
+ * The repository defaults apply only to the repository's own default agent. A
+ * step that pinned a different harness falls back to that harness's global
+ * default instead, which is exactly what the launcher displayed for it.
+ */
+function connectionDefaultsFor(
+  agent: BuildPipelineAgent,
+  config: Pick<AppConfig, "global">,
+  repository: {
+    defaultAgent?: BuildPipelineAgent;
+    defaultModel?: string;
+    defaultEffort?: string;
+  },
+): { model?: string; effort?: string } {
+  const owns = agent === repositoryAgent(config.global, repository);
+  return {
+    model: modelFor(
+      agent,
+      config.global,
+      owns ? repository.defaultModel : undefined,
+    ),
+    effort: (owns ? repository.defaultEffort : undefined)
+      ?? (agent === "codex" ? config.global.codexReasoningEffort : undefined),
+  };
 }
 
 /**
@@ -305,6 +355,16 @@ export class BuildPipelineService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly locks = new Map<string, Promise<void>>();
   private readonly providers = new Map<string, BuildPipelineProvider>();
+  /**
+   * The harness whose provider each pipeline last resolved.
+   *
+   * A stage transition resolves and caches the *next* step's provider before it
+   * records that step's session, so a failure there cannot be attributed by
+   * reading the stored snapshot — it still describes the previous stage. Passes
+   * are serialised per pipeline by {@link runLocked}, so the last agent handed
+   * to {@link provider} is the one that failed.
+   */
+  private readonly lastProviderAgent = new Map<string, BuildPipelineAgent>();
   private readonly provisioningPrompts = new Map<string, string | undefined>();
   private tickPromise: Promise<void> | null = null;
   private tickRequested = false;
@@ -749,6 +809,7 @@ export class BuildPipelineService {
       await this.cancel(pipelineId);
     }
     await this.storage.deleteBuildPipeline(pipelineId);
+    this.lastProviderAgent.delete(pipelineId);
     if (!record || !isBuildPipeline(record.snapshot)) return;
     const removed = record.snapshot;
     // Providers are keyed by environment and agent, so a sibling pipeline in
@@ -1659,9 +1720,10 @@ export class BuildPipelineService {
   /**
    * The harness, model and reasoning a step runs under.
    *
-   * A step configured in the launcher is authoritative and takes no defaults: a
-   * user who cleared the reasoning effort there must not have the repository
-   * default silently reinstated. Only an unconfigured step falls back.
+   * A step's own selections win. A field it left unset resolves to that
+   * harness's default — the same value the launcher displayed for it — which
+   * `connectionDefaultsFor` supplies one layer down when these are `undefined`.
+   * The repository defaults never cross to a harness they were not chosen for.
    */
   private async stepSettings(
     pipeline: BuildPipeline,
@@ -1683,11 +1745,7 @@ export class BuildPipelineService {
     const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
     return {
       agent: pipeline.agentType,
-      model: modelFor(pipeline.agentType, config.global, repository.defaultModel),
-      effort: repository.defaultEffort
-        ?? (pipeline.agentType === "codex"
-          ? config.global.codexReasoningEffort
-          : undefined),
+      ...connectionDefaultsFor(pipeline.agentType, config, repository),
     };
   }
 
@@ -1695,6 +1753,9 @@ export class BuildPipelineService {
     pipeline: BuildPipeline,
     agent: BuildPipelineAgent = pipeline.agentType,
   ): Promise<BuildPipelineProvider> {
+    // Recorded before anything that can throw, so a bridge that is unreachable
+    // during connection setup is still attributed to the right harness.
+    this.lastProviderAgent.set(pipeline.id, agent);
     const providerKey = `${pipeline.environmentId}:${agent}`;
     // Only this harness's own sessions. Registering a sibling step's session id
     // would put a foreign session into an environment-wide monitor that is
@@ -1724,11 +1785,10 @@ export class BuildPipelineService {
     const connection = await this.bridgeConnection(agent, environment);
     const provider = createBuildPipelineProvider({
       ...connection,
-      // Connection-level defaults only. Every pipeline turn passes the step's
-      // own model and effort per call, which take precedence.
-      model: modelFor(agent, config.global, repository.defaultModel),
-      effort: repository.defaultEffort
-        ?? (agent === "codex" ? config.global.codexReasoningEffort : undefined),
+      // Connection-level defaults only, and only this harness's own. Every
+      // pipeline turn passes the step's model and effort per call, which take
+      // precedence; these fill in whatever the step left unset.
+      ...connectionDefaultsFor(agent, config, repository),
     }, {
       // Task-snapshot images arrive as base64. Both bridges require a workspace
       // path, so they have to be written into the environment before they can be
@@ -1808,13 +1868,14 @@ export class BuildPipelineService {
     const pipeline = record.snapshot;
     const phase = resumablePhase(pipeline.phase);
     if (!phase) return;
-    // Evict the harness that actually failed. With per-step harnesses the
-    // current session may not be running on the build agent, and dropping that
-    // provider instead would leave the unreachable one cached forever.
+    // Evict the harness that actually failed. The stored snapshot cannot answer
+    // that on its own: a stage transition resolves the next step's provider
+    // before it records that step's session, so a `createSession` failure on the
+    // review harness would look like a failure on the build harness here — and
+    // dropping the healthy one would leave the unreachable one cached forever.
     const session = sessionForCurrentPhase(pipeline);
-    const agent = session
-      ? sessionAgent(pipeline, session)
-      : pipeline.agentType;
+    const agent = this.lastProviderAgent.get(pipelineId)
+      ?? (session ? sessionAgent(pipeline, session) : pipeline.agentType);
     const providerKey = `${pipeline.environmentId}:${agent}`;
     const provider = this.providers.get(providerKey);
     this.providers.delete(providerKey);

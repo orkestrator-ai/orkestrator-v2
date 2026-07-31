@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   BUILD_PIPELINE_VERSION,
+  BUILD_STEP_KEYS,
   isActiveBuildPhase,
   isBuildPipeline,
   isBuildStepConfigs,
@@ -12,6 +13,8 @@ import {
   isVerificationVerdict,
   VERIFICATION_VERDICT_SCHEMA,
   type BuildPipeline,
+  type BuildStepKey,
+  type PipelineSessionPhase,
 } from "./build-pipeline.js";
 import type { StructuredReviewReport } from "./structured-review.js";
 
@@ -314,6 +317,121 @@ describe("build pipeline protocol", () => {
     })).toBe(false);
   });
 
+  test("rejects a step map that is not a record of steps at all", () => {
+    // `Object.entries` is happy with a string or a number and returns nothing
+    // for them, so without the record guard every one of these would read as an
+    // empty — and therefore valid — configuration.
+    for (const value of [null, undefined, [], "x", 123, true, () => undefined]) {
+      expect(isBuildStepConfigs(value)).toBe(false);
+    }
+    expect(isBuildStepConfigs({})).toBe(true);
+  });
+
+  test("accepts an explicitly unset step but not a null one", () => {
+    // A launcher that clears a step leaves the key behind with `undefined`,
+    // which survives a structured clone but not JSON; both must round-trip.
+    expect(isBuildStepConfigs({ build: undefined })).toBe(true);
+    expect(isBuildStepConfigs({ build: undefined, review: { agent: "codex" } }))
+      .toBe(true);
+    // `null` is not "unset": it would reach the launcher as a configured step
+    // and be dereferenced for its agent.
+    expect(isBuildStepConfigs({ build: null })).toBe(false);
+  });
+
+  test("rejects a step whose harness, model or effort is unusable", () => {
+    const invalid: unknown[] = [
+      { build: {} },
+      { build: { model: "claude-a" } },
+      { build: { agent: "gemini" } },
+      { build: { agent: null } },
+      { build: { agent: 1 } },
+      // A blank string is not "unset": it would be sent to the provider as the
+      // model or effort to run under.
+      { build: { agent: "claude", model: "" } },
+      { build: { agent: "claude", reasoningEffort: "" } },
+      { build: { agent: "claude", model: 123 } },
+      { build: { agent: "claude", reasoningEffort: 123 } },
+      { build: { agent: "claude", model: ["claude-a"] } },
+      { build: [] },
+      { build: "claude" },
+    ];
+    for (const value of invalid) {
+      expect(isBuildStepConfigs(value)).toBe(false);
+    }
+    expect(isBuildStepConfigs({
+      build: { agent: "claude", model: "claude-a", reasoningEffort: "high" },
+    })).toBe(true);
+    expect(isBuildStepConfigs({ build: { agent: "claude" } })).toBe(true);
+  });
+
+  test("rejects a prototype-polluting key from a parsed snapshot", () => {
+    // JSON.parse makes `__proto__` an own enumerable key, so `Object.entries`
+    // sees it. It is not a step, and carrying it through would put a key on the
+    // record that nothing reads and every consumer inherits.
+    const parsed = JSON.parse('{"__proto__":{"agent":"claude"}}') as unknown;
+    expect(Object.keys(parsed as object)).toEqual(["__proto__"]);
+    expect(isBuildStepConfigs(parsed)).toBe(false);
+    expect(isBuildPipeline({ ...snapshot(), steps: parsed })).toBe(false);
+    expect(isBuildStepConfigs(
+      JSON.parse('{"constructor":{"agent":"claude"}}'),
+    )).toBe(false);
+  });
+
+  test("rejects a snapshot or a start request whose step map is malformed", () => {
+    const base = snapshot();
+    const input = {
+      taskId: base.taskId,
+      projectId: base.projectId,
+      taskTitle: base.taskTitle,
+      taskSnapshot: base.taskSnapshot,
+      environmentType: base.environmentType,
+      agentType: base.agentType,
+    };
+    for (const steps of [
+      null,
+      [],
+      "build",
+      7,
+      { build: null },
+      { build: { agent: "claude", reasoningEffort: "" } },
+      { fix: { agent: "claude" } },
+    ]) {
+      expect(isBuildPipeline({ ...base, steps })).toBe(false);
+      expect(isStartBuildPipelineInput({ ...input, steps })).toBe(false);
+    }
+    // Absent is not malformed: every step falls back to the repository default.
+    expect(isBuildPipeline({ ...base, steps: undefined })).toBe(true);
+    expect(isStartBuildPipelineInput({ ...input, steps: undefined })).toBe(true);
+  });
+
+  test("records the harness a session ran on, and only a known one", () => {
+    const base = snapshot();
+    const withAgent = (agent: unknown) => ({
+      ...base,
+      sessions: [{
+        phase: "review",
+        ...(agent === undefined ? {} : { agent }),
+        iteration: 0,
+        sessionKey: "review-key",
+        sdkSessionId: "review-session",
+        status: "idle",
+        startedAt: base.createdAt,
+        label: "Review Session",
+      }],
+      currentSessionIndex: 0,
+    });
+
+    for (const agent of ["claude", "codex", "opencode"]) {
+      expect(isBuildPipeline(withAgent(agent))).toBe(true);
+    }
+    // Absent on every snapshot written before per-step harnesses existed; those
+    // fall back to `agentType` rather than failing to load at all.
+    expect(isBuildPipeline(withAgent(undefined))).toBe(true);
+    for (const agent of ["gemini", "", null, 1, ["codex"]]) {
+      expect(isBuildPipeline(withAgent(agent))).toBe(false);
+    }
+  });
+
   test("maps every phase to its own step, except the fix stage", () => {
     expect(stepKeyForSessionPhase("build")).toBe("build");
     expect(stepKeyForSessionPhase("review")).toBe("review");
@@ -322,6 +440,50 @@ describe("build pipeline protocol", () => {
     expect(stepKeyForSessionPhase("resolve-conflicts")).toBe("resolve-conflicts");
     // The fix stage has no launcher control of its own; it is build work.
     expect(stepKeyForSessionPhase("fix")).toBe("build");
+  });
+
+  test("maps every member of the phase union to a configurable step", () => {
+    // A `Record` over the union, not a hand-picked list: adding a phase makes
+    // this fail to compile rather than silently leaving it unasserted, which is
+    // how a phase would end up resolving its harness from a step nobody
+    // configures.
+    const expected: Record<PipelineSessionPhase, BuildStepKey> = {
+      build: "build",
+      review: "review",
+      verify: "verify",
+      fix: "build",
+      pr: "pr",
+      "resolve-conflicts": "resolve-conflicts",
+    };
+    const phases = Object.keys(expected) as PipelineSessionPhase[];
+
+    for (const phase of phases) {
+      const step = stepKeyForSessionPhase(phase);
+      expect(step).toBe(expected[phase]);
+      // A step key the launcher never writes could never be read back.
+      expect(BUILD_STEP_KEYS).toContain(step);
+    }
+    // Every configurable step is reachable from some phase, so no launcher
+    // control can be configured and then never consulted.
+    expect(new Set(phases.map(stepKeyForSessionPhase)))
+      .toEqual(new Set(BUILD_STEP_KEYS));
+  });
+
+  test("publishes the configurable step keys in launcher order, immutably", () => {
+    expect([...BUILD_STEP_KEYS]).toEqual([
+      "build",
+      "review",
+      "verify",
+      "pr",
+      "resolve-conflicts",
+    ]);
+    // The guard tests membership against this list, and the launcher renders it
+    // in order; a consumer mutating it would change both at once.
+    expect(Object.isFrozen(BUILD_STEP_KEYS)).toBe(true);
+    expect(() => {
+      (BUILD_STEP_KEYS as BuildStepKey[]).push("fix" as BuildStepKey);
+    }).toThrow();
+    expect(BUILD_STEP_KEYS).toHaveLength(5);
   });
 
   test("classifies only nonterminal, nonpaused phases as active", () => {

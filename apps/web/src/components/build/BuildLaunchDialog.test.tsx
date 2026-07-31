@@ -112,6 +112,29 @@ function chooseAgent(step: StepLabel, agent: string) {
   fireEvent.click(within(group).getByRole("radio", { name: agent }));
 }
 
+function chooseModel(step: StepLabel, model: string) {
+  const trigger = screen.getByRole("combobox", { name: `${step} model` });
+  fireEvent.click(within(trigger.parentElement!).getByRole("option", { name: model }));
+}
+
+function chooseEffort(step: StepLabel, effort: string) {
+  const trigger = screen.getByRole("combobox", { name: `${step} reasoning effort` });
+  fireEvent.click(within(trigger.parentElement!).getByRole("option", { name: effort }));
+}
+
+/** The stubbed SelectValue renders the effort the dialog currently holds. */
+function effortValue(step: StepLabel) {
+  return screen.getByRole("combobox", { name: `${step} reasoning effort` }).textContent;
+}
+
+function modelValue(step: StepLabel) {
+  return screen.getByRole("combobox", { name: `${step} model` }).textContent;
+}
+
+function environmentSummary() {
+  return screen.getByText("Environment:").parentElement?.textContent;
+}
+
 /** Unticks "use one configuration for every step" to reveal the step sections. */
 function separateSteps() {
   fireEvent.click(
@@ -294,6 +317,226 @@ describe("BuildLaunchDialog", () => {
 
     submit();
     expect(onConfirm.mock.calls[0]![0].steps.review.agent).toBe("claude");
+  });
+
+  test("opens on the local environment when that is the configured default", () => {
+    const { onConfirm } = renderDialog({ defaultEnvironmentType: "local" });
+    const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+
+    // Initial value, not the result of a click: every other test starts
+    // containerized and clicks its way to local.
+    expect((
+      within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement
+    ).checked).toBe(true);
+    expect(environmentSummary()).toBe("Environment: Local worktree");
+    submit();
+
+    expect(onConfirm.mock.calls[0]![0].environmentType).toBe("local");
+  });
+
+  test("summarises the environment and every visible step", () => {
+    renderDialog();
+
+    expect(environmentSummary()).toBe("Environment: Container");
+    expect(screen.getByText("All steps: Claude A · default effort")).toBeTruthy();
+
+    const environment = screen.getByRole("radiogroup", { name: "Build environment" });
+    fireEvent.click(within(environment).getByRole("radio", { name: /^Local/ }));
+    separateSteps();
+    chooseAgent("Review", "Codex");
+    chooseEffort("Review", "High");
+
+    expect(environmentSummary()).toBe("Environment: Local worktree");
+    expect(screen.getByText("Build: Claude A · default effort")).toBeTruthy();
+    expect(screen.getByText("Review: Codex A · high effort")).toBeTruthy();
+  });
+
+  test("disables the submit button only while a start request is in flight", () => {
+    const { onConfirm, rerender } = renderDialog({ busy: true });
+
+    expect((
+      screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement
+    ).disabled).toBe(true);
+
+    rerender(
+      <BuildLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        catalog={catalog}
+        defaultAgent="claude"
+        defaultEnvironmentType="containerized"
+        busy={false}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    expect((
+      screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement
+    ).disabled).toBe(false);
+    submit();
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  test("drops a reasoning effort the newly picked model does not offer", () => {
+    const { onConfirm } = renderDialog({
+      preferredReasoningEfforts: { claude: "high" },
+    });
+
+    expect(effortValue("All steps")).toBe("high");
+    chooseModel("All steps", "Claude B");
+
+    expect(modelValue("All steps")).toContain("Claude B");
+    // Claude B offers "xhigh" only, so "high" cannot survive the switch.
+    expect(effortValue("All steps")).toBe("default");
+    // effortLabel spells this one out rather than capitalising it.
+    expect(within(
+      screen.getByRole("combobox", { name: "All steps reasoning effort" }).parentElement!,
+    ).getByRole("option", { name: "Extra high" })).toBeTruthy();
+    submit();
+
+    expect(onConfirm.mock.calls[0]![0].steps.build).toEqual({
+      agent: "claude",
+      model: "claude-b",
+      reasoningEffort: undefined,
+    });
+  });
+
+  test("adopts the preferred effort once a model that offers it is picked", () => {
+    const { onConfirm } = renderDialog({
+      preferredReasoningEfforts: { claude: "xhigh" },
+    });
+
+    // Claude A has no "xhigh", so the dialog opens on the default instead.
+    expect(effortValue("All steps")).toBe("default");
+    chooseModel("All steps", "Claude B");
+
+    expect(effortValue("All steps")).toBe("xhigh");
+    submit();
+    expect(onConfirm.mock.calls[0]![0].steps.build.reasoningEffort).toBe("xhigh");
+  });
+
+  test("seeds codex and opencode from their own preferred reasoning efforts", () => {
+    const { onConfirm } = renderDialog({
+      catalog: {
+        ...catalog,
+        opencode: [
+          { id: "provider/model-a", name: "OpenCode A", reasoningEfforts: ["low", "high"] },
+        ],
+      },
+      preferredReasoningEfforts: { codex: "high", opencode: "low" },
+    });
+
+    separateSteps();
+    chooseAgent("Review", "Codex");
+    chooseAgent("Verify", "OpenCode");
+
+    expect(effortValue("Review")).toBe("high");
+    expect(effortValue("Verify")).toBe("low");
+    submit();
+
+    expect(onConfirm.mock.calls[0]![0].steps.review.reasoningEffort).toBe("high");
+    expect(onConfirm.mock.calls[0]![0].steps.verify.reasoningEffort).toBe("low");
+  });
+
+  test("offers a placeholder when a harness exposes no models at all", () => {
+    const { onConfirm } = renderDialog({ catalog: { ...catalog, claude: [] } });
+
+    expect(modelValue("All steps")).toContain("Choose a model");
+    expect((
+      screen.getByRole("combobox", { name: "All steps reasoning effort" }) as HTMLButtonElement
+    ).disabled).toBe(true);
+    expect(screen.getByText("All steps: default · default effort")).toBeTruthy();
+    submit();
+
+    expect(onConfirm.mock.calls[0]![0].steps.build).toEqual({
+      agent: "claude",
+      model: "default",
+      reasoningEffort: undefined,
+    });
+  });
+
+  test("keeps the selection when a catalog arrives while the dialog is open", () => {
+    const { onConfirm, rerender } = renderDialog();
+
+    separateSteps();
+    chooseAgent("Review", "Codex");
+    chooseModel("Build", "Claude B");
+
+    // A late model fetch hands the dialog a different catalog object; the
+    // closed→open guard is what stops that discarding the user's answers.
+    rerender(
+      <BuildLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        catalog={{
+          ...catalog,
+          claude: [
+            ...catalog.claude,
+            { id: "claude-c", name: "Claude C", reasoningEfforts: ["low"] },
+          ],
+        }}
+        defaultAgent="claude"
+        defaultEnvironmentType="containerized"
+        onConfirm={onConfirm}
+      />,
+    );
+
+    // Still unticked and still on the picked model: no reset ran.
+    expect(screen.getByRole("radiogroup", { name: "Review agent" })).toBeTruthy();
+    expect(modelValue("Build")).toContain("Claude B");
+    submit();
+
+    expect(onConfirm.mock.calls[0]![0].steps.build.model).toBe("claude-b");
+    expect(onConfirm.mock.calls[0]![0].steps.review.agent).toBe("codex");
+  });
+
+  test("unticking keeps the shared model and reasoning on all five steps", () => {
+    const { onConfirm } = renderDialog();
+
+    chooseAgent("All steps", "Codex");
+    chooseEffort("All steps", "High");
+    separateSteps();
+    submit();
+
+    const shared = {
+      agent: "codex" as const,
+      model: "codex-a",
+      reasoningEffort: "high",
+    };
+    expect(onConfirm.mock.calls[0]![0].steps).toEqual({
+      build: shared,
+      review: shared,
+      verify: shared,
+      pr: shared,
+      "resolve-conflicts": shared,
+    });
+  });
+
+  test("re-ticking copies the build step's model and reasoning over the rest", () => {
+    const { onConfirm } = renderDialog();
+
+    separateSteps();
+    chooseAgent("Review", "Codex");
+    chooseEffort("Review", "High");
+    chooseModel("Build", "Claude B");
+    chooseEffort("Build", "Extra high");
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /Use one configuration for every step/ }),
+    );
+    submit();
+
+    const shared = {
+      agent: "claude" as const,
+      model: "claude-b",
+      reasoningEffort: "xhigh",
+    };
+    expect(onConfirm.mock.calls[0]![0].steps).toEqual({
+      build: shared,
+      review: shared,
+      verify: shared,
+      pr: shared,
+      "resolve-conflicts": shared,
+    });
   });
 
   test("cancel closes without confirming", () => {

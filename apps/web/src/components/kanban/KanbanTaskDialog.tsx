@@ -591,6 +591,12 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         steps: selection.steps,
       });
       handleOpenChange(false);
+    } catch (error) {
+      // Both call sites are `void`-ed click handlers, so an escaping rejection
+      // would surface as an unhandled one with nothing to attach it to. The
+      // hook reports its own failures; this only covers a throw it did not.
+      console.error("[KanbanTaskDialog] Failed to start build:", error);
+      toast.error("Failed to start build");
     } finally {
       setIsBuildStarting(false);
     }
@@ -648,6 +654,12 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         { steps: selection.steps },
       );
       handleOpenChange(false);
+    } catch (error) {
+      // `addTaskStore`, `addImage` and `startBuild` are all awaited from a
+      // `void`-ed click handler; without this an escaping rejection would go
+      // unhandled and the user would see the dialog stall with no explanation.
+      console.error("[KanbanTaskDialog] Failed to create task and build:", error);
+      toast.error("Failed to create task and start build");
     } finally {
       setIsBuildStarting(false);
     }
@@ -1125,7 +1137,11 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       <BuildLaunchDialog
         open={buildDialogOpen}
         onOpenChange={setBuildDialogOpen}
-        catalog={buildReviewModelCatalog(task.environmentId ?? undefined)}
+        // Unscoped, like create mode: a build always provisions a new
+        // environment, so the task's existing one says nothing about which
+        // models will be available — and scoping to it collapses the OpenCode
+        // list to a placeholder whenever that environment has none cached.
+        catalog={buildReviewModelCatalog(undefined)}
         busy={isBuildStarting}
         {...launchDefaults}
         onConfirm={handleBuildConfirmed}

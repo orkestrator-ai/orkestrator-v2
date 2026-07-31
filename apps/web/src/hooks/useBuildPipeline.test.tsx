@@ -7,12 +7,18 @@ import {
   test,
 } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
+import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import * as realBackend from "@/lib/backend";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useConfigStore } from "@/stores/configStore";
 import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { KanbanTask } from "@/lib/backend";
+import {
+  mockToastError as toastErrorMock,
+  mockToastSuccess as toastSuccessMock,
+} from "../../../../tests/mocks/sonner";
 
 const realBackendSnapshot = { ...realBackend };
 const startBuildPipelineMock = mock(async (_input: unknown) =>
@@ -54,6 +60,44 @@ const task: KanbanTask = {
   createdAt: "",
   order: 0,
 };
+
+/** What the build launcher submits: one harness per pipeline step. */
+const steps: BuildStepConfigs = {
+  build: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+  review: { agent: "claude", model: "opus[1m]" },
+  verify: { agent: "opencode", model: "provider/model-a" },
+  pr: { agent: "claude", model: "sonnet", reasoningEffort: "low" },
+  "resolve-conflicts": { agent: "codex", model: "gpt-5.4" },
+};
+
+const githubIssue = {
+  repositoryOwner: "Acme",
+  repositoryName: "Widget",
+  number: 7,
+  url: "https://github.com/Acme/Widget/issues/7",
+  title: "GitHub title",
+  body: "GitHub body",
+  labels: ["bug"],
+  status: "open",
+  comments: [],
+};
+
+const linearIssue = {
+  id: "linear-id",
+  identifier: "ENG-42",
+  title: "Linear title",
+  description: "Linear body",
+  status: "In Progress",
+  teamKey: "ENG",
+  url: "https://linear.example/ENG-42",
+  updatedAt: "2026-07-29",
+  labels: [],
+  comments: [],
+};
+
+function startInput() {
+  return startBuildPipelineMock.mock.calls[0]?.[0] as Record<string, unknown>;
+}
 
 function buildTabs(environmentId: string) {
   const state = usePaneLayoutStore.getState().environments.get(environmentId);
@@ -175,6 +219,129 @@ describe("useBuildPipeline", () => {
     expect(pipelineId).toBeUndefined();
     expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
     expect(usePaneLayoutStore.getState().environments.size).toBe(0);
+  });
+
+  test("forwards the launcher's per-step configuration verbatim", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuild(task, "local", "codex", { steps });
+    });
+
+    // Verbatim: the backend, not the renderer, decides what a step means.
+    expect(startInput().steps).toEqual(steps);
+  });
+
+  test("the build step's harness outranks an agent override", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      // Both supplied, and they disagree on purpose.
+      await result.current.startBuild(task, "local", "claude", { steps });
+    });
+
+    expect(startInput().agentType).toBe("codex");
+  });
+
+  test("an agent override wins when no step configuration was chosen", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuild(task, "local", "opencode");
+    });
+
+    expect(startInput().agentType).toBe("opencode");
+    expect(startInput().steps).toBeUndefined();
+  });
+
+  test("falls back to the repository's configured agent when neither is given", async () => {
+    const baseConfig = useConfigStore.getState().config;
+    useConfigStore.setState({
+      config: {
+        ...baseConfig,
+        repositories: {
+          ...baseConfig.repositories,
+          "project-1": {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+            defaultAgent: "opencode",
+          },
+        },
+      },
+    });
+
+    try {
+      const { result } = renderHook(() => useBuildPipeline());
+      await act(async () => {
+        await result.current.startBuild(task, "local");
+      });
+
+      expect(startInput().agentType).toBe("opencode");
+    } finally {
+      // The hook is still mounted and subscribed, so the restore is a render.
+      act(() => {
+        useConfigStore.setState({ config: baseConfig });
+      });
+    }
+  });
+
+  test("a GitHub issue build carries the same per-step configuration", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromGitHubIssue(
+        githubIssue,
+        "project-1",
+        "local",
+        "claude",
+        { steps },
+      );
+    });
+
+    expect(startInput().steps).toEqual(steps);
+    expect(startInput().agentType).toBe("codex");
+  });
+
+  test("the Linear entry point takes neither an override nor step configuration", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    // Locked in deliberately: Linear builds have no launcher in front of them,
+    // so they resolve their harness from config alone.
+    expect(result.current.startBuildFromLinearIssue.length).toBe(3);
+    await act(async () => {
+      await result.current.startBuildFromLinearIssue(linearIssue, "project-1", "local");
+    });
+
+    expect(startInput().steps).toBeUndefined();
+    expect(startInput().agentType).toBe("claude");
+  });
+
+  test("announces the start and names the reason a start failed", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuild(task, "local");
+    });
+    expect(toastSuccessMock).toHaveBeenCalledWith("Build pipeline started");
+    expect(toastErrorMock).not.toHaveBeenCalled();
+
+    startBuildPipelineMock.mockRejectedValueOnce(new Error("backend unavailable"));
+    await act(async () => {
+      await result.current.startBuild(task, "local");
+    });
+    expect(toastErrorMock).toHaveBeenCalledWith("Failed to start build pipeline", {
+      description: "backend unavailable",
+    });
+
+    toastErrorMock.mockClear();
+    // A non-Error rejection still has to say something to the user.
+    startBuildPipelineMock.mockRejectedValueOnce("plain string failure");
+    await act(async () => {
+      await result.current.startBuild(task, "local");
+    });
+    expect(toastErrorMock).toHaveBeenCalledWith("Failed to start build pipeline", {
+      description: "Unknown error",
+    });
   });
 
   test("navigation initializes, focuses, and reuses a task's existing build tab", async () => {

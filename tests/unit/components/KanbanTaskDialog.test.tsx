@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { Environment } from "@/types";
@@ -94,8 +94,14 @@ mock.module("@/lib/native/clipboard", () => ({
 const { KanbanTaskDialog } = await import("@/components/kanban/KanbanTaskDialog");
 const { useKanbanStore } = await import("@/stores/kanbanStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
+const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
+const { useConfigStore } = await import("@/stores/configStore");
+const { useOpenCodeStore } = await import("@/stores/openCodeStore");
+const { useProjectStore } = await import("@/stores/projectStore");
+const { buildPipelineFixture } = await import("@/test/build-pipeline-fixture");
 const initialKanbanState = useKanbanStore.getState();
 const initialEnvironmentState = useEnvironmentStore.getState();
+const initialConfig = useConfigStore.getState().config;
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 const originalReadAsDataURL = FileReader.prototype.readAsDataURL;
@@ -244,6 +250,28 @@ function resetStores() {
     setupScriptsRunning: new Set(),
     sessionActivated: new Set(),
   });
+  // The build launcher reads its defaults and its model catalog from these, so
+  // a test that seeds them must not leak into the next one.
+  useConfigStore.setState({ config: initialConfig });
+  useProjectStore.setState({ projects: [] });
+  useOpenCodeStore.setState({ models: new Map(), modelSource: new Map() });
+  useBuildPipelineStore.setState({
+    pipelines: new Map(),
+    buildEnvironmentIds: new Set(),
+  });
+}
+
+/** Opens the launcher without answering it, for assertions on its defaults. */
+function openLauncher() {
+  fireEvent.click(screen.getByRole("button", { name: "Build…" }));
+}
+
+function isChecked(group: HTMLElement, name: string | RegExp) {
+  return (within(group).getByRole("radio", { name }) as HTMLInputElement).checked;
+}
+
+function buildButton() {
+  return screen.getByRole("button", { name: "Build…" }) as HTMLButtonElement;
 }
 
 function getDialogBody(dialog: HTMLElement = screen.getByRole("dialog")) {
@@ -1171,6 +1199,208 @@ describe("KanbanTaskDialog", () => {
         { steps: defaultSteps() },
       );
     });
+  });
+
+  test("cancelling the existing-environment confirmation starts no build", async () => {
+    const task = makeTask({ environmentId: "env-1" });
+
+    render(<KanbanTaskDialog task={task} open onOpenChange={() => {}} />);
+
+    launchBuild("Container");
+    expect(screen.getByText("Environment Already Exists")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText("Environment Already Exists")).toBeNull());
+    // The held selection is dropped, so there is nothing left to confirm.
+    expect(screen.queryByRole("button", { name: "Start Build" })).toBeNull();
+    expect(startBuildMock).not.toHaveBeenCalled();
+  });
+
+  test("the launcher reopens on the default agent after being cancelled", () => {
+    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+
+    openLauncher();
+    const agents = screen.getByRole("radiogroup", { name: "All steps agent" });
+    fireEvent.click(within(agents).getByRole("radio", { name: "Codex" }));
+    expect(isChecked(agents, "Codex")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    openLauncher();
+
+    const reopened = screen.getByRole("radiogroup", { name: "All steps agent" });
+    expect(isChecked(reopened, "Claude")).toBe(true);
+    expect(isChecked(reopened, "Codex")).toBe(false);
+  });
+
+  test("blocks another launch while a build start is in flight", async () => {
+    const pending = deferred<void>();
+    startBuildMock.mockImplementationOnce(() => pending.promise);
+
+    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+
+    launchBuild("Container");
+
+    await waitFor(() => expect(buildButton().disabled).toBe(true));
+
+    pending.resolve();
+
+    await waitFor(() => expect(buildButton().disabled).toBe(false));
+  });
+
+  test("reports a build start that throws instead of leaving the launch stuck", async () => {
+    // The launcher's confirm handlers are `void`-ed, so a rejection escaping
+    // here would be unhandled and the button would stay disabled forever.
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    startBuildMock.mockImplementationOnce(() => {
+      throw new Error("bridge exploded");
+    });
+
+    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+
+    launchBuild("Container");
+
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("Failed to start build"));
+    await waitFor(() => expect(buildButton().disabled).toBe(false));
+
+    consoleError.mockRestore();
+  });
+
+  test("an unfinished pipeline for the task blocks launching another build", () => {
+    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
+      id: "pipeline-active",
+      taskId: "task-1",
+      projectId: "project-1",
+      phase: "building",
+    }));
+
+    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    expect(buildButton().disabled).toBe(true);
+
+    cleanup();
+    // A pipeline that already finished is not an active build.
+    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
+      id: "pipeline-active",
+      taskId: "task-1",
+      projectId: "project-1",
+      phase: "complete",
+      backendRevision: 2,
+    }));
+
+    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    expect(buildButton().disabled).toBe(false);
+  });
+
+  test("offers OpenCode models cached under a different environment", () => {
+    useOpenCodeStore.setState({
+      models: new Map([[
+        "env-other",
+        [{ id: "openrouter/zeta", name: "Zeta", provider: "OpenRouter", variants: [] }],
+      ]]),
+    });
+
+    render(
+      <KanbanTaskDialog
+        task={makeTask({ environmentId: "env-1" })}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+
+    openLauncher();
+    const agents = screen.getByRole("radiogroup", { name: "All steps agent" });
+    fireEvent.click(within(agents).getByRole("radio", { name: "OpenCode" }));
+
+    // A build always provisions a NEW environment, so the catalog must not be
+    // scoped to the one this task already owns: scoping it there offers only
+    // the "Default" placeholder whenever that environment has nothing cached.
+    expect(screen.getByRole("combobox", { name: "All steps model" }).textContent)
+      .toContain("Zeta");
+  });
+
+  test("the launcher opens on the repository and project defaults", async () => {
+    useConfigStore.setState({
+      config: {
+        ...initialConfig,
+        global: { ...initialConfig.global, codexModel: "gpt-5.4-mini" },
+        repositories: {
+          ...initialConfig.repositories,
+          "project-1": {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+            defaultAgent: "codex",
+          },
+        },
+      },
+    });
+    useProjectStore.setState({
+      projects: [{
+        id: "project-1",
+        name: "Project 1",
+        gitUrl: "https://github.com/org/repo.git",
+        localPath: "/tmp/project-1",
+        addedAt: "2026-01-01T00:00:00.000Z",
+        order: 0,
+      }],
+    });
+
+    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+    openLauncher();
+
+    expect(isChecked(
+      screen.getByRole("radiogroup", { name: "All steps agent" }),
+      "Codex",
+    )).toBe(true);
+    // A project with a local path defaults to a worktree, not a container.
+    expect(isChecked(
+      screen.getByRole("radiogroup", { name: "Build environment" }),
+      /^Local/,
+    )).toBe(true);
+    expect(screen.getByRole("combobox", { name: "All steps model" }).textContent)
+      .toContain("GPT-5.4-Mini");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start build" }));
+
+    await waitFor(() => expect(startBuildMock).toHaveBeenCalled());
+    const [, environmentType, agent, options] = startBuildMock.mock
+      .calls[0] as unknown as [
+        KanbanTask,
+        string,
+        string,
+        { steps: Record<string, { agent: string; model: string; reasoningEffort?: string }> },
+      ];
+    expect(environmentType).toBe("local");
+    expect(agent).toBe("codex");
+    expect(options.steps.build).toEqual({
+      agent: "codex",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "medium",
+    });
+  });
+
+  test("clears the in-flight state when a build cannot start", async () => {
+    // startBuild swallows its own failures and resolves undefined, so the
+    // launcher's failure path is an early return from inside the try block.
+    // Only the finally clause can put the buttons back.
+    addTaskMock.mockImplementationOnce(async () => "");
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), {
+      target: { value: "Doomed build" },
+    });
+
+    launchBuild("Container");
+
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("Failed to create task"));
+    expect(startBuildMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(buildButton().disabled).toBe(false));
+    expect((
+      screen.getByRole("button", { name: "Create Task" }) as HTMLButtonElement
+    ).disabled).toBe(false);
   });
 
   test("view build navigates to the linked environment and closes the dialog", () => {

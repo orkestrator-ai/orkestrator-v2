@@ -203,7 +203,11 @@ export function BuildChatTab({
   const selectedSession = pipeline?.sessions.find(
     (session) => session.sdkSessionId === selectedSessionId,
   );
-  const agentType = pipeline?.agentType;
+  // The harness this session actually ran on, not the pipeline's build agent:
+  // steps may choose different harnesses, and decoding a Codex transcript
+  // through the Claude adapter silently drops its subagent and tool-group parts.
+  // Snapshots written before per-step harnesses carry no session agent.
+  const agentType = selectedSession?.agent ?? pipeline?.agentType;
   const messages = useMemo(
     () =>
       agentType
@@ -289,7 +293,10 @@ export function BuildChatTab({
   const canSendMessage = pipeline.phase !== "complete"
     && pipeline.phase !== "failed";
   const queuedMessages = pipeline.pendingUserMessages?.length ?? 0;
-  const agentLabel = AGENT_LABELS[pipeline.agentType] ?? pipeline.agentType;
+  // Names the harness of the session on screen, which per-step configuration
+  // can make different from the pipeline's build agent.
+  const displayedAgent = selectedSession?.agent ?? pipeline.agentType;
+  const agentLabel = AGENT_LABELS[displayedAgent] ?? displayedAgent;
   const reportSession = reviewReportSession(pipeline);
   const showReviewReport = Boolean(
     pipeline.structuredReview
@@ -365,7 +372,7 @@ export function BuildChatTab({
             )}
             <span>{phaseLabel}</span>
             <span>·</span>
-            <span className="capitalize">{pipeline.agentType}</span>
+            <span className="capitalize">{displayedAgent}</span>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">

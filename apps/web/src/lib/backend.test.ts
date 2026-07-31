@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AppConfig } from "@/types";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from
+  "@orkestrator/protocol/agent-interactions";
 
 const invokeMock = mock<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve());
 
@@ -1203,6 +1205,8 @@ describe("backend native agent and looped review wrappers", () => {
       environmentId: "env-1",
       agent: "codex" as const,
       logicalSessionKey: "review-1",
+      origin: "looped-review" as const,
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       title: "Review",
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
@@ -1228,6 +1232,8 @@ describe("backend native agent and looped review wrappers", () => {
     );
     const minimalPayload = invokeMock.mock.calls.at(-1)?.[1] as Record<string, unknown>;
     expect(minimalPayload).not.toHaveProperty("title");
+    expect(minimalPayload).not.toHaveProperty("origin");
+    expect(minimalPayload).not.toHaveProperty("interactionPolicy");
     expect(minimalPayload).not.toHaveProperty("model");
     expect(minimalPayload).not.toHaveProperty("reasoningEffort");
     expect(minimalPayload).not.toHaveProperty("phase");
@@ -1258,6 +1264,8 @@ describe("backend native agent and looped review wrappers", () => {
       environmentId: "env-1",
       agent: "opencode" as const,
       logicalSessionKey: "fork-1",
+      origin: "build-pipeline" as const,
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       providerSessionId: "provider-new",
       expectedProviderSessionId: "provider-old",
       model: "open-model",
@@ -1284,6 +1292,8 @@ describe("backend native agent and looped review wrappers", () => {
     );
     const minimalPayload = invokeMock.mock.calls.at(-1)?.[1] as Record<string, unknown>;
     expect(minimalPayload).not.toHaveProperty("expectedProviderSessionId");
+    expect(minimalPayload).not.toHaveProperty("origin");
+    expect(minimalPayload).not.toHaveProperty("interactionPolicy");
     expect(minimalPayload).not.toHaveProperty("model");
     expect(minimalPayload).not.toHaveProperty("reasoningEffort");
   });
@@ -1314,6 +1324,8 @@ describe("backend native agent and looped review wrappers", () => {
       environmentId: "env-1",
       agent: "claude" as const,
       logicalSessionKey: "fix-1",
+      origin: "looped-review" as const,
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       title: "Fix review",
       model: "claude-model",
       reasoningEffort: "high",
@@ -1345,6 +1357,8 @@ describe("backend native agent and looped review wrappers", () => {
     );
     const minimalPayload = invokeMock.mock.calls.at(-1)?.[1] as Record<string, unknown>;
     expect(minimalPayload).not.toHaveProperty("title");
+    expect(minimalPayload).not.toHaveProperty("origin");
+    expect(minimalPayload).not.toHaveProperty("interactionPolicy");
     expect(minimalPayload).not.toHaveProperty("model");
     expect(minimalPayload).not.toHaveProperty("reasoningEffort");
     expect(minimalPayload).not.toHaveProperty("phase");

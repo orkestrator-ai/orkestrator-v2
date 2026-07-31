@@ -480,7 +480,10 @@ export function isAgentInteractionSnapshot(
     || !isNonNegativeInteger(value.revision)
     || !Array.isArray(value.requests)
     || value.requests.length > AGENT_INTERACTION_LIMITS.maxPendingRequests
-    || !value.requests.every(isAgentInteractionRequest)
+    || !value.requests.every((request) =>
+      isAgentInteractionRequest(request)
+      && (request.state === "pending" || request.state === "answering")
+    )
   ) {
     return false;
   }
@@ -671,18 +674,38 @@ function isJournalEntry(value: unknown): value is AgentInteractionResolutionJour
 export function isAgentInteractionResolutionJournal(
   value: unknown,
 ): value is AgentInteractionResolutionJournal {
+  return isAgentInteractionResolutionJournalStructure(value)
+    && value.entries.length <= AGENT_INTERACTION_LIMITS.maxJournalEntries
+    && isWithinSerializedLimit(value);
+}
+
+function hasUniqueInteractionPairs(
+  entries: readonly AgentInteractionResolutionJournalEntry[],
+): boolean {
+  const bySession = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    const interactionIds = bySession.get(entry.sessionId) ?? new Set<string>();
+    if (interactionIds.has(entry.interactionId)) return false;
+    interactionIds.add(entry.interactionId);
+    bySession.set(entry.sessionId, interactionIds);
+  }
+  return true;
+}
+
+function isAgentInteractionResolutionJournalStructure(
+  value: unknown,
+): value is AgentInteractionResolutionJournal {
   if (
     !isRecord(value)
     || !hasOnlyKeys(value, new Set(["version", "entries"]))
     || value.version !== AGENT_INTERACTION_JOURNAL_VERSION
     || !Array.isArray(value.entries)
-    || value.entries.length > AGENT_INTERACTION_LIMITS.maxJournalEntries
+    || value.entries.length > AGENT_INTERACTION_LIMITS.maxJournalEntries + 1
     || !value.entries.every(isJournalEntry)
   ) return false;
   const entries = value.entries as AgentInteractionResolutionJournalEntry[];
   return hasUniqueStrings(entries.map((entry) => entry.id))
-    && hasUniqueStrings(entries.map((entry) => `${entry.sessionId}\0${entry.interactionId}`))
-    && isWithinSerializedLimit(value);
+    && hasUniqueInteractionPairs(entries);
 }
 
 function isWorkflowSummaryEntry(value: unknown): value is AgentInteractionWorkflowSummaryEntry {
@@ -724,7 +747,10 @@ export function pruneAgentInteractionResolutionJournal(
   journal: AgentInteractionResolutionJournal,
   now = Date.now(),
 ): AgentInteractionResolutionJournal {
-  if (!isAgentInteractionResolutionJournal(journal) || !isEpochMilliseconds(now)) {
+  if (
+    !isAgentInteractionResolutionJournalStructure(journal)
+    || !isEpochMilliseconds(now)
+  ) {
     throw new Error("Invalid interaction resolution journal cleanup input");
   }
   const cutoff = now - AGENT_INTERACTION_JOURNAL_RETENTION_MS;
@@ -735,14 +761,23 @@ export function pruneAgentInteractionResolutionJournal(
     .filter((entry) => entry.state === TERMINAL_JOURNAL_STATE)
     .filter((entry) => (entry.workflowRecordedAt ?? 0) >= cutoff)
     .sort((a, b) => (b.workflowRecordedAt ?? 0) - (a.workflowRecordedAt ?? 0));
-  const available = Math.max(
-    0,
-    AGENT_INTERACTION_LIMITS.maxJournalEntries - unfinished.length,
-  );
-  return {
+  const pruned: AgentInteractionResolutionJournal = {
     version: AGENT_INTERACTION_JOURNAL_VERSION,
-    entries: [...unfinished, ...terminal.slice(0, available)],
+    entries: [...unfinished],
   };
+  if (!isAgentInteractionResolutionJournal(pruned)) {
+    throw new Error("Unfinished interaction claims exceed the journal limit");
+  }
+  for (const entry of terminal) {
+    if (pruned.entries.length >= AGENT_INTERACTION_LIMITS.maxJournalEntries) break;
+    const candidate: AgentInteractionResolutionJournal = {
+      ...pruned,
+      entries: [...pruned.entries, entry],
+    };
+    if (!isWithinSerializedLimit(candidate)) break;
+    pruned.entries.push(entry);
+  }
+  return pruned;
 }
 
 function assertSerializable(value: unknown, label: string): string {

@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { isPrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from
+  "@orkestrator/protocol/agent-interactions";
 import {
   __testing as commandTesting,
   createCommandRegistry,
@@ -513,6 +515,8 @@ describe("native agent and looped-review controller commands", () => {
         environmentId: "e1",
         agent: "codex",
         logicalSessionKey: "env-e1:tab-1",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         title: "Review",
         model: "gpt-test",
         reasoningEffort: "high",
@@ -522,6 +526,8 @@ describe("native agent and looped-review controller commands", () => {
         environmentId: "e1",
         agent: "codex",
         logicalSessionKey: "env-e1:tab-1",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         title: "Review",
         model: "gpt-test",
         reasoningEffort: "high",
@@ -532,6 +538,8 @@ describe("native agent and looped-review controller commands", () => {
         environmentId: "e1",
         agent: "opencode",
         logicalSessionKey: "env-e1:tab-adopted",
+        origin: "build-pipeline",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         providerSessionId: "provider-new",
         expectedProviderSessionId: "provider-old",
         model: "provider/model",
@@ -541,6 +549,8 @@ describe("native agent and looped-review controller commands", () => {
         environmentId: "e1",
         agent: "opencode",
         logicalSessionKey: "env-e1:tab-adopted",
+        origin: "build-pipeline",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         providerSessionId: "provider-new",
         expectedProviderSessionId: "provider-old",
         title: undefined,
@@ -555,6 +565,8 @@ describe("native agent and looped-review controller commands", () => {
         environmentId: "e1",
         agent: "claude",
         logicalSessionKey: "env-e1:tab-2",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         prompt: "Review this",
         requestId: "request-1",
         images,
@@ -564,6 +576,8 @@ describe("native agent and looped-review controller commands", () => {
         environmentId: "e1",
         agent: "claude",
         logicalSessionKey: "env-e1:tab-2",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         title: undefined,
         model: undefined,
         reasoningEffort: undefined,
@@ -597,6 +611,26 @@ describe("native agent and looped-review controller commands", () => {
       })).rejects.toThrow("non-blank string");
       expect(dispatchPrompt).toHaveBeenCalledTimes(1);
       expect(adoptSession).toHaveBeenCalledTimes(1);
+
+      await expect(invoke("ensure_native_agent_session", {
+        environmentId: "e1",
+        agent: "codex",
+        logicalSessionKey: "env-e1:invalid-origin",
+        origin: "scheduled-task",
+      })).rejects.toThrow("supported agent interaction origin");
+      await expect(invoke("dispatch_native_agent_prompt", {
+        environmentId: "e1",
+        agent: "codex",
+        logicalSessionKey: "env-e1:invalid-policy",
+        prompt: "Review",
+        requestId: "request-invalid-policy",
+        interactionPolicy: {
+          ...UNATTENDED_AGENT_INTERACTION_POLICY,
+          authorization: "await-user",
+        },
+      })).rejects.toThrow("valid agent interaction policy");
+      expect(ensureSession).toHaveBeenCalledTimes(1);
+      expect(dispatchPrompt).toHaveBeenCalledTimes(1);
     }, { nativeAgents });
   });
 

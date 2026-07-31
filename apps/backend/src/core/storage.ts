@@ -532,11 +532,7 @@ function isPersistedNativeAgentSession(
     && Number.isFinite(Date.parse(value.updatedAt));
 }
 
-/**
- * Records written before interaction policies existed were all user-created
- * logical native sessions. Restore them as interactive without changing any
- * provider identity, timestamps, or dispatch deduplication data.
- */
+/** Restores pre-policy records without changing provider or dispatch identity. */
 function migratePersistedNativeAgentSession(
   value: unknown,
   expectedKey: string,
@@ -550,11 +546,15 @@ function migratePersistedNativeAgentSession(
   ) {
     return null;
   }
+  const legacyLoopedReview = typeof value.logicalSessionKey === "string"
+    && value.logicalSessionKey.startsWith("looped-review:");
   const migrated = {
     ...value,
     version: NATIVE_AGENT_SESSION_VERSION,
-    origin: "interactive-native",
-    interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+    origin: legacyLoopedReview ? "looped-review" : "interactive-native",
+    interactionPolicy: legacyLoopedReview
+      ? UNATTENDED_AGENT_INTERACTION_POLICY
+      : INTERACTIVE_AGENT_INTERACTION_POLICY,
   };
   return isPersistedNativeAgentSession(migrated, expectedKey)
     ? migrated
@@ -578,6 +578,10 @@ function resolveNativeAgentInteractionMetadata(input: {
       "looped-review",
     ].includes(origin)
     || !isAgentInteractionPolicy(interactionPolicy)
+    || (
+      (origin === "build-pipeline" || origin === "looped-review")
+        !== (interactionPolicy.mode === "unattended")
+    )
   ) {
     return null;
   }
@@ -3425,19 +3429,32 @@ export class StorageService {
     });
   }
 
-  private async loadNativeAgentSessions(): Promise<
-    Record<string, PersistedNativeAgentSession>
-  > {
-    const stored = await this.loadJson<Record<string, PersistedNativeAgentSession>>(
+  private async loadNativeAgentSessions(): Promise<{
+    sessions: Record<string, PersistedNativeAgentSession>;
+    migrated: boolean;
+  }> {
+    const stored = await this.loadJson<unknown>(
       this.nativeAgentSessionsFile(),
       () => ({}),
     );
-    return Object.fromEntries(
-      Object.entries(stored).flatMap(([storedKey, session]) => {
-        const migrated = migratePersistedNativeAgentSession(session, storedKey);
-        return migrated ? [[storedKey, migrated]] : [];
-      }),
-    ) as Record<string, PersistedNativeAgentSession>;
+    if (!isRecord(stored)) {
+      throw new Error("Stored native agent sessions are invalid");
+    }
+    const sessions: Record<string, PersistedNativeAgentSession> = {};
+    let migratedAny = false;
+    for (const [storedKey, session] of Object.entries(stored)) {
+      if (!isPersistedNativeAgentSession(session, storedKey)) {
+        migratedAny = true;
+      }
+      const migrated = migratePersistedNativeAgentSession(session, storedKey);
+      if (!migrated) {
+        throw new Error(
+          "Stored native agent session metadata is invalid or uses an unsupported version",
+        );
+      }
+      sessions[storedKey] = migrated;
+    }
+    return { sessions, migrated: migratedAny };
   }
 
   async getNativeAgentSession(
@@ -3446,7 +3463,13 @@ export class StorageService {
     if (!isNonBlankString(key)) {
       throw new Error("Native agent session key must not be blank");
     }
-    return (await this.loadNativeAgentSessions())[key] ?? null;
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const { sessions, migrated } = await this.loadNativeAgentSessions();
+      if (migrated) {
+        await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+      }
+      return sessions[key] ?? null;
+    });
   }
 
   /**
@@ -3481,15 +3504,23 @@ export class StorageService {
         input.environmentId,
         "Native agent session",
       );
-      const sessions = await this.loadNativeAgentSessions();
+      const { sessions, migrated } = await this.loadNativeAgentSessions();
       const existing = sessions[input.key];
       if (existing) {
         if (
           existing.environmentId !== input.environmentId
           || existing.agent !== input.agent
           || existing.logicalSessionKey !== input.logicalSessionKey
+          || (input.origin !== undefined && existing.origin !== input.origin)
+          || (
+            input.interactionPolicy !== undefined
+            && existing.interactionPolicy.mode !== input.interactionPolicy.mode
+          )
         ) {
           throw new Error("Native agent session key collision");
+        }
+        if (migrated) {
+          await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
         }
         return existing;
       }
@@ -3551,17 +3582,25 @@ export class StorageService {
         input.environmentId,
         "Native agent session",
       );
-      const sessions = await this.loadNativeAgentSessions();
+      const { sessions, migrated } = await this.loadNativeAgentSessions();
       const existing = sessions[input.key];
       if (existing) {
         if (
           existing.environmentId !== input.environmentId
           || existing.agent !== input.agent
           || existing.logicalSessionKey !== input.logicalSessionKey
+          || (input.origin !== undefined && existing.origin !== input.origin)
+          || (
+            input.interactionPolicy !== undefined
+            && existing.interactionPolicy.mode !== input.interactionPolicy.mode
+          )
         ) {
           throw new Error("Native agent session key collision");
         }
         if (existing.providerSessionId === input.providerSessionId) {
+          if (migrated) {
+            await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+          }
           return existing;
         }
         if (existing.providerSessionId !== input.expectedProviderSessionId) {
@@ -3603,9 +3642,12 @@ export class StorageService {
       throw new Error("Native agent session identity must not be blank");
     }
     return this.enqueueNativeAgentSessionMutation(async () => {
-      const sessions = await this.loadNativeAgentSessions();
+      const { sessions, migrated } = await this.loadNativeAgentSessions();
       const existing = sessions[key];
       if (!existing || existing.providerSessionId !== providerSessionId) {
+        if (migrated) {
+          await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+        }
         return false;
       }
       delete sessions[key];
@@ -3620,13 +3662,16 @@ export class StorageService {
   ): Promise<void> {
     if (!isNonBlankString(environmentId)) return;
     await this.enqueueNativeAgentSessionMutation(async () => {
-      const sessions = await this.loadNativeAgentSessions();
+      const { sessions, migrated } = await this.loadNativeAgentSessions();
       const retained = Object.fromEntries(
         Object.entries(sessions).filter(
           ([, session]) => session.environmentId !== environmentId,
         ),
       );
-      if (Object.keys(retained).length !== Object.keys(sessions).length) {
+      if (
+        migrated
+        || Object.keys(retained).length !== Object.keys(sessions).length
+      ) {
         await this.saveSensitiveJson(this.nativeAgentSessionsFile(), retained);
         this.announce("native-agent-session", environmentId);
       }
@@ -3637,9 +3682,10 @@ export class StorageService {
       // failed delete may have removed the primary record while leaving a backup.
       await this.scrubSensitiveJsonBackups(
         this.nativeAgentSessionsFile(),
-        (storedKey, session) =>
-          migratePersistedNativeAgentSession(session, storedKey)?.environmentId
-            !== environmentId,
+        (storedKey, session) => {
+          const migrated = migratePersistedNativeAgentSession(session, storedKey);
+          return migrated !== null && migrated.environmentId !== environmentId;
+        },
       );
     });
   }
@@ -3656,10 +3702,13 @@ export class StorageService {
       throw new Error("Native agent dispatch key must not be blank");
     }
     return this.enqueueNativeAgentSessionMutation(async () => {
-      const sessions = await this.loadNativeAgentSessions();
+      const { sessions, migrated } = await this.loadNativeAgentSessions();
       const session = sessions[key];
       if (!session) throw new Error("Native agent session was not found");
       if (session.dispatchedRequestIds?.includes(requestId)) {
+        if (migrated) {
+          await this.saveSensitiveJson(this.nativeAgentSessionsFile(), sessions);
+        }
         return { session, dispatched: false };
       }
 

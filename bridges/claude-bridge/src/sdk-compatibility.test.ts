@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 type PackageManifest = {
@@ -191,5 +192,93 @@ describe("Claude Agent SDK runtime compatibility", () => {
 
     expect(exitCode, stderr).toBe(0);
     expect(JSON.parse(stdout)).toEqual({ ok: true });
+  }, 15_000);
+
+  test("routes AskUserQuestion through canUseTool under bypassPermissions", async () => {
+    const packageRoot = join(import.meta.dir, "..");
+    const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-contract-"));
+    const executable = join(fixtureDir, "fake-claude");
+    const responseFile = join(fixtureDir, "response.json");
+    await copyFile(
+      join(import.meta.dir, "testing", "fake-ask-user-question-cli.ts"),
+      executable,
+    );
+    await chmod(executable, 0o755);
+
+    try {
+      const probe = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `
+            import { query } from "@anthropic-ai/claude-agent-sdk";
+            let callbackCount = 0;
+            const request = query({
+              prompt: "Run the deterministic question contract",
+              options: {
+                pathToClaudeCodeExecutable: process.env.CLAUDE_SDK_CONTRACT_EXECUTABLE,
+                permissionMode: "bypassPermissions",
+                allowDangerouslySkipPermissions: true,
+                maxTurns: 1,
+                canUseTool: async (toolName, input) => {
+                  callbackCount += 1;
+                  await new Promise((resolve) => setTimeout(resolve, 25));
+                  return {
+                    behavior: "allow",
+                    updatedInput: {
+                      ...input,
+                      answers: { "Choose a deterministic answer": "Continue" },
+                    },
+                  };
+                },
+              },
+            });
+            let resultSeen = false;
+            for await (const message of request) {
+              if (message.type === "result") resultSeen = true;
+            }
+            console.log(JSON.stringify({ callbackCount, resultSeen }));
+          `,
+        ],
+        {
+          cwd: packageRoot,
+          env: {
+            ...process.env,
+            CLAUDE_SDK_CONTRACT_EXECUTABLE: executable,
+            CLAUDE_SDK_CONTRACT_RESPONSE_FILE: responseFile,
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(probe.stdout).text(),
+        new Response(probe.stderr).text(),
+        probe.exited,
+      ]);
+      expect(exitCode, stderr).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({ callbackCount: 1, resultSeen: true });
+
+      const captured = JSON.parse(await readFile(responseFile, "utf8")) as {
+        argv: string[];
+        response: {
+          subtype: string;
+          response: { behavior: string; updatedInput: { answers: Record<string, string> } };
+        };
+      };
+      expect(captured.argv).toContain("bypassPermissions");
+      expect(captured.response).toMatchObject({
+        subtype: "success",
+        response: {
+          behavior: "allow",
+          updatedInput: {
+            answers: { "Choose a deterministic answer": "Continue" },
+          },
+        },
+      });
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
   }, 15_000);
 });

@@ -1285,6 +1285,27 @@ describe("looped review recovery validation", () => {
     })).toBe(true);
   });
 
+  test("accepts the shared interactive-request failure and rejects unknown codes", () => {
+    const id = createWorkflow();
+    const valid = workflow(id);
+    const failure = {
+      message: "The unattended workflow requested input",
+      retryPhase: "discovering" as const,
+      occurredAt: valid.updatedAt,
+    };
+
+    expect(isLoopedReviewWorkflow({
+      ...valid,
+      phase: "failed",
+      failure: { ...failure, code: "interactive-request" },
+    })).toBe(true);
+    expect(isLoopedReviewWorkflow({
+      ...valid,
+      phase: "failed",
+      failure: { ...failure, code: "future-failure-code" },
+    })).toBe(false);
+  });
+
   test("restores archived pools with and without a recorded fix outcome", () => {
     const id = createWorkflow();
     const valid = workflow(id);

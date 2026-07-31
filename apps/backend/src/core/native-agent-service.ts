@@ -76,6 +76,27 @@ export interface AdoptNativeAgentSessionInput
   expectedProviderSessionId?: string;
 }
 
+function isValidInteractionMetadata(input: {
+  origin?: AgentInteractionOrigin;
+  interactionPolicy?: AgentInteractionPolicy;
+}): boolean {
+  if (
+    input.origin !== undefined
+    && !AGENT_INTERACTION_ORIGINS.includes(input.origin)
+  ) return false;
+  if (
+    input.interactionPolicy !== undefined
+    && !isAgentInteractionPolicy(input.interactionPolicy)
+  ) return false;
+  const origin = input.origin ?? "interactive-native";
+  const policyMode = input.interactionPolicy?.mode
+    ?? (origin === "build-pipeline" || origin === "looped-review"
+      ? "unattended"
+      : "interactive");
+  return (origin === "build-pipeline" || origin === "looped-review")
+    === (policyMode === "unattended");
+}
+
 export interface NativeAgentServiceOptions {
   provider?: (
     input: EnsureNativeAgentSessionInput,
@@ -181,10 +202,7 @@ export class NativeAgentService {
       !nonBlank(input.environmentId)
       || !nonBlank(input.logicalSessionKey)
       || !["claude", "codex", "opencode"].includes(input.agent)
-      || (input.origin !== undefined
-        && !AGENT_INTERACTION_ORIGINS.includes(input.origin))
-      || (input.interactionPolicy !== undefined
-        && !isAgentInteractionPolicy(input.interactionPolicy))
+      || !isValidInteractionMetadata(input)
     ) {
       throw new Error("Invalid native agent session request");
     }
@@ -235,10 +253,7 @@ export class NativeAgentService {
       || !nonBlank(input.logicalSessionKey)
       || !nonBlank(input.providerSessionId)
       || !["claude", "codex", "opencode"].includes(input.agent)
-      || (input.origin !== undefined
-        && !AGENT_INTERACTION_ORIGINS.includes(input.origin))
-      || (input.interactionPolicy !== undefined
-        && !isAgentInteractionPolicy(input.interactionPolicy))
+      || !isValidInteractionMetadata(input)
       || (
         input.expectedProviderSessionId !== undefined
         && !nonBlank(input.expectedProviderSessionId)
@@ -883,6 +898,11 @@ export class NativeAgentService {
       || session.environmentId !== input.environmentId
       || session.agent !== input.agent
       || session.logicalSessionKey !== input.logicalSessionKey
+      || (input.origin !== undefined && session.origin !== input.origin)
+      || (
+        input.interactionPolicy !== undefined
+        && session.interactionPolicy.mode !== input.interactionPolicy.mode
+      )
     ) {
       throw new Error("Native agent session key collision");
     }

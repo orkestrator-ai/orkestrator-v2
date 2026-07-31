@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   AGENT_INTERACTION_JOURNAL_VERSION,
+  AGENT_INTERACTION_LIMITS,
+  AGENT_INTERACTION_JOURNAL_RETENTION_MS,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
   UNATTENDED_AGENT_INTERACTION_POLICY,
 } from "@orkestrator/protocol/agent-interactions";
@@ -46,6 +48,27 @@ const input = {
   logicalSessionKey: "env-env-1:startup-agent",
 };
 
+function terminalJournalEntry(index: number, resolvedAt = Date.now()) {
+  return {
+    id: `claim-${index}`,
+    interactionId: `interaction-${index}`,
+    provider: "codex" as const,
+    kind: "command-approval" as const,
+    sessionId: "provider-session",
+    state: "workflow-recorded" as const,
+    claim: {
+      workflowType: "build-pipeline" as const,
+      workflowId: "pipeline-1",
+      phase: "building",
+      fence: index,
+      claimedAt: resolvedAt - 2,
+    },
+    outcome: "denied" as const,
+    providerResolvedAt: resolvedAt - 1,
+    workflowRecordedAt: resolvedAt,
+  };
+}
+
 describe("StorageService native agent sessions", () => {
   test("migrates legacy sessions to interactive without losing identity or dispatch history", async () => {
     await withStorage(async (first) => {
@@ -77,6 +100,44 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("migrates legacy looped-review sessions to unattended without replacing the provider", async () => {
+    await withStorage(async (first, second) => {
+      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const legacyInput = {
+        ...input,
+        logicalSessionKey: "looped-review:workflow-1:discovery:round-1",
+      };
+      await fs.writeFile(file, JSON.stringify({
+        [input.key]: {
+          ...legacyInput,
+          providerSessionId: "legacy-provider-session",
+          createdAt: new Date(1).toISOString(),
+          updatedAt: new Date(2).toISOString(),
+        },
+      }));
+
+      const migrated = await first.getOrCreateNativeAgentSession(
+        {
+          ...legacyInput,
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        },
+        async () => "must-not-be-created",
+      );
+      expect(migrated).toMatchObject({
+        providerSessionId: "legacy-provider-session",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      expect(JSON.parse(await fs.readFile(file, "utf8"))[input.key]).toMatchObject({
+        version: 1,
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      expect(await second.getNativeAgentSession(input.key)).toEqual(migrated);
+    });
+  });
+
   test("persists unattended origin and policy on newly created logical sessions", async () => {
     await withStorage(async (first) => {
       const saved = await first.getOrCreateNativeAgentSession({
@@ -93,7 +154,7 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
-  test("does not reinterpret malformed versioned metadata as a legacy interactive session", async () => {
+  test("fails closed for malformed versioned metadata", async () => {
     await withStorage(async (first) => {
       const dataDir = (await first.getEnvironment("env-1"))!.worktreePath!;
       await fs.writeFile(
@@ -110,7 +171,50 @@ describe("StorageService native agent sessions", () => {
           },
         }),
       );
-      expect(await first.getNativeAgentSession(input.key)).toBeNull();
+      await expect(first.getNativeAgentSession(input.key)).rejects.toThrow(
+        "invalid or uses an unsupported version",
+      );
+    });
+  });
+
+  test("does not overwrite an unknown future session version", async () => {
+    await withStorage(async (first) => {
+      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const future = {
+        [input.key]: {
+          ...input,
+          version: 2,
+          providerSessionId: "future-provider-session",
+          origin: "interactive-native",
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+          createdAt: new Date(1).toISOString(),
+          updatedAt: new Date(2).toISOString(),
+        },
+      };
+      const original = JSON.stringify(future);
+      await fs.writeFile(file, original);
+      const create = mock(async () => "replacement-provider-session");
+
+      await expect(first.getOrCreateNativeAgentSession(input, create))
+        .rejects.toThrow("invalid or uses an unsupported version");
+      expect(create).not.toHaveBeenCalled();
+      expect(await fs.readFile(file, "utf8")).toBe(original);
+    });
+  });
+
+  test("rejects origin and policy combinations that weaken workflow authority", async () => {
+    await withStorage(async (first) => {
+      await expect(first.getOrCreateNativeAgentSession({
+        ...input,
+        origin: "looped-review",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      }, async () => "provider-session")).rejects.toThrow("input is invalid");
+      await expect(first.adoptNativeAgentSession({
+        ...input,
+        providerSessionId: "provider-session",
+        origin: "interactive-native",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      })).rejects.toThrow("adoption input is invalid");
     });
   });
 
@@ -161,6 +265,82 @@ describe("StorageService native agent sessions", () => {
       expect(await second.getAgentInteractionResolutionJournal()).toEqual(saved);
       expect(JSON.stringify(saved)).not.toContain("prompt");
       expect(JSON.stringify(saved)).not.toContain("answer");
+    });
+  });
+
+  test("serializes concurrent journal updates across storage instances", async () => {
+    await withStorage(async (first, second) => {
+      await Promise.all([
+        first.updateAgentInteractionResolutionJournal((journal) => ({
+          ...journal,
+          entries: [...journal.entries, terminalJournalEntry(1)],
+        })),
+        second.updateAgentInteractionResolutionJournal((journal) => ({
+          ...journal,
+          entries: [...journal.entries, terminalJournalEntry(2)],
+        })),
+      ]);
+      expect((await first.getAgentInteractionResolutionJournal()).entries
+        .map((entry) => entry.id).sort()).toEqual(["claim-1", "claim-2"]);
+    });
+  });
+
+  test("rolls terminal journal history over at the configured bound", async () => {
+    await withStorage(async (first) => {
+      const entries = Array.from(
+        { length: AGENT_INTERACTION_LIMITS.maxJournalEntries },
+        (_, index) => terminalJournalEntry(index, Date.now() + index),
+      );
+      await first.updateAgentInteractionResolutionJournal((journal) => ({
+        ...journal,
+        entries,
+      }));
+      const rolled = await first.updateAgentInteractionResolutionJournal((journal) => ({
+        ...journal,
+        entries: [...journal.entries, terminalJournalEntry(entries.length, Date.now() + entries.length)],
+      }));
+      expect(rolled.entries).toHaveLength(AGENT_INTERACTION_LIMITS.maxJournalEntries);
+      expect(rolled.entries.some((entry) => entry.id === "claim-0")).toBe(false);
+      expect(rolled.entries.some((entry) => entry.id === `claim-${entries.length}`))
+        .toBe(true);
+    });
+  });
+
+  test("rejects malformed journals and invalid updater results", async () => {
+    await withStorage(async (first) => {
+      const file = path.join(
+        first.getDataDir(),
+        "agent-interaction-resolution-journal.json",
+      );
+      await fs.writeFile(file, JSON.stringify({ version: 1, entries: [{}] }));
+      await expect(first.getAgentInteractionResolutionJournal()).rejects.toThrow(
+        "journal is invalid",
+      );
+      await fs.writeFile(file, JSON.stringify({ version: 1, entries: [] }));
+      await expect(first.updateAgentInteractionResolutionJournal(() => ({
+        version: 2,
+        entries: [],
+      } as never))).rejects.toThrow("cleanup input");
+    });
+  });
+
+  test("persists journal cleanup with restricted permissions", async () => {
+    await withStorage(async (first) => {
+      const file = path.join(
+        first.getDataDir(),
+        "agent-interaction-resolution-journal.json",
+      );
+      const expiredAt = Date.now() - AGENT_INTERACTION_JOURNAL_RETENTION_MS - 1;
+      await fs.writeFile(file, JSON.stringify({
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [terminalJournalEntry(1, expiredAt)],
+      }));
+      await first.updateAgentInteractionResolutionJournal((journal) => journal);
+      expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [],
+      });
+      expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
     });
   });
 
@@ -488,6 +668,32 @@ describe("StorageService native agent sessions", () => {
       expect(all).toContain("KEEP-ME");
       expect(all).not.toContain("DROP-ME");
       expect(all).not.toContain("provider-drop");
+    });
+  });
+
+  test("drops unrecognized session records from sensitive backups", async () => {
+    await withStorage(async (first) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-current");
+      const backup = path.join(first.getDataDir(), "native-agent-sessions.json.bak.1");
+      await fs.writeFile(backup, JSON.stringify({
+        future: {
+          ...input,
+          key: "future",
+          version: 2,
+          logicalSessionKey: "DROP-FUTURE-METADATA",
+          providerSessionId: "provider-future",
+          origin: "interactive-native",
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+          createdAt: new Date(1).toISOString(),
+          updatedAt: new Date(2).toISOString(),
+        },
+      }));
+
+      await first.deleteNativeAgentSessionsByEnvironment("env-1");
+      const scrubbed = await fs.readFile(backup, "utf8");
+      expect(scrubbed).not.toContain("DROP-FUTURE-METADATA");
+      expect(scrubbed).not.toContain("provider-future");
+      expect(JSON.parse(scrubbed)).toEqual({});
     });
   });
 

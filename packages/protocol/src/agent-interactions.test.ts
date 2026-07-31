@@ -96,6 +96,13 @@ function clone<T>(value: T): T {
 }
 
 describe("agent interaction request contract", () => {
+  test("publishes the contract through the package subpath", async () => {
+    const exported = await import("@orkestrator/protocol/agent-interactions");
+    expect(exported.isAgentInteractionRequest).toBe(isAgentInteractionRequest);
+    expect(exported.AGENT_INTERACTION_CONTRACT_VERSION)
+      .toBe(AGENT_INTERACTION_CONTRACT_VERSION);
+  });
+
   test("validates every supported provider, kind, and state", () => {
     for (const provider of AGENT_INTERACTION_PROVIDERS) {
       for (const kind of AGENT_INTERACTION_KINDS) {
@@ -129,6 +136,27 @@ describe("agent interaction request contract", () => {
     expect(isAgentInteractionRequest({ ...request(), expiresAt: CREATED_AT })).toBe(false);
     expect(isAgentInteractionRequest({ ...request(), updatedAt: CREATED_AT - 1 })).toBe(false);
     expect(isAgentInteractionRequest({ ...request(), unexpected: true })).toBe(false);
+  });
+
+  test("rejects malformed top-level enums, revisions, versions, and presentations", () => {
+    for (const invalid of [
+      { version: 2 },
+      { provider: "future-provider" },
+      { origin: "future-origin" },
+      { state: "future-state" },
+      { revision: -1 },
+      { revision: 1.5 },
+    ]) {
+      expect(isAgentInteractionRequest({ ...request(), ...invalid })).toBe(false);
+    }
+    expect(isAgentInteractionRequest({
+      ...request("mcp-url"),
+      presentation: { ...request("mcp-url").presentation, url: undefined },
+    })).toBe(false);
+    const noInput = clone(request());
+    noInput.presentation.questions[0]!.options = [];
+    noInput.presentation.questions[0]!.allowFreeText = false;
+    expect(isAgentInteractionRequest(noInput)).toBe(false);
   });
 
   test("enforces question, option, request-count, text, and serialized byte limits", () => {
@@ -200,6 +228,25 @@ describe("agent interaction request contract", () => {
       requests: [request(), request()],
     })).toBe(false);
   });
+
+  test("keeps terminal requests out of authoritative pending snapshots", () => {
+    for (const state of ["pending", "answering"] as const) {
+      expect(isAgentInteractionSnapshot({
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        revision: 4,
+        requests: [request("question", state)],
+      })).toBe(true);
+    }
+    for (const state of AGENT_INTERACTION_STATES.filter(
+      (candidate) => candidate !== "pending" && candidate !== "answering",
+    )) {
+      expect(isAgentInteractionSnapshot({
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        revision: 4,
+        requests: [request("question", state)],
+      })).toBe(false);
+    }
+  });
 });
 
 describe("answers and resolutions", () => {
@@ -226,6 +273,44 @@ describe("answers and resolutions", () => {
         { questionId: "question-1", optionIds: ["alpha"] },
         { questionId: "question-1", optionIds: ["beta"] },
       ],
+    }, value)).toBe(false);
+  });
+
+  test("enforces free-text, multiplicity, and non-empty selection rules", () => {
+    const value = request();
+    value.presentation.questions[0]!.allowFreeText = false;
+    expect(isAgentInteractionAnswer({
+      ...answer(value),
+      answers: [{ questionId: "question-1", freeText: "value" }],
+    }, value)).toBe(false);
+    expect(isAgentInteractionAnswer({
+      ...answer(value),
+      answers: [{ questionId: "question-1", optionIds: ["alpha", "beta"] }],
+    }, value)).toBe(false);
+    expect(isAgentInteractionAnswer({
+      ...answer(value),
+      answers: [{ questionId: "question-1", optionIds: [] }],
+    }, value)).toBe(false);
+  });
+
+  test("validates every non-answer resolution and rejects mismatched payloads", () => {
+    const value = request();
+    for (const action of ["decline", "deny", "cancel"] as const) {
+      expect(isAgentInteractionResolution({
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        interactionId: value.id,
+        sessionId: value.sessionId,
+        action,
+        resolvedAt: value.createdAt,
+      }, value)).toBe(true);
+    }
+    expect(isAgentInteractionResolution({
+      ...resolution(value),
+      action: "deny",
+    }, value)).toBe(false);
+    expect(isAgentInteractionResolution({
+      ...resolution(value),
+      resolvedAt: value.createdAt - 1,
     }, value)).toBe(false);
   });
 
@@ -373,6 +458,35 @@ describe("resolution journal and summaries", () => {
     })).toBe(false);
   });
 
+  test("accepts provider-resolved state and rejects invalid state ordering", () => {
+    const providerResolved = {
+      ...journal.entries[0]!,
+      state: "provider-resolved" as const,
+      workflowRecordedAt: undefined,
+    };
+    expect(isAgentInteractionResolutionJournal({
+      ...journal,
+      entries: [providerResolved],
+    })).toBe(true);
+    expect(isAgentInteractionResolutionJournal({
+      ...journal,
+      entries: [{
+        ...providerResolved,
+        providerResolvedAt: CREATED_AT - 1,
+      }],
+    })).toBe(false);
+  });
+
+  test("compares opaque session and interaction IDs without delimiter collisions", () => {
+    expect(isAgentInteractionResolutionJournal({
+      ...journal,
+      entries: [
+        { ...journal.entries[0]!, id: "one", sessionId: "a", interactionId: "b\0c" },
+        { ...journal.entries[0]!, id: "two", sessionId: "a\0b", interactionId: "c" },
+      ],
+    })).toBe(true);
+  });
+
   test("cleanup preserves unfinished claims and removes expired terminal records", () => {
     const unfinished = {
       ...journal.entries[0]!,
@@ -389,9 +503,105 @@ describe("resolution journal and summaries", () => {
     }, CREATED_AT + AGENT_INTERACTION_JOURNAL_RETENTION_MS + 3);
     expect(cleaned.entries).toEqual([unfinished]);
   });
+
+  test("cleanup evicts oldest terminal records at the entry limit", () => {
+    const entries = Array.from(
+      { length: AGENT_INTERACTION_LIMITS.maxJournalEntries + 1 },
+      (_, index) => ({
+        ...journal.entries[0]!,
+        id: `journal-${index}`,
+        interactionId: `interaction-${index}`,
+        providerResolvedAt: CREATED_AT + index,
+        workflowRecordedAt: CREATED_AT + index,
+      }),
+    );
+    const cleaned = pruneAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries,
+    }, CREATED_AT + entries.length);
+    expect(cleaned.entries).toHaveLength(AGENT_INTERACTION_LIMITS.maxJournalEntries);
+    expect(cleaned.entries.some((entry) => entry.id === "journal-0")).toBe(false);
+    expect(cleaned.entries[0]?.id).toBe(`journal-${entries.length - 1}`);
+    expect(isAgentInteractionResolutionJournal(cleaned)).toBe(true);
+  });
+
+  test("cleanup enforces the byte limit after keeping the newest terminal records", () => {
+    const entries = Array.from({ length: 400 }, (_, index) => ({
+      ...journal.entries[0]!,
+      id: `${index}-`.padEnd(AGENT_INTERACTION_LIMITS.maxIdLength, "i"),
+      interactionId: `${index}-`.padEnd(AGENT_INTERACTION_LIMITS.maxIdLength, "j"),
+      sessionId: `${index}-`.padEnd(AGENT_INTERACTION_LIMITS.maxIdLength, "s"),
+      providerResolvedAt: CREATED_AT + index,
+      workflowRecordedAt: CREATED_AT + index,
+    }));
+    const cleaned = pruneAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries,
+    }, CREATED_AT + entries.length);
+    expect(cleaned.entries.length).toBeLessThan(entries.length);
+    expect(cleaned.entries[0]?.id).toBe(entries[entries.length - 1]!.id);
+    expect(isAgentInteractionResolutionJournal(cleaned)).toBe(true);
+  });
+
+  test("cleanup fails when unfinished claims alone exceed the hard bound", () => {
+    const entries = Array.from(
+      { length: AGENT_INTERACTION_LIMITS.maxJournalEntries + 1 },
+      (_, index) => ({
+        ...journal.entries[0]!,
+        id: `claim-${index}`,
+        interactionId: `interaction-${index}`,
+        state: "claimed" as const,
+        outcome: undefined,
+        providerResolvedAt: undefined,
+        workflowRecordedAt: undefined,
+      }),
+    );
+    expect(() => pruneAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries,
+    })).toThrow("Unfinished interaction claims exceed");
+  });
+
+  test("rejects malformed workflow summary bounds and timestamps", () => {
+    expect(isAgentInteractionWorkflowSummary({
+      ...summary,
+      entries: [{ ...summary.entries[0]!, count: 0 }],
+    })).toBe(false);
+    expect(isAgentInteractionWorkflowSummary({
+      ...summary,
+      entries: [{ ...summary.entries[0]!, lastResolvedAt: CREATED_AT - 1 }],
+    })).toBe(false);
+    expect(isAgentInteractionWorkflowSummary({
+      ...summary,
+      entries: Array.from(
+        { length: AGENT_INTERACTION_LIMITS.maxWorkflowSummaries + 1 },
+        (_, index) => ({ ...summary.entries[0]!, sessionId: `session-${index}` }),
+      ),
+    })).toBe(false);
+  });
 });
 
 describe("privacy-safe serializers", () => {
+  test("round-trips non-secret drafts and rejects invalid serializer inputs", () => {
+    const value = request();
+    expect(JSON.parse(serializeAgentInteractionDraft(value, answer(value))))
+      .toEqual(answer(value));
+    expect(() => serializeAgentInteractionTelemetry(value, "future" as never))
+      .toThrow("Invalid interaction telemetry input");
+    expect(() => serializeAgentInteractionWorkflowSummary({
+      version: AGENT_INTERACTION_SUMMARY_VERSION,
+      entries: [{
+        provider: "claude",
+        kind: "permission",
+        phase: "build",
+        sessionId: "session-1",
+        firstSeenAt: CREATED_AT,
+        outcome: "denied",
+        count: 0,
+      }],
+    })).toThrow("Invalid interaction workflow summary");
+  });
+
   test("rejects secret values from app-owned drafts", () => {
     const secret = request();
     secret.presentation.questions[0]!.secret = true;

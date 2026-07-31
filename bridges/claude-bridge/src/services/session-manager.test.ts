@@ -7423,6 +7423,119 @@ describe("background task reducer", () => {
     expect(getSession(created.id)?.status).toBe("idle");
   });
 
+  test("keeps streaming input open when a Bash launch precedes delayed lifecycle events", async () => {
+    const created = createSession("structured background launch");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "run the suite in the background");
+    const call = await nextQueryCall();
+
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-background-bash",
+        content: [{
+          type: "tool_use",
+          id: "bash-tool-1",
+          name: "Bash",
+          input: {
+            command: "bun run test",
+            description: "Run the full test suite",
+            run_in_background: true,
+          },
+        }],
+      },
+    });
+    call.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "bash-tool-1",
+          content: "Command running in background with ID: bash-task-1",
+        }],
+      },
+      parent_tool_use_id: null,
+      tool_use_result: {
+        stdout: "",
+        stderr: "",
+        interrupted: false,
+        backgroundTaskId: "bash-task-1",
+      },
+    });
+    // The real incident delivered the result before task_started. The
+    // structured Bash result must already make the task live, otherwise this
+    // result closes stdin and the CLI sends SIGTERM to the test process.
+    call.push({
+      type: "result",
+      subtype: "success",
+      usage: { input_tokens: 1, output_tokens: 1 },
+      modelUsage: {
+        "claude-mock": {
+          inputTokens: 1,
+          outputTokens: 1,
+          contextWindow: 200_000,
+        },
+      },
+    });
+    await waitFor(
+      () =>
+        getSession(created.id)?.backgroundTasks?.["bash-task-1"]?.status === "running"
+        && getSession(created.id)?.usage !== undefined,
+    );
+
+    expect(getSession(created.id)?.backgroundTasks?.["bash-task-1"]).toMatchObject({
+      toolUseId: "bash-tool-1",
+      description: "Run the full test suite",
+      status: "running",
+      isBackgrounded: true,
+    });
+    expect(inputClosed).toBe(false);
+    expect(getSession(created.id)?.status).toBe("running");
+
+    // A late level edge enriches/reconciles the provisional launch without
+    // closing the turn or losing correlation.
+    call.push({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{
+        task_id: "bash-task-1",
+        task_type: "bash",
+        description: "Run the full test suite",
+      }],
+    });
+    await waitFor(
+      () => getSession(created.id)?.backgroundTasks?.["bash-task-1"]?.status === "running",
+    );
+    expect(inputClosed).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "bash-task-1",
+      tool_use_id: "bash-tool-1",
+      status: "completed",
+      summary: "Tests passed",
+    });
+    await waitFor(() => inputClosed);
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+
+    call.finish();
+    await promptPromise;
+    expect(getSession(created.id)?.status).toBe("idle");
+    expect(getSession(created.id)?.backgroundTasks?.["bash-task-1"]?.status).toBe(
+      "completed",
+    );
+  });
+
   test("records a started task as running, then settles it when the stream ends", async () => {
     const { session, finish } = await inspectDuringTurn(
       [

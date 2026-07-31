@@ -2077,6 +2077,76 @@ function persistedTaskText(value: unknown): string | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+interface BackgroundTaskLaunch {
+  id: string;
+  toolUseId?: string;
+  description?: string;
+}
+
+/**
+ * Recover the synchronous launch edge carried by a tool result.
+ *
+ * Bash returns `backgroundTaskId` in `SDKUserMessage.tool_use_result` before
+ * the provider publishes `task_started` / `background_tasks_changed`. Waiting
+ * for only those system messages leaves a race where the turn result sees an
+ * empty task set, closes streaming input, and the CLI then terminates the
+ * background process it owns. The structured result is provider-authored and
+ * is the earliest authoritative evidence that the process exists.
+ */
+function backgroundTaskLaunchFromSdkUserMessage(
+  message: SDKUserMessage,
+  toolTracker: ToolTracker,
+): BackgroundTaskLaunch | undefined {
+  const structuredResult = message.tool_use_result;
+  if (
+    structuredResult === null
+    || typeof structuredResult !== "object"
+    || Array.isArray(structuredResult)
+  ) {
+    return undefined;
+  }
+  const id = persistedTaskIdentifier(
+    (structuredResult as Record<string, unknown>).backgroundTaskId,
+  );
+  if (!id) return undefined;
+
+  const content = (
+    message.message as { content?: unknown } | undefined
+  )?.content;
+  const toolResultIds = new Set<string>();
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (
+        block
+        && typeof block === "object"
+        && (block as { type?: unknown }).type === "tool_result"
+      ) {
+        const toolUseId = persistedTaskIdentifier(
+          (block as { tool_use_id?: unknown }).tool_use_id,
+        );
+        if (toolUseId) toolResultIds.add(toolUseId);
+      }
+    }
+  }
+  // `tool_use_result` describes one tool invocation. Refuse to guess if a
+  // malformed provider message carries several candidate result blocks; the
+  // task id alone still keeps the process alive until a lifecycle edge enriches
+  // it with correlation metadata.
+  const toolUseId = toolResultIds.size === 1
+    ? toolResultIds.values().next().value
+    : undefined;
+  const tool = toolUseId ? toolTracker.getTool(toolUseId) : undefined;
+  const description = persistedTaskText(tool?.toolArgs?.description)
+    ?? persistedTaskText(tool?.toolArgs?.command)
+    ?? persistedTaskText(tool?.toolTitle);
+
+  return {
+    id,
+    ...(toolUseId ? { toolUseId } : {}),
+    ...(description ? { description } : {}),
+  };
+}
+
 function persistedTaskStatus(
   value: unknown,
 ): BackgroundTaskSnapshot["status"] | undefined {
@@ -3165,6 +3235,40 @@ const LIVE_BACKGROUND_TASK_STATUSES = new Set<BackgroundTaskSnapshot["status"]>(
   "running",
   "paused",
 ]);
+
+/**
+ * Publish a background launch before the delayed lifecycle stream catches up.
+ * A terminal record always wins over this launch edge: SDK ordering is
+ * explicitly unspecified, so a late tool result must never resurrect work that
+ * already reported completion or failure.
+ */
+function recordBackgroundTaskLaunch(
+  session: SessionState,
+  launch: BackgroundTaskLaunch,
+  control: NonNullable<SessionState["queryControl"]>,
+): void {
+  const previous = session.backgroundTasks?.[launch.id];
+  const status = previous && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)
+    ? previous.status
+    : "running";
+  session.backgroundTasks = boundBackgroundTaskHistory({
+    ...(session.backgroundTasks ?? {}),
+    [launch.id]: {
+      id: launch.id,
+      toolUseId: launch.toolUseId ?? previous?.toolUseId,
+      description: launch.description ?? previous?.description,
+      status,
+      isBackgrounded: previous?.isBackgrounded ?? true,
+      startedAt: previous?.startedAt ?? Date.now(),
+      endedAt: previous?.endedAt,
+      error: previous?.error,
+    },
+  });
+  if (LIVE_BACKGROUND_TASK_STATUSES.has(status)) {
+    (session.backgroundTaskControls ??= new Map()).set(launch.id, control);
+  }
+  emitBackgroundTaskSnapshot(session);
+}
 
 /**
  * Terminal task snapshots retained for launch correlation and restart display.
@@ -5371,6 +5475,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           activeTaskIds,
           taskRegistry
         );
+
+        const backgroundLaunch = backgroundTaskLaunchFromSdkUserMessage(
+          message as SDKUserMessage,
+          toolTracker,
+        );
+        if (backgroundLaunch) {
+          recordBackgroundTaskLaunch(session, backgroundLaunch, queryIterator);
+        }
 
         // Update active Task tracking - remove completed Tasks
         for (const taskId of completedTaskIds) {

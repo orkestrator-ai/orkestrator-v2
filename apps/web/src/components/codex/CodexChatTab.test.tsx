@@ -5126,6 +5126,76 @@ describe("CodexChatTab", () => {
     expect(mockSendPrompt).not.toHaveBeenCalled();
   });
 
+  test("subscribes while an idle startup session waits for the backend-owned prompt", async () => {
+    const startupTabId = "startup-agent";
+    const startupSessionKey = createSessionKey(ENVIRONMENT_ID, startupTabId);
+    const turnStarted = deferred<void>();
+    const backendMessage = createMessage(
+      "backend-startup-message",
+      "Backend startup work is now visible",
+    );
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((environment) =>
+        environment.id === ENVIRONMENT_ID
+          ? {
+              ...environment,
+              pendingAgentLaunch: true,
+              setupScriptsComplete: true,
+            }
+          : environment
+      ),
+    }));
+    useCodexStore.setState((state) => ({
+      ...state,
+      sessions: new Map([
+        [
+          startupSessionKey,
+          {
+            sessionId: SESSION_ID,
+            messages: [],
+            isLoading: false,
+            title: "Agent Session",
+          },
+        ],
+      ]),
+    }));
+    mockSubscribeToEvents.mockImplementation(
+      (_client: unknown, signal?: AbortSignal) => (async function* () {
+        await turnStarted.promise;
+        if (signal?.aborted) return;
+        yield {
+          type: "session.updated",
+          sessionId: SESSION_ID,
+          data: { phase: "running" },
+        };
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { message: backendMessage },
+        };
+      })(),
+    );
+
+    render(
+      <CodexChatTab
+        tabId={startupTabId}
+        data={createData({ sessionId: SESSION_ID })}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    act(() => turnStarted.resolve());
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(startupSessionKey)).toMatchObject({
+        isLoading: true,
+        messages: [backendMessage],
+      });
+    });
+  });
+
   test("uses one-shot review model and effort when creating a native session", async () => {
     useCodexStore.setState((state) => ({
       ...state,

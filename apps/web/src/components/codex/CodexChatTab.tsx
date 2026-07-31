@@ -2259,9 +2259,16 @@ export function CodexChatTab({
   // when the tab is rendered as a hidden background mount (e.g. an off-screen
   // initial-prompt dispatch), so the response is processed before the
   // environment unmounts.
+  //
+  // A backend-owned startup prompt is the important pre-running exception. The
+  // bridge session id is deterministic, so this tab can attach while the
+  // backend is still between session creation and prompt dispatch. At that
+  // point the renderer's snapshot legitimately says "idle". Waiting for
+  // `isLoading` before subscribing then misses the event that changes it to
+  // running, leaving the empty "Ready to build" surface visible until reload.
   useEffect(() => {
     if (
-      !session?.isLoading
+      (!session?.isLoading && !backendOwnsStartupPrompt)
       || connectionState !== "connected"
       || !client
       || !session?.sessionId
@@ -2270,8 +2277,9 @@ export function CodexChatTab({
     }
 
     const abortController = new AbortController();
-    const isTurnActive = () =>
-      useCodexStore.getState().sessions.get(sessionKey)?.isLoading === true;
+    const shouldTrackSession = () =>
+      backendOwnsStartupPrompt
+      || useCodexStore.getState().sessions.get(sessionKey)?.isLoading === true;
 
     (async () => {
       let patchRecovery: Promise<boolean> | null = null;
@@ -2291,7 +2299,7 @@ export function CodexChatTab({
         return recovery;
       };
 
-      while (!abortController.signal.aborted && isTurnActive()) {
+      while (!abortController.signal.aborted && shouldTrackSession()) {
         /**
          * Reconnect from where we left off.
          *
@@ -2543,7 +2551,7 @@ export function CodexChatTab({
           await reconcileSessionState();
         }
 
-        if (abortController.signal.aborted || !isTurnActive()) {
+        if (abortController.signal.aborted || !shouldTrackSession()) {
           break;
         }
 
@@ -2556,6 +2564,7 @@ export function CodexChatTab({
     };
   }, [
     addPendingApproval,
+    backendOwnsStartupPrompt,
     client,
     connectionState,
     refreshMessages,
@@ -2574,10 +2583,11 @@ export function CodexChatTab({
   ]);
 
   // Watchdog poll for stalled turns. Mirrors the SSE gate above so it also
-  // runs for hidden background mounts during a turn.
+  // covers the short interval where the backend owns the startup prompt but
+  // the renderer has not observed the turn-start frame yet.
   useStalledTurnWatchdog({
     agentLabel: "Codex",
-    isLoading: session?.isLoading ?? false,
+    isLoading: (session?.isLoading ?? false) || backendOwnsStartupPrompt,
     isReady:
       connectionState === "connected" && !!client && !!session?.sessionId,
     reconcile: () => reconcileSessionState({ forceRefreshMessages: true }),

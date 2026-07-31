@@ -48,6 +48,52 @@ export type PipelineSessionPhase =
   | "pr"
   | "resolve-conflicts";
 
+/** The steps a launcher can configure independently. */
+export type BuildStepKey =
+  | "build"
+  | "review"
+  | "verify"
+  | "pr"
+  | "resolve-conflicts";
+
+export const BUILD_STEP_KEYS: readonly BuildStepKey[] = Object.freeze([
+  "build",
+  "review",
+  "verify",
+  "pr",
+  "resolve-conflicts",
+]);
+
+/**
+ * The harness, model and reasoning effort one step runs under.
+ *
+ * Held per step rather than per pipeline because a build may run one agent and
+ * its review another. {@link BuildPipeline.agentType} stays the build step's
+ * agent: that is the one the environment's default is configured for.
+ */
+export interface BuildStepConfig {
+  agent: BuildPipelineAgent;
+  model?: string;
+  reasoningEffort?: string;
+}
+
+export type BuildStepConfigs = Partial<Record<BuildStepKey, BuildStepConfig>>;
+
+/**
+ * Which configured step owns a session phase.
+ *
+ * Every phase maps to its own step except `fix`: it re-implements against
+ * verification feedback, which is build work, and it has no launcher control of
+ * its own. Falling back to a repository default there would ignore the harness
+ * the user just chose for the build.
+ */
+export function stepKeyForSessionPhase(
+  phase: PipelineSessionPhase,
+): BuildStepKey {
+  if (phase === "fix") return "build";
+  return phase;
+}
+
 /**
  * The one declaration both the schema and the guard are built from.
  *
@@ -128,6 +174,15 @@ export function isVerificationVerdict(
 
 export interface PipelineSession {
   phase: PipelineSessionPhase;
+  /**
+   * The harness this session was created on.
+   *
+   * Recorded because steps may run different agents: status, transcript and
+   * abort calls have to reach the provider that actually owns the session, and
+   * `agentType` alone only describes the build step. Absent on snapshots written
+   * before per-step harnesses existed, which fall back to `agentType`.
+   */
+  agent?: BuildPipelineAgent;
   iteration: number;
   sessionKey: string;
   sdkSessionId: string;
@@ -223,6 +278,11 @@ export interface BuildPipeline {
   environmentId: string;
   environmentType: BuildPipelineEnvironmentType;
   agentType: BuildPipelineAgent;
+  /**
+   * Per-step launch configuration. A missing step, or a missing field within
+   * one, falls back to the repository and global defaults.
+   */
+  steps?: BuildStepConfigs;
   phase: BuildPhase;
   sessions: PipelineSession[];
   currentSessionIndex: number;
@@ -270,6 +330,8 @@ export interface StartBuildPipelineInput {
   projectId: string;
   environmentType: BuildPipelineEnvironmentType;
   agentType: BuildPipelineAgent;
+  /** Per-step harness, model and reasoning chosen in the build launcher. */
+  steps?: BuildStepConfigs;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
   source?: BuildPipelineSource;
@@ -355,9 +417,30 @@ function isIsoDate(value: unknown): value is string {
     && Number.isFinite(Date.parse(value));
 }
 
+function isBuildStepConfig(value: unknown): value is BuildStepConfig {
+  if (!isRecord(value)) return false;
+  return AGENTS.has(value.agent as BuildPipelineAgent)
+    && isOptionalNonBlankString(value.model)
+    && isOptionalNonBlankString(value.reasoningEffort);
+}
+
+/**
+ * Only the three configurable step keys are accepted. An unknown key would be
+ * carried through the snapshot and silently never consulted, which reads as a
+ * setting that was applied when it was not.
+ */
+export function isBuildStepConfigs(value: unknown): value is BuildStepConfigs {
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(([key, config]) =>
+    BUILD_STEP_KEYS.includes(key as BuildStepKey)
+    && (config === undefined || isBuildStepConfig(config)));
+}
+
 function isPipelineSession(value: unknown): value is PipelineSession {
   if (!isRecord(value)) return false;
   return SESSION_PHASES.has(value.phase as PipelineSessionPhase)
+    && (value.agent === undefined
+      || AGENTS.has(value.agent as BuildPipelineAgent))
     && isNonNegativeInteger(value.iteration)
     && typeof value.sessionKey === "string"
     && value.sessionKey.length > 0
@@ -457,6 +540,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     || typeof value.environmentId !== "string"
     || !ENVIRONMENT_TYPES.has(value.environmentType as BuildPipelineEnvironmentType)
     || !AGENTS.has(value.agentType as BuildPipelineAgent)
+    || (value.steps !== undefined && !isBuildStepConfigs(value.steps))
     || !BUILD_PHASES.has(value.phase as BuildPhase)
     || !Array.isArray(value.sessions)
     || !value.sessions.every(isPipelineSession)
@@ -560,6 +644,7 @@ export function isStartBuildPipelineInput(
       value.environmentType as BuildPipelineEnvironmentType,
     )
     && AGENTS.has(value.agentType as BuildPipelineAgent)
+    && (value.steps === undefined || isBuildStepConfigs(value.steps))
     && isTaskSnapshot(value.taskSnapshot)
     && (value.source === undefined || isPipelineSource(value.source))
     && (value.namingPrompt === undefined

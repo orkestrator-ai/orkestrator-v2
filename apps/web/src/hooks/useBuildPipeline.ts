@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { toast } from "sonner";
 import type {
   BuildPipelineSource,
+  BuildStepConfigs,
   StartBuildPipelineInput,
   TaskSnapshot,
 } from "@orkestrator/protocol/build-pipeline";
@@ -28,6 +29,8 @@ type BuildPipelineTicketInput = {
 type StartBuildOptions = {
   existingEnvironmentId?: string | null;
   featurePlanId?: string;
+  /** Per-step harness, model and reasoning chosen in the build launcher. */
+  steps?: BuildStepConfigs;
 };
 
 export type GitHubIssueBuildComment = {
@@ -234,9 +237,13 @@ export function useBuildPipeline() {
         taskId: ticket.id,
         projectId: ticket.projectId,
         environmentType,
+        // The build step's harness is the pipeline agent when one was chosen;
+        // the backend resolves it the same way, so both agree on the snapshot.
         agentType:
-          agentOverride
+          options.steps?.build?.agent
+          ?? agentOverride
           ?? resolveBuildPipelineAgent(config, ticket.projectId),
+        steps: options.steps,
         taskTitle: ticket.title,
         taskSnapshot: ticket.taskSnapshot,
         source: ticket.source,

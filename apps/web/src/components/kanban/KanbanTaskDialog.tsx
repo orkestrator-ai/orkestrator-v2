@@ -21,12 +21,19 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Trash2, Send, CheckCircle2, Container, FolderGit2, ExternalLink, Loader2, Paperclip, ImageIcon, X } from "lucide-react";
+import { Trash2, Send, CheckCircle2, Hammer, ExternalLink, Loader2, Paperclip, ImageIcon, X } from "lucide-react";
 import { toast } from "sonner";
 import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
+import { useConfigStore, useProjectStore } from "@/stores";
+import {
+  BuildLaunchDialog,
+  type BuildLaunchSelection,
+} from "@/components/build/BuildLaunchDialog";
+import { buildLaunchDefaults } from "@/lib/build-launch-options";
+import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import { readImage } from "@/lib/native/clipboard";
 import {
   getKanbanImageData,
@@ -149,10 +156,23 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
   const { startBuild, navigateToBuild } = useBuildPipeline();
   const getPipelineByTaskId = useBuildPipelineStore((s) => s.getPipelineByTaskId);
+  const config = useConfigStore((s) => s.config);
+  const projects = useProjectStore((s) => s.projects);
   const [isBuildStarting, setIsBuildStarting] = useState(false);
-  const [confirmBuildType, setConfirmBuildType] = useState<"containerized" | "local" | null>(null);
+  const [buildDialogOpen, setBuildDialogOpen] = useState(false);
+  // Held rather than started immediately: a task that already owns an
+  // environment asks for confirmation first, and the answer must not lose the
+  // configuration the user just made.
+  const [confirmBuildSelection, setConfirmBuildSelection] =
+    useState<BuildLaunchSelection | null>(null);
 
   const isCreateMode = !!createForProjectId;
+  const buildProjectId = createForProjectId ?? task?.projectId ?? "";
+  const launchDefaults = buildLaunchDefaults(
+    config,
+    buildProjectId,
+    Boolean(projects.find((project) => project.id === buildProjectId)?.localPath),
+  );
 
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -563,19 +583,32 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
     }
   };
 
-  const handleStartBuild = async (type: "containerized" | "local") => {
+  const handleStartBuild = async (selection: BuildLaunchSelection) => {
     if (!task) return;
     setIsBuildStarting(true);
     try {
-      await startBuild(task, type);
+      await startBuild(task, selection.environmentType, selection.steps.build.agent, {
+        steps: selection.steps,
+      });
       handleOpenChange(false);
     } finally {
       setIsBuildStarting(false);
     }
   };
 
-  const handleCreateAndBuild = async (type: "containerized" | "local") => {
+  /** Confirms first when the task already owns an environment. */
+  const handleBuildConfirmed = (selection: BuildLaunchSelection) => {
+    setBuildDialogOpen(false);
+    if (task?.environmentId) {
+      setConfirmBuildSelection(selection);
+      return;
+    }
+    void handleStartBuild(selection);
+  };
+
+  const handleCreateAndBuild = async (selection: BuildLaunchSelection) => {
     if (!editTitle.trim() || !createForProjectId) return;
+    setBuildDialogOpen(false);
 
     const title = editTitle.trim();
     const description = editDescription.trim();
@@ -608,7 +641,12 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         return;
       }
 
-      await startBuild(newTask, type);
+      await startBuild(
+        newTask,
+        selection.environmentType,
+        selection.steps.build.agent,
+        { steps: selection.steps },
+      );
       handleOpenChange(false);
     } finally {
       setIsBuildStarting(false);
@@ -804,28 +842,14 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                 variant="outline"
                 className="gap-1.5"
                 disabled={!editTitle.trim() || isBuildStarting}
-                onClick={() => void handleCreateAndBuild("containerized")}
+                onClick={() => setBuildDialogOpen(true)}
               >
                 {isBuildStarting ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <Container className="h-3.5 w-3.5" />
+                  <Hammer className="h-3.5 w-3.5" />
                 )}
-                Build Container
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5"
-                disabled={!editTitle.trim() || isBuildStarting}
-                onClick={() => void handleCreateAndBuild("local")}
-              >
-                {isBuildStarting ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <FolderGit2 className="h-3.5 w-3.5" />
-                )}
-                Build Local
+                Build…
               </Button>
               <Button size="sm" variant="ghost" onClick={() => handleOpenChange(false)}>
                 Cancel
@@ -833,6 +857,14 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
             </div>
           </DialogContent>
         </Dialog>
+        <BuildLaunchDialog
+          open={buildDialogOpen}
+          onOpenChange={setBuildDialogOpen}
+          catalog={buildReviewModelCatalog(undefined)}
+          busy={isBuildStarting}
+          {...launchDefaults}
+          onConfirm={(selection) => void handleCreateAndBuild(selection)}
+        />
         {renderPreviewDialog()}
       </>
     );
@@ -965,40 +997,14 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                           variant="outline"
                           className="gap-1.5 flex-1"
                           disabled={isBuildStarting || !!hasActiveBuild}
-                          onClick={() => {
-                            if (task.environmentId) {
-                              setConfirmBuildType("containerized");
-                            } else {
-                              void handleStartBuild("containerized");
-                            }
-                          }}
+                          onClick={() => setBuildDialogOpen(true)}
                         >
                           {isBuildStarting ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           ) : (
-                            <Container className="h-3.5 w-3.5" />
+                            <Hammer className="h-3.5 w-3.5" />
                           )}
-                          Build Container
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="gap-1.5 flex-1"
-                          disabled={isBuildStarting || !!hasActiveBuild}
-                          onClick={() => {
-                            if (task.environmentId) {
-                              setConfirmBuildType("local");
-                            } else {
-                              void handleStartBuild("local");
-                            }
-                          }}
-                        >
-                          {isBuildStarting ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <FolderGit2 className="h-3.5 w-3.5" />
-                          )}
-                          Build Local
+                          Build…
                         </Button>
                         {task.environmentId && (
                           <Button
@@ -1081,7 +1087,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
           </div>
         </DialogContent>
 
-        <AlertDialog open={!!confirmBuildType} onOpenChange={(open) => { if (!open) setConfirmBuildType(null); }}>
+        <AlertDialog
+          open={!!confirmBuildSelection}
+          onOpenChange={(open) => { if (!open) setConfirmBuildSelection(null); }}
+        >
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Environment Already Exists</AlertDialogTitle>
@@ -1089,7 +1098,11 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                 This task already has an environment linked to it. Starting a new build will create an additional environment.
                 <span className="block mt-2">
                   Are you sure you want to start a new{" "}
-                  <strong>{confirmBuildType === "containerized" ? "container" : "local"}</strong> build?
+                  <strong>
+                    {confirmBuildSelection?.environmentType === "containerized"
+                      ? "container"
+                      : "local"}
+                  </strong> build?
                 </span>
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -1097,10 +1110,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 onClick={() => {
-                  if (confirmBuildType) {
-                    void handleStartBuild(confirmBuildType);
+                  if (confirmBuildSelection) {
+                    void handleStartBuild(confirmBuildSelection);
                   }
-                  setConfirmBuildType(null);
+                  setConfirmBuildSelection(null);
                 }}
               >
                 Start Build
@@ -1109,6 +1122,14 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
           </AlertDialogContent>
         </AlertDialog>
       </Dialog>
+      <BuildLaunchDialog
+        open={buildDialogOpen}
+        onOpenChange={setBuildDialogOpen}
+        catalog={buildReviewModelCatalog(task.environmentId ?? undefined)}
+        busy={isBuildStarting}
+        {...launchDefaults}
+        onConfirm={handleBuildConfirmed}
+      />
       {renderPreviewDialog()}
     </>
   );

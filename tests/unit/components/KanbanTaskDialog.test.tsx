@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { Environment } from "@/types";
 import {
@@ -109,6 +109,54 @@ if (typeof globalThis.ImageData === "undefined") {
       public width: number,
       public height: number,
     ) {}
+  };
+}
+
+/**
+ * Drives the build launcher: open it, pick an environment, submit.
+ *
+ * Every build entry point now goes through the modal, so the per-step defaults
+ * it submits are what the assertions below compare against.
+ */
+function launchBuild(
+  environment: "Container" | "Local",
+  stepAgents: Partial<
+    Record<"Build" | "Review" | "Verify" | "PR" | "Conflicts", "Claude" | "Codex" | "OpenCode">
+  > = {},
+) {
+  fireEvent.click(screen.getByRole("button", { name: "Build…" }));
+  const environmentGroup = screen.getByRole("radiogroup", { name: "Build environment" });
+  fireEvent.click(
+    within(environmentGroup).getByRole("radio", { name: new RegExp(`^${environment}`) }),
+  );
+  const stepEntries = Object.entries(stepAgents);
+  if (stepEntries.length > 0) {
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /Use one configuration for every step/ }),
+    );
+  }
+  for (const [step, agent] of stepEntries) {
+    const group = screen.getByRole("radiogroup", { name: `${step} agent` });
+    fireEvent.click(within(group).getByRole("radio", { name: agent }));
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Start build" }));
+}
+
+/**
+ * The launcher's defaults for a project with no repository overrides.
+ *
+ * The globally configured "claude-sonnet-5" is not in the fallback Claude
+ * catalog these tests run against, so the launcher falls back to its first
+ * entry rather than offering a model the agent does not expose.
+ */
+function defaultSteps(agent = "claude") {
+  const step = { agent, model: "default", reasoningEffort: undefined };
+  return {
+    build: { ...step },
+    review: { ...step },
+    verify: { ...step },
+    pr: { ...step },
+    "resolve-conflicts": { ...step },
   };
 }
 
@@ -840,7 +888,7 @@ describe("KanbanTaskDialog", () => {
     fireEvent.change(screen.getByPlaceholderText("Task title..."), {
       target: { value: "Failed creation" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Build Container" }));
+    launchBuild("Container");
 
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Failed to create task"));
     expect(startBuildMock).not.toHaveBeenCalled();
@@ -862,13 +910,18 @@ describe("KanbanTaskDialog", () => {
     fireEvent.change(screen.getByPlaceholderText("Define what 'done' looks like..."), {
       target: { value: "Persist this" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Build Local" }));
+    launchBuild("Local");
 
     await waitFor(() => {
       expect(toastErrorMock).toHaveBeenCalledWith(
         "Task created but acceptance criteria could not be saved",
       );
-      expect(startBuildMock).toHaveBeenCalledWith(createdTask, "local");
+      expect(startBuildMock).toHaveBeenCalledWith(
+        createdTask,
+        "local",
+        "claude",
+        { steps: defaultSteps() },
+      );
     });
   });
 
@@ -877,7 +930,7 @@ describe("KanbanTaskDialog", () => {
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     fireEvent.change(screen.getByPlaceholderText("Task title..."), { target: { value: "Missing build task" } });
-    fireEvent.click(screen.getByRole("button", { name: "Build Container" }));
+    launchBuild("Container");
     await waitFor(() => {
       expect(toastErrorMock).toHaveBeenCalledWith("Task created but could not start build");
     });
@@ -894,8 +947,42 @@ describe("KanbanTaskDialog", () => {
       <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
     );
     fireEvent.change(screen.getByPlaceholderText("Task title..."), { target: { value: createdTask.title } });
-    fireEvent.click(screen.getByRole("button", { name: "Build Local" }));
-    await waitFor(() => expect(startBuildMock).toHaveBeenCalledWith(createdTask, "local"));
+    launchBuild("Local");
+    await waitFor(() => expect(startBuildMock).toHaveBeenCalledWith(
+      createdTask,
+      "local",
+      "claude",
+      { steps: defaultSteps() },
+    ));
+  });
+
+  test("creates a task with a per-step harness chosen in the launcher", async () => {
+    const createdTask = makeTask({ id: "task-created", title: "Mixed harness build" });
+    addTaskMock.mockImplementationOnce(async () => {
+      useKanbanStore.setState({ tasks: [createdTask] });
+      return createdTask.id;
+    });
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), { target: { value: createdTask.title } });
+    launchBuild("Local", { Review: "Codex", PR: "OpenCode" });
+
+    await waitFor(() => expect(startBuildMock).toHaveBeenCalled());
+    const [, environmentType, agent, options] = startBuildMock.mock.calls[0] as unknown as [
+      KanbanTask,
+      string,
+      string,
+      { steps: Record<string, { agent: string }> },
+    ];
+    expect(environmentType).toBe("local");
+    // The pipeline agent stays the build step's harness even when review differs.
+    expect(agent).toBe("claude");
+    expect(options.steps.build.agent).toBe("claude");
+    expect(options.steps.review.agent).toBe("codex");
+    expect(options.steps.verify.agent).toBe("claude");
+    expect(options.steps.pr.agent).toBe("opencode");
+    expect(options.steps["resolve-conflicts"].agent).toBe("claude");
   });
 
   test("create mode attaches a pasted clipboard image with a generated UUID", async () => {
@@ -1038,10 +1125,15 @@ describe("KanbanTaskDialog", () => {
       <KanbanTaskDialog task={task} open onOpenChange={onOpenChange} />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Build Container" }));
+    launchBuild("Container");
 
     await waitFor(() => {
-      expect(startBuildMock).toHaveBeenCalledWith(task, "containerized");
+      expect(startBuildMock).toHaveBeenCalledWith(
+        task,
+        "containerized",
+        "claude",
+        { steps: defaultSteps() },
+      );
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
   });
@@ -1053,21 +1145,31 @@ describe("KanbanTaskDialog", () => {
       <KanbanTaskDialog task={task} open onOpenChange={() => {}} />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Build Container" }));
+    launchBuild("Container");
     expect(startBuildMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Build" }));
 
     await waitFor(() => {
-      expect(startBuildMock).toHaveBeenCalledWith(task, "containerized");
+      expect(startBuildMock).toHaveBeenCalledWith(
+        task,
+        "containerized",
+        "claude",
+        { steps: defaultSteps() },
+      );
     });
 
     startBuildMock.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: "Build Local" }));
+    launchBuild("Local");
     expect(startBuildMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Start Build" }));
     await waitFor(() => {
-      expect(startBuildMock).toHaveBeenCalledWith(task, "local");
+      expect(startBuildMock).toHaveBeenCalledWith(
+        task,
+        "local",
+        "claude",
+        { steps: defaultSteps() },
+      );
     });
   });
 

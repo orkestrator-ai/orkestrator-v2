@@ -3,7 +3,9 @@ import {
   BUILD_PIPELINE_VERSION,
   isActiveBuildPhase,
   isBuildPipeline,
+  isBuildStepConfigs,
   isStartBuildPipelineInput,
+  stepKeyForSessionPhase,
   MAX_BUILD_PIPELINE_ITERATIONS,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
@@ -267,6 +269,61 @@ describe("build pipeline protocol", () => {
     })).toBe(false);
   });
 
+  test("accepts per-step configuration and rejects keys no step reads", () => {
+    const base = snapshot();
+    const steps = {
+      build: { agent: "claude", model: "claude-a", reasoningEffort: "high" },
+      review: { agent: "codex" },
+    };
+    expect(isBuildPipeline({ ...base, steps })).toBe(true);
+    expect(isBuildPipeline({
+      ...base,
+      sessions: [{
+        phase: "review",
+        agent: "codex",
+        iteration: 0,
+        sessionKey: "key",
+        sdkSessionId: "session",
+        status: "running",
+        startedAt: base.createdAt,
+        label: "Review Session",
+      }],
+      currentSessionIndex: 0,
+    })).toBe(true);
+
+    expect(isBuildStepConfigs(steps)).toBe(true);
+    expect(isBuildStepConfigs({ "resolve-conflicts": { agent: "codex" } })).toBe(true);
+    // The fix stage follows the build step, so a key for it would never be read.
+    expect(isBuildStepConfigs({ fix: { agent: "claude" } })).toBe(false);
+    expect(isBuildStepConfigs({ build: { agent: "gemini" } })).toBe(false);
+    expect(isBuildStepConfigs({ build: { agent: "claude", model: "" } })).toBe(false);
+    expect(isBuildPipeline({ ...base, steps: { verify: {} } })).toBe(false);
+    expect(isBuildPipeline({
+      ...base,
+      sessions: [{
+        phase: "build",
+        agent: "gemini",
+        iteration: 0,
+        sessionKey: "key",
+        sdkSessionId: "session",
+        status: "running",
+        startedAt: base.createdAt,
+        label: "Build Session",
+      }],
+      currentSessionIndex: 0,
+    })).toBe(false);
+  });
+
+  test("maps every phase to its own step, except the fix stage", () => {
+    expect(stepKeyForSessionPhase("build")).toBe("build");
+    expect(stepKeyForSessionPhase("review")).toBe("review");
+    expect(stepKeyForSessionPhase("verify")).toBe("verify");
+    expect(stepKeyForSessionPhase("pr")).toBe("pr");
+    expect(stepKeyForSessionPhase("resolve-conflicts")).toBe("resolve-conflicts");
+    // The fix stage has no launcher control of its own; it is build work.
+    expect(stepKeyForSessionPhase("fix")).toBe("build");
+  });
+
   test("classifies only nonterminal, nonpaused phases as active", () => {
     expect(isActiveBuildPhase("building")).toBe(true);
     expect(isActiveBuildPhase("paused")).toBe(false);
@@ -286,6 +343,14 @@ describe("build pipeline protocol", () => {
       maxIterations: 3,
     };
     expect(isStartBuildPipelineInput(input)).toBe(true);
+    expect(isStartBuildPipelineInput({
+      ...input,
+      steps: { build: { agent: "claude", model: "claude-a" } },
+    })).toBe(true);
+    expect(isStartBuildPipelineInput({
+      ...input,
+      steps: { build: { agent: "claude" }, deploy: { agent: "codex" } },
+    })).toBe(false);
     expect(isStartBuildPipelineInput({ ...input, maxIterations: 11 })).toBe(false);
     expect(isStartBuildPipelineInput({
       ...input,

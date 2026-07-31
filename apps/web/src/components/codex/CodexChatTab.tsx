@@ -529,6 +529,64 @@ export function CodexChatTab({
     return environment?.pendingAgentLaunch === true
       || environment?.startupAgentSession !== undefined;
   });
+  const backendStartupTrackingRequestKey = useEnvironmentStore((state) => {
+    if (tabId !== "startup-agent") return null;
+    const environment = state.getEnvironmentById(environmentId);
+    const startupSession = environment?.startupAgentSession;
+    if (
+      environment?.pendingAgentLaunch !== true
+      && startupSession?.status !== "starting"
+      && startupSession?.status !== "running"
+    ) {
+      return null;
+    }
+    return [
+      environment?.pendingAgentLaunch === true ? "pending" : "accepted",
+      startupSession?.status ?? "unprojected",
+      startupSession?.providerSessionId ?? "",
+      startupSession?.startedAt ?? "",
+      startupSession?.error ?? "",
+    ].join(":");
+  });
+  const backendStartupPermanentlyFailed = useEnvironmentStore((state) => {
+    if (tabId !== "startup-agent") return false;
+    const environment = state.getEnvironmentById(environmentId);
+    return environment?.pendingAgentLaunch !== true
+      && environment?.startupAgentSession?.status === "error";
+  });
+  const [trackingBackendStartupTurn, setTrackingBackendStartupTurn] = useState(
+    () => backendStartupTrackingRequestKey !== null,
+  );
+  const trackingBackendStartupTurnRef = useRef(trackingBackendStartupTurn);
+  trackingBackendStartupTurnRef.current = trackingBackendStartupTurn;
+  const updateBackendStartupTracking = useCallback((tracking: boolean) => {
+    trackingBackendStartupTurnRef.current = tracking;
+    setTrackingBackendStartupTurn(tracking);
+  }, []);
+  useEffect(() => {
+    if (backendStartupTrackingRequestKey !== null) {
+      updateBackendStartupTracking(true);
+    } else if (backendStartupPermanentlyFailed) {
+      updateBackendStartupTracking(false);
+    }
+    // A successful acknowledgement also clears the request key, but that only
+    // proves the pane was persisted. Keep the latch armed until this tab sees
+    // authoritative running/terminal session state.
+  }, [
+    backendStartupPermanentlyFailed,
+    backendStartupTrackingRequestKey,
+    sessionKey,
+    updateBackendStartupTracking,
+  ]);
+  const backendStartupIsStillPreDispatch = useCallback(() => {
+    if (tabId !== "startup-agent") return false;
+    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+    return environment?.pendingAgentLaunch === true
+      && environment?.startupAgentSession?.status !== "running";
+  }, [environmentId, tabId]);
+  const finishBackendStartupTracking = useCallback(() => {
+    updateBackendStartupTracking(false);
+  }, [updateBackendStartupTracking]);
   const launchPrompt = backendOwnsStartupPrompt
     ? handoff.initialPrompt
     : initialPrompt ?? handoff.initialPrompt;
@@ -1770,12 +1828,19 @@ export function CodexChatTab({
         return false;
       }
 
-      const rawOutcome = await updateCodexSessionConfig(client, session.sessionId, {
-        model,
-        modelReasoningEffort: nextReasoningEffort,
-        mode,
-        fastMode,
-      });
+      let rawOutcome: unknown;
+      try {
+        rawOutcome = await updateCodexSessionConfig(client, session.sessionId, {
+          model,
+          modelReasoningEffort: nextReasoningEffort,
+          mode,
+          fastMode,
+        });
+      } catch (error) {
+        console.error("[CodexChatTab] Failed to update Codex session settings:", error);
+        setSessionError(sessionKey, "Failed to update Codex session settings");
+        return false;
+      }
       const outcome = normalizeConfigUpdateOutcome(rawOutcome);
 
       if (outcome.outcome === "applied") {
@@ -2009,6 +2074,9 @@ export function CodexChatTab({
     if (!shouldApply()) return "stale";
 
     if (lookup.kind === "missing") {
+      if (!backendStartupIsStillPreDispatch()) {
+        finishBackendStartupTracking();
+      }
       if (options?.throwOnError) {
         throw new Error("The Codex session is no longer available on the server");
       }
@@ -2112,6 +2180,9 @@ export function CodexChatTab({
     );
 
     if (status.status === "idle") {
+      if (!backendStartupIsStillPreDispatch()) {
+        finishBackendStartupTracking();
+      }
       const hasUnconfirmedDispatch =
         useCodexStore.getState().unconfirmedDispatches.has(sessionKey);
       if (!hasUnconfirmedDispatch) {
@@ -2153,6 +2224,9 @@ export function CodexChatTab({
     }
 
     if (status.status === "error") {
+      if (!backendStartupIsStillPreDispatch()) {
+        finishBackendStartupTracking();
+      }
       const error = status.error?.trim() || "Codex session failed";
       setSessionError(sessionKey, error);
       setErrorMessage(error);
@@ -2186,6 +2260,7 @@ export function CodexChatTab({
     }
 
     setSessionLoading(sessionKey, true);
+    finishBackendStartupTracking();
     if (options?.forceRefreshMessages) {
       await refreshMessages(client, session.sessionId, {
         throwOnError: options.throwOnError,
@@ -2197,6 +2272,8 @@ export function CodexChatTab({
     client,
     connectionState,
     refreshMessages,
+    backendStartupIsStillPreDispatch,
+    finishBackendStartupTracking,
     resolveUnconfirmedDispatch,
     session?.sessionId,
     sessionKey,
@@ -2266,9 +2343,12 @@ export function CodexChatTab({
   // point the renderer's snapshot legitimately says "idle". Waiting for
   // `isLoading` before subscribing then misses the event that changes it to
   // running, leaving the empty "Ready to build" surface visible until reload.
+  const shouldTrackCodexSession =
+    (session?.isLoading ?? false) || trackingBackendStartupTurn;
+
   useEffect(() => {
     if (
-      (!session?.isLoading && !backendOwnsStartupPrompt)
+      !shouldTrackCodexSession
       || connectionState !== "connected"
       || !client
       || !session?.sessionId
@@ -2278,7 +2358,7 @@ export function CodexChatTab({
 
     const abortController = new AbortController();
     const shouldTrackSession = () =>
-      backendOwnsStartupPrompt
+      trackingBackendStartupTurnRef.current
       || useCodexStore.getState().sessions.get(sessionKey)?.isLoading === true;
 
     (async () => {
@@ -2432,6 +2512,9 @@ export function CodexChatTab({
               const phase = event.data?.phase;
               if (isCodexSessionPhase(phase)) {
                 const terminal = phase === "idle" || phase === "failed";
+                if (!terminal || !backendStartupIsStillPreDispatch()) {
+                  finishBackendStartupTracking();
+                }
                 setSessionPhase(sessionKey, terminal ? undefined : phase);
                 /**
                  * A terminal phase here can be recovery reporting that the
@@ -2445,12 +2528,16 @@ export function CodexChatTab({
                   setSessionLoading(sessionKey, !terminal);
                 }
               } else {
+                finishBackendStartupTracking();
                 setSessionLoading(sessionKey, true);
               }
               continue;
             }
 
             if (event.type === "session.idle") {
+              if (!backendStartupIsStillPreDispatch()) {
+                finishBackendStartupTracking();
+              }
               const hasUnconfirmedDispatch =
                 useCodexStore.getState().unconfirmedDispatches.has(sessionKey);
               setSessionPhase(sessionKey, undefined);
@@ -2504,6 +2591,9 @@ export function CodexChatTab({
             }
 
             if (event.type === "session.error") {
+              if (!backendStartupIsStillPreDispatch()) {
+                finishBackendStartupTracking();
+              }
               const error =
                 typeof event.data?.error === "string"
                   ? event.data.error
@@ -2564,16 +2654,17 @@ export function CodexChatTab({
     };
   }, [
     addPendingApproval,
-    backendOwnsStartupPrompt,
+    backendStartupIsStillPreDispatch,
     client,
     connectionState,
+    finishBackendStartupTracking,
     refreshMessages,
     reconcileSessionState,
     removePendingApproval,
     resolveUnconfirmedDispatch,
-    session?.isLoading,
     session?.sessionId,
     sessionKey,
+    shouldTrackCodexSession,
     setSessionError,
     setSessionLoading,
     setSessionPhase,
@@ -2587,7 +2678,7 @@ export function CodexChatTab({
   // the renderer has not observed the turn-start frame yet.
   useStalledTurnWatchdog({
     agentLabel: "Codex",
-    isLoading: (session?.isLoading ?? false) || backendOwnsStartupPrompt,
+    isLoading: shouldTrackCodexSession,
     isReady:
       connectionState === "connected" && !!client && !!session?.sessionId,
     reconcile: () => reconcileSessionState({ forceRefreshMessages: true }),

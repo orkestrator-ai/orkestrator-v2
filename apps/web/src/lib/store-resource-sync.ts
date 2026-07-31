@@ -1,5 +1,14 @@
-import { getConfig, getPaneLayout } from "@/lib/backend";
-import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
+import {
+  getConfig,
+  getEnvironmentSnapshots,
+  getPaneLayout,
+  getProjects,
+} from "@/lib/backend";
+import {
+  onResourceChanged,
+  onResourceResync,
+  type ResourceResyncRequest,
+} from "@/lib/resource-sync";
 import {
   adoptPersistedPaneLayout,
   onPaneLayoutWriteSettled,
@@ -27,6 +36,7 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useSessionStore } from "@/stores/sessionStore";
+import type { ResourceManifestKind } from "@orkestrator/protocol/resource-events";
 
 /**
  * Binds the backend change feed to the stores that are read-through caches.
@@ -36,12 +46,14 @@ import { useSessionStore } from "@/stores/sessionStore";
  * Pane/tab existence is backend-owned too, while active pane/tab selection is
  * preserved locally whenever an authoritative snapshot is installed.
  *
- * Projects and environments are bound separately, in the hooks that already own
- * their loaders, because those loaders carry request-generation bookkeeping that
- * must not be bypassed.
+ * Live project/environment changes are also consumed by their UI hooks for
+ * low-latency updates. Manifest/full reconciliation owns those collections
+ * here as well so convergence never depends on the sidebar being mounted.
  */
 interface StoreResourceSyncOptions {
   getConfig?: typeof getConfig;
+  getProjects?: typeof getProjects;
+  getEnvironmentSnapshots?: typeof getEnvironmentSnapshots;
   getPaneLayout?: typeof getPaneLayout;
   adoptPaneLayout?: typeof adoptPersistedPaneLayout;
   onPaneLayoutWriteSettled?: typeof onPaneLayoutWriteSettled;
@@ -54,8 +66,8 @@ export function startStoreResourceSync(
   const promptQueueSources = createPromptQueueSources();
   let disposed = false;
   let configRequestGeneration = 0;
-  let resyncRunning = false;
-  let resyncRequested = false;
+  let pendingResyncResources: Set<ResourceManifestKind> | null | undefined;
+  let resyncPromise: Promise<void> | null = null;
   const paneLayoutRequestGenerations = new Map<string, number>();
   const deferredPaneLayoutRefreshes = new Set<string>();
   const declinedPaneLayoutRefreshes = new Set<string>();
@@ -69,6 +81,7 @@ export function startStoreResourceSync(
       }
     } catch (error) {
       console.warn("[store-resource-sync] Failed to refresh config:", error);
+      throw error;
     }
   };
 
@@ -238,38 +251,80 @@ export function startStoreResourceSync(
     }
   }));
 
-  const resyncAll = async (): Promise<void> => {
+  const resyncAll = async (
+    resources: ReadonlySet<ResourceManifestKind> | null,
+  ): Promise<void> => {
+    const includes = (
+      resource: ResourceManifestKind,
+    ): boolean => resources === null || resources.has(resource);
+    const tasks: Array<Promise<unknown>> = [];
+    const paneEnvironmentIds: string[] = [];
+    let failed = false;
+
+    if (includes("project")) {
+      try {
+        const projects = await (options.getProjects ?? getProjects)();
+        if (!disposed) useProjectStore.getState().setProjects(projects);
+      } catch (error) {
+        failed = true;
+        console.warn("[store-resource-sync] Authoritative project resync failed:", error);
+      }
+    }
+    if (includes("environment")) {
+      try {
+        // This phase runs after the project phase, so it sees projects added or
+        // removed while the renderer was inactive. Install all project scopes
+        // atomically: one failed read must not leave a half-new environment set.
+        const projectIds = useProjectStore.getState().projects.map(({ id }) => id);
+        const snapshots = await Promise.all(projectIds.map((projectId) =>
+          (options.getEnvironmentSnapshots ?? getEnvironmentSnapshots)(projectId)
+        ));
+        if (!disposed) {
+          useEnvironmentStore.getState().setEnvironments(snapshots.flat());
+        }
+      } catch (error) {
+        failed = true;
+        console.warn("[store-resource-sync] Authoritative environment resync failed:", error);
+      }
+    }
+
     const environments = useEnvironmentStore.getState().environments;
     const projects = useProjectStore.getState().projects;
     const kanban = useKanbanStore.getState();
     const featurePlan = useFeaturePlanStore.getState();
-    const tasks: Array<Promise<unknown>> = [refreshConfig()];
-    const paneEnvironmentIds: string[] = [];
+    if (includes("config")) tasks.push(refreshConfig());
 
     for (const { id: environmentId } of environments) {
-      tasks.push(
-        hydratePromptQueuesForEnvironment(environmentId, promptQueueSources),
-        useSessionStore.getState().loadSessionsForEnvironment(environmentId),
-        refreshLoopedReviewsForEnvironment(environmentId),
-      );
-      paneEnvironmentIds.push(environmentId);
+      if (includes("prompt-queue")) {
+        tasks.push(hydratePromptQueuesForEnvironment(environmentId, promptQueueSources));
+      }
+      if (includes("session")) {
+        tasks.push(useSessionStore.getState().loadSessionsForEnvironment(environmentId));
+      }
+      if (includes("looped-review")) {
+        tasks.push(refreshLoopedReviewsForEnvironment(environmentId));
+      }
+      if (includes("pane-layout")) paneEnvironmentIds.push(environmentId);
     }
-    for (const { id: projectId } of projects) {
-      tasks.push(refreshBuildPipelinesForProject(projectId));
+    if (includes("build-pipeline")) {
+      for (const { id: projectId } of projects) {
+        tasks.push(refreshBuildPipelinesForProject(projectId));
+      }
     }
-    if (kanban.currentProjectId) {
+    if (includes("kanban") && kanban.currentProjectId) {
       tasks.push(kanban.loadTasks(kanban.currentProjectId));
     }
-    if (kanban.currentNotesProjectId) {
+    if (includes("project-notes") && kanban.currentNotesProjectId) {
       tasks.push(kanban.loadNotes(kanban.currentNotesProjectId));
     }
-    if (featurePlan.currentProjectId) {
+    if (includes("feature-plan") && featurePlan.currentProjectId) {
       tasks.push(featurePlan.loadFeatures(featurePlan.currentProjectId));
     }
 
     const results = await Promise.allSettled(tasks);
     for (const result of results) {
       if (result.status === "rejected") {
+        failed = true;
         console.warn(
           "[store-resource-sync] Authoritative resync read failed:",
           result.reason,
@@ -281,32 +336,44 @@ export function startStoreResourceSync(
     );
     for (const result of paneResults) {
       if (result.status === "rejected") {
+        failed = true;
         console.warn(
           "[store-resource-sync] Authoritative pane resync failed:",
           result.reason,
         );
       }
     }
+    if (failed) throw new Error("One or more authoritative resync reads failed");
   };
 
-  const requestFullResync = (): void => {
-    if (disposed) return;
-    resyncRequested = true;
-    if (resyncRunning) return;
-    resyncRunning = true;
-    void (async () => {
+  const requestStoreResync = (
+    request: ResourceResyncRequest,
+  ): Promise<void> => {
+    if (disposed) return Promise.resolve();
+    if (request.resources === null) {
+      pendingResyncResources = null;
+    } else if (pendingResyncResources !== null) {
+      pendingResyncResources ??= new Set();
+      for (const resource of request.resources) {
+        pendingResyncResources.add(resource);
+      }
+    }
+    if (resyncPromise) return resyncPromise;
+    resyncPromise = (async () => {
       try {
-        do {
-          resyncRequested = false;
-          await resyncAll();
-        } while (!disposed && resyncRequested);
+        while (!disposed && pendingResyncResources !== undefined) {
+          const resources = pendingResyncResources;
+          pendingResyncResources = undefined;
+          await resyncAll(resources);
+        }
       } finally {
-        resyncRunning = false;
+        resyncPromise = null;
       }
     })();
+    return resyncPromise;
   };
 
-  unsubscribes.push(onResourceResync(requestFullResync));
+  unsubscribes.push(onResourceResync(requestStoreResync));
 
   unsubscribes.push(onResourceChanged("prompt-queue", ({ id: environmentId }) => {
     // Queues announce against their environment rather than their tab, so this
@@ -323,7 +390,7 @@ export function startStoreResourceSync(
   }));
 
   unsubscribes.push(onResourceChanged("config", () => {
-    void refreshConfig();
+    void refreshConfig().catch(() => undefined);
   }));
 
   unsubscribes.push(onResourceChanged("kanban", ({ id: projectId }) => {

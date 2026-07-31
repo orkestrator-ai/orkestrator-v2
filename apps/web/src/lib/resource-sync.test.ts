@@ -1,6 +1,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { NativeEvent, UnlistenFn } from "@/lib/native/events";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
+import {
+  RESOURCE_MANIFEST_KINDS,
+  type ResourceRevisionManifest,
+  type ResourceRevisionMap,
+} from "@orkestrator/protocol/resource-events";
 
 /**
  * The global setup mocks `@/lib/native/events` for every suite. `startResourceSync`
@@ -62,6 +67,19 @@ const originalClearInterval = globalThis.clearInterval;
 
 function change(overrides: Partial<ResourceChange> = {}): ResourceChange {
   return { resource: "environment", id: "env-1", revision: 1, ...overrides };
+}
+
+function fullManifest(
+  generation = "a".repeat(32),
+  revision = "b".repeat(32),
+): ResourceRevisionManifest {
+  return {
+    generation,
+    reset: true,
+    revisions: Object.fromEntries(
+      RESOURCE_MANIFEST_KINDS.map((kind) => [kind, revision]),
+    ) as ResourceRevisionMap,
+  };
 }
 
 beforeEach(() => {
@@ -579,7 +597,7 @@ describe("startResourceSync", () => {
     let intervalCallback: (() => void) | undefined;
     const clearIntervalMock = mock(() => undefined);
     globalThis.setInterval = ((callback: TimerHandler, timeout?: number) => {
-      expect(timeout).toBe(60_000);
+      expect(timeout).toBe(300_000);
       intervalCallback = callback as () => void;
       return 42 as unknown as ReturnType<typeof setInterval>;
     }) as unknown as typeof setInterval;
@@ -595,5 +613,114 @@ describe("startResourceSync", () => {
     expect(resync).toHaveBeenCalledTimes(1);
     stop();
     expect(clearIntervalMock).toHaveBeenCalledWith(42);
+  });
+});
+
+describe("manifest reconciliation", () => {
+  test("hydrates a generation reset in project, environment, dependent order", async () => {
+    const requests: Array<string[] | null> = [];
+    onResourceResync((request) => {
+      requests.push(request.resources === null ? null : [...request.resources]);
+    });
+
+    startResourceSync({ loadManifest: async () => fullManifest() });
+    await tick(20);
+
+    expect(requests[0]).toEqual(["project"]);
+    expect(requests[1]).toEqual(["environment"]);
+    expect(requests[2]).toEqual(
+      RESOURCE_MANIFEST_KINDS.filter((kind) =>
+        kind !== "project" && kind !== "environment"
+      ),
+    );
+  });
+
+  test("a stable periodic check transfers no snapshots", async () => {
+    let intervalCallback: (() => void) | undefined;
+    globalThis.setInterval = ((callback: TimerHandler) => {
+      intervalCallback = callback as () => void;
+      return 42 as unknown as ReturnType<typeof setInterval>;
+    }) as unknown as typeof setInterval;
+    const first = fullManifest();
+    const loadManifest = mock(async (
+      knownGeneration?: string,
+    ): Promise<ResourceRevisionManifest> => knownGeneration === first.generation
+      ? { generation: first.generation, reset: false, revisions: {} }
+      : first);
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+    startResourceSync({ loadManifest });
+    await tick(20);
+    resync.mockClear();
+
+    intervalCallback?.();
+    await tick(20);
+
+    expect(loadManifest).toHaveBeenCalledTimes(2);
+    expect(resync).not.toHaveBeenCalled();
+  });
+
+  test("hydrates only the resource revision that differs", async () => {
+    const initial = fullManifest();
+    let calls = 0;
+    const loadManifest = async (): Promise<ResourceRevisionManifest> => {
+      calls += 1;
+      return calls === 1
+        ? initial
+        : {
+          generation: initial.generation,
+          reset: false,
+          revisions: { config: "c".repeat(32) },
+        };
+    };
+    const requests: Array<string[] | null> = [];
+    onResourceResync((request) => {
+      requests.push(request.resources === null ? null : [...request.resources]);
+    });
+    startResourceSync({ loadManifest });
+    await tick(20);
+    requests.length = 0;
+
+    const resource = listenCalls.find(({ event }) => event === "resource-changed");
+    resource?.handler({ payload: change({ revision: 10 }) });
+    resource?.handler({ payload: change({ revision: 12 }) });
+    await tick(20);
+
+    expect(requests).toEqual([["config"]]);
+  });
+
+  test("does not advance known revisions after a failed hydration", async () => {
+    const argumentsSeen: Array<{
+      generation?: string;
+      revisions?: Partial<ResourceRevisionMap>;
+    }> = [];
+    const loadManifest = async (
+      generation?: string,
+      revisions?: Partial<ResourceRevisionMap>,
+    ): Promise<ResourceRevisionManifest> => {
+      argumentsSeen.push({ generation, revisions });
+      return fullManifest();
+    };
+    let fail = true;
+    const requests: Array<string[] | null> = [];
+    onResourceResync((request) => {
+      requests.push(request.resources === null ? null : [...request.resources]);
+      if (fail) {
+        fail = false;
+        throw new Error("offline");
+      }
+    });
+    startResourceSync({ loadManifest });
+    await tick(20);
+    expect(requests).toEqual([["project"]]);
+
+    const resource = listenCalls.find(({ event }) => event === "resource-changed");
+    resource?.handler({ payload: change({ revision: 10 }) });
+    resource?.handler({ payload: change({ revision: 12 }) });
+    await tick(20);
+
+    expect(argumentsSeen).toHaveLength(2);
+    expect(argumentsSeen[1]?.generation).toBeUndefined();
+    expect(argumentsSeen[1]?.revisions).toEqual({});
   });
 });

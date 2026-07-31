@@ -1,6 +1,6 @@
 # Milestone 4 — Gateway replay and revision-aware synchronization
 
-Status: In progress — gateway replay transport implemented
+Status: Implemented; manual soak verification pending
 
 Depends on: Milestone 3
 
@@ -52,25 +52,26 @@ Primary areas:
 
 ### Revision manifest and conditional hydration
 
-- [ ] Define a small authoritative revision manifest.
-- [ ] Include projects, config, environments, pipelines, prompt queues,
+- [x] Define a small authoritative revision manifest.
+- [x] Include projects, config, environments, pipelines, prompt queues,
       sessions, and reviews.
-- [ ] Add other resources only when they currently participate in broad sync.
-- [ ] Track client-known revisions.
-- [ ] Make snapshot commands return unchanged without a full body when the
+- [x] Add other resources only when they currently participate in broad sync.
+- [x] Track client-known revisions.
+- [x] Make snapshot commands return unchanged without a full body when the
       client revision matches.
-- [ ] Hydrate only resources whose revisions differ.
-- [ ] Treat generation changes as a full manifest invalidation.
+- [x] Hydrate only resources whose revisions differ.
+- [x] Treat generation changes as a full manifest invalidation.
 
 ### Polling migration
 
-- [ ] Keep the existing broad 60-second sweep during development and initial
+- [x] Keep the existing broad 60-second sweep during development and initial
       rollout.
 - [ ] Compare broad-sweep results with replay/manifest results during soak.
 - [ ] Confirm all inactive-environment resources converge.
-- [ ] Replace broad transfer with a slower manifest check and targeted hydration
-      only after equivalence is proven.
-- [ ] Keep an explicit full-reconcile action for diagnosis and recovery.
+- [x] Replace broad transfer with a slower manifest check and targeted hydration;
+      focused automated equivalence and failure-retry coverage passes, while the
+      longer manual soak remains open below.
+- [x] Keep an explicit full-reconcile action for diagnosis and recovery.
 
 ## Required tests
 
@@ -85,9 +86,9 @@ Primary areas:
 - [x] A scoped stream's cursor advances past revisions its filter omitted.
 - [x] An undeliverable replay window reconciles instead of dropping the client.
 - [x] A throw mid-handshake unregisters the client and releases the gauge.
-- [ ] Resource manifest returns stable revisions for unchanged state.
-- [ ] Conditional snapshot returns unchanged without its body.
-- [ ] Backend restart invalidates old cursors and converges.
+- [x] Resource manifest returns stable revisions for unchanged state.
+- [x] Conditional snapshot returns unchanged without its body.
+- [x] Backend restart invalidates old cursors and converges.
 - [x] Slow clients cannot make handshake buffers unbounded.
 
 ## Manual verification
@@ -117,9 +118,9 @@ bun run test
 - [x] Expired and prior-generation cursors reconcile explicitly.
 - [x] Replay and handshake memory are bounded.
 - [x] Subscribe-before-replay races are covered.
-- [ ] Stable clients use manifest checks instead of broad snapshot transfer.
+- [x] Stable clients use manifest checks instead of broad snapshot transfer.
 - [ ] Inactive/background clients converge every authoritative resource.
-- [ ] An explicit full reconciliation remains available.
+- [x] An explicit full reconciliation remains available.
 - [ ] Focused tests, typechecks, soak checks, and the full suite pass.
 
 ## Evidence and decisions
@@ -191,9 +192,9 @@ Record:
   retained cursor. Nothing else rebuilds it, and `ensureEventStream` early
   returns while one exists, so a fatal error previously stranded every
   authoritative event until the tab reloaded.
-- The 60-second resource safety sweep remains enabled. Revision manifests,
-  conditional snapshots, targeted hydration, equivalence soak, and iOS manual
-  verification are the next slice.
+- `requestResourceResync()` remains the explicit authoritative full-reconcile
+  path. Automatic initial attach, revision-gap, reconnect, and periodic paths
+  now use the manifest instead.
 - Baseline/after transfer evidence has not yet been recorded for this milestone.
 - Passing focused checks:
   - `bun run --cwd apps/backend typecheck`
@@ -204,3 +205,47 @@ Record:
     (28 tests)
   - `bun test src/lib/native/web-gateway.test.ts src/lib/resource-sync.test.ts --parallel`
     from `apps/web` (98 tests)
+
+### 2026-07-31 — revision manifest and targeted hydration slice
+
+- The backend exposes a process-generation-scoped manifest for the eleven
+  persistent snapshots that participated in broad synchronization: projects,
+  environments, sessions, config, Kanban, project notes, feature plans, pane
+  layouts, looped reviews, build pipelines, and prompt queues.
+- Revisions are opaque 128-bit values derived from file metadata, not file
+  contents. The atomic JSON writer installs a fresh inode on each commit, so the
+  manifest detects writes made by this backend and by another backend sharing
+  the data directory without reading prompts, notes, or other user data.
+- A client sending the current generation and revisions receives an empty
+  revision delta. The stable safety check therefore transfers one small
+  manifest every five minutes and no resource snapshots.
+- Existing snapshot commands preserve their legacy response shape. When callers
+  supply `knownManifestGeneration` and `knownResourceRevision`, projects,
+  config, environment snapshots, sessions, pane layouts, looped reviews, build
+  pipelines, prompt queues, Kanban, project notes, and feature plans return an
+  `unchanged` envelope without reading or returning the body.
+- The renderer tracks revisions only after every requested hydration succeeds.
+  Failed reads leave knowledge behind so the next check retries. Generation
+  resets hydrate projects first, environments second, and dependent resources
+  last. Project and environment manifest hydration is owned by the global store
+  binding rather than the sidebar hooks, so a closed mobile drawer cannot omit
+  a newly discovered scope before dependent stores are reconciled.
+- The former broad one-minute sweep is replaced by a five-minute manifest
+  check. Replay misses and generation changes use the same targeted path;
+  explicit full reconciliation is retained for diagnosis and recovery.
+- Focused automated checks cover stable revisions, cross-process writes,
+  body-less unchanged snapshots, restart invalidation, ordered convergence,
+  changed-resource-only hydration, failed-hydration retry, and the existing
+  resource binding and replay behavior. Manual multi-environment, constrained
+  network, and iOS background/foreground soak verification remains open.
+- The final focused run passed all four TypeScript projects plus 19 protocol,
+  20 backend storage, 151 renderer synchronization, 40 hook, 156 gateway, 82
+  web-gateway, and 304 command-registry tests (with one live-Docker test
+  skipped).
+- `bun run test` is not yet signed off. The bounded runner reaches an unrelated
+  pre-existing native-session storage failure: `listNativeAgentSessions()`
+  applies `Object.values()` to the newer `{ sessions, opaque, migrated }`
+  migration envelope, so downstream native-agent tests receive three envelope
+  fields instead of the stored session list. The same implementation is
+  present at `HEAD` independently of this milestone patch; the full-suite exit
+  criterion therefore remains unchecked.

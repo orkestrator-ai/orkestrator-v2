@@ -1672,6 +1672,7 @@ describe("backend command wrapper coverage", () => {
       "createLocalTerminalSession",
       "createTerminalSession",
       "getTerminalOutputSnapshot",
+      "getResourceRevisionManifest",
     ]);
     const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
       typeof value === "function" && !specialWrappers.has(name)
@@ -1686,6 +1687,32 @@ describe("backend command wrapper coverage", () => {
       await wrapper(...args);
       expect(invokeMock.mock.calls.length, `${name} must call invoke`).toBeGreaterThan(0);
     }
+  });
+
+  test("validates and forwards resource revision manifest knowledge", async () => {
+    const response = {
+      generation: "a".repeat(32),
+      reset: false,
+      revisions: { config: "b".repeat(32) },
+    };
+    invokeMock.mockResolvedValueOnce(response);
+
+    await expect(backendWrappers.getResourceRevisionManifest(
+      "a".repeat(32),
+      { config: "c".repeat(32) },
+    )).resolves.toEqual(response);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "get_resource_revision_manifest",
+      {
+        knownGeneration: "a".repeat(32),
+        knownRevisions: { config: "c".repeat(32) },
+      },
+    );
+
+    invokeMock.mockResolvedValueOnce({ generation: "invalid" });
+    await expect(
+      backendWrappers.getResourceRevisionManifest(),
+    ).rejects.toThrow("Invalid resource revision manifest response");
   });
 
   test("getEnvironmentExtensions defaults to the cached backend result", async () => {

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   isResourceChange,
   isResourceKind,
+  isResourceRevisionManifest,
+  RESOURCE_MANIFEST_KINDS,
   RESOURCE_CHANGED_EVENT,
   RESOURCE_KINDS,
   type ResourceChange,
@@ -103,5 +105,38 @@ describe("RESOURCE_CHANGED_EVENT", () => {
     // Backend emit and client listen are wired by this literal in separate
     // packages, so a rename has to be deliberate.
     expect(RESOURCE_CHANGED_EVENT).toBe("resource-changed");
+  });
+});
+
+describe("resource revision manifests", () => {
+  test("accepts a reset manifest containing every broad-sync resource", () => {
+    expect(isResourceRevisionManifest({
+      generation: "a".repeat(32),
+      reset: true,
+      revisions: Object.fromEntries(
+        RESOURCE_MANIFEST_KINDS.map((kind) => [kind, "b".repeat(32)]),
+      ),
+    })).toBe(true);
+  });
+
+  test("accepts an unchanged response without resource revisions", () => {
+    expect(isResourceRevisionManifest({
+      generation: "a".repeat(32),
+      reset: false,
+      revisions: {},
+    })).toBe(true);
+  });
+
+  test("rejects unknown resources and malformed opaque revisions", () => {
+    expect(isResourceRevisionManifest({
+      generation: "a".repeat(32),
+      reset: false,
+      revisions: { secrets: "b".repeat(32) },
+    })).toBe(false);
+    expect(isResourceRevisionManifest({
+      generation: "a".repeat(32),
+      reset: false,
+      revisions: { project: "not-a-revision" },
+    })).toBe(false);
   });
 });

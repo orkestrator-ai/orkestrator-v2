@@ -55,6 +55,87 @@ function kinds(changes: ResourceChange[]): string[] {
 }
 
 describe("StorageService resource change announcements", () => {
+  test("returns stable manifest revisions and changes only the written store", async () => {
+    await withStorage(async (storage) => {
+      const first = await storage.getResourceRevisionManifest();
+      const stable = await storage.getResourceRevisionManifest(
+        first.generation,
+        first.revisions,
+      );
+      expect(first.reset).toBe(true);
+      expect(stable).toEqual({
+        generation: first.generation,
+        reset: false,
+        revisions: {},
+      });
+
+      await storage.addProject(project("p1"));
+      const changed = await storage.getResourceRevisionManifest(
+        first.generation,
+        first.revisions,
+      );
+      expect(changed.reset).toBe(false);
+      expect(Object.keys(changed.revisions)).toEqual(["project"]);
+    });
+  });
+
+  test("detects a write from another backend sharing the data directory", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-resource-manifest-"));
+    const reader = new StorageService(dataDir);
+    const writer = new StorageService(dataDir);
+    await reader.init();
+    await writer.init();
+    try {
+      const known = await reader.getResourceRevisionManifest();
+      await writer.addProject(project("external"));
+      const observed = await reader.getResourceRevisionManifest(
+        known.generation,
+        known.revisions,
+      );
+      expect(Object.keys(observed.revisions)).toEqual(["project"]);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("changes generation on restart and omits an unchanged snapshot body", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-resource-generation-"));
+    const first = new StorageService(dataDir);
+    await first.init();
+    try {
+      const manifest = await first.getResourceRevisionManifest();
+      const projectRevision = manifest.revisions.project!;
+      let loads = 0;
+      const unchanged = await first.readConditionalResourceSnapshot(
+        "project",
+        manifest.generation,
+        projectRevision,
+        () => {
+          loads += 1;
+          return first.loadProjects();
+        },
+      );
+      expect(unchanged).toEqual({
+        status: "unchanged",
+        generation: manifest.generation,
+        revision: projectRevision,
+      });
+      expect(loads).toBe(0);
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      const afterRestart = await restarted.getResourceRevisionManifest(
+        manifest.generation,
+        manifest.revisions,
+      );
+      expect(afterRestart.generation).not.toBe(manifest.generation);
+      expect(afterRestart.reset).toBe(true);
+      expect(Object.keys(afterRestart.revisions).length).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("announces project create, update, reorder and delete", async () => {
     await withStorage(async (storage, changes) => {
       await storage.addProject(project("p1"));

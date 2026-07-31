@@ -31,13 +31,13 @@ Primary files:
 - [ ] Record cold and warm load bytes and timings for a real iPhone or iPad
       `WKWebView`.
 - [ ] Record raw, gzip, and Brotli sizes of the main JavaScript and CSS assets.
-- [ ] Record invoke count, request bytes, response bytes, and duration by
+- [x] Record invoke count, request bytes, response bytes, and duration by
       command.
-- [ ] Record gateway and bridge event frames and bytes by event type.
+- [x] Record gateway and bridge event frames and bytes by event type.
 - [ ] Record terminal input request count, raw bytes, wire bytes, and
       key-to-visible-echo latency.
-- [ ] Record open, connecting, dropped, and stalled stream counts.
-- [ ] Record reconnects, replay hits, cursor expirations, and full
+- [x] Record open, connecting, dropped, and stalled stream counts.
+- [x] Record reconnects, replay hits, cursor expirations, and full
       reconciliations where those values already exist.
 - [ ] Record the HTTP version and encoding headers seen through raw tailnet HTTP
       and Tailscale Serve.
@@ -144,6 +144,14 @@ Recorded Tuesday, July 28, 2026:
 - Added browser boot/resource reporting in
   `apps/web/src/lib/native/web-gateway.ts` and explicit `WKWebView` platform
   tagging in `apps/ios/OrkestratorMobile/Views/RemoteWebView.swift`.
+- Gateway command metrics record count, request bytes, response bytes, duration,
+  and failures by bounded registry-backed command label. Event metrics record
+  delivered frames and wire bytes by bounded event type, including events
+  relayed from provider bridges.
+- Stream metrics record connecting/open gauges plus opened, closed, dropped,
+  stalled, soft-desync, and keepalive counts. PR #240 added bounded replay
+  outcomes and per-reason reconciliation counts for fresh, caught-up, replayed,
+  expired, invalid, prior-generation, ahead, and undeliverable cursors.
 - Added `compression?: "off" | "body" | "on"` to gateway construction, wired
   `--compression` and `ORKESTRATOR_GATEWAY_COMPRESSION`, and kept the default
   at `off` so production response encoding remains unchanged.

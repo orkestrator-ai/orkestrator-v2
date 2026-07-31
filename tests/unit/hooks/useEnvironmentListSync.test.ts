@@ -266,7 +266,7 @@ describe("useEnvironmentListSync", () => {
   test("re-runs a project whose refresh was requested while one was in flight", async () => {
     // The in-flight read was started before the mutation that prompted the new
     // request, so it cannot contain it. Dropping the request would leave the
-    // list stale until the next 60s resync.
+    // list stale until the next slow manifest resync.
     let finishRefresh: (() => void) | undefined;
     const refreshProject = mock<(projectId: string) => Promise<void>>(
       () => new Promise<void>((resolve) => { finishRefresh = resolve; }),

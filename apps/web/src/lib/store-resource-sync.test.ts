@@ -64,6 +64,17 @@ const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
 const { useProjectStore } = await import("@/stores/projectStore");
 const { useSessionStore } = await import("@/stores/sessionStore");
 
+const startTestStoreResourceSync = (
+  options: Parameters<typeof startStoreResourceSync>[0] = {},
+) => startStoreResourceSync({
+  getProjects: async () => useProjectStore.getState().projects,
+  getEnvironmentSnapshots: async (projectId: string) =>
+    useEnvironmentStore.getState().environments.filter(
+      (environment) => environment.projectId === projectId,
+    ),
+  ...options,
+});
+
 const tick = (ms = 80) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let detach: (() => void) | null = null;
@@ -119,7 +130,7 @@ beforeEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
-  detach = startStoreResourceSync();
+  detach = startTestStoreResourceSync();
 });
 
 afterEach(() => {
@@ -386,7 +397,7 @@ describe("pane-layout binding", () => {
       updatedAt: "2026-07-29T08:00:00.000Z",
       revision: 4,
     }));
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
     await tick();
@@ -430,7 +441,7 @@ describe("pane-layout binding", () => {
       updatedAt: "2026-07-29T08:00:00.000Z",
       revision: 2,
     }));
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
     await tick();
@@ -525,7 +536,7 @@ describe("pane-layout binding", () => {
       updatedAt: "2026-07-29T08:00:00.000Z",
       revision: 5,
     }));
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
     await tick();
@@ -612,7 +623,7 @@ describe("pane-layout binding", () => {
       updatedAt: "2026-07-29T08:00:00.000Z",
       revision: 2,
     }));
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
     await tick();
@@ -651,7 +662,7 @@ describe("pane-layout binding", () => {
       resolveLayout = resolve;
       markLayoutRequestStarted();
     }));
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 1 });
     await layoutRequestStarted;
@@ -725,7 +736,7 @@ describe("pane-layout binding", () => {
     const getPaneLayout = mock(() => new Promise((resolve) => {
       resolvers.push(resolve);
     }));
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
     const saved = (tabId: string, revision: number) => ({
       version: 1,
       environmentId: "env-1",
@@ -804,7 +815,7 @@ describe("pane-layout binding", () => {
         revision: 3,
       }));
     const adoptPaneLayout = mock(() => false);
-    detach = startStoreResourceSync({
+    detach = startTestStoreResourceSync({
       getPaneLayout: getPaneLayout as never,
       adoptPaneLayout,
     });
@@ -864,7 +875,7 @@ describe("pane-layout binding", () => {
       };
     });
 
-    detach = startStoreResourceSync({
+    detach = startTestStoreResourceSync({
       getPaneLayout: getPaneLayout as never,
       adoptPaneLayout,
       onPaneLayoutWriteSettled: onWriteSettled as never,
@@ -897,7 +908,7 @@ describe("pane-layout binding", () => {
     detach?.();
     useEnvironmentStore.setState({ environments: [] });
     const getPaneLayout = mock(async () => null);
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     dispatchResourceChange({ resource: "pane-layout", id: "env-unknown", revision: 1 });
     await tick();
@@ -943,7 +954,7 @@ describe("pane-layout binding", () => {
         revision: 6,
       };
     });
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 6 });
     await tick();
@@ -991,7 +1002,7 @@ describe("pane-layout binding", () => {
         revision: 7,
       };
     });
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 7 });
     await tick();
@@ -1042,7 +1053,7 @@ describe("pane-layout binding", () => {
       dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 9 });
       return undefined;
     });
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     dispatchResourceChange({ resource: "pane-layout", id: "env-1", revision: 8 });
     await tick();
@@ -1055,6 +1066,32 @@ describe("pane-layout binding", () => {
 });
 
 describe("authoritative resync", () => {
+  test("rehydrates project and environment collections without mounted UI loaders", async () => {
+    detach?.();
+    const project = { id: "project-new", name: "new", order: 0 } as never;
+    const authoritativeEnvironment = {
+      ...environment("env-new"),
+      projectId: "project-new",
+    };
+    const getProjects = mock(async () => [project]);
+    const getEnvironmentSnapshots = mock(async (projectId: string) =>
+      projectId === "project-new" ? [authoritativeEnvironment] : []
+    );
+    detach = startTestStoreResourceSync({
+      getProjects: getProjects as never,
+      getEnvironmentSnapshots: getEnvironmentSnapshots as never,
+    });
+
+    requestResourceResync();
+    await tick();
+
+    expect(useProjectStore.getState().projects).toEqual([project]);
+    expect(useEnvironmentStore.getState().environments).toEqual([
+      authoritativeEnvironment,
+    ]);
+    expect(getEnvironmentSnapshots).toHaveBeenCalledWith("project-new");
+  });
+
   test("refreshes every active backend-owned store after a reconnect or gap", async () => {
     const loadSessionsForEnvironment = mock(async () => {});
     const loadTasks = mock(async () => {});
@@ -1150,7 +1187,7 @@ describe("authoritative resync", () => {
       .mockImplementationOnce(async () => ({ theme: "dark" }));
     const setConfig = mock(() => {});
     useConfigStore.setState({ setConfig } as never);
-    detach = startStoreResourceSync({ getConfig: getConfig as never });
+    detach = startTestStoreResourceSync({ getConfig: getConfig as never });
 
     requestResourceResync();
     await tick();
@@ -1175,7 +1212,7 @@ describe("authoritative resync", () => {
       }));
     const setConfig = mock(() => {});
     useConfigStore.setState({ setConfig } as never);
-    detach = startStoreResourceSync({ getConfig: getConfig as never });
+    detach = startTestStoreResourceSync({ getConfig: getConfig as never });
 
     requestResourceResync();
     dispatchResourceChange({ resource: "config", id: "app", revision: 1 });
@@ -1199,7 +1236,7 @@ describe("authoritative resync", () => {
     }));
     const setConfig = mock(() => {});
     useConfigStore.setState({ setConfig } as never);
-    detach = startStoreResourceSync({ getConfig: getConfig as never });
+    detach = startTestStoreResourceSync({ getConfig: getConfig as never });
 
     requestResourceResync();
     detach();
@@ -1213,6 +1250,7 @@ describe("authoritative resync", () => {
   test("waits for dependency hydration before applying pane layouts", async () => {
     detach?.();
     useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
     const paneStore = usePaneLayoutStore.getState();
     paneStore.initialize(null, "env-1");
     paneStore.addTab("default", { id: "base", type: "plain" }, "env-1");
@@ -1230,7 +1268,7 @@ describe("authoritative resync", () => {
       return [];
     });
     const getPaneLayout = mock(async () => null);
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     requestResourceResync();
     await tick(0);
@@ -1243,6 +1281,7 @@ describe("authoritative resync", () => {
   test("continues pane resync after another authoritative read fails", async () => {
     detach?.();
     useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
     const paneStore = usePaneLayoutStore.getState();
     paneStore.initialize(null, "env-1");
     paneStore.beginHydration("env-1");
@@ -1251,7 +1290,7 @@ describe("authoritative resync", () => {
       throw new Error("queue offline");
     });
     const getPaneLayout = mock(async () => null);
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     requestResourceResync();
     await tick();
@@ -1264,6 +1303,7 @@ describe("authoritative resync", () => {
     useEnvironmentStore.setState({
       environments: [environment("env-1"), environment("env-2")],
     });
+    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
     const paneStore = usePaneLayoutStore.getState();
     for (const environmentId of ["env-1", "env-2"]) {
       paneStore.initialize(null, environmentId);
@@ -1274,7 +1314,7 @@ describe("authoritative resync", () => {
       if (environmentId === "env-1") throw new Error("pane read offline");
       return null;
     });
-    detach = startStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
 
     // A rejected read is settled, not awaited-and-thrown: one bad environment
     // must not strand the reconnect resync for every other one.
@@ -1296,7 +1336,7 @@ describe("authoritative resync", () => {
         return { theme: "first" };
       })
       .mockImplementationOnce(async () => ({ theme: "second" }));
-    detach = startStoreResourceSync({ getConfig: getConfig as never });
+    detach = startTestStoreResourceSync({ getConfig: getConfig as never });
 
     requestResourceResync();
     requestResourceResync();

@@ -10,10 +10,10 @@ is the source of truth; update it first, then this table.
 | Milestone | Outcome | Status |
 | --- | --- | --- |
 | [0](milestone-0.md) | Baseline, instrumentation, and rollout controls | In progress |
-| [1](milestone-1.md) | Static delivery and initial bundle improvements | Not started (see note) |
+| [1](milestone-1.md) | Static delivery and initial bundle improvements | Implemented; manual verification pending |
 | [2](milestone-2.md) | Dynamic body, event-stream, and proxy compression | Implementation complete; real-device rollout evidence pending |
 | [3](milestone-3.md) | Repeated payload and polling reduction | Implemented; manual verification pending |
-| [4](milestone-4.md) | Gateway replay and revision-aware synchronization | In progress — gateway replay transport implemented |
+| [4](milestone-4.md) | Gateway replay and revision-aware synchronization | Implemented; manual soak verification pending |
 | [5](milestone-5.md) | Multiplexed terminal WebSocket | In progress — protocol and HTTP input batching implemented |
 | [6](milestone-6.md) | Large payloads and optional connection brokerage | Not started |
 
@@ -21,18 +21,12 @@ No milestone is `Complete`. Every one still carries unmet exit criteria, and
 most of those are the manual, real-device, and constrained-link measurements
 that no milestone has yet recorded.
 
-Two documents are known to understate what has shipped, and neither checklist
-has been reconciled against the code:
-
-- Milestone 1 reads `Not started` with no checklist item ticked, but
-  `perf(app): optimize loading and static delivery (#225)` landed
-  `apps/web/scripts/precompress.ts`, encoding-aware static delivery with ETags
-  and conditional requests, and a self-hosted lazily loaded Monaco chunk. The
-  commit never touched the milestone document.
-- Milestone 3 records a full evidence section and a passing verification run,
-  yet none of its 67 checklist items are ticked.
-
-Reconcile both against the code before reading either status as accurate.
+Milestones 1 and 3 were reconciled against PRs #225 and #237 and current main on
+July 31, 2026. Their implemented behavior and automated checks are now marked in
+the milestone documents. Device, Tailscale, visual, inactive-environment, and
+other explicitly manual verification remain open; Milestone 1 also awaits final
+full-suite signoff, and Milestone 3 still needs its terminal decoding CPU
+comparison.
 
 ## Working convention
 

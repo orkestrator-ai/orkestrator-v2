@@ -422,9 +422,6 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
           onKeyDown={handleKeyDown}
           className={cn(
             "native-compose-input w-full resize-none overflow-y-auto border-none bg-transparent px-1 py-1 text-sm text-foreground outline-none transition-colors",
-            "[&:empty]:before:pointer-events-none",
-            "[&:empty]:before:content-[attr(data-placeholder)]",
-            "[&:empty]:before:text-muted-foreground",
             disabled && "cursor-not-allowed opacity-50",
             className
           )}
@@ -438,7 +435,8 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         />
         {showPlaceholder && (
           <div
-            className="pointer-events-none absolute top-1 left-1 text-sm text-muted-foreground"
+            className="native-compose-placeholder pointer-events-none absolute top-1 left-1 text-sm text-muted-foreground"
+            data-native-compose-placeholder
             aria-hidden="true"
           >
             {placeholder}

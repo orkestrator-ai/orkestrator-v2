@@ -301,6 +301,11 @@ body {
     font-size: 16px;
     line-height: 1.25rem;
   }
+
+  .native-compose-placeholder {
+    font-size: 16px;
+    line-height: 1.25rem;
+  }
 }
 
 @media (max-width: 767px) {

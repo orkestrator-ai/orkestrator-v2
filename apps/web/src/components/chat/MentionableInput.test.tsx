@@ -53,7 +53,7 @@ describe("MentionableInput", () => {
     expect(input?.parentElement?.classList.contains("native-compose-input-viewport")).toBe(false);
   });
 
-  test("applies custom placeholder, class, and height props", () => {
+  test("renders one placeholder and applies custom class and height props", () => {
     const { container, rerender } = render(
       <MentionableInput
         value=""
@@ -71,7 +71,12 @@ describe("MentionableInput", () => {
     expect(input.style.minHeight).toBe("40px");
     expect(input.style.maxHeight).toBe("80px");
     expect(input.getAttribute("data-placeholder")).toBe("Describe the change");
-    expect(input.parentElement?.textContent).toContain("Describe the change");
+    expect(input.className).not.toContain("before:content");
+    const placeholders = input.parentElement?.querySelectorAll(
+      "[data-native-compose-placeholder]",
+    );
+    expect(placeholders?.length).toBe(1);
+    expect(placeholders?.[0]?.textContent).toBe("Describe the change");
 
     rerender(
       <MentionableInput
@@ -81,7 +86,9 @@ describe("MentionableInput", () => {
         placeholder="Describe the change"
       />,
     );
-    expect(input.parentElement?.querySelector("[aria-hidden='true']")).toBeNull();
+    expect(
+      input.parentElement?.querySelector("[data-native-compose-placeholder]"),
+    ).toBeNull();
   });
 
   test("syncs external value and mention metadata changes into the editor", () => {

@@ -3,19 +3,20 @@ import { onResourceChanged, onResourceResync } from "@/lib/resource-sync";
 
 /**
  * Kept exported for backwards compatibility; the periodic safety net now runs
- * through `resource-sync`'s own `RESOURCE_RESYNC_INTERVAL_MS` timer (which
- * raises `onResourceResync`), so this hook no longer runs its own interval —
- * doing both refreshed every project twice per tick.
+ * through `resource-sync`'s manifest timer and the global store binding, so
+ * this hook no longer runs its own interval — doing both refreshed every
+ * project twice per tick.
  */
-export const ENVIRONMENT_LIST_RESYNC_INTERVAL_MS = 60_000;
+export const ENVIRONMENT_LIST_RESYNC_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Keeps every project's environment snapshot converged across clients.
  *
- * Refreshes on the backend `environment` change feed, plus a slow periodic
- * resync so a client that was offline catches up without waiting for the next
- * mutation. Refreshes are deduplicated per project so a burst of announcements
- * (a reorder announces once per moved environment) collapses into one read.
+ * Refreshes on the backend `environment` change feed and on an explicit
+ * fallback reconciliation. Manifest recovery lives in the global store
+ * binding so it continues when a mobile drawer unmounts this hook. Refreshes
+ * are deduplicated per project so a burst of announcements (a reorder announces
+ * once per moved environment) collapses into one read.
  */
 export function useEnvironmentListSync(
   projectIds: string[],
@@ -87,11 +88,14 @@ export function useEnvironmentListSync(
       // Rolling-upgrade fallback for older backends without project attribution.
       void refreshAll();
     });
-    // The periodic safety net is provided by resource-sync itself: its
-    // interval raises a resync, which lands here. Running a second interval in
-    // this hook doubled every scheduled refresh.
-    const unsubscribeResync = onResourceResync(() => {
-      void refreshAll();
+    // Keep the explicit/rolling-upgrade recovery route without duplicating the
+    // global manifest hydration owned by store-resource-sync.
+    const unsubscribeResync = onResourceResync((request) => {
+      // Manifest recovery is backend-store-owned so it still runs while the
+      // mobile sidebar is closed and this hook is unmounted.
+      if (request.reason === "manifest") return;
+      if (request.resources !== null && !request.resources.has("environment")) return;
+      return refreshAll();
     });
 
     return () => {

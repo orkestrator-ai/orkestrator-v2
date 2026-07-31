@@ -1,15 +1,15 @@
-import { describe, test, expect, beforeEach, mock } from "bun:test";
+import { afterAll, describe, test, expect, beforeEach, mock } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import {
   useProjectStore,
 } from "../../../apps/web/src/stores/projectStore";
 import type { Project } from "../../../apps/web/src/types";
 import { createMockProject } from "../utils/testFactories";
-import {
-  dispatchResourceChange,
-  requestResourceResync,
-  resetResourceSync,
-} from "../../../apps/web/src/lib/resource-sync";
+import * as realResourceSync from "../../../apps/web/src/lib/resource-sync";
+
+const realResourceSyncSnapshot = { ...realResourceSync };
+type ResourceResyncHandler = Parameters<typeof realResourceSync.onResourceResync>[0];
+const capturedResyncHandlers = new Set<ResourceResyncHandler>();
 
 // Mock backend module BEFORE importing the hook
 const mockGetProjects = mock<() => Promise<Project[]>>(() => Promise.resolve([]));
@@ -36,12 +36,41 @@ mock.module("@/lib/backend", () => ({
   updateProject: mockUpdateProject,
 }));
 
+mock.module("@/lib/resource-sync", () => ({
+  ...realResourceSyncSnapshot,
+  onResourceResync: (handler: ResourceResyncHandler) => {
+    capturedResyncHandlers.add(handler);
+    const unsubscribeReal = realResourceSyncSnapshot.onResourceResync(handler);
+    return () => {
+      capturedResyncHandlers.delete(handler);
+      unsubscribeReal();
+    };
+  },
+}));
+
 // Import hook AFTER mocking
 import { useProjects } from "../../../apps/web/src/hooks/useProjects";
+
+const {
+  dispatchResourceChange,
+  requestResourceResync,
+  resetResourceSync,
+} = realResourceSyncSnapshot;
+
+async function deliverResync(
+  request: realResourceSync.ResourceResyncRequest,
+): Promise<void> {
+  await act(async () => {
+    await Promise.all(
+      [...capturedResyncHandlers].map((handler) => handler(request)),
+    );
+  });
+}
 
 describe("useProjects", () => {
   beforeEach(() => {
     resetResourceSync();
+    capturedResyncHandlers.clear();
     // Reset store between tests
     useProjectStore.setState({
       projects: [],
@@ -68,6 +97,10 @@ describe("useProjects", () => {
     mockUpdateProject.mockImplementation((projectId, updates) =>
       Promise.resolve(createMockProject({ id: projectId, ...updates }))
     );
+  });
+
+  afterAll(() => {
+    mock.module("@/lib/resource-sync", () => realResourceSyncSnapshot);
   });
 
   test("returns initial state", async () => {
@@ -598,6 +631,40 @@ describe("useProjects", () => {
 
     expect(mockGetProjects).toHaveBeenCalledTimes(1);
     expect(result.current.projects.map(({ id }) => id)).toEqual(["recovered-project"]);
+  });
+
+  test("ignores manifest and irrelevant selective resync requests", async () => {
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    mockGetProjects.mockClear();
+
+    await deliverResync({
+      resources: new Set(["project"]),
+      reason: "manifest",
+    });
+    await deliverResync({
+      resources: new Set(["environment"]),
+      reason: "explicit",
+    });
+
+    expect(mockGetProjects).not.toHaveBeenCalled();
+  });
+
+  test("reloads projects for a relevant selective explicit resync request", async () => {
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    mockGetProjects.mockClear();
+    mockGetProjects.mockResolvedValue([
+      createMockProject({ id: "selective-project", name: "selective", order: 0 }),
+    ]);
+
+    await deliverResync({
+      resources: new Set(["project"]),
+      reason: "explicit",
+    });
+
+    expect(mockGetProjects).toHaveBeenCalledTimes(1);
+    expect(result.current.projects.map(({ id }) => id)).toEqual(["selective-project"]);
   });
 
   test("unsubscribes project change and recovery listeners on unmount", async () => {

@@ -67,6 +67,11 @@ import type {
   ReviewPreparationResult,
 } from "@/lib/looped-review-prompts";
 import type { CodexModel } from "@/lib/codex-client";
+import {
+  isResourceRevisionManifest,
+  type ResourceRevisionManifest,
+  type ResourceRevisionMap,
+} from "@orkestrator/protocol/resource-events";
 
 /** PR detection result containing URL, state, and merge conflict status */
 export interface PrDetectionResult {
@@ -78,6 +83,20 @@ export interface PrDetectionResult {
 // Typed command wrapper for the Electron backend.
 
 // --- Project Commands ---
+
+export async function getResourceRevisionManifest(
+  knownGeneration?: string,
+  knownRevisions: Partial<ResourceRevisionMap> = {},
+): Promise<ResourceRevisionManifest> {
+  const response = await invoke<unknown>("get_resource_revision_manifest", {
+    ...(knownGeneration === undefined ? {} : { knownGeneration }),
+    knownRevisions,
+  });
+  if (!isResourceRevisionManifest(response)) {
+    throw new Error("Invalid resource revision manifest response");
+  }
+  return response;
+}
 
 export async function getProjects(): Promise<Project[]> {
   return invoke<Project[]>("get_projects");

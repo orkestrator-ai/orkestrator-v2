@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   isResourceChange,
   isResourceKind,
+  isResourceRevisionManifest,
+  RESOURCE_MANIFEST_KINDS,
   RESOURCE_CHANGED_EVENT,
   RESOURCE_KINDS,
   type ResourceChange,
@@ -103,5 +105,100 @@ describe("RESOURCE_CHANGED_EVENT", () => {
     // Backend emit and client listen are wired by this literal in separate
     // packages, so a rename has to be deliberate.
     expect(RESOURCE_CHANGED_EVENT).toBe("resource-changed");
+  });
+});
+
+describe("resource revision manifests", () => {
+  test("accepts a reset manifest containing every broad-sync resource", () => {
+    expect(isResourceRevisionManifest({
+      generation: "a".repeat(32),
+      reset: true,
+      revisions: Object.fromEntries(
+        RESOURCE_MANIFEST_KINDS.map((kind) => [kind, "b".repeat(32)]),
+      ),
+    })).toBe(true);
+  });
+
+  test("accepts an unchanged response without resource revisions", () => {
+    expect(isResourceRevisionManifest({
+      generation: "a".repeat(32),
+      reset: false,
+      revisions: {},
+    })).toBe(true);
+  });
+
+  test("rejects unknown resources and malformed opaque revisions", () => {
+    expect(isResourceRevisionManifest({
+      generation: "a".repeat(32),
+      reset: false,
+      revisions: { secrets: "b".repeat(32) },
+    })).toBe(false);
+    expect(isResourceRevisionManifest({
+      generation: "a".repeat(32),
+      reset: false,
+      revisions: { project: "not-a-revision" },
+    })).toBe(false);
+  });
+
+  test("rejects malformed generations", () => {
+    for (const generation of [
+      undefined,
+      null,
+      42,
+      {},
+      [],
+      "",
+      "a".repeat(31),
+      "a".repeat(33),
+      "A".repeat(32),
+      "g".repeat(32),
+    ]) {
+      expect(isResourceRevisionManifest({
+        generation,
+        reset: false,
+        revisions: {},
+      })).toBe(false);
+    }
+  });
+
+  test("rejects a missing or non-boolean reset marker", () => {
+    for (const reset of [undefined, null, 0, 1, "false", {}, []]) {
+      expect(isResourceRevisionManifest({
+        generation: "a".repeat(32),
+        ...(reset === undefined ? {} : { reset }),
+        revisions: {},
+      })).toBe(false);
+    }
+  });
+
+  test("rejects non-object revision maps", () => {
+    for (const revisions of [undefined, null, "", 42, true, []]) {
+      expect(isResourceRevisionManifest({
+        generation: "a".repeat(32),
+        reset: false,
+        revisions,
+      })).toBe(false);
+    }
+  });
+
+  test("rejects malformed revision values regardless of resource", () => {
+    for (const revision of [
+      undefined,
+      null,
+      42,
+      {},
+      [],
+      "",
+      "b".repeat(31),
+      "b".repeat(33),
+      "B".repeat(32),
+      "z".repeat(32),
+    ]) {
+      expect(isResourceRevisionManifest({
+        generation: "a".repeat(32),
+        reset: false,
+        revisions: { project: revision },
+      })).toBe(false);
+    }
   });
 });

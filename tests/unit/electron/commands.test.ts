@@ -1125,6 +1125,243 @@ describe("Electron backend command registry", () => {
     }
   });
 
+  test("validates and delegates resource revision manifest requests", async () => {
+    const generation = "a".repeat(32);
+    const projectRevision = "b".repeat(32);
+    const response = {
+      generation,
+      reset: false,
+      revisions: { project: projectRevision },
+    };
+    const getResourceRevisionManifest = mock(async () => response);
+    const context = {
+      storage: { getResourceRevisionManifest },
+    } as unknown as CommandContext;
+    const command = createCommandRegistry().get("get_resource_revision_manifest")!;
+
+    await expect(command({
+      knownGeneration: generation,
+      knownRevisions: { project: projectRevision },
+    }, context)).resolves.toEqual(response);
+    expect(getResourceRevisionManifest).toHaveBeenCalledWith(
+      generation,
+      { project: projectRevision },
+    );
+
+    await expect(command({}, context)).resolves.toEqual(response);
+    expect(getResourceRevisionManifest).toHaveBeenLastCalledWith(undefined, {});
+
+    for (const knownRevisions of [null, [], "revisions"]) {
+      expect(() => command({ knownRevisions }, context)).toThrow("knownRevisions");
+    }
+    expect(() => command({
+      knownRevisions: { unknown: projectRevision },
+    }, context)).toThrow("Unknown manifest resource: unknown");
+    expect(() => command({
+      knownRevisions: { project: "invalid" },
+    }, context)).toThrow("Invalid manifest revision for project");
+    expect(() => command({
+      knownGeneration: "invalid",
+    }, context)).toThrow("knownGeneration must be an opaque resource generation");
+    expect(getResourceRevisionManifest).toHaveBeenCalledTimes(2);
+  });
+
+  test("requires paired, well-formed conditional snapshot cursors", async () => {
+    const generation = "a".repeat(32);
+    const revision = "b".repeat(32);
+    const storage = {
+      loadProjects: mock(async () => []),
+      readConditionalResourceSnapshot: mock(async () => ({
+        status: "unchanged" as const,
+        generation,
+        revision,
+      })),
+    };
+    const context = { storage } as unknown as CommandContext;
+    const command = createCommandRegistry().get("get_projects")!;
+
+    await expect(command({ knownManifestGeneration: generation }, context))
+      .rejects.toThrow(
+        "knownManifestGeneration and knownResourceRevision must be provided together",
+      );
+    await expect(command({ knownResourceRevision: revision }, context))
+      .rejects.toThrow(
+        "knownManifestGeneration and knownResourceRevision must be provided together",
+      );
+    for (const knownManifestGeneration of [null, 42, "A".repeat(32), "a".repeat(31)]) {
+      await expect(command({
+        knownManifestGeneration,
+        knownResourceRevision: revision,
+      }, context)).rejects.toThrow(
+        "knownManifestGeneration must be an opaque resource generation",
+      );
+    }
+    for (const knownResourceRevision of [null, 42, "B".repeat(32), "b".repeat(33)]) {
+      await expect(command({
+        knownManifestGeneration: generation,
+        knownResourceRevision,
+      }, context)).rejects.toThrow(
+        "knownResourceRevision must be an opaque resource revision",
+      );
+    }
+    expect(storage.readConditionalResourceSnapshot).not.toHaveBeenCalled();
+    expect(storage.loadProjects).not.toHaveBeenCalled();
+  });
+
+  test("preserves legacy snapshots and returns changed and unchanged envelopes", async () => {
+    const generation = "a".repeat(32);
+    const revision = "b".repeat(32);
+    const projects = [{ id: "project-1" }];
+    const loadProjects = mock(async () => projects);
+    const readConditionalResourceSnapshot = mock(async (
+      _resource: string,
+      requestedGeneration: string,
+      _requestedRevision: string,
+      load: () => Promise<unknown> | unknown,
+    ) => ({
+      status: "changed" as const,
+      generation: requestedGeneration,
+      revision,
+      snapshot: await load(),
+    }));
+    const storage = { loadProjects, readConditionalResourceSnapshot };
+    const context = { storage } as unknown as CommandContext;
+    const command = createCommandRegistry().get("get_projects")!;
+
+    await expect(command({}, context)).resolves.toEqual(projects);
+    expect(readConditionalResourceSnapshot).not.toHaveBeenCalled();
+
+    await expect(command({
+      knownManifestGeneration: generation,
+      knownResourceRevision: revision,
+    }, context)).resolves.toEqual({
+      status: "changed",
+      generation,
+      revision,
+      snapshot: projects,
+    });
+    expect(readConditionalResourceSnapshot).toHaveBeenCalledWith(
+      "project",
+      generation,
+      revision,
+      expect.any(Function),
+    );
+
+    readConditionalResourceSnapshot.mockImplementation(async () => ({
+      status: "unchanged" as const,
+      generation,
+      revision,
+    }));
+    loadProjects.mockClear();
+    await expect(command({
+      knownManifestGeneration: generation,
+      knownResourceRevision: revision,
+    }, context)).resolves.toEqual({
+      status: "unchanged",
+      generation,
+      revision,
+    });
+    expect(loadProjects).not.toHaveBeenCalled();
+  });
+
+  test("routes all manifest-backed snapshot commands through their resource cursor", async () => {
+    const generation = "a".repeat(32);
+    const revision = "b".repeat(32);
+    const rawConfig = {
+      version: "1.0.0",
+      global: { githubToken: "configured-token" },
+      repositories: {},
+    };
+    const storage = {
+      loadProjects: mock(async () => [{ id: "project-1" }]),
+      loadConfig: mock(async () => rawConfig),
+      getEnvironmentsByProject: mock(async () => []),
+      getSessionsByEnvironment: mock(async () => []),
+      getPaneLayout: mock(async () => null),
+      listLoopedReviewWorkflows: mock(async () => []),
+      listBuildPipelines: mock(async () => []),
+      listPromptQueues: mock(async () => []),
+      getKanbanTasks: mock(async () => []),
+      getProjectNotes: mock(async () => ({ projectId: "project-1", content: "notes" })),
+      getFeaturePlans: mock(async () => []),
+      readConditionalResourceSnapshot: mock(async (
+        _resource: string,
+        requestedGeneration: string,
+        _requestedRevision: string,
+        load: () => Promise<unknown> | unknown,
+      ) => ({
+        status: "changed" as const,
+        generation: requestedGeneration,
+        revision,
+        snapshot: await load(),
+      })),
+    };
+    const context = { storage } as unknown as CommandContext;
+    const commands = createCommandRegistry();
+    const cases = [
+      { command: "get_projects", resource: "project", args: {}, snapshot: [{ id: "project-1" }] },
+      {
+        command: "get_config",
+        resource: "config",
+        args: {},
+        snapshot: {
+          version: "1.0.0",
+          global: { githubTokenConfigured: true },
+          repositories: {},
+        },
+      },
+      { command: "get_environment_snapshots", resource: "environment", args: { projectId: "project-1" }, snapshot: [] },
+      { command: "get_sessions_by_environment", resource: "session", args: { environmentId: "env-1" }, snapshot: [] },
+      { command: "get_pane_layout", resource: "pane-layout", args: { environmentId: "env-1" }, snapshot: null },
+      { command: "list_looped_review_workflows", resource: "looped-review", args: { environmentId: "env-1" }, snapshot: [] },
+      { command: "list_build_pipelines", resource: "build-pipeline", args: { projectId: "project-1" }, snapshot: [] },
+      { command: "list_prompt_queues", resource: "prompt-queue", args: { environmentId: "env-1" }, snapshot: [] },
+      { command: "get_kanban_tasks", resource: "kanban", args: { projectId: "project-1" }, snapshot: [] },
+      {
+        command: "get_project_notes",
+        resource: "project-notes",
+        args: { projectId: "project-1" },
+        snapshot: { projectId: "project-1", content: "notes" },
+      },
+      { command: "get_feature_plans", resource: "feature-plan", args: { projectId: "project-1" }, snapshot: [] },
+    ] as const;
+
+    for (const entry of cases) {
+      storage.readConditionalResourceSnapshot.mockClear();
+      await expect(commands.get(entry.command)?.({
+        ...entry.args,
+        knownManifestGeneration: generation,
+        knownResourceRevision: revision,
+      }, context)).resolves.toEqual({
+        status: "changed",
+        generation,
+        revision,
+        snapshot: entry.snapshot,
+      });
+      expect(storage.readConditionalResourceSnapshot).toHaveBeenCalledWith(
+        entry.resource,
+        generation,
+        revision,
+        expect.any(Function),
+      );
+
+      storage.readConditionalResourceSnapshot.mockImplementationOnce(async () => ({
+        status: "unchanged" as const,
+        generation,
+        revision,
+      }));
+      await expect(commands.get(entry.command)?.({
+        ...entry.args,
+        knownManifestGeneration: generation,
+        knownResourceRevision: revision,
+      }, context)).resolves.toEqual({
+        status: "unchanged",
+        generation,
+        revision,
+      });
+    }
+  });
+
   test("leaves directory picking to the connected client", async () => {
     const commands = createCommandRegistry();
     await expect(commands.get("browse_for_directory")?.({}, createContext(createEnvironment()).context)).resolves.toBeNull();

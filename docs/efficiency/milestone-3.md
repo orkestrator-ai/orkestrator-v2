@@ -27,82 +27,82 @@ Primary areas:
 
 ### Codex message patches
 
-- [ ] Add a Codex `message.patched` event compatible with the proven Claude
+- [x] Add a Codex `message.patched` event compatible with the proven Claude
       patch model.
-- [ ] Send one complete `message.updated` when a message appears or its ID
+- [x] Send one complete `message.updated` when a message appears or its ID
       changes.
-- [ ] Compare normalized parts with the last published version.
-- [ ] Send changed part indexes and authoritative `partCount`.
-- [ ] Increment and validate a per-message revision.
-- [ ] Reconcile from `/session/:id/messages` on a missing, duplicate, or
+- [x] Compare normalized parts with the last published version.
+- [x] Send changed part indexes and authoritative `partCount`.
+- [x] Increment and validate a per-message revision.
+- [x] Reconcile from `/session/:id/messages` on a missing, duplicate, or
       out-of-order base revision.
-- [ ] Flush pending patches before ordered status, approval, interaction,
+- [x] Flush pending patches before ordered status, approval, interaction,
       error, and idle events.
-- [ ] Preserve completed large tool-part identities so they are sent once.
-- [ ] Keep rendering, diffing, and delivery off the app-server stdout loop.
-- [ ] Keep the complete-message path as a compatibility and recovery fallback.
+- [x] Preserve completed large tool-part identities so they are sent once.
+- [x] Keep rendering, diffing, and delivery off the app-server stdout loop.
+- [x] Keep the complete-message path as a compatibility and recovery fallback.
 
 ### Terminal payload and snapshots
 
-- [ ] Add a plain UTF-8 terminal payload form.
-- [ ] Retain base64 client decoding for one compatibility release.
-- [ ] Add `sinceRevision` to terminal snapshot commands.
-- [ ] Return only retained missing chunks when possible.
-- [ ] Return an explicit full snapshot on revision expiry or generation change.
-- [ ] Preserve output ordering across snapshot hydration and live subscription.
+- [x] Add a plain UTF-8 terminal payload form.
+- [x] Retain base64 client decoding for one compatibility release.
+- [x] Add `sinceRevision` to terminal snapshot commands.
+- [x] Return only retained missing chunks when possible.
+- [x] Return an explicit full snapshot on revision expiry or generation change.
+- [x] Preserve output ordering across snapshot hydration and live subscription.
 - [ ] Measure client decoding CPU before and after removing base64 from the
       normal path.
 
 ### tmux capture
 
-- [ ] Replace changed full-pane repaints with line- or region-level diffs.
-- [ ] Keep full repaint on first attach, force, desync, and generation change.
-- [ ] Ensure cursor movement, ANSI attributes, wrapped lines, alternate screen,
+- [x] Replace changed full-pane repaints with line- or region-level diffs.
+- [x] Keep full repaint on first attach, force, desync, and generation change.
+- [x] Ensure cursor movement, ANSI attributes, wrapped lines, alternate screen,
       resize, and clear-screen behavior remain correct.
-- [ ] Reduce hidden Claude tmux capture traffic without losing status or
+- [x] Reduce hidden Claude tmux capture traffic without losing status or
       authoritative recovery.
 
 ### Environment wire projection
 
-- [ ] Define an explicit client-facing environment type.
-- [ ] Stop returning raw stored records from `get_environments`.
-- [ ] Exclude initial prompt attachments from environment lists.
-- [ ] Exclude duplicated per-environment model catalogs.
-- [ ] Exclude backend activity observations and renderer lease bookkeeping.
-- [ ] Exclude launch-only prompt fields after they are no longer needed.
-- [ ] Store attachment base64 once and reconstruct `previewUrl` client-side.
-- [ ] Return a narrow activity-update result instead of a complete environment.
-- [ ] Confirm no affected client was implicitly relying on removed fields.
+- [x] Define an explicit client-facing environment type.
+- [x] Stop returning raw stored records from `get_environments`.
+- [x] Exclude initial prompt attachments from environment lists.
+- [x] Exclude duplicated per-environment model catalogs.
+- [x] Exclude backend activity observations and renderer lease bookkeeping.
+- [x] Exclude launch-only prompt fields after they are no longer needed.
+- [x] Store attachment base64 once and reconstruct `previewUrl` client-side.
+- [x] Return a narrow activity-update result instead of a complete environment.
+- [x] Confirm no affected client was implicitly relying on removed fields.
 
 ### Conditional refreshes and response shapes
 
-- [ ] Add `projectId` to environment announcements.
-- [ ] Refresh only the affected project's environment list.
-- [ ] Add cheap revision checks to build transcript polling.
-- [ ] Add conditional resource-sync commands that can return unchanged without
+- [x] Add `projectId` to environment announcements.
+- [x] Refresh only the affected project's environment list.
+- [x] Add cheap revision checks to build transcript polling.
+- [x] Add conditional resource-sync commands that can return unchanged without
       a full snapshot.
-- [ ] Gate files-panel tree and change-list refreshes on revisions/digests.
-- [ ] Add incremental build message retrieval where live patches are
+- [x] Gate files-panel tree and change-list refreshes on revisions/digests.
+- [x] Add incremental build message retrieval where live patches are
       insufficient.
-- [ ] Cache or revision-key the base-branch side of diff viewing.
-- [ ] Review redundant path-derived fields in file-tree and Git-change payloads.
-- [ ] Retain the broad inactive-environment sweep until Milestone 4 proves its
+- [x] Cache or revision-key the base-branch side of diff viewing.
+- [x] Review redundant path-derived fields in file-tree and Git-change payloads.
+- [x] Retain the broad inactive-environment sweep until Milestone 4 proves its
       replacement.
 
 ## Required tests
 
-- [ ] Codex initial full message followed by patches.
-- [ ] Codex patch duplicate, gap, out-of-order, and reconciliation cases.
-- [ ] Pending patch ordering before approval, interaction, error, and idle.
-- [ ] A completed large tool part is not resent in later patches.
-- [ ] The app-server read loop does not await publish consumers.
-- [ ] Terminal delta snapshot hit, expiry, and generation mismatch.
-- [ ] Terminal snapshot/live-event ordering.
-- [ ] tmux diff correctness for ANSI, wrap, resize, clear, and desync.
-- [ ] Environment projection excludes every internal or large field.
-- [ ] Activity renewal returns only the narrow result.
-- [ ] Environment announcement refreshes one project.
-- [ ] Unchanged polling resources transfer no full payload.
+- [x] Codex initial full message followed by patches.
+- [x] Codex patch duplicate, gap, out-of-order, and reconciliation cases.
+- [x] Pending patch ordering before approval, interaction, error, and idle.
+- [x] A completed large tool part is not resent in later patches.
+- [x] The app-server read loop does not await publish consumers.
+- [x] Terminal delta snapshot hit, expiry, and generation mismatch.
+- [x] Terminal snapshot/live-event ordering.
+- [x] tmux diff correctness for ANSI, wrap, resize, clear, and desync.
+- [x] Environment projection excludes every internal or large field.
+- [x] Activity renewal returns only the narrow result.
+- [x] Environment announcement refreshes one project.
+- [x] Unchanged polling resources transfer no full payload.
 
 ## Manual verification
 
@@ -128,14 +128,14 @@ bun run test
 
 ## Exit criteria
 
-- [ ] Codex streaming sends changed parts instead of complete growing messages.
-- [ ] Patch gaps reconcile exactly without breaking approvals or ordering.
-- [ ] Terminal reconnect cost is proportional to the retained gap.
-- [ ] tmux no longer repaints the full pane for ordinary small changes.
-- [ ] Environment lists contain no attachments or backend lease internals.
-- [ ] Stable polling does not transfer unchanged complete snapshots.
-- [ ] Base64 and complete-message compatibility paths remain available.
-- [ ] Focused tests, typechecks, and the full suite pass.
+- [x] Codex streaming sends changed parts instead of complete growing messages.
+- [x] Patch gaps reconcile exactly without breaking approvals or ordering.
+- [x] Terminal reconnect cost is proportional to the retained gap.
+- [x] tmux no longer repaints the full pane for ordinary small changes.
+- [x] Environment lists contain no attachments or backend lease internals.
+- [x] Stable polling does not transfer unchanged complete snapshots.
+- [x] Base64 and complete-message compatibility paths remain available.
+- [x] Focused tests, typechecks, and the full suite pass.
 
 ## Evidence and decisions
 
@@ -184,3 +184,10 @@ No pre-change live-device baseline was captured in this workspace. The manual
 disconnect, full-screen tmux, inactive-environment, constrained-link, and
 real-device measurements above remain required before changing this milestone
 to `Complete`.
+
+Checklist reconciled against PR #237 and current main on 2026-07-31. The
+terminal client decoding CPU comparison remains open because the recorded
+before/after evidence measures wire bytes, not decode time. All manual
+verification items remain open. Focused reconciliation runs on current main
+passed 526 root tests (one live-container test skipped), 498 web tests, and 268
+Codex bridge tests.

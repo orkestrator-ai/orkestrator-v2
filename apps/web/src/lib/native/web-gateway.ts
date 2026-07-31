@@ -18,6 +18,8 @@ import {
 } from "@/lib/native/terminal-input-batcher";
 
 const GATEWAY_PREFIX = "/__orkestrator";
+/** How many recently closed terminal input queues stay rejected. */
+const TERMINAL_CLOSED_QUEUE_MEMORY = 256;
 const EVENT_RECONNECT_DELAY_MS = 2_000;
 const TERMINAL_OUTPUT_EVENT_PREFIX = "terminal-output-";
 const GATEWAY_CONNECTED_EVENT = "gateway.connected";
@@ -713,11 +715,25 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   options.terminalInputSendTimeoutMs ?? TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS);
 
   const terminalLifecycleTails = new Map<string, Promise<void>>();
+  // Closed sessions are never reopened under the same id, so this only has to
+  // remember the recently closed ones. Evicting the oldest bounds the set for a
+  // long-lived page; the worst case for an evicted key is a write to a dead
+  // session, which the backend ignores.
   const closedTerminalInputQueues = new Set<string>();
   let terminalInputDisposedReason: unknown | null = null;
 
   const terminalInputQueueKey = (command: TerminalInputCommand, sessionId: string): string =>
     `${command}\0${sessionId}`;
+
+  const closeTerminalInputQueue = (key: string): void => {
+    closedTerminalInputQueues.delete(key);
+    closedTerminalInputQueues.add(key);
+    while (closedTerminalInputQueues.size > TERMINAL_CLOSED_QUEUE_MEMORY) {
+      const oldest = closedTerminalInputQueues.values().next().value;
+      if (oldest === undefined) break;
+      closedTerminalInputQueues.delete(oldest);
+    }
+  };
 
   const terminalInputQueue = (
     command: string,
@@ -756,7 +772,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
     // Install the barrier before the first await. Writes invoked after this call
     // therefore wait behind resize/start, while close rejects them immediately.
-    if (queue.closes) closedTerminalInputQueues.add(key);
+    // The close marker is provisional: a close that never reached the backend
+    // leaves a live terminal behind, and that terminal must stay writable.
+    if (queue.closes) closeTerminalInputQueue(key);
     if (queue.starts) closedTerminalInputQueues.delete(key);
 
     const operation = previous.catch(() => undefined).then(async () => {
@@ -776,8 +794,20 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       // a stale resize/close request against the backend being replaced.
       if (terminalInputDisposedReason) throw terminalInputDisposedReason;
       try {
-        return await invokeImmediately<T>(command, args);
+        const result = await invokeImmediately<T>(command, args);
+        // Resize proves the transport recovered, so re-arm a queue that failed
+        // closed. Without this a single transient write failure would leave a
+        // terminal that streams output but silently refuses every keystroke.
+        if (!queue.closes) terminalInputBatcher.clearFailure(queue.command, queue.sessionId);
+        return result;
+      } catch (error) {
+        // The terminal is still alive, so undo the provisional close rather than
+        // rejecting its input for the lifetime of the page.
+        if (queue.closes) closedTerminalInputQueues.delete(key);
+        throw error;
       } finally {
+        // Unconditional: whether or not the close landed, input queued against
+        // the old session must not be delivered.
         if (queue.closes) terminalInputBatcher.reset(queue.command, queue.sessionId);
       }
     });

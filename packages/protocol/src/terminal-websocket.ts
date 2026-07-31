@@ -165,16 +165,23 @@ function malformed(message: string): never {
   throw new TerminalWebSocketControlFrameError("malformed-frame", message);
 }
 
+function tooLarge(): never {
+  throw new TerminalWebSocketControlFrameError(
+    "frame-too-large",
+    "Terminal WebSocket control frame exceeds the maximum size",
+  );
+}
+
 function parseControlObject(text: string): JsonObject {
   if (typeof text !== "string") {
     return malformed("Terminal WebSocket control frame must be text");
   }
-  if (utf8Encoder.encode(text).byteLength > TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES) {
-    throw new TerminalWebSocketControlFrameError(
-      "frame-too-large",
-      "Terminal WebSocket control frame exceeds the maximum size",
-    );
-  }
+  // UTF-8 never encodes a string to fewer bytes than it has UTF-16 code units,
+  // so this rejects an oversized frame without first encoding it. Measuring by
+  // encoding alone would let an attacker force an allocation proportional to
+  // whatever they sent, just to discover it was over the limit.
+  if (text.length > TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES) tooLarge();
+  if (utf8Encoder.encode(text).byteLength > TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES) tooLarge();
   let decoded: unknown;
   try {
     decoded = JSON.parse(text) as unknown;

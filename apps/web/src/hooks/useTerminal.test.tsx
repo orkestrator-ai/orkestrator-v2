@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import {
   listen,
@@ -1782,7 +1782,145 @@ describe("useTerminal reconnect behavior", () => {
     expect(toastErrorMock).toHaveBeenCalledWith("Terminal input failed", {
       id: "terminal-input-session-new-container",
       description: "write failed",
+      action: { label: "Reconnect", onClick: expect.any(Function) },
     });
+  });
+
+  it("offers a reconnect action that rebuilds the session a failed write left closed", async () => {
+    writeTerminalMock.mockRejectedValueOnce(new Error("closed until the session restarts"));
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        persistSession: true,
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+      await result.current.write("input");
+    });
+
+    detachTerminalMock.mockClear();
+    createTerminalSessionMock.mockClear();
+    startTerminalSessionMock.mockClear();
+    const [, options] = toastErrorMock.mock.calls.at(-1) as [
+      string,
+      { action: { label: string; onClick: () => void } },
+    ];
+    expect(options.action.label).toBe("Reconnect");
+
+    // Only a restarted session reopens the gateway's input queue, so the action
+    // has to detach and start rather than merely re-attach.
+    getTerminalSessionMock.mockImplementation(async (sessionId: string) => ({
+      id: sessionId,
+      running: false,
+    }));
+    await act(async () => {
+      options.action.onClick();
+      await waitFor(() => expect(startTerminalSessionMock).toHaveBeenCalled());
+    });
+
+    expect(detachTerminalMock).toHaveBeenCalledWith("session-new-container");
+    expect(createTerminalSessionMock).toHaveBeenCalled();
+    expect(result.current.isConnected).toBe(true);
+  });
+
+  it("reports a failed local terminal write against its own session", async () => {
+    writeLocalTerminalMock.mockRejectedValueOnce(new Error("local write failed"));
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: null,
+        environmentId: "env-1",
+        isLocal: true,
+        persistSession: true,
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+      await result.current.write("pwd\r");
+    });
+
+    expect(writeLocalTerminalMock).toHaveBeenCalledWith("session-new-local", "pwd\r");
+    expect(toastErrorMock).toHaveBeenCalledWith("Terminal input failed", {
+      id: "terminal-input-session-new-local",
+      description: "local write failed",
+      action: { label: "Reconnect", onClick: expect.any(Function) },
+    });
+  });
+
+  it("describes a write rejection that is not an Error", async () => {
+    // The browser gateway rethrows whatever reason it was disposed with, which
+    // is not required to be an Error.
+    writeTerminalMock.mockImplementationOnce(() => Promise.reject("gateway replaced"));
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        persistSession: true,
+      }),
+    );
+    await act(async () => {
+      await result.current.connect();
+      await result.current.write("input");
+    });
+
+    expect(toastErrorMock).toHaveBeenCalledWith("Terminal input failed", {
+      id: "terminal-input-session-new-container",
+      description: "gateway replaced",
+      action: { label: "Reconnect", onClick: expect.any(Function) },
+    });
+  });
+
+  it("ignores writes and resizes issued with no active session", async () => {
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        persistSession: true,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.write("input");
+      await result.current.resize(120, 40);
+    });
+
+    expect(writeTerminalMock).not.toHaveBeenCalled();
+    expect(resizeTerminalMock).not.toHaveBeenCalled();
+    // No session id means no toast id, so the failure surface stays silent.
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the expected session-not-found resize error during teardown", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    resizeTerminalMock.mockRejectedValueOnce(new Error("Session not found"));
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        persistSession: true,
+      }),
+    );
+
+    try {
+      await act(async () => {
+        await result.current.connect();
+        await result.current.resize(120, 40);
+      });
+
+      expect(consoleError).not.toHaveBeenCalledWith(
+        "Failed to resize terminal:",
+        expect.anything(),
+      );
+      expect(toastErrorMock).not.toHaveBeenCalled();
+
+      resizeTerminalMock.mockRejectedValueOnce(new Error("resize failed"));
+      await act(async () => {
+        await result.current.resize(121, 41);
+      });
+      expect(consoleError).toHaveBeenCalledWith(
+        "Failed to resize terminal:",
+        new Error("resize failed"),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("does not terminate a backend-owned persistent session when renderer props change", async () => {

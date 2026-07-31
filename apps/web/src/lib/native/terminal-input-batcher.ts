@@ -19,6 +19,19 @@ type InputWaiter = {
   settled: boolean;
 };
 
+/**
+ * One `enqueue` call parked at the queue ceiling, waiting for room. A released
+ * entry stays queued until its continuation has actually appended its chunks,
+ * so nothing arriving in between can be admitted ahead of it.
+ */
+type AdmissionWaiter = {
+  bytes: number;
+  released: boolean;
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+};
+
 type PendingBatch = {
   data: string;
   bytes: number;
@@ -36,6 +49,9 @@ type PendingInput = {
   sessionId: string;
   batches: PendingBatch[];
   waiters: Set<InputWaiter>;
+  admission: AdmissionWaiter[];
+  /** Outstanding `flush` calls; while any is active, typing does not wait. */
+  flushing: number;
   timer: ReturnType<typeof setTimeout> | null;
   inFlight: InFlightBatch | null;
   outstandingBytes: number;
@@ -118,8 +134,12 @@ function splitAtUtf8Boundaries(
 /**
  * Batches only remote HTTP terminal writes. Each terminal has an independent,
  * byte-bounded queue. Requests for one terminal are serialized and a failed or
- * timed-out send stops that queue until reset, so a suffix is never delivered
- * after an ambiguously lost prefix.
+ * timed-out send stops that queue until reset or `clearFailure`, so a suffix is
+ * never delivered after an ambiguously lost prefix.
+ *
+ * The byte ceiling applies backpressure rather than discarding input: an input
+ * that fits the ceiling on its own waits, in order, for room. Only an input too
+ * large to ever fit is rejected outright.
  */
 export class TerminalHttpInputBatcher {
   private readonly pending = new Map<string, PendingInput>();
@@ -162,8 +182,10 @@ export class TerminalHttpInputBatcher {
     }
 
     const incomingBytes = this.encoder.encode(request.data).byteLength;
-    if (incomingBytes > this.maxQueuedBytes || (state?.outstandingBytes ?? 0) + incomingBytes > this.maxQueuedBytes) {
-      return Promise.reject(new RangeError("Terminal HTTP input queue is full"));
+    if (incomingBytes > this.maxQueuedBytes) {
+      return Promise.reject(new RangeError(
+        `Terminal HTTP input of ${incomingBytes} bytes exceeds the ${this.maxQueuedBytes}-byte terminal queue limit`,
+      ));
     }
 
     let chunks: Array<{ data: string; bytes: number }>;
@@ -179,6 +201,8 @@ export class TerminalHttpInputBatcher {
         sessionId: request.sessionId,
         batches: [],
         waiters: new Set(),
+        admission: [],
+        flushing: 0,
         timer: null,
         inFlight: null,
         outstandingBytes: 0,
@@ -189,50 +213,79 @@ export class TerminalHttpInputBatcher {
       this.pending.set(key, state);
     }
 
+    // Register the waiter before any admission wait so `flush` and the failure
+    // paths already account for input that has not been accepted yet. A
+    // lifecycle command must not overtake a write that is only waiting for room.
     const waiter = createWaiter();
     state.waiters.add(waiter);
-    state.outstandingBytes += incomingBytes;
-    for (const chunk of chunks) this.appendChunk(state, chunk, waiter);
 
-    const immediate = terminalInputRequiresImmediateFlush(request.data);
-    if (immediate) {
-      this.markReady(state);
-    } else {
-      const tail = state.batches.at(-1);
-      if (tail?.bytes === this.maxBufferBytes) {
-        this.markReady(state);
-      } else {
-        this.pump(key, state);
-        if (state.batches.some((batch) => !batch.ready)) this.scheduleFlush(key, state);
-      }
+    // Strictly ordered admission: once anything is parked, everything parks, so
+    // a later keystroke can never overtake a queued paste.
+    if (state.admission.length === 0 && state.outstandingBytes + incomingBytes <= this.maxQueuedBytes) {
+      state.outstandingBytes += incomingBytes;
+      this.acceptChunks(key, state, chunks, request.data, waiter);
+      return waiter.promise;
     }
+    const entry = this.admit(state, incomingBytes);
+    entry.promise.then(
+      () => {
+        const index = state.admission.indexOf(entry);
+        if (index >= 0) state.admission.splice(index, 1);
+        this.acceptChunks(key, state, chunks, request.data, waiter);
+      },
+      (error) => this.settleWaiter(state, waiter, error),
+    );
     return waiter.promise;
   }
 
-  /** Flushes all input currently accepted for one terminal. */
+  /**
+   * Re-arms a queue that failed closed, discarding nothing: `fail` has already
+   * rejected and dropped everything the queue held. A healthy queue is left
+   * alone, so this can never discard input that is still in flight.
+   */
+  clearFailure(command: TerminalInputCommand, sessionId: string): boolean {
+    const key = this.keyFor(command, sessionId);
+    const state = this.pending.get(key);
+    if (!state?.failed) return false;
+    this.pending.delete(key);
+    return true;
+  }
+
+  /**
+   * Flushes all input already handed to one terminal, including input still
+   * parked at the byte ceiling, so a lifecycle command cannot overtake a write
+   * the caller has already issued.
+   */
   flush(command: TerminalInputCommand, sessionId: string): Promise<void> {
     const state = this.pending.get(this.keyFor(command, sessionId));
     if (!state) return Promise.resolve();
     if (state.failed) return Promise.reject(state.failure);
-    const completions = [...state.waiters].map((waiter) => waiter.promise);
-    this.markReady(state);
+    return this.flushState(state);
+  }
+
+  /** Flushes all input already handed to every terminal. */
+  flushAll(): Promise<void> {
+    const completions = [...this.pending.values()].map((state) => (
+      state.failed ? Promise.reject(state.failure) : this.flushState(state)
+    ));
     return Promise.all(completions).then(() => undefined);
   }
 
-  /** Flushes all input currently accepted across every terminal. */
-  flushAll(): Promise<void> {
-    const completions = [...this.pending.values()].map((state) => {
-      if (state.failed) return Promise.reject(state.failure);
-      const current = [...state.waiters].map((waiter) => waiter.promise);
-      this.markReady(state);
-      return Promise.all(current);
+  private flushState(state: PendingInput): Promise<void> {
+    const completions = [...state.waiters].map((waiter) => waiter.promise);
+    // Input parked at the ceiling is admitted after this call, so hold the queue
+    // in flushing mode until every snapshotted waiter settles. Otherwise late
+    // admissions would arm a fresh typing timer and stall the flush behind it.
+    state.flushing += 1;
+    this.markReady(state);
+    return Promise.all(completions).then(() => undefined).finally(() => {
+      state.flushing -= 1;
     });
-    return Promise.all(completions).then(() => undefined);
   }
 
   /**
-   * Aborts and forgets one queue. Callers must reset after a send failure before
-   * accepting more input for that terminal.
+   * Aborts and forgets one queue. After a send failure a caller must reset (or
+   * `clearFailure`) before that terminal accepts more input.
    */
   reset(
     command: TerminalInputCommand,
@@ -256,6 +309,86 @@ export class TerminalHttpInputBatcher {
 
   private keyFor(command: TerminalInputCommand, sessionId: string): string {
     return `${command}\0${sessionId}`;
+  }
+
+  /** Parks one enqueue at the ceiling and ships accepted input to make room. */
+  private admit(state: PendingInput, bytes: number): AdmissionWaiter {
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    const entry: AdmissionWaiter = { bytes, released: false, promise, resolve, reject };
+    state.admission.push(entry);
+    // Waiting out the typing timer cannot free bytes, so stop waiting for it.
+    this.markReady(state);
+    return entry;
+  }
+
+  private releaseAdmission(state: PendingInput): void {
+    for (const next of state.admission) {
+      // Already reserved, still waiting for its continuation to run.
+      if (next.released) continue;
+      if (state.outstandingBytes + next.bytes > this.maxQueuedBytes) return;
+      next.released = true;
+      // Reserve here rather than in the resumed continuation. Continuations run
+      // as microtasks, so releasing without reserving would admit the whole
+      // parked queue at once and blow through the ceiling.
+      state.outstandingBytes += next.bytes;
+      next.resolve();
+    }
+  }
+
+  private acceptChunks(
+    key: string,
+    state: PendingInput,
+    chunks: Array<{ data: string; bytes: number }>,
+    data: string,
+    waiter: InputWaiter,
+  ): void {
+    if (waiter.settled) return;
+    if (state.retired || this.pending.get(key) !== state) {
+      this.settleWaiter(state, waiter, new Error("Terminal HTTP input queue was reset"));
+      return;
+    }
+    if (state.failed) {
+      this.settleWaiter(state, waiter, state.failure);
+      return;
+    }
+
+    for (const chunk of chunks) this.appendChunk(state, chunk, waiter);
+
+    if (state.flushing > 0 || terminalInputRequiresImmediateFlush(data)) {
+      this.markReady(state);
+      return;
+    }
+    const tail = state.batches.at(-1);
+    if (tail?.bytes === this.maxBufferBytes) {
+      this.markReady(state);
+      return;
+    }
+    this.pump(key, state);
+    if (state.batches.some((batch) => !batch.ready)) this.scheduleFlush(key, state);
+  }
+
+  private settleWaiter(state: PendingInput, waiter: InputWaiter, error: unknown): void {
+    if (waiter.settled) return;
+    waiter.settled = true;
+    state.waiters.delete(waiter);
+    waiter.reject(error);
+  }
+
+  private rejectAll(state: PendingInput, reason: unknown): void {
+    const admission = state.admission;
+    state.admission = [];
+    for (const entry of admission) entry.reject(reason);
+    for (const waiter of state.waiters) {
+      if (waiter.settled) continue;
+      waiter.settled = true;
+      waiter.reject(reason);
+    }
+    state.waiters.clear();
   }
 
   private appendChunk(
@@ -343,8 +476,16 @@ export class TerminalHttpInputBatcher {
         waiter.resolve();
       }
     }
+    this.releaseAdmission(state);
     this.pump(key, state);
-    if (!state.inFlight && state.batches.length === 0 && state.waiters.size === 0 && !state.timer) {
+    if (
+      !state.inFlight
+      && state.batches.length === 0
+      && state.waiters.size === 0
+      && state.admission.length === 0
+      && state.outstandingBytes === 0
+      && !state.timer
+    ) {
       this.pending.delete(key);
     }
   }
@@ -359,12 +500,7 @@ export class TerminalHttpInputBatcher {
     state.outstandingBytes = 0;
     state.failed = true;
     state.failure = error;
-    for (const waiter of state.waiters) {
-      if (waiter.settled) continue;
-      waiter.settled = true;
-      waiter.reject(error);
-    }
-    state.waiters.clear();
+    this.rejectAll(state, error);
   }
 
   private retire(key: string, state: PendingInput, reason: unknown): void {
@@ -375,12 +511,7 @@ export class TerminalHttpInputBatcher {
     state.inFlight = null;
     state.batches = [];
     state.outstandingBytes = 0;
-    for (const waiter of state.waiters) {
-      if (waiter.settled) continue;
-      waiter.settled = true;
-      waiter.reject(reason);
-    }
-    state.waiters.clear();
+    this.rejectAll(state, reason);
     if (this.pending.get(key) === state) this.pending.delete(key);
   }
 }

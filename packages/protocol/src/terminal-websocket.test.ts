@@ -6,12 +6,20 @@ import {
   parseTerminalWebSocketServerControlFrame,
   TERMINAL_BINARY_FRAME_TYPE,
   TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES,
+  TERMINAL_WEBSOCKET_CHANNEL_HARD_BUFFER_BYTES,
+  TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES,
+  TERMINAL_WEBSOCKET_CLOSE,
   TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
   TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES,
   TERMINAL_WEBSOCKET_MAX_ERROR_MESSAGE_BYTES,
   TERMINAL_WEBSOCKET_MAX_IDENTIFIER_BYTES,
   TERMINAL_WEBSOCKET_MAX_SESSION_ID_BYTES,
   TERMINAL_WEBSOCKET_MAX_TOKEN_BYTES,
+  TERMINAL_WEBSOCKET_PATH,
+  TERMINAL_WEBSOCKET_PROTOCOL_VERSION,
+  TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES,
+  TERMINAL_WEBSOCKET_SOCKET_SOFT_BUFFER_BYTES,
+  TERMINAL_WEBSOCKET_SUBPROTOCOL,
   TerminalWebSocketControlFrameError,
   type TerminalWebSocketClientControlFrame,
 } from "@orkestrator/protocol/terminal-websocket";
@@ -341,6 +349,167 @@ describe("terminal WebSocket server control protocol", () => {
     for (const frame of invalid) {
       expectControlError(parseTerminalWebSocketServerControlFrame, frame, "malformed-frame");
     }
+  });
+});
+
+describe("terminal WebSocket control protocol field validation", () => {
+  test("requires a non-empty string token when one is supplied", () => {
+    for (const token of ["", 1, null, {}]) {
+      expectControlError(parseTerminalWebSocketClientControlFrame, {
+        type: "authenticate",
+        version: 1,
+        token,
+      }, "malformed-frame");
+    }
+    expect(parseTerminalWebSocketClientControlFrame(encodeJson({
+      type: "authenticate",
+      version: 1,
+    }))).toEqual({ type: "authenticate", version: 1 });
+  });
+
+  test("rejects an unrecognized subscribed recovery mode", () => {
+    for (const recovery of ["resume", "", 1, null]) {
+      expectControlError(parseTerminalWebSocketServerControlFrame, {
+        type: "subscribed",
+        requestId: 1,
+        sessionId: "s",
+        channelId: 1,
+        targetGeneration: 2,
+        targetRevision: 9,
+        baseGeneration: 2,
+        baseRevision: 9,
+        recovery,
+      }, "malformed-frame");
+    }
+  });
+
+  test("validates the optional identifiers on a server error frame", () => {
+    for (const partial of [
+      { requestId: -1 },
+      { requestId: 1.5 },
+      { requestId: Number.MAX_SAFE_INTEGER + 1 },
+      { channelId: -1 },
+      { channelId: 0x1_0000 },
+      { channelId: "1" },
+    ]) {
+      expectControlError(parseTerminalWebSocketServerControlFrame, {
+        type: "error",
+        code: "internal-error",
+        message: "boom",
+        ...partial,
+      }, "malformed-frame");
+    }
+  });
+
+  test("validates the version on a server ready frame", () => {
+    for (const version of [undefined, null, "1", -1, 1.5]) {
+      expectControlError(parseTerminalWebSocketServerControlFrame, {
+        type: "ready",
+        socketId: "socket-1",
+        ...(version === undefined ? {} : { version }),
+      }, "malformed-frame");
+    }
+    expectControlError(parseTerminalWebSocketServerControlFrame, {
+      type: "ready",
+      socketId: "socket-1",
+      version: 2,
+    }, "unsupported-version");
+  });
+});
+
+describe("terminal WebSocket control protocol shared boundary", () => {
+  const parsers = [
+    ["client", parseTerminalWebSocketClientControlFrame],
+    ["server", parseTerminalWebSocketServerControlFrame],
+  ] as const;
+
+  test("rejects non-text frames handed straight off a socket", () => {
+    for (const [, parse] of parsers) {
+      for (const value of [undefined, null, 42, new Uint8Array([1, 2, 3]), new ArrayBuffer(4)]) {
+        expectControlError(parse as (text: string) => unknown, value as never, "malformed-frame");
+      }
+    }
+  });
+
+  test("enforces shape, JSON, and size limits on both directions", () => {
+    for (const [, parse] of parsers) {
+      for (const invalid of ["", "{", "null", "[]", "1", "true", '"text"']) {
+        expectControlError(parse, invalid, "malformed-frame");
+      }
+      expectControlError(
+        parse,
+        `{"type":"ready","version":1,"socketId":"${"é".repeat(TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES)}"}`,
+        "frame-too-large",
+      );
+    }
+  });
+
+  test("rejects an oversized frame without encoding it first", () => {
+    // A frame far beyond the limit must be refused on its code-unit length, so
+    // an attacker cannot force an allocation proportional to what they sent.
+    const oversized = `{"type":"ready","version":1,"socketId":"${"a".repeat(4 * 1024 * 1024)}"}`;
+    for (const [, parse] of parsers) {
+      expectControlError(parse, oversized, "frame-too-large");
+    }
+  });
+
+  test("accepts a frame at exactly the control byte limit", () => {
+    const base = { type: "ready", version: 1, socketId: "socket-1", padding: "" };
+    const padding = TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES - encodeJson(base).length;
+    const frame = encodeJson({ ...base, padding: "p".repeat(padding) });
+    expect(frame.length).toBe(TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES);
+    expect(parseTerminalWebSocketServerControlFrame(frame))
+      .toEqual({ type: "ready", version: 1, socketId: "socket-1" });
+
+    const oneOver = encodeJson({ ...base, padding: "p".repeat(padding + 1) });
+    expectControlError(parseTerminalWebSocketServerControlFrame, oneOver, "frame-too-large");
+  });
+});
+
+describe("terminal WebSocket protocol constants", () => {
+  test("pins the negotiated identity of version 1", () => {
+    expect(TERMINAL_WEBSOCKET_PROTOCOL_VERSION).toBe(1);
+    expect(TERMINAL_WEBSOCKET_SUBPROTOCOL).toBe("orkestrator-terminal.v1");
+    expect(TERMINAL_WEBSOCKET_PATH).toBe("/__orkestrator/terminal");
+  });
+
+  test("pins every close code the specification assigns", () => {
+    expect(TERMINAL_WEBSOCKET_CLOSE).toEqual({
+      normal: 1000,
+      unsupportedData: 1003,
+      policyViolation: 1008,
+      messageTooLarge: 1009,
+      internalError: 1011,
+      unsupportedVersion: 4001,
+      authenticationRequired: 4003,
+      protocolError: 4004,
+      slowConsumer: 4008,
+    });
+  });
+
+  test("keeps a channel bounded well inside the socket it shares", () => {
+    // One noisy terminal must desynchronize before it can monopolize the socket,
+    // which only holds while the channel soft limit is the first to be crossed.
+    expect(TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES)
+      .toBeLessThan(TERMINAL_WEBSOCKET_CHANNEL_HARD_BUFFER_BYTES);
+    expect(TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES)
+      .toBeLessThan(TERMINAL_WEBSOCKET_SOCKET_SOFT_BUFFER_BYTES);
+    expect(TERMINAL_WEBSOCKET_CHANNEL_HARD_BUFFER_BYTES)
+      .toBeLessThanOrEqual(TERMINAL_WEBSOCKET_SOCKET_SOFT_BUFFER_BYTES);
+    expect(TERMINAL_WEBSOCKET_SOCKET_SOFT_BUFFER_BYTES)
+      .toBeLessThan(TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES);
+  });
+
+  test("keeps every control field inside one control frame", () => {
+    for (const limit of [
+      TERMINAL_WEBSOCKET_MAX_SESSION_ID_BYTES,
+      TERMINAL_WEBSOCKET_MAX_TOKEN_BYTES,
+      TERMINAL_WEBSOCKET_MAX_IDENTIFIER_BYTES,
+      TERMINAL_WEBSOCKET_MAX_ERROR_MESSAGE_BYTES,
+    ]) {
+      expect(limit).toBeLessThan(TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES);
+    }
+    expect(TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES).toBeLessThan(TERMINAL_WEBSOCKET_MAX_BINARY_BYTES);
   });
 });
 

@@ -35,7 +35,9 @@ The shared constants and TypeScript frame definitions live in
 Control frames are UTF-8 JSON text, limited to 16 KiB including UTF-8 encoding.
 Each must decode to exactly one object with a recognized `type`. Unknown fields
 may be ignored for forward compatibility; missing, incorrectly typed, or
-out-of-range required fields are malformed.
+out-of-range required fields are malformed. An oversized frame is refused on its
+code-unit length before it is encoded, so a peer cannot force an allocation
+proportional to whatever it sent just to learn the frame was over the limit.
 
 Client frames:
 

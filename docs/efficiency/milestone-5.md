@@ -154,14 +154,25 @@ Initial implementation evidence:
   outstanding-input ceiling per terminal. Larger pastes are split on UTF-8
   boundaries; Enter, C0/DEL controls, escape sequences, and paste chunks flush
   immediately with any preceding printable input. Sends time out after 30
-  seconds, fail closed without dispatching a queued suffix, and resume only
-  after an explicit session reset. Resize and close commands flush accepted
-  input before changing terminal lifecycle state.
+  seconds and fail closed without dispatching a queued suffix.
+- The ceiling applies backpressure rather than discarding input. Input that fits
+  the ceiling waits, strictly in order, for room; only input too large to ever
+  fit is rejected. Resize and close commands flush accepted *and* parked input
+  before changing terminal lifecycle state, so neither can overtake a write the
+  caller already issued.
+- A queue that failed closed is re-armed by a session restart, by a close, or by
+  the next resize that succeeds — a resize proves the transport recovered. The
+  failure toast also offers an explicit reconnect. Without a recovery path a
+  single transient write failure would leave a terminal that still streams
+  output but silently refuses every keystroke.
+- A close marks the input queue closed only once it reaches the backend. A close
+  that fails leaves a live terminal behind, and that terminal stays writable.
 - Automated verification on 2026-07-31:
-  - terminal batcher plus browser gateway: 94 passed;
-  - shared protocol package: 173 passed;
-  - terminal hook recovery suite: 44 passed;
-  - backend, web, desktop, and protocol TypeScript checks: passed.
+  - terminal batcher plus browser gateway: 114 passed;
+  - shared protocol package: 185 passed;
+  - terminal hook recovery suite: 49 passed;
+  - backend, web, desktop, and protocol TypeScript checks: passed;
+  - renderer production build: passed.
 - WebSocket is not yet the default. Baseline latency/transfer measurements,
   gateway implementation, browser socket ownership, and compatibility results
   remain to be recorded.

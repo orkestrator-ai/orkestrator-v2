@@ -822,6 +822,19 @@ export function useTerminal({
     }
   }, [cleanupEventListener]);
 
+  // A failed write can leave the browser gateway's input queue closed until the
+  // session restarts, while output keeps streaming so the terminal still looks
+  // alive. Reconnecting is the only recovery, so the failure toast offers it.
+  const reconnectRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    reconnectRef.current = () => {
+      void (async () => {
+        await disconnect();
+        await connect();
+      })();
+    };
+  }, [connect, disconnect]);
+
   const resize = useCallback(
     async (newCols: number, newRows: number) => {
       if (!sessionId) return;
@@ -863,6 +876,10 @@ export function useTerminal({
         toast.error("Terminal input failed", {
           id: `terminal-input-${currentSessionId}`,
           description: err instanceof Error ? err.message : String(err),
+          action: {
+            label: "Reconnect",
+            onClick: () => reconnectRef.current(),
+          },
         });
       }
     },

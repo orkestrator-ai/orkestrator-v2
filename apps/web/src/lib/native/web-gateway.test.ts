@@ -802,6 +802,203 @@ describe("web gateway browser API", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  test("keeps a live terminal writable when its close never reached the backend", async () => {
+    const invokes: string[] = [];
+    globalThis.fetch = mock(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        command: string;
+        args: Record<string, unknown>;
+      };
+      invokes.push(body.command);
+      if (body.command === "detach_terminal" && body.args.sessionId === "still-alive") {
+        return new Response(JSON.stringify({ error: "gateway unavailable" }), { status: 503 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi();
+
+    await expect(api.invoke("detach_terminal", { sessionId: "still-alive" }))
+      .rejects.toThrow("gateway unavailable");
+
+    // The backend terminal survived the failed detach, so its input must not be
+    // rejected for the lifetime of the page.
+    await api.invoke("terminal_write", { sessionId: "still-alive", data: "ls\r" });
+    expect(invokes).toEqual(["detach_terminal", "terminal_write"]);
+
+    // A close that does land still closes the queue.
+    await api.invoke("detach_terminal", { sessionId: "other" });
+    await expect(api.invoke("terminal_write", { sessionId: "other", data: "x" }))
+      .rejects.toThrow("closed until the session restarts");
+    expect(invokes).toEqual(["detach_terminal", "terminal_write", "detach_terminal"]);
+  });
+
+  test("re-arms a terminal whose input failed once the transport recovers", async () => {
+    const invokes: string[] = [];
+    let rejectWrites = true;
+    globalThis.fetch = mock(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        command: string;
+        args: Record<string, unknown>;
+      };
+      invokes.push(body.command);
+      if (body.command === "terminal_write" && rejectWrites) {
+        return new Response(JSON.stringify({ error: "gateway unavailable" }), { status: 503 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi();
+
+    await expect(api.invoke("terminal_write", { sessionId: "flaky", data: "a\r" }))
+      .rejects.toThrow("gateway unavailable");
+    await expect(api.invoke("terminal_write", { sessionId: "flaky", data: "b\r" }))
+      .rejects.toThrow("gateway unavailable");
+
+    // A resize that succeeds proves the transport recovered.
+    rejectWrites = false;
+    await api.invoke("terminal_resize", { sessionId: "flaky", cols: 100, rows: 30 });
+    await api.invoke("terminal_write", { sessionId: "flaky", data: "c\r" });
+
+    expect(invokes).toEqual([
+      "terminal_write",
+      "terminal_resize",
+      "terminal_write",
+    ]);
+  });
+
+  test("leaves a failed queue closed when the recovering resize also fails", async () => {
+    globalThis.fetch = mock(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { command: string };
+      return body.command === "start_terminal_session"
+        ? new Response(JSON.stringify({}), { status: 200 })
+        : new Response(JSON.stringify({ error: "gateway unavailable" }), { status: 503 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi();
+
+    await expect(api.invoke("terminal_write", { sessionId: "down", data: "a\r" }))
+      .rejects.toThrow("gateway unavailable");
+    await expect(api.invoke("terminal_resize", { sessionId: "down", cols: 80, rows: 24 }))
+      .rejects.toThrow("gateway unavailable");
+    await expect(api.invoke("terminal_write", { sessionId: "down", data: "b\r" }))
+      .rejects.toThrow("gateway unavailable");
+  });
+
+  test("reopens a terminal whose start command failed", async () => {
+    const invokes: string[] = [];
+    let rejectStart = true;
+    globalThis.fetch = mock(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { command: string };
+      invokes.push(body.command);
+      if (body.command === "start_terminal_session" && rejectStart) {
+        rejectStart = false;
+        return new Response(JSON.stringify({ error: "container gone" }), { status: 500 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi();
+
+    await api.invoke("detach_terminal", { sessionId: "restart" });
+    await expect(api.invoke("start_terminal_session", { sessionId: "restart" }))
+      .rejects.toThrow("container gone");
+
+    // The failed start already cleared the close marker, so a retry works and
+    // input is accepted rather than rejected against a session that now exists.
+    await api.invoke("start_terminal_session", { sessionId: "restart" });
+    await api.invoke("terminal_write", { sessionId: "restart", data: "ok\r" });
+    expect(invokes).toEqual([
+      "detach_terminal",
+      "start_terminal_session",
+      "start_terminal_session",
+      "terminal_write",
+    ]);
+  });
+
+  test("rejects lifecycle commands issued after the gateway was replaced", async () => {
+    globalThis.fetch = mock(async () =>
+      new Response(JSON.stringify({}), { status: 200 })) as unknown as typeof fetch;
+    const fakeWindow: TestGatewayWindow = {
+      location: { protocol: "http:" },
+      orkestrator: undefined,
+      orkestratorGateway: undefined,
+    };
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+      {},
+    );
+    const oldApi = fakeWindow.orkestrator!;
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+      { replaceExisting: true },
+    );
+
+    for (const [command, args] of [
+      ["terminal_resize", { sessionId: "gone", cols: 80, rows: 24 }],
+      ["detach_terminal", { sessionId: "gone" }],
+      ["start_terminal_session", { sessionId: "gone" }],
+    ] as const) {
+      await expect(oldApi.invoke(command, args)).rejects.toThrow("Browser gateway replaced");
+    }
+  });
+
+  test("replaces a gateway this module did not create without disposing it", () => {
+    const foreignApi = { invoke: async () => undefined } as unknown as Window["orkestrator"];
+    const fakeWindow: TestGatewayWindow = {
+      location: { protocol: "http:" },
+      orkestrator: foreignApi,
+      orkestratorGateway: undefined,
+    };
+
+    expect(() => installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+      { replaceExisting: true },
+    )).not.toThrow();
+    expect(fakeWindow.orkestrator).not.toBe(foreignApi);
+  });
+
+  test("routes a lifecycle command with no usable session id straight through", async () => {
+    const invokes: Array<{ command: string; args: Record<string, unknown> }> = [];
+    globalThis.fetch = mock(async (_input, init) => {
+      invokes.push(JSON.parse(String(init?.body)) as {
+        command: string;
+        args: Record<string, unknown>;
+      });
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({ terminalInputBatchDelayMs: 50 });
+
+    // Without a string session id there is no queue to order against, so the
+    // command must not be silently dropped or attached to another terminal.
+    await api.invoke("terminal_resize", { cols: 80, rows: 24 });
+    await api.invoke("detach_terminal", { sessionId: 42 });
+    expect(invokes.map(({ command }) => command)).toEqual(["terminal_resize", "detach_terminal"]);
+
+    // The absent session id did not close any real terminal's queue.
+    await api.invoke("terminal_write", { sessionId: "42", data: "x\r" });
+    expect(invokes.map(({ command }) => command)).toEqual([
+      "terminal_resize",
+      "detach_terminal",
+      "terminal_write",
+    ]);
+  });
+
+  test("wires the configured batch and queue byte limits into the batcher", async () => {
+    const sent: string[] = [];
+    globalThis.fetch = mock(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { args: { data: string } };
+      sent.push(body.args.data);
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      terminalInputMaxBatchBytes: 4,
+      terminalInputMaxQueuedBytes: 8,
+    });
+
+    await api.invoke("terminal_write", { sessionId: "bounded", data: "abcdefgh" });
+    expect(sent).toEqual(["abcd", "efgh"]);
+
+    await expect(api.invoke("terminal_write", { sessionId: "bounded", data: "too-long-to-fit" }))
+      .rejects.toThrow("exceeds the 8-byte terminal queue limit");
+  });
+
   test("batches direct terminal writes with bearer authentication", async () => {
     const requests: Array<{ url: string; authorization: string | null; data: string }> = [];
     globalThis.fetch = mock(async (input, init) => {

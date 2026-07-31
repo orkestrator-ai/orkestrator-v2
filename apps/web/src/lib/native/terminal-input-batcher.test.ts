@@ -11,6 +11,15 @@ const tick = async () => {
   for (let index = 0; index < 5; index += 1) await Promise.resolve();
 };
 
+/**
+ * Deeper than `tick`. Releasing a parked enqueue resumes it several microtasks
+ * after the batch completion that made room, so backpressure assertions need a
+ * longer drain than ordinary batching does.
+ */
+const settle = async () => {
+  for (let index = 0; index < 25; index += 1) await Promise.resolve();
+};
+
 const rejectionOf = (promise: Promise<unknown>): Promise<unknown> => promise.then(
   () => {
     throw new Error("Expected promise to reject");
@@ -117,24 +126,144 @@ describe("TerminalHttpInputBatcher", () => {
     await second;
   });
 
-  test("enforces a finite total per-terminal queue while leaving accepted input intact", async () => {
+  test("rejects only input too large to ever fit and backpressures the rest in order", async () => {
     const sent: string[] = [];
-    let releaseFirst: () => void = () => {};
-    const firstBlocked = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    const batcher = new TerminalHttpInputBatcher(async ({ data }) => {
+    const releases: Array<() => void> = [];
+    const batcher = new TerminalHttpInputBatcher(({ data }) => {
       sent.push(data);
-      if (sent.length === 1) await firstBlocked;
+      return new Promise<void>((resolve) => releases.push(resolve));
     }, 50, 2, 4, 1_000);
 
     const first = batcher.enqueue(request("ab"));
     const pending = batcher.enqueue(request("cd"));
-    await expect(batcher.enqueue(request("e"))).rejects.toThrow("queue is full");
-    await expect(batcher.enqueue(request("oversized"))).rejects.toThrow("queue is full");
-    releaseFirst();
-    await Promise.all([first, pending]);
+    await tick();
+    expect(sent).toEqual(["ab"]);
+
+    // Nine bytes can never fit a four-byte queue, however long the caller waits.
+    await expect(batcher.enqueue(request("oversized")))
+      .rejects.toThrow("exceeds the 4-byte terminal queue limit");
+
+    // Two bytes fit once there is room, so they wait rather than being dropped.
+    let parkedAccepted = false;
+    const parked = batcher.enqueue(request("ef")).then(() => {
+      parkedAccepted = true;
+    });
+    await settle();
+    expect(sent).toEqual(["ab"]);
+    expect(parkedAccepted).toBe(false);
+
+    releases.shift()?.();
+    await settle();
     expect(sent).toEqual(["ab", "cd"]);
+    expect(parkedAccepted).toBe(false);
+
+    releases.shift()?.();
+    await settle();
+    expect(sent).toEqual(["ab", "cd", "ef"]);
+
+    releases.shift()?.();
+    await Promise.all([first, pending, parked]);
+    expect(parkedAccepted).toBe(true);
+  });
+
+  test("keeps parked input ahead of a later keystroke and behind an explicit flush", async () => {
+    const sent: string[] = [];
+    const releases: Array<() => void> = [];
+    const batcher = new TerminalHttpInputBatcher(({ data }) => {
+      sent.push(data);
+      return new Promise<void>((resolve) => releases.push(resolve));
+    }, 60_000, 4, 4, 1_000);
+
+    const inFlight = batcher.enqueue(request("abcd"));
+    await tick();
+    expect(sent).toEqual(["abcd"]);
+
+    // Both park. A one-byte keystroke must not overtake the four-byte paste.
+    const paste = batcher.enqueue(request("wxyz"));
+    const later = batcher.enqueue(request("!"));
+
+    // The flush covers input that has not been accepted yet, so a lifecycle
+    // command sequenced behind it cannot overtake either write.
+    let flushed = false;
+    const flush = batcher.flush("terminal_write", "session-1").then(() => {
+      flushed = true;
+    });
+
+    releases.shift()?.();
+    await settle();
+    expect(sent).toEqual(["abcd", "wxyz"]);
+    expect(flushed).toBe(false);
+
+    releases.shift()?.();
+    await settle();
+    expect(sent).toEqual(["abcd", "wxyz", "!"]);
+    expect(flushed).toBe(false);
+
+    releases.shift()?.();
+    await Promise.all([inFlight, paste, later, flush]);
+    expect(flushed).toBe(true);
+  });
+
+  test("preserves issue order across writes that repeatedly hit the ceiling", async () => {
+    const sent: string[] = [];
+    const releases: Array<() => void> = [];
+    const batcher = new TerminalHttpInputBatcher(({ data }) => {
+      sent.push(data);
+      return new Promise<void>((resolve) => releases.push(resolve));
+    }, 60_000, 2, 4, 5_000);
+
+    const issued = ["ab", "cd", "ef", "gh", "ij", "kl"];
+    const writes = issued.map((data) => batcher.enqueue(request(data)));
+    await settle();
+
+    // Inject a fresh write into each drain step so new input races the admission
+    // release it overlaps with.
+    for (let index = 0; index < 4 && releases.length > 0; index += 1) {
+      releases.shift()?.();
+      const extra = `x${index}`;
+      issued.push(extra);
+      writes.push(batcher.enqueue(request(extra)));
+      await settle();
+    }
+    while (releases.length > 0) {
+      releases.shift()?.();
+      await settle();
+    }
+
+    await Promise.all(writes);
+    expect(sent.join("")).toBe(issued.join(""));
+  });
+
+  test("rejects parked input when its queue fails or is reset before admission", async () => {
+    let rejectFirst: (error: Error) => void = () => {};
+    const failing = new TerminalHttpInputBatcher(({ data }) => (
+      data === "ab"
+        ? new Promise<void>((_, reject) => {
+          rejectFirst = reject;
+        })
+        : Promise.resolve()
+    ), 60_000, 2, 2, 1_000);
+
+    const inFlight = rejectionOf(failing.enqueue(request("ab")));
+    const parked = rejectionOf(failing.enqueue(request("cd")));
+    await tick();
+    rejectFirst(new Error("network failed"));
+    expect(await inFlight).toEqual(new Error("network failed"));
+    expect(await parked).toEqual(new Error("network failed"));
+
+    const reset = new TerminalHttpInputBatcher(
+      () => new Promise<void>(() => {}),
+      60_000,
+      2,
+      2,
+      1_000,
+    );
+    const resetInFlight = rejectionOf(reset.enqueue(request("ab")));
+    const resetParked = rejectionOf(reset.enqueue(request("cd")));
+    await tick();
+    reset.resetAll(new Error("gateway replaced"));
+    expect(await resetInFlight).toEqual(new Error("gateway replaced"));
+    expect(await resetParked).toEqual(new Error("gateway replaced"));
   });
 
   test("flushes a non-in-flight full batch and accepts the ordered overflow", async () => {
@@ -308,6 +437,192 @@ describe("TerminalHttpInputBatcher", () => {
       .rejects.toThrow("Invalid terminal input request");
     await expect(batcher.enqueue({ command: "terminal_write", sessionId: "s", data: 1 } as never))
       .rejects.toThrow("Invalid terminal input request");
+  });
+
+  test("ships a printable keystroke that exactly fills a batch without the typing timer", async () => {
+    const sent: string[] = [];
+    const batcher = new TerminalHttpInputBatcher(async ({ data }) => {
+      sent.push(data);
+    }, 60_000, 2, 10, 1_000);
+
+    const first = batcher.enqueue(request("a"));
+    await tick();
+    expect(sent).toEqual([]);
+
+    // "b" is a single printable character, so only the full batch can flush it.
+    const second = batcher.enqueue(request("b"));
+    await Promise.all([first, second]);
+    expect(sent).toEqual(["ab"]);
+  });
+
+  test("flushAll surfaces a queue that already failed closed", async () => {
+    let rejectFirst: (error: Error) => void = () => {};
+    const batcher = new TerminalHttpInputBatcher(() => new Promise<void>((_, reject) => {
+      rejectFirst = reject;
+    }), 50, 2, 10, 1_000);
+
+    const failing = rejectionOf(batcher.enqueue(request("ab", "broken")));
+    await tick();
+    rejectFirst(new Error("transport down"));
+    expect(await failing).toEqual(new Error("transport down"));
+
+    await expect(batcher.flushAll()).rejects.toThrow("transport down");
+  });
+
+  test("clearFailure re-arms a failed queue and leaves a healthy one alone", async () => {
+    const sent: string[] = [];
+    let rejectFirst: (error: Error) => void = () => {};
+    let shouldFail = true;
+    const batcher = new TerminalHttpInputBatcher(({ data }) => {
+      sent.push(data);
+      if (!shouldFail) return Promise.resolve();
+      return new Promise<void>((_, reject) => {
+        rejectFirst = reject;
+      });
+    }, 50, 2, 10, 1_000);
+
+    expect(batcher.clearFailure("terminal_write", "never-used")).toBe(false);
+
+    const failing = rejectionOf(batcher.enqueue(request("ab")));
+    await tick();
+    rejectFirst(new Error("network failed"));
+    expect(await failing).toEqual(new Error("network failed"));
+    await expect(batcher.enqueue(request("cd"))).rejects.toThrow("network failed");
+
+    shouldFail = false;
+    expect(batcher.clearFailure("terminal_write", "session-1")).toBe(true);
+    await batcher.enqueue(request("ef"));
+    expect(sent).toEqual(["ab", "ef"]);
+
+    // A healthy queue is never disturbed, so its accepted input still lands.
+    const healthy = batcher.enqueue(request("gh"));
+    expect(batcher.clearFailure("terminal_write", "session-1")).toBe(false);
+    await healthy;
+    expect(sent).toEqual(["ab", "ef", "gh"]);
+  });
+
+  test("resetting an unknown queue is a no-op", async () => {
+    const send = mock(async () => {});
+    const batcher = new TerminalHttpInputBatcher(send, 0);
+    expect(() => batcher.reset("terminal_write", "never-used")).not.toThrow();
+    await batcher.enqueue(request("x", "never-used"));
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses its documented default reasons for reset, resetAll, and dispose", async () => {
+    const batcher = new TerminalHttpInputBatcher(
+      () => new Promise<void>(() => {}),
+      60_000,
+      2,
+      10,
+      1_000,
+    );
+
+    const one = rejectionOf(batcher.enqueue(request("a", "one")));
+    batcher.reset("terminal_write", "one");
+    expect(await one).toEqual(new Error("Terminal HTTP input queue reset"));
+
+    const two = rejectionOf(batcher.enqueue(request("b", "two")));
+    batcher.resetAll();
+    expect(await two).toEqual(new Error("Terminal HTTP input queues reset"));
+
+    const three = rejectionOf(batcher.enqueue(request("c", "three")));
+    batcher.dispose();
+    expect(await three).toEqual(new Error("Terminal HTTP input queues reset"));
+  });
+
+  test("ignores a send that settles after its queue was retired", async () => {
+    const sent: string[] = [];
+    const settlers: Array<{ resolve: () => void; reject: (error: unknown) => void }> = [];
+    const batcher = new TerminalHttpInputBatcher(({ data }) => {
+      sent.push(data);
+      return new Promise<void>((resolve, reject) => settlers.push({ resolve, reject }));
+    }, 60_000, 4, 20, 1_000);
+
+    const retired = rejectionOf(batcher.enqueue(request("ab")));
+    await tick();
+    batcher.reset("terminal_write", "session-1", new Error("reset"));
+    expect(await retired).toEqual(new Error("reset"));
+
+    const fresh = batcher.enqueue(request("cd"));
+    await tick();
+    expect(sent).toEqual(["ab", "cd"]);
+
+    let freshSettled = false;
+    void fresh.then(() => {
+      freshSettled = true;
+    }, () => {
+      freshSettled = true;
+    });
+
+    // The abandoned send belongs to the retired queue and must not complete the
+    // fresh one that replaced it under the same key.
+    settlers[0]?.resolve();
+    await tick();
+    expect(freshSettled).toBe(false);
+
+    settlers[1]?.resolve();
+    await fresh;
+    expect(sent).toEqual(["ab", "cd"]);
+  });
+
+  test("ignores a rejection that arrives after its queue was retired", async () => {
+    const sent: string[] = [];
+    const settlers: Array<{ resolve: () => void; reject: (error: unknown) => void }> = [];
+    const batcher = new TerminalHttpInputBatcher(({ data }) => {
+      sent.push(data);
+      if (sent.length > 2) return Promise.resolve();
+      return new Promise<void>((resolve, reject) => settlers.push({ resolve, reject }));
+    }, 60_000, 4, 20, 1_000);
+
+    const retired = rejectionOf(batcher.enqueue(request("ab")));
+    await tick();
+    batcher.reset("terminal_write", "session-1", new Error("reset"));
+    expect(await retired).toEqual(new Error("reset"));
+
+    const fresh = batcher.enqueue(request("cd"));
+    await tick();
+    settlers[0]?.reject(new Error("late failure"));
+    await tick();
+
+    // The fresh queue must not inherit the retired queue's failure.
+    settlers[1]?.resolve();
+    await fresh;
+    await batcher.enqueue(request("ef"));
+    expect(sent).toEqual(["ab", "cd", "ef"]);
+  });
+
+  test("accepts a sender that returns void synchronously", async () => {
+    const sent: string[] = [];
+    const batcher = new TerminalHttpInputBatcher(({ data }) => {
+      sent.push(data);
+    }, 5);
+
+    await batcher.enqueue(request("hi"));
+    expect(sent).toEqual(["hi"]);
+  });
+
+  test("cancels an armed typing timer when the queue fails", async () => {
+    const sent: string[] = [];
+    let rejectFirst: (error: Error) => void = () => {};
+    const batcher = new TerminalHttpInputBatcher(({ data }) => {
+      sent.push(data);
+      if (sent.length > 1) return Promise.resolve();
+      return new Promise<void>((_, reject) => {
+        rejectFirst = reject;
+      });
+    }, 5, 4, 20, 1_000);
+
+    const inFlight = rejectionOf(batcher.enqueue(request("ab")));
+    const typed = rejectionOf(batcher.enqueue(request("c")));
+    await tick();
+    rejectFirst(new Error("network failed"));
+    expect(await inFlight).toEqual(new Error("network failed"));
+    expect(await typed).toEqual(new Error("network failed"));
+
+    // Let the cancelled 5 ms deadline pass; the failed queue may send nothing.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(sent).toEqual(["ab"]);
   });
 
   test("validates constructor bounds", () => {

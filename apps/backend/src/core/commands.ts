@@ -9256,18 +9256,24 @@ export function createCommandRegistry(
     );
     spawnTerminalProcess(id, "docker", dockerArgs, config, emit, trackedTerminalActivityHooks(id, context));
   });
+  // `delivered` is additive: HTTP callers ignore the result, while the terminal
+  // WebSocket gateway needs it to avoid acknowledging input that never reached a
+  // shell. Dropping it silently would tell the user a keystroke landed.
   register("terminal_write", ({ sessionId, data }, context) => {
     const id = asString(sessionId, "sessionId");
     const terminalData = asString(data, "data");
     const terminalProcess = terminalProcesses.get(id);
-    if (!terminalProcess) return;
+    if (!terminalProcess) return { delivered: false };
     terminalProcess.write(terminalData);
     recordTerminalInputActivity(id, terminalData, context);
+    return { delivered: true };
   });
-  register("terminal_resize", ({ sessionId, cols, rows }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.resize(
-    asTerminalDimension(cols, 80),
-    asTerminalDimension(rows, 24),
-  ));
+  register("terminal_resize", ({ sessionId, cols, rows }) => {
+    const terminalProcess = terminalProcesses.get(asString(sessionId, "sessionId"));
+    if (!terminalProcess) return { delivered: false };
+    terminalProcess.resize(asTerminalDimension(cols, 80), asTerminalDimension(rows, 24));
+    return { delivered: true };
+  });
   register("detach_terminal", ({ sessionId }) => {
     explicitlyCloseTerminalSession(asString(sessionId, "sessionId"));
   });
@@ -9424,14 +9430,17 @@ export function createCommandRegistry(
     const id = asString(sessionId, "sessionId");
     const terminalData = asString(data, "data");
     const terminalProcess = terminalProcesses.get(id);
-    if (!terminalProcess) return;
+    if (!terminalProcess) return { delivered: false };
     terminalProcess.write(terminalData);
     recordTerminalInputActivity(id, terminalData, context);
+    return { delivered: true };
   });
-  register("local_terminal_resize", ({ sessionId, cols, rows }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.resize(
-    asTerminalDimension(cols, 80),
-    asTerminalDimension(rows, 24),
-  ));
+  register("local_terminal_resize", ({ sessionId, cols, rows }) => {
+    const terminalProcess = terminalProcesses.get(asString(sessionId, "sessionId"));
+    if (!terminalProcess) return { delivered: false };
+    terminalProcess.resize(asTerminalDimension(cols, 80), asTerminalDimension(rows, 24));
+    return { delivered: true };
+  });
   register("close_local_terminal_session", ({ sessionId }) => {
     explicitlyCloseTerminalSession(asString(sessionId, "sessionId"));
   });

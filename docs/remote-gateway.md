@@ -209,6 +209,21 @@ snapshot is pending. WebSocket input and resize calls complete only after the
 backend acknowledges the operation. Later HTTP start, detach, or close calls for
 the same terminal share that ordering tail and cannot overtake accepted input.
 
+Acknowledgement is an ordering boundary, not a send barrier. Input frames are
+serialized onto the socket in the order they were issued, but a keystroke is
+never held waiting for the previous keystroke's acknowledgement — that would
+cost one network round trip per character. A write the backend could not hand to
+a running shell is reported as a failed operation rather than acknowledged, and
+a channel that cannot carry a payload (no live subscription, or an operation
+bound reached) declines it so the HTTP batcher takes it instead.
+
+Channel readiness means the channel itself can carry the terminal, not merely
+that the socket authenticated or that a snapshot arrived. A channel with no live
+subscription never retires its compatibility transport, and a snapshot that is
+older than output already applied is ignored rather than rewinding the cursor. A
+snapshot reporting a new PTY generation forces a resubscribe before any further
+input, because the gateway pins a channel's generation when it is created.
+
 The fallback will remain available for at least one release after WebSocket is
 made the default and will not be removed before v2.9.0.
 

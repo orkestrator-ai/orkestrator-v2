@@ -111,6 +111,20 @@ Primary areas:
 - [x] Explicit and stored opt-in select WebSocket; HTTP/SSE remains the default
       and stays active until each channel is ready.
 - [x] Large UTF-8 input preserves code points at frame boundaries.
+- [x] A stale generation or input sequence is answered per channel and never
+      closes the shared socket.
+- [x] Input the backend could not hand to a running shell is reported as failed
+      rather than acknowledged.
+- [x] Consecutive writes pipeline instead of waiting for each acknowledgement.
+- [x] A retired fallback is not re-armed by its own abort, and a channel with no
+      live subscription never retires one.
+- [x] A snapshot older than applied output is ignored; one reporting a new
+      generation forces a resubscribe before further input.
+- [x] A latched HTTP input queue does not block a healthy socket write, and a
+      refused socket resize still reaches the backend over HTTP.
+- [x] Denied subscriptions back off instead of polling at a fixed interval.
+- [x] An unresponsive peer is force-released, and a refused upgrade never
+      escapes the listener callback.
 
 ## Manual verification
 
@@ -203,6 +217,22 @@ Initial implementation evidence:
   `apps/web/src/lib/native/web-gateway.ts`.
 - Retained snapshot deltas now preserve revision boundaries for binary replay;
   the additive `deltas` field is ignored by older HTTP clients.
+- Sends are serialized per terminal; acknowledgements are only tracked. Chaining
+  each write on the previous acknowledgement made typing cost one round trip per
+  character, which is the opposite of this milestone's latency goal. Lifecycle
+  commands drain the outstanding acknowledgements instead, which preserves the
+  ordering guarantee without the per-keystroke barrier.
+- Nothing about one channel may close the shared socket. A stale generation or
+  input sequence is a state divergence the design permits — the client adopts a
+  new generation from an authoritative snapshot before the gateway hears of the
+  restart — so both are answered per channel.
+- Retiring a channel's fallback aborts its stream, and that abort is what runs
+  the stream's own reconnect bookkeeping. The reconnect is therefore gated on
+  the fallback still being wanted; otherwise stopping it schedules its
+  replacement and both transports carry the same terminal.
+- Channel readiness requires a live subscription. A snapshot arriving while a
+  channel has none (during a reconnect) must not retire the transport that is
+  currently the only one carrying that terminal.
 - Rollout: `http-sse` remains the default. Browser profiles opt in through
   `orkestrator-terminal-transport=websocket`; fallback removal is no earlier
   than v2.9.0 and still requires one full compatibility release after default

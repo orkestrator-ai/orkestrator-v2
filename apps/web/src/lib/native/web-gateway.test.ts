@@ -1313,6 +1313,226 @@ describe("web gateway browser API", () => {
     stop();
   });
 
+  test("does not re-arm a terminal fallback that a ready WebSocket channel retired", async () => {
+    let eventStreamRequests = 0;
+    globalThis.fetch = mock(async (input, init) => {
+      if (String(input).includes("/__orkestrator/events?")) {
+        eventStreamRequests += 1;
+        const signal = init?.signal;
+        return new Response(new ReadableStream({
+          start(controller) {
+            // A real aborted body errors its reader, which is what runs the
+            // reconnect bookkeeping. A stream that just hangs would hide it.
+            signal?.addEventListener("abort", () => {
+              controller.error(new DOMException("Aborted", "AbortError"));
+            });
+          },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        result: { generation: 1, revision: 0, output: "" },
+      }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "http://localhost:4319",
+      terminalTransport: "websocket",
+      eventReconnectDelayMs: 1,
+      terminalWebSocketFactory: (url, protocols) =>
+        new MockWebSocket(url, protocols) as unknown as WebSocket,
+    });
+
+    const stop = api.listen("terminal-output-session-1", () => undefined);
+    await waitForCondition(() => eventStreamRequests === 1);
+    const socket = MockWebSocket.instances[0]!;
+    openTerminalSocket(socket);
+    subscribeTerminalSocket(socket, "session-1");
+    await api.invoke("get_terminal_output_snapshot", { sessionId: "session-1" });
+    await waitForCondition(
+      () => sentControlFrames(socket).some((frame) => frame.type === "ack")
+        || eventStreamRequests === 1,
+      "Channel never became ready",
+    );
+
+    const settled = eventStreamRequests;
+    await new Promise((resolve) => originalSetTimeout(resolve, 30));
+    // Stopping the fallback aborts its controller, and that abort is exactly
+    // what schedules the reconnect. Both transports carrying the same terminal
+    // would double every byte the milestone is trying to save.
+    expect(eventStreamRequests).toBe(settled);
+    stop();
+  });
+
+  test("pipelines consecutive WebSocket writes instead of waiting for each acknowledgement", async () => {
+    globalThis.fetch = mock(async (input) => {
+      if (String(input).includes("/__orkestrator/events?")) {
+        return new Response(new ReadableStream({ start() {} }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ result: {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "http://localhost:4319",
+      terminalTransport: "websocket",
+      terminalWebSocketFactory: (url, protocols) =>
+        new MockWebSocket(url, protocols) as unknown as WebSocket,
+    });
+    const stop = api.listen("terminal-output-typed", () => undefined);
+    const socket = MockWebSocket.instances[0]!;
+    openTerminalSocket(socket);
+    const channelId = subscribeTerminalSocket(socket, "typed", "current");
+
+    const writes = [
+      api.invoke("terminal_write", { sessionId: "typed", data: "a" }),
+      api.invoke("terminal_write", { sessionId: "typed", data: "b" }),
+      api.invoke("terminal_write", { sessionId: "typed", data: "c" }),
+    ];
+    // No acknowledgement has been delivered yet. Chaining each keystroke on the
+    // previous ack would cap typing at one round trip per character.
+    await waitForCondition(
+      () => socket.sent.filter((frame) => typeof frame !== "string").length === 3,
+      "Writes were serialized behind their acknowledgements",
+    );
+    const frames = socket.sent
+      .filter((frame) => typeof frame !== "string")
+      .map((frame) => decodeSentBinaryFrame(frame as ArrayBufferLike | ArrayBufferView));
+    expect(frames.map((frame) => new TextDecoder().decode(frame.bytes))).toEqual(["a", "b", "c"]);
+
+    for (const frame of frames) {
+      socket.receive(JSON.stringify({
+        type: "operation-result",
+        channelId,
+        operationId: frame.revision,
+        operation: "input",
+        ok: true,
+      }));
+    }
+    await Promise.all(writes);
+    stop();
+  });
+
+  test("keeps socket input working after a transient HTTP write failure latched the queue", async () => {
+    let failWrites = true;
+    const invokes: string[] = [];
+    globalThis.fetch = mock(async (input, init) => {
+      if (String(input).includes("/__orkestrator/events?")) {
+        return new Response(new ReadableStream({ start() {} }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { command: string };
+      invokes.push(body.command);
+      if (failWrites && body.command.endsWith("terminal_write")) {
+        return new Response(JSON.stringify({ error: "write failed" }), { status: 503 });
+      }
+      return new Response(JSON.stringify({ result: {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "http://localhost:4319",
+      terminalTransport: "websocket",
+      terminalWebSocketFactory: (url, protocols) =>
+        new MockWebSocket(url, protocols) as unknown as WebSocket,
+    });
+    const stop = api.listen("terminal-output-latched", () => undefined);
+    const socket = MockWebSocket.instances[0]!;
+    openTerminalSocket(socket);
+
+    // The channel is not ready yet, so this write takes the HTTP path and
+    // fails, latching the batcher's queue for this terminal.
+    await expect(api.invoke("terminal_write", { sessionId: "latched", data: "x" }))
+      .rejects.toThrow();
+    failWrites = false;
+
+    const channelId = subscribeTerminalSocket(socket, "latched", "current");
+    const write = api.invoke("terminal_write", { sessionId: "latched", data: "y" });
+    // A latched HTTP queue must not veto a healthy socket: the flush rejection
+    // belongs to the write that already failed, not to this one.
+    await waitForCondition(
+      () => socket.sent.some((frame) => typeof frame !== "string"),
+      "A latched HTTP queue blocked a healthy WebSocket write",
+    );
+    const frame = decodeSentBinaryFrame(
+      socket.sent.find((value) => typeof value !== "string") as ArrayBufferLike,
+    );
+    socket.receive(JSON.stringify({
+      type: "operation-result", channelId, operationId: frame.revision, operation: "input", ok: true,
+    }));
+    await write;
+    stop();
+  });
+
+  test("falls back to an HTTP resize when the socket rejects the operation", async () => {
+    const invokes: string[] = [];
+    globalThis.fetch = mock(async (input, init) => {
+      if (String(input).includes("/__orkestrator/events?")) {
+        return new Response(new ReadableStream({ start() {} }), { status: 200 });
+      }
+      invokes.push((JSON.parse(String(init?.body)) as { command: string }).command);
+      return new Response(JSON.stringify({ result: {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "http://localhost:4319",
+      terminalTransport: "websocket",
+      terminalWebSocketFactory: (url, protocols) =>
+        new MockWebSocket(url, protocols) as unknown as WebSocket,
+    });
+    const stop = api.listen("terminal-output-sized", () => undefined);
+    const socket = MockWebSocket.instances[0]!;
+    openTerminalSocket(socket);
+    const channelId = subscribeTerminalSocket(socket, "sized", "current");
+
+    const resize = api.invoke("terminal_resize", { sessionId: "sized", cols: 100, rows: 30 });
+    await waitForCondition(
+      () => sentControlFrames(socket).some((frame) => frame.type === "resize"),
+      "Resize was never attempted over the socket",
+    );
+    const resizeFrame = sentControlFrames(socket).find((frame) => frame.type === "resize")!;
+    socket.receive(JSON.stringify({
+      type: "operation-result",
+      channelId,
+      operationId: resizeFrame.operationId,
+      operation: "resize",
+      ok: false,
+      message: "Unknown terminal channel",
+    }));
+
+    // A refused socket resize still has to reach the backend. Letting the
+    // rejection propagate would leave the PTY at stale dimensions silently.
+    await resize;
+    expect(invokes).toContain("terminal_resize");
+    stop();
+  });
+
+  test("coalesces the shared browser stream rebuild when channels become ready together", async () => {
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    globalThis.fetch = mock(async () => new Response(JSON.stringify({
+      result: { generation: 1, revision: 0, output: "" },
+    }), { status: 200 })) as unknown as typeof fetch;
+    // The shared stream is the same-origin path, so there is no base URL to
+    // derive the socket address from — the document has to have a real one.
+    const happyWindow = window as unknown as { happyDOM: { setURL(url: string): void } };
+    happyWindow.happyDOM.setURL("http://localhost:1420/");
+    const api = createBrowserGatewayApi({
+      terminalTransport: "websocket",
+      terminalWebSocketFactory: (url, protocols) =>
+        new MockWebSocket(url, protocols) as unknown as WebSocket,
+    });
+    const stopFirst = api.listen("terminal-output-one", () => undefined);
+    const stopSecond = api.listen("terminal-output-two", () => undefined);
+    await waitForCondition(() => MockEventSource.instances.length === 1);
+    MockEventSource.instances[0]!.open();
+
+    const socket = MockWebSocket.instances[0]!;
+    openTerminalSocket(socket);
+    subscribeTerminalSocket(socket, "one", "current", 1);
+    subscribeTerminalSocket(socket, "two", "current", 2);
+
+    // Every rebuild costs the still-fallback terminals a snapshot reconcile, so
+    // channels retiring their fallback in a burst must produce one rebuild.
+    await new Promise((resolve) => originalSetTimeout(resolve, 120));
+    expect(MockEventSource.instances).toHaveLength(1);
+    expect(MockEventSource.instances[0]!.closed).toBe(true);
+    stopFirst();
+    stopSecond();
+    happyWindow.happyDOM.setURL("about:blank");
+  });
+
   test("disposes an opted-in terminal socket when the browser adapter is replaced", () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     globalThis.fetch = mock(async () =>

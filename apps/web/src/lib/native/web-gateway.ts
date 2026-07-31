@@ -38,6 +38,8 @@ const GATEWAY_CURSOR_EVENT = "gateway.cursor";
  */
 const EVENT_SOURCE_CLOSED = 2;
 export const TERMINAL_TRANSPORT_STORAGE_KEY = "orkestrator-terminal-transport";
+/** How long a shared-stream filter narrowing waits for its siblings. */
+const TERMINAL_FILTER_NARROW_DELAY_MS = 50;
 
 type EventCallback<T> = (payload: T) => void;
 type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
@@ -153,6 +155,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const terminalEventStreams = new Map<string, TerminalEventStream>();
   let browserTerminalEventSource: EventSource | null = null;
   let browserTerminalRefreshQueued = false;
+  let browserTerminalNarrowTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * The sorted event list backing `browserTerminalEventSource`. Rebuilding the
    * socket costs every already-connected terminal a full snapshot reconcile, so
@@ -556,9 +559,29 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
    * `terminal-output-<sessionId>` event, and rebuilding the socket for it would
    * make every *other* mounted terminal refetch its snapshot for nothing.
    */
-  const refreshBrowserTerminalEventSource = () => {
+  /**
+   * Narrowing the filter (a channel moved to the WebSocket, or a terminal
+   * closed) is not urgent, and doing it per channel would rebuild the shared
+   * socket once per terminal — each rebuild costing every *other* mounted
+   * terminal a snapshot reconcile. Widening it is urgent: that terminal has no
+   * output until the socket carries it. So defer removals and coalesce them.
+   */
+  const refreshBrowserTerminalEventSource = (refresh: { defer?: boolean } = {}) => {
+    if (refresh.defer) {
+      if (browserTerminalRefreshQueued || browserTerminalNarrowTimer) return;
+      browserTerminalNarrowTimer = setTimeout(() => {
+        browserTerminalNarrowTimer = null;
+        refreshBrowserTerminalEventSource();
+      }, TERMINAL_FILTER_NARROW_DELAY_MS);
+      browserTerminalNarrowTimer.unref?.();
+      return;
+    }
     if (browserTerminalRefreshQueued) return;
     browserTerminalRefreshQueued = true;
+    if (browserTerminalNarrowTimer) {
+      clearTimeout(browserTerminalNarrowTimer);
+      browserTerminalNarrowTimer = null;
+    }
     queueMicrotask(() => {
       browserTerminalRefreshQueued = false;
 
@@ -667,6 +690,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           if (stream.controller === controller) stream.controller = null;
           if (
             !stream.closed
+            // Stopping the fallback works by aborting this controller, which is
+            // what runs this block. Without this check the stop schedules its
+            // own replacement and the terminal ends up on both transports.
+            && stream.fallbackActive
             && terminalEventStreams.get(stream.event) === stream
             && listeners.has(stream.event)
             && !stream.reconnectTimer
@@ -692,12 +719,21 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     stream.controller = null;
     if (stream.reconnectTimer) clearTimeout(stream.reconnectTimer);
     stream.reconnectTimer = null;
-    if (!bearerToken && !baseUrl) refreshBrowserTerminalEventSource();
+    if (!bearerToken && !baseUrl) refreshBrowserTerminalEventSource({ defer: true });
   };
 
   const stopTerminalEventFallbacks = () => {
-    for (const stream of terminalEventStreams.values()) stopTerminalEventFallback(stream);
+    for (const stream of terminalEventStreams.values()) {
+      // Disposal replaces the whole adapter, so these streams must never come
+      // back. `closed` is the flag every reconnect path already honours.
+      stream.closed = true;
+      stopTerminalEventFallback(stream);
+    }
     clearBrowserTerminalReconnectTimer();
+    if (browserTerminalNarrowTimer) {
+      clearTimeout(browserTerminalNarrowTimer);
+      browserTerminalNarrowTimer = null;
+    }
     browserTerminalEventSource?.close();
     browserTerminalEventSource = null;
     browserTerminalSubscribedEvents = null;
@@ -795,6 +831,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     stream.reconnectTimer = null;
     resolveTerminalStreamReady(stream);
     terminalEventStreams.delete(event);
+    // Unlike a channel moving to the WebSocket, closing a terminal is a
+    // discrete user action rather than one of a burst, so it is not deferred:
+    // the socket should stop carrying a terminal nobody is watching at once.
     if (stream.fallbackActive && !bearerToken && !baseUrl) refreshBrowserTerminalEventSource();
   };
 
@@ -864,6 +903,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   options.terminalInputSendTimeoutMs ?? TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS);
 
   const terminalLifecycleTails = new Map<string, Promise<void>>();
+  /** Serializes socket sends per terminal; releases before the acknowledgement. */
+  const terminalInputSendTails = new Map<string, Promise<void>>();
+  /** Outstanding socket acknowledgements a lifecycle command must wait behind. */
+  const terminalInputAcks = new Map<string, Set<Promise<void>>>();
   // Closed sessions are never reopened under the same id, so this only has to
   // remember the recently closed ones. Evicting the oldest bounds the set for a
   // long-lived page; the worst case for an evicted key is a write to a dead
@@ -939,18 +982,22 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       // and close must still reach the backend, while accepted successful input
       // is flushed first so the lifecycle command cannot overtake it.
       await terminalInputBatcher.flush(queue.command, queue.sessionId).catch(() => undefined);
+      await drainTerminalSocketInput(key);
       // Disposal also rejects the flush itself. Do not turn that rejection into
       // a stale resize/close request against the backend being replaced.
       if (terminalInputDisposedReason) throw terminalInputDisposedReason;
       try {
-        if (
-          !queue.closes
+        // A *rejected* socket resize must still reach the backend over HTTP.
+        // Left to propagate it would skip the request entirely and leave the
+        // PTY at stale dimensions with nothing surfaced to the user.
+        const resizedOverSocket = !queue.closes
           && websocketTerminalsEnabled
           && terminalSocket
           && typeof args?.cols === "number"
           && typeof args.rows === "number"
           && await terminalSocket.resize(queue.sessionId, args.cols, args.rows)
-        ) {
+            .catch(() => false);
+        if (resizedOverSocket) {
           terminalInputBatcher.clearFailure(queue.command, queue.sessionId);
           return undefined as T;
         }
@@ -980,10 +1027,26 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   /**
-   * Put acknowledged socket input on the same per-terminal tail used by HTTP
-   * resize/close/start operations. `WebSocket.send()` only means bytes entered
-   * a browser buffer; the backend acknowledgement is the ordering boundary
-   * that prevents a later HTTP close from overtaking accepted input.
+   * Waits for every socket write already issued for one terminal. Lifecycle
+   * commands use this so a close cannot overtake accepted input, without input
+   * itself having to wait for the previous write's acknowledgement.
+   *
+   * One snapshot is enough: a write issued after the caller installed its
+   * lifecycle tail blocks on that tail, and a write issued before it is already
+   * registered here by the time this runs.
+   */
+  const drainTerminalSocketInput = async (key: string): Promise<void> => {
+    const outstanding = terminalInputAcks.get(key);
+    if (!outstanding || outstanding.size === 0) return;
+    await Promise.all([...outstanding]);
+  };
+
+  /**
+   * `WebSocket.send()` only means bytes entered a browser buffer, so the
+   * backend acknowledgement is what a later HTTP close must not overtake. But
+   * it is emphatically *not* what the next keystroke must wait for: chaining
+   * writes on their own acknowledgements costs one full round trip per
+   * character. Sends are serialized; acknowledgements are merely tracked.
    */
   const invokeTerminalInputWithOrdering = async <T>(
     terminalInput: NonNullable<ReturnType<typeof parseTerminalInputRequest>>,
@@ -993,26 +1056,57 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     if (closedTerminalInputQueues.has(key)) {
       throw new Error("Terminal input is closed until the session restarts");
     }
-    const previous = terminalLifecycleTails.get(key) ?? Promise.resolve();
-    const operation = previous.catch(() => undefined).then(async () => {
+    const previousSend = terminalInputSendTails.get(key)
+      ?? terminalLifecycleTails.get(key)
+      ?? Promise.resolve();
+
+    const send = previousSend.catch(() => undefined).then(async () => {
       if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-      await terminalInputBatcher.flush(terminalInput.command, terminalInput.sessionId);
-      if (
-        terminalSocket
-        && await terminalSocket.sendInput(terminalInput.sessionId, terminalInput.data)
-      ) {
-        return undefined as T;
+      const lifecycle = terminalLifecycleTails.get(key);
+      if (lifecycle) await lifecycle.catch(() => undefined);
+      if (terminalInputDisposedReason) throw terminalInputDisposedReason;
+      // A latched-failed HTTP queue must not veto a healthy socket. Its
+      // rejection has already been reported to whoever issued that write.
+      await terminalInputBatcher.flush(terminalInput.command, terminalInput.sessionId)
+        .catch(() => undefined);
+      if (terminalInputDisposedReason) throw terminalInputDisposedReason;
+      const acknowledgement = terminalSocket?.enqueueInput(
+        terminalInput.sessionId,
+        terminalInput.data,
+      ) ?? null;
+      if (acknowledgement) {
+        // The socket accepted this write, so a queue that failed closed on a
+        // transient HTTP error must not keep refusing later keystrokes.
+        terminalInputBatcher.clearFailure(terminalInput.command, terminalInput.sessionId);
+        // Wrapped, not returned bare: an async function *adopts* a returned
+        // promise, which would make the send tail wait for the acknowledgement
+        // and restore the very round trip per keystroke this avoids.
+        return { acknowledgement };
       }
-      if (terminalInputDisposedReason) throw terminalInputDisposedReason;
       await terminalInputBatcher.enqueue(terminalInput);
-      return undefined as T;
+      return null;
     });
-    const tail = operation.then(() => undefined, () => undefined);
-    terminalLifecycleTails.set(key, tail);
-    void tail.finally(() => {
-      if (terminalLifecycleTails.get(key) === tail) terminalLifecycleTails.delete(key);
+
+    // The send tail releases as soon as the frame is on the wire, so the next
+    // keystroke follows immediately and still in order.
+    const sendTail = send.then(() => undefined, () => undefined);
+    terminalInputSendTails.set(key, sendTail);
+    void sendTail.finally(() => {
+      if (terminalInputSendTails.get(key) === sendTail) terminalInputSendTails.delete(key);
     });
-    return operation;
+
+    const acknowledged = send.then((result) => result?.acknowledgement);
+    const settled = acknowledged.then(() => undefined, () => undefined);
+    const outstanding = terminalInputAcks.get(key) ?? new Set<Promise<void>>();
+    terminalInputAcks.set(key, outstanding);
+    outstanding.add(settled);
+    void settled.finally(() => {
+      outstanding.delete(settled);
+      if (outstanding.size === 0 && terminalInputAcks.get(key) === outstanding) {
+        terminalInputAcks.delete(key);
+      }
+    });
+    return acknowledged.then(() => undefined as T);
   };
 
   const api = {

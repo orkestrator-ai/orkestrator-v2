@@ -39,6 +39,8 @@ type DesiredChannel = {
   usable: boolean;
   unavailableNotified: boolean;
   retryTimer: ReturnType<typeof setTimeout> | null;
+  /** Consecutive failed subscription attempts, used to back off the retry. */
+  subscribeAttempts: number;
 };
 
 type PendingOperation = {
@@ -56,6 +58,7 @@ export type TerminalWebSocketClientOptions = {
   reconnectDelayMs?: number;
   maxReconnectDelayMs?: number;
   subscriptionRetryDelayMs?: number;
+  maxSubscriptionRetryDelayMs?: number;
   maxAwaitingSnapshotFrames?: number;
   maxAwaitingSnapshotBytes?: number;
   maxPendingOperations?: number;
@@ -115,6 +118,7 @@ export class TerminalWebSocketClient {
         usable: false,
         unavailableNotified: false,
         retryTimer: null,
+        subscribeAttempts: 0,
       };
       this.desired.set(sessionId, channel);
       this.ensureSocket();
@@ -138,16 +142,27 @@ export class TerminalWebSocketClient {
     return this.desired.get(sessionId)?.ready ?? Promise.resolve();
   }
 
-  async sendInput(sessionId: string, data: string): Promise<boolean> {
+  /**
+   * Sends one input payload and returns a promise for its backend
+   * acknowledgement, or `null` when this channel cannot carry it and the caller
+   * should fall back to HTTP.
+   *
+   * The send itself is synchronous. Callers therefore preserve frame order
+   * without waiting for the previous acknowledgement — making each keystroke
+   * wait a full round trip is not a usable terminal on a high-latency link.
+   */
+  enqueueInput(sessionId: string, data: string): Promise<void> | null {
     const channel = this.usableChannel(sessionId);
-    if (!channel || channel.generation === null) return false;
+    if (!channel || channel.generation === null) return null;
     const socket = this.socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return null;
 
     const bytes = new TextEncoder().encode(data);
     const maxPayload = TERMINAL_WEBSOCKET_MAX_BINARY_BYTES - TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES;
     const chunks = this.splitUtf8(bytes, maxPayload);
-    this.assertOperationCapacity(chunks.length, bytes.byteLength, channel);
+    // A refused write says nothing about channel health, so it neither tears
+    // the channel down nor throws: HTTP carries this payload instead.
+    if (!this.hasOperationCapacity(chunks.length, bytes.byteLength)) return null;
     const completions: Promise<void>[] = [];
     try {
       for (const chunk of chunks) {
@@ -167,10 +182,15 @@ export class TerminalWebSocketClient {
       this.rejectChannelOperations(channel, sendError);
       this.markUnavailable(channel);
       socket.close(1011, "Terminal input send failed");
-      await Promise.allSettled(completions);
-      throw sendError;
+      return Promise.allSettled(completions).then(() => { throw sendError; });
     }
-    await Promise.all(completions);
+    return Promise.all(completions).then(() => undefined);
+  }
+
+  async sendInput(sessionId: string, data: string): Promise<boolean> {
+    const completion = this.enqueueInput(sessionId, data);
+    if (!completion) return false;
+    await completion;
     return true;
   }
 
@@ -179,7 +199,7 @@ export class TerminalWebSocketClient {
     if (!channel) return false;
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) return false;
-    this.assertOperationCapacity(1, 0, channel);
+    if (!this.hasOperationCapacity(1, 0)) return false;
     const operationId = this.nextOperationId();
     const completion = this.registerOperation(operationId, channel, "resize", 0);
     try {
@@ -199,11 +219,27 @@ export class TerminalWebSocketClient {
   observeSnapshot(sessionId: string, snapshot: Snapshot): void {
     const channel = this.desired.get(sessionId);
     if (!channel) return;
-    channel.generation = snapshot.generation;
-    channel.revision = snapshot.revision;
+    // A snapshot computed before output this channel has already applied must
+    // not rewind the cursor. Adopting it would make the next live frame look
+    // non-contiguous and desynchronize a perfectly healthy channel.
+    const stale = channel.generation === snapshot.generation
+      && channel.revision !== null
+      && snapshot.revision < channel.revision;
+    // The server pins a channel's generation at subscribe time and never
+    // advances it. A snapshot carrying a new one is therefore the first this
+    // client has heard of the restart: adopting it without resubscribing would
+    // make the next input frame disagree with the server about the generation.
+    const generationChanged = channel.generation !== null
+      && channel.generation !== snapshot.generation;
+    if (!stale) {
+      channel.generation = snapshot.generation;
+      channel.revision = snapshot.revision;
+    }
     channel.awaitingSnapshot = false;
-    if (channel.requiresResubscribe && channel.channelId !== null) {
-      this.unsubscribeForRecovery(channel);
+    if (generationChanged) channel.requiresResubscribe = true;
+    if (channel.requiresResubscribe) {
+      if (channel.channelId !== null) this.unsubscribeForRecovery(channel);
+      else channel.requiresResubscribe = false;
       this.scheduleSubscribe(channel, 0);
       return;
     }
@@ -325,6 +361,7 @@ export class TerminalWebSocketClient {
           channel.pendingRequestId = null;
           channel.channelId = frame.channelId;
           channel.generation = frame.targetGeneration;
+          channel.subscribeAttempts = 0;
           this.channels.set(frame.channelId, channel);
           if (frame.recovery === "snapshot-required") {
             channel.revision = null;
@@ -533,8 +570,19 @@ export class TerminalWebSocketClient {
     channel.resolveReady();
   }
 
+  /**
+   * Readiness retires this terminal's compatibility transport, so it must mean
+   * "this channel can carry the terminal", not merely "a snapshot arrived". A
+   * channel with no live subscription — after a reconnect, or between an
+   * unsubscribe and its replacement — has no transport of its own, and
+   * announcing it would strand the terminal with none at all.
+   */
   private markReady(channel: DesiredChannel): void {
-    if (channel.usable || this.desired.get(channel.sessionId) !== channel) return;
+    if (
+      channel.usable
+      || channel.channelId === null
+      || this.desired.get(channel.sessionId) !== channel
+    ) return;
     channel.usable = true;
     channel.unavailableNotified = false;
     this.options.onChannelReady?.(channel.sessionId);
@@ -560,12 +608,25 @@ export class TerminalWebSocketClient {
     }, delay);
   }
 
-  private scheduleSubscribe(channel: DesiredChannel, delay = this.options.subscriptionRetryDelayMs ?? 500): void {
+  /**
+   * A denied subscription costs the backend two command invocations per
+   * attempt, so a session the server will never accept must not be retried at a
+   * fixed interval forever. `delay` is only supplied for a recovery resubscribe
+   * the client itself initiated, which is not a failed attempt.
+   */
+  private scheduleSubscribe(channel: DesiredChannel, delay?: number): void {
     if (this.disposed || this.desired.get(channel.sessionId) !== channel || channel.retryTimer) return;
+    let wait = delay;
+    if (wait === undefined) {
+      const base = this.options.subscriptionRetryDelayMs ?? 500;
+      const cap = this.options.maxSubscriptionRetryDelayMs ?? 10_000;
+      wait = Math.min(cap, base * (2 ** Math.min(channel.subscribeAttempts, 5)));
+      channel.subscribeAttempts += 1;
+    }
     channel.retryTimer = setTimeout(() => {
       channel.retryTimer = null;
       this.sendSubscribe(channel);
-    }, delay);
+    }, wait);
   }
 
   private unsubscribeForRecovery(channel: DesiredChannel): void {
@@ -652,14 +713,11 @@ export class TerminalWebSocketClient {
     return chunks;
   }
 
-  private assertOperationCapacity(count: number, bytes: number, channel: DesiredChannel): void {
+  private hasOperationCapacity(count: number, bytes: number): boolean {
     const maxCount = this.options.maxPendingOperations ?? DEFAULT_MAX_PENDING_OPERATIONS;
     const maxBytes = this.options.maxPendingOperationBytes ?? DEFAULT_MAX_PENDING_OPERATION_BYTES;
-    if (this.pendingOperations.size + count <= maxCount && this.pendingOperationBytes + bytes <= maxBytes) return;
-    this.markUnavailable(channel);
-    this.unsubscribeForRecovery(channel);
-    this.scheduleSubscribe(channel);
-    throw new Error("Terminal WebSocket operation queue limit exceeded");
+    return this.pendingOperations.size + count <= maxCount
+      && this.pendingOperationBytes + bytes <= maxBytes;
   }
 
   private nextOperationId(): number {

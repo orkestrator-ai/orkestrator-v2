@@ -410,7 +410,7 @@ describe("TerminalWebSocketClient", () => {
     }
   });
 
-  test("bounds pending operation acknowledgements by count and bytes", async () => {
+  test("refuses work over the operation bounds without disturbing a healthy channel", async () => {
     const { client, sockets, channelUnavailable } = createHarness({
       maxPendingOperations: 1,
       maxPendingOperationBytes: 2,
@@ -421,12 +421,136 @@ describe("TerminalWebSocketClient", () => {
     acceptSubscription(socket, "session-a", 4);
 
     const pending = client.sendInput("session-a", "ab");
-    await expect(client.resize("session-a", 80, 24)).rejects.toThrow("operation queue limit exceeded");
-    await expect(pending).rejects.toThrow("Terminal channel is recovering");
-    expect(channelUnavailable).toHaveBeenCalledWith("session-a");
+    // Exceeding the bound says nothing about channel health: the caller is told
+    // to use HTTP for this payload, and the channel keeps its subscription
+    // rather than being torn down and rebuilt for an oversized write.
+    expect(await client.resize("session-a", 80, 24)).toBe(false);
+    expect(client.enqueueInput("session-a", "cd")).toBeNull();
+    expect(channelUnavailable).not.toHaveBeenCalled();
     await tick();
+    expect(sentControls(socket)).not.toContainEqual({ type: "unsubscribe", channelId: 4 });
+    expect(sentControls(socket).filter((frame) => frame.type === "subscribe")).toHaveLength(1);
+
+    const input = sentBinaries(socket).find((frame) => frame.type === TERMINAL_BINARY_FRAME_TYPE.input)!;
+    socket.receive(JSON.stringify({
+      type: "operation-result", channelId: 4, operationId: input.revision, operation: "input", ok: true,
+    }));
+    expect(await pending).toBe(true);
+  });
+
+  test("keeps a reconnecting channel unavailable when its snapshot lands before resubscribing", async () => {
+    const { client, sockets, channelReady, channelUnavailable } = createHarness({
+      reconnectDelayMs: 10_000,
+      maxReconnectDelayMs: 10_000,
+    });
+    client.subscribe("session-a", () => undefined);
+    openAndReady(sockets[0]!);
+    acceptSubscription(sockets[0]!, "session-a", 4);
+    expect(channelReady).toHaveBeenCalledWith("session-a");
+    channelReady.mockClear();
+
+    // The socket dies, so the compatibility transport is the only one carrying
+    // this terminal. The resulting desync makes the consumer fetch a snapshot.
+    sockets[0]!.close(1006, "dropped");
+    expect(channelUnavailable).toHaveBeenCalledWith("session-a");
+    client.observeSnapshot("session-a", { generation: 1, revision: 7 });
+    await tick();
+
+    // Announcing readiness here would retire the fallback while this channel
+    // still has no subscription, leaving the terminal with no transport at all.
+    expect(channelReady).not.toHaveBeenCalled();
+  });
+
+  test("ignores a snapshot that predates already-applied output", async () => {
+    const payloads: TerminalSocketPayload[] = [];
+    const { client, sockets, channelUnavailable } = createHarness();
+    client.subscribe("session-a", (payload) => payloads.push(payload));
+    const socket = sockets[0]!;
+    openAndReady(socket);
+    acceptSubscription(socket, "session-a", 4, 1, 5);
+
+    socket.onmessage?.(new MessageEvent("message", {
+      data: encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.output,
+        channelId: 4,
+        generation: 1,
+        revision: 6,
+        bytes: new TextEncoder().encode("six"),
+      }).buffer as ArrayBuffer,
+    }));
+    await tick();
+    expect(payloads.map((payload) => payload.revision)).toEqual([6]);
+
+    // A snapshot computed at revision 5 is now behind the applied cursor.
+    // Adopting it would make revision 7 look non-contiguous.
+    client.observeSnapshot("session-a", { generation: 1, revision: 5 });
+    await tick();
+    socket.onmessage?.(new MessageEvent("message", {
+      data: encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.output,
+        channelId: 4,
+        generation: 1,
+        revision: 7,
+        bytes: new TextEncoder().encode("seven"),
+      }).buffer as ArrayBuffer,
+    }));
+    await tick();
+
+    expect(payloads.map((payload) => payload.revision)).toEqual([6, 7]);
+    expect(payloads.some((payload) => payload.desynced)).toBe(false);
+    expect(channelUnavailable).not.toHaveBeenCalled();
+  });
+
+  test("resubscribes before sending input when a snapshot reports a new generation", async () => {
+    const { client, sockets } = createHarness();
+    client.subscribe("session-a", () => undefined);
+    const socket = sockets[0]!;
+    openAndReady(socket);
+    acceptSubscription(socket, "session-a", 4, 1, 0);
+
+    // The PTY restarted. The server pins its channel at generation 1, so
+    // sending input at generation 2 would be a protocol error for every
+    // terminal on this socket — the channel has to be rebuilt first.
+    client.observeSnapshot("session-a", { generation: 2, revision: 0 });
+    await tick();
+
     expect(sentControls(socket)).toContainEqual({ type: "unsubscribe", channelId: 4 });
+    expect(client.enqueueInput("session-a", "x")).toBeNull();
+    expect(sentBinaries(socket)).toHaveLength(0);
     expect(sentControls(socket).filter((frame) => frame.type === "subscribe")).toHaveLength(2);
+  });
+
+  test("backs off repeatedly denied subscriptions instead of polling at a fixed interval", async () => {
+    const delays: number[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...rest: unknown[]) => {
+      if (typeof timeout === "number") delays.push(timeout);
+      return realSetTimeout(handler as () => void, 0, ...(rest as []));
+    }) as unknown as typeof globalThis.setTimeout;
+    try {
+      const { client, sockets } = createHarness({
+        subscriptionRetryDelayMs: 100,
+        maxSubscriptionRetryDelayMs: 800,
+      });
+      client.subscribe("session-a", () => undefined);
+      const socket = sockets[0]!;
+      openAndReady(socket);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const requestId = subscribeFrame(socket, "session-a").requestId as number;
+        socket.receive(JSON.stringify({
+          type: "error",
+          code: "subscription-denied",
+          message: "Terminal session is unavailable",
+          requestId,
+        }));
+        await tick();
+      }
+      // Each denial costs the backend two command invocations, so a session the
+      // server will never accept must not be retried at a constant rate.
+      expect(delays.filter((delay) => delay >= 100)).toEqual([100, 200, 400, 800, 800]);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
   });
 
   test("times out missing operation acknowledgements and reconnects through fallback", async () => {

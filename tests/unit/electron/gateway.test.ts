@@ -9,6 +9,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
+import { connect as netConnect } from "node:net";
 import type { Duplex } from "node:stream";
 import os from "node:os";
 import path from "node:path";
@@ -885,6 +886,231 @@ describe("gateway terminal WebSocket", () => {
     const error = await nextTerminalControl(inbox, "error");
     expect(error).toMatchObject({ type: "error", code: "authentication-required", fatal: true });
     socket.terminate();
+  });
+
+  test("answers a stale generation or sequence per channel without closing the socket", async () => {
+    const backend = {
+      invoke: mock(async (command: string) => {
+        if (command === "get_terminal_session") return { running: true };
+        if (command === "get_terminal_output_snapshot") {
+          return { output: "", generation: 1, revision: 0, truncated: false };
+        }
+        return undefined;
+      }),
+    };
+    const { gateway, info } = await startGateway({ backend });
+    const { socket, inbox } = await openTerminalSocket(info);
+
+    socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "stale" }));
+    const stale = await nextTerminalControl(inbox, "subscribed");
+    if (stale.type !== "subscribed") throw new Error("Expected subscribed frame");
+    socket.send(JSON.stringify({ type: "subscribe", requestId: 2, sessionId: "healthy" }));
+    const healthy = await nextTerminalControl(inbox, "subscribed");
+    if (healthy.type !== "subscribed") throw new Error("Expected subscribed frame");
+
+    // A client legitimately adopts a newer generation from an authoritative
+    // snapshot before this channel hears about the restart. Treating that as a
+    // protocol violation would tear down every other terminal on the socket.
+    socket.send(encodeTerminalBinaryFrame({
+      type: TERMINAL_BINARY_FRAME_TYPE.input,
+      channelId: stale.channelId,
+      generation: 2,
+      revision: 1,
+      bytes: new TextEncoder().encode("x"),
+    }));
+    expect(await nextTerminalControl(inbox, "operation-result")).toMatchObject({
+      channelId: stale.channelId, operationId: 1, operation: "input", ok: false,
+    });
+    expect(await nextTerminalControl(inbox, "desync")).toMatchObject({
+      channelId: stale.channelId, reason: "generation-changed", generation: 2,
+    });
+
+    // A non-increasing sequence is at worst a duplicate, not a violation.
+    socket.send(encodeTerminalBinaryFrame({
+      type: TERMINAL_BINARY_FRAME_TYPE.input,
+      channelId: healthy.channelId,
+      generation: 1,
+      revision: 5,
+      bytes: new TextEncoder().encode("first"),
+    }));
+    expect(await nextTerminalControl(inbox, "operation-result")).toMatchObject({
+      channelId: healthy.channelId, operationId: 5, ok: true,
+    });
+    socket.send(encodeTerminalBinaryFrame({
+      type: TERMINAL_BINARY_FRAME_TYPE.input,
+      channelId: healthy.channelId,
+      generation: 1,
+      revision: 5,
+      bytes: new TextEncoder().encode("replay"),
+    }));
+    expect(await nextTerminalControl(inbox, "operation-result")).toMatchObject({
+      channelId: healthy.channelId, operationId: 5, ok: false,
+    });
+
+    // The untouched channel is still live on the still-open socket.
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    gateway.emit("terminal-output-healthy", { text: "alive", generation: 1, revision: 1 });
+    while (true) {
+      const message = await inbox.next();
+      if (!message.binary) continue;
+      const frame = decodeTerminalBinaryFrame(message.data);
+      expect(frame.channelId).toBe(healthy.channelId);
+      expect(new TextDecoder().decode(frame.bytes)).toBe("alive");
+      break;
+    }
+    socket.terminate();
+  });
+
+  test("refuses to acknowledge input a backend command could not deliver", async () => {
+    const backend = {
+      invoke: mock(async (command: string) => {
+        if (command === "get_terminal_session") return { running: true };
+        if (command === "get_terminal_output_snapshot") {
+          return { output: "", generation: 1, revision: 0, truncated: false };
+        }
+        // The shell exited between the snapshot and this write.
+        if (command === "terminal_write" || command === "terminal_resize") {
+          return { delivered: false };
+        }
+        return undefined;
+      }),
+    };
+    const { info } = await startGateway({ backend });
+    const { socket, inbox } = await openTerminalSocket(info);
+    socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "gone" }));
+    const subscribed = await nextTerminalControl(inbox, "subscribed");
+    if (subscribed.type !== "subscribed") throw new Error("Expected subscribed frame");
+
+    socket.send(encodeTerminalBinaryFrame({
+      type: TERMINAL_BINARY_FRAME_TYPE.input,
+      channelId: subscribed.channelId,
+      generation: 1,
+      revision: 1,
+      bytes: new TextEncoder().encode("ls\r"),
+    }));
+    expect(await nextTerminalControl(inbox, "operation-result")).toMatchObject({
+      operation: "input", ok: false, message: "Terminal session is not running",
+    });
+
+    socket.send(JSON.stringify({
+      type: "resize", channelId: subscribed.channelId, operationId: 9, cols: 80, rows: 24,
+    }));
+    expect(await nextTerminalControl(inbox, "operation-result")).toMatchObject({
+      operationId: 9, operation: "resize", ok: false, message: "Terminal session is not running",
+    });
+    socket.terminate();
+  });
+
+  test("does no per-event work when no terminal socket is attached", async () => {
+    const terminalGateway = new TerminalWebSocketGateway({
+      backend: { invoke: mock(async () => undefined) },
+      tokenMatches: () => true,
+      originAllowed: () => true,
+      logger: { debug: () => {}, warn: () => {}, error: () => {} },
+    });
+    let payloadRead = false;
+    // Terminal output is the highest-volume event in the system and the
+    // transport is opt-in, so the no-socket case must not decode the payload.
+    terminalGateway.emit("terminal-output-idle", {
+      generation: 1,
+      revision: 1,
+      get text() {
+        payloadRead = true;
+        return "expensive";
+      },
+    });
+    expect(payloadRead).toBe(false);
+    terminalGateway.close();
+  });
+
+  test("releases a socket that never answers the close handshake", async () => {
+    const backend = { invoke: mock(async () => undefined) };
+    const { info } = await startGateway({ backend });
+    const target = new URL(info.url);
+
+    // `ws` always answers a close frame, and pausing it is a no-op under Bun,
+    // so a genuinely unresponsive peer needs a raw socket that performs the
+    // handshake by hand and then simply never replies.
+    const raw = netConnect({
+      host: target.hostname,
+      port: Number(target.port),
+    });
+    await new Promise<void>((resolve, reject) => {
+      raw.once("connect", resolve);
+      raw.once("error", reject);
+    });
+    const closed = new Promise<void>((resolve) => raw.once("close", () => resolve()));
+    raw.write(
+      `GET /__orkestrator/terminal HTTP/1.1\r\n`
+      + `Host: ${target.host}\r\n`
+      + `Upgrade: websocket\r\nConnection: Upgrade\r\n`
+      + `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}\r\n`
+      + `Sec-WebSocket-Version: 13\r\n`
+      + `Sec-WebSocket-Protocol: ${TERMINAL_WEBSOCKET_SUBPROTOCOL}\r\n`
+      // An origin-less upgrade that already carries a credential is refused, so
+      // this has to look like the browser client it is standing in for.
+      + `Origin: http://${target.host}\r\n`
+      + `Authorization: Bearer ${info.token}\r\n\r\n`,
+    );
+    await new Promise<void>((resolve, reject) => {
+      const onData = (chunk: Buffer) => {
+        if (!chunk.toString("latin1").includes("101")) return;
+        raw.off("data", onData);
+        resolve();
+      };
+      raw.on("data", onData);
+      raw.once("error", reject);
+    });
+
+    // A malformed control frame makes the gateway close. The peer never
+    // answers, so only the forced-termination backstop can release this.
+    const payload = Buffer.from("not json", "utf8");
+    const mask = randomBytes(4);
+    const masked = Buffer.from(payload.map((byte, index) => byte ^ mask[index % 4]!));
+    raw.write(Buffer.concat([Buffer.from([0x81, 0x80 | payload.byteLength]), mask, masked]));
+
+    await Promise.race([
+      closed,
+      new Promise<void>((_, reject) => {
+        setTimeout(() => reject(new Error("Socket was never force-released")), 3_000);
+      }),
+    ]);
+    raw.destroy();
+  });
+
+  test("rejects an upgrade whose request the WebSocket server refuses", async () => {
+    const warnings: string[] = [];
+    const terminalGateway = new TerminalWebSocketGateway({
+      backend: { invoke: mock(async () => undefined) },
+      tokenMatches: () => true,
+      originAllowed: () => true,
+      logger: { debug: (message: string) => warnings.push(message), warn: () => {}, error: () => {} },
+    });
+    const written: string[] = [];
+    let destroyed = false;
+    const socket = {
+      destroyed: false,
+      end: (chunk: string) => written.push(chunk),
+      destroy: () => { destroyed = true; },
+      once: () => undefined,
+      removeListener: () => undefined,
+    } as unknown as Duplex;
+    // `ws` throws on a request with no key rather than returning a status, and
+    // that must not escape the listener's upgrade callback.
+    const handled = terminalGateway.handleUpgrade({
+      url: "/__orkestrator/terminal",
+      headers: {
+        origin: "http://localhost",
+        "sec-websocket-protocol": TERMINAL_WEBSOCKET_SUBPROTOCOL,
+      },
+    } as unknown as IncomingMessage, socket, Buffer.alloc(0));
+
+    expect(handled).toBe(true);
+    // The listener's upgrade callback must not see this throw, and the socket
+    // must not be left attached and idle.
+    expect(warnings).toContain("[TerminalWebSocket] Upgrade rejected");
+    expect(destroyed || written.some((chunk) => chunk.includes("400"))).toBe(true);
+    terminalGateway.close();
   });
 
   test("multiplexes isolated terminal channels, raw input, resize, and retained replay", async () => {

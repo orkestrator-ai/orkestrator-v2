@@ -12,6 +12,7 @@ import {
   TERMINAL_WEBSOCKET_CLOSE,
   TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
   TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES,
+  TERMINAL_WEBSOCKET_PATH,
   TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES,
   TERMINAL_WEBSOCKET_SOCKET_SOFT_BUFFER_BYTES,
   TERMINAL_WEBSOCKET_SUBPROTOCOL,
@@ -46,6 +47,9 @@ export const TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES = 8 * 1024 * 1024;
 
 type QueuedFrame = { data: string | Uint8Array; bytes: number };
 
+/** Header bytes charged to a buffered event when projecting queue growth. */
+const FRAME_OVERHEAD_BYTES = 16;
+
 type Channel = {
   id: number;
   sessionId: string;
@@ -57,6 +61,8 @@ type Channel = {
   desynced: boolean;
   reconciling: boolean;
   bufferedLive: TerminalEvent[];
+  /** Running total of `bufferedLive`; re-summing it per event is quadratic. */
+  bufferedLiveBytes: number;
   pendingDesync: {
     reason: "revision-gap" | "generation-changed" | "slow-consumer";
     generation: number;
@@ -78,7 +84,6 @@ type SocketState = {
   channels: Map<number, Channel>;
   sessions: Map<string, Channel>;
   controlQueue: QueuedFrame[];
-  controlBytes: number;
   queuedBytes: number;
   nextChannelId: number;
   roundRobinCursor: number;
@@ -100,6 +105,8 @@ function rawDataBytes(data: RawData): Uint8Array {
   return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
 }
 
+const sharedEncoder = new TextEncoder();
+
 function terminalEvent(payload: unknown): TerminalEvent | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const value = payload as { text?: unknown; generation?: unknown; revision?: unknown };
@@ -113,8 +120,24 @@ function terminalEvent(payload: unknown): TerminalEvent | null {
   return {
     generation: value.generation as number,
     revision: value.revision as number,
-    bytes: new TextEncoder().encode(value.text),
+    bytes: sharedEncoder.encode(value.text),
   };
+}
+
+/**
+ * A backend command that could not reach its terminal process reports the
+ * refusal in band rather than throwing. Acknowledging it as delivered would
+ * tell the user a keystroke landed in a shell that is no longer running.
+ */
+function operationRefusal(result: unknown): string | null {
+  if (
+    result
+    && typeof result === "object"
+    && (result as { delivered?: unknown }).delivered === false
+  ) {
+    return "Terminal session is not running";
+  }
+  return null;
 }
 
 function validSnapshot(value: unknown): value is TerminalSnapshot {
@@ -153,7 +176,7 @@ export class TerminalWebSocketGateway {
       this.rejectUpgrade(socket, 400, "Bad Request");
       return true;
     }
-    if (url.pathname !== "/__orkestrator/terminal") return false;
+    if (url.pathname !== TERMINAL_WEBSOCKET_PATH) return false;
     // Browsers always send Origin. A non-browser/direct client may omit it, but
     // then it must authenticate in-band; accepting a cookie-authenticated
     // origin-less upgrade would bypass the browser CSWSH check.
@@ -187,20 +210,24 @@ export class TerminalWebSocketGateway {
   }
 
   emit(event: string, payload: unknown): void {
-    if (!event.startsWith("terminal-output-")) return;
+    // Terminal output is the highest-volume event in the system and this runs
+    // for every one of them. Decide there is nothing to do before paying for a
+    // UTF-8 encode whose result would only be discarded — the transport is
+    // opt-in, so no socket at all is the common case.
+    if (this.sockets.size === 0 || !event.startsWith("terminal-output-")) return;
     const sessionId = event.slice("terminal-output-".length);
-    const output = terminalEvent(payload);
-    if (!output) return;
+    let output: TerminalEvent | null = null;
     for (const state of this.sockets) {
       const channel = state.sessions.get(sessionId);
       if (!channel || channel.desynced || channel.pendingDesync) continue;
+      output ??= terminalEvent(payload);
+      if (!output) return;
       if (channel.reconciling) {
-        const frameBytes = output.bytes.byteLength + 16;
-        const projected = channel.queuedBytes
-          + channel.bufferedLive.reduce((total, item) => total + item.bytes.byteLength + 16, 0)
-          + frameBytes;
+        const frameBytes = output.bytes.byteLength + FRAME_OVERHEAD_BYTES;
+        const projected = channel.queuedBytes + channel.bufferedLiveBytes + frameBytes;
         if (projected > TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES) {
           channel.bufferedLive = [];
+          channel.bufferedLiveBytes = 0;
           // The client cannot interpret a channel-scoped frame until it has
           // received `subscribed`. Defer the desync until that mapping exists.
           channel.pendingDesync = {
@@ -210,6 +237,7 @@ export class TerminalWebSocketGateway {
           };
         } else {
           channel.bufferedLive.push(output);
+          channel.bufferedLiveBytes += frameBytes;
         }
         continue;
       }
@@ -242,7 +270,6 @@ export class TerminalWebSocketGateway {
       channels: new Map(),
       sessions: new Map(),
       controlQueue: [],
-      controlBytes: 0,
       queuedBytes: 0,
       nextChannelId: 1,
       roundRobinCursor: 0,
@@ -367,8 +394,22 @@ export class TerminalWebSocketGateway {
       this.operationResult(state, frame.channelId, frame.revision, "input", false, "Unknown terminal channel");
       return;
     }
-    if (frame.generation !== channel.generation || frame.revision <= channel.inputSequence) {
-      this.fatal(state, "malformed-frame", "Terminal input sequence or generation is invalid", TERMINAL_WEBSOCKET_CLOSE.protocolError);
+    // Neither of these is a protocol violation, so neither may close the socket:
+    // that would tear down every *other* terminal multiplexed onto it. A client
+    // legitimately adopts a newer generation from an authoritative snapshot
+    // before this channel has heard about the restart, and a stale sequence is
+    // at worst a duplicate. Both are answered per channel.
+    if (frame.generation !== channel.generation) {
+      this.operationResult(
+        state, channel.id, frame.revision, "input", false, "Terminal generation changed",
+      );
+      this.desync(state, channel, "generation-changed", frame.generation, channel.revision);
+      return;
+    }
+    if (frame.revision <= channel.inputSequence) {
+      this.operationResult(
+        state, channel.id, frame.revision, "input", false, "Terminal input sequence is not increasing",
+      );
       return;
     }
     channel.inputSequence = frame.revision;
@@ -413,6 +454,7 @@ export class TerminalWebSocketGateway {
       desynced: false,
       reconciling: true,
       bufferedLive: [],
+      bufferedLiveBytes: 0,
       pendingDesync: null,
     };
     // Register before reading the snapshot so concurrent terminal output is
@@ -503,6 +545,7 @@ export class TerminalWebSocketGateway {
         return;
       }
       const buffered = channel.bufferedLive.splice(0).sort((a, b) => a.revision - b.revision);
+      channel.bufferedLiveBytes = 0;
       for (const output of buffered) {
         if (output.generation === channel.generation && output.revision <= snapshotValue.revision) continue;
         this.enqueueOutput(state, channel, output);
@@ -574,6 +617,7 @@ export class TerminalWebSocketGateway {
     channel.queue = [];
     channel.queuedBytes = 0;
     channel.bufferedLive = [];
+    channel.bufferedLiveBytes = 0;
     this.sendControl(state, { type: "desync", channelId: channel.id, generation, revision, reason });
   }
 
@@ -595,7 +639,6 @@ export class TerminalWebSocketGateway {
       return;
     }
     state.controlQueue.push(queued);
-    state.controlBytes += queued.bytes;
     state.queuedBytes += queued.bytes;
     this.scheduleFlush(state);
   }
@@ -612,7 +655,6 @@ export class TerminalWebSocketGateway {
     let budget = 64 * 1024;
     while (state.controlQueue.length > 0 && budget > 0) {
       const frame = state.controlQueue.shift()!;
-      state.controlBytes -= frame.bytes;
       state.queuedBytes -= frame.bytes;
       budget -= frame.bytes;
       state.ws.send(frame.data, (error) => error && state.ws.terminate());
@@ -666,6 +708,7 @@ export class TerminalWebSocketGateway {
     channel.queue = [];
     channel.queuedBytes = 0;
     channel.bufferedLive = [];
+    channel.bufferedLiveBytes = 0;
     channel.pendingDesync = null;
   }
 
@@ -708,13 +751,17 @@ export class TerminalWebSocketGateway {
     const next = previous
       .then(() => options.invoke())
       .then(
-        () => this.operationResult(
-          options.state,
-          options.channelId,
-          options.operationId,
-          options.operation,
-          true,
-        ),
+        (result) => {
+          const refusal = operationRefusal(result);
+          this.operationResult(
+            options.state,
+            options.channelId,
+            options.operationId,
+            options.operation,
+            !refusal,
+            refusal ?? undefined,
+          );
+        },
         () => {
           this.options.logger.warn("[TerminalWebSocket] Terminal operation failed");
           this.operationResult(
@@ -813,7 +860,6 @@ export class TerminalWebSocketGateway {
     state.channels.clear();
     state.sessions.clear();
     state.controlQueue = [];
-    state.controlBytes = 0;
     state.queuedBytes = 0;
     this.sockets.delete(state);
   }

@@ -2077,6 +2077,100 @@ function persistedTaskText(value: unknown): string | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+interface BackgroundTaskLaunch {
+  id: string;
+  toolUseId?: string;
+  description?: string;
+}
+
+/**
+ * Recover the synchronous launch edge carried by a tool result.
+ *
+ * Bash returns `backgroundTaskId` in `SDKUserMessage.tool_use_result` before
+ * the provider publishes `task_started` / `background_tasks_changed`. Waiting
+ * for only those system messages leaves a race where the turn result sees an
+ * empty task set, closes streaming input, and the CLI then terminates the
+ * background process it owns. The structured result is provider-authored and
+ * is the earliest authoritative evidence that the process exists.
+ */
+function backgroundTaskLaunchFromSdkUserMessage(
+  message: SDKUserMessage,
+  toolTracker: ToolTracker,
+): BackgroundTaskLaunch | undefined {
+  const structuredResult = message.tool_use_result;
+  if (
+    structuredResult === null
+    || typeof structuredResult !== "object"
+    || Array.isArray(structuredResult)
+  ) {
+    return undefined;
+  }
+  const structuredResultRecord = structuredResult as Record<string, unknown>;
+  const id = persistedTaskIdentifier(structuredResultRecord.backgroundTaskId);
+  if (!id) return undefined;
+
+  const content = (
+    message.message as { content?: unknown } | undefined
+  )?.content;
+  const toolResultIds: string[] = [];
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (
+        block
+        && typeof block === "object"
+        && (block as { type?: unknown }).type === "tool_result"
+      ) {
+        const resultBlock = block as {
+          tool_use_id?: unknown;
+          is_error?: unknown;
+        };
+        const toolUseId = persistedTaskIdentifier(resultBlock.tool_use_id);
+        // A failed or malformed tool result cannot vouch for a launched
+        // process. Count it as an invalid candidate rather than silently
+        // discarding it and correlating some other block in the same message.
+        if (!toolUseId || resultBlock.is_error === true) return undefined;
+        toolResultIds.push(toolUseId);
+      }
+    }
+  }
+  // `tool_use_result` describes exactly one invocation. Correlation is a
+  // security boundary here because MCP and dynamic tools may return arbitrary
+  // objects whose field names can collide with the built-in Bash result.
+  if (toolResultIds.length !== 1) return undefined;
+  const toolUseId = toolResultIds[0];
+  const tool = toolTracker.getTool(toolUseId);
+  if (tool?.toolName !== "Bash") {
+    return undefined;
+  }
+  const toolArgs =
+    tool.toolArgs
+    && typeof tool.toolArgs === "object"
+    && !Array.isArray(tool.toolArgs)
+      ? tool.toolArgs as Record<string, unknown>
+      : undefined;
+  const hasBackgroundIntent =
+    toolArgs?.run_in_background === true
+    || structuredResultRecord.backgroundedByUser === true
+    || (
+      typeof structuredResultRecord.timedOutAfterMs === "number"
+      && Number.isFinite(structuredResultRecord.timedOutAfterMs)
+      && structuredResultRecord.timedOutAfterMs >= 0
+    );
+  if (!hasBackgroundIntent) return undefined;
+
+  const description = persistedTaskText(toolArgs?.description)
+    ?? persistedTaskText(toolArgs?.command)
+    // `content` is the provider tool label ("Bash") and is the only title
+    // the Claude parsing path currently retains on a normalized invocation.
+    ?? persistedTaskText(tool.content);
+
+  return {
+    id,
+    toolUseId,
+    ...(description ? { description } : {}),
+  };
+}
+
 function persistedTaskStatus(
   value: unknown,
 ): BackgroundTaskSnapshot["status"] | undefined {
@@ -3165,6 +3259,38 @@ const LIVE_BACKGROUND_TASK_STATUSES = new Set<BackgroundTaskSnapshot["status"]>(
   "running",
   "paused",
 ]);
+
+/**
+ * Publish a background launch before the delayed lifecycle stream catches up.
+ * A terminal record always wins over this launch edge: SDK ordering is
+ * explicitly unspecified, so a late tool result must never resurrect work that
+ * already reported completion or failure.
+ */
+function recordBackgroundTaskLaunch(
+  session: SessionState,
+  launch: BackgroundTaskLaunch,
+  control: NonNullable<SessionState["queryControl"]>,
+): void {
+  const previous = session.backgroundTasks?.[launch.id];
+  const status = previous?.status ?? "running";
+  session.backgroundTasks = boundBackgroundTaskHistory({
+    ...(session.backgroundTasks ?? {}),
+    [launch.id]: {
+      id: launch.id,
+      toolUseId: launch.toolUseId ?? previous?.toolUseId,
+      description: launch.description ?? previous?.description,
+      status,
+      isBackgrounded: previous?.isBackgrounded ?? true,
+      startedAt: previous?.startedAt ?? Date.now(),
+      endedAt: previous?.endedAt,
+      error: previous?.error,
+    },
+  });
+  if (LIVE_BACKGROUND_TASK_STATUSES.has(status)) {
+    (session.backgroundTaskControls ??= new Map()).set(launch.id, control);
+  }
+  emitBackgroundTaskSnapshot(session);
+}
 
 /**
  * Terminal task snapshots retained for launch correlation and restart display.
@@ -5371,6 +5497,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           activeTaskIds,
           taskRegistry
         );
+
+        const backgroundLaunch = backgroundTaskLaunchFromSdkUserMessage(
+          message as SDKUserMessage,
+          toolTracker,
+        );
+        if (backgroundLaunch) {
+          recordBackgroundTaskLaunch(session, backgroundLaunch, queryIterator);
+        }
 
         // Update active Task tracking - remove completed Tasks
         for (const taskId of completedTaskIds) {

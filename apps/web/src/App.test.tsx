@@ -228,6 +228,11 @@ const mockCheckCodexCli = mock(async () => true);
 const mockCheckGithubCli = mock(async () => true);
 const mockGetAvailableAiCli = mock<() => Promise<string | null>>(async () => "claude");
 const mockGetConfig = mock(async () => mockConfig);
+const mockGetResourceRevisionManifest = mock(async () => ({
+  generation: "a".repeat(32),
+  reset: false,
+  revisions: {},
+}));
 const mockGetEnvironment = mock(
   async (environmentId: string): Promise<Environment | null> =>
     useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
@@ -306,6 +311,7 @@ mock.module("@/lib/backend", () => ({
   checkGithubCli: mockCheckGithubCli,
   getAvailableAiCli: mockGetAvailableAiCli,
   getConfig: mockGetConfig,
+  getResourceRevisionManifest: mockGetResourceRevisionManifest,
   getEnvironment: mockGetEnvironment,
   listBuildPipelines: mockListBuildPipelines,
   listLoopedReviewWorkflows: mockListLoopedReviewWorkflows,
@@ -459,6 +465,12 @@ function resetAppMocks() {
   mockGetAvailableAiCli.mockImplementation(async () => "claude");
   mockGetConfig.mockClear();
   mockGetConfig.mockImplementation(async () => mockConfig);
+  mockGetResourceRevisionManifest.mockClear();
+  mockGetResourceRevisionManifest.mockImplementation(async () => ({
+    generation: "a".repeat(32),
+    reset: false,
+    revisions: {},
+  }));
   mockGetEnvironment.mockClear();
   mockGetEnvironment.mockImplementation(
     async (environmentId: string) =>
@@ -649,6 +661,7 @@ describe("App background processing mounts", () => {
     await waitFor(() => {
       expect(appEventCallbacks.has("resource-changed")).toBe(true);
       expect(appEventCallbacks.has("native-event-stream-connected")).toBe(true);
+      expect(mockGetResourceRevisionManifest).toHaveBeenCalledWith(undefined, {});
       expect(mockStartBuildPipelinePersistence).not.toHaveBeenCalled();
     });
 

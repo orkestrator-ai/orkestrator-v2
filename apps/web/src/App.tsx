@@ -45,7 +45,7 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
-import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, getEnvironment, syncAllEnvironmentsWithDocker } from "@/lib/backend";
+import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, getEnvironment, getResourceRevisionManifest, syncAllEnvironmentsWithDocker } from "@/lib/backend";
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
 import { useCodexBackgroundSync } from "@/hooks/useCodexBackgroundSync";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
@@ -101,7 +101,7 @@ function App() {
   useUnreadEnvironmentSync();
   // The backend change feed must be attached before the store bindings that
   // consume it, and both before anything that reads a backend snapshot.
-  useEffect(() => startResourceSync(), []);
+  useEffect(() => startResourceSync({ loadManifest: getResourceRevisionManifest }), []);
   useEffect(() => startStoreResourceSync(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
   // Selection is renderer-local by design, so it needs its own mirror to

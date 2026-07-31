@@ -52,6 +52,9 @@ describe("buildReviewBody", () => {
       expect(body).toContain(
         "Use subagents / threads to complete the work in parallel where possible.",
       );
+      expect(body).toContain(
+        "Wait until all sub agents have resolved before delivering the report.",
+      );
       expect(body).toContain("## User review instruction");
       expect(body).toContain("provider-enforced output schema");
       expect(body).toContain("User review instruction (JSON string):");

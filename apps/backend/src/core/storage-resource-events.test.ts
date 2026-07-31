@@ -3,7 +3,11 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
-import type { ResourceChange } from "@orkestrator/protocol/resource-events";
+import {
+  RESOURCE_MANIFEST_KINDS,
+  type ResourceChange,
+  type ResourceManifestKind,
+} from "@orkestrator/protocol/resource-events";
 import type { Environment, Project } from "./models.js";
 
 async function withStorage<T>(
@@ -54,7 +58,224 @@ function kinds(changes: ResourceChange[]): string[] {
   return changes.map((change) => change.resource);
 }
 
+const RESOURCE_MANIFEST_FILES: Record<ResourceManifestKind, string> = {
+  project: "projects.json",
+  environment: "environments.json",
+  session: "sessions.json",
+  config: "config.json",
+  kanban: "kanban.json",
+  "project-notes": "project-notes.json",
+  "feature-plan": "feature-plans.json",
+  "pane-layout": "pane-layouts.json",
+  "looped-review": "looped-reviews.json",
+  "build-pipeline": "build-pipelines.json",
+  "prompt-queue": "prompt-queues.json",
+};
+
+async function replaceManifestFile(
+  storage: StorageService,
+  resource: ResourceManifestKind,
+  contents: string,
+): Promise<void> {
+  const target = path.join(storage.getDataDir(), RESOURCE_MANIFEST_FILES[resource]);
+  const temporary = `${target}.test-replacement`;
+  await fs.writeFile(temporary, contents);
+  await fs.rename(temporary, target);
+}
+
 describe("StorageService resource change announcements", () => {
+  test("returns stable manifest revisions and changes only the written store", async () => {
+    await withStorage(async (storage) => {
+      const first = await storage.getResourceRevisionManifest();
+      const stable = await storage.getResourceRevisionManifest(
+        first.generation,
+        first.revisions,
+      );
+      expect(first.reset).toBe(true);
+      expect(stable).toEqual({
+        generation: first.generation,
+        reset: false,
+        revisions: {},
+      });
+
+      await storage.addProject(project("p1"));
+      const changed = await storage.getResourceRevisionManifest(
+        first.generation,
+        first.revisions,
+      );
+      expect(changed.reset).toBe(false);
+      expect(Object.keys(changed.revisions)).toEqual(["project"]);
+    });
+  });
+
+  test("detects a write from another backend sharing the data directory", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-resource-manifest-"));
+    const reader = new StorageService(dataDir);
+    const writer = new StorageService(dataDir);
+    await reader.init();
+    await writer.init();
+    try {
+      const known = await reader.getResourceRevisionManifest();
+      await writer.addProject(project("external"));
+      const observed = await reader.getResourceRevisionManifest(
+        known.generation,
+        known.revisions,
+      );
+      expect(Object.keys(observed.revisions)).toEqual(["project"]);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("changes generation on restart and omits an unchanged snapshot body", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-resource-generation-"));
+    const first = new StorageService(dataDir);
+    await first.init();
+    try {
+      const manifest = await first.getResourceRevisionManifest();
+      const projectRevision = manifest.revisions.project!;
+      let loads = 0;
+      const unchanged = await first.readConditionalResourceSnapshot(
+        "project",
+        manifest.generation,
+        projectRevision,
+        () => {
+          loads += 1;
+          return first.loadProjects();
+        },
+      );
+      expect(unchanged).toEqual({
+        status: "unchanged",
+        generation: manifest.generation,
+        revision: projectRevision,
+      });
+      expect(loads).toBe(0);
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      const afterRestart = await restarted.getResourceRevisionManifest(
+        manifest.generation,
+        manifest.revisions,
+      );
+      expect(afterRestart.generation).not.toBe(manifest.generation);
+      expect(afterRestart.reset).toBe(true);
+      expect(Object.keys(afterRestart.revisions).length).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("exposes the same generation through direct and manifest reads", async () => {
+    await withStorage(async (storage) => {
+      const generation = storage.getResourceGeneration();
+      const manifest = await storage.getResourceRevisionManifest();
+
+      expect(generation).toMatch(/^[a-f0-9]{32}$/);
+      expect(manifest.generation).toBe(generation);
+    });
+  });
+
+  test("returns changed snapshots for generation and revision mismatches", async () => {
+    await withStorage(async (storage) => {
+      const manifest = await storage.getResourceRevisionManifest();
+      const expectedRevision = manifest.revisions.project!;
+      let loads = 0;
+      const load = async () => {
+        loads += 1;
+        return [{ id: `snapshot-${loads}` }];
+      };
+
+      await expect(storage.readConditionalResourceSnapshot(
+        "project",
+        "0".repeat(32),
+        expectedRevision,
+        load,
+      )).resolves.toEqual({
+        status: "changed",
+        generation: manifest.generation,
+        revision: expectedRevision,
+        snapshot: [{ id: "snapshot-1" }],
+      });
+
+      await expect(storage.readConditionalResourceSnapshot(
+        "project",
+        manifest.generation,
+        "0".repeat(32),
+        load,
+      )).resolves.toEqual({
+        status: "changed",
+        generation: manifest.generation,
+        revision: expectedRevision,
+        snapshot: [{ id: "snapshot-2" }],
+      });
+      expect(loads).toBe(2);
+    });
+  });
+
+  test("propagates snapshot loader failures", async () => {
+    await withStorage(async (storage) => {
+      const manifest = await storage.getResourceRevisionManifest();
+      const failure = new Error("snapshot load failed");
+
+      await expect(storage.readConditionalResourceSnapshot(
+        "project",
+        manifest.generation,
+        "0".repeat(32),
+        async () => {
+          throw failure;
+        },
+      )).rejects.toBe(failure);
+    });
+  });
+
+  test("does not bless a snapshot when its resource changes during the load", async () => {
+    await withStorage(async (storage) => {
+      const manifest = await storage.getResourceRevisionManifest();
+      const before = manifest.revisions.project!;
+
+      const result = await storage.readConditionalResourceSnapshot(
+        "project",
+        manifest.generation,
+        "0".repeat(32),
+        async () => {
+          await replaceManifestFile(storage, "project", JSON.stringify([{ id: "new" }]));
+          return [{ id: "old" }];
+        },
+      );
+      const after = await storage.getResourceSnapshotRevision("project");
+
+      expect(result).toEqual({
+        status: "changed",
+        generation: manifest.generation,
+        revision: before,
+        snapshot: [{ id: "old" }],
+      });
+      expect(after).not.toBe(result.revision);
+    });
+  });
+
+  test("maps every manifest resource to its own persistent file", async () => {
+    await withStorage(async (storage) => {
+      expect(Object.keys(RESOURCE_MANIFEST_FILES)).toEqual([...RESOURCE_MANIFEST_KINDS]);
+
+      for (const [index, resource] of RESOURCE_MANIFEST_KINDS.entries()) {
+        const before = await storage.getResourceRevisionManifest();
+        await replaceManifestFile(
+          storage,
+          resource,
+          JSON.stringify({ resource, marker: "x".repeat(index + 1) }),
+        );
+        const after = await storage.getResourceRevisionManifest(
+          before.generation,
+          before.revisions,
+        );
+
+        expect(after.reset).toBe(false);
+        expect(Object.keys(after.revisions)).toEqual([resource]);
+      }
+    });
+  });
+
   test("announces project create, update, reorder and delete", async () => {
     await withStorage(async (storage, changes) => {
       await storage.addProject(project("p1"));

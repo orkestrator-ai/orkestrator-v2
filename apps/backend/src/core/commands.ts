@@ -16,6 +16,14 @@ import {
   reviewValidationArtifactPaths,
 } from "@orkestrator/protocol/review-artifacts";
 import {
+  isResourceGeneration,
+  isResourceManifestKind,
+  isResourceSnapshotRevision,
+  type ConditionalResourceSnapshot,
+  type ResourceManifestKind,
+  type ResourceRevisionMap,
+} from "@orkestrator/protocol/resource-events";
+import {
   PANE_LAYOUT_VERSION,
   type AgentModelConfigKey,
   type ClientEnvironment,
@@ -7226,6 +7234,36 @@ export function createCommandRegistry(
   const validatedClaudeModelCatalogs = new Set<string>();
   const extensionDiscoveryCache = createExtensionDiscoveryCache();
 
+  const conditionalManifestSnapshot = async <T>(
+    args: JsonRecord,
+    storage: StorageService,
+    resource: ResourceManifestKind,
+    load: () => Promise<T> | T,
+  ): Promise<T | ConditionalResourceSnapshot<T>> => {
+    const hasGeneration = args.knownManifestGeneration !== undefined;
+    const hasRevision = args.knownResourceRevision !== undefined;
+    if (!hasGeneration && !hasRevision) return await load();
+    if (!hasGeneration || !hasRevision) {
+      throw new Error(
+        "knownManifestGeneration and knownResourceRevision must be provided together",
+      );
+    }
+    const generation = args.knownManifestGeneration;
+    if (!isResourceGeneration(generation)) {
+      throw new Error("knownManifestGeneration must be an opaque resource generation");
+    }
+    const revision = args.knownResourceRevision;
+    if (!isResourceSnapshotRevision(revision)) {
+      throw new Error("knownResourceRevision must be an opaque resource revision");
+    }
+    return storage.readConditionalResourceSnapshot(
+      resource,
+      generation,
+      revision,
+      load,
+    );
+  };
+
   const schedulePendingEnvironmentRename = (environmentId: string, context: CommandContext): void => {
     if (pendingEnvironmentRenameTasks.has(environmentId)) return;
 
@@ -7254,7 +7292,29 @@ export function createCommandRegistry(
   // a server-side filesystem picker, while Electron handles this via preload.
   register("browse_for_directory", async () => null);
 
-  register("get_projects", (_args, { storage }) => storage.loadProjects());
+  register("get_resource_revision_manifest", ({ knownGeneration, knownRevisions }, { storage }) => {
+    const parsed: Partial<ResourceRevisionMap> = {};
+    if (knownRevisions !== undefined) {
+      const revisions = asRecord(knownRevisions, "knownRevisions");
+      for (const [resource, revision] of Object.entries(revisions)) {
+        if (!isResourceManifestKind(resource)) {
+          throw new Error(`Unknown manifest resource: ${resource}`);
+        }
+        if (!isResourceSnapshotRevision(revision)) {
+          throw new Error(`Invalid manifest revision for ${resource}`);
+        }
+        parsed[resource] = revision;
+      }
+    }
+    if (knownGeneration !== undefined && !isResourceGeneration(knownGeneration)) {
+      throw new Error("knownGeneration must be an opaque resource generation");
+    }
+    return storage.getResourceRevisionManifest(knownGeneration, parsed);
+  });
+
+  register("get_projects", (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "project", () => storage.loadProjects())
+  );
   register("add_project", ({ gitUrl, localPath }, { storage }) => storage.addProject(createProject(asString(gitUrl, "gitUrl"), asOptionalString(localPath))));
   register("remove_project", ({ projectId }, { storage }) => storage.removeProject(asString(projectId, "projectId")));
   register("get_project", ({ projectId }, { storage }) => storage.getProject(asString(projectId, "projectId")));
@@ -7266,7 +7326,11 @@ export function createCommandRegistry(
     return stdout.trim() || null;
   });
 
-  register("get_config", async (_args, { storage }) => redactAppConfig(await storage.loadConfig()));
+  register("get_config", (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "config", async () =>
+      redactAppConfig(await storage.loadConfig())
+    )
+  );
   register("get_agent_model_catalog_cache", (_args, { storage }) =>
     storage.getAgentModelCatalogCache()
   );
@@ -7683,9 +7747,11 @@ export function createCommandRegistry(
     void syncPrMonitorTracking(context).catch(() => undefined);
     return synced.map(toClientEnvironment);
   });
-  register("get_environment_snapshots", async ({ projectId }, { storage }) =>
-    (await storage.getEnvironmentsByProject(asString(projectId, "projectId")))
-      .map(toClientEnvironment)
+  register("get_environment_snapshots", (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "environment", async () =>
+      (await storage.getEnvironmentsByProject(asString(args.projectId, "projectId")))
+        .map(toClientEnvironment)
+    )
   );
   register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) =>
@@ -8527,7 +8593,11 @@ export function createCommandRegistry(
     storage.createSession(asString(environmentId, "environmentId"), asString(containerId, "containerId"), asString(tabId, "tabId"), asString(sessionType, "sessionType") as SessionType),
   );
   register("get_session", ({ sessionId }, { storage }) => storage.getSession(asString(sessionId, "sessionId")));
-  register("get_sessions_by_environment", ({ environmentId }, { storage }) => storage.getSessionsByEnvironment(asString(environmentId, "environmentId")));
+  register("get_sessions_by_environment", (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "session", () =>
+      storage.getSessionsByEnvironment(asString(args.environmentId, "environmentId"))
+    )
+  );
   register("update_session_status", ({ sessionId, status }, { storage }) => storage.updateSession(asString(sessionId, "sessionId"), { status: asString(status, "status") as SessionStatus }));
   register("update_session_activity", ({ sessionId }, { storage }) => storage.updateSession(asString(sessionId, "sessionId"), { lastActivityAt: new Date().toISOString() }));
   register("delete_session", ({ sessionId }, { storage }) => storage.removeSession(asString(sessionId, "sessionId")));
@@ -8547,8 +8617,10 @@ export function createCommandRegistry(
   register("reorder_sessions", ({ environmentId, sessionIds }, { storage }) => storage.reorderSessions(asString(environmentId, "environmentId"), asStringArray(sessionIds)));
   register("cleanup_orphaned_buffers", (_args, { storage }) => storage.cleanupOrphanedBuffers());
 
-  register("get_pane_layout", ({ environmentId }, { storage }) =>
-    storage.getPaneLayout(asString(environmentId, "environmentId")),
+  register("get_pane_layout", (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "pane-layout", () =>
+      storage.getPaneLayout(asString(args.environmentId, "environmentId"))
+    ),
   );
   register("save_pane_layout", async (
     { environmentId, layout, expectedRevision },
@@ -8705,8 +8777,10 @@ export function createCommandRegistry(
   register("get_looped_review_workflow", ({ workflowId }, { storage }) =>
     storage.getLoopedReviewWorkflow(asString(workflowId, "workflowId")),
   );
-  register("list_looped_review_workflows", ({ environmentId }, { storage }) =>
-    storage.listLoopedReviewWorkflows(asString(environmentId, "environmentId")),
+  register("list_looped_review_workflows", (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "looped-review", () =>
+      storage.listLoopedReviewWorkflows(asString(args.environmentId, "environmentId"))
+    ),
   );
   register(
     "save_looped_review_workflow",
@@ -8897,19 +8971,25 @@ export function createCommandRegistry(
     }
     return record;
   });
-  register("list_build_pipelines", async ({ projectId, knownRevisions }, { storage }) => {
-    const records = await storage.listBuildPipelines(
-      asNonBlankString(projectId, "projectId"),
-    );
-    if (!knownRevisions || typeof knownRevisions !== "object" || Array.isArray(knownRevisions)) {
-      return records;
-    }
-    const revisions = knownRevisions as Record<string, unknown>;
-    return {
-      ids: records.map((record) => record.id),
-      records: records.filter((record) => revisions[record.id] !== record.revision),
-    };
-  });
+  register("list_build_pipelines", async (args, { storage }) => conditionalManifestSnapshot(
+    args,
+    storage,
+    "build-pipeline",
+    async () => {
+      const { projectId, knownRevisions } = args;
+      const records = await storage.listBuildPipelines(
+        asNonBlankString(projectId, "projectId"),
+      );
+      if (!knownRevisions || typeof knownRevisions !== "object" || Array.isArray(knownRevisions)) {
+        return records;
+      }
+      const revisions = knownRevisions as Record<string, unknown>;
+      return {
+        ids: records.map((record) => record.id),
+        records: records.filter((record) => revisions[record.id] !== record.revision),
+      };
+    },
+  ));
   register(
     "save_build_pipeline",
     () => {
@@ -8940,8 +9020,10 @@ export function createCommandRegistry(
   register("get_prompt_queue", ({ queueKey }, { storage }) =>
     storage.getPromptQueue(asString(queueKey, "queueKey")),
   );
-  register("list_prompt_queues", ({ environmentId }, { storage }) =>
-    storage.listPromptQueues(asString(environmentId, "environmentId")),
+  register("list_prompt_queues", (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "prompt-queue", () =>
+      storage.listPromptQueues(asString(args.environmentId, "environmentId"))
+    ),
   );
   register(
     "enqueue_prompt_queue_message",
@@ -9885,7 +9967,11 @@ export function createCommandRegistry(
     );
   });
 
-  register("get_kanban_tasks", ({ projectId }, { storage }) => storage.getKanbanTasks(asString(projectId, "projectId")));
+  register("get_kanban_tasks", (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "kanban", () =>
+      storage.getKanbanTasks(asString(args.projectId, "projectId"))
+    )
+  );
   register("add_kanban_task", ({ projectId, title, description }, { storage }) => storage.addKanbanTask(asString(projectId, "projectId"), asString(title, "title"), asString(description, "description")));
   register("update_kanban_task", ({ taskId, title, description, acceptanceCriteria, status, environmentId, buildPipelineId, prUrl, prState, prMergeCommented }, { storage }) =>
     storage.updateKanbanTask(asString(taskId, "taskId"), {
@@ -9906,9 +9992,17 @@ export function createCommandRegistry(
   register("add_kanban_image", ({ taskId, filename, data }, { storage }) => storage.addKanbanImage(asString(taskId, "taskId"), asString(filename, "filename"), asString(data, "data")));
   register("delete_kanban_image", ({ taskId, imageId }, { storage }) => storage.deleteKanbanImage(asString(taskId, "taskId"), asString(imageId, "imageId")));
   register("get_kanban_image_data", ({ imageId }, { storage }) => storage.getKanbanImageData(asString(imageId, "imageId")));
-  register("get_project_notes", ({ projectId }, { storage }) => storage.getProjectNotes(asString(projectId, "projectId")));
+  register("get_project_notes", (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "project-notes", () =>
+      storage.getProjectNotes(asString(args.projectId, "projectId"))
+    )
+  );
   register("save_project_notes", ({ projectId, content }, { storage }) => storage.saveProjectNotes(asString(projectId, "projectId"), asString(content, "content")));
-  register("get_feature_plans", ({ projectId }, { storage }) => storage.getFeaturePlans(asString(projectId, "projectId")));
+  register("get_feature_plans", (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "feature-plan", () =>
+      storage.getFeaturePlans(asString(args.projectId, "projectId"))
+    )
+  );
   register("create_feature_plan", ({ projectId }, { storage }) => storage.createFeaturePlan(asString(projectId, "projectId")));
   register("update_feature_plan", ({ featureId, updates }, { storage }) => storage.updateFeaturePlan(asString(featureId, "featureId"), parseUpdateObject(updates) as never));
   register("claim_feature_plan_build", ({ featureId, taskId }, { storage }) =>

@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   aggregateAgentActivityState,
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
@@ -30,7 +30,16 @@ import {
   parseReviewInstruction,
 } from "@orkestrator/protocol/review-instruction";
 import { paneLayoutRevisionConflictMessage } from "@orkestrator/protocol/pane-layout";
-import type { ResourceChange, ResourceKind } from "@orkestrator/protocol/resource-events";
+import {
+  RESOURCE_MANIFEST_KINDS,
+  type ConditionalResourceSnapshot,
+  type ResourceChange,
+  type ResourceKind,
+  type ResourceManifestKind,
+  type ResourceRevisionManifest,
+  type ResourceRevisionMap,
+  type ResourceSnapshotRevision,
+} from "@orkestrator/protocol/resource-events";
 import {
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   isValidCodexMaxConcurrentThreads,
@@ -1418,6 +1427,8 @@ export type ResourceChangeListener = (change: ResourceChange) => void;
 
 export class StorageService {
   private readonly dataDir: string;
+  /** Process identity: client revision knowledge never crosses this boundary. */
+  private readonly resourceGeneration = randomBytes(16).toString("hex");
   private writeQueue = Promise.resolve();
   private environmentMutationQueue: Promise<unknown> = Promise.resolve();
   private configMutationQueue: Promise<unknown> = Promise.resolve();
@@ -1576,6 +1587,109 @@ export class StorageService {
 
   private featurePlansFile(): string {
     return this.file("feature-plans.json");
+  }
+
+  private resourceManifestFile(resource: ResourceManifestKind): string {
+    switch (resource) {
+      case "project": return this.projectsFile();
+      case "environment": return this.environmentsFile();
+      case "session": return this.sessionsFile();
+      case "config": return this.configFile();
+      case "kanban": return this.kanbanFile();
+      case "project-notes": return this.projectNotesFile();
+      case "feature-plan": return this.featurePlansFile();
+      case "pane-layout": return this.paneLayoutsFile();
+      case "looped-review": return this.loopedReviewsFile();
+      case "build-pipeline": return this.buildPipelinesFile();
+      case "prompt-queue": return this.promptQueuesFile();
+    }
+  }
+
+  /**
+   * Returns an opaque, content-free revision for one authoritative store.
+   *
+   * The JSON writer atomically renames a fresh inode into place. Combining the
+   * inode with size and timestamps therefore detects both this process's writes
+   * and writes made by another backend sharing the same data directory, without
+   * reading or hashing user content.
+   */
+  async getResourceSnapshotRevision(
+    resource: ResourceManifestKind,
+  ): Promise<ResourceSnapshotRevision> {
+    const filePath = this.resourceManifestFile(resource);
+    let fingerprint: string;
+    try {
+      const stat = await fs.stat(filePath, { bigint: true });
+      fingerprint = [
+        resource,
+        stat.ino,
+        stat.size,
+        stat.mtimeNs,
+        stat.ctimeNs,
+      ].join(":");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      fingerprint = `${resource}:missing`;
+    }
+    return createHash("sha256").update(fingerprint).digest("hex").slice(0, 32);
+  }
+
+  getResourceGeneration(): string {
+    return this.resourceGeneration;
+  }
+
+  async getResourceRevisionManifest(
+    knownGeneration?: string,
+    knownRevisions: Partial<ResourceRevisionMap> = {},
+  ): Promise<ResourceRevisionManifest> {
+    const entries = await Promise.all(
+      RESOURCE_MANIFEST_KINDS.map(async (resource) => [
+        resource,
+        await this.getResourceSnapshotRevision(resource),
+      ] as const),
+    );
+    const current = Object.fromEntries(entries) as ResourceRevisionMap;
+    const reset = knownGeneration !== this.resourceGeneration;
+    const revisions: Partial<ResourceRevisionMap> = {};
+    for (const resource of RESOURCE_MANIFEST_KINDS) {
+      if (reset || knownRevisions[resource] !== current[resource]) {
+        revisions[resource] = current[resource];
+      }
+    }
+    return { generation: this.resourceGeneration, reset, revisions };
+  }
+
+  /**
+   * Revision-aware wrapper for existing snapshot commands. Their legacy shape
+   * remains unchanged unless the caller supplies manifest knowledge.
+   */
+  async readConditionalResourceSnapshot<T>(
+    resource: ResourceManifestKind,
+    knownGeneration: string,
+    knownRevision: ResourceSnapshotRevision,
+    load: () => Promise<T> | T,
+  ): Promise<ConditionalResourceSnapshot<T>> {
+    const revision = await this.getResourceSnapshotRevision(resource);
+    if (
+      knownGeneration === this.resourceGeneration
+      && knownRevision === revision
+    ) {
+      return {
+        status: "unchanged",
+        generation: this.resourceGeneration,
+        revision,
+      };
+    }
+    const snapshot = await load();
+    // Deliberately publish the pre-read revision. If a concurrent writer lands
+    // during the read, the next event/manifest comparison still sees a mismatch
+    // instead of incorrectly blessing a potentially older body as current.
+    return {
+      status: "changed",
+      generation: this.resourceGeneration,
+      revision,
+      snapshot,
+    };
   }
 
   private linearAuthFile(): string {
@@ -3536,8 +3650,7 @@ export class StorageService {
    * sensitive implementation details and never need to reach a renderer.
    */
   async listNativeAgentSessions(): Promise<PersistedNativeAgentSession[]> {
-    const loaded = await this.loadNativeAgentSessions();
-    return Object.values(loaded.sessions);
+    return Object.values((await this.loadNativeAgentSessions()).sessions);
   }
 
   /**

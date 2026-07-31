@@ -1,11 +1,30 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
+import * as realResourceSync from "../../../apps/web/src/lib/resource-sync";
+
+const realResourceSyncSnapshot = { ...realResourceSync };
+type ResourceResyncHandler = Parameters<typeof realResourceSync.onResourceResync>[0];
+const capturedResyncHandlers = new Set<ResourceResyncHandler>();
+
+mock.module("@/lib/resource-sync", () => ({
+  ...realResourceSyncSnapshot,
+  onResourceResync: (handler: ResourceResyncHandler) => {
+    capturedResyncHandlers.add(handler);
+    const unsubscribeReal = realResourceSyncSnapshot.onResourceResync(handler);
+    return () => {
+      capturedResyncHandlers.delete(handler);
+      unsubscribeReal();
+    };
+  },
+}));
+
 import { useEnvironmentListSync } from "../../../apps/web/src/hooks/useEnvironmentListSync";
-import {
+
+const {
   dispatchResourceChange,
   requestResourceResync,
   resetResourceSync,
-} from "../../../apps/web/src/lib/resource-sync";
+} = realResourceSyncSnapshot;
 
 const originalSetInterval = globalThis.setInterval;
 const originalClearInterval = globalThis.clearInterval;
@@ -26,10 +45,25 @@ async function announceEnvironmentChange(
   });
 }
 
+async function deliverResync(
+  request: realResourceSync.ResourceResyncRequest,
+): Promise<void> {
+  await act(async () => {
+    await Promise.all(
+      [...capturedResyncHandlers].map((handler) => handler(request)),
+    );
+  });
+}
+
 afterEach(() => {
   globalThis.setInterval = originalSetInterval;
   globalThis.clearInterval = originalClearInterval;
   resetResourceSync();
+  capturedResyncHandlers.clear();
+});
+
+afterAll(() => {
+  mock.module("@/lib/resource-sync", () => realResourceSyncSnapshot);
 });
 
 describe("useEnvironmentListSync", () => {
@@ -127,6 +161,44 @@ describe("useEnvironmentListSync", () => {
     await act(async () => {
       requestResourceResync();
       await Promise.resolve();
+    });
+
+    expect(refreshProject.mock.calls.map(([projectId]) => projectId)).toEqual([
+      "project-1",
+      "project-2",
+    ]);
+  });
+
+  test("ignores manifest and irrelevant selective resync requests", async () => {
+    const refreshProject = mock<(projectId: string) => Promise<void>>(
+      () => Promise.resolve(),
+    );
+    renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
+
+    await deliverResync({
+      resources: new Set(["environment"]),
+      reason: "manifest",
+    });
+    await deliverResync({
+      resources: new Set(["project"]),
+      reason: "explicit",
+    });
+
+    expect(refreshProject).not.toHaveBeenCalled();
+  });
+
+  test("handles a relevant selective explicit resync request", async () => {
+    const refreshProject = mock<(projectId: string) => Promise<void>>(
+      () => Promise.resolve(),
+    );
+    renderHook(() => useEnvironmentListSync(
+      ["project-1", "project-2"],
+      refreshProject,
+    ));
+
+    await deliverResync({
+      resources: new Set(["environment"]),
+      reason: "explicit",
     });
 
     expect(refreshProject.mock.calls.map(([projectId]) => projectId)).toEqual([
@@ -266,7 +338,7 @@ describe("useEnvironmentListSync", () => {
   test("re-runs a project whose refresh was requested while one was in flight", async () => {
     // The in-flight read was started before the mutation that prompted the new
     // request, so it cannot contain it. Dropping the request would leave the
-    // list stale until the next 60s resync.
+    // list stale until the next slow manifest resync.
     let finishRefresh: (() => void) | undefined;
     const refreshProject = mock<(projectId: string) => Promise<void>>(
       () => new Promise<void>((resolve) => { finishRefresh = resolve; }),

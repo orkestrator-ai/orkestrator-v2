@@ -82,12 +82,14 @@ export function useProjects() {
     void loadProjects();
   }), [loadProjects]);
 
-  // The event transport has no replay buffer. A reconnect or detected sequence
-  // gap therefore invalidates the shared snapshot even when no project event
-  // follows the missed window.
-  useEffect(() => onResourceResync(() => {
+  // Manifest reconciliation only reloads this collection when its opaque
+  // revision differs. The global store binding owns that inactive-safe read;
+  // this hook retains the explicit fallback for rolling upgrades and diagnosis.
+  useEffect(() => onResourceResync((request) => {
+    if (request.reason === "manifest") return;
+    if (request.resources !== null && !request.resources.has("project")) return;
     invalidateProjectSnapshots();
-    void loadProjects();
+    return loadProjects();
   }), [loadProjects]);
 
   const addProject = useCallback(

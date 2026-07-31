@@ -1,8 +1,13 @@
 import {
   isResourceChange,
+  isResourceRevisionManifest,
+  RESOURCE_MANIFEST_KINDS,
   RESOURCE_CHANGED_EVENT,
   type ResourceChange,
   type ResourceKind,
+  type ResourceManifestKind,
+  type ResourceRevisionManifest,
+  type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
 import {
   listen,
@@ -30,7 +35,22 @@ import {
  */
 
 type ResourceHandler = (change: ResourceChange) => void;
-type ResourceResyncHandler = () => void;
+export interface ResourceResyncRequest {
+  /** `null` is the deliberately retained diagnostic/full-recovery path. */
+  resources: ReadonlySet<ResourceManifestKind> | null;
+  reason: "explicit" | "manifest";
+}
+
+type ResourceResyncHandler = (
+  request: ResourceResyncRequest,
+) => void | Promise<void>;
+
+export interface ResourceSyncOptions {
+  loadManifest?: (
+    knownGeneration?: string,
+    knownRevisions?: Partial<ResourceRevisionMap>,
+  ) => Promise<ResourceRevisionManifest>;
+}
 
 const handlers = new Map<ResourceKind, Set<ResourceHandler>>();
 const resyncHandlers = new Set<ResourceResyncHandler>();
@@ -39,7 +59,9 @@ const resyncHandlers = new Set<ResourceResyncHandler>();
  * Safety net for native/local transports that cannot surface a reconnect.
  * Reconnect notifications and revision-gap detection are the primary path.
  */
-export const RESOURCE_RESYNC_INTERVAL_MS = 60_000;
+export const RESOURCE_MANIFEST_INTERVAL_MS = 5 * 60_000;
+/** @deprecated Prefer the accurately named manifest interval. */
+export const RESOURCE_RESYNC_INTERVAL_MS = RESOURCE_MANIFEST_INTERVAL_MS;
 
 /** Coalescing window for bursts. Reorders announce once per moved record. */
 const COALESCE_MS = 50;
@@ -101,14 +123,27 @@ export function onResourceResync(handler: ResourceResyncHandler): () => void {
   };
 }
 
-export function requestResourceResync(): void {
+async function deliverResourceResync(request: ResourceResyncRequest): Promise<boolean> {
+  let succeeded = true;
+  const pending: Promise<void>[] = [];
   for (const handler of [...resyncHandlers]) {
     try {
-      handler();
+      pending.push(Promise.resolve(handler(request)).catch((error) => {
+        succeeded = false;
+        console.error("[resource-sync] Resync handler threw:", error);
+      }));
     } catch (error) {
+      succeeded = false;
       console.error("[resource-sync] Resync handler threw:", error);
     }
   }
+  await Promise.all(pending);
+  return succeeded;
+}
+
+/** Explicit, intentionally broad diagnostic and last-resort recovery action. */
+export function requestResourceResync(): void {
+  void deliverResourceResync({ resources: null, reason: "explicit" });
 }
 
 function deliver(change: ResourceChange): void {
@@ -159,13 +194,102 @@ export function resetResourceSync(): void {
  * Installs the backend event listener. Call once at app start; the returned
  * function detaches it.
  */
-export function startResourceSync(): () => void {
+export function startResourceSync(options: ResourceSyncOptions = {}): () => void {
+  const loadManifest = options.loadManifest;
   const unlistens: UnlistenFn[] = [];
   let disposed = false;
   let lastRevision: number | null = null;
   let attachedListeners = 0;
   let connectionAnnounced = false;
   let bootResyncAt: number | null = null;
+  let knownGeneration: string | undefined;
+  let knownRevisions: Partial<ResourceRevisionMap> = {};
+  let manifestRunning = false;
+  let manifestRequested = false;
+
+  const requestManifestResync = (): void => {
+    if (disposed) return;
+    if (!loadManifest) {
+      requestResourceResync();
+      return;
+    }
+    manifestRequested = true;
+    if (manifestRunning) return;
+    manifestRunning = true;
+    void (async () => {
+      try {
+        do {
+          manifestRequested = false;
+          let manifest: ResourceRevisionManifest;
+          try {
+            manifest = await loadManifest(
+              knownGeneration,
+              knownRevisions,
+            );
+            if (!isResourceRevisionManifest(manifest)) {
+              throw new Error("Invalid resource revision manifest");
+            }
+          } catch (error) {
+            if (disposed) break;
+            console.warn(
+              "[resource-sync] Manifest check failed; using full reconciliation:",
+              error,
+            );
+            await deliverResourceResync({ resources: null, reason: "explicit" });
+            continue;
+          }
+          if (disposed) break;
+
+          const changed = new Set<ResourceManifestKind>();
+          if (manifest.reset) {
+            for (const resource of RESOURCE_MANIFEST_KINDS) changed.add(resource);
+          }
+          for (const resource of Object.keys(manifest.revisions)) {
+            changed.add(resource as ResourceManifestKind);
+          }
+
+          // Collection ownership is layered. Projects must exist before their
+          // environment lists can be refreshed, and environments must exist
+          // before session/queue/review/pane stores enumerate them. Running the
+          // phases in this order is what makes a generation reset converge a
+          // client that was inactive while whole scopes were added or removed.
+          let succeeded = true;
+          if (changed.has("project")) {
+            succeeded = await deliverResourceResync({
+              resources: new Set(["project"]),
+              reason: "manifest",
+            });
+          }
+          if (succeeded && changed.has("environment")) {
+            succeeded = await deliverResourceResync({
+              resources: new Set(["environment"]),
+              reason: "manifest",
+            });
+          }
+          const dependent = new Set(changed);
+          dependent.delete("project");
+          dependent.delete("environment");
+          if (succeeded && dependent.size > 0) {
+            succeeded = await deliverResourceResync({
+              resources: dependent,
+              reason: "manifest",
+            });
+          }
+          if (!succeeded) continue;
+
+          if (manifest.reset || knownGeneration !== manifest.generation) {
+            knownRevisions = {};
+          }
+          knownGeneration = manifest.generation;
+          for (const [resource, revision] of Object.entries(manifest.revisions)) {
+            knownRevisions[resource as ResourceManifestKind] = revision;
+          }
+        } while (!disposed && manifestRequested);
+      } finally {
+        manifestRunning = false;
+      }
+    })();
+  };
 
   const attach = (
     event: string,
@@ -185,7 +309,7 @@ export function startResourceSync(): () => void {
         setTimeout(() => {
           if (!disposed && !connectionAnnounced) {
             bootResyncAt = Date.now();
-            requestResourceResync();
+            requestManifestResync();
           }
         }, 0);
       }
@@ -210,7 +334,7 @@ export function startResourceSync(): () => void {
       lastRevision !== null
       && (revision <= lastRevision || revision > lastRevision + 1)
     ) {
-      requestResourceResync();
+      requestManifestResync();
     }
     lastRevision = revision;
     dispatchResourceChange(event.payload);
@@ -229,12 +353,12 @@ export function startResourceSync(): () => void {
       bootResyncAt = null;
       return;
     }
-    requestResourceResync();
+    requestManifestResync();
   });
 
   const intervalId = setInterval(() => {
-    requestResourceResync();
-  }, RESOURCE_RESYNC_INTERVAL_MS);
+    requestManifestResync();
+  }, RESOURCE_MANIFEST_INTERVAL_MS);
 
   const stop = () => {
     if (disposed) return;

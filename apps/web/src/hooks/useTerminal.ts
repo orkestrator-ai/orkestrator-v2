@@ -860,6 +860,10 @@ export function useTerminal({
         }
       } catch (err) {
         console.error("[useTerminal] Failed to write to terminal:", err);
+        toast.error("Terminal input failed", {
+          id: `terminal-input-${currentSessionId}`,
+          description: err instanceof Error ? err.message : String(err),
+        });
       }
     },
     [] // No deps - uses refs for sessionId and isLocal

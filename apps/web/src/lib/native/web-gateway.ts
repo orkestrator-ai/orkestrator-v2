@@ -9,7 +9,12 @@ import { GatewayHttpError } from "@/lib/native/gateway-http-error";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import {
   parseTerminalInputRequest,
+  TERMINAL_HTTP_INPUT_BATCH_DELAY_MS,
+  TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
+  TERMINAL_HTTP_INPUT_MAX_QUEUED_BYTES,
+  TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS,
   TerminalHttpInputBatcher,
+  type TerminalInputCommand,
 } from "@/lib/native/terminal-input-batcher";
 
 const GATEWAY_PREFIX = "/__orkestrator";
@@ -28,6 +33,8 @@ const EVENT_SOURCE_CLOSED = 2;
 
 type EventCallback<T> = (payload: T) => void;
 type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
+
+const browserGatewayDisposers = new WeakMap<object, (reason?: unknown) => void>();
 
 async function readBrowserClipboardImage(): Promise<{
   width: number;
@@ -56,6 +63,11 @@ export interface BrowserGatewayOptions {
   eventReconnectDelayMs?: number;
   reportBootMetrics?: boolean;
   connections?: NonNullable<Window["orkestrator"]>["connections"];
+  /** Test/embedding overrides; production uses the bounded defaults. */
+  terminalInputBatchDelayMs?: number;
+  terminalInputMaxBatchBytes?: number;
+  terminalInputMaxQueuedBytes?: number;
+  terminalInputSendTimeoutMs?: number;
 }
 
 function normalizedBaseUrl(value: string | undefined): string | undefined {
@@ -676,31 +688,126 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const invokeImmediately = async <T = unknown>(
     command: string,
     args?: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<T> => {
     const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/invoke`), {
       method: "POST",
       credentials,
       headers: requestHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ command, args: args ?? {} }),
+      signal,
     });
     const payload = await readGatewayResponse<{ result?: T }>(response, "Gateway command failed");
     return payload.result as T;
   };
 
-  const terminalInputBatcher = new TerminalHttpInputBatcher(async (request) => {
+  const terminalInputBatcher = new TerminalHttpInputBatcher(async (request, signal) => {
     await invokeImmediately(request.command, {
       sessionId: request.sessionId,
       data: request.data,
-    });
-  });
+    }, signal);
+  },
+  options.terminalInputBatchDelayMs ?? TERMINAL_HTTP_INPUT_BATCH_DELAY_MS,
+  options.terminalInputMaxBatchBytes ?? TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
+  options.terminalInputMaxQueuedBytes ?? TERMINAL_HTTP_INPUT_MAX_QUEUED_BYTES,
+  options.terminalInputSendTimeoutMs ?? TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS);
 
-  return {
+  const terminalLifecycleTails = new Map<string, Promise<void>>();
+  const closedTerminalInputQueues = new Set<string>();
+  let terminalInputDisposedReason: unknown | null = null;
+
+  const terminalInputQueueKey = (command: TerminalInputCommand, sessionId: string): string =>
+    `${command}\0${sessionId}`;
+
+  const terminalInputQueue = (
+    command: string,
+    args: Record<string, unknown> | undefined,
+  ): { command: TerminalInputCommand; sessionId: string; closes: boolean; starts: boolean } | null => {
+    if (typeof args?.sessionId !== "string") return null;
+    if (command === "terminal_resize") {
+      return { command: "terminal_write", sessionId: args.sessionId, closes: false, starts: false };
+    }
+    if (command === "detach_terminal") {
+      return { command: "terminal_write", sessionId: args.sessionId, closes: true, starts: false };
+    }
+    if (command === "start_terminal_session") {
+      return { command: "terminal_write", sessionId: args.sessionId, closes: false, starts: true };
+    }
+    if (command === "local_terminal_resize") {
+      return { command: "local_terminal_write", sessionId: args.sessionId, closes: false, starts: false };
+    }
+    if (command === "close_local_terminal_session") {
+      return { command: "local_terminal_write", sessionId: args.sessionId, closes: true, starts: false };
+    }
+    if (command === "start_local_terminal_session") {
+      return { command: "local_terminal_write", sessionId: args.sessionId, closes: false, starts: true };
+    }
+    return null;
+  };
+
+  const invokeWithTerminalOrdering = async <T>(
+    command: string,
+    args: Record<string, unknown> | undefined,
+    queue: NonNullable<ReturnType<typeof terminalInputQueue>>,
+  ): Promise<T> => {
+    if (terminalInputDisposedReason) throw terminalInputDisposedReason;
+    const key = terminalInputQueueKey(queue.command, queue.sessionId);
+    const previous = terminalLifecycleTails.get(key) ?? Promise.resolve();
+
+    // Install the barrier before the first await. Writes invoked after this call
+    // therefore wait behind resize/start, while close rejects them immediately.
+    if (queue.closes) closedTerminalInputQueues.add(key);
+    if (queue.starts) closedTerminalInputQueues.delete(key);
+
+    const operation = previous.catch(() => undefined).then(async () => {
+      // The gateway may have been replaced while this lifecycle command was
+      // queued behind an earlier operation for the same terminal.
+      if (terminalInputDisposedReason) throw terminalInputDisposedReason;
+      if (queue.starts) {
+        terminalInputBatcher.reset(queue.command, queue.sessionId);
+        return invokeImmediately<T>(command, args);
+      }
+
+      // A failed input promise has already reported the transport error. Resize
+      // and close must still reach the backend, while accepted successful input
+      // is flushed first so the lifecycle command cannot overtake it.
+      await terminalInputBatcher.flush(queue.command, queue.sessionId).catch(() => undefined);
+      // Disposal also rejects the flush itself. Do not turn that rejection into
+      // a stale resize/close request against the backend being replaced.
+      if (terminalInputDisposedReason) throw terminalInputDisposedReason;
+      try {
+        return await invokeImmediately<T>(command, args);
+      } finally {
+        if (queue.closes) terminalInputBatcher.reset(queue.command, queue.sessionId);
+      }
+    });
+    const tail = operation.then(() => undefined, () => undefined);
+    terminalLifecycleTails.set(key, tail);
+    void tail.finally(() => {
+      if (terminalLifecycleTails.get(key) === tail) terminalLifecycleTails.delete(key);
+    });
+    return operation;
+  };
+
+  const api = {
     async invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
       const terminalInput = parseTerminalInputRequest(command, args);
       if (terminalInput) {
+        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
+        const key = terminalInputQueueKey(terminalInput.command, terminalInput.sessionId);
+        if (closedTerminalInputQueues.has(key)) {
+          throw new Error("Terminal input is closed until the session restarts");
+        }
+        const lifecycle = terminalLifecycleTails.get(key);
+        if (lifecycle) await lifecycle;
+        // Replacement can occur while this write is waiting behind a lifecycle
+        // barrier, before it has entered the batcher itself.
+        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
         await terminalInputBatcher.enqueue(terminalInput);
         return undefined as T;
       }
+      const queue = terminalInputQueue(command, args);
+      if (queue) return invokeWithTerminalOrdering<T>(command, args, queue);
       return invokeImmediately<T>(command, args);
     },
 
@@ -810,6 +917,11 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       },
     },
   };
+  browserGatewayDisposers.set(api, (reason = new Error("Browser gateway disposed")) => {
+    terminalInputDisposedReason = reason;
+    terminalInputBatcher.dispose(reason);
+  });
+  return api;
 }
 
 export function installBrowserGatewayApi(
@@ -821,6 +933,11 @@ export function installBrowserGatewayApi(
     (!targetWindow.orkestrator || options.replaceExisting)
     && targetWindow.location.protocol.startsWith("http")
   ) {
+    if (options.replaceExisting && targetWindow.orkestrator) {
+      browserGatewayDisposers.get(targetWindow.orkestrator)?.(
+        new Error("Browser gateway replaced"),
+      );
+    }
     if (baseUrl && options.token) {
       configureDirectGatewayTransport(baseUrl, options.token.trim());
     }

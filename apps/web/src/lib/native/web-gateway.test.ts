@@ -3,6 +3,7 @@ import {
   createBrowserGatewayApi,
   installBrowserGatewayApi,
 } from "./web-gateway";
+import { TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES } from "./terminal-input-batcher";
 import {
   clearDirectGatewayTransport,
   configureDirectGatewayTransport,
@@ -182,6 +183,60 @@ describe("web gateway browser API", () => {
       enabled: true,
       baseUrl: "https://workstation.tailnet.ts.net",
     });
+  });
+
+  test("does not install the browser gateway on non-HTTP pages", () => {
+    const fakeWindow: TestGatewayWindow = {
+      location: { protocol: "file:" },
+      orkestrator: undefined,
+      orkestratorGateway: undefined,
+    };
+
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+    );
+
+    expect(fakeWindow.orkestrator).toBeUndefined();
+    expect(fakeWindow.orkestratorGateway).toBeUndefined();
+  });
+
+  test("installing a direct client configures scoped bearer transport", async () => {
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      requests.push({
+        url: String(input),
+        authorization: new Headers(init?.headers).get("authorization"),
+      });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const fakeWindow: TestGatewayWindow = {
+      location: { protocol: "https:" },
+      orkestrator: undefined,
+      orkestratorGateway: undefined,
+    };
+
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+      {
+        baseUrl: "https://workstation.tailnet.ts.net/",
+        token: "direct-token-123456",
+      },
+    );
+    await globalThis.fetch(
+      "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/health",
+    );
+    await globalThis.fetch("https://example.com/not-the-gateway");
+
+    expect(requests).toEqual([
+      {
+        url: "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/health",
+        authorization: "Bearer direct-token-123456",
+      },
+      {
+        url: "https://example.com/not-the-gateway",
+        authorization: null,
+      },
+    ]);
   });
 
   test("enables boot metrics for every installed browser client", async () => {
@@ -440,6 +495,338 @@ describe("web gateway browser API", () => {
     expect(invokes).toEqual([{
       command: "terminal_write",
       args: { sessionId: "session-1", data: "hi\r" },
+    }]);
+  });
+
+  test("batches local-terminal input and keeps malformed invokes on the immediate path", async () => {
+    const invokes: Array<{ command: string; args: Record<string, unknown> }> = [];
+    globalThis.fetch = mock(async (_input, init) => {
+      invokes.push(JSON.parse(String(init?.body)) as {
+        command: string;
+        args: Record<string, unknown>;
+      });
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const api = createBrowserGatewayApi();
+    await Promise.all(["o", "k", "\r"].map((data) => api.invoke("local_terminal_write", {
+      sessionId: "local-1",
+      data,
+    })));
+    await api.invoke("terminal_write", { sessionId: 42, data: "x" });
+    await api.invoke("terminal_write", { sessionId: "empty", data: "" });
+
+    expect(invokes).toEqual([
+      {
+        command: "local_terminal_write",
+        args: { sessionId: "local-1", data: "ok\r" },
+      },
+      {
+        command: "terminal_write",
+        args: { sessionId: 42, data: "x" },
+      },
+    ]);
+  });
+
+  test("splits large Unicode-safe terminal input into bounded ordered requests", async () => {
+    const chunks: string[] = [];
+    globalThis.fetch = mock(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { args: { data: string } };
+      chunks.push(body.args.data);
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const input = `${"x".repeat(TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES - 1)}😀tail`;
+
+    const api = createBrowserGatewayApi();
+    await api.invoke("terminal_write", { sessionId: "session-large", data: input });
+
+    const encoder = new TextEncoder();
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) =>
+      encoder.encode(chunk).byteLength <= TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES
+    )).toBe(true);
+    expect(chunks.join("")).toBe(input);
+  });
+
+  test("fails a terminal queue closed after HTTP rejection and resets it on session restart", async () => {
+    const invokes: Array<{ command: string; args: Record<string, unknown> }> = [];
+    let rejectFirstWrite = true;
+    globalThis.fetch = mock(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        command: string;
+        args: Record<string, unknown>;
+      };
+      invokes.push(body);
+      if (body.command === "terminal_write" && rejectFirstWrite) {
+        rejectFirstWrite = false;
+        return new Response(JSON.stringify({ error: "gateway unavailable" }), { status: 503 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const api = createBrowserGatewayApi();
+    const failed = ["a", "b", "\r"].map((data) => api.invoke("terminal_write", {
+      sessionId: "session-recover",
+      data,
+    }));
+    const failedResults = await Promise.allSettled(failed);
+    expect(failedResults).toHaveLength(3);
+    for (const result of failedResults) {
+      expect(result.status).toBe("rejected");
+      expect(String(result.status === "rejected" ? result.reason : ""))
+        .toContain("gateway unavailable");
+    }
+    await expect(api.invoke("terminal_write", {
+      sessionId: "session-recover",
+      data: "blocked",
+    })).rejects.toThrow("gateway unavailable");
+    expect(invokes).toHaveLength(1);
+
+    await api.invoke("start_terminal_session", { sessionId: "session-recover" });
+    await api.invoke("terminal_write", { sessionId: "session-recover", data: "ok\r" });
+    expect(invokes.map(({ command }) => command)).toEqual([
+      "terminal_write",
+      "start_terminal_session",
+      "terminal_write",
+    ]);
+  });
+
+  test("times out a hung terminal send and does not dispatch its queued suffix", async () => {
+    const fetchMock = mock((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      })
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({ terminalInputSendTimeoutMs: 5 });
+
+    const prefix = api.invoke("terminal_write", { sessionId: "hung", data: "prefix" });
+    const suffix = api.invoke("terminal_write", { sessionId: "hung", data: "suffix" });
+    const timeoutResults = await Promise.allSettled([prefix, suffix]);
+    for (const result of timeoutResults) {
+      expect(result.status).toBe("rejected");
+      expect(String(result.status === "rejected" ? result.reason : ""))
+        .toContain("timed out");
+    }
+    await expect(api.invoke("terminal_write", {
+      sessionId: "hung",
+      data: "later",
+    })).rejects.toThrow("timed out");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("flushes accepted terminal input before resize and close lifecycle commands", async () => {
+    const invokes: Array<{ command: string; args: Record<string, unknown> }> = [];
+    globalThis.fetch = mock(async (_input, init) => {
+      invokes.push(JSON.parse(String(init?.body)) as {
+        command: string;
+        args: Record<string, unknown>;
+      });
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({ terminalInputBatchDelayMs: 50 });
+
+    const scenarios = [
+      ["terminal_write", "terminal_resize", "container-resize"],
+      ["terminal_write", "detach_terminal", "container-close"],
+      ["local_terminal_write", "local_terminal_resize", "local-resize"],
+      ["local_terminal_write", "close_local_terminal_session", "local-close"],
+    ] as const;
+    for (const [writeCommand, lifecycleCommand, sessionId] of scenarios) {
+      const write = api.invoke(writeCommand, { sessionId, data: "x" });
+      const lifecycle = api.invoke(lifecycleCommand, { sessionId, cols: 100, rows: 30 });
+      await Promise.all([write, lifecycle]);
+    }
+    await api.invoke("start_local_terminal_session", { sessionId: "local-restart" });
+
+    expect(invokes.map(({ command }) => command)).toEqual([
+      "terminal_write", "terminal_resize",
+      "terminal_write", "detach_terminal",
+      "local_terminal_write", "local_terminal_resize",
+      "local_terminal_write", "close_local_terminal_session",
+      "start_local_terminal_session",
+    ]);
+  });
+
+  test("keeps post-lifecycle input behind resize and rejects it after close", async () => {
+    const runScenario = async ({
+      writeCommand,
+      lifecycleCommand,
+      closes,
+    }: {
+      writeCommand: "terminal_write" | "local_terminal_write";
+      lifecycleCommand: "terminal_resize" | "detach_terminal" | "close_local_terminal_session";
+      closes: boolean;
+    }) => {
+      const invokes: string[] = [];
+      let releaseFirst: () => void = () => {};
+      const firstResponse = new Promise<Response>((resolve) => {
+        releaseFirst = () => resolve(new Response(JSON.stringify({}), { status: 200 }));
+      });
+      globalThis.fetch = mock(async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          command: string;
+          args: Record<string, unknown>;
+        };
+        invokes.push(`${body.command}:${String(body.args.data ?? "")}`);
+        if (invokes.length === 1) return firstResponse;
+        return new Response(JSON.stringify({}), { status: 200 });
+      }) as unknown as typeof fetch;
+      const api = createBrowserGatewayApi({ terminalInputBatchDelayMs: 50 });
+
+      const first = api.invoke(writeCommand, { sessionId: "ordered", data: "prefix" });
+      await waitForCondition(() => invokes.length === 1, "First terminal write did not start");
+      const lifecycle = api.invoke(lifecycleCommand, {
+        sessionId: "ordered",
+        cols: 100,
+        rows: 30,
+      });
+      const later = api.invoke(writeCommand, { sessionId: "ordered", data: "\r" });
+
+      if (closes) {
+        await expect(later).rejects.toThrow("closed until the session restarts");
+      }
+      releaseFirst();
+      await Promise.all([first, lifecycle, ...(closes ? [] : [later])]);
+      expect(invokes).toEqual(closes
+        ? [`${writeCommand}:prefix`, `${lifecycleCommand}:`]
+        : [`${writeCommand}:prefix`, `${lifecycleCommand}:`, `${writeCommand}:\r`]);
+    };
+
+    await runScenario({
+      writeCommand: "terminal_write",
+      lifecycleCommand: "terminal_resize",
+      closes: false,
+    });
+    await runScenario({
+      writeCommand: "terminal_write",
+      lifecycleCommand: "detach_terminal",
+      closes: true,
+    });
+    await runScenario({
+      writeCommand: "local_terminal_write",
+      lifecycleCommand: "close_local_terminal_session",
+      closes: true,
+    });
+  });
+
+  test("start aborts active input, resets a closed queue, and gates later writes", async () => {
+    const invokes: string[] = [];
+    let firstSignal: AbortSignal | undefined;
+    globalThis.fetch = mock(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        command: string;
+        args: Record<string, unknown>;
+      };
+      invokes.push(`${body.command}:${String(body.args.data ?? "")}`);
+      if (invokes.length === 1) {
+        firstSignal = init?.signal ?? undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({ terminalInputBatchDelayMs: 50 });
+
+    const active = api.invoke("terminal_write", { sessionId: "restart", data: "active" });
+    await waitForCondition(() => invokes.length === 1, "Active terminal write did not start");
+    const activeResult = active.catch((error) => error);
+    const start = api.invoke("start_terminal_session", { sessionId: "restart" });
+    const later = api.invoke("terminal_write", { sessionId: "restart", data: "ok\r" });
+
+    await expect(activeResult).resolves.toEqual(new Error("Terminal HTTP input queue reset"));
+    await Promise.all([start, later]);
+    expect(firstSignal?.aborted).toBe(true);
+    expect(invokes).toEqual([
+      "terminal_write:active",
+      "start_terminal_session:",
+      "terminal_write:ok\r",
+    ]);
+
+    await api.invoke("detach_terminal", { sessionId: "restart" });
+    await expect(api.invoke("terminal_write", { sessionId: "restart", data: "blocked" }))
+      .rejects.toThrow("closed until the session restarts");
+    await api.invoke("start_terminal_session", { sessionId: "restart" });
+    await expect(api.invoke("terminal_write", { sessionId: "restart", data: "fresh\r" }))
+      .resolves.toBeUndefined();
+  });
+
+  test("disposing a replaced gateway aborts in-flight and queued terminal input", async () => {
+    let oldSignal: AbortSignal | undefined;
+    const fetchMock = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      oldSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const fakeWindow: TestGatewayWindow = {
+      location: { protocol: "http:" },
+      orkestrator: undefined,
+      orkestratorGateway: undefined,
+    };
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+      { terminalInputBatchDelayMs: 50 },
+    );
+    const oldApi = fakeWindow.orkestrator!;
+    const active = oldApi.invoke("terminal_write", { sessionId: "old", data: "active" });
+    const queued = oldApi.invoke("terminal_write", { sessionId: "old", data: "q" });
+    const activeResult = active.catch((error) => error);
+    const queuedResult = queued.catch((error) => error);
+    await waitForCondition(() => fetchMock.mock.calls.length === 1, "Old terminal write did not start");
+    const resizeResult = oldApi.invoke("terminal_resize", {
+      sessionId: "old",
+      cols: 100,
+      rows: 30,
+    }).catch((error) => error);
+    const closeResult = oldApi.invoke("detach_terminal", { sessionId: "old" })
+      .catch((error) => error);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+      { replaceExisting: true },
+    );
+
+    expect(fakeWindow.orkestrator).not.toBe(oldApi);
+    expect(oldSignal?.aborted).toBe(true);
+    await expect(activeResult).resolves.toEqual(new Error("Browser gateway replaced"));
+    await expect(queuedResult).resolves.toEqual(new Error("Browser gateway replaced"));
+    await expect(resizeResult).resolves.toEqual(new Error("Browser gateway replaced"));
+    await expect(closeResult).resolves.toEqual(new Error("Browser gateway replaced"));
+    await expect(oldApi.invoke("terminal_write", { sessionId: "old", data: "later" }))
+      .rejects.toThrow("Browser gateway replaced");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("batches direct terminal writes with bearer authentication", async () => {
+    const requests: Array<{ url: string; authorization: string | null; data: string }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      const body = JSON.parse(String(init?.body)) as { args: { data: string } };
+      requests.push({
+        url: String(input),
+        authorization: new Headers(init?.headers).get("authorization"),
+        data: body.args.data,
+      });
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+    });
+
+    await Promise.all(["d", "i", "r", "\r"].map((data) => api.invoke("terminal_write", {
+      sessionId: "direct-terminal",
+      data,
+    })));
+
+    expect(requests).toEqual([{
+      url: "https://workstation.tailnet.ts.net/__orkestrator/invoke",
+      authorization: "Bearer direct-token-123456",
+      data: "dir\r",
     }]);
   });
 

@@ -5,6 +5,10 @@ export const TERMINAL_WEBSOCKET_PATH = "/__orkestrator/terminal";
 
 /** Control frames are deliberately small and never contain terminal bytes. */
 export const TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES = 16 * 1024;
+export const TERMINAL_WEBSOCKET_MAX_SESSION_ID_BYTES = 1024;
+export const TERMINAL_WEBSOCKET_MAX_TOKEN_BYTES = 12 * 1024;
+export const TERMINAL_WEBSOCKET_MAX_IDENTIFIER_BYTES = 512;
+export const TERMINAL_WEBSOCKET_MAX_ERROR_MESSAGE_BYTES = 4 * 1024;
 /** Includes the fixed header and raw terminal bytes. */
 export const TERMINAL_WEBSOCKET_MAX_BINARY_BYTES = 256 * 1024;
 export const TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES = 16;
@@ -50,6 +54,10 @@ export interface TerminalBinaryFrame {
   bytes: Uint8Array;
 }
 
+type TerminalSubscriptionCursor =
+  | { knownGeneration: number; knownRevision: number }
+  | { knownGeneration?: never; knownRevision?: never };
+
 export type TerminalWebSocketClientControlFrame =
   | {
       type: "authenticate";
@@ -57,16 +65,41 @@ export type TerminalWebSocketClientControlFrame =
       /** Required only when the HTTP upgrade did not carry an auth cookie. */
       token?: string;
     }
-  | {
+  | ({
       type: "subscribe";
       requestId: number;
       sessionId: string;
-      knownGeneration?: number;
-      knownRevision?: number;
-    }
+    } & TerminalSubscriptionCursor)
   | { type: "unsubscribe"; channelId: number }
   | { type: "resize"; channelId: number; cols: number; rows: number }
   | { type: "ack"; channelId: number; generation: number; revision: number };
+
+type TerminalSubscribedFrameBase = {
+  type: "subscribed";
+  requestId: number;
+  sessionId: string;
+  channelId: number;
+  /** Server cursor captured before retained/concurrent output is flushed. */
+  targetGeneration: number;
+  targetRevision: number;
+};
+
+/**
+ * `base*` is the cursor the client had already applied before subscribing.
+ * `target*` is informational and MUST NOT advance the client's applied cursor;
+ * replayed output frames (or an authoritative snapshot) do that.
+ */
+export type TerminalSubscribedFrame =
+  | (TerminalSubscribedFrameBase & {
+      recovery: "current" | "delta";
+      baseGeneration: number;
+      baseRevision: number;
+    })
+  | (TerminalSubscribedFrameBase & {
+      recovery: "snapshot-required";
+      baseGeneration: null;
+      baseRevision: null;
+    });
 
 export type TerminalWebSocketServerControlFrame =
   | {
@@ -74,15 +107,7 @@ export type TerminalWebSocketServerControlFrame =
       version: typeof TERMINAL_WEBSOCKET_PROTOCOL_VERSION;
       socketId: string;
     }
-  | {
-      type: "subscribed";
-      requestId: number;
-      sessionId: string;
-      channelId: number;
-      generation: number;
-      revision: number;
-      recovery: "current" | "delta" | "snapshot-required";
-    }
+  | TerminalSubscribedFrame
   | { type: "unsubscribed"; channelId: number }
   | {
       type: "lifecycle";
@@ -115,6 +140,287 @@ export type TerminalWebSocketServerControlFrame =
       channelId?: number;
       fatal?: boolean;
     };
+
+export type TerminalWebSocketControlFrameErrorCode =
+  | "frame-too-large"
+  | "malformed-frame"
+  | "unsupported-version";
+
+/** A wire-validation failure that maps directly to a protocol error code. */
+export class TerminalWebSocketControlFrameError extends Error {
+  readonly code: TerminalWebSocketControlFrameErrorCode;
+
+  constructor(code: TerminalWebSocketControlFrameErrorCode, message: string) {
+    super(message);
+    this.name = "TerminalWebSocketControlFrameError";
+    this.code = code;
+  }
+}
+
+type JsonObject = Record<string, unknown>;
+
+const utf8Encoder = new TextEncoder();
+
+function malformed(message: string): never {
+  throw new TerminalWebSocketControlFrameError("malformed-frame", message);
+}
+
+function parseControlObject(text: string): JsonObject {
+  if (typeof text !== "string") {
+    return malformed("Terminal WebSocket control frame must be text");
+  }
+  if (utf8Encoder.encode(text).byteLength > TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES) {
+    throw new TerminalWebSocketControlFrameError(
+      "frame-too-large",
+      "Terminal WebSocket control frame exceeds the maximum size",
+    );
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(text) as unknown;
+  } catch {
+    return malformed("Terminal WebSocket control frame is not valid JSON");
+  }
+  if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
+    return malformed("Terminal WebSocket control frame must be a JSON object");
+  }
+  return decoded as JsonObject;
+}
+
+function readString(
+  object: JsonObject,
+  key: string,
+  maxBytes: number,
+  options: { optional?: boolean; allowEmpty?: boolean } = {},
+): string | undefined {
+  const value = object[key];
+  if (value === undefined && options.optional) return undefined;
+  if (typeof value !== "string") return malformed(`${key} must be a string`);
+  const byteLength = utf8Encoder.encode(value).byteLength;
+  if ((!options.allowEmpty && byteLength === 0) || byteLength > maxBytes) {
+    return malformed(`${key} must contain 1 to ${maxBytes} UTF-8 bytes`);
+  }
+  return value;
+}
+
+function readBoolean(object: JsonObject, key: string, optional = false): boolean | undefined {
+  const value = object[key];
+  if (value === undefined && optional) return undefined;
+  if (typeof value !== "boolean") return malformed(`${key} must be a boolean`);
+  return value;
+}
+
+function readInteger(
+  object: JsonObject,
+  key: string,
+  minimum: number,
+  maximum: number,
+  optional = false,
+): number | undefined {
+  const value = object[key];
+  if (value === undefined && optional) return undefined;
+  if (
+    typeof value !== "number"
+    || !Number.isSafeInteger(value)
+    || value < minimum
+    || value > maximum
+  ) {
+    return malformed(`${key} must be an integer from ${minimum} through ${maximum}`);
+  }
+  return value;
+}
+
+function readLiteral<T extends string>(object: JsonObject, key: string, values: readonly T[]): T {
+  const value = object[key];
+  if (typeof value !== "string" || !values.includes(value as T)) {
+    return malformed(`${key} has an unsupported value`);
+  }
+  return value as T;
+}
+
+function readVersion(object: JsonObject): typeof TERMINAL_WEBSOCKET_PROTOCOL_VERSION {
+  const version = object.version;
+  if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 0) {
+    return malformed("version must be an unsigned integer");
+  }
+  if (version !== TERMINAL_WEBSOCKET_PROTOCOL_VERSION) {
+    throw new TerminalWebSocketControlFrameError(
+      "unsupported-version",
+      "Terminal WebSocket protocol version is unsupported",
+    );
+  }
+  return TERMINAL_WEBSOCKET_PROTOCOL_VERSION;
+}
+
+const readChannelId = (object: JsonObject): number =>
+  readInteger(object, "channelId", 0, 0xffff) as number;
+const readGeneration = (object: JsonObject, key = "generation"): number =>
+  readInteger(object, key, 0, 0xffff_ffff) as number;
+const readRevision = (object: JsonObject, key = "revision"): number =>
+  readInteger(object, key, 0, Number.MAX_SAFE_INTEGER) as number;
+const readRequestId = (object: JsonObject): number =>
+  readInteger(object, "requestId", 0, Number.MAX_SAFE_INTEGER) as number;
+
+/** Parse and validate one complete client-to-server JSON control frame. */
+export function parseTerminalWebSocketClientControlFrame(
+  text: string,
+): TerminalWebSocketClientControlFrame {
+  const object = parseControlObject(text);
+  const type = readLiteral(object, "type", ["authenticate", "subscribe", "unsubscribe", "resize", "ack"]);
+  switch (type) {
+    case "authenticate": {
+      const token = readString(object, "token", TERMINAL_WEBSOCKET_MAX_TOKEN_BYTES, { optional: true });
+      return {
+        type,
+        version: readVersion(object),
+        ...(token === undefined ? {} : { token }),
+      };
+    }
+    case "subscribe": {
+      const requestId = readRequestId(object);
+      const sessionId = readString(object, "sessionId", TERMINAL_WEBSOCKET_MAX_SESSION_ID_BYTES) as string;
+      const hasGeneration = object.knownGeneration !== undefined;
+      const hasRevision = object.knownRevision !== undefined;
+      if (hasGeneration !== hasRevision) {
+        return malformed("knownGeneration and knownRevision must be supplied together");
+      }
+      if (!hasGeneration) return { type, requestId, sessionId };
+      return {
+        type,
+        requestId,
+        sessionId,
+        knownGeneration: readGeneration(object, "knownGeneration"),
+        knownRevision: readRevision(object, "knownRevision"),
+      };
+    }
+    case "unsubscribe":
+      return { type, channelId: readChannelId(object) };
+    case "resize":
+      return {
+        type,
+        channelId: readChannelId(object),
+        cols: readInteger(object, "cols", 1, 0xffff) as number,
+        rows: readInteger(object, "rows", 1, 0xffff) as number,
+      };
+    case "ack":
+      return {
+        type,
+        channelId: readChannelId(object),
+        generation: readGeneration(object),
+        revision: readRevision(object),
+      };
+  }
+}
+
+const ERROR_CODES = [
+  "authentication-required",
+  "unsupported-version",
+  "malformed-frame",
+  "frame-too-large",
+  "unknown-channel",
+  "subscription-denied",
+  "terminal-unavailable",
+  "internal-error",
+] as const;
+
+/** Parse and validate one complete server-to-client JSON control frame. */
+export function parseTerminalWebSocketServerControlFrame(
+  text: string,
+): TerminalWebSocketServerControlFrame {
+  const object = parseControlObject(text);
+  const type = readLiteral(
+    object,
+    "type",
+    ["ready", "subscribed", "unsubscribed", "lifecycle", "desync", "error"],
+  );
+  switch (type) {
+    case "ready":
+      return {
+        type,
+        version: readVersion(object),
+        socketId: readString(object, "socketId", TERMINAL_WEBSOCKET_MAX_IDENTIFIER_BYTES) as string,
+      };
+    case "subscribed": {
+      const common: TerminalSubscribedFrameBase = {
+        type,
+        requestId: readRequestId(object),
+        sessionId: readString(object, "sessionId", TERMINAL_WEBSOCKET_MAX_SESSION_ID_BYTES) as string,
+        channelId: readChannelId(object),
+        targetGeneration: readGeneration(object, "targetGeneration"),
+        targetRevision: readRevision(object, "targetRevision"),
+      };
+      const recovery = readLiteral(object, "recovery", ["current", "delta", "snapshot-required"]);
+      if (recovery === "snapshot-required") {
+        if (object.baseGeneration !== null || object.baseRevision !== null) {
+          return malformed("snapshot-required subscriptions must use null base cursors");
+        }
+        return { ...common, recovery, baseGeneration: null, baseRevision: null };
+      }
+      const frame: TerminalSubscribedFrame = {
+        ...common,
+        recovery,
+        baseGeneration: readGeneration(object, "baseGeneration"),
+        baseRevision: readRevision(object, "baseRevision"),
+      };
+      if (frame.baseGeneration !== frame.targetGeneration) {
+        return malformed(`${recovery} subscriptions must keep one generation`);
+      }
+      if (recovery === "current" && frame.baseRevision !== frame.targetRevision) {
+        return malformed("current subscriptions must use identical base and target cursors");
+      }
+      if (recovery === "delta" && frame.baseRevision >= frame.targetRevision) {
+        return malformed("delta subscriptions must advance beyond the base cursor");
+      }
+      return frame;
+    }
+    case "unsubscribed":
+      return { type, channelId: readChannelId(object) };
+    case "lifecycle": {
+      const exitCodeValue = object.exitCode;
+      let exitCode: number | null | undefined;
+      if (exitCodeValue === null) exitCode = null;
+      else exitCode = readInteger(object, "exitCode", -0x8000_0000, 0x7fff_ffff, true);
+      return {
+        type,
+        channelId: readChannelId(object),
+        state: readLiteral(object, "state", ["running", "exited"]),
+        generation: readGeneration(object),
+        revision: readRevision(object),
+        ...(exitCode === undefined ? {} : { exitCode }),
+      };
+    }
+    case "desync":
+      return {
+        type,
+        channelId: readChannelId(object),
+        generation: readGeneration(object),
+        revision: readRevision(object),
+        reason: readLiteral(
+          object,
+          "reason",
+          ["revision-gap", "generation-changed", "slow-consumer", "reconnect"],
+        ),
+      };
+    case "error": {
+      const requestId = readInteger(object, "requestId", 0, Number.MAX_SAFE_INTEGER, true);
+      const channelId = readInteger(object, "channelId", 0, 0xffff, true);
+      const fatal = readBoolean(object, "fatal", true);
+      return {
+        type,
+        code: readLiteral(object, "code", ERROR_CODES),
+        message: readString(
+          object,
+          "message",
+          TERMINAL_WEBSOCKET_MAX_ERROR_MESSAGE_BYTES,
+          { allowEmpty: true },
+        ) as string,
+        ...(requestId === undefined ? {} : { requestId }),
+        ...(channelId === undefined ? {} : { channelId }),
+        ...(fatal === undefined ? {} : { fatal }),
+      };
+    }
+  }
+}
 
 function assertUnsignedInteger(value: number, max: number, label: string): void {
   if (!Number.isSafeInteger(value) || value < 0 || value > max) {

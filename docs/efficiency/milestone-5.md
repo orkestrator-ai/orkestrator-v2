@@ -148,12 +148,18 @@ Initial implementation evidence:
 - Protocol version: v1, negotiated as `orkestrator-terminal.v1`.
 - Wire specification: [`terminal-websocket-protocol.md`](terminal-websocket-protocol.md).
 - Binary codec and bounds: `packages/protocol/src/terminal-websocket.ts`.
-- HTTP fallback batching: 8 ms, 64 KiB accumulated-input ceiling, serialized
-  per terminal. Enter, C0/DEL controls, escape sequences, and paste-sized chunks
-  flush immediately with any preceding printable input.
+- JSON control-frame parsers enforce version, shape, atomic cursor, scalar, and
+  UTF-8 byte bounds in `packages/protocol/src/terminal-websocket.ts`.
+- HTTP fallback batching: 8 ms, 64 KiB per-request payloads, and a 1 MiB
+  outstanding-input ceiling per terminal. Larger pastes are split on UTF-8
+  boundaries; Enter, C0/DEL controls, escape sequences, and paste chunks flush
+  immediately with any preceding printable input. Sends time out after 30
+  seconds, fail closed without dispatching a queued suffix, and resume only
+  after an explicit session reset. Resize and close commands flush accepted
+  input before changing terminal lifecycle state.
 - Automated verification on 2026-07-31:
-  - terminal batcher plus browser gateway: 69 passed;
-  - shared protocol package: 157 passed;
+  - terminal batcher plus browser gateway: 94 passed;
+  - shared protocol package: 173 passed;
   - terminal hook recovery suite: 44 passed;
   - backend, web, desktop, and protocol TypeScript checks: passed.
 - WebSocket is not yet the default. Baseline latency/transfer measurements,

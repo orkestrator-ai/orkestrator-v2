@@ -1779,6 +1779,10 @@ describe("useTerminal reconnect behavior", () => {
 
     expect(result.current.sessionId).toBe("session-new-container");
     expect(result.current.isConnected).toBe(true);
+    expect(toastErrorMock).toHaveBeenCalledWith("Terminal input failed", {
+      id: "terminal-input-session-new-container",
+      description: "write failed",
+    });
   });
 
   it("does not terminate a backend-owned persistent session when renderer props change", async () => {

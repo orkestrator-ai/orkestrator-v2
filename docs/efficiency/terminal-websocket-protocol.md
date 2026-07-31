@@ -23,9 +23,12 @@ The shared constants and TypeScript frame definitions live in
   succeeds the connection is provisional: it receives no terminal data, may
   send no other frame, accepts at most the control-frame byte limit, and is
   closed after five seconds. Tokens never appear in URLs or logs.
-- A missing subprotocol or unsupported version is rejected before upgrade with
-  HTTP 426. A failed post-upgrade authentication closes with 4003. Authentication
-  and origin failures never include the supplied token in metrics or logs.
+- A missing or unsupported upgrade subprotocol is rejected before upgrade with
+  HTTP 426. If a direct client upgrades with the v1 subprotocol but sends an
+  `authenticate.version` other than `1`, the gateway sends a fatal
+  `unsupported-version` error when possible and closes with 4001. Other failed
+  post-upgrade authentication closes with 4003. Authentication and origin
+  failures never include the supplied token in metrics or logs.
 
 ## Control frames
 
@@ -37,7 +40,8 @@ out-of-range required fields are malformed.
 Client frames:
 
 - `authenticate { version, token? }`
-- `subscribe { requestId, sessionId, knownGeneration?, knownRevision? }`
+- `subscribe { requestId, sessionId, knownGeneration, knownRevision }`, or the
+  same frame with both cursor fields omitted
 - `unsubscribe { channelId }`
 - `resize { channelId, cols, rows }`
 - `ack { channelId, generation, revision }`
@@ -45,16 +49,27 @@ Client frames:
 Server frames:
 
 - `ready { version, socketId }`
-- `subscribed { requestId, sessionId, channelId, generation, revision, recovery }`
+- `subscribed { requestId, sessionId, channelId, baseGeneration, baseRevision,
+  targetGeneration, targetRevision, recovery }`
 - `unsubscribed { channelId }`
 - `lifecycle { channelId, state, generation, revision, exitCode? }`
 - `desync { channelId, generation, revision, reason }`
 - `error { code, message, requestId?, channelId?, fatal? }`
 
+The shared `parseTerminalWebSocketClientControlFrame` and
+`parseTerminalWebSocketServerControlFrame` functions enforce the following
+wire bounds. `requestId` and revisions are safe unsigned JavaScript integers;
+generation is an unsigned 32-bit integer; and `channelId`, `cols`, and `rows`
+are unsigned 16-bit integers, with terminal dimensions additionally requiring
+at least `1`. Session IDs contain 1–1024 UTF-8 bytes, tokens contain 1–12288,
+socket IDs contain 1–512, and error messages contain 0–4096. Exit codes are
+signed 32-bit integers or `null`.
+
 `requestId` is client allocated and correlates concurrent subscriptions.
-`channelId` is an unsigned 16-bit integer allocated by the server, unique only
-for the lifetime of one socket, and not reused until the prior subscription is
-fully retired.
+`channelId` is allocated by the server, unique only for the lifetime of one
+socket, and not reused until the prior subscription is fully retired. The
+recovery cursor is atomic: `knownGeneration` and `knownRevision` must either
+both be present or both be absent. A partial cursor is a malformed frame.
 
 Every subscription is authorized independently after authentication. Knowing a
 session ID does not bypass the gateway's terminal-session checks. Unsubscribe or
@@ -91,14 +106,25 @@ Subscription follows the same subscribe-before-reconcile rule as gateway SSE:
 1. Register for live backend terminal output.
 2. Compare the supplied generation/revision with the retained terminal window.
 3. Buffer concurrent channel output within the channel limits.
-4. Send `subscribed` with `current`, `delta`, or `snapshot-required`.
+4. Send `subscribed` with `current`, `delta`, or `snapshot-required`, the
+   accepted replay base, and the target cursor captured during reconciliation.
 5. Flush retained and concurrently buffered frames in revision order.
 
-On a retained gap, `delta` output begins at `knownRevision + 1`. On generation
-change, an expired cursor, reconnect without a cursor, or an explicit desync,
-the adapter reads `get_terminal_output_snapshot` and treats it as authoritative.
-It buffers newer socket output until that snapshot is applied. A revision jump
-or duplicate generation change detected by the adapter triggers the same path.
+For `current` and `delta`, `baseGeneration`/`baseRevision` echo the cursor the
+client had already applied. `delta` output begins at `baseRevision + 1`, while
+`current` means the base and target cursors are equal and no retained output is
+required. `targetGeneration`/`targetRevision` describe the server cursor at the
+reconciliation boundary; they are informational and **never advance the
+client's applied cursor**. Only output frames applied in sequence advance it.
+This prevents a `subscribed` frame delivered ahead of replay from making the
+client skip that replay after a mid-handshake disconnect.
+
+For `snapshot-required`, both base fields are `null`. This includes a generation
+change, expired cursor, reconnect without a cursor, or explicit desync. The
+adapter reads `get_terminal_output_snapshot` and treats it as authoritative;
+the snapshot, not `target*`, establishes the applied cursor. It buffers newer
+socket output until that snapshot is applied. A revision jump or duplicate
+generation change detected by the adapter triggers the same path.
 
 After reconnect or an iOS foreground transition, the gateway adapter rebuilds
 the socket from its authoritative desired-subscription registry. Components
@@ -123,6 +149,8 @@ discard the backend's authoritative recovery window.
 ## Protocol errors
 
 - Text over 16 KiB or binary over 256 KiB closes with 1009.
+- A post-upgrade `authenticate` frame with a version other than `1` receives a
+  fatal `unsupported-version` error when deliverable, then closes with 4001.
 - Binary shorter than 16 bytes, non-zero v1 flags, invalid JSON, invalid fields,
   or an input/output direction violation receives a fatal `malformed-frame`
   error when it can be delivered, then closes with 4004.

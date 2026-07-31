@@ -1,6 +1,6 @@
 # Milestone 5 — Multiplexed terminal WebSocket
 
-Status: Not started
+Status: In progress — protocol and HTTP input batching implemented
 
 Depends on: Milestone 4
 
@@ -27,25 +27,25 @@ Primary areas:
 
 ### HTTP compatibility improvement
 
-- [ ] Add a 5–10 ms terminal input micro-batch to the HTTP path.
-- [ ] Flush Enter, control sequences, and explicit paste boundaries
+- [x] Add a 5–10 ms terminal input micro-batch to the HTTP path.
+- [x] Flush Enter, control sequences, and explicit paste boundaries
       immediately.
-- [ ] Enforce a hard input buffer limit.
-- [ ] Preserve exact input ordering.
+- [x] Enforce a hard input buffer limit.
+- [x] Preserve exact input ordering.
 - [ ] Measure typing and paste behavior before making WebSocket the default.
 
 ### Protocol definition
 
-- [ ] Version the WebSocket protocol.
-- [ ] Define authentication and origin checks.
-- [ ] Define JSON control frames for subscribe, unsubscribe, resize, generation,
+- [x] Version the WebSocket protocol.
+- [x] Define authentication and origin checks.
+- [x] Define JSON control frames for subscribe, unsubscribe, resize, generation,
       lifecycle, acknowledgement, and errors.
-- [ ] Allocate compact numeric channel IDs after subscription.
-- [ ] Define binary input and output frames with frame type, channel ID,
+- [x] Allocate compact numeric channel IDs after subscription.
+- [x] Define binary input and output frames with frame type, channel ID,
       generation, revision, and raw bytes.
-- [ ] Define maximum control and binary frame sizes.
-- [ ] Define protocol-error and unsupported-version behavior.
-- [ ] Document ordering and resubscription rules.
+- [x] Define maximum control and binary frame sizes.
+- [x] Define protocol-error and unsupported-version behavior.
+- [x] Document ordering and resubscription rules.
 
 ### Gateway implementation
 
@@ -143,4 +143,36 @@ Record:
 - default and fallback-removal decisions;
 - test command results.
 
-No evidence recorded yet.
+Initial implementation evidence:
+
+- Protocol version: v1, negotiated as `orkestrator-terminal.v1`.
+- Wire specification: [`terminal-websocket-protocol.md`](terminal-websocket-protocol.md).
+- Binary codec and bounds: `packages/protocol/src/terminal-websocket.ts`.
+- JSON control-frame parsers enforce version, shape, atomic cursor, scalar, and
+  UTF-8 byte bounds in `packages/protocol/src/terminal-websocket.ts`.
+- HTTP fallback batching: 8 ms, 64 KiB per-request payloads, and a 1 MiB
+  outstanding-input ceiling per terminal. Larger pastes are split on UTF-8
+  boundaries; Enter, C0/DEL controls, escape sequences, and paste chunks flush
+  immediately with any preceding printable input. Sends time out after 30
+  seconds and fail closed without dispatching a queued suffix.
+- The ceiling applies backpressure rather than discarding input. Input that fits
+  the ceiling waits, strictly in order, for room; only input too large to ever
+  fit is rejected. Resize and close commands flush accepted *and* parked input
+  before changing terminal lifecycle state, so neither can overtake a write the
+  caller already issued.
+- A queue that failed closed is re-armed by a session restart, by a close, or by
+  the next resize that succeeds — a resize proves the transport recovered. The
+  failure toast also offers an explicit reconnect. Without a recovery path a
+  single transient write failure would leave a terminal that still streams
+  output but silently refuses every keystroke.
+- A close marks the input queue closed only once it reaches the backend. A close
+  that fails leaves a live terminal behind, and that terminal stays writable.
+- Automated verification on 2026-07-31:
+  - terminal batcher plus browser gateway: 114 passed;
+  - shared protocol package: 185 passed;
+  - terminal hook recovery suite: 49 passed;
+  - backend, web, desktop, and protocol TypeScript checks: passed;
+  - renderer production build: passed.
+- WebSocket is not yet the default. Baseline latency/transfer measurements,
+  gateway implementation, browser socket ownership, and compatibility results
+  remain to be recorded.

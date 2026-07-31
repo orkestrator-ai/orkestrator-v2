@@ -781,7 +781,41 @@ describe("Electron StorageService", () => {
       "working",
       frontendIdleAt,
       "unknown-source" as never,
-    )).rejects.toThrow("source must be frontend or claude-terminal");
+    )).rejects.toThrow("source must be frontend, claude-terminal, or native-agent");
+  });
+
+  test("accepts backend-owned native activity without renderer observer ids", async () => {
+    const dataDir = await createTempDir("ork-storage-native-agent-activity-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1"),
+    );
+    const occurredAt = new Date(
+      Date.parse(environment.agentActivityUpdatedAt!) + 1_000,
+    ).toISOString();
+
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "waiting",
+      occurredAt,
+      "native-agent",
+    )).resolves.toMatchObject({
+      agentActivityState: "waiting",
+      agentActivitySources: {
+        "native-agent": { state: "waiting", updatedAt: occurredAt },
+      },
+    });
+
+    await expect(storage.setEnvironmentAgentActivity(
+      environment.id,
+      "working",
+      new Date(Date.parse(occurredAt) + 1_000).toISOString(),
+      "native-agent",
+      "renderer-observer-id",
+    )).rejects.toThrow(
+      "observerId must be a non-blank string of at most 256 characters for frontend activity",
+    );
   });
 
   test("aggregates independently leased renderer observations", async () => {

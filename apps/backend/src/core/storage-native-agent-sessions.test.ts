@@ -117,6 +117,57 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("lists every valid provider session and filters malformed persisted entries", async () => {
+    await withStorage(async (first) => {
+      const inputs = [
+        {
+          ...input,
+          key: "claude-session-key",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:claude-tab",
+        },
+        {
+          ...input,
+          key: "codex-session-key",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:codex-tab",
+        },
+        {
+          ...input,
+          key: "opencode-session-key",
+          logicalSessionKey: "env-env-1:opencode-tab",
+        },
+      ];
+      const expected = await Promise.all(inputs.map((session, index) =>
+        first.getOrCreateNativeAgentSession(
+          session,
+          async () => `provider-${index + 1}`,
+        )
+      ));
+
+      const file = path.join(first.getDataDir(), "native-agent-sessions.json");
+      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      stored["mismatched-storage-key"] = {
+        ...expected[0],
+        key: "different-record-key",
+      };
+      stored["invalid-provider"] = {
+        ...expected[1],
+        key: "invalid-provider",
+        agent: "gemini",
+      };
+      stored["missing-required-fields"] = { key: "missing-required-fields" };
+      await fs.writeFile(file, JSON.stringify(stored));
+
+      const listed = await first.listNativeAgentSessions();
+      expect(listed).toEqual(expect.arrayContaining(expected));
+      expect(listed).toHaveLength(3);
+    });
+  });
+
   test("dispatches a stable request once across backend processes", async () => {
     await withStorage(async (first, second) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");

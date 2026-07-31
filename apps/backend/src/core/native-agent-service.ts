@@ -14,6 +14,7 @@ import type { StorageService } from "./storage.js";
 import {
   createBuildPipelineProvider,
   PromptRejectedError,
+  ProviderUnavailableError,
   type BridgeConnection,
   type BuildPipelineProvider,
   type ProviderExecutionMode,
@@ -353,9 +354,7 @@ export class NativeAgentService {
     const groups = new Map<string, PersistedNativeAgentSession[]>();
     for (const [environmentId, environmentSessions] of sessionsByEnvironment) {
       const environment = environmentsById.get(environmentId)!;
-      const canRun = environment.environmentType === "local"
-        || environment.status === "running";
-      if (!canRun || environment.setupScriptsComplete !== true) continue;
+      if (!isEnvironmentReadyForAgents(environment)) continue;
       for (const session of environmentSessions) {
         const key = `${environmentId}\0${session.agent}`;
         const grouped = groups.get(key) ?? [];
@@ -371,15 +370,32 @@ export class NativeAgentService {
         const group = pendingGroups[nextGroup++];
         if (!group) return;
         const first = group[0]!;
+        let provider: BuildPipelineProvider | undefined;
         try {
-          const provider = await this.provider(first);
+          provider = await this.provider(first);
           for (const session of group) {
             provider.registerSession?.(session.providerSessionId);
-            const activity = provider.activity
-              ? await provider.activity(session.providerSessionId)
-              : await provider.status(session.providerSessionId).then((status) =>
-                  status === "running" ? "working" : "idle"
-                );
+          }
+          const batchedActivity = provider.activityBatch
+            ? await provider.activityBatch(
+                group.map((session) => session.providerSessionId),
+              )
+            : undefined;
+          for (const session of group) {
+            const activity = batchedActivity
+              ? batchedActivity.get(session.providerSessionId)
+              : provider.activity
+                ? await provider.activity(session.providerSessionId)
+                : await provider.status(session.providerSessionId).then((status) =>
+                    status === "missing"
+                      ? "missing"
+                      : status === "running" ? "working" : "idle"
+                  );
+            if (!activity) {
+              throw new ProviderUnavailableError(
+                `Provider activity snapshot omitted ${session.providerSessionId}`,
+              );
+            }
             if (activity === "missing") {
               await this.storage.invalidateNativeAgentSession(
                 session.key,
@@ -399,6 +415,9 @@ export class NativeAgentService {
           }
         } catch (error) {
           failedEnvironments.add(first.environmentId);
+          if (provider) {
+            await this.invalidateProvider(first, provider);
+          }
           console.warn(
             `[native-agent] Activity reconciliation for ${first.environmentId} failed:`,
             error instanceof Error ? error.name : "unknown error",
@@ -419,9 +438,7 @@ export class NativeAgentService {
       const hasRegisteredSessions = sessionsByEnvironment.has(environment.id);
       const previous = environment.agentActivitySources?.["native-agent"];
       if (!hasRegisteredSessions && !previous) continue;
-      const canRun = environment.environmentType === "local"
-        || environment.status === "running";
-      const desiredState = canRun && environment.setupScriptsComplete === true
+      const desiredState = isEnvironmentReadyForAgents(environment)
         ? aggregateAgentActivityState(
             activityByEnvironment.get(environment.id) ?? {},
           )
@@ -934,6 +951,28 @@ export class NativeAgentService {
     });
     this.providers.set(cacheKey, provider);
     return provider;
+  }
+
+  /**
+   * Drop a provider whose read-only health/activity call failed so the next
+   * sweep reconnects with fresh bridge coordinates. The identity check avoids
+   * disposing a replacement installed by concurrent work.
+   */
+  private async invalidateProvider(
+    input: Pick<EnsureNativeAgentSessionInput, "environmentId" | "agent">,
+    provider: BuildPipelineProvider,
+  ): Promise<void> {
+    const cacheKey = `${input.environmentId}\0${input.agent}`;
+    if (this.providers.get(cacheKey) !== provider) return;
+    this.providers.delete(cacheKey);
+    try {
+      await provider.dispose?.();
+    } catch (error) {
+      console.warn(
+        `[native-agent] Failed to dispose stale provider for ${input.environmentId}:`,
+        error instanceof Error ? error.name : "unknown error",
+      );
+    }
   }
 
   /** Stage base64 images into the workspace so a bridge will accept them. */

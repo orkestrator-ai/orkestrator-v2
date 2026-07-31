@@ -123,6 +123,14 @@ export interface BuildPipelineProvider {
    * the coarser status contract.
    */
   activity?(sessionId: string): Promise<ProviderActivityState>;
+  /**
+   * Read authoritative activity for several sessions from one provider
+   * snapshot. Providers whose upstream API is session-scoped may omit this and
+   * let callers fall back to activity()/status() per session.
+   */
+  activityBatch?(
+    sessionIds: readonly string[],
+  ): Promise<Map<string, ProviderActivityState>>;
   messages(sessionId: string): Promise<unknown[]>;
   structured<T>(
     sessionId: string,
@@ -796,7 +804,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     if (this.blockedSessions.has(sessionId)) return "error";
     try {
       const response = await this.client.session.status(
-        undefined,
+        { directory: this.connection.directory },
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode status read");
@@ -813,10 +821,42 @@ class OpenCodeProvider implements BuildPipelineProvider {
   }
 
   async activity(sessionId: string): Promise<ProviderActivityState> {
+    const activity = await this.activityBatch([sessionId]);
+    return activity.get(sessionId) ?? "missing";
+  }
+
+  async activityBatch(
+    sessionIds: readonly string[],
+  ): Promise<Map<string, ProviderActivityState>> {
     try {
-      const status = await this.status(sessionId);
-      if (status === "missing") return "missing";
-      if (status !== "running") return "idle";
+      const activity = new Map<string, ProviderActivityState>();
+      const sessionIdsToRead = [...new Set(sessionIds)].filter((sessionId) => {
+        if (!this.blockedSessions.has(sessionId)) return true;
+        activity.set(sessionId, "idle");
+        return false;
+      });
+      if (sessionIdsToRead.length === 0) return activity;
+
+      const statusResponse = await this.client.session.status(
+        { directory: this.connection.directory },
+        this.requestOptions(),
+      );
+      assertSdkResponse(statusResponse, "OpenCode status read");
+      if (!statusResponse.data) throw new Error("OpenCode returned no status");
+
+      const runningSessionIds = new Set<string>();
+      for (const sessionId of sessionIdsToRead) {
+        const status = statusResponse.data[sessionId];
+        if (!status) {
+          activity.set(sessionId, "missing");
+        } else if (status.type === "busy" || status.type === "retry") {
+          runningSessionIds.add(sessionId);
+        } else {
+          activity.set(sessionId, "idle");
+        }
+      }
+      if (runningSessionIds.size === 0) return activity;
+
       const [questions, permissions] = await Promise.all([
         this.client.question.list(
           { directory: this.connection.directory },
@@ -829,16 +869,26 @@ class OpenCodeProvider implements BuildPipelineProvider {
       ]);
       assertSdkResponse(questions, "OpenCode pending question read");
       assertSdkResponse(permissions, "OpenCode pending permission read");
-      const isForSession = (request: unknown): boolean => (
-        Boolean(request)
-        && typeof request === "object"
-        && !Array.isArray(request)
-        && (request as { sessionID?: unknown }).sessionID === sessionId
-      );
-      return (questions.data ?? []).some(isForSession)
-        || (permissions.data ?? []).some(isForSession)
-        ? "waiting"
-        : "working";
+      const waitingSessionIds = new Set<string>();
+      for (const request of [
+        ...(questions.data ?? []),
+        ...(permissions.data ?? []),
+      ]) {
+        if (!request || typeof request !== "object" || Array.isArray(request)) {
+          continue;
+        }
+        const sessionId = (request as { sessionID?: unknown }).sessionID;
+        if (typeof sessionId === "string" && runningSessionIds.has(sessionId)) {
+          waitingSessionIds.add(sessionId);
+        }
+      }
+      for (const sessionId of runningSessionIds) {
+        activity.set(
+          sessionId,
+          waitingSessionIds.has(sessionId) ? "waiting" : "working",
+        );
+      }
+      return activity;
     } catch (error) {
       if (error instanceof ProviderUnavailableError) throw error;
       throw new ProviderUnavailableError("OpenCode activity is unavailable", {

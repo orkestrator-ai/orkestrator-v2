@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -336,6 +336,199 @@ test("native-agent restore failure leaves commands available and shutdown still 
     await backend.shutdown().catch(() => undefined);
     await fs.rm(dataDir, { recursive: true, force: true });
   }
+});
+
+describe("native-agent activity reconciliation lifecycle", () => {
+  test("awaits initial activity hydration before startup completes", async () => {
+    const dataDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ork-backend-native-activity-init-"),
+    );
+    const hydration = deferred<void>();
+    const calls: string[] = [];
+    const backend = new OrkestratorBackend({
+      dataDir,
+      toolchainBinDir: "",
+      appRoot: "",
+      resourceRoot: "",
+      emit: () => undefined,
+      agentTools: fakeAgentTools(),
+      startupReapers: {
+        localServers: async () => [],
+        claudeTmuxRuntimes: async () => [],
+      },
+    });
+    const internals = backend as unknown as {
+      buildPipelines: { init: () => Promise<void> };
+      nativeAgents: {
+        init: () => Promise<void>;
+        reconcileAgentActivity: () => Promise<void>;
+      };
+    };
+    internals.buildPipelines.init = mock(async () => undefined);
+    internals.nativeAgents.init = mock(async () => undefined);
+    internals.nativeAgents.reconcileAgentActivity = mock(async () => {
+      calls.push("hydrate:start");
+      await hydration.promise;
+      calls.push("hydrate:end");
+    });
+
+    try {
+      let initialized = false;
+      const initialization = backend.init().then(() => {
+        initialized = true;
+      });
+      await waitForCondition(
+        () => calls.includes("hydrate:start"),
+        "initial native-agent activity hydration",
+      );
+
+      expect(initialized).toBe(false);
+      expect(calls).toEqual(["hydrate:start"]);
+
+      hydration.resolve(undefined);
+      await initialization;
+      expect(initialized).toBe(true);
+      expect(calls).toEqual(["hydrate:start", "hydrate:end"]);
+    } finally {
+      hydration.resolve(undefined);
+      await backend.shutdown().catch(() => undefined);
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("isolates an initial activity hydration failure and leaves commands available", async () => {
+    const dataDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ork-backend-native-activity-failure-"),
+    );
+    const tools = fakeAgentTools();
+    const backend = new OrkestratorBackend({
+      dataDir,
+      toolchainBinDir: "",
+      appRoot: "",
+      resourceRoot: "",
+      emit: () => undefined,
+      agentTools: tools,
+      startupReapers: {
+        localServers: async () => [],
+        claudeTmuxRuntimes: async () => [],
+      },
+    });
+    const internals = backend as unknown as {
+      buildPipelines: { init: () => Promise<void> };
+      nativeAgents: {
+        init: () => Promise<void>;
+        reconcileAgentActivity: () => Promise<void>;
+      };
+    };
+    internals.buildPipelines.init = mock(async () => undefined);
+    internals.nativeAgents.init = mock(async () => undefined);
+    internals.nativeAgents.reconcileAgentActivity = mock(async () => {
+      throw new Error("activity snapshot unavailable");
+    });
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await expect(backend.init()).resolves.toBeUndefined();
+      await expect(backend.invoke("get_environment_snapshots", {
+        projectId: "project-1",
+      })).resolves.toEqual([]);
+      expect(tools.start).toHaveBeenCalledTimes(1);
+      expect(internals.nativeAgents.reconcileAgentActivity)
+        .toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        "[backend] Failed to restore native agent activity:",
+        expect.objectContaining({ message: "activity snapshot unavailable" }),
+      );
+    } finally {
+      warn.mockRestore();
+      await backend.shutdown().catch(() => undefined);
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("runs activity reconciliation periodically and clears its interval on shutdown", async () => {
+    const dataDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ork-backend-native-activity-sweep-"),
+    );
+    const backend = new OrkestratorBackend({
+      dataDir,
+      toolchainBinDir: "",
+      appRoot: "",
+      resourceRoot: "",
+      emit: () => undefined,
+      agentTools: fakeAgentTools(),
+      startupReapers: {
+        localServers: async () => [],
+        claudeTmuxRuntimes: async () => [],
+      },
+    });
+    const internals = backend as unknown as {
+      buildPipelines: { init: () => Promise<void> };
+      nativeAgents: {
+        init: () => Promise<void>;
+        reconcileAgentActivity: () => Promise<void>;
+      };
+    };
+    internals.buildPipelines.init = mock(async () => undefined);
+    internals.nativeAgents.init = mock(async () => undefined);
+    internals.nativeAgents.reconcileAgentActivity = mock(async () => undefined);
+
+    type ControlledInterval = {
+      active: boolean;
+      callback: () => void;
+      delay: number;
+      handle: ReturnType<typeof setInterval>;
+      unref: ReturnType<typeof mock>;
+    };
+    const intervals: ControlledInterval[] = [];
+    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(
+      ((callback: () => void, delay = 0) => {
+        const unref = mock(() => undefined);
+        const handle = { unref } as unknown as ReturnType<typeof setInterval>;
+        intervals.push({ active: true, callback, delay, handle, unref });
+        return handle;
+      }) as typeof setInterval,
+    );
+    const clearIntervalSpy = spyOn(globalThis, "clearInterval").mockImplementation(
+      ((handle: ReturnType<typeof setInterval>) => {
+        const interval = intervals.find((candidate) => candidate.handle === handle);
+        if (interval) interval.active = false;
+      }) as typeof clearInterval,
+    );
+    const tick = (delay: number): void => {
+      for (const interval of intervals) {
+        if (interval.active && interval.delay === delay) interval.callback();
+      }
+    };
+
+    try {
+      await backend.init();
+      expect(internals.nativeAgents.reconcileAgentActivity)
+        .toHaveBeenCalledTimes(1);
+      const nativeSweep = intervals.find((interval) => interval.delay === 2_000);
+      expect(nativeSweep).toBeDefined();
+      expect(nativeSweep!.unref).toHaveBeenCalledTimes(1);
+
+      tick(2_000);
+      await Promise.resolve();
+      expect(internals.nativeAgents.reconcileAgentActivity)
+        .toHaveBeenCalledTimes(2);
+
+      await backend.shutdown();
+      expect(nativeSweep!.active).toBe(false);
+      expect(clearIntervalSpy).toHaveBeenCalledWith(nativeSweep!.handle);
+
+      tick(2_000);
+      await Promise.resolve();
+      expect(internals.nativeAgents.reconcileAgentActivity)
+        .toHaveBeenCalledTimes(2);
+    } finally {
+      await backend.shutdown().catch(() => undefined);
+      clearIntervalSpy.mockRestore();
+      setIntervalSpy.mockRestore();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
 });
 
 test("shutdown clears backend-owned PR watch state before a new backend starts", async () => {

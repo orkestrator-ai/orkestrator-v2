@@ -37,8 +37,11 @@ function createProviderStub(
       prompt: string,
       options: ProviderSendOptions,
     ) => Promise<void>;
-    status?: () => Promise<ProviderStatus>;
+    status?: (sessionId: string) => Promise<ProviderStatus>;
     activity?: (sessionId: string) => Promise<ProviderActivityState>;
+    activityBatch?: (
+      sessionIds: readonly string[],
+    ) => Promise<Map<string, ProviderActivityState>>;
   } = {},
 ) {
   const createSession = mock(
@@ -47,20 +50,34 @@ function createProviderStub(
   const send = mock(behaviour.send ?? (async () => undefined));
   const status = mock(behaviour.status ?? (async () => "idle" as ProviderStatus));
   const activity = behaviour.activity ? mock(behaviour.activity) : undefined;
+  const activityBatch = behaviour.activityBatch
+    ? mock(behaviour.activityBatch)
+    : undefined;
+  const registerSession = mock((_sessionId: string) => undefined);
   const dispose = mock(async () => undefined);
   const provider = {
     agent,
     createSession,
-    registerSession: () => undefined,
+    registerSession,
     send,
     status,
     activity,
+    activityBatch,
     messages: async () => [],
     structured: async () => null,
     abort: async () => undefined,
     dispose,
   } as unknown as BuildPipelineProvider;
-  return { provider, createSession, send, status, activity, dispose };
+  return {
+    provider,
+    createSession,
+    registerSession,
+    send,
+    status,
+    activity,
+    activityBatch,
+    dispose,
+  };
 }
 
 /** Reach the timer-driven scans and backoff bookkeeping the service keeps private. */
@@ -218,6 +235,363 @@ describe("NativeAgentService", () => {
         agentActivitySources: {
           "native-agent": { state: "idle" },
         },
+      });
+    });
+  });
+
+  test.each([
+    ["stopped", { status: "stopped" }],
+    ["errored", { status: "error" }],
+    ["still provisioning", { setupScriptsComplete: false }],
+  ])("does not start a provider for a %s local environment", async (
+    _label,
+    environmentUpdate,
+  ) => {
+    const providerFactory = mock(async () => createProviderStub("codex").provider);
+    await withService({
+      prefix: "orkestrator-native-activity-not-ready-",
+      environment: environmentUpdate,
+      provider: providerFactory,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-1",
+      });
+      await storage.setEnvironmentAgentActivity(
+        "env-1",
+        "working",
+        new Date().toISOString(),
+        "native-agent",
+      );
+
+      await service.reconcileAgentActivity();
+
+      expect(providerFactory).not.toHaveBeenCalled();
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivitySources: { "native-agent": { state: "idle" } },
+      });
+    });
+  });
+
+  test("registers sessions and uses one batched activity snapshot per provider", async () => {
+    const snapshot = new Map<string, ProviderActivityState>([
+      ["provider-1", "idle"],
+      ["provider-2", "waiting"],
+    ]);
+    const { provider, activityBatch, registerSession, activity, status } =
+      createProviderStub("opencode", {
+        activity: async () => {
+          throw new Error("per-session activity must not be used");
+        },
+        activityBatch: async () => snapshot,
+      });
+    await withService({
+      prefix: "orkestrator-native-activity-batch-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      for (const [suffix, providerSessionId] of [
+        ["one", "provider-1"],
+        ["two", "provider-2"],
+      ] as const) {
+        const key = nativeAgentSessionStorageKey("env-1", "opencode", suffix);
+        await storage.adoptNativeAgentSession({
+          key,
+          environmentId: "env-1",
+          agent: "opencode",
+          logicalSessionKey: suffix,
+          providerSessionId,
+        });
+      }
+
+      await service.reconcileAgentActivity();
+
+      expect(activityBatch).toHaveBeenCalledTimes(1);
+      expect(activityBatch).toHaveBeenCalledWith(["provider-1", "provider-2"]);
+      expect(registerSession).toHaveBeenCalledTimes(2);
+      expect(activity).not.toHaveBeenCalled();
+      expect(status).not.toHaveBeenCalled();
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivitySources: { "native-agent": { state: "waiting" } },
+      });
+    });
+  });
+
+  test("invalidates a missing session through the status fallback", async () => {
+    const { provider, status } = createProviderStub("codex", {
+      status: async () => "missing",
+    });
+    await withService({
+      prefix: "orkestrator-native-activity-status-fallback-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-missing",
+      });
+
+      await service.reconcileAgentActivity();
+
+      expect(status).toHaveBeenCalledWith("provider-missing");
+      expect(await storage.getNativeAgentSession(key)).toBeNull();
+    });
+  });
+
+  test("recreates a cached provider after an activity read failure", async () => {
+    const stale = createProviderStub("codex", {
+      activity: async () => {
+        throw new ProviderUnavailableError("bridge stopped");
+      },
+    });
+    const recovered = createProviderStub("codex", {
+      activity: async () => "working",
+    });
+    const providerFactory = mock(async () => (
+      providerFactory.mock.calls.length === 1 ? stale.provider : recovered.provider
+    ));
+    await withService({
+      prefix: "orkestrator-native-activity-recover-",
+      provider: providerFactory,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-1",
+      });
+      const originalWarn = console.warn;
+      console.warn = () => undefined;
+      try {
+        await service.reconcileAgentActivity();
+        expect(stale.dispose).toHaveBeenCalledTimes(1);
+        expect(internals(service).providers.size).toBe(0);
+
+        await service.reconcileAgentActivity();
+      } finally {
+        console.warn = originalWarn;
+      }
+
+      expect(providerFactory).toHaveBeenCalledTimes(2);
+      expect(recovered.activity).toHaveBeenCalledWith("provider-1");
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivitySources: { "native-agent": { state: "working" } },
+      });
+    });
+  });
+
+  test("coalesces overlapping scans and shutdown waits for the active read", async () => {
+    let signalEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const { provider, activity } = createProviderStub("codex", {
+      activity: async () => {
+        signalEntered();
+        await barrier;
+        return "working";
+      },
+    });
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-activity-shutdown-"));
+    const storage = await createStorage(dataDir);
+    await addEnvironment(storage);
+    const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+    await storage.adoptNativeAgentSession({
+      key,
+      environmentId: "env-1",
+      agent: "codex",
+      logicalSessionKey: "tab-1",
+      providerSessionId: "provider-1",
+    });
+    const service = new NativeAgentService(storage, refusingInvoke, {
+      provider: async () => provider,
+    });
+    try {
+      const first = service.reconcileAgentActivity();
+      const second = service.reconcileAgentActivity();
+      expect(second).toBe(first);
+      await entered;
+      let shutdownSettled = false;
+      const shuttingDown = service.shutdown().then(() => { shutdownSettled = true; });
+      await Promise.resolve();
+      expect(shutdownSettled).toBe(false);
+      release();
+      await Promise.all([first, shuttingDown]);
+      expect(activity).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("isolates a failed agent group and leaves its previous projection intact", async () => {
+    const codex = createProviderStub("codex", { activity: async () => "working" });
+    const claude = createProviderStub("claude", {
+      activity: async () => { throw new ProviderUnavailableError("offline"); },
+    });
+    await withService({
+      prefix: "orkestrator-native-activity-partial-",
+      provider: async (input) => input.agent === "codex" ? codex.provider : claude.provider,
+    }, async ({ storage, service }) => {
+      for (const agent of ["codex", "claude"] as const) {
+        const key = nativeAgentSessionStorageKey("env-1", agent, `${agent}-tab`);
+        await storage.adoptNativeAgentSession({
+          key,
+          environmentId: "env-1",
+          agent,
+          logicalSessionKey: `${agent}-tab`,
+          providerSessionId: `${agent}-provider`,
+        });
+      }
+      await storage.setEnvironmentAgentActivity(
+        "env-1",
+        "waiting",
+        new Date().toISOString(),
+        "native-agent",
+      );
+      const before = (await storage.getEnvironment("env-1"))!
+        .agentActivitySources?.["native-agent"];
+      const originalWarn = console.warn;
+      console.warn = () => undefined;
+      try {
+        await service.reconcileAgentActivity();
+      } finally {
+        console.warn = originalWarn;
+      }
+
+      expect(codex.activity).toHaveBeenCalledTimes(1);
+      expect(claude.activity).toHaveBeenCalledTimes(1);
+      expect((await storage.getEnvironment("env-1"))!
+        .agentActivitySources?.["native-agent"]).toEqual(before);
+    });
+  });
+
+  test("isolates an activity persistence failure", async () => {
+    const { provider } = createProviderStub("codex", {
+      activity: async () => "working",
+    });
+    await withService({
+      prefix: "orkestrator-native-activity-persist-error-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-1",
+      });
+      const originalSet = storage.setEnvironmentAgentActivity.bind(storage);
+      const setActivity = mock(async () => {
+        throw new Error("disk unavailable");
+      });
+      storage.setEnvironmentAgentActivity = setActivity as typeof storage.setEnvironmentAgentActivity;
+      const originalWarn = console.warn;
+      console.warn = () => undefined;
+      try {
+        await expect(service.reconcileAgentActivity()).resolves.toBeUndefined();
+      } finally {
+        console.warn = originalWarn;
+        storage.setEnvironmentAgentActivity = originalSet;
+      }
+      expect(setActivity).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("skips deleted-environment sessions and avoids rewriting an unchanged state", async () => {
+    const { provider, activity } = createProviderStub("codex", {
+      activity: async () => "idle",
+    });
+    await withService({
+      prefix: "orkestrator-native-activity-stable-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const liveKey = nativeAgentSessionStorageKey("env-1", "codex", "live");
+      await storage.adoptNativeAgentSession({
+        key: liveKey,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "live",
+        providerSessionId: "live-provider",
+      });
+      await storage.setEnvironmentAgentActivity(
+        "env-1",
+        "idle",
+        new Date().toISOString(),
+        "native-agent",
+      );
+      const before = (await storage.getEnvironment("env-1"))!
+        .agentActivitySources?.["native-agent"];
+
+      await addEnvironment(storage, { id: "env-deleted", worktreePath: "/tmp/deleted" });
+      const deletedKey = nativeAgentSessionStorageKey("env-deleted", "codex", "deleted");
+      await storage.adoptNativeAgentSession({
+        key: deletedKey,
+        environmentId: "env-deleted",
+        agent: "codex",
+        logicalSessionKey: "deleted",
+        providerSessionId: "deleted-provider",
+      });
+      await storage.removeEnvironment("env-deleted");
+
+      await service.reconcileAgentActivity();
+
+      expect(activity).toHaveBeenCalledTimes(1);
+      expect(activity).toHaveBeenCalledWith("live-provider");
+      expect((await storage.getEnvironment("env-1"))!
+        .agentActivitySources?.["native-agent"]).toEqual(before);
+    });
+  });
+
+  test("keeps a concurrently replaced session when an old snapshot reports missing", async () => {
+    let signalEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const { provider } = createProviderStub("codex", {
+      activity: async () => {
+        signalEntered();
+        await barrier;
+        return "missing";
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-activity-session-race-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-old",
+      });
+      const scan = service.reconcileAgentActivity();
+      await entered;
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-new",
+        expectedProviderSessionId: "provider-old",
+      });
+      release();
+      await scan;
+
+      expect(await storage.getNativeAgentSession(key)).toMatchObject({
+        providerSessionId: "provider-new",
       });
     });
   });
@@ -1236,6 +1610,62 @@ describe("NativeAgentService", () => {
         expect([...internals(service).providers.keys()].sort())
           .toEqual(["env-1\u0000codex", "env-1\u0000opencode"]);
       });
+    });
+
+    test("stages images through the real provider callback before dispatch", async () => {
+      const stagedPath = "/tmp/env-1/.orkestrator/initial-prompt/reference.png";
+      const invoke = mock(async (command: string) => {
+        if (command === "write_local_file") return stagedPath as never;
+        throw new Error(`Unexpected backend command: ${command}`);
+      });
+      const requests: Array<{ url: string; init?: RequestInit }> = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+        requests.push({ url: String(input), init });
+        return new Response(null, { status: 202 });
+      }) as unknown as typeof fetch;
+      try {
+        await withService({
+          prefix: "orkestrator-native-provider-stage-images-",
+          invoke: invoke as unknown as Invoke,
+        }, async ({ service }) => {
+          internals(service).bridgeConnection = async () => ({
+            agent: "codex",
+            baseUrl: "http://127.0.0.1:4123",
+            authToken: "token",
+            directory: "/tmp/env-1",
+          });
+          const provider = await internals(service).provider({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey: "tab-1",
+          });
+
+          await provider.send("provider-1", "Inspect it", {
+            requestId: "request-1",
+            images: [{ filename: "reference.png", data: "cG5n" }],
+          });
+
+          expect(invoke).toHaveBeenCalledWith("write_local_file", {
+            worktreePath: "/tmp/env-1",
+            filePath: ".orkestrator/initial-prompt/reference.png",
+            base64Data: "cG5n",
+          });
+          expect(requests).toHaveLength(1);
+          expect(JSON.parse(String(requests[0]?.init?.body))).toMatchObject({
+            prompt: "Inspect it",
+            requestId: "request-1",
+            attachments: [{
+              type: "image",
+              path: stagedPath,
+              filename: "reference.png",
+              dataUrl: "data:image/png;base64,cG5n",
+            }],
+          });
+        });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 

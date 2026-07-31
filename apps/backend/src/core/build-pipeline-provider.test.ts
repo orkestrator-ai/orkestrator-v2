@@ -266,6 +266,114 @@ describe("HTTP build pipeline provider", () => {
     await expect(provider.activity?.("session/1")).resolves.toBe("working");
   });
 
+  test.each([
+    ["claude" as const, claudeConnection, "plan-approvals", "approvals"],
+    ["codex" as const, codexConnection, "interactions", "interactions"],
+  ])("reports %s secondary pending input as waiting", async (
+    agent,
+    connection,
+    pendingPath,
+    pendingKey,
+  ) => {
+    const { provider } = httpProvider((url) => {
+      const isStatus = agent === "claude"
+        ? url.endsWith("/session/session%2F1")
+        : url.endsWith("/session/session%2F1/status");
+      if (isStatus) return Response.json({ status: "running" });
+      if (url.endsWith(`/${pendingPath}`)) {
+        return Response.json({ [pendingKey]: [{ id: "pending-1" }] });
+      }
+      const emptyKey = agent === "claude" ? "questions" : "approvals";
+      return Response.json({ [emptyKey]: [] });
+    }, connection);
+
+    await expect(provider.activity?.("session/1")).resolves.toBe("waiting");
+  });
+
+  test.each([
+    ["claude" as const, claudeConnection],
+    ["codex" as const, codexConnection],
+  ])("short-circuits %s pending reads for missing and non-running sessions", async (
+    _agent,
+    connection,
+  ) => {
+    for (const [status, expected] of [
+      ["missing", "missing"],
+      ["idle", "idle"],
+      ["error", "idle"],
+    ] as const) {
+      const responseStatus = status === "missing" ? 404 : 200;
+      const { provider, requests } = httpProvider(() => responseStatus === 404
+        ? new Response(null, { status: responseStatus })
+        : Response.json({ status }), connection);
+
+      await expect(provider.activity?.("session/1")).resolves.toBe(expected);
+      expect(requests).toHaveLength(1);
+    }
+  });
+
+  test.each([
+    ["claude", "questions", claudeConnection],
+    ["claude", "plan-approvals", claudeConnection],
+    ["codex", "approvals", codexConnection],
+    ["codex", "interactions", codexConnection],
+  ])("rejects malformed pending input from %s %s", async (
+    _agent,
+    malformedPath,
+    connection,
+  ) => {
+    const { provider } = httpProvider((url) => {
+      const isStatus = connection.agent === "claude"
+        ? url.endsWith("/session/session-1")
+        : url.endsWith("/session/session-1/status");
+      if (isStatus) return Response.json({ status: "running" });
+      if (url.endsWith(`/${malformedPath}`)) return Response.json({});
+      const validKey = connection.agent === "claude"
+        ? malformedPath === "questions" ? "approvals" : "questions"
+        : malformedPath === "approvals" ? "interactions" : "approvals";
+      return Response.json({ [validKey]: [] });
+    }, connection);
+
+    await expect(provider.activity?.("session-1"))
+      .rejects.toBeInstanceOf(ProviderUnavailableError);
+  });
+
+  test.each([
+    ["claude", "questions", 400, false, claudeConnection],
+    ["claude", "plan-approvals", 503, true, claudeConnection],
+    ["codex", "approvals", 400, false, codexConnection],
+    ["codex", "interactions", 503, true, codexConnection],
+  ])("surfaces a non-success %s %s read (HTTP %i)", async (
+    _agent,
+    failedPath,
+    status,
+    isUnavailable,
+    connection,
+  ) => {
+    const { provider } = httpProvider((url) => {
+      const isStatus = connection.agent === "claude"
+        ? url.endsWith("/session/session-1")
+        : url.endsWith("/session/session-1/status");
+      if (isStatus) return Response.json({ status: "running" });
+      if (url.endsWith(`/${failedPath}`)) {
+        return new Response(null, { status });
+      }
+      const validKey = connection.agent === "claude"
+        ? failedPath === "questions" ? "approvals" : "questions"
+        : failedPath === "approvals" ? "interactions" : "approvals";
+      return Response.json({ [validKey]: [] });
+    }, connection);
+
+    let caught: unknown;
+    try {
+      await provider.activity?.("session-1");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught instanceof ProviderUnavailableError).toBe(isUnavailable);
+  });
+
   test("lets an explicit session mode override the one the phase implies", async () => {
     const { provider, requests } = httpProvider(
       () => Response.json({ sessionId: "codex-1" }),
@@ -507,9 +615,13 @@ type OpenCodeFake = {
   setPromptError(error: unknown): void;
   client: OpencodeClient;
   readonly permissionListCallCount: number;
+  permissionListCalls: Array<Record<string, unknown> | undefined>;
   permissionReplies: Array<Record<string, unknown>>;
   readonly questionListCallCount: number;
+  questionListCalls: Array<Record<string, unknown> | undefined>;
   questionRejections: Array<Record<string, unknown>>;
+  readonly statusCallCount: number;
+  statusCalls: Array<Record<string, unknown> | undefined>;
   readonly subscribeCallCount: number;
   subscriptions: EventHarness[];
   setPending(
@@ -521,6 +633,10 @@ type OpenCodeFake = {
     permissions: Record<string, unknown> | null,
     questions: Record<string, unknown> | null,
   ): void;
+  setPendingReadErrors(
+    permissions: unknown | null,
+    questions: unknown | null,
+  ): void;
   setPermissionReplyResponse(response: Record<string, unknown>): void;
   setQuestionRejectResponse(response: Record<string, unknown>): void;
   setSubscribeFailures(failures: Array<"throw" | "missing-stream">): void;
@@ -528,6 +644,7 @@ type OpenCodeFake = {
   setAbortResponse(response: Record<string, unknown>): void;
   setCreateResponse(response: Record<string, unknown>): void;
   setPromptResponse(response: Record<string, unknown>): void;
+  setStatusError(error: unknown): void;
   setStatusResponse(response: Record<string, unknown>): void;
 };
 
@@ -541,17 +658,23 @@ function openCodeFake(): OpenCodeFake {
   let subscribeFailures: Array<"throw" | "missing-stream"> = [];
   let permissionListCallCount = 0;
   let questionListCallCount = 0;
+  const permissionListCalls: Array<Record<string, unknown> | undefined> = [];
+  const questionListCalls: Array<Record<string, unknown> | undefined> = [];
   let pendingPermissions: Array<Record<string, unknown>> = [];
   let pendingQuestions: Array<Record<string, unknown>> = [];
   let pendingReadGate: Promise<void> | null = null;
   let permissionListResponse: Record<string, unknown> | null = null;
   let questionListResponse: Record<string, unknown> | null = null;
+  let permissionListError: unknown = null;
+  let questionListError: unknown = null;
   let permissionReplyResponse: Record<string, unknown> = { data: true };
   let questionRejectResponse: Record<string, unknown> = { data: true };
   let messagesResponse: Record<string, unknown> = { data: [] };
   let abortResponse: Record<string, unknown> = { data: true };
   let createResponse: Record<string, unknown> = { data: { id: "owned-session" } };
   let promptResponse: Record<string, unknown> = { data: true };
+  let statusError: unknown = null;
+  const statusCalls: Array<Record<string, unknown> | undefined> = [];
   let statusResponse: Record<string, unknown> = {
     data: { "owned-session": { type: "idle" } },
   };
@@ -572,9 +695,11 @@ function openCodeFake(): OpenCodeFake {
       },
     },
     permission: {
-      async list() {
+      async list(parameters?: Record<string, unknown>) {
         permissionListCallCount += 1;
+        permissionListCalls.push(parameters);
         await pendingReadGate;
+        if (permissionListError) throw permissionListError;
         return permissionListResponse ?? { data: pendingPermissions };
       },
       async reply(parameters: Record<string, unknown>) {
@@ -588,9 +713,11 @@ function openCodeFake(): OpenCodeFake {
       },
     },
     question: {
-      async list() {
+      async list(parameters?: Record<string, unknown>) {
         questionListCallCount += 1;
+        questionListCalls.push(parameters);
         await pendingReadGate;
+        if (questionListError) throw questionListError;
         return questionListResponse ?? { data: pendingQuestions };
       },
       async reject(parameters: Record<string, unknown>) {
@@ -612,7 +739,9 @@ function openCodeFake(): OpenCodeFake {
         if (promptError) throw promptError;
         return promptResponse;
       },
-      async status() {
+      async status(parameters?: Record<string, unknown>) {
+        statusCalls.push(parameters);
+        if (statusError) throw statusError;
         return statusResponse;
       },
       async messages() {
@@ -629,12 +758,18 @@ function openCodeFake(): OpenCodeFake {
     get permissionListCallCount() {
       return permissionListCallCount;
     },
+    permissionListCalls,
     permissionReplies,
     promptCalls,
     get questionListCallCount() {
       return questionListCallCount;
     },
+    questionListCalls,
     questionRejections,
+    get statusCallCount() {
+      return statusCalls.length;
+    },
+    statusCalls,
     get subscribeCallCount() {
       return subscribeCallCount;
     },
@@ -652,6 +787,10 @@ function openCodeFake(): OpenCodeFake {
     setPendingReadResponses(permissions, questions) {
       permissionListResponse = permissions;
       questionListResponse = questions;
+    },
+    setPendingReadErrors(permissions, questions) {
+      permissionListError = permissions;
+      questionListError = questions;
     },
     setPermissionReplyResponse(response) {
       permissionReplyResponse = response;
@@ -674,6 +813,9 @@ function openCodeFake(): OpenCodeFake {
     setPromptResponse(response) {
       promptResponse = response;
     },
+    setStatusError(error) {
+      statusError = error;
+    },
     setStatusResponse(response) {
       statusResponse = response;
     },
@@ -695,6 +837,18 @@ function openCodeProvider(fake: OpenCodeFake, monitorRetryMs = 1) {
   );
 }
 
+function openCodeActivityProvider(fake: OpenCodeFake) {
+  return createBuildPipelineProvider(
+    {
+      agent: "opencode",
+      baseUrl: "http://opencode.test",
+      authToken: "test-token",
+      directory: "/workspace",
+    },
+    { openCodeClient: fake.client, autoAnswerRequests: false },
+  );
+}
+
 describe("OpenCode build pipeline provider", () => {
   test("reports busy OpenCode sessions with pending input as waiting", async () => {
     const fake = openCodeFake();
@@ -705,15 +859,7 @@ describe("OpenCode build pipeline provider", () => {
       [{ id: "permission-other", sessionID: "other-session" }],
       [{ id: "question-owned", sessionID: "owned-session" }],
     );
-    const provider = createBuildPipelineProvider(
-      {
-        agent: "opencode",
-        baseUrl: "http://opencode.test",
-        authToken: "test-token",
-        directory: "/workspace",
-      },
-      { openCodeClient: fake.client, autoAnswerRequests: false },
-    );
+    const provider = openCodeActivityProvider(fake);
     try {
       await expect(provider.activity?.("owned-session")).resolves.toBe("waiting");
       fake.setPending(
@@ -721,6 +867,130 @@ describe("OpenCode build pipeline provider", () => {
         [],
       );
       await expect(provider.activity?.("owned-session")).resolves.toBe("working");
+      fake.setPending(
+        [{ id: "permission-owned", sessionID: "owned-session" }],
+        [],
+      );
+      await expect(provider.activity?.("owned-session")).resolves.toBe("waiting");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("batches multiple OpenCode sessions from one global snapshot", async () => {
+    const fake = openCodeFake();
+    fake.setStatusResponse({
+      data: {
+        "busy-session": { type: "busy" },
+        "retry-session": { type: "retry" },
+        "idle-session": { type: "idle" },
+      },
+    });
+    fake.setPending(
+      [
+        { id: "permission-owned", sessionID: "retry-session" },
+        { id: "permission-other", sessionID: "other-session" },
+      ],
+      [{ id: "question-owned", sessionID: "busy-session" }],
+    );
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const activity = await provider.activityBatch?.([
+        "busy-session",
+        "retry-session",
+        "idle-session",
+        "missing-session",
+        "busy-session",
+      ]);
+
+      expect(activity).toEqual(new Map([
+        ["idle-session", "idle"],
+        ["missing-session", "missing"],
+        ["busy-session", "waiting"],
+        ["retry-session", "waiting"],
+      ]));
+      expect(fake.statusCallCount).toBe(1);
+      expect(fake.questionListCallCount).toBe(1);
+      expect(fake.permissionListCallCount).toBe(1);
+      expect(fake.statusCalls).toEqual([{ directory: "/workspace" }]);
+      expect(fake.questionListCalls).toEqual([{ directory: "/workspace" }]);
+      expect(fake.permissionListCalls).toEqual([{ directory: "/workspace" }]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("short-circuits OpenCode pending reads when every session is non-running", async () => {
+    const fake = openCodeFake();
+    fake.setStatusResponse({
+      data: {
+        "idle-session": { type: "idle" },
+        "error-session": { type: "unexpected" },
+      },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const activity = await provider.activityBatch?.([
+        "idle-session",
+        "error-session",
+        "missing-session",
+      ]);
+
+      expect(activity).toEqual(new Map([
+        ["idle-session", "idle"],
+        ["error-session", "idle"],
+        ["missing-session", "missing"],
+      ]));
+      expect(fake.statusCallCount).toBe(1);
+      expect(fake.questionListCallCount).toBe(0);
+      expect(fake.permissionListCallCount).toBe(0);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("returns an empty OpenCode activity batch without upstream reads", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeActivityProvider(fake);
+    try {
+      await expect(provider.activityBatch?.([])).resolves.toEqual(new Map());
+      expect(fake.statusCallCount).toBe(0);
+      expect(fake.questionListCallCount).toBe(0);
+      expect(fake.permissionListCallCount).toBe(0);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test.each([
+    ["question", "envelope"],
+    ["permission", "envelope"],
+    ["question", "throw"],
+    ["permission", "throw"],
+  ] as const)("wraps OpenCode %s list %s failures as unavailable", async (
+    requestType,
+    failureType,
+  ) => {
+    const fake = openCodeFake();
+    fake.setStatusResponse({ data: { "owned-session": { type: "busy" } } });
+    if (failureType === "envelope") {
+      fake.setPendingReadResponses(
+        requestType === "permission" ? { error: { message: "failed" } } : null,
+        requestType === "question" ? { error: { message: "failed" } } : null,
+      );
+    } else {
+      fake.setPendingReadErrors(
+        requestType === "permission" ? new Error("failed") : null,
+        requestType === "question" ? new Error("failed") : null,
+      );
+    }
+    const provider = openCodeActivityProvider(fake);
+    try {
+      await expect(provider.activity?.("owned-session"))
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(fake.statusCallCount).toBe(1);
+      expect(fake.questionListCallCount).toBe(1);
+      expect(fake.permissionListCallCount).toBe(1);
     } finally {
       await provider.dispose?.();
     }
@@ -1132,6 +1402,19 @@ describe("OpenCode build pipeline provider", () => {
       } finally {
         await provider.dispose?.();
       }
+    }
+  });
+
+  test("wraps a thrown OpenCode status read as unavailable", async () => {
+    const fake = openCodeFake();
+    fake.setStatusError(new Error("status failed"));
+    const provider = openCodeActivityProvider(fake);
+    try {
+      await expect(provider.activity?.("owned-session"))
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(fake.statusCalls).toEqual([{ directory: "/workspace" }]);
+    } finally {
+      await provider.dispose?.();
     }
   });
 

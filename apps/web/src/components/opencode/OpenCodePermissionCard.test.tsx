@@ -198,7 +198,7 @@ describe("OpenCodePermissionCard", () => {
     });
   });
 
-  test("recovers from an unexpected thrown reply error", async () => {
+  test("blocks retry after an unreconciled thrown reply error", async () => {
     const originalError = console.error;
     console.error = mock(() => {});
     try {
@@ -218,7 +218,7 @@ describe("OpenCodePermissionCard", () => {
       ).toBeTruthy();
       expect(
         screen.getByRole("button", { name: "Reject" }).hasAttribute("disabled"),
-      ).toBe(false);
+      ).toBe(true);
       expect(mockToastError).toHaveBeenCalledWith(
         "Failed to send permission decision",
         { description: "transport exploded" },

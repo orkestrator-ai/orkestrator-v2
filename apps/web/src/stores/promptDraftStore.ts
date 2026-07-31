@@ -80,19 +80,32 @@ export const usePromptDraftStore = create<PromptDraftState>((set) => ({
  * Key builders shared by the cards and by the stores that clear drafts on
  * resolution. Namespaced so ids from different agents can never collide.
  */
-export const claudeQuestionDraftKey = (requestId: string) =>
-  `claude-question:${requestId}`;
-export const claudePlanApprovalDraftKey = (requestId: string) =>
-  `claude-plan-approval:${requestId}`;
-export const openCodeQuestionDraftKey = (requestId: string) =>
-  `opencode-question:${requestId}`;
-export const codexInteractionDraftKey = (interactionId: string) =>
-  `codex-interaction:${interactionId}`;
-export const tmuxQuestionDraftKey = (eventId: string) =>
-  `tmux-question:${eventId}`;
-export const tmuxPlanDraftKey = (eventId: string) => `tmux-plan:${eventId}`;
-export const tmuxElicitationDraftKey = (eventId: string) =>
-  `tmux-elicitation:${eventId}`;
+function scopedDraftKey(
+  provider: string,
+  sessionOrRequestId: string,
+  requestId?: string,
+): string {
+  // The optional form keeps old renderer-only callers readable during rollout;
+  // authoritative cards always pass both session and request identity.
+  return requestId === undefined
+    ? `${provider}:${encodeURIComponent(sessionOrRequestId)}`
+    : `${provider}:${encodeURIComponent(sessionOrRequestId)}:${encodeURIComponent(requestId)}`;
+}
+
+export const claudeQuestionDraftKey = (sessionId: string, requestId?: string) =>
+  scopedDraftKey("claude-question", sessionId, requestId);
+export const claudePlanApprovalDraftKey = (sessionId: string, requestId?: string) =>
+  scopedDraftKey("claude-plan-approval", sessionId, requestId);
+export const openCodeQuestionDraftKey = (sessionId: string, requestId?: string) =>
+  scopedDraftKey("opencode-question", sessionId, requestId);
+export const codexInteractionDraftKey = (sessionKey: string, interactionId?: string) =>
+  scopedDraftKey("codex-interaction", sessionKey, interactionId);
+export const tmuxQuestionDraftKey = (sessionKey: string, eventId?: string) =>
+  scopedDraftKey("tmux-question", sessionKey, eventId);
+export const tmuxPlanDraftKey = (sessionKey: string, eventId?: string) =>
+  scopedDraftKey("tmux-plan", sessionKey, eventId);
+export const tmuxElicitationDraftKey = (sessionKey: string, eventId?: string) =>
+  scopedDraftKey("tmux-elicitation", sessionKey, eventId);
 
 /**
  * `useState` drop-in whose value survives unmount by living in the draft

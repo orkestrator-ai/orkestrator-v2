@@ -1461,7 +1461,8 @@ export type ClaudeApprovalResponseResult =
   | "applied"
   | "stale"
   | "forbidden"
-  | "error";
+  | "error"
+  | "unknown";
 
 /** Maps a bridge reply onto the shared outcome union. */
 function approvalResponseResult(response: Response): ClaudeApprovalResponseResult {
@@ -1493,7 +1494,12 @@ export async function answerQuestion(
     return approvalResponseResult(response);
   } catch (error) {
     console.error("[claude-client] Failed to answer question:", error);
-    return "error";
+    try {
+      const pending = await getPendingQuestions(client, sessionId, { throwOnError: true });
+      return pending.some((question) => question.id === questionId) ? "error" : "applied";
+    } catch {
+      return "unknown";
+    }
   }
 }
 
@@ -1514,7 +1520,12 @@ export async function dismissQuestion(
     return approvalResponseResult(response);
   } catch (error) {
     console.error("[claude-client] Failed to dismiss question:", error);
-    return "error";
+    try {
+      const pending = await getPendingQuestions(client, sessionId, { throwOnError: true });
+      return pending.some((question) => question.id === questionId) ? "error" : "applied";
+    } catch {
+      return "unknown";
+    }
   }
 }
 
@@ -1544,7 +1555,12 @@ export async function respondToPlanApproval(
     return approvalResponseResult(response);
   } catch (error) {
     console.error("[claude-client] Failed to respond to plan approval:", error);
-    return "error";
+    try {
+      const pending = await getPendingPlanApprovals(client, sessionId, { throwOnError: true });
+      return pending.some((approval) => approval.id === approvalId) ? "error" : "applied";
+    } catch {
+      return "unknown";
+    }
   }
 }
 

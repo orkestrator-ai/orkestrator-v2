@@ -24,10 +24,12 @@ const realCodexClientSnapshot = { ...realCodexClient };
 const respondMock = mock(
   async (): Promise<CodexApprovalResponseResult> => "applied",
 );
+const fetchPendingApprovalsMock = mock(async () => [] as CodexApproval[]);
 
 mock.module("@/lib/codex-client", () => ({
   ...realCodexClientSnapshot,
   respondToApproval: respondMock,
+  fetchPendingApprovals: fetchPendingApprovalsMock,
 }));
 
 afterAll(() => {
@@ -71,6 +73,8 @@ function renderCard(approval: CodexApproval) {
 beforeEach(() => {
   respondMock.mockClear();
   respondMock.mockImplementation(async () => "applied");
+  fetchPendingApprovalsMock.mockReset();
+  fetchPendingApprovalsMock.mockResolvedValue([]);
   useCodexStore.setState({ pendingApprovals: new Map() });
   useCodexStore.getState().addPendingApproval(SESSION_KEY, makeApproval());
 });
@@ -246,6 +250,20 @@ describe("CodexApprovalCard", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
     // Only a transport failure is retryable, so the approval must survive.
     expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(true);
+    expect(screen.getByRole("button", { name: "Approve" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  test("reconciles an unknown transport outcome before enabling a retry", async () => {
+    const approval = makeApproval();
+    fetchPendingApprovalsMock.mockResolvedValue([approval]);
+    respondMock.mockResolvedValue("unknown");
+    renderCard(approval);
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() =>
+      expect(fetchPendingApprovalsMock).toHaveBeenCalledWith(CLIENT, "session-1"),
+    );
+    expect(screen.getByRole("alert").textContent).toMatch(/safe to retry/i);
     expect(screen.getByRole("button", { name: "Approve" }).hasAttribute("disabled")).toBe(false);
   });
 

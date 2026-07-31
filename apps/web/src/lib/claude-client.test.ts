@@ -1785,9 +1785,9 @@ describe("claude-client", () => {
       expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("applied");
     });
 
-    test("returns error on network failure", async () => {
+    test("reports an unknown outcome when transport and reconciliation fail", async () => {
       mockFetchError();
-      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("error");
+      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("unknown");
     });
 
     // 409 is the bridge saying the window closed; 404 is "no such session",
@@ -1825,7 +1825,7 @@ describe("claude-client", () => {
       expect(await dismissQuestion(client, "s-1", "q-1")).toBe("error");
 
       mockFetchError();
-      expect(await dismissQuestion(client, "s-1", "q-1")).toBe("error");
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe("unknown");
     });
   });
 
@@ -1852,7 +1852,7 @@ describe("claude-client", () => {
       expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("error");
 
       mockFetchError();
-      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("error");
+      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("unknown");
     });
   });
 

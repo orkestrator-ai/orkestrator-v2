@@ -411,7 +411,7 @@ describe("QuestionCard submit contract", () => {
       .toBe(false);
   });
 
-  test("releases the card after a rejected submit", async () => {
+  test("blocks retry after an unreconciled submit exception", async () => {
     const onSubmit = mock(async () => {
       throw new Error("bridge down");
     });
@@ -426,14 +426,9 @@ describe("QuestionCard submit contract", () => {
       fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
       await waitFor(() => expect(errorSpy).toHaveBeenCalledTimes(1));
-      await waitFor(() =>
-        expect(
-          screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled"),
-        ).toBe(false),
-      );
-
+      expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
       fireEvent.click(screen.getByRole("button", { name: "Submit" }));
-      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+      expect(onSubmit).toHaveBeenCalledTimes(1);
     } finally {
       console.error = consoleError;
     }
@@ -449,7 +444,7 @@ describe("QuestionCard submit contract", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Submitting..." }).hasAttribute("disabled"),
+        screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled"),
       ).toBe(true),
     );
     expect(screen.getByRole("button", { name: "Yes" }).hasAttribute("disabled")).toBe(true);
@@ -689,8 +684,39 @@ describe("QuestionCard draft persistence", () => {
   });
 });
 
+describe("QuestionCard secret handling", () => {
+  test("submits a secret without retaining it and loses it on unmount", async () => {
+    const questions: QuestionCardQuestion[] = [
+      { id: "token", question: "Token?", secret: true, allowCustomAnswer: true },
+    ];
+    const onSubmit = mock(async () => false);
+    const first = render(
+      <QuestionCard
+        agentLabel="Test"
+        title="Secret required"
+        questions={questions}
+        onSubmit={onSubmit}
+        draftKey="provider:session:request:token"
+      />,
+    );
+
+    const input = screen.getByPlaceholderText("Type your answer") as HTMLInputElement;
+    expect(input.type).toBe("password");
+    fireEvent.change(input, { target: { value: "not-for-the-store" } });
+    expect(usePromptDraftStore.getState().drafts.has("provider:session:request:token"))
+      .toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["not-for-the-store"]]));
+
+    first.unmount();
+    renderCard(questions, { draftKey: "provider:session:request:token" });
+    expect((screen.getByPlaceholderText("Type your answer") as HTMLInputElement).value).toBe("");
+    expect(screen.getByText(/lost if you leave it/i)).toBeTruthy();
+  });
+});
+
 describe("QuestionCard dismiss recovery", () => {
-  test("unlocks the card after a rejected dismiss so the user can retry", async () => {
+  test("blocks retry after an unreconciled dismiss exception", async () => {
     const onDismiss = mock(async () => {
       throw new Error("bridge unavailable");
     });
@@ -700,11 +726,9 @@ describe("QuestionCard dismiss recovery", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled")).toBe(false),
-    );
+    expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled")).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(2));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });

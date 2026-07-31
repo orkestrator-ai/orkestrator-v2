@@ -23,10 +23,14 @@ export function OpenCodeQuestionCard({
 
   const questions = useMemo<QuestionCardQuestion[]>(
     () =>
-      question.questions.map((info) => ({
+      question.questions.map((info, questionIndex) => ({
+        id: `${question.id}:question:${questionIndex}`,
         question: info.question,
         header: info.header,
-        options: info.options,
+        options: info.options.map((option, optionIndex) => ({
+          ...option,
+          id: `${question.id}:question:${questionIndex}:option:${optionIndex}`,
+        })),
         // OpenCode names these `multiple` and `custom`; `custom` defaults to true.
         multiSelect: info.multiple,
         allowCustomAnswer: info.custom !== false,
@@ -65,7 +69,7 @@ export function OpenCodeQuestionCard({
       exclusiveSingleSelect
       // Cleared by `openCodeStore.removePendingQuestion` when the request
       // resolves, so in-progress answers survive tab switches until then.
-      draftKey={openCodeQuestionDraftKey(question.id)}
+      draftKey={openCodeQuestionDraftKey(question.sessionId, question.id)}
     />
   );
 }

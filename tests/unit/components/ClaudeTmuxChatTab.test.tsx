@@ -8,7 +8,7 @@ import {
   spyOn,
   test,
 } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { forwardRef, useEffect, useImperativeHandle, useRef as useReactRef } from "react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
@@ -2394,6 +2394,9 @@ Running 1 Explore agent...
   });
 
   test("routes live lifecycle and actionable hook events into authoritative state", async () => {
+    const requestedAt = 1_900_000_000_000;
+    const expiresAt = requestedAt + 90_000;
+    dateNowSpy = spyOn(Date, "now").mockReturnValue(requestedAt);
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
@@ -2425,6 +2428,8 @@ Running 1 Explore agent...
         session_id: "session-1",
         event_id: "question-live",
         event_kind: "PreToolUse",
+        requested_at: requestedAt,
+        expires_at: expiresAt,
         payload: {
           tool_name: "AskUserQuestion",
           tool_input: {
@@ -2446,6 +2451,8 @@ Running 1 Explore agent...
         session_id: "session-1",
         event_id: "plan-live",
         event_kind: "PreToolUse",
+        requested_at: requestedAt,
+        expires_at: expiresAt,
         payload: {
           tool_name: "ExitPlanMode",
           tool_input: { plan: "Ship the implementation" },
@@ -2458,6 +2465,8 @@ Running 1 Explore agent...
         session_id: "session-1",
         event_id: "approval-live",
         event_kind: "PreToolUse",
+        requested_at: requestedAt,
+        expires_at: expiresAt,
         payload: {
           tool_name: "Bash",
           tool_input: { command: "bun test" },
@@ -2470,6 +2479,8 @@ Running 1 Explore agent...
         session_id: "session-1",
         event_id: "permission-live",
         event_kind: "PermissionRequest",
+        requested_at: requestedAt,
+        expires_at: expiresAt,
         payload: {
           tool_name: "Write",
           tool_input: { file_path: "/tmp/result.txt" },
@@ -2483,6 +2494,8 @@ Running 1 Explore agent...
         session_id: "session-1",
         event_id: "elicitation-live",
         event_kind: "Elicitation",
+        requested_at: requestedAt,
+        expires_at: expiresAt,
         payload: {
           mcp_server_name: "docs-mcp",
           message: "Choose a format",
@@ -2517,6 +2530,17 @@ Running 1 Explore agent...
     expect(screen.getByText("Claude wants to use a tool")).toBeTruthy();
     expect(screen.getByText("Claude needs permission")).toBeTruthy();
     expect(screen.getByText("MCP server requested input")).toBeTruthy();
+    for (const name of [
+      "Claude needs your input",
+      "Claude plan ready for review",
+      "Claude wants to use Bash",
+      "Claude needs permission",
+      "Claude MCP input request",
+    ]) {
+      expect(
+        within(screen.getByRole("group", { name })).getByLabelText("Time remaining 1:30"),
+      ).toBeTruthy();
+    }
   });
 
   test("keeps busy during SubagentStop and clears it on top-level Stop", async () => {
@@ -6837,7 +6861,7 @@ Enter to confirm · Esc to cancel
           hookSpecificOutput: expect.objectContaining({
             updatedInput: expect.objectContaining({
               answers: {
-                "Which frameworks?": "React, Vue",
+                "Which frameworks?": JSON.stringify(["React", "Vue"]),
                 "Any notes?": "Prefer TypeScript-first tooling",
               },
             }),

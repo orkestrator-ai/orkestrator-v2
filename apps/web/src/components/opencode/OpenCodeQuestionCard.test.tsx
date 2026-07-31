@@ -105,6 +105,12 @@ describe("OpenCodeQuestionCard", () => {
     });
   });
 
+  test("does not fabricate a countdown when OpenCode publishes no deadline", () => {
+    render(<OpenCodeQuestionCard question={makeQuestion()} client={CLIENT} />);
+
+    expect(screen.queryByLabelText(/Time remaining/i)).toBeNull();
+  });
+
   test("treats custom as enabled by default and keeps single-select answers exclusive", async () => {
     const question = makeQuestion({
       questions: [
@@ -174,11 +180,11 @@ describe("OpenCodeQuestionCard", () => {
     fireEvent.click(screen.getByRole("button", { name: /Web/ }));
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Submitting..." }).hasAttribute("disabled")).toBe(
+      expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(
         true,
       );
     });
-    fireEvent.click(screen.getByRole("button", { name: "Submitting..." }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(replyMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -212,7 +218,7 @@ describe("OpenCodeQuestionCard", () => {
     expect(
       usePromptDraftStore
         .getState()
-        .drafts.has(openCodeQuestionDraftKey(question.id)),
+        .drafts.has(openCodeQuestionDraftKey(question.sessionId, question.id)),
     ).toBe(false);
   });
 

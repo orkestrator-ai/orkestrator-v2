@@ -30,10 +30,12 @@ const mockRespondToInteraction = mock<
   ) => Promise<CodexApprovalResponseResult>
 >(async () => "applied");
 const mockOpenInBrowser = mock(async (_url: string) => undefined);
+const mockFetchPendingInteractions = mock(async () => [] as CodexInteraction[]);
 
 mock.module("@/lib/codex-client", () => ({
   ...realCodexClientSnapshot,
   respondToInteraction: mockRespondToInteraction,
+  fetchPendingInteractions: mockFetchPendingInteractions,
 }));
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -100,6 +102,8 @@ beforeEach(() => {
   mockRespondToInteraction.mockImplementation(async () => "applied");
   mockOpenInBrowser.mockClear();
   mockOpenInBrowser.mockImplementation(async () => undefined);
+  mockFetchPendingInteractions.mockReset();
+  mockFetchPendingInteractions.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -205,7 +209,7 @@ describe("CodexInteractionCard question branch", () => {
     });
   });
 
-  test("typing clears a selected option so only one answer is submitted", async () => {
+  test("submits a selected option together with custom text", async () => {
     const interaction = createInteraction({
       questions: [
         {
@@ -230,7 +234,7 @@ describe("CodexInteractionCard question branch", () => {
     await waitFor(() => expect(mockRespondToInteraction).toHaveBeenCalledTimes(1));
     expect(mockRespondToInteraction.mock.calls[0]?.[3]).toEqual({
       action: "accept",
-      answers: { q1: ["actually yes"] },
+      answers: { q1: ["no", "actually yes"] },
     });
   });
 
@@ -280,7 +284,8 @@ describe("CodexInteractionCard question branch", () => {
     renderCard(interaction);
 
     fireEvent.click(screen.getByRole("button", { name: /^yes/ }));
-    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Next" }).hasAttribute("disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
 
     fireEvent.click(screen.getByRole("button", { name: /also yes/ }));
     expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(false);
@@ -331,6 +336,36 @@ describe("CodexInteractionCard failure handling", () => {
       expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY) ?? []).toEqual([]),
     );
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  test("reconciles an ambiguous transport outcome before offering a retry", async () => {
+    mockRespondToInteraction.mockResolvedValue("unknown");
+    const interaction = createInteraction();
+    mockFetchPendingInteractions.mockResolvedValue([interaction]);
+    seedPending(interaction);
+    renderCard(interaction);
+
+    fireEvent.click(screen.getByRole("button", { name: /staging/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => expect(mockFetchPendingInteractions).toHaveBeenCalledWith(CLIENT, SESSION_ID));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/safe to retry/i);
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  test("removes an interaction when reconciliation proves an ambiguous response resolved", async () => {
+    mockRespondToInteraction.mockResolvedValue("unknown");
+    mockFetchPendingInteractions.mockResolvedValue([]);
+    const interaction = createInteraction();
+    seedPending(interaction);
+    renderCard(interaction);
+
+    fireEvent.click(screen.getByRole("button", { name: /staging/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() =>
+      expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY) ?? []).toEqual([]),
+    );
   });
 
   test("a stale response still clears the card", async () => {
@@ -478,7 +513,7 @@ describe("CodexInteractionCard draft persistence", () => {
     renderCard(interaction);
 
     fireEvent.click(screen.getByRole("button", { name: /staging/ }));
-    const draftKey = codexInteractionDraftKey(interaction.interactionId);
+    const draftKey = codexInteractionDraftKey(SESSION_KEY, interaction.interactionId);
     expect(usePromptDraftStore.getState().drafts.has(draftKey)).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
@@ -496,7 +531,7 @@ describe("CodexInteractionCard draft persistence", () => {
     renderCard(interaction);
 
     fireEvent.click(screen.getByRole("button", { name: /staging/ }));
-    const draftKey = codexInteractionDraftKey(interaction.interactionId);
+    const draftKey = codexInteractionDraftKey(SESSION_KEY, interaction.interactionId);
     expect(usePromptDraftStore.getState().drafts.has(draftKey)).toBe(true);
 
     useCodexStore.getState().setPendingInteractions(SESSION_KEY, []);

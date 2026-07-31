@@ -767,6 +767,7 @@ describe("interactive questions and MCP elicitation", () => {
       resolution: "cancelled",
       timedOut: true,
     });
+    expect(h.transcript.at(-1)?.message).toContain("timed out");
   });
 
   test("a shorter autoResolutionMs shortens the park, it does not extend it", async () => {
@@ -878,6 +879,7 @@ describe("interactive questions and MCP elicitation", () => {
       resolution: "cancelled",
     });
     expect(h.resolved[0]!.resolution).toBe("engine-restarted");
+    expect(h.transcript.at(-1)?.message).toContain("provider restarted");
   });
 
   test("abandonGeneration leaves another generation's interaction alone", async () => {

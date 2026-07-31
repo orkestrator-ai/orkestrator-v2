@@ -1948,19 +1948,26 @@ exit 0
       const pendingDir = path.join(sessionRoot, "pending");
       const responseDir = path.join(sessionRoot, "response");
       await fs.mkdir(pendingDir, { recursive: true });
-      await fs.writeFile(path.join(pendingDir, "PreToolUse-event-1.json"), JSON.stringify({ tool_name: "Edit" }));
+      const hookEventId = "1700000000-event-1";
+      await fs.writeFile(path.join(pendingDir, `PreToolUse-${hookEventId}.json`), JSON.stringify({ tool_name: "Edit" }));
 
       await expect(invoke(handlers, "claude_tmux_pending_hooks", { tabId: "tab-1", environmentId: environment.id })).resolves.toEqual([
-        { id: "event-1", kind: "PreToolUse", payload: { tool_name: "Edit" } },
+        {
+          id: hookEventId,
+          kind: "PreToolUse",
+          payload: { tool_name: "Edit" },
+          requestedAt: 1_700_000_000_000,
+          expiresAt: 1_700_000_300_000,
+        },
       ]);
 
       await invoke(
         handlers,
         "claude_tmux_reply_hook",
-        { tabId: "tab-1", environmentId: environment.id, eventKind: "PreToolUse", eventId: "event-1", response: { ok: true } },
+        { tabId: "tab-1", environmentId: environment.id, eventKind: "PreToolUse", eventId: hookEventId, response: { ok: true } },
       );
-      await expect(fs.readFile(path.join(responseDir, "PreToolUse-event-1.json"), "utf8")).resolves.toBe(JSON.stringify({ ok: true }));
-      await expect(fs.stat(path.join(pendingDir, "PreToolUse-event-1.json"))).rejects.toThrow();
+      await expect(fs.readFile(path.join(responseDir, `PreToolUse-${hookEventId}.json`), "utf8")).resolves.toBe(JSON.stringify({ ok: true }));
+      await expect(fs.stat(path.join(pendingDir, `PreToolUse-${hookEventId}.json`))).rejects.toThrow();
       await expect(invoke(
         handlers,
         "claude_tmux_reply_hook",

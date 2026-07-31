@@ -3,7 +3,7 @@ import { useCallback, useState } from "react";
 import { AlertTriangle, FileDiff, Globe, ShieldAlert, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { respondToApproval } from "@/lib/codex-client";
+import { fetchPendingApprovals, respondToApproval } from "@/lib/codex-client";
 import { useCodexStore } from "@/stores/codexStore";
 import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 import type {
@@ -61,6 +61,7 @@ export function CodexApprovalCard({
   const removePendingApproval = useCodexStore((state) => state.removePendingApproval);
   const [submitting, setSubmitting] = useState<CodexApprovalDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retryBlocked, setRetryBlocked] = useState(false);
   // Codex always promises a deadline. If a malformed bridge response omits it,
   // pass NaN so the shared hook fails closed instead of treating it like a
   // protocol that legitimately has no deadline.
@@ -74,6 +75,7 @@ export function CodexApprovalCard({
       if (submitting) return;
       setSubmitting(decision);
       setError(null);
+      setRetryBlocked(false);
 
       const result = await respondToApproval(client, sessionId, approval.approvalId, decision);
 
@@ -81,6 +83,22 @@ export function CodexApprovalCard({
         // `stale` and `forbidden` both mean this card can no longer do anything, so
         // it must go — leaving it would invite the user to click forever.
         removePendingApproval(sessionKey, approval.approvalId);
+        return;
+      }
+
+      if (result === "unknown") {
+        try {
+          const pending = await fetchPendingApprovals(client, sessionId);
+          if (!pending.some((candidate) => candidate.approvalId === approval.approvalId)) {
+            removePendingApproval(sessionKey, approval.approvalId);
+            return;
+          }
+          setError("The connection dropped, but Codex is still waiting. It is safe to retry.");
+        } catch {
+          setRetryBlocked(true);
+          setError("The decision outcome is unknown. Reconnect or refresh Codex before trying again.");
+        }
+        setSubmitting(null);
         return;
       }
 
@@ -96,6 +114,7 @@ export function CodexApprovalCard({
       className="p-3 text-sm"
       role="group"
       aria-label={approvalTitle(approval)}
+      arrivalAnnouncement={`${approvalTitle(approval)}. A decision is required.`}
     >
       <div className="flex items-start gap-2">
         <ApprovalIcon approval={approval} />
@@ -183,7 +202,7 @@ export function CodexApprovalCard({
               <Button
                 size="sm"
                 variant="default"
-                disabled={submitting !== null}
+                disabled={submitting !== null || retryBlocked}
                 onClick={() => void respond("deny")}
               >
                 {submitting === "deny" ? "Declining…" : "Decline"}
@@ -191,7 +210,7 @@ export function CodexApprovalCard({
               <Button
                 size="sm"
                 variant="ghost"
-                disabled={submitting !== null}
+                disabled={submitting !== null || retryBlocked}
                 onClick={() => void respond("cancel")}
               >
                 {submitting === "cancel" ? "Cancelling…" : "Cancel turn"}
@@ -205,7 +224,7 @@ export function CodexApprovalCard({
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={submitting !== null}
+                  disabled={submitting !== null || retryBlocked}
                   onClick={() => void respond("approve-for-session")}
                 >
                   {submitting === "approve-for-session" ? "Approving…" : "Approve for session"}
@@ -215,7 +234,7 @@ export function CodexApprovalCard({
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={submitting !== null}
+                  disabled={submitting !== null || retryBlocked}
                   onClick={() => void respond("approve")}
                 >
                   {submitting === "approve" ? "Approving…" : "Approve"}

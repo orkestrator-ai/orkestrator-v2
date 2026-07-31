@@ -27,6 +27,7 @@ import {
   setSessionPreferences,
   clearPromptSuggestion,
 } from "../services/session-manager.js";
+import { serializeClaudeQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
 import type {
   CreateSessionResponse,
   SessionListResponse,
@@ -784,8 +785,10 @@ session.post("/:id/questions/:questionId/answer", async (c) => {
     const answersRecord: Record<string, string> = {};
     pendingQuestion.questions.forEach((q, index) => {
       const questionAnswers = answersArray[index] || [];
-      // Join multiple answers with commas, or use first answer if single
-      answersRecord[q.question] = questionAnswers.join(", ");
+      answersRecord[q.question] = serializeClaudeQuestionAnswer(
+        questionAnswers,
+        q.multiSelect === true,
+      );
     });
 
     console.log("[session] Converted answers from array to record:", answersRecord);

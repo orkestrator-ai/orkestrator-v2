@@ -46,6 +46,8 @@ export type TmuxEvent =
       event_id: string;
       event_kind: HookEventKind;
       payload: unknown;
+      requested_at?: number;
+      expires_at?: number;
     }
   | {
       kind: "hook-timed-out";
@@ -112,6 +114,8 @@ export interface TmuxPendingHook {
   id: string;
   kind: HookEventKind | string;
   payload: unknown;
+  requestedAt?: number;
+  expiresAt?: number;
 }
 
 export type TranscriptContent =

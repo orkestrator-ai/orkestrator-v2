@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { usePromptDraftStore } from "./promptDraftStore";
+import {
+  claudeQuestionDraftKey,
+  codexInteractionDraftKey,
+  openCodeQuestionDraftKey,
+  usePromptDraftStore,
+} from "./promptDraftStore";
 
 beforeEach(() => {
   usePromptDraftStore.getState().reset();
@@ -53,5 +58,29 @@ describe("promptDraftStore", () => {
     expect(drafts.has("k100")).toBe(true);
     // k1 was the least recently edited once k0 moved to the back.
     expect(drafts.has("k1")).toBe(false);
+  });
+
+  test("namespaces drafts by provider, session, and request identity", () => {
+    const keys = [
+      claudeQuestionDraftKey("session-a", "request-1"),
+      claudeQuestionDraftKey("session-b", "request-1"),
+      openCodeQuestionDraftKey("session-a", "request-1"),
+      codexInteractionDraftKey("session-a", "request-1"),
+    ];
+
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys[0]).toContain("session-a");
+    expect(keys[0]).toContain("request-1");
+  });
+
+  test("renderer restart reset drops every in-memory draft", () => {
+    usePromptDraftStore.getState().setDraftValue(
+      claudeQuestionDraftKey("session-a", "request-1"),
+      "answers",
+      [["unfinished"]],
+    );
+
+    usePromptDraftStore.getState().reset();
+    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
   });
 });

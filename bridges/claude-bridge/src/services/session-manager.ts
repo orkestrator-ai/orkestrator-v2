@@ -30,6 +30,7 @@ import type {
 } from "../types/index.js";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
+import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 import {
   isRootAssistantRecord,
   normalizeBackendModelId,
@@ -171,8 +172,8 @@ const planApprovalResolvers = new Map<
 >();
 
 // Timeouts for user interactions (5 minutes)
-const QUESTION_TIMEOUT_MS = 5 * 60 * 1000;
-const PLAN_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+const QUESTION_TIMEOUT_MS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
+const PLAN_APPROVAL_TIMEOUT_MS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
 
 /**
  * Reason a session operation refused, carried as a plain string property.

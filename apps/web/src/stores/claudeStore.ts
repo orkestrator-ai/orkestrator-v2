@@ -607,13 +607,13 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       for (const [requestId, question] of nextPendingQuestions) {
         if (sessionIdsToCleanup.has(question.sessionId)) {
           nextPendingQuestions.delete(requestId);
-          sweptDraftKeys.push(claudeQuestionDraftKey(requestId));
+          sweptDraftKeys.push(claudeQuestionDraftKey(question.sessionId, requestId));
         }
       }
       for (const [requestId, approval] of nextPendingPlanApprovals) {
         if (sessionIdsToCleanup.has(approval.sessionId)) {
           nextPendingPlanApprovals.delete(requestId);
-          sweptDraftKeys.push(claudePlanApprovalDraftKey(requestId));
+          sweptDraftKeys.push(claudePlanApprovalDraftKey(approval.sessionId, requestId));
         }
       }
 
@@ -654,14 +654,14 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       for (const [requestId, question] of pendingQuestions) {
         if (question.sessionId === session.sessionId) {
           pendingQuestions.delete(requestId);
-          sweptDraftKeys.push(claudeQuestionDraftKey(requestId));
+          sweptDraftKeys.push(claudeQuestionDraftKey(question.sessionId, requestId));
         }
       }
       const pendingPlanApprovals = new Map(state.pendingPlanApprovals);
       for (const [requestId, approval] of pendingPlanApprovals) {
         if (approval.sessionId === session.sessionId) {
           pendingPlanApprovals.delete(requestId);
-          sweptDraftKeys.push(claudePlanApprovalDraftKey(requestId));
+          sweptDraftKeys.push(claudePlanApprovalDraftKey(approval.sessionId, requestId));
         }
       }
       return { ...patch, pendingQuestions, pendingPlanApprovals };
@@ -677,6 +677,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
     }),
 
   removePendingQuestion: (requestId) => {
+    const question = get().pendingQuestions.get(requestId);
     set((state) => {
       const next = new Map(state.pendingQuestions);
       next.delete(requestId);
@@ -685,7 +686,11 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
     // The request is resolved (answered, dismissed, or withdrawn), so the
     // in-progress answer draft must not survive to a future request that
     // happens to reuse this id.
-    usePromptDraftStore.getState().clearDraft(claudeQuestionDraftKey(requestId));
+    if (question) {
+      usePromptDraftStore.getState().clearDraft(
+        claudeQuestionDraftKey(question.sessionId, requestId),
+      );
+    }
   },
 
   addPendingPlanApproval: (approval) =>
@@ -696,15 +701,18 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
     }),
 
   removePendingPlanApproval: (requestId) => {
+    const approval = get().pendingPlanApprovals.get(requestId);
     set((state) => {
       const next = new Map(state.pendingPlanApprovals);
       next.delete(requestId);
       return { pendingPlanApprovals: next };
     });
     // See removePendingQuestion: resolved requests drop their feedback draft.
-    usePromptDraftStore
-      .getState()
-      .clearDraft(claudePlanApprovalDraftKey(requestId));
+    if (approval) {
+      usePromptDraftStore
+        .getState()
+        .clearDraft(claudePlanApprovalDraftKey(approval.sessionId, requestId));
+    }
   },
 
   // Selectors

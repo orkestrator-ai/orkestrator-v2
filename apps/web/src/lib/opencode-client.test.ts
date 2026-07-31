@@ -3028,8 +3028,23 @@ describe("opencode-client events and pending requests", () => {
       question: {
         reply: async () => { throw new Error("reply failed"); },
         reject: async () => { throw new Error("reject failed"); },
+        list: async () => ({
+          data: [{ id: "question-1", sessionID: "session-1", questions: [] }],
+        }),
       },
-      permission: { reply: async () => { throw new Error("permission failed"); } },
+      permission: {
+        reply: async () => { throw new Error("permission failed"); },
+        list: async () => ({
+          data: [{
+            id: "permission-1",
+            sessionID: "session-1",
+            permission: "read",
+            patterns: [],
+            metadata: {},
+            always: [],
+          }],
+        }),
+      },
     } as unknown as OpencodeClient;
     expect(await replyToQuestion(failed, "question-1", [])).toBe(false);
     expect(await replyToPermission(failed, "permission-1", "reject")).toBe(false);

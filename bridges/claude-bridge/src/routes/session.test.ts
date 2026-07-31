@@ -1270,7 +1270,7 @@ describe("session routes", () => {
       expect(callArgs[1]).toEqual({ "Pick a color": "blue" });
     });
 
-    test("joins multiple selected answers with comma", async () => {
+    test("serializes multi-select answers unambiguously when labels contain commas", async () => {
       mockGetPendingQuestions.mockImplementationOnce(() => [
         {
           id: "q-2",
@@ -1279,7 +1279,8 @@ describe("session routes", () => {
             {
               question: "Pick languages",
               header: "Languages",
-              options: [{ label: "ts" }, { label: "py" }, { label: "go" }],
+              options: [{ label: "TypeScript, strict" }, { label: "Python" }],
+              multiSelect: true,
             },
           ],
         },
@@ -1288,11 +1289,13 @@ describe("session routes", () => {
       const res = await jsonRequest(
         "POST",
         "/session/s-1/questions/q-2/answer",
-        { answers: [["ts", "py"]] },
+        { answers: [["TypeScript, strict", "Python"]] },
       );
       expect(res.status).toBe(200);
       const callArgs = mockAnswerQuestion.mock.calls[0];
-      expect(callArgs[1]).toEqual({ "Pick languages": "ts, py" });
+      expect(callArgs[1]).toEqual({
+        "Pick languages": JSON.stringify(["TypeScript, strict", "Python"]),
+      });
     });
 
     test("maps answers to multiple questions in order", async () => {

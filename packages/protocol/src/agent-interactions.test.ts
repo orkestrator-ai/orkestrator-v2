@@ -3,6 +3,7 @@ import {
   AGENT_INTERACTION_AUTHORIZATION_KINDS,
   AGENT_INTERACTION_CLAIM_RETENTION_MS,
   AGENT_INTERACTION_CONTRACT_VERSION,
+  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
   AGENT_INTERACTION_INPUT_KINDS,
   AGENT_INTERACTION_JOURNAL_RETENTION_MS,
   AGENT_INTERACTION_JOURNAL_VERSION,
@@ -26,6 +27,7 @@ import {
   serializeAgentInteractionTelemetry,
   serializeAgentInteractionTranscriptEvent,
   serializeAgentInteractionWorkflowSummary,
+  serializeClaudeQuestionAnswer,
   UNATTENDED_AGENT_INTERACTION_POLICY,
   type AgentInteractionAnswer,
   type AgentInteractionKind,
@@ -37,6 +39,16 @@ import {
 } from "./agent-interactions.js";
 
 const CREATED_AT = 1_800_000_000_000;
+
+test("uses one five-minute product timeout and preserves Claude comma labels", () => {
+  expect(AGENT_INTERACTION_DEFAULT_TIMEOUT_MS).toBe(300_000);
+  expect(serializeClaudeQuestionAnswer(["A, with comma", "B"], true)).toBe(
+    JSON.stringify(["A, with comma", "B"]),
+  );
+  expect(serializeClaudeQuestionAnswer(["A, with comma", "B"], false)).toBe(
+    "A, with comma",
+  );
+});
 
 function request(
   kind: AgentInteractionKind = "question",

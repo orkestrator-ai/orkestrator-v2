@@ -29,8 +29,9 @@ interface ClaudeQuestionCardBaseProps {
 
 /**
  * Either the card answers through the bridge itself (client + sessionId), or
- * the caller supplies its own submit handler — the feature planner and build
- * pipeline reuse this card without a live Claude session behind it.
+ * the caller supplies its own submit handler. ClaudeTmuxChatTab uses callback
+ * mode for backend-owned hook and screen-detected questions; the feature
+ * planner deliberately remains a prose-based discovery flow.
  */
 type ClaudeQuestionCardProps =
   | (ClaudeQuestionCardBaseProps & {
@@ -63,10 +64,14 @@ export function ClaudeQuestionCard({
 
   const questions = useMemo<QuestionCardQuestion[]>(
     () =>
-      question.questions.map((info) => ({
+      question.questions.map((info, questionIndex) => ({
+        id: `${question.id}:question:${questionIndex}`,
         question: info.question,
         header: info.header,
-        options: info.options,
+        options: info.options.map((option, optionIndex) => ({
+          ...option,
+          id: `${question.id}:question:${questionIndex}:option:${optionIndex}`,
+        })),
         multiSelect: info.multiSelect,
       })),
     [question.questions],
@@ -90,6 +95,13 @@ export function ClaudeQuestionCard({
         removePendingQuestion(question.id);
         return true;
       }
+      if (result === "unknown") {
+        return {
+          applied: false,
+          retryable: false,
+          message: "The response outcome is unknown. Reconnect or refresh Claude before trying again.",
+        };
+      }
       return false;
     },
     [client, onSubmitAnswers, question.id, removePendingQuestion, sessionId],
@@ -104,6 +116,13 @@ export function ClaudeQuestionCard({
     if (result === "applied" || result === "stale") {
       removePendingQuestion(question.id);
       return true;
+    }
+    if (result === "unknown") {
+      return {
+        applied: false,
+        retryable: false,
+        message: "The dismissal outcome is unknown. Reconnect or refresh Claude before trying again.",
+      };
     }
     return false;
   }, [client, onDismiss, question.id, removePendingQuestion, sessionId]);
@@ -121,7 +140,7 @@ export function ClaudeQuestionCard({
       submitOnOptionSelect={submitOnOptionSelect}
       hideDismiss={hideDismiss}
       draftKey={
-        draftKey ?? (client ? claudeQuestionDraftKey(question.id) : undefined)
+        draftKey ?? (client ? claudeQuestionDraftKey(sessionId!, question.id) : undefined)
       }
       expiresAt={question.expiresAt}
     />

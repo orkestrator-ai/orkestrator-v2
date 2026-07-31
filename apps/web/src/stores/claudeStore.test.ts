@@ -190,17 +190,17 @@ describe("claudeStore cleanup and queue helpers", () => {
       sessionId: "session-b",
     } as any);
     usePromptDraftStore.getState().setDraftValue(
-      claudeQuestionDraftKey("question-a"),
+      claudeQuestionDraftKey("session-a", "question-a"),
       "answer",
       "target",
     );
     usePromptDraftStore.getState().setDraftValue(
-      claudePlanApprovalDraftKey("approval-a"),
+      claudePlanApprovalDraftKey("session-a", "approval-a"),
       "feedback",
       "target",
     );
     usePromptDraftStore.getState().setDraftValue(
-      claudeQuestionDraftKey("question-b"),
+      claudeQuestionDraftKey("session-b", "question-b"),
       "answer",
       "other",
     );
@@ -228,17 +228,17 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(store.getPendingPlanApproval("approval-b")).toBeDefined();
     expect(
       usePromptDraftStore.getState().drafts.has(
-        claudeQuestionDraftKey("question-a"),
+        claudeQuestionDraftKey("session-a", "question-a"),
       ),
     ).toBe(false);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        claudePlanApprovalDraftKey("approval-a"),
+        claudePlanApprovalDraftKey("session-a", "approval-a"),
       ),
     ).toBe(false);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        claudeQuestionDraftKey("question-b"),
+        claudeQuestionDraftKey("session-b", "question-b"),
       ),
     ).toBe(true);
   });
@@ -373,17 +373,17 @@ describe("claudeStore cleanup and queue helpers", () => {
       ]),
     });
     usePromptDraftStore.getState().setDraftValue(
-      claudeQuestionDraftKey("question-target"),
+      claudeQuestionDraftKey("sdk-target", "question-target"),
       "answer",
       "target",
     );
     usePromptDraftStore.getState().setDraftValue(
-      claudePlanApprovalDraftKey("approval-target"),
+      claudePlanApprovalDraftKey("sdk-target", "approval-target"),
       "feedback",
       "target",
     );
     usePromptDraftStore.getState().setDraftValue(
-      claudeQuestionDraftKey("question-other"),
+      claudeQuestionDraftKey("sdk-other", "question-other"),
       "answer",
       "other",
     );
@@ -417,17 +417,17 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(state.pendingPlanApprovals.has("approval-other")).toBe(true);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        claudeQuestionDraftKey("question-target"),
+        claudeQuestionDraftKey("sdk-target", "question-target"),
       ),
     ).toBe(false);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        claudePlanApprovalDraftKey("approval-target"),
+        claudePlanApprovalDraftKey("sdk-target", "approval-target"),
       ),
     ).toBe(false);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        claudeQuestionDraftKey("question-other"),
+        claudeQuestionDraftKey("sdk-other", "question-other"),
       ),
     ).toBe(true);
   });

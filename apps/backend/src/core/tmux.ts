@@ -14,6 +14,7 @@ import type { JsonRecord } from "./storage.js";
 import { runCommand } from "./shell.js";
 import { TranscriptTaskTracker } from "./claude-transcript-tasks.js";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
+import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
 type RegisterCommand = (name: string, handler: CommandHandler) => void;
@@ -35,12 +36,9 @@ const POLL_INTERVAL_MS = 250;
  * already stopped — runs on this slower cadence.
  */
 export const LIVENESS_CHECK_EVERY_TICKS = 8;
-// Milestone 1 baseline: blocking hooks currently wait ten minutes. The hook
-// polls its response file four times per second and the backend polls pending
-// files every 250 ms, so transport latency does not justify the extra five
-// minutes. Milestone 2 will move this authority to the shared five-minute
-// deadline while publishing its absolute expiresAt to clients.
-const HOOK_TIMEOUT_SECS = 600;
+// The hook process owns the shared five-minute timeout. Renderers receive the
+// resulting absolute timestamps and only display them.
+const HOOK_TIMEOUT_SECS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS / 1_000;
 const COMMAND_IDLE_TIMEOUT_MS = 8_000;
 const COMMAND_NO_HOOK_SETTLE_MS = 2_000;
 const COMMAND_AFTER_IDLE_SETTLE_MS = 400;
@@ -865,7 +863,19 @@ type PendingHookEvent = {
   id: string;
   kind: string;
   payload: unknown;
+  requestedAt?: number;
+  expiresAt?: number;
 };
+
+function blockingHookTiming(id: string): { requestedAt: number; expiresAt: number } | null {
+  const seconds = Number.parseInt(id.split("-", 1)[0] ?? "", 10);
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) return null;
+  const requestedAt = seconds * 1_000;
+  return {
+    requestedAt,
+    expiresAt: requestedAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
+  };
+}
 
 function workspaceHookPaths(runtimeRoot: string, workspace: string): WorkspaceHookPaths {
   return {
@@ -1152,7 +1162,12 @@ async function drainPending(
     } else {
       await backend.removeFile(full).catch(() => undefined);
     }
-    events.push({ id, kind, payload });
+    events.push({
+      id,
+      kind,
+      payload,
+      ...(blocking ? blockingHookTiming(id) ?? {} : {}),
+    });
   }
   return events;
 }
@@ -1173,7 +1188,7 @@ async function listPendingBlocking(backend: TmuxBackend, paths: SessionHookPaths
     } catch {
       payload = content;
     }
-    events.push({ id, kind, payload });
+    events.push({ id, kind, payload, ...(blockingHookTiming(id) ?? {}) });
   }
   return events;
 }
@@ -2006,6 +2021,8 @@ class TmuxSession {
       event_id: event.id,
       event_kind: event.kind,
       payload: event.payload,
+      requested_at: event.requestedAt,
+      expires_at: event.expiresAt,
     });
   }
 

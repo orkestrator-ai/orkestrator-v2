@@ -2694,7 +2694,8 @@ export async function replyToQuestion(
     return true;
   } catch (error) {
     console.error("[opencode-client] Failed to reply to question:", error);
-    return false;
+    const pending = await getPendingQuestions(client, { throwOnError: true });
+    return !pending.some((question) => question.id === requestId);
   }
 }
 
@@ -2716,7 +2717,8 @@ export async function replyToPermission(
     return true;
   } catch (error) {
     console.error("[opencode-client] Failed to reply to permission:", error);
-    return false;
+    const pending = await getPendingPermissions(client, { throwOnError: true });
+    return !pending.some((permission) => permission.id === requestId);
   }
 }
 
@@ -2734,6 +2736,7 @@ export async function rejectQuestion(
     return true;
   } catch (error) {
     console.error("[opencode-client] Failed to reject question:", error);
-    return false;
+    const pending = await getPendingQuestions(client, { throwOnError: true });
+    return !pending.some((question) => question.id === requestId);
   }
 }

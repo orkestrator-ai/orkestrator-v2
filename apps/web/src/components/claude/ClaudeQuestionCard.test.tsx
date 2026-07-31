@@ -459,7 +459,7 @@ describe("ClaudeQuestionCard", () => {
     expect(args[3]).toEqual([["Red", "Magenta"]]);
   });
 
-  test("when answerQuestion throws, the question stays pending and submit re-enables", async () => {
+  test("when answerQuestion throws, the question stays pending and retry stays blocked", async () => {
     const failure = mock(async () => {
       throw new Error("network down");
     });
@@ -487,8 +487,8 @@ describe("ClaudeQuestionCard", () => {
 
       // Question NOT removed on failure
       expect(mockRemovePendingQuestion).not.toHaveBeenCalled();
-      // Submit button re-enabled
-      expect(submit.disabled).toBe(false);
+      // A thrown response has not been reconciled, so retry cannot be safe yet.
+      expect(submit.disabled).toBe(true);
     } finally {
       console.error = origError;
       mockAnswerQuestion.mockImplementation(async () => "applied");
@@ -647,7 +647,7 @@ test("dismiss releases the server question before removing it locally", async ()
       target: { value: "half-typed" },
     });
     expect(
-      usePromptDraftStore.getState().drafts.has(claudeQuestionDraftKey("q-1")),
+      usePromptDraftStore.getState().drafts.has(claudeQuestionDraftKey("s-1", "q-1")),
     ).toBe(true);
 
     unmount();

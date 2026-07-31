@@ -604,8 +604,13 @@ describe("app-lifetime looped-review controller", () => {
       />,
     );
 
-    await waitFor(() => expect(reads).toBeGreaterThan(0));
-    await waitFor(() => expect(claims).toBe(2));
+    // This file runs alongside another happy-dom worker in the workspace suite.
+    // Give React's initial effect and the 5 ms renewal timer enough wall-clock
+    // budget to run even when that worker temporarily saturates the host. The
+    // lease itself still expires after 30 ms, so the assertion below continues
+    // to exercise local expiry while the renewal promise is parked.
+    await waitFor(() => expect(reads).toBeGreaterThan(0), { timeout: 5_000 });
+    await waitFor(() => expect(claims).toBe(2), { timeout: 5_000 });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 45));
     });

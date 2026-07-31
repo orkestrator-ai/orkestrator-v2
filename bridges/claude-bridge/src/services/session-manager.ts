@@ -2105,15 +2105,14 @@ function backgroundTaskLaunchFromSdkUserMessage(
   ) {
     return undefined;
   }
-  const id = persistedTaskIdentifier(
-    (structuredResult as Record<string, unknown>).backgroundTaskId,
-  );
+  const structuredResultRecord = structuredResult as Record<string, unknown>;
+  const id = persistedTaskIdentifier(structuredResultRecord.backgroundTaskId);
   if (!id) return undefined;
 
   const content = (
     message.message as { content?: unknown } | undefined
   )?.content;
-  const toolResultIds = new Set<string>();
+  const toolResultIds: string[] = [];
   if (Array.isArray(content)) {
     for (const block of content) {
       if (
@@ -2121,28 +2120,53 @@ function backgroundTaskLaunchFromSdkUserMessage(
         && typeof block === "object"
         && (block as { type?: unknown }).type === "tool_result"
       ) {
-        const toolUseId = persistedTaskIdentifier(
-          (block as { tool_use_id?: unknown }).tool_use_id,
-        );
-        if (toolUseId) toolResultIds.add(toolUseId);
+        const resultBlock = block as {
+          tool_use_id?: unknown;
+          is_error?: unknown;
+        };
+        const toolUseId = persistedTaskIdentifier(resultBlock.tool_use_id);
+        // A failed or malformed tool result cannot vouch for a launched
+        // process. Count it as an invalid candidate rather than silently
+        // discarding it and correlating some other block in the same message.
+        if (!toolUseId || resultBlock.is_error === true) return undefined;
+        toolResultIds.push(toolUseId);
       }
     }
   }
-  // `tool_use_result` describes one tool invocation. Refuse to guess if a
-  // malformed provider message carries several candidate result blocks; the
-  // task id alone still keeps the process alive until a lifecycle edge enriches
-  // it with correlation metadata.
-  const toolUseId = toolResultIds.size === 1
-    ? toolResultIds.values().next().value
-    : undefined;
-  const tool = toolUseId ? toolTracker.getTool(toolUseId) : undefined;
-  const description = persistedTaskText(tool?.toolArgs?.description)
-    ?? persistedTaskText(tool?.toolArgs?.command)
-    ?? persistedTaskText(tool?.toolTitle);
+  // `tool_use_result` describes exactly one invocation. Correlation is a
+  // security boundary here because MCP and dynamic tools may return arbitrary
+  // objects whose field names can collide with the built-in Bash result.
+  if (toolResultIds.length !== 1) return undefined;
+  const toolUseId = toolResultIds[0];
+  const tool = toolTracker.getTool(toolUseId);
+  if (tool?.toolName !== "Bash") {
+    return undefined;
+  }
+  const toolArgs =
+    tool.toolArgs
+    && typeof tool.toolArgs === "object"
+    && !Array.isArray(tool.toolArgs)
+      ? tool.toolArgs as Record<string, unknown>
+      : undefined;
+  const hasBackgroundIntent =
+    toolArgs?.run_in_background === true
+    || structuredResultRecord.backgroundedByUser === true
+    || (
+      typeof structuredResultRecord.timedOutAfterMs === "number"
+      && Number.isFinite(structuredResultRecord.timedOutAfterMs)
+      && structuredResultRecord.timedOutAfterMs >= 0
+    );
+  if (!hasBackgroundIntent) return undefined;
+
+  const description = persistedTaskText(toolArgs?.description)
+    ?? persistedTaskText(toolArgs?.command)
+    // `content` is the provider tool label ("Bash") and is the only title
+    // the Claude parsing path currently retains on a normalized invocation.
+    ?? persistedTaskText(tool.content);
 
   return {
     id,
-    ...(toolUseId ? { toolUseId } : {}),
+    toolUseId,
     ...(description ? { description } : {}),
   };
 }
@@ -3248,9 +3272,7 @@ function recordBackgroundTaskLaunch(
   control: NonNullable<SessionState["queryControl"]>,
 ): void {
   const previous = session.backgroundTasks?.[launch.id];
-  const status = previous && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)
-    ? previous.status
-    : "running";
+  const status = previous?.status ?? "running";
   session.backgroundTasks = boundBackgroundTaskHistory({
     ...(session.backgroundTasks ?? {}),
     [launch.id]: {

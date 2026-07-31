@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, jest, mock, test } from "bun:tes
 import { EventEmitter } from "node:events";
 import * as realChildProcess from "node:child_process";
 import * as realFs from "node:fs";
+import * as realFsPromises from "node:fs/promises";
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,17 +19,25 @@ const mcpConfigSnapshot = { ...realMcpConfig };
 const pluginConfigSnapshot = { ...realPluginConfig };
 const childProcessSnapshot = { ...realChildProcess };
 const fsSnapshot = { ...realFs };
+const fsPromisesSnapshot = { ...realFsPromises };
 const originalExistsSync = realFs.existsSync;
+const originalReadFile = realFsPromises.readFile;
 const originalExecFile = realChildProcess.execFile;
 const originalSpawn = realChildProcess.spawn;
 
 const mockExistsSync = mock((path: realFs.PathLike) => originalExistsSync(path));
+const mockReadFile = mock(originalReadFile);
 const mockExecFile = mock(originalExecFile);
 const mockSpawn = mock(originalSpawn);
 
 mock.module("node:fs", () => ({
   ...realFs,
   existsSync: mockExistsSync,
+}));
+
+mock.module("node:fs/promises", () => ({
+  ...realFsPromises,
+  readFile: mockReadFile,
 }));
 
 mock.module("node:child_process", () => ({
@@ -263,15 +272,20 @@ function resetSdkSessionStoreMocks(): void {
   mockSdkForkSession.mockImplementation(async () => ({ sessionId: FORK_SDK_ID }));
 }
 
-mock.module("@anthropic-ai/claude-agent-sdk", () => ({
-  query: mockQuery,
-  listSessions: mockSdkListSessions,
-  getSessionInfo: mockSdkGetSessionInfo,
-  getSessionMessages: mockSdkGetSessionMessages,
-  deleteSession: mockSdkDeleteSession,
-  renameSession: mockSdkRenameSession,
-  forkSession: mockSdkForkSession,
-}));
+function installSdkModuleMock(overrides: Record<string, unknown> = {}): void {
+  mock.module("@anthropic-ai/claude-agent-sdk", () => ({
+    query: mockQuery,
+    listSessions: mockSdkListSessions,
+    getSessionInfo: mockSdkGetSessionInfo,
+    getSessionMessages: mockSdkGetSessionMessages,
+    deleteSession: mockSdkDeleteSession,
+    renameSession: mockSdkRenameSession,
+    forkSession: mockSdkForkSession,
+    ...overrides,
+  }));
+}
+
+installSdkModuleMock();
 
 const mockGetMcpServersForSdk = mock(async () => ({}));
 const mockGetMcpServerNames = mock(async () => new Set<string>());
@@ -467,6 +481,8 @@ afterEach(() => {
   mockQuery.mockClear();
   mockExistsSync.mockReset();
   mockExistsSync.mockImplementation((path) => originalExistsSync(path));
+  mockReadFile.mockReset();
+  mockReadFile.mockImplementation(originalReadFile);
   mockExecFile.mockReset();
   mockExecFile.mockImplementation(originalExecFile);
   mockSpawn.mockReset();
@@ -478,6 +494,7 @@ afterEach(() => {
   mockGetPluginsForSdk.mockReset();
   mockGetPluginsForSdk.mockImplementation(async () => []);
   resetSdkSessionStoreMocks();
+  installSdkModuleMock();
   queryControlOverrides = {};
 });
 
@@ -488,6 +505,7 @@ afterAll(async () => {
   mock.module("./plugin-config.js", () => pluginConfigSnapshot);
   mock.module("node:child_process", () => childProcessSnapshot);
   mock.module("node:fs", () => fsSnapshot);
+  mock.module("node:fs/promises", () => fsPromisesSnapshot);
   setClaudeHomeForTesting(null);
   await rm(sessionManagerTestHome, { recursive: true, force: true });
 });
@@ -855,6 +873,15 @@ describe("session lifecycle", () => {
     expect(ids).toContain(b.id);
   });
 
+  test("setSessionPreferences rejects an unknown session", async () => {
+    await expect(
+      setSessionPreferences("session-does-not-exist", { planMode: true }),
+    ).rejects.toMatchObject({
+      code: "not_found",
+      message: "Session not found",
+    });
+  });
+
   test("deleteSession removes the session and returns true; subsequent deletes return false", () => {
     const session = createSession("doomed");
     expect(deleteSession(session.id)).toBe(true);
@@ -883,12 +910,18 @@ describe("session lifecycle", () => {
     try {
       expect(clearPromptSuggestion(session.id)).toBe(true);
       expect(session.promptSuggestion).toBeUndefined();
-      expect(events).toContainEqual({
+      const removalEvent = {
         type: "session.updated",
         sessionId: session.id,
         data: { promptSuggestion: null },
-      });
+      } as const;
+      expect(events).toContainEqual(removalEvent);
       expect(clearPromptSuggestion(session.id)).toBe(true);
+      expect(events.filter((event) =>
+        event.type === removalEvent.type
+        && event.sessionId === removalEvent.sessionId
+        && (event.data as { promptSuggestion?: string | null }).promptSuggestion === null
+      )).toHaveLength(1);
       expect(clearPromptSuggestion("session-missing")).toBe(false);
     } finally {
       stop();
@@ -939,6 +972,59 @@ describe("session lifecycle", () => {
       setClaudeHomeForTesting(sessionManagerTestHome);
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  test("claimPromptDispatch reports an unknown session without starting work", async () => {
+    const dispatch = mock(async () => {});
+
+    await expect(
+      claimPromptDispatch("session-does-not-exist", "request-missing", dispatch),
+    ).resolves.toBe("not-found");
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    {
+      name: "deleting",
+      prepare: (session: ReturnType<typeof createSession>) => {
+        session.deleting = true;
+      },
+      message: "Session is being deleted",
+    },
+    {
+      name: "running",
+      prepare: (session: ReturnType<typeof createSession>) => {
+        session.status = "running";
+        session.structuredOutputRequestId = "different-request";
+      },
+      message: "Session is already processing a prompt",
+    },
+    {
+      name: "rewinding files",
+      prepare: (session: ReturnType<typeof createSession>) => {
+        session.rewindInProgress = true;
+      },
+      message: "Session is restoring files from a checkpoint",
+    },
+  ])("claimPromptDispatch rejects a $name session before persisting", async ({
+    prepare,
+    message,
+  }) => {
+    await withTemporaryClaudeHome("claude-dispatch-guard-", async () => {
+      const session = createSession("guarded dispatch");
+      track(session.id);
+      prepare(session);
+      const dispatch = mock(async () => {});
+
+      await expect(
+        claimPromptDispatch(session.id, "request-guarded", dispatch),
+      ).rejects.toMatchObject({ code: "conflict", message });
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(session.dispatchedRequestIds?.has("request-guarded")).not.toBe(true);
+      expect(
+        await readSessionPreferences(session.id.slice("session-".length)),
+      ).toBeUndefined();
+    });
   });
 
   test("reserves a stable-id turn before its durable claim yields", async () => {
@@ -1428,6 +1514,27 @@ describe("sendPrompt", () => {
         model: "claude-opus-mock",
       },
     ]);
+  });
+
+  test("falls back to no agents when provider discovery fails", async () => {
+    queryControlOverrides.supportedAgents = async () => {
+      throw new Error("agent discovery failed");
+    };
+
+    const { session } = await runPromptWithMessages([
+      {
+        type: "system",
+        subtype: "init",
+        session_id: "sdk-agent-discovery-failure",
+        mcp_servers: [],
+        plugins: [],
+        slash_commands: [],
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    expect(getSessionInitData(session.id)?.agents).toEqual([]);
+    expect(session.status).toBe("idle");
   });
 
   test("warns when a provider turn produces no messages or heartbeat", async () => {
@@ -3449,6 +3556,75 @@ describe("sendPrompt", () => {
     }
   });
 
+  test("rejects unsupported inline image media types", async () => {
+    const session = createSession("unsupported-inline-image");
+    track(session.id);
+
+    await expect(sendPrompt(session.id, "describe this", {
+      attachments: [{
+        type: "image",
+        path: "",
+        filename: "vector.svg",
+        dataUrl: "data:image/svg+xml;base64,PHN2Zy8+",
+      }],
+    })).rejects.toMatchObject({
+      name: "ClaudeAttachmentError",
+      code: "attachment_invalid_data",
+    });
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  test("rejects image attachments with neither inline data nor a file source", async () => {
+    const session = createSession("missing-image-source");
+    track(session.id);
+
+    await expect(sendPrompt(session.id, "describe this", {
+      attachments: [{ type: "image", path: "" }],
+    })).rejects.toMatchObject({
+      name: "ClaudeAttachmentError",
+      code: "attachment_read_failed",
+      message: "Image attachment does not contain readable image data.",
+    });
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  test("accepts inline image data at exactly 8MB and rejects one byte over", async () => {
+    const allowedData = Buffer.alloc(MAX_IMAGE_ATTACHMENT_BYTES, 1).toString("base64");
+    const { call } = await runPromptWithMessages(
+      [{ type: "result", subtype: "success" }],
+      {
+        attachments: [{
+          type: "image",
+          path: "",
+          filename: "boundary.png",
+          dataUrl: `data:image/png;base64,${allowedData}`,
+        }],
+      },
+    );
+    const sdkMessages = await readSdkPrompt(call) as Array<{
+      message: { content: Array<{ source?: { data?: string } }> };
+    }>;
+    expect(sdkMessages[0].message.content[1]?.source?.data).toHaveLength(
+      allowedData.length,
+    );
+
+    const oversizedSession = createSession("oversized-inline-image");
+    track(oversizedSession.id);
+    const oversizedData = Buffer.alloc(MAX_IMAGE_ATTACHMENT_BYTES + 1, 1).toString("base64");
+    await expect(sendPrompt(oversizedSession.id, "describe this", {
+      attachments: [{
+        type: "image",
+        path: "",
+        filename: "boundary.png",
+        dataUrl: `data:image/png;base64,${oversizedData}`,
+      }],
+    })).rejects.toMatchObject({
+      name: "ClaudeAttachmentError",
+      code: "attachment_invalid_data",
+    });
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
   test("rejects an image-only prompt when no image can be decoded", async () => {
     const session = createSession("invalid-image-only");
     track(session.id);
@@ -3895,6 +4071,92 @@ describe("sendPrompt", () => {
       requestId: "structured-exhausted",
       error: { code: "schema_retry_exhausted", retryable: true },
     });
+  });
+
+  test("records a non-schema provider failure as the authoritative structured result", async () => {
+    const session = createSession("structured-provider-failure");
+    track(session.id);
+    const { events, stop } = captureEvents();
+    try {
+      const prompt = sendPrompt(session.id, "review", {
+        outputSchema: { type: "object" },
+        requestId: "structured-provider-failure",
+      });
+      const call = await nextQueryCall();
+      call.push({
+        type: "result",
+        subtype: "error_during_execution",
+        errors: ["provider unavailable"],
+      });
+      call.finish();
+
+      await expect(prompt).rejects.toThrow("provider unavailable");
+      expect(session.structuredOutput).toEqual({
+        ok: false,
+        provider: "claude",
+        requestId: "structured-provider-failure",
+        error: {
+          code: "provider_error",
+          message: "provider unavailable",
+          provider: "claude",
+          retryable: true,
+          details: { subtype: "error_during_execution" },
+        },
+      });
+      expect(events.filter((event) =>
+        event.type === "session.structured-output"
+        && event.sessionId === session.id
+      )).toEqual([
+        {
+          type: "session.structured-output",
+          sessionId: session.id,
+          data: { structuredOutput: session.structuredOutput },
+        },
+      ]);
+    } finally {
+      stop();
+    }
+  });
+
+  test("records an aborted structured turn as an authoritative interrupted result", async () => {
+    const session = createSession("structured-interrupted");
+    track(session.id);
+    const { events, stop } = captureEvents();
+    try {
+      const prompt = sendPrompt(session.id, "review", {
+        outputSchema: { type: "object" },
+        requestId: "structured-interrupted",
+      });
+      await nextQueryCall();
+
+      expect(abortSession(session.id)).toBe(true);
+      await prompt;
+
+      expect(session.structuredOutput).toEqual({
+        ok: false,
+        provider: "claude",
+        requestId: "structured-interrupted",
+        error: {
+          code: "interrupted",
+          message: "Claude structured-output turn was interrupted.",
+          provider: "claude",
+          retryable: true,
+          details: undefined,
+        },
+      });
+      expect(events.filter((event) =>
+        event.type === "session.structured-output"
+        && event.sessionId === session.id
+      )).toEqual([
+        {
+          type: "session.structured-output",
+          sessionId: session.id,
+          data: { structuredOutput: session.structuredOutput },
+        },
+      ]);
+    } finally {
+      stop();
+    }
   });
 
   test("a repeated structured request id attaches instead of launching another query", async () => {
@@ -4568,6 +4830,40 @@ describe("plan approval flow", () => {
     expect(getSession(session.id)?.status).toBe("idle");
   });
 
+  test("rejecting a plan without feedback denies it and requests a generic revision", async () => {
+    const session = createSession("plan-reject-without-feedback");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
+    const call = await nextQueryCall();
+    const toolPromise = call.options.canUseTool!("ExitPlanMode", { plan: "do stuff" });
+    await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
+    const [approval] = getPendingPlanApprovals(session.id);
+
+    expect(respondToPlanApproval(approval!.id, false)).toBe(true);
+    await expect(toolPromise).resolves.toEqual({
+      behavior: "deny",
+      message: "User rejected the plan. No specific feedback was provided. Please revise your approach based on this feedback.",
+    });
+    call.finish();
+
+    const repromptCall = await nextQueryCall();
+    expect(repromptCall.options.permissionMode).toBe("plan");
+    repromptCall.push({ type: "result", subtype: "success" });
+    repromptCall.finish();
+    await promptPromise;
+
+    const sdkMessages = await readSdkPrompt(repromptCall) as Array<{
+      message: { role: string; content: Array<{ type: string; text: string }> };
+    }>;
+    expect(sdkMessages).toHaveLength(1);
+    expect(sdkMessages[0]?.message.role).toBe("user");
+    expect(sdkMessages[0]?.message.content[0]?.text).toContain(
+      "I don't approve it as-is. Please revise your approach.",
+    );
+    expect(getPendingPlanApprovals(session.id)).toEqual([]);
+  });
+
   test("surfaces a failed plan-rejection re-prompt instead of reporting success", async () => {
     const session = createSession("reprompt-failure");
     track(session.id);
@@ -4734,6 +5030,38 @@ describe("plan approval flow", () => {
     expect((await toolPromise).behavior).toBe("deny");
     expect(getPendingPlanApprovals(session.id)).toEqual([]);
     await promptPromise;
+  });
+
+  test("abort and query failures release pending plan approvals", async () => {
+    const abortedSession = createSession("plan-abort");
+    track(abortedSession.id);
+    const abortedPrompt = sendPrompt(abortedSession.id, "plan", { permissionMode: "plan" });
+    const abortedCall = await nextQueryCall();
+    const abortedTool = abortedCall.options.canUseTool!("ExitPlanMode", {});
+    await waitFor(() => getPendingPlanApprovals(abortedSession.id).length === 1);
+
+    expect(abortSession(abortedSession.id)).toBe(true);
+    await expect(abortedTool).resolves.toEqual({
+      behavior: "deny",
+      message: "Session terminated",
+    });
+    expect(getPendingPlanApprovals(abortedSession.id)).toEqual([]);
+    await abortedPrompt;
+
+    const failedSession = createSession("plan-query-failure");
+    track(failedSession.id);
+    const failedPrompt = sendPrompt(failedSession.id, "plan", { permissionMode: "plan" });
+    const failedCall = await nextQueryCall();
+    const failedTool = failedCall.options.canUseTool!("ExitPlanMode", {});
+    await waitFor(() => getPendingPlanApprovals(failedSession.id).length === 1);
+
+    failedCall.fail(new Error("query failed"));
+    await expect(failedPrompt).rejects.toThrow("query failed");
+    await expect(failedTool).resolves.toEqual({
+      behavior: "deny",
+      message: "Session terminated",
+    });
+    expect(getPendingPlanApprovals(failedSession.id)).toEqual([]);
   });
 
   test("EnterPlanMode emits its event and unrelated tools pass their input through", async () => {
@@ -5079,6 +5407,21 @@ describe("session titles", () => {
     await waitFor(() => getSession(session.id)?.title === "Fix the login flow");
   });
 
+  test("falls back to prompt text when successful CLI output is not a usable title", async () => {
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("/claude"));
+    const { child, complete } = createMockChildProcess({
+      stdout: "...\n",
+      defer: true,
+    });
+    mockSpawn.mockImplementationOnce(() => child as never);
+
+    const session = await runTitlePrompt("recover with a useful fallback");
+    complete();
+    await waitFor(() => session.titleGenerationPending === false);
+
+    expect(session.title).toBe("Recover with a useful fallback");
+  });
+
   describe("sanitizeSessionTitle", () => {
     const ESC = String.fromCharCode(27);
     const NUL = String.fromCharCode(0);
@@ -5144,6 +5487,34 @@ describe("session titles", () => {
       child.emit("close", 0);
 
       expect(await promise).toBe("A concise title\n");
+    });
+
+    test("accepts output at the exact cap and ignores duplicate close events", async () => {
+      const { child, kill } = createKillableChild();
+      mockSpawn.mockImplementationOnce(() => child as never);
+
+      const promise = runClaudeTitleCommand("/bin/claude", ["--print"], {
+        maxOutputBytes: 16,
+      });
+      child.stdout.emit("data", Buffer.from("x".repeat(16)));
+      child.emit("close", 0);
+      child.emit("close", 1);
+
+      expect(await promise).toBe("x".repeat(16));
+      expect(kill).not.toHaveBeenCalled();
+    });
+
+    test("resolves null once when the child errors and later closes", async () => {
+      const { child, kill } = createKillableChild();
+      mockSpawn.mockImplementationOnce(() => child as never);
+
+      const promise = runClaudeTitleCommand("/bin/claude", ["--print"]);
+      child.emit("error", new Error("spawn failed after creation"));
+      child.emit("close", 0);
+      child.emit("close", 0);
+
+      expect(await promise).toBeNull();
+      expect(kill).not.toHaveBeenCalled();
     });
 
     test("resolves null and terminates the child when output exceeds the cap", async () => {
@@ -5377,6 +5748,30 @@ describe("getClaudeRuntimeVersions", () => {
     });
   });
 
+  test("returns unknown bundled versions when the SDK manifest cannot be read", async () => {
+    await withClaudeCliPath(undefined, async () => {
+      mockReadFile.mockImplementationOnce(async () => {
+        throw new Error("manifest unreadable");
+      });
+
+      await expect(getClaudeRuntimeVersions()).resolves.toEqual({
+        sdkVersion: undefined,
+        cliVersion: undefined,
+      });
+    });
+  });
+
+  test("returns unknown bundled versions when the SDK manifest is malformed", async () => {
+    await withClaudeCliPath(undefined, async () => {
+      mockReadFile.mockImplementationOnce(async () => "{");
+
+      await expect(getClaudeRuntimeVersions()).resolves.toEqual({
+        sdkVersion: undefined,
+        cliVersion: undefined,
+      });
+    });
+  });
+
   test("parses the managed CLI --version output when configured", async () => {
     await withClaudeCliPath("/managed/toolchain/claude", async () => {
       stubClaudeVersionOutput(
@@ -5538,6 +5933,13 @@ async function materializePersistedSession(
 }
 
 describe("reconcilePersistedSessions", () => {
+  test("does nothing when the installed SDK has no listSessions API", async () => {
+    installSdkModuleMock({ listSessions: undefined });
+
+    await expect(reconcilePersistedSessions()).resolves.toBeUndefined();
+    expect(mockSdkListSessions).not.toHaveBeenCalled();
+  });
+
   test("asks the SDK for this directory only and drops worktree siblings", async () => {
     mockSdkListSessions.mockImplementation(async () => [
       sdkSessionInfo({ sessionId: PERSISTED_SDK_ID, cwd: "/repo/env-a" }),
@@ -5971,6 +6373,47 @@ describe("reconcilePersistedSessions", () => {
     expect(getSession(state.id)).toBeDefined();
   });
 
+  test("bounds stale-list deletion tombstones to the newest 128 sessions", async () => {
+    await withTemporaryClaudeHome("claude-reconcile-tombstone-cap-", async () => {
+      const infos = Array.from({ length: 129 }, (_, index) =>
+        sdkSessionInfo({
+          sessionId: `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`,
+          summary: `Persisted session ${index}`,
+          cwd: "/repo/env-a",
+        }));
+      mockSdkListSessions.mockImplementation(async () => infos);
+      await withWorkspaceCwd("/repo/env-a", reconcilePersistedSessions);
+      for (const info of infos) track(`session-${info.sessionId}`);
+
+      let releaseStaleList: ((value: SdkSessionInfo[]) => void) | undefined;
+      mockSdkListSessions.mockImplementation(
+        async () => new Promise<SdkSessionInfo[]>((resolve) => {
+          releaseStaleList = resolve;
+        }),
+      );
+      const staleReconcile = withWorkspaceCwd(
+        "/repo/env-a",
+        reconcilePersistedSessions,
+      );
+      await waitFor(() => releaseStaleList !== undefined);
+
+      for (const info of infos) {
+        await expect(
+          deleteSessionDurably(`session-${info.sessionId}`),
+        ).resolves.toBe(true);
+      }
+      releaseStaleList!(infos);
+      await staleReconcile;
+
+      // The fixed-size history intentionally lets the oldest deletion age out,
+      // while every deletion still inside the 128-entry window suppresses its
+      // pre-deletion row from this stale SDK snapshot.
+      expect(getSession(`session-${infos[0]!.sessionId}`)).toBeDefined();
+      expect(getSession(`session-${infos[1]!.sessionId}`)).toBeUndefined();
+      expect(getSession(`session-${infos.at(-1)!.sessionId}`)).toBeUndefined();
+    });
+  });
+
   test("propagates a listSessions failure to its caller", async () => {
     mockSdkListSessions.mockImplementation(async () => {
       throw new Error("claude home unreadable");
@@ -5997,6 +6440,25 @@ describe("ensurePersistedSession", () => {
   test("returns undefined when the SDK has no such session", async () => {
     mockSdkGetSessionInfo.mockImplementation(async () => undefined);
     expect(await ensurePersistedSession(`session-${PERSISTED_SDK_ID}`)).toBeUndefined();
+  });
+
+  test("clears a rejected materialization so a later point read can retry", async () => {
+    const bridgeId = track(`session-${PERSISTED_SDK_ID}`);
+    mockSdkGetSessionInfo
+      .mockImplementationOnce(async () => {
+        throw new Error("metadata temporarily unavailable");
+      })
+      .mockImplementation(async () => sdkSessionInfo({ customTitle: "Recovered" }));
+
+    await expect(ensurePersistedSession(bridgeId)).rejects.toThrow(
+      "metadata temporarily unavailable",
+    );
+    await expect(ensurePersistedSession(bridgeId)).resolves.toMatchObject({
+      id: bridgeId,
+      title: "Recovered",
+      sdkSessionId: PERSISTED_SDK_ID,
+    });
+    expect(mockSdkGetSessionInfo).toHaveBeenCalledTimes(2);
   });
 
   test("materializes a session from SDK metadata", async () => {
@@ -6971,6 +7433,17 @@ describe("forkPersistedSession", () => {
     await promptPromise;
   });
 
+  test("throws conflict when the installed SDK cannot fork sessions", async () => {
+    const state = await materializePersistedSession();
+    installSdkModuleMock({ forkSession: undefined });
+
+    await expect(forkPersistedSession(state.id)).rejects.toMatchObject({
+      code: "conflict",
+      message: "Installed Claude Agent SDK does not support session forking",
+    });
+    expect(mockSdkForkSession).not.toHaveBeenCalled();
+  });
+
   test("throws invalid for a boundary that is not in the transcript", async () => {
     mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
     const state = await materializePersistedSession();
@@ -7037,6 +7510,25 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
     expect(mockSdkRenameSession).not.toHaveBeenCalled();
   });
 
+  test("leaves the in-memory title unchanged when durable rename is rejected", async () => {
+    const state = await materializePersistedSession({ customTitle: "Original" });
+    mockSdkRenameSession.mockRejectedValueOnce(new Error("rename denied"));
+    const { events, stop } = captureEvents();
+    try {
+      await expect(renameSessionDurably(state.id, "Rejected")).rejects.toThrow(
+        "rename denied",
+      );
+    } finally {
+      stop();
+    }
+
+    expect(state.title).toBe("Original");
+    expect(events).not.toContainEqual(expect.objectContaining({
+      type: "session.title-updated",
+      sessionId: state.id,
+    }));
+  });
+
   test("deletes the rollout and the registry entry together", async () => {
     const state = await materializePersistedSession();
     await updateSessionPreferences(PERSISTED_SDK_ID, {
@@ -7071,6 +7563,17 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
     expect(await deleteSessionDurably(state.id)).toBe(true);
     expect(mockSdkDeleteSession).not.toHaveBeenCalled();
     expect(await readSessionPreferences(sdkSessionId)).toBeUndefined();
+    expect(getSession(state.id)).toBeUndefined();
+  });
+
+  test("cleans up bridge state when the installed SDK has no durable delete", async () => {
+    const state = await materializePersistedSession();
+    await updateSessionPreferences(PERSISTED_SDK_ID, { planMode: true });
+    installSdkModuleMock({ deleteSession: undefined });
+
+    await expect(deleteSessionDurably(state.id)).resolves.toBe(true);
+    expect(mockSdkDeleteSession).not.toHaveBeenCalled();
+    expect(await readSessionPreferences(PERSISTED_SDK_ID)).toBeUndefined();
     expect(getSession(state.id)).toBeUndefined();
   });
 
@@ -7287,6 +7790,35 @@ describe("rewindSessionFiles", () => {
     await expect(rewindPromise).rejects.toMatchObject({ code: "conflict" });
     expect(returnSpy).toHaveBeenCalled();
     expect(getSession(state.id)?.rewindInProgress).toBe(false);
+  });
+
+  test("times out and closes a transient query that never produces a message", async () => {
+    const state = await rewindableSession();
+    const returnSpy = mock(async () => ({ done: true, value: undefined }));
+    queryControlOverrides.return = returnSpy;
+    // Warm the dynamic SDK import before faking timers; Bun otherwise leaves
+    // the import continuation behind the fake-timer boundary.
+    await import("@anthropic-ai/claude-agent-sdk");
+
+    jest.useFakeTimers();
+    try {
+      const rewindPromise = rewindSessionFiles(state.id, U1);
+      for (let attempt = 0; attempt < 1_000 && mockQuery.mock.calls.length === 0; attempt += 1) {
+        jest.advanceTimersByTime(0);
+        await Promise.resolve();
+      }
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+
+      jest.advanceTimersByTime(30_000);
+      await expect(rewindPromise).rejects.toMatchObject({
+        code: "conflict",
+        message: "Timed out opening the Claude session for file rewind",
+      });
+      expect(returnSpy).toHaveBeenCalledTimes(1);
+      expect(getSession(state.id)?.rewindInProgress).toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test("rejects a prompt accepted while files are being restored", async () => {
@@ -7534,6 +8066,405 @@ describe("background task reducer", () => {
     expect(getSession(created.id)?.backgroundTasks?.["bash-task-1"]?.status).toBe(
       "completed",
     );
+  });
+
+  test.each([
+    ["an MCP tool", "mcp_build_run"],
+    ["a dynamic tool", "CustomBackgroundRunner"],
+  ])("does not mistake %s structured output for a Bash launch", async (_label, toolName) => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        message: {
+          id: `assistant-${toolName}`,
+          content: [{
+            type: "tool_use",
+            id: "colliding-tool",
+            name: toolName,
+            input: { run_in_background: true },
+          }],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "colliding-tool",
+            content: "arbitrary third-party output",
+          }],
+        },
+        tool_use_result: { backgroundTaskId: "collision" },
+      },
+    ]);
+
+    expect(session.backgroundTasks).toBeUndefined();
+  });
+
+  test("requires structured evidence that the correlated Bash invocation backgrounded", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        message: {
+          id: "assistant-foreground-bash",
+          content: [{
+            type: "tool_use",
+            id: "foreground-bash",
+            name: "Bash",
+            input: { command: "bun test" },
+          }],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "foreground-bash",
+            content: "done",
+          }],
+        },
+        tool_use_result: { backgroundTaskId: "unvouched-task" },
+      },
+    ]);
+
+    expect(session.backgroundTasks).toBeUndefined();
+  });
+
+  test.each([
+    ["null structured output", null],
+    ["array structured output", [{ backgroundTaskId: "array-task" }]],
+    ["missing task id", { stdout: "" }],
+    ["non-string task id", { backgroundTaskId: 42 }],
+    ["blank task id", { backgroundTaskId: "   " }],
+    ["control character in task id", { backgroundTaskId: "bad\ntask" }],
+    [
+      "oversized task id",
+      { backgroundTaskId: "x".repeat(513) },
+    ],
+  ])("ignores %s in a Bash tool result", async (_label, toolUseResult) => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        message: {
+          id: "assistant-malformed-launch",
+          content: [{
+            type: "tool_use",
+            id: "bash-malformed-launch",
+            name: "Bash",
+            input: { command: "bun test", run_in_background: true },
+          }],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "bash-malformed-launch",
+            content: "result",
+          }],
+        },
+        tool_use_result: toolUseResult,
+      },
+    ]);
+
+    expect(session.backgroundTasks).toBeUndefined();
+  });
+
+  test.each([
+    [
+      "no correlated result block",
+      [],
+    ],
+    [
+      "multiple candidate result ids",
+      [
+        { type: "tool_result", tool_use_id: "bash-ambiguous", content: "first" },
+        { type: "tool_result", tool_use_id: "bash-other", content: "second" },
+      ],
+    ],
+    [
+      "duplicate correlated result blocks",
+      [
+        { type: "tool_result", tool_use_id: "bash-ambiguous", content: "first" },
+        { type: "tool_result", tool_use_id: "bash-ambiguous", content: "duplicate" },
+      ],
+    ],
+    [
+      "a failed correlated result block",
+      [{
+        type: "tool_result",
+        tool_use_id: "bash-ambiguous",
+        content: "failed",
+        is_error: true,
+      }],
+    ],
+    [
+      "an invalid correlated result id",
+      [{ type: "tool_result", tool_use_id: "bad\nid", content: "invalid" }],
+    ],
+  ])("rejects a Bash launch with %s", async (_label, content) => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        message: {
+          id: "assistant-ambiguous-launch",
+          content: [{
+            type: "tool_use",
+            id: "bash-ambiguous",
+            name: "Bash",
+            input: { command: "bun test", run_in_background: true },
+          }],
+        },
+      },
+      {
+        type: "user",
+        message: { role: "user", content },
+        tool_use_result: { backgroundTaskId: "ambiguous-task" },
+      },
+    ]);
+
+    expect(session.backgroundTasks).toBeUndefined();
+  });
+
+  test.each([
+    [
+      "the command when description is absent",
+      { command: "bun run test", run_in_background: true },
+      {},
+      "bun run test",
+    ],
+    [
+      "the retained tool title when command and description are absent",
+      { run_in_background: true },
+      {},
+      "Bash",
+    ],
+    [
+      "the command for a user-backgrounded process",
+      { command: "bun run build" },
+      { backgroundedByUser: true },
+      "bun run build",
+    ],
+    [
+      "the command for a process backgrounded after its timeout",
+      { command: "bun run lint" },
+      { timedOutAfterMs: 30_000 },
+      "bun run lint",
+    ],
+  ])("describes a provisional Bash launch using %s", async (
+    _label,
+    input,
+    structuredFields,
+    expectedDescription,
+  ) => {
+    const { session, finish } = await inspectDuringTurn(
+      [
+        {
+          type: "assistant",
+          message: {
+            id: "assistant-description-fallback",
+            content: [{
+              type: "tool_use",
+              id: "bash-description-fallback",
+              name: "Bash",
+              input,
+            }],
+          },
+        },
+        {
+          type: "user",
+          message: {
+            role: "user",
+            content: [{
+              type: "tool_result",
+              tool_use_id: "bash-description-fallback",
+              content: "backgrounded",
+            }],
+          },
+          tool_use_result: {
+            backgroundTaskId: "description-task",
+            ...structuredFields,
+          },
+        },
+      ],
+      (s) => s.backgroundTasks?.["description-task"] !== undefined,
+    );
+
+    expect(session.backgroundTasks?.["description-task"]).toMatchObject({
+      description: expectedDescription,
+      status: "running",
+    });
+    await finish();
+    // No lifecycle edge followed the provisional launch, so closing the only
+    // provider stream must leave an honest terminal snapshot rather than a
+    // task that remains live forever.
+    expect(session.backgroundTasks?.["description-task"]).toMatchObject({
+      status: "killed",
+    });
+  });
+
+  test.each([
+    ["completed", "completed"],
+    ["failed", "failed"],
+    ["stopped", "killed"],
+  ] as const)("does not resurrect a %s task when its Bash launch arrives late", async (
+    notificationStatus,
+    expectedStatus,
+  ) => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        message: {
+          id: `assistant-late-${notificationStatus}`,
+          content: [{
+            type: "tool_use",
+            id: "bash-late-launch",
+            name: "Bash",
+            input: { command: "bun test", run_in_background: true },
+          }],
+        },
+      },
+      {
+        type: "system",
+        subtype: "task_notification",
+        task_id: "late-launch-task",
+        status: notificationStatus,
+        summary: "already settled",
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "bash-late-launch",
+            content: "backgrounded",
+          }],
+        },
+        tool_use_result: { backgroundTaskId: "late-launch-task" },
+      },
+    ]);
+
+    expect(session.backgroundTasks?.["late-launch-task"]).toMatchObject({
+      status: expectedStatus,
+      toolUseId: "bash-late-launch",
+    });
+  });
+
+  test("does not resume a paused task when its Bash launch arrives late", async () => {
+    const { session, finish } = await inspectDuringTurn(
+      [
+        {
+          type: "assistant",
+          message: {
+            id: "assistant-late-paused",
+            content: [{
+              type: "tool_use",
+              id: "bash-late-paused",
+              name: "Bash",
+              input: { command: "bun test", run_in_background: true },
+            }],
+          },
+        },
+        {
+          type: "system",
+          subtype: "task_started",
+          task_id: "paused-launch-task",
+        },
+        {
+          type: "system",
+          subtype: "task_updated",
+          task_id: "paused-launch-task",
+          patch: { status: "paused" },
+        },
+        {
+          type: "user",
+          message: {
+            role: "user",
+            content: [{
+              type: "tool_result",
+              tool_use_id: "bash-late-paused",
+              content: "backgrounded",
+            }],
+          },
+          tool_use_result: { backgroundTaskId: "paused-launch-task" },
+        },
+      ],
+      (s) => s.backgroundTasks?.["paused-launch-task"]?.toolUseId !== undefined,
+    );
+
+    expect(session.backgroundTasks?.["paused-launch-task"]).toMatchObject({
+      status: "paused",
+      toolUseId: "bash-late-paused",
+    });
+    await finish();
+  });
+
+  test("publishes a provisional launch and routes stop through its owning control", async () => {
+    const stopTask = mock(async (_taskId: string) => {});
+    queryControlOverrides.stopTask = stopTask;
+    const { events, stop } = captureEvents();
+    const created = createSession("stop provisional launch");
+    track(created.id);
+    try {
+      const promptPromise = sendPrompt(created.id, "run in the background");
+      const call = await nextQueryCall();
+      call.push({
+        type: "assistant",
+        message: {
+          id: "assistant-stop-provisional",
+          content: [{
+            type: "tool_use",
+            id: "bash-stop-provisional",
+            name: "Bash",
+            input: { command: "bun test", run_in_background: true },
+          }],
+        },
+      });
+      call.push({
+        type: "user",
+        message: {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "bash-stop-provisional",
+            content: "backgrounded",
+          }],
+        },
+        tool_use_result: { backgroundTaskId: "stop-provisional-task" },
+      });
+      call.push({
+        type: "result",
+        subtype: "success",
+        usage: { input_tokens: 1, output_tokens: 1 },
+      });
+      await waitFor(
+        () => getSession(created.id)?.backgroundTasks?.["stop-provisional-task"]?.status
+          === "running",
+      );
+
+      expect(events.some(
+        (event) =>
+          event.type === "session.updated"
+          && (event.data as { backgroundTasks?: Record<string, BackgroundTaskSnapshot> })
+            .backgroundTasks?.["stop-provisional-task"]?.status === "running",
+      )).toBe(true);
+      expect(await stopBackgroundTask(created.id, "stop-provisional-task")).toEqual({ ok: true });
+      expect(stopTask).toHaveBeenCalledWith("stop-provisional-task");
+      expect(getSession(created.id)?.backgroundTasks?.["stop-provisional-task"]).toMatchObject({
+        status: "killed",
+      });
+
+      call.finish();
+      await promptPromise;
+    } finally {
+      stop();
+    }
   });
 
   test("records a started task as running, then settles it when the stream ends", async () => {

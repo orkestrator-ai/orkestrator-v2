@@ -11439,6 +11439,93 @@ exec node -e 'const http=require("node:http");http.createServer((req,res)=>{res.
     }
   });
 
+  test("peeks a local bridge without ever starting one", async () => {
+    // The activity sweep polls every environment every two seconds. Resolving
+    // its connection through `start_local_*_server_cmd` would spawn a bridge
+    // for every environment that has ever held a session — at startup, with no
+    // tab open — and then keep them all alive. Peeking must therefore report a
+    // bridge that is already running and never create one.
+    const appRoot = await createTempDir("ork-electron-app-peek-local-");
+    const worktreePath = await createTempDir("ork-electron-worktree-peek-local-");
+    await writeBridgeServer(appRoot, "claude-bridge");
+
+    const environment = createEnvironment({ id: "env-peek-local", worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    // Nothing running yet: null, and no process spawned as a side effect.
+    const spawnAttempt = mock(() => {
+      throw new Error("peek must not spawn a bridge");
+    });
+    commandTesting.setSpawnLocalServerCommand(
+      spawnAttempt as unknown as typeof spawnCommand,
+    );
+    await expect(commands.get("peek_local_agent_bridge")?.(
+      { environmentId: environment.id, agent: "claude" },
+      context,
+    )).resolves.toBeNull();
+    expect(spawnAttempt).not.toHaveBeenCalled();
+    commandTesting.setSpawnLocalServerCommand(spawnCommand);
+
+    const started = await commands.get("start_local_claude_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { port: number; authToken: string };
+    try {
+      await expect(commands.get("peek_local_agent_bridge")?.(
+        { environmentId: environment.id, agent: "claude" },
+        context,
+      )).resolves.toEqual({
+        port: started.port,
+        authToken: started.authToken,
+      });
+
+      // A different agent shares the environment but has no bridge of its own.
+      await expect(commands.get("peek_local_agent_bridge")?.(
+        { environmentId: environment.id, agent: "codex" },
+        context,
+      )).resolves.toBeNull();
+    } finally {
+      await commands.get("stop_local_claude_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
+    }
+
+    // Once stopped it reports null again rather than resurrecting the bridge.
+    await expect(commands.get("peek_local_agent_bridge")?.(
+      { environmentId: environment.id, agent: "claude" },
+      context,
+    )).resolves.toBeNull();
+  });
+
+  test("rejects an unknown agent on either peek surface", async () => {
+    const environment = createEnvironment({ id: "env-peek-validation" });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    // Validation runs before the handler returns a promise, so these throw
+    // synchronously; `invoke` awaits the handler and surfaces them either way.
+    expect(() => commands.get("peek_local_agent_bridge")?.(
+      { environmentId: environment.id, agent: "gemini" },
+      context,
+    )).toThrow("agent must be one of: opencode, claude, codex");
+    expect(() => commands.get("peek_container_agent_bridge")?.(
+      { containerId: "container-1", agent: "gemini" },
+      context,
+    )).toThrow("agent must be one of: opencode, claude, codex");
+    expect(() => commands.get("peek_local_agent_bridge")?.(
+      { environmentId: "  ", agent: "claude" },
+      context,
+    )).toThrow();
+    expect(() => commands.get("peek_container_agent_bridge")?.(
+      { containerId: "container-1", agent: "claude", extra: 1 },
+      context,
+    )).toThrow();
+  });
+
   test("restarts a healthy local Claude bridge whose auth token this process no longer holds", async () => {
     const appRoot = await createTempDir("ork-electron-app-tokenless-claude-");
     const worktreePath = await createTempDir("ork-electron-worktree-tokenless-claude-");

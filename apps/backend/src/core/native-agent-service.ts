@@ -5,6 +5,10 @@ import type {
   TaskSnapshotImage,
 } from "@orkestrator/protocol/build-pipeline";
 import {
+  aggregateAgentActivityState,
+  type AgentActivityState,
+} from "@orkestrator/protocol/agent-activity";
+import {
   AGENT_INTERACTION_ORIGINS,
   isAgentInteractionPolicy,
   type AgentInteractionOrigin,
@@ -16,6 +20,7 @@ import type { StorageService } from "./storage.js";
 import {
   createBuildPipelineProvider,
   PromptRejectedError,
+  ProviderUnavailableError,
   type BridgeConnection,
   type BuildPipelineProvider,
   type ProviderExecutionMode,
@@ -102,12 +107,22 @@ export interface NativeAgentServiceOptions {
     input: EnsureNativeAgentSessionInput,
     environment: Environment,
   ) => Promise<BuildPipelineProvider>;
+  /**
+   * Clock for the activity sweep's backoff. Injectable so a test can prove the
+   * retry schedule without sleeping through a 60-second ceiling.
+   */
+  now?: () => number;
 }
 
 const QUEUE_RETRY_BASE_MS = 2_000;
 const QUEUE_RETRY_CEILING_MS = 60_000;
 const MAX_QUEUE_DISPATCH_ATTEMPTS = 5;
 const LAUNCH_RETRY_MS = 10_000;
+const ACTIVITY_STATUS_CONCURRENCY = 8;
+const ACTIVITY_RETRY_BASE_MS = 2_000;
+const ACTIVITY_RETRY_CEILING_MS = 60_000;
+/** How long "no bridge is running" is trusted before it is re-probed. */
+const ABSENT_BRIDGE_RECHECK_MS = 15_000;
 
 function nonBlank(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -170,6 +185,10 @@ export class NativeAgentService {
   private readonly queueRetryAt = new Map<string, number>();
   private readonly queueAttempts = new Map<string, number>();
   private readonly scanTasks = new Set<Promise<void>>();
+  private readonly activityRetryAt = new Map<string, number>();
+  private readonly activityAttempts = new Map<string, number>();
+  private readonly absentBridgeUntil = new Map<string, number>();
+  private activityScan: Promise<void> | null = null;
   private launchTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
 
@@ -178,6 +197,10 @@ export class NativeAgentService {
     private readonly invoke: CommandInvoker,
     private readonly options: NativeAgentServiceOptions = {},
   ) {}
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
 
   async init(): Promise<void> {
     if (this.stopped) throw new Error("Native agent service is shut down");
@@ -338,6 +361,225 @@ export class NativeAgentService {
       [...this.providers.values()].map((provider) => provider.dispose?.()),
     );
     this.providers.clear();
+  }
+
+  /**
+   * Rebuild the durable environment activity projection from provider-owned
+   * session state. This does not depend on a mounted tab or a renderer event.
+   */
+  reconcileAgentActivity(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    if (this.activityScan) return this.activityScan;
+    const scan = this.trackScan(this.reconcileAgentActivityOnce())
+      .finally(() => {
+        if (this.activityScan === scan) this.activityScan = null;
+      });
+    this.activityScan = scan;
+    return scan;
+  }
+
+  private async reconcileAgentActivityOnce(): Promise<void> {
+    const [environments, sessions] = await Promise.all([
+      this.storage.loadEnvironments(),
+      this.storage.listNativeAgentSessions(),
+    ]);
+    if (this.stopped) return;
+
+    const environmentsById = new Map(
+      environments.map((environment) => [environment.id, environment]),
+    );
+    const sessionsByEnvironment = new Map<
+      string,
+      PersistedNativeAgentSession[]
+    >();
+    for (const session of sessions) {
+      if (!environmentsById.has(session.environmentId)) continue;
+      const grouped = sessionsByEnvironment.get(session.environmentId) ?? [];
+      grouped.push(session);
+      sessionsByEnvironment.set(session.environmentId, grouped);
+    }
+
+    const activityByEnvironment = new Map<
+      string,
+      Record<string, { state: AgentActivityState; updatedAt: string }>
+    >();
+    const failedEnvironments = new Set<string>();
+    const groups = new Map<string, PersistedNativeAgentSession[]>();
+    for (const [environmentId, environmentSessions] of sessionsByEnvironment) {
+      const environment = environmentsById.get(environmentId)!;
+      if (!isEnvironmentReadyForAgents(environment)) continue;
+      // A pending deletion makes every provider call throw on the liveness
+      // assertion, which would otherwise warn and back off on a loop until the
+      // delete finishes. Its activity is settled by the delete itself.
+      if (environment.deletionRequestedAt) continue;
+      for (const session of environmentSessions) {
+        const key = `${environmentId}\0${session.agent}`;
+        const grouped = groups.get(key) ?? [];
+        grouped.push(session);
+        groups.set(key, grouped);
+      }
+    }
+
+    const pendingGroups = [...groups.entries()];
+    let nextGroup = 0;
+    const worker = async (): Promise<void> => {
+      while (!this.stopped) {
+        const entry = pendingGroups[nextGroup++];
+        if (!entry) return;
+        const [groupKey, group] = entry;
+        const first = group[0]!;
+        // A group whose last read failed stays untouched until its backoff
+        // expires. Its environment is still withheld from the commit below:
+        // publishing an aggregate built from a group we deliberately skipped
+        // would report the unread agent as idle.
+        if ((this.activityRetryAt.get(groupKey) ?? 0) > this.now()) {
+          failedEnvironments.add(first.environmentId);
+          continue;
+        }
+        // A bridge known to be absent stays absent until something starts it,
+        // and starting one always runs through `provider()`, which clears this.
+        // Re-probing on every tick would mean a `docker exec` per container
+        // every two seconds to re-learn an answer that cannot have changed.
+        if ((this.absentBridgeUntil.get(groupKey) ?? 0) > this.now()) {
+          for (const session of group) {
+            this.recordActivity(activityByEnvironment, session, "idle");
+          }
+          continue;
+        }
+        let provider: BuildPipelineProvider | undefined;
+        try {
+          provider = await this.observeProvider(first);
+          if (!provider) {
+            // No bridge is running for this environment, so no turn can be
+            // executing. That is an answer, not a failure — recording it is
+            // what retires a `working` indicator left behind by a crash.
+            for (const session of group) {
+              this.recordActivity(activityByEnvironment, session, "idle");
+            }
+            this.activityAttempts.delete(groupKey);
+            this.activityRetryAt.delete(groupKey);
+            this.absentBridgeUntil.set(
+              groupKey,
+              this.now() + ABSENT_BRIDGE_RECHECK_MS,
+            );
+            continue;
+          }
+          this.absentBridgeUntil.delete(groupKey);
+          for (const session of group) {
+            provider.registerSession?.(session.providerSessionId);
+          }
+          const batchedActivity = provider.activityBatch
+            ? await provider.activityBatch(
+                group.map((session) => session.providerSessionId),
+              )
+            : undefined;
+          for (const session of group) {
+            const activity = batchedActivity
+              ? batchedActivity.get(session.providerSessionId)
+              : provider.activity
+                ? await provider.activity(session.providerSessionId)
+                : await provider.status(session.providerSessionId).then((status) =>
+                    status === "missing"
+                      ? "missing"
+                      : status === "running" ? "working" : "idle"
+                  );
+            if (!activity) {
+              throw new ProviderUnavailableError(
+                `Provider activity snapshot omitted ${session.providerSessionId}`,
+              );
+            }
+            if (activity === "missing") {
+              await this.storage.invalidateNativeAgentSession(
+                session.key,
+                session.providerSessionId,
+              );
+              continue;
+            }
+            this.recordActivity(activityByEnvironment, session, activity);
+          }
+          this.activityAttempts.delete(groupKey);
+          this.activityRetryAt.delete(groupKey);
+        } catch (error) {
+          failedEnvironments.add(first.environmentId);
+          this.backOffActivityGroup(groupKey);
+          if (provider) {
+            this.evictProvider(first, provider);
+          }
+          console.warn(
+            `[native-agent] Activity reconciliation for ${first.environmentId} failed:`,
+            error instanceof Error ? error.name : "unknown error",
+          );
+        }
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(ACTIVITY_STATUS_CONCURRENCY, pendingGroups.length) },
+        () => worker(),
+      ),
+    );
+    if (this.stopped) return;
+
+    for (const environment of environments) {
+      if (failedEnvironments.has(environment.id)) continue;
+      const hasRegisteredSessions = sessionsByEnvironment.has(environment.id);
+      const previous = environment.agentActivitySources?.["native-agent"];
+      if (!hasRegisteredSessions && !previous) continue;
+      const desiredState = isEnvironmentReadyForAgents(environment)
+        ? aggregateAgentActivityState(
+            activityByEnvironment.get(environment.id) ?? {},
+          )
+        : "idle";
+      if (previous?.state === desiredState) continue;
+      await this.storage.setEnvironmentAgentActivity(
+        environment.id,
+        desiredState,
+        new Date().toISOString(),
+        "native-agent",
+      ).catch((error) => {
+        console.warn(
+          `[native-agent] Failed to persist activity for ${environment.id}:`,
+          error instanceof Error ? error.name : "unknown error",
+        );
+      });
+    }
+  }
+
+  /** Stage one session's observed state into the per-environment aggregate. */
+  private recordActivity(
+    activityByEnvironment: Map<
+      string,
+      Record<string, { state: AgentActivityState; updatedAt: string }>
+    >,
+    session: PersistedNativeAgentSession,
+    state: AgentActivityState,
+  ): void {
+    const sources = activityByEnvironment.get(session.environmentId) ?? {};
+    sources[session.key] = {
+      state,
+      // Only the state matters for this in-memory aggregate. A real timestamp
+      // is supplied once per committed environment.
+      updatedAt: "1970-01-01T00:00:00.000Z",
+    };
+    activityByEnvironment.set(session.environmentId, sources);
+  }
+
+  /**
+   * Push a failing group's next read out geometrically.
+   *
+   * Without this an environment whose bridge cannot be reached is retried
+   * thirty times a minute forever, each attempt re-resolving a connection and
+   * emitting a warning. Mirrors the prompt queue's backoff so the two paths
+   * degrade the same way.
+   */
+  private backOffActivityGroup(groupKey: string): void {
+    const attempts = (this.activityAttempts.get(groupKey) ?? 0) + 1;
+    this.activityAttempts.set(groupKey, attempts);
+    const backoff = Math.min(
+      ACTIVITY_RETRY_CEILING_MS,
+      ACTIVITY_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 8),
+    );
+    this.activityRetryAt.set(groupKey, this.now() + backoff);
   }
 
   async reconcileInitialLaunch(environmentId: string): Promise<void> {
@@ -812,7 +1054,7 @@ export class NativeAgentService {
       const provider = await this.options.provider(input, environment);
       await this.assertEnvironmentLive(input.environmentId);
       this.assertAcceptingWork();
-      this.providers.set(cacheKey, provider);
+      this.cacheProvider(cacheKey, provider);
       return provider;
     }
     const connection = await this.bridgeConnection(
@@ -831,8 +1073,96 @@ export class NativeAgentService {
       stageImages: (images) =>
         this.stageImages(input.environmentId, images),
     });
+    this.cacheProvider(cacheKey, provider);
+    return provider;
+  }
+
+  /**
+   * Publish a provider and retire any "no bridge is running" note for it.
+   *
+   * Reaching here means a bridge was just started or connected to, so the
+   * observer's cooldown is stale and would otherwise keep the sidebar reporting
+   * idle for up to its full window after a user opens a tab.
+   */
+  private cacheProvider(
+    cacheKey: string,
+    provider: BuildPipelineProvider,
+  ): void {
+    this.providers.set(cacheKey, provider);
+    this.absentBridgeUntil.delete(cacheKey);
+  }
+
+  /**
+   * Resolve a provider for observation only, never starting a bridge.
+   *
+   * `provider()` resolves its connection by *invoking the start command*, so
+   * calling it from the activity sweep would spawn a bridge process for every
+   * environment that has ever held a session — at startup, with no tab open,
+   * and then keep them all alive on a two-second poll. An environment with no
+   * running bridge has no turn in flight, which the caller records as idle, so
+   * `undefined` here is an answer rather than a failure.
+   */
+  private async observeProvider(
+    input: EnsureNativeAgentSessionInput,
+  ): Promise<BuildPipelineProvider | undefined> {
+    this.assertAcceptingWork();
+    const cacheKey = `${input.environmentId}\0${input.agent}`;
+    const environment = await this.assertEnvironmentLive(input.environmentId);
+    const cached = this.providers.get(cacheKey);
+    if (cached) return cached;
+
+    if (this.options.provider) {
+      const provider = await this.options.provider(input, environment);
+      await this.assertEnvironmentLive(input.environmentId);
+      this.assertAcceptingWork();
+      this.providers.set(cacheKey, provider);
+      return provider;
+    }
+    const connection = await this.observeBridgeConnection(
+      input.agent,
+      environment,
+    );
+    if (!connection) return undefined;
+    await this.assertEnvironmentLive(input.environmentId);
+    this.assertAcceptingWork();
+    const provider = createBuildPipelineProvider(connection, {
+      autoAnswerRequests: false,
+      stageImages: (images) =>
+        this.stageImages(input.environmentId, images),
+    });
     this.providers.set(cacheKey, provider);
     return provider;
+  }
+
+  /** Forget a provider whose environment is gone, along with its observer state. */
+  private forgetProviderState(cacheKey: string): void {
+    this.providers.delete(cacheKey);
+    this.absentBridgeUntil.delete(cacheKey);
+    this.activityRetryAt.delete(cacheKey);
+    this.activityAttempts.delete(cacheKey);
+  }
+
+  /**
+   * Drop a provider whose read-only activity call failed so the next sweep
+   * reconnects with fresh bridge coordinates. The identity check avoids
+   * evicting a replacement installed by concurrent work.
+   *
+   * Deliberately does not dispose. `OpenCodeProvider.dispose()` aborts the
+   * controller whose signal is attached to *every* request that provider makes,
+   * including a `promptAsync` the user is waiting on — so disposing here would
+   * let a failed background health read cancel a live prompt and report it as
+   * an ambiguous dispatch. Eviction alone is enough: these providers are built
+   * with `autoAnswerRequests: false`, so they hold no event stream, and
+   * `pruneProviders` still disposes a provider whose environment has gone away,
+   * where nothing can be in flight.
+   */
+  private evictProvider(
+    input: Pick<EnsureNativeAgentSessionInput, "environmentId" | "agent">,
+    provider: BuildPipelineProvider,
+  ): void {
+    const cacheKey = `${input.environmentId}\0${input.agent}`;
+    if (this.providers.get(cacheKey) !== provider) return;
+    this.providers.delete(cacheKey);
   }
 
   /** Stage base64 images into the workspace so a bridge will accept them. */
@@ -862,7 +1192,9 @@ export class NativeAgentService {
       if (!liveEnvironmentIds.has(environmentId)) stale.push([cacheKey, provider]);
     }
     if (stale.length === 0) return;
-    for (const [cacheKey] of stale) this.providers.delete(cacheKey);
+    for (const [cacheKey] of stale) this.forgetProviderState(cacheKey);
+    // Safe to dispose here, unlike the observer's eviction path: the
+    // environment is gone, so nothing can still be dispatching through it.
     await Promise.allSettled(stale.map(([, provider]) => provider.dispose?.()));
   }
 
@@ -1038,6 +1370,46 @@ export class NativeAgentService {
       authToken: result.authToken,
       model,
       effort,
+    };
+  }
+
+  /**
+   * Bridge coordinates for an already-running bridge, or `undefined`.
+   *
+   * The peek commands are the read-only twins of the start commands: they
+   * report a live, authenticated bridge and never spawn one. Anything that
+   * cannot be answered without starting a process is reported as "not running"
+   * rather than started on the observer's behalf.
+   */
+  private async observeBridgeConnection(
+    agent: BuildPipelineAgent,
+    environment: Environment,
+  ): Promise<BridgeConnection | undefined> {
+    if (environment.environmentType === "local") {
+      const result = await this.invoke<
+        { port: number; authToken: string } | null
+      >("peek_local_agent_bridge", { environmentId: environment.id, agent });
+      if (!result?.authToken) return undefined;
+      return {
+        agent,
+        baseUrl: `http://127.0.0.1:${result.port}`,
+        authToken: result.authToken,
+        directory: environment.worktreePath,
+      };
+    }
+
+    if (!environment.containerId) return undefined;
+    const result = await this.invoke<
+      { hostPort: number; authToken: string } | null
+    >("peek_container_agent_bridge", {
+      containerId: environment.containerId,
+      agent,
+    });
+    if (!result?.authToken) return undefined;
+    return {
+      agent,
+      baseUrl: `http://127.0.0.1:${result.hostPort}`,
+      authToken: result.authToken,
     };
   }
 }

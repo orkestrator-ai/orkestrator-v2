@@ -10,6 +10,7 @@ import {
   answerQuestion,
   dismissQuestion,
   getPendingQuestions,
+  getSessionActivity,
   getSessionInitData,
   claimPromptDispatch,
   getPromptDispatchState,
@@ -690,6 +691,30 @@ session.post("/:id/tasks/:taskId/stop", async (c) => {
       sessionErrorStatus(error),
     );
   }
+});
+
+/**
+ * Coarse activity state for the backend's per-session sweep.
+ *
+ * Deliberately not `GET /:id`: that route resolves the session (touching its
+ * idle clock) and hydrates the persisted transcript, so a two-second poll
+ * across every session pulled every transcript into memory and then pinned it
+ * there — idle transcript eviction could never fire again. `getSessionActivity`
+ * reads only what is already resident and materializes nothing, so this route
+ * must not route through `resolveSession` / `ensurePersistedSession` either.
+ *
+ * Always 200, never 404 — including for an id this bridge has never heard of.
+ * The backend reads a 404 from this path as "the bridge predates this route"
+ * and fails the whole environment, whereas `{ activity: "missing" }` is the
+ * in-band signal that one specific session is gone, on which it deletes that
+ * session's persisted mapping. Answering 404 for an unknown session makes the
+ * two indistinguishable and risks unmapping a session that is still live.
+ *
+ * Registered as a two-segment path, so the `/:id` route above cannot shadow it.
+ */
+session.get("/:id/activity", async (c) => {
+  const activity = await getSessionActivity(c.req.param("id"));
+  return c.json({ activity });
 });
 
 // Get pending questions for a session

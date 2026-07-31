@@ -6,13 +6,34 @@ import type {
 } from "@orkestrator/protocol/build-pipeline";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
+  AGENT_ACTIVITY_STATES,
+  type AgentActivityState,
+} from "@orkestrator/protocol/agent-activity";
+import {
   mimeTypeForFilename,
   promptAttachmentUrl,
   type PromptAttachment,
 } from "./prompt-attachments.js";
 
 export type ProviderStatus = "running" | "idle" | "error" | "missing";
+export type ProviderActivityState = AgentActivityState | "missing";
 export type ProviderExecutionMode = "plan" | "build";
+
+const PROVIDER_ACTIVITY_STATES: readonly ProviderActivityState[] = [
+  ...AGENT_ACTIVITY_STATES,
+  "missing",
+];
+
+/**
+ * Validate a bridge-supplied activity token before it can reach the durable
+ * projection. An unrecognized value must fail loudly: coercing it to `idle`
+ * would silently retire a spinner for a turn that is still running.
+ */
+function isProviderActivityState(
+  value: unknown,
+): value is ProviderActivityState {
+  return PROVIDER_ACTIVITY_STATES.includes(value as ProviderActivityState);
+}
 
 export class PromptRejectedError extends Error {
   constructor(message: string) {
@@ -115,6 +136,20 @@ export interface BuildPipelineProvider {
     options: ProviderSendOptions,
   ): Promise<void>;
   status(sessionId: string): Promise<ProviderStatus>;
+  /**
+   * Authoritative activity including input parked at the provider. Optional so
+   * narrow test providers and non-interactive integrations can fall back to
+   * the coarser status contract.
+   */
+  activity?(sessionId: string): Promise<ProviderActivityState>;
+  /**
+   * Read authoritative activity for several sessions from one provider
+   * snapshot. Providers whose upstream API is session-scoped may omit this and
+   * let callers fall back to activity()/status() per session.
+   */
+  activityBatch?(
+    sessionIds: readonly string[],
+  ): Promise<Map<string, ProviderActivityState>>;
   messages(sessionId: string): Promise<unknown[]>;
   structured<T>(
     sessionId: string,
@@ -472,6 +507,39 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       : "error";
   }
 
+  /**
+   * Read activity from the bridge's dedicated observation route.
+   *
+   * This deliberately does not reuse `status()` plus the pending-input routes.
+   * Those are the routes a *tab* reads, so each one is a liveness touch: the
+   * codex bridge refreshes `lastAccessed` (blocking idle thread detaching) and
+   * the claude bridge additionally hydrates the persisted transcript. This
+   * method is polled every couple of seconds for every session in every
+   * environment, so it must have no side effect at all — `/activity` exists
+   * only to answer it.
+   *
+   * The route reports an unknown session in-band as `missing` and never 404s.
+   * A 404 here therefore means the route itself is absent — an older bridge —
+   * and must surface as a failure rather than as "this session is gone", which
+   * the caller would act on by deleting the user's session mapping.
+   */
+  async activity(sessionId: string): Promise<ProviderActivityState> {
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/activity`,
+      {},
+      this.fetchImpl,
+    );
+    assertOk(response, `${this.agent} activity read`);
+    const body = await response.json() as { activity?: unknown };
+    if (!isProviderActivityState(body.activity)) {
+      throw new ProviderUnavailableError(
+        `${this.agent} returned a malformed activity snapshot`,
+      );
+    }
+    return body.activity;
+  }
+
   async messages(sessionId: string): Promise<unknown[]> {
     const response = await bridgeFetch(
       this.connection,
@@ -764,7 +832,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     if (this.blockedSessions.has(sessionId)) return "error";
     try {
       const response = await this.client.session.status(
-        undefined,
+        { directory: this.connection.directory },
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode status read");
@@ -775,6 +843,97 @@ class OpenCodeProvider implements BuildPipelineProvider {
       return status.type === "idle" ? "idle" : "error";
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode status is unavailable", {
+        cause: error,
+      });
+    }
+  }
+
+  async activity(sessionId: string): Promise<ProviderActivityState> {
+    const activity = await this.activityBatch([sessionId]);
+    const state = activity.get(sessionId);
+    // `activityBatch` answers for every id it is given, so a gap is a broken
+    // provider rather than a missing session. Defaulting to `missing` here
+    // would turn that bug into a deleted session mapping.
+    if (!state) {
+      throw new ProviderUnavailableError(
+        `OpenCode activity snapshot omitted ${sessionId}`,
+      );
+    }
+    return state;
+  }
+
+  async activityBatch(
+    sessionIds: readonly string[],
+  ): Promise<Map<string, ProviderActivityState>> {
+    try {
+      const activity = new Map<string, ProviderActivityState>();
+      const sessionIdsToRead = [...new Set(sessionIds)].filter((sessionId) => {
+        if (!this.blockedSessions.has(sessionId)) return true;
+        // A blocked session asked a question this provider will not answer, so
+        // it is parked on a human. `status()` calls that `error` because a
+        // pipeline must stop advancing on it; for the sidebar the honest
+        // answer is `waiting`. `idle` is the one answer that is certainly
+        // wrong — it retires the indicator on a turn nobody has resolved.
+        activity.set(sessionId, "waiting");
+        return false;
+      });
+      if (sessionIdsToRead.length === 0) return activity;
+
+      const statusResponse = await this.client.session.status(
+        { directory: this.connection.directory },
+        this.requestOptions(),
+      );
+      assertSdkResponse(statusResponse, "OpenCode status read");
+      if (!statusResponse.data) throw new Error("OpenCode returned no status");
+
+      const runningSessionIds = new Set<string>();
+      for (const sessionId of sessionIdsToRead) {
+        const status = statusResponse.data[sessionId];
+        if (!status) {
+          activity.set(sessionId, "missing");
+        } else if (status.type === "busy" || status.type === "retry") {
+          runningSessionIds.add(sessionId);
+        } else {
+          activity.set(sessionId, "idle");
+        }
+      }
+      if (runningSessionIds.size === 0) return activity;
+
+      const [questions, permissions] = await Promise.all([
+        this.client.question.list(
+          { directory: this.connection.directory },
+          this.requestOptions(),
+        ),
+        this.client.permission.list(
+          { directory: this.connection.directory },
+          this.requestOptions(),
+        ),
+      ]);
+      assertSdkResponse(questions, "OpenCode pending question read");
+      assertSdkResponse(permissions, "OpenCode pending permission read");
+      const waitingSessionIds = new Set<string>();
+      for (const request of [
+        ...(questions.data ?? []),
+        ...(permissions.data ?? []),
+      ]) {
+        if (!request || typeof request !== "object" || Array.isArray(request)) {
+          continue;
+        }
+        const sessionId = (request as { sessionID?: unknown }).sessionID;
+        if (typeof sessionId === "string" && runningSessionIds.has(sessionId)) {
+          waitingSessionIds.add(sessionId);
+        }
+      }
+      for (const sessionId of runningSessionIds) {
+        activity.set(
+          sessionId,
+          waitingSessionIds.has(sessionId) ? "waiting" : "working",
+        );
+      }
+      return activity;
+    } catch (error) {
+      if (error instanceof ProviderUnavailableError) throw error;
+      throw new ProviderUnavailableError("OpenCode activity is unavailable", {
         cause: error,
       });
     }

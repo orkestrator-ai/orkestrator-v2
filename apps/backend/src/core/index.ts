@@ -34,6 +34,7 @@ export class OrkestratorBackend {
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
+  private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
   private readonly reapPidServers: typeof reapOrphanedLocalServers;
   private readonly reapTmuxRuntimes: typeof reapOrphanedClaudeTmuxRuntimes;
   private readonly agentTools: Pick<
@@ -179,6 +180,18 @@ export class OrkestratorBackend {
     await this.nativeAgents.init().catch((error) => {
       console.warn("[backend] Failed to restore native agent launches:", error);
     });
+    // Hydrate the sidebar from bridge-owned session snapshots before the
+    // gateway accepts a renderer. A refresh therefore sees active environments
+    // immediately, without mounting each tab to recreate client state.
+    await this.nativeAgents.reconcileAgentActivity().catch((error) => {
+      console.warn("[backend] Failed to restore native agent activity:", error);
+    });
+    this.nativeActivitySweep ??= setInterval(() => {
+      void this.nativeAgents.reconcileAgentActivity().catch((error) => {
+        console.warn("[backend] Failed to reconcile native agent activity:", error);
+      });
+    }, 2_000);
+    this.nativeActivitySweep.unref?.();
   }
 
   /**
@@ -205,6 +218,10 @@ export class OrkestratorBackend {
     if (this.activityLeaseSweep) {
       clearInterval(this.activityLeaseSweep);
       this.activityLeaseSweep = null;
+    }
+    if (this.nativeActivitySweep) {
+      clearInterval(this.nativeActivitySweep);
+      this.nativeActivitySweep = null;
     }
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.

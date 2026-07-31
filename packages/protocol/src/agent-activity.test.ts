@@ -2,9 +2,22 @@ import { describe, expect, test } from "bun:test";
 import {
   aggregateAgentActivityState,
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
+  AGENT_ACTIVITY_SOURCES,
+  AGENT_ACTIVITY_STATES,
   isAgentActivityTimestamp,
   parseUsableAgentActivityTime,
 } from "./agent-activity.js";
+
+describe("agent activity vocabulary", () => {
+  test("enumerates every supported state and source", () => {
+    expect(AGENT_ACTIVITY_STATES).toEqual(["idle", "working", "waiting"]);
+    expect(AGENT_ACTIVITY_SOURCES).toEqual([
+      "frontend",
+      "claude-terminal",
+      "native-agent",
+    ]);
+  });
+});
 
 describe("isAgentActivityTimestamp", () => {
   test("accepts the forms this codebase actually mints", () => {

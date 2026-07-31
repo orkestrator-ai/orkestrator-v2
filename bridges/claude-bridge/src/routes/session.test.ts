@@ -84,6 +84,9 @@ const mockGetSessionInitData = mock(() => ({
 const mockAnswerQuestion = mock(() => true);
 const mockDismissQuestion = mock(() => true);
 const mockGetPendingPlanApprovals = mock(() => []);
+const mockGetSessionActivity = mock<
+  typeof realSessionManager.getSessionActivity
+>(async (id: string) => (id === "s-1" ? "working" : "missing"));
 const mockRespondToPlanApproval = mock(() => true);
 const mockSetSessionPreferences = mock(
   async (_id: string, preferences: { planMode?: boolean }) => preferences,
@@ -149,6 +152,7 @@ mock.module("../services/session-manager.js", () => ({
   rewindSessionFiles: mockRewindSessionFiles,
   stopBackgroundTask: mockStopBackgroundTask,
   getPendingQuestions: mockGetPendingQuestions,
+  getSessionActivity: mockGetSessionActivity,
   getSessionInitData: mockGetSessionInitData,
   answerQuestion: mockAnswerQuestion,
   dismissQuestion: mockDismissQuestion,
@@ -243,6 +247,10 @@ describe("session routes", () => {
     mockAnswerQuestion.mockClear();
     mockDismissQuestion.mockClear();
     mockGetPendingPlanApprovals.mockClear();
+    mockGetSessionActivity.mockReset();
+    mockGetSessionActivity.mockImplementation(async (id: string) =>
+      id === "s-1" ? "working" : "missing",
+    );
     mockRespondToPlanApproval.mockClear();
     mockClaimPromptDispatch.mockReset();
     mockClaimPromptDispatch.mockImplementation(async (
@@ -1174,6 +1182,43 @@ describe("session routes", () => {
     test("returns 404 for unknown session", async () => {
       const res = await app.request("/session/s-unknown/questions");
       expect(res.status).toBe(404);
+    });
+  });
+
+  // --- GET /session/:id/activity ---
+  describe("GET /session/:id/activity", () => {
+    test("returns the session's activity state", async () => {
+      const res = await app.request("/session/s-1/activity");
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({ activity: "working" });
+      expect(mockGetSessionActivity).toHaveBeenCalledWith("s-1");
+    });
+
+    test("returns 200 with activity 'missing' for an unknown session", async () => {
+      const res = await app.request("/session/s-unknown/activity");
+
+      // Deliberately not 404. The backend reads a 404 from this path as "the
+      // bridge is too old to have this route" and fails the environment, while
+      // an in-band "missing" only unmaps this one session.
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({ activity: "missing" });
+    });
+
+    test("does not resolve, materialize or hydrate the session", async () => {
+      await app.request("/session/s-1/activity");
+
+      // Every one of these is a liveness side effect, and the backend polls
+      // this route every two seconds for every session it knows about.
+      expect(mockGetSession).not.toHaveBeenCalled();
+      expect(mockEnsurePersistedSession).not.toHaveBeenCalled();
+      expect(mockHydratePersistedSessionMessages).not.toHaveBeenCalled();
+    });
+
+    test("is not shadowed by GET /session/:id", async () => {
+      mockGetSessionActivity.mockImplementation(async () => "waiting");
+
+      const res = await app.request("/session/s-1/activity");
+      expect(await jsonBody(res)).toEqual({ activity: "waiting" });
     });
   });
 

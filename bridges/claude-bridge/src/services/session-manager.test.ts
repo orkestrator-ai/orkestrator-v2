@@ -9006,6 +9006,167 @@ describe("rate_limit_event", () => {
     usage: { input_tokens: 10, output_tokens: 5, context_window_tokens: 1000 },
   };
 
+  test("publishes authoritative allocation before the first turn finishes", async () => {
+    const getStructuredUsage = mock(async () => ({
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: {
+          utilization: 17,
+          resets_at: "2026-07-28T22:30:00.000Z",
+        },
+        seven_day: {
+          utilization: 29,
+          resets_at: "2026-08-04T10:00:00.000Z",
+        },
+      },
+    }));
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      getStructuredUsage;
+
+    const { events, stop } = captureEvents();
+    const created = createSession("early allocation");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "keep working");
+    const call = await nextQueryCall();
+
+    try {
+      await waitFor(() => getSession(created.id)?.rateLimits?.[0]?.usedPercent === 17);
+      const running = getSession(created.id)!;
+      expect(running.status).toBe("running");
+      expect(running.usage).toBeUndefined();
+      expect(getStructuredUsage).toHaveBeenCalledTimes(1);
+      expect(events).toContainEqual({
+        type: "session.updated",
+        sessionId: created.id,
+        data: {
+          rateLimits: [
+            {
+              label: "Five Hour",
+              usedPercent: 17,
+              resetsAt: "2026-07-28T22:30:00.000Z",
+            },
+            {
+              label: "Weekly",
+              usedPercent: 29,
+              resetsAt: "2026-08-04T10:00:00.000Z",
+            },
+          ],
+        },
+      });
+    } finally {
+      stop();
+      call.finish();
+      await promptPromise;
+    }
+  });
+
+  test("replaces a sparse mid-turn notification with structured allocation", async () => {
+    let requestCount = 0;
+    const getStructuredUsage = mock(async () => {
+      requestCount += 1;
+      return {
+        rate_limits_available: true,
+        rate_limits: {
+          five_hour: {
+            utilization: requestCount === 1 ? 10 : 37,
+            resets_at: "2026-07-28T22:30:00.000Z",
+          },
+        },
+      };
+    });
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      getStructuredUsage;
+
+    const created = createSession("mid-turn allocation");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "keep working");
+    const call = await nextQueryCall();
+
+    try {
+      await waitFor(() => getSession(created.id)?.rateLimits?.[0]?.usedPercent === 10);
+      call.push({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          rateLimitType: "five_hour",
+          // Real threshold notifications can omit utilization entirely.
+          resetsAt: Date.parse("2026-07-28T22:30:00.000Z") / 1000,
+        },
+      });
+
+      await waitFor(() => getSession(created.id)?.rateLimits?.[0]?.usedPercent === 37);
+      expect(getSession(created.id)?.status).toBe("running");
+      expect(getSession(created.id)?.usage).toBeUndefined();
+      expect(getStructuredUsage).toHaveBeenCalledTimes(2);
+    } finally {
+      call.finish();
+      await promptPromise;
+    }
+  });
+
+  test("coalesces refreshes without blocking later SDK messages", async () => {
+    let resolveFirst: ((value: unknown) => void) | undefined;
+    let requestCount = 0;
+    const getStructuredUsage = mock(() => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return new Promise<unknown>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return Promise.resolve({
+        rate_limits_available: true,
+        rate_limits: {
+          five_hour: { utilization: 44 },
+          seven_day: { utilization: 55 },
+        },
+      });
+    });
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      getStructuredUsage;
+
+    const created = createSession("coalesced allocation");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "keep working");
+    const call = await nextQueryCall();
+
+    try {
+      await waitFor(() => getStructuredUsage.mock.calls.length === 1 && resolveFirst !== undefined);
+      for (const utilization of [11, 22, 33]) {
+        call.push({
+          type: "rate_limit_event",
+          rate_limit_info: { rateLimitType: "five_hour", utilization },
+        });
+      }
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-after-limit",
+        description: "Continued draining",
+      });
+
+      // The first control request is still parked, but the iterator has
+      // already consumed the message after all three refresh signals.
+      await waitFor(
+        () => getSession(created.id)?.backgroundTasks?.["task-after-limit"] !== undefined,
+      );
+      expect(getStructuredUsage).toHaveBeenCalledTimes(1);
+
+      resolveFirst!({
+        rate_limits_available: true,
+        rate_limits: { five_hour: { utilization: 5 } },
+      });
+      await waitFor(() => getSession(created.id)?.rateLimits?.[0]?.usedPercent === 44);
+      expect(getStructuredUsage).toHaveBeenCalledTimes(2);
+      expect(getSession(created.id)?.rateLimits).toEqual([
+        { label: "Five Hour", usedPercent: 44 },
+        { label: "Weekly", usedPercent: 55 },
+      ]);
+    } finally {
+      call.finish();
+      await promptPromise;
+    }
+  });
+
   test("replaces sparse threshold data with all structured /usage windows", async () => {
     queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
       mock(async () => ({
@@ -9136,8 +9297,9 @@ describe("rate_limit_event", () => {
   });
 
   test("times out a non-settling structured request without blocking turn completion", async () => {
+    const getStructuredUsage = mock(() => new Promise<unknown>(() => {}));
     queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
-      mock(() => new Promise<unknown>(() => {}));
+      getStructuredUsage;
 
     const startedAt = Date.now();
     const { session } = await runPromptWithMessages([
@@ -9156,6 +9318,10 @@ describe("rate_limit_event", () => {
       label: "Five Hour",
       usedPercent: 42,
     });
+    // The SDK has no cancellation primitive for get_usage. Once this turn's
+    // first request times out, event and result triggers must not accumulate
+    // more unresolved control requests.
+    expect(getStructuredUsage).toHaveBeenCalledTimes(1);
   });
 
   test("preserves sparse windows for malformed structured responses", async () => {
@@ -9179,11 +9345,9 @@ describe("rate_limit_event", () => {
         rate_limits: { model_scoped: ["not-a-window"] },
       },
     ];
-    const responses = [...malformedResponses];
-    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
-      mock(async () => responses.shift());
-
-    for (const _response of malformedResponses) {
+    for (const response of malformedResponses) {
+      queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+        mock(async () => response);
       const { session } = await runPromptWithMessages([
         sparseFiveHourEvent,
         successfulUsageResult,

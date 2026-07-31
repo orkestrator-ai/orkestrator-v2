@@ -6,6 +6,11 @@ import {
 export const BUILD_PIPELINE_VERSION = 2;
 
 export type BuildPipelineAgent = "claude" | "opencode" | "codex";
+
+/** The one list every agent check is built from. */
+export const BUILD_PIPELINE_AGENTS: readonly BuildPipelineAgent[] =
+  Object.freeze(["claude", "opencode", "codex"]);
+
 export type BuildPipelineEnvironmentType = "containerized" | "local";
 
 export type TaskSnapshotImage = {
@@ -92,6 +97,31 @@ export function stepKeyForSessionPhase(
 ): BuildStepKey {
   if (phase === "fix") return "build";
   return phase;
+}
+
+/** How much of the workspace a stage may touch. */
+export type BuildExecutionMode = "plan" | "build";
+
+/**
+ * The execution mode a session phase runs under on one harness.
+ *
+ * `review` and `verify` only need to read the workspace, and Codex enforces that
+ * with a read-only sandbox. Claude cannot be held to the same guarantee: its
+ * `plan` permission mode injects the `ExitPlanMode` approval protocol, which
+ * waits for a human to approve before work continues — in a pipeline with nobody
+ * to answer, a plan-mode review would simply stall. OpenCode's `plan` agent is
+ * likewise a chat-oriented surface rather than a sandbox.
+ *
+ * The difference is therefore real and cannot be flattened by forcing a mode. It
+ * lives here so the supervisor that applies it and the launcher that discloses
+ * it read the same definition and cannot drift.
+ */
+export function executionModeForSessionPhase(
+  phase: PipelineSessionPhase,
+  agent: BuildPipelineAgent,
+): BuildExecutionMode {
+  const readOnly = phase === "review" || phase === "verify";
+  return readOnly && agent === "codex" ? "plan" : "build";
 }
 
 /**
@@ -258,6 +288,18 @@ export interface PipelineFailureContext {
 export interface PipelineReconnectAttempt extends PipelineFailureContext {
   id: string;
   startedAt: string;
+  /**
+   * The harness that was unreachable.
+   *
+   * Recorded because steps may run different agents: a stage transition
+   * resolves the *next* step's provider before it records that step's session,
+   * so the failure belongs to a harness no session names yet. Without this the
+   * supervisor clears the attempt as soon as the *previous* stage's still-healthy
+   * harness answers, which restarts the reconnect deadline on every retry and
+   * leaves the pipeline retrying an unreachable bridge forever. Absent on
+   * attempts written before per-step harnesses existed.
+   */
+  agent?: BuildPipelineAgent;
 }
 
 export interface PipelinePromptAttempt {
@@ -360,7 +402,7 @@ const BUILD_PHASES = new Set<BuildPhase>([
   "complete",
   "failed",
 ]);
-const AGENTS = new Set<BuildPipelineAgent>(["claude", "codex", "opencode"]);
+const AGENTS = new Set<BuildPipelineAgent>(BUILD_PIPELINE_AGENTS);
 const ENVIRONMENT_TYPES = new Set<BuildPipelineEnvironmentType>([
   "containerized",
   "local",
@@ -501,7 +543,10 @@ function isFailureContext(value: unknown): value is PipelineFailureContext {
 
 function isReconnectAttempt(value: unknown): value is PipelineReconnectAttempt {
   if (!isRecord(value) || !isFailureContext(value)) return false;
-  return isNonBlankString(value.id) && isIsoDate(value.startedAt);
+  return isNonBlankString(value.id)
+    && isIsoDate(value.startedAt)
+    && (value.agent === undefined
+      || AGENTS.has(value.agent as BuildPipelineAgent));
 }
 
 function isPromptAttempt(value: unknown): value is PipelinePromptAttempt {

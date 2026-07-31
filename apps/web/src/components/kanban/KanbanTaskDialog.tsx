@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -34,6 +34,9 @@ import {
 } from "@/components/build/BuildLaunchDialog";
 import { buildLaunchDefaults } from "@/lib/build-launch-options";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useCodexStore } from "@/stores/codexStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { readImage } from "@/lib/native/clipboard";
 import {
   getKanbanImageData,
@@ -168,10 +171,29 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
   const isCreateMode = !!createForProjectId;
   const buildProjectId = createForProjectId ?? task?.projectId ?? "";
-  const launchDefaults = buildLaunchDefaults(
-    config,
-    buildProjectId,
-    Boolean(projects.find((project) => project.id === buildProjectId)?.localPath),
+  const buildProjectHasLocalPath = Boolean(
+    projects.find((project) => project.id === buildProjectId)?.localPath,
+  );
+  const launchDefaults = useMemo(
+    () => buildLaunchDefaults(config, buildProjectId, buildProjectHasLocalPath),
+    [buildProjectHasLocalPath, buildProjectId, config],
+  );
+  // Subscribed rather than read through `getState()` inside the render: this
+  // dialog's title, description and comment fields are controlled, so every
+  // keystroke re-renders it and would otherwise rebuild the whole catalog —
+  // including an O(n²) de-dupe across every environment's OpenCode models. The
+  // subscription is also what makes a catalog that arrives after mount reach the
+  // launcher at all.
+  const claudeModels = useClaudeStore((s) => s.models);
+  const codexModels = useCodexStore((s) => s.models);
+  const openCodeModels = useOpenCodeStore((s) => s.models);
+  // Unscoped by environment, like create mode: a build always provisions a new
+  // environment, so the task's existing one says nothing about which models will
+  // be available — and scoping to it collapses the OpenCode list to a
+  // placeholder whenever that environment has none cached.
+  const launchCatalog = useMemo(
+    () => buildReviewModelCatalog(undefined),
+    [claudeModels, codexModels, openCodeModels],
   );
 
   const [isEditing, setIsEditing] = useState(false);
@@ -872,7 +894,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         <BuildLaunchDialog
           open={buildDialogOpen}
           onOpenChange={setBuildDialogOpen}
-          catalog={buildReviewModelCatalog(undefined)}
+          catalog={launchCatalog}
           busy={isBuildStarting}
           {...launchDefaults}
           onConfirm={(selection) => void handleCreateAndBuild(selection)}
@@ -1137,11 +1159,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       <BuildLaunchDialog
         open={buildDialogOpen}
         onOpenChange={setBuildDialogOpen}
-        // Unscoped, like create mode: a build always provisions a new
-        // environment, so the task's existing one says nothing about which
-        // models will be available — and scoping to it collapses the OpenCode
-        // list to a placeholder whenever that environment has none cached.
-        catalog={buildReviewModelCatalog(undefined)}
+        catalog={launchCatalog}
         busy={isBuildStarting}
         {...launchDefaults}
         onConfirm={handleBuildConfirmed}

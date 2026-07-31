@@ -254,6 +254,22 @@ describe("useBuildPipeline", () => {
     expect(startInput().steps).toBeUndefined();
   });
 
+  test("an agent override wins when the step map pins no build harness", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    // The backend accepts a sparse step map, so the launcher's build step can
+    // legitimately be absent while other steps are pinned. The override then
+    // still decides the pipeline agent, and both sides agree on the snapshot.
+    await act(async () => {
+      await result.current.startBuild(task, "local", "opencode", {
+        steps: { review: { agent: "codex" } },
+      });
+    });
+
+    expect(startInput().agentType).toBe("opencode");
+    expect(startInput().steps).toEqual({ review: { agent: "codex" } });
+  });
+
   test("falls back to the repository's configured agent when neither is given", async () => {
     const baseConfig = useConfigStore.getState().config;
     useConfigStore.setState({

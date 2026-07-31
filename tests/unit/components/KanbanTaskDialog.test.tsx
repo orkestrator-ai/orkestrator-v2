@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { Environment } from "@/types";
 import {
@@ -151,12 +151,13 @@ function launchBuild(
 /**
  * The launcher's defaults for a project with no repository overrides.
  *
- * The globally configured "claude-sonnet-5" is not in the fallback Claude
- * catalog these tests run against, so the launcher falls back to its first
- * entry rather than offering a model the agent does not expose.
+ * The globally configured Claude model is stored as `claude-sonnet-5`, which the
+ * fallback catalog lists under the alias `sonnet`; the launcher matches it
+ * through the entry's resolved model, so the configured default is what opens
+ * pre-selected rather than the catalog's first entry.
  */
-function defaultSteps(agent = "claude") {
-  const step = { agent, model: "default", reasoningEffort: undefined };
+function defaultSteps(agent = "claude", model = "sonnet") {
+  const step = { agent, model, reasoningEffort: undefined };
   return {
     build: { ...step },
     review: { ...step },
@@ -1013,6 +1014,32 @@ describe("KanbanTaskDialog", () => {
     expect(options.steps["resolve-conflicts"].agent).toBe("claude");
   });
 
+  test("reports a create-and-build that throws instead of leaving the launch stuck", async () => {
+    // `addTask`, image saving and `startBuild` are all awaited from a `void`-ed
+    // confirm handler, so a rejection escaping here would be unhandled and the
+    // dialog would sit with a permanently disabled button and no explanation.
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    addTaskMock.mockImplementationOnce(async () => {
+      throw new Error("kanban store unavailable");
+    });
+
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), {
+      target: { value: "Doomed task" },
+    });
+    launchBuild("Container");
+
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("Failed to create task and start build"));
+    expect(startBuildMock).not.toHaveBeenCalled();
+    // Cleared in `finally`, so the launcher can be opened again.
+    await waitFor(() => expect(buildButton().disabled).toBe(false));
+
+    consoleError.mockRestore();
+  });
+
   test("create mode attaches a pasted clipboard image with a generated UUID", async () => {
     readImageMock.mockImplementation(async () => ({
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
@@ -1318,6 +1345,38 @@ describe("KanbanTaskDialog", () => {
     // the "Default" placeholder whenever that environment has nothing cached.
     expect(screen.getByRole("combobox", { name: "All steps model" }).textContent)
       .toContain("Zeta");
+  });
+
+  test("picks up a model catalog that arrives while the launcher is open", async () => {
+    render(
+      <KanbanTaskDialog
+        task={makeTask({ environmentId: "env-1" })}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+
+    openLauncher();
+    const agents = screen.getByRole("radiogroup", { name: "All steps agent" });
+    fireEvent.click(within(agents).getByRole("radio", { name: "OpenCode" }));
+    // Nothing cached yet, so the picker shows only its placeholder.
+    expect(screen.getByRole("combobox", { name: "All steps model" }).textContent)
+      .toContain("Default");
+
+    // The catalog is subscribed rather than read through `getState()` during
+    // render, so a catalog that loads with the launcher already open reaches it.
+    // Nothing else re-renders this dialog at that moment.
+    await act(async () => {
+      useOpenCodeStore.setState({
+        models: new Map([[
+          "env-late",
+          [{ id: "openrouter/late", name: "Late", provider: "OpenRouter", variants: [] }],
+        ]]),
+      });
+    });
+
+    expect(screen.getByRole("combobox", { name: "All steps model" }).textContent)
+      .toContain("Late");
   });
 
   test("the launcher opens on the repository and project defaults", async () => {

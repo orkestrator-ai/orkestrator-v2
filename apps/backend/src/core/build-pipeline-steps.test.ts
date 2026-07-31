@@ -80,6 +80,17 @@ class RecordingProvider implements BuildPipelineProvider {
   createSessionError: unknown = null;
   /** Queue of errors; each send() shifts one and throws it when present. */
   sendErrors: unknown[] = [];
+  /**
+   * The verdict every verify stage returns. Set false to drive the pipeline
+   * into its fix stage, which has no launcher control of its own.
+   */
+  verificationComplete = true;
+  /**
+   * The execution mode each stage asked for, kept apart from `created`/`sent`
+   * so the sandbox can be asserted on its own.
+   */
+  readonly createdModes: Array<[PipelineSessionPhase, string | undefined]> = [];
+  readonly sentModes: Array<string | undefined> = [];
 
   constructor(
     readonly agent: BuildPipelineAgent,
@@ -99,6 +110,7 @@ class RecordingProvider implements BuildPipelineProvider {
     if (this.createSessionError) throw this.createSessionError;
     const id = `${this.agent}-${phase}-${++this.counter}`;
     this.phases.set(id, phase);
+    this.createdModes.push([phase, options.mode]);
     this.created.push({
       agent: this.agent,
       phase,
@@ -115,6 +127,7 @@ class RecordingProvider implements BuildPipelineProvider {
   ): Promise<void> {
     const error = this.sendErrors.shift();
     if (error) throw error;
+    this.sentModes.push(options.mode);
     this.sent.push({
       agent: this.agent,
       sessionId,
@@ -142,7 +155,9 @@ class RecordingProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : { complete: true, rationale: "All criteria pass." }) as T,
+        : this.verificationComplete
+          ? { complete: true, rationale: "All criteria pass." }
+          : { complete: false, rationale: "Acceptance checks still fail." }) as T,
     };
   }
 
@@ -170,6 +185,12 @@ async function withService(
      * other moment at which it could be reached.
      */
     providerFor: (agent: BuildPipelineAgent) => RecordingProvider;
+    /**
+     * What PR detection reports. Mutable so a test can present a conflicting
+     * pull request and then clear the conflict, which is the only route into
+     * — and out of — the `resolve-conflicts` stage.
+     */
+    controls: { detection: unknown };
   }) => Promise<void>,
   options: ServiceOptions = {},
 ): Promise<void> {
@@ -196,6 +217,7 @@ async function withService(
   const created: CreatedSession[] = [];
   const sent: SentPrompt[] = [];
   const providerRequests: BuildPipelineAgent[] = [];
+  const controls: { detection: unknown } = { detection: null };
   const providers = new Map<BuildPipelineAgent, RecordingProvider>();
   const providerFor = (agent: BuildPipelineAgent): RecordingProvider => {
     const existing = providers.get(agent);
@@ -214,7 +236,9 @@ async function withService(
     if (command === "update_environment_agent_settings") {
       return (await storage.getEnvironment("env-1")) as T;
     }
-    if (command === "detect_pr_local" || command === "detect_pr") return null as T;
+    if (command === "detect_pr_local" || command === "detect_pr") {
+      return controls.detection as T;
+    }
     if (command === "get_kanban_tasks") return [] as T;
     return undefined as T;
   };
@@ -234,6 +258,7 @@ async function withService(
       sent,
       providerRequests,
       providerFor,
+      controls,
     });
   } finally {
     await service.shutdown();
@@ -906,6 +931,519 @@ describe("per-step bridge connections", () => {
       // reached is missing from the cache.
       expect(providerCache(service).has("env-1:claude")).toBe(true);
       expect(providerCache(service).has("env-1:codex")).toBe(false);
+    });
+  });
+});
+
+describe("per-step stage coverage", () => {
+  test("runs the fix stage on the build step's harness", async () => {
+    await withService(async ({ service, storage, created, providerFor }) => {
+      // `fix` re-implements against verification feedback, so it is build work
+      // and has no launcher control of its own. It must follow the build step
+      // rather than falling back to a repository default.
+      await writeDefaults(storage, {
+        global: { claudeModel: "global-claude", codexModel: "global-codex" },
+        repository: { defaultAgent: "codex", defaultModel: "repo-codex" },
+      });
+      providerFor("opencode").verificationComplete = false;
+
+      const started = await service.start({
+        ...startInput(),
+        steps: {
+          build: { agent: "claude", model: "claude-a", reasoningEffort: "high" },
+          review: { agent: "codex", model: "codex-b" },
+          verify: { agent: "opencode", model: "opencode/c" },
+        },
+      });
+      const pipeline = await advanceToStage(service, storage, started.id, "fix");
+
+      expect(created).toContainEqual({
+        agent: "claude",
+        phase: "fix",
+        model: "claude-a",
+        effort: "high",
+      });
+      const fix = pipeline.sessions.find((session) => session.phase === "fix");
+      expect(fix?.agent).toBe("claude");
+    });
+  });
+
+  test("runs the conflict stage on its own configured harness", async () => {
+    await withService(async ({ service, storage, created, controls }) => {
+      controls.detection = {
+        url: "https://github.com/acme/repo/pull/9",
+        state: "open",
+        hasMergeConflicts: true,
+      };
+
+      const started = await service.start(startInput());
+      const pipeline = await advanceToStage(
+        service,
+        storage,
+        started.id,
+        "resolve-conflicts",
+      );
+
+      expect(created).toContainEqual({
+        agent: "claude",
+        phase: "resolve-conflicts",
+        model: "claude-conflicts",
+        effort: undefined,
+      });
+      const conflicts = pipeline.sessions.find(
+        (session) => session.phase === "resolve-conflicts",
+      );
+      expect(conflicts?.agent).toBe("claude");
+
+      controls.detection = {
+        url: "https://github.com/acme/repo/pull/9",
+        state: "open",
+        hasMergeConflicts: false,
+      };
+      await service.advanceNow(started.id);
+      expect((await snapshot(storage, started.id)).phase).toBe("complete");
+    });
+  });
+
+  test("falls back to the global Codex effort for a step the repository does not own", async () => {
+    await withService(async ({ service, storage, created }) => {
+      // The repository's effort belongs to Claude, so a Codex step cannot take
+      // it — but Codex still has a global effort of its own to fall back to.
+      await writeDefaults(storage, {
+        global: {
+          claudeModel: "global-claude",
+          codexModel: "global-codex",
+          codexReasoningEffort: "medium",
+        },
+        repository: {
+          defaultAgent: "claude",
+          defaultModel: "repo-claude",
+          defaultEffort: "max",
+        },
+      });
+
+      const started = await service.start({
+        ...startInput(),
+        agentType: "codex",
+        steps: { build: { agent: "codex" } },
+      });
+      await advanceToStage(service, storage, started.id, "review");
+
+      expect(created).toEqual([
+        { agent: "codex", phase: "build", model: undefined, effort: undefined },
+        {
+          agent: "codex",
+          phase: "review",
+          model: "global-codex",
+          effort: "medium",
+        },
+      ]);
+    });
+  });
+
+  test("redispatches a stage-less attempt without a step selection", async () => {
+    await withService(async ({ service, storage, sent, providerFor }) => {
+      const started = await service.start(startInput());
+      await advanceToStage(service, storage, started.id, "build");
+      const running = await snapshot(storage, started.id);
+      const session = running.sessions[0]!;
+
+      // `waiting-for-setup` maps to no session phase, so the redispatch has no
+      // step to read and must send the prompt without pinning a model at all.
+      running.pendingPromptAttempt = {
+        id: "attempt-setup",
+        sessionId: session.sdkSessionId,
+        requestId: "request-setup",
+        phase: "waiting-for-setup",
+        prompt: "Resume",
+        useTaskImages: false,
+        startedAt: new Date().toISOString(),
+      };
+      session.status = "idle";
+      const record = await storage.getBuildPipeline(started.id);
+      await storage.saveBuildPipeline(
+        running.id,
+        running.projectId,
+        running.environmentId,
+        2,
+        running,
+        record!.revision,
+      );
+
+      providerFor("claude").phases.set(session.sdkSessionId, "build");
+      const before = sent.length;
+      await service.advanceNow(started.id);
+
+      expect(sent.slice(before)).toEqual([
+        {
+          agent: "claude",
+          sessionId: session.sdkSessionId,
+          model: undefined,
+          effort: undefined,
+        },
+      ]);
+    });
+  });
+});
+
+describe("per-step reconnect accounting", () => {
+  test("lets the deadline elapse when a healthy harness owns the current session", async () => {
+    await withService(async ({ service, storage, providerFor }) => {
+      // The regression this pins: a stage transition resolves the *next* step's
+      // provider before it records that step's session, so the failure belongs
+      // to a harness no session names. Clearing the attempt on the previous
+      // stage's still-healthy harness restarted `startedAt` every pass, and the
+      // deadline could then never elapse — the pipeline retried a dead bridge
+      // forever instead of failing.
+      const codex = providerFor("codex");
+      const started = await service.start({
+        ...startInput(),
+        taskId: "task-reconnect-accrues",
+        steps: { build: { agent: "claude" }, review: { agent: "codex" } },
+      });
+      await advanceToStage(service, storage, started.id, "build");
+      codex.createSessionError = new ProviderUnavailableError(
+        "codex bridge is unavailable",
+      );
+
+      await service.advanceNow(started.id);
+      const first = (await snapshot(storage, started.id)).reconnectAttempt;
+      expect(first).toMatchObject({ agent: "codex" });
+      // The build session is on the healthy harness, so it must not be offered
+      // as the failure's session id.
+      expect(first?.sessionId).toBeUndefined();
+
+      for (let pass = 0; pass < 4; pass += 1) {
+        await service.advanceNow(started.id);
+        const current = await snapshot(storage, started.id);
+        if (current.phase === "failed") break;
+        expect(current.reconnectAttempt?.startedAt).toBe(first!.startedAt);
+        expect(current.reconnectAttempt?.id).toBe(first!.id);
+      }
+    }, { reconnectDeadlineMs: 60_000 });
+  });
+
+  test("gives a different harness's outage its own deadline", async () => {
+    await withService(async ({ service, storage, providerFor }) => {
+      const codex = providerFor("codex");
+      const started = await service.start({
+        ...startInput(),
+        taskId: "task-reconnect-switches",
+        steps: { build: { agent: "claude" }, review: { agent: "codex" } },
+      });
+      await advanceToStage(service, storage, started.id, "build");
+      codex.createSessionError = new ProviderUnavailableError("codex is down");
+      await service.advanceNow(started.id);
+      const onCodex = (await snapshot(storage, started.id)).reconnectAttempt!;
+      expect(onCodex.agent).toBe("codex");
+
+      // Rewrite the standing attempt so it belongs to another harness and has
+      // already run past the deadline. A continuation would inherit that
+      // elapsed time and fail the pipeline on this very pass; a new outage on a
+      // harness that has only just stopped answering must start its own clock.
+      const pipeline = await snapshot(storage, started.id);
+      pipeline.reconnectAttempt = {
+        ...pipeline.reconnectAttempt!,
+        agent: "opencode",
+        startedAt: new Date(0).toISOString(),
+      };
+      const record = await storage.getBuildPipeline(started.id);
+      await storage.saveBuildPipeline(
+        pipeline.id,
+        pipeline.projectId,
+        pipeline.environmentId,
+        2,
+        pipeline,
+        record!.revision,
+      );
+
+      await service.advanceNow(started.id);
+
+      const after = await snapshot(storage, started.id);
+      expect(after.phase).not.toBe("failed");
+      expect(after.reconnectAttempt?.agent).toBe("codex");
+      expect(after.reconnectAttempt?.startedAt).not.toBe(new Date(0).toISOString());
+      expect(after.reconnectAttempt?.id).not.toBe(onCodex.id);
+    }, { reconnectDeadlineMs: 60_000 });
+  });
+
+  test("clears the attempt once the harness that failed answers again", async () => {
+    await withService(async ({ service, storage, providerFor }) => {
+      const codex = providerFor("codex");
+      const started = await service.start({
+        ...startInput(),
+        taskId: "task-reconnect-recovers",
+        steps: { build: { agent: "claude" }, review: { agent: "codex" } },
+      });
+      await advanceToStage(service, storage, started.id, "build");
+      codex.createSessionError = new ProviderUnavailableError("codex is down");
+      await service.advanceNow(started.id);
+      expect((await snapshot(storage, started.id)).reconnectAttempt?.agent)
+        .toBe("codex");
+
+      codex.createSessionError = null;
+      // Opens the review stage on the recovered harness, then lets the next
+      // pass observe it: the outage is over, so nothing should still say so.
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+
+      const recovered = await snapshot(storage, started.id);
+      expect(recovered.reconnectAttempt).toBeUndefined();
+      expect(recovered.error).toBeUndefined();
+      expect(recovered.sessions.map((session) => session.phase))
+        .toContain("review");
+    }, { reconnectDeadlineMs: 60_000 });
+  });
+
+  test("clears its recorded harness once the pipeline reaches a terminal phase", async () => {
+    await withService(async ({ service, storage, controls }) => {
+      controls.detection = {
+        url: "https://github.com/acme/repo/pull/4",
+        state: "open",
+        hasMergeConflicts: false,
+      };
+      const started = await service.start(startInput());
+      for (let pass = 0; pass < 8; pass += 1) {
+        if ((await snapshot(storage, started.id)).phase === "complete") break;
+        await service.advanceNow(started.id);
+      }
+
+      expect((await snapshot(storage, started.id)).phase).toBe("complete");
+      // Kept only while a pass may still need to attribute a failure. A finished
+      // pipeline keeps nothing, and `shutdown` clears the rest.
+      expect(lastProviderAgents(service).has(started.id)).toBe(false);
+    });
+  });
+
+  test("shutdown clears every recorded harness", async () => {
+    await withService(async ({ service, storage }) => {
+      const started = await service.start(startInput());
+      await advanceToStage(service, storage, started.id, "build");
+      expect(lastProviderAgents(service).size).toBe(1);
+
+      await service.shutdown();
+
+      expect(lastProviderAgents(service).size).toBe(0);
+      expect(providerCache(service).size).toBe(0);
+    });
+  });
+});
+
+describe("per-step model placeholders", () => {
+  test("keeps Claude's own default model id, which is a real one", async () => {
+    await withService(async ({ service, storage, created, sent }) => {
+      // `"default"` is a Claude catalog id — the bridge resolves it to Opus with
+      // a 1M context. Dropping it as if it meant "unset" ran the stage on the
+      // global default instead, so the build silently used a different model
+      // from the one the launcher displayed.
+      await writeDefaults(storage, {
+        global: { claudeModel: "claude-sonnet-5", codexModel: "global-codex" },
+      });
+
+      const started = await service.start({
+        ...startInput(),
+        agentType: "claude",
+        steps: { build: { agent: "claude", model: "default" } },
+      });
+      expect((await snapshot(storage, started.id)).steps)
+        .toEqual({ build: { agent: "claude", model: "default" } });
+
+      await advanceToStage(service, storage, started.id, "build");
+
+      expect(created[0]).toEqual({
+        agent: "claude",
+        phase: "build",
+        model: "default",
+        effort: undefined,
+      });
+      expect(sent[0]?.model).toBe("default");
+    });
+  });
+
+  test("drops the placeholder the launcher shows for a harness with no catalog", async () => {
+    await withService(async ({ service, storage, created }) => {
+      // No Codex or OpenCode server knows a model called "default"; it is only
+      // what the picker displays when that harness has not published a catalog.
+      await writeDefaults(storage, {
+        global: { claudeModel: "global-claude", codexModel: "global-codex" },
+      });
+
+      const started = await service.start({
+        ...startInput(),
+        agentType: "codex",
+        steps: { build: { agent: "codex", model: "default" } },
+      });
+      expect((await snapshot(storage, started.id)).steps)
+        .toEqual({ build: { agent: "codex" } });
+
+      await advanceToStage(service, storage, started.id, "build");
+
+      expect(created[0]).toEqual({
+        agent: "codex",
+        phase: "build",
+        model: undefined,
+        effort: undefined,
+      });
+    });
+  });
+
+  test("normalizes a placeholder that reached the snapshot unnormalized", async () => {
+    await withService(async ({ service, storage, created }) => {
+      // `start()` is not the only way a snapshot arrives — `importLegacy` takes
+      // one straight from disk — so the read side has to normalize too.
+      const started = await service.start({
+        ...startInput(),
+        agentType: "codex",
+        steps: { build: { agent: "codex", model: "codex-b" } },
+      });
+      const pipeline = await snapshot(storage, started.id);
+      pipeline.steps = {
+        build: { agent: "codex", model: "default", reasoningEffort: "default" },
+      };
+      const record = await storage.getBuildPipeline(started.id);
+      await storage.saveBuildPipeline(
+        pipeline.id,
+        pipeline.projectId,
+        pipeline.environmentId,
+        2,
+        pipeline,
+        record!.revision,
+      );
+
+      await advanceToStage(service, storage, started.id, "build");
+
+      expect(created[0]).toEqual({
+        agent: "codex",
+        phase: "build",
+        model: undefined,
+        effort: undefined,
+      });
+    });
+  });
+});
+
+describe("per-step execution modes", () => {
+  test("sandboxes review and verify on Codex and states build mode elsewhere", async () => {
+    await withService(async ({ service, storage, providerFor }) => {
+      const codex = providerFor("codex");
+      const started = await service.start({
+        ...startInput(),
+        agentType: "codex",
+        steps: {
+          build: { agent: "codex" },
+          review: { agent: "codex" },
+          verify: { agent: "codex" },
+          pr: { agent: "codex" },
+        },
+      });
+      await advanceToStage(service, storage, started.id, "pr");
+
+      // Stated by the supervisor rather than inferred inside the provider, so
+      // the sandbox a stage runs under is one decision in one place.
+      expect(codex.createdModes).toEqual([
+        ["build", "build"],
+        ["review", "plan"],
+        ["verify", "plan"],
+        ["pr", "build"],
+      ]);
+      expect(codex.sentModes).toEqual(["build", "plan", "plan", "build"]);
+    });
+  });
+
+  test("keeps a harness that cannot be sandboxed in build mode", async () => {
+    await withService(async ({ service, storage, providerFor }) => {
+      // Claude's plan mode waits on `ExitPlanMode` approval, which a pipeline
+      // has nobody to give, so a plan-mode review would stall rather than run.
+      const claude = providerFor("claude");
+      const started = await service.start({
+        ...startInput(),
+        agentType: "claude",
+        steps: {
+          build: { agent: "claude" },
+          review: { agent: "claude" },
+          verify: { agent: "claude" },
+          pr: { agent: "claude" },
+        },
+      });
+      await advanceToStage(service, storage, started.id, "pr");
+
+      expect(claude.createdModes.map(([, mode]) => mode))
+        .toEqual(["build", "build", "build", "build"]);
+      expect(claude.sentModes).toEqual(["build", "build", "build", "build"]);
+    });
+  });
+
+  test("addressing review findings overrides the review stage's read-only mode", async () => {
+    await withService(async ({ service, storage, providerFor }) => {
+      const codex = providerFor("codex");
+      codex.structured = async <T>(
+        sessionId: string,
+        requestId: string,
+      ): Promise<StructuredOutputResult<T>> => ({
+        ok: true,
+        provider: "codex",
+        requestId,
+        value: (codex.phases.get(sessionId) === "review"
+          ? {
+              ...cleanReview,
+              issues: [{
+                severity: "P1" as const,
+                confidence: 90,
+                category: "correctness" as const,
+                title: "Off-by-one",
+                file: "src/app.ts",
+                line: 2,
+                symbol: "run",
+                description: "Loops once too many.",
+                evidence: "for (i <= n)",
+                suggestion: "Use <.",
+                verification: "Run the suite.",
+              }],
+            }
+          : { complete: true, rationale: "All criteria pass." }) as T,
+      });
+
+      const started = await service.start({
+        ...startInput(),
+        agentType: "codex",
+        steps: { build: { agent: "codex" }, review: { agent: "codex" } },
+      });
+      await advanceToStage(service, storage, started.id, "verify");
+
+      // The review session is reused to write the fixes, so that turn has to
+      // leave the read-only sandbox the review itself ran in.
+      expect(codex.sentModes.slice(0, 3)).toEqual(["build", "plan", "build"]);
+    });
+  });
+});
+
+describe("per-step provider reservations", () => {
+  test("keeps a harness a sibling has only configured, not yet run", async () => {
+    await withService(async ({ service, storage, providerFor }) => {
+      const codex = providerFor("codex");
+      const kept = await service.start({
+        ...startInput(),
+        taskId: "task-keeps-codex",
+        steps: { build: { agent: "claude" }, review: { agent: "codex" } },
+      });
+      // Only reaches its build stage, so its Codex step exists purely as
+      // configuration — no session names that harness yet.
+      await advanceToStage(service, storage, kept.id, "build");
+
+      const removed = await service.start({
+        ...startInput(),
+        taskId: "task-removed",
+        steps: { build: { agent: "codex" } },
+      });
+      await advanceToStage(service, storage, removed.id, "build");
+      expect(providerCache(service).has("env-1:codex")).toBe(true);
+
+      await service.remove(removed.id);
+
+      // The surviving pipeline has reserved Codex through its review step, so
+      // disposing it here would tear the bridge out from under that stage.
+      expect(codex.disposed).toBe(0);
+      expect(providerCache(service).has("env-1:codex")).toBe(true);
     });
   });
 });

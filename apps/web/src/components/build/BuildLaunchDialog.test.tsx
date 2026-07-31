@@ -548,3 +548,100 @@ describe("BuildLaunchDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 });
+
+describe("BuildLaunchDialog step markers", () => {
+  /** The header badge plus one marker per visible step, all `size-8`. */
+  function iconBadges(container: HTMLElement) {
+    return Array.from(container.querySelectorAll<HTMLElement>('[class~="size-8"]'));
+  }
+
+  test("renders one badge for the header, the environment and each visible step", () => {
+    const { container } = renderDialog();
+
+    // Uniform mode collapses the five steps onto one card.
+    expect(iconBadges(container)).toHaveLength(3);
+
+    separateSteps();
+
+    // Header + environment + build, review, verify, PR and conflicts.
+    expect(iconBadges(container)).toHaveLength(7);
+  });
+
+  test("numbers the steps from the environment onwards", () => {
+    const { container } = renderDialog();
+    separateSteps();
+
+    const numbers = iconBadges(container)
+      .map((badge) => badge.querySelector("span")?.textContent)
+      .filter((label) => label !== undefined && label !== "");
+    expect(numbers).toEqual(["1", "2", "3", "4", "5", "6"]);
+  });
+
+  test("shapes every badge identically and never lets one squash", () => {
+    const { container } = renderDialog();
+    separateSteps();
+
+    for (const badge of iconBadges(container)) {
+      expect(badge.className).toContain("rounded-full");
+      // Without shrink-0 a flex sibling can squash the circle into an ellipse.
+      expect(badge.className).toContain("shrink-0");
+      expect(badge.className).toContain("place-items-center");
+    }
+  });
+
+  test("draws no connector below the last step", () => {
+    const { container } = renderDialog();
+    separateSteps();
+
+    // One connector between each consecutive pair, none trailing the last.
+    const connectors = container.querySelectorAll('[class*="min-h-5"]');
+    expect(connectors).toHaveLength(iconBadges(container).length - 2);
+  });
+});
+
+describe("BuildLaunchDialog review sandbox disclosure", () => {
+  const notice = /full workspace access/;
+
+  test("warns when the reviewing harness cannot be held read-only", () => {
+    renderDialog();
+
+    // Uniform mode configures review and verify too, so the single visible card
+    // has to carry the disclosure.
+    expect(screen.getByText(notice).textContent).toContain("Claude");
+    expect(screen.getByText(notice).textContent).toContain("Review and verify");
+  });
+
+  test("drops the warning once the reviewing harness is sandboxed", () => {
+    renderDialog();
+
+    chooseAgent("All steps", "Codex");
+
+    expect(screen.queryByText(notice)).toBeNull();
+  });
+
+  test("warns only on the steps that actually review", () => {
+    renderDialog();
+    separateSteps();
+
+    // Build, PR and conflict resolution are meant to write, so full access
+    // there is the point rather than a surprise.
+    const notices = screen.getAllByText(notice);
+    expect(notices).toHaveLength(2);
+    for (const line of notices) {
+      expect(line.textContent).toContain("This step");
+    }
+  });
+
+  test("tracks each step's own harness once they are configured apart", () => {
+    renderDialog();
+    separateSteps();
+    chooseAgent("Review", "Codex");
+
+    const notices = screen.getAllByText(notice);
+    expect(notices).toHaveLength(1);
+
+    chooseAgent("Verify", "Codex");
+
+    expect(screen.queryByText(notice)).toBeNull();
+  });
+});

@@ -114,3 +114,50 @@ describe("LAUNCH_AGENT_OPTIONS", () => {
     ]);
   });
 });
+
+describe("firstModelFor resolved-model matching", () => {
+  /**
+   * Configuration and the catalog do not share an id space: the global Claude
+   * default is stored as `claude-sonnet-5`, while the catalog lists that model
+   * under the alias `sonnet`.
+   */
+  const aliased: AgentModelCatalog = {
+    claude: [
+      {
+        id: "default",
+        name: "Default (recommended)",
+        reasoningEfforts: ["low", "high"],
+        resolvedModel: "claude-opus-5[1m]",
+      },
+      {
+        id: "sonnet",
+        name: "Sonnet",
+        reasoningEfforts: ["low", "high"],
+        resolvedModel: "claude-sonnet-5",
+      },
+    ],
+    codex: [{ id: "codex-a", name: "Codex A", reasoningEfforts: [] }],
+    opencode: [],
+  };
+
+  test("matches a preference stored as the resolved model", () => {
+    // Without this the preference misses every entry and the launcher silently
+    // opens on the catalog's first model instead of the configured one.
+    expect(firstModelFor("claude", aliased, { claude: "claude-sonnet-5" }))
+      .toBe("sonnet");
+  });
+
+  test("prefers an exact catalog id over a resolved-model match", () => {
+    expect(firstModelFor("claude", aliased, { claude: "default" })).toBe("default");
+  });
+
+  test("still falls back when neither the id nor the resolved model matches", () => {
+    expect(firstModelFor("claude", aliased, { claude: "claude-retired-9" }))
+      .toBe("default");
+  });
+
+  test("ignores a resolved model on another agent's entries", () => {
+    expect(firstModelFor("codex", aliased, { codex: "claude-sonnet-5" }))
+      .toBe("codex-a");
+  });
+});

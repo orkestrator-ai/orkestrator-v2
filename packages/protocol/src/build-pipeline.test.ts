@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BUILD_PIPELINE_AGENTS,
   BUILD_PIPELINE_VERSION,
   BUILD_STEP_KEYS,
+  executionModeForSessionPhase,
   isActiveBuildPhase,
   isBuildPipeline,
   isBuildStepConfigs,
@@ -831,5 +833,71 @@ describe("verification verdict contract", () => {
         rationale: { type: "string" },
       },
     });
+  });
+});
+
+describe("execution mode policy", () => {
+  test("sandboxes only the read-only stages, and only where that is possible", () => {
+    // Codex holds review and verify to a read-only sandbox. Claude and OpenCode
+    // cannot be held to it — Claude's plan mode waits on `ExitPlanMode` approval
+    // that a pipeline has nobody to give — so they stay in build mode and the
+    // launcher discloses the difference instead.
+    expect(executionModeForSessionPhase("review", "codex")).toBe("plan");
+    expect(executionModeForSessionPhase("verify", "codex")).toBe("plan");
+    expect(executionModeForSessionPhase("review", "claude")).toBe("build");
+    expect(executionModeForSessionPhase("verify", "claude")).toBe("build");
+    expect(executionModeForSessionPhase("review", "opencode")).toBe("build");
+    expect(executionModeForSessionPhase("verify", "opencode")).toBe("build");
+  });
+
+  test("never sandboxes a stage that has to write", () => {
+    const writing: PipelineSessionPhase[] = [
+      "build",
+      "fix",
+      "pr",
+      "resolve-conflicts",
+    ];
+    for (const phase of writing) {
+      for (const agent of BUILD_PIPELINE_AGENTS) {
+        expect(executionModeForSessionPhase(phase, agent)).toBe("build");
+      }
+    }
+  });
+
+  test("publishes one agent list that the guard is built from", () => {
+    expect([...BUILD_PIPELINE_AGENTS].sort())
+      .toEqual(["claude", "codex", "opencode"]);
+    expect(Object.isFrozen(BUILD_PIPELINE_AGENTS)).toBe(true);
+    // Every published agent must satisfy the snapshot guard, or the list and
+    // the validator would disagree about what an agent is.
+    for (const agent of BUILD_PIPELINE_AGENTS) {
+      expect(isBuildStepConfigs({ build: { agent } })).toBe(true);
+    }
+  });
+});
+
+describe("reconnect attempt harness", () => {
+  test("accepts a recorded harness, an absent one, and nothing else", () => {
+    const attempt = {
+      id: "attempt-1",
+      phase: "reviewing" as const,
+      kind: "stage-transition" as const,
+      startedAt: new Date(0).toISOString(),
+    };
+    // Recorded so the supervisor can tell whose outage it is: a stage
+    // transition fails before its own session exists, so no session names it.
+    expect(isBuildPipeline({
+      ...snapshot(),
+      reconnectAttempt: { ...attempt, agent: "codex" },
+    })).toBe(true);
+    // Absent on attempts written before per-step harnesses existed.
+    expect(isBuildPipeline({ ...snapshot(), reconnectAttempt: attempt }))
+      .toBe(true);
+    for (const agent of ["", "gpt", null, 3, {}]) {
+      expect(isBuildPipeline({
+        ...snapshot(),
+        reconnectAttempt: { ...attempt, agent },
+      })).toBe(false);
+    }
   });
 });

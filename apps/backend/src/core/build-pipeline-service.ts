@@ -13,6 +13,7 @@ import type {
 import {
   BUILD_PIPELINE_VERSION,
   BUILD_STEP_KEYS,
+  executionModeForSessionPhase,
   isBuildPipeline,
   isActiveBuildPhase,
   isStartBuildPipelineInput,
@@ -211,8 +212,29 @@ function pipelineAgents(pipeline: BuildPipeline): Set<BuildPipelineAgent> {
 }
 
 /**
- * Drops empty selections so a step that only pinned a harness does not also
- * pin the string "default" as a model id.
+ * The model a step actually pinned, or `undefined` for "no selection".
+ *
+ * `"default"` is a **real Claude catalog id** — the bridge resolves it to Opus
+ * with a 1M context — so discarding it there silently downgrades the run to the
+ * global default and contradicts the model the launcher displayed. For Codex and
+ * OpenCode the same string is only ever the placeholder the launcher shows when
+ * that harness has no catalog yet, and no server would recognise it, so there it
+ * does mean "unset". The same asymmetry is documented at the other consumer,
+ * `CreateEnvironmentDialog`.
+ */
+function stepModel(
+  agent: BuildPipelineAgent,
+  model: string | undefined,
+): string | undefined {
+  const trimmed = model?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed === "default" && agent !== "claude") return undefined;
+  return trimmed;
+}
+
+/**
+ * Drops empty selections so a step that only pinned a harness does not also pin
+ * a placeholder as a model id or the string "default" as a reasoning effort.
  */
 function normalizeSteps(
   steps: BuildStepConfigs | undefined,
@@ -222,11 +244,11 @@ function normalizeSteps(
   for (const key of BUILD_STEP_KEYS) {
     const step = steps[key];
     if (!step) continue;
-    const model = step.model?.trim();
+    const model = stepModel(step.agent, step.model);
     const reasoningEffort = step.reasoningEffort?.trim();
     normalized[key] = {
       agent: step.agent,
-      ...(model && model !== "default" ? { model } : {}),
+      ...(model ? { model } : {}),
       ...(reasoningEffort && reasoningEffort !== "default"
         ? { reasoningEffort }
         : {}),
@@ -464,6 +486,7 @@ export class BuildPipelineService {
     }));
     this.providers.clear();
     this.provisioningPrompts.clear();
+    this.lastProviderAgent.clear();
   }
 
   async start(input: StartBuildPipelineInput): Promise<BuildPipeline> {
@@ -978,9 +1001,23 @@ export class BuildPipelineService {
       await this.restartMissingStage(pipeline);
       return;
     }
-    const provider = await this.provider(pipeline, sessionAgent(pipeline, session));
+    const currentAgent = sessionAgent(pipeline, session);
+    const provider = await this.provider(pipeline, currentAgent);
     const status = await provider.status(session.sdkSessionId);
-    if (pipeline.reconnectAttempt && !pipeline.pendingPromptAttempt) {
+    // Only the harness that was recorded as unreachable can clear its own
+    // reconnect attempt. A stage transition resolves the *next* step's provider
+    // before it records that step's session, so a failure there belongs to a
+    // harness this session does not name — and clearing it on this session's
+    // evidence would reset `startedAt` on every retry, so the reconnect deadline
+    // would never elapse and the pipeline would retry a dead bridge forever.
+    // An attempt written before the agent was recorded has no harness to
+    // disagree with, so it keeps the original behaviour.
+    if (
+      pipeline.reconnectAttempt
+      && !pipeline.pendingPromptAttempt
+      && (pipeline.reconnectAttempt.agent === undefined
+        || pipeline.reconnectAttempt.agent === currentAgent)
+    ) {
       delete pipeline.reconnectAttempt;
       delete pipeline.error;
       await this.save(pipeline, record.revision);
@@ -1202,11 +1239,16 @@ export class BuildPipelineService {
     const { agent, model, effort } = await this.stepSettings(pipeline, sessionPhase);
     const provider = await this.provider(pipeline, agent);
     const label = SESSION_LABELS[sessionPhase];
+    // Stated rather than left to each provider's own default, so the sandbox a
+    // stage runs under is one decision in one place and does not move when a
+    // step pins a different harness.
+    const mode = executionModeForSessionPhase(sessionPhase, agent);
     // Codex binds model and effort at session creation, Claude and OpenCode at
     // prompt dispatch, so a per-step selection has to be supplied at both.
     const sessionId = await provider.createSession(sessionPhase, label, {
       model,
       effort,
+      mode,
     });
     provider.registerSession?.(sessionId);
     const { prompt, schema, images } = await this.promptFor(pipeline, sessionPhase);
@@ -1261,6 +1303,7 @@ export class BuildPipelineService {
         schema,
         model,
         effort,
+        mode,
       });
       delete pipeline.pendingPromptAttempt;
       await this.save(pipeline, pipeline.backendRevision);
@@ -1296,6 +1339,14 @@ export class BuildPipelineService {
     const step = sessionPhase
       ? await this.stepSettings(pipeline, sessionPhase)
       : undefined;
+    // `addressing` re-uses the review session to write code, so its override
+    // wins over the phase's own read-only mode. Everything else re-states the
+    // mode the session was opened with, so a redispatch cannot land a turn in a
+    // different sandbox than the one that was interrupted.
+    const mode = executionModeOverrideForPhase(attempt.phase)
+      ?? (sessionPhase && step
+        ? executionModeForSessionPhase(sessionPhase, step.agent)
+        : undefined);
     try {
       await provider.send(attempt.sessionId, attempt.prompt, {
         requestId: attempt.requestId,
@@ -1303,7 +1354,7 @@ export class BuildPipelineService {
           ? pipeline.taskSnapshot.images
           : [],
         schema,
-        mode: executionModeOverrideForPhase(attempt.phase),
+        mode,
         model: step?.model,
         effort: step?.effort,
       });
@@ -1581,6 +1632,8 @@ export class BuildPipelineService {
   private async complete(pipeline: BuildPipeline): Promise<void> {
     pipeline.phase = "complete";
     delete pipeline.error;
+    this.provisioningPrompts.delete(pipeline.id);
+    this.lastProviderAgent.delete(pipeline.id);
     await this.save(pipeline, pipeline.backendRevision);
     await this.reconcileTerminalState(pipeline);
   }
@@ -1735,10 +1788,14 @@ export class BuildPipelineService {
   }> {
     const step = pipeline.steps?.[stepKeyForSessionPhase(sessionPhase)];
     if (step) {
+      const effort = step.reasoningEffort?.trim();
       return {
         agent: step.agent,
-        model: step.model,
-        effort: step.reasoningEffort,
+        // Normalised on read as well as on write: `start()` is not the only way
+        // a snapshot gets here — `importLegacy` accepts one straight from disk,
+        // where a placeholder could otherwise be sent as a real model id.
+        model: stepModel(step.agent, step.model),
+        effort: effort && effort !== "default" ? effort : undefined,
       };
     }
     const config = await this.storage.loadConfig();
@@ -1855,6 +1912,7 @@ export class BuildPipelineService {
     pipeline.phase = "failed";
     delete pipeline.pendingPromptAttempt;
     this.provisioningPrompts.delete(pipeline.id);
+    this.lastProviderAgent.delete(pipeline.id);
     await this.save(pipeline, record.revision);
     await this.reconcileTerminalState(pipeline);
   }
@@ -1880,7 +1938,13 @@ export class BuildPipelineService {
     const provider = this.providers.get(providerKey);
     this.providers.delete(providerKey);
     await provider?.dispose?.();
-    const startedAt = pipeline.reconnectAttempt?.startedAt
+    // Only an attempt for this same harness carries its start time forward. A
+    // different harness failing is a new outage and gets its own deadline,
+    // rather than inheriting an elapsed time it did not accumulate.
+    const previous = pipeline.reconnectAttempt;
+    const continues = previous !== undefined
+      && (previous.agent === undefined || previous.agent === agent);
+    const startedAt = (continues ? previous.startedAt : undefined)
       ?? new Date().toISOString();
     const elapsed = elapsedSince(startedAt);
     if (elapsed !== null && elapsed >= this.reconnectDeadlineMs) {
@@ -1897,11 +1961,17 @@ export class BuildPipelineService {
     }
     pipeline.backendRevision = record.revision;
     pipeline.reconnectAttempt = {
-      id: pipeline.reconnectAttempt?.id ?? randomUUID(),
+      id: (continues ? previous.id : undefined) ?? randomUUID(),
       phase,
       kind: "stage-transition",
-      sessionId: sessionForCurrentPhase(pipeline)?.sdkSessionId,
+      // Only when this harness owns the current session. A stage transition
+      // fails before its own session exists, and naming the previous stage's
+      // session there would point recovery at a session on a healthy bridge.
+      sessionId: session && sessionAgent(pipeline, session) === agent
+        ? session.sdkSessionId
+        : undefined,
       startedAt,
+      agent,
     };
     pipeline.error = `Reconnecting to ${agent}: ${error.message}`;
     await this.save(pipeline, record.revision);

@@ -5,36 +5,47 @@ import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { DefaultAgent, Environment, GlobalConfig, RepositoryConfig } from "@/types";
 
+/**
+ * `resolvedModel` mirrors the bridge's own catalog. Configuration stores a
+ * Claude model in that resolved space (`claude-sonnet-5`) while these entries
+ * are keyed by alias, so without it no configured Claude default can ever be
+ * matched back to the option that represents it.
+ */
 const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] = [
   {
     id: "default",
     name: "Default (recommended)",
     description: "Opus 5 with 1M context · Best for everyday, complex tasks",
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    resolvedModel: "claude-opus-5[1m]",
   },
   {
     id: "opus[1m]",
     name: "Opus (1M context)",
     description: "Opus 5 with 1M context · Best for everyday, complex tasks",
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    resolvedModel: "claude-opus-5[1m]",
   },
   {
     id: "claude-fable-5[1m]",
     name: "Fable 5",
     description: "Most capable for difficult, long-running tasks",
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    resolvedModel: "claude-fable-5",
   },
   {
     id: "sonnet",
     name: "Sonnet",
     description: "Sonnet 5 · Efficient for routine tasks",
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    resolvedModel: "claude-sonnet-5",
   },
   {
     id: "haiku",
     name: "Haiku",
     description: "Fastest for quick tasks",
     reasoningEfforts: [],
+    resolvedModel: "claude-haiku-4-5-20251001",
   },
 ];
 
@@ -51,6 +62,7 @@ export function buildReviewModelCatalog(
         : model.supportsEffort
           ? ["low", "medium", "high"]
           : [],
+    resolvedModel: model.resolvedModel,
   }));
   const claude = liveClaudeModels.length > 0
     ? liveClaudeModels

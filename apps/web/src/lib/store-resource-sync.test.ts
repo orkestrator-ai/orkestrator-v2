@@ -1,4 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { Environment } from "@/types";
 
 // Each of the modules stubbed below has its own test file. Snapshot the real
@@ -52,6 +55,7 @@ const {
   dispatchResourceChange,
   requestResourceResync,
   resetResourceSync,
+  startResourceSync,
 } = await import("./resource-sync");
 const { startStoreResourceSync } = await import("./store-resource-sync");
 const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
@@ -61,7 +65,10 @@ const { useFeaturePlanStore } = await import("@/stores/featurePlanStore");
 const { useKanbanStore } = await import("@/stores/kanbanStore");
 const { useLoopedReviewStore } = await import("@/stores/loopedReviewStore");
 const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
-const { useProjectStore } = await import("@/stores/projectStore");
+const {
+  invalidateProjectSnapshots,
+  useProjectStore,
+} = await import("@/stores/projectStore");
 const { useSessionStore } = await import("@/stores/sessionStore");
 
 const startTestStoreResourceSync = (
@@ -1066,6 +1073,205 @@ describe("pane-layout binding", () => {
 });
 
 describe("authoritative resync", () => {
+  test("converges renderer collections through the real command boundary after a backend restart", async () => {
+    detach?.();
+    detach = null;
+
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-resource-restart-"));
+    const {
+      StorageService,
+      createEnvironment,
+      createProject,
+    } = await import("../../../backend/src/core/storage");
+    const { createCommandRegistry } = await import("../../../backend/src/core/commands");
+    const nativeEvents = await import("@/lib/native/events");
+    const listenMock = nativeEvents.listen as ReturnType<typeof mock>;
+    const eventHandlers = new Map<string, (event: { payload: unknown }) => void>();
+    listenMock.mockImplementation(async (
+      event: string,
+      handler: (event: { payload: unknown }) => void,
+    ) => {
+      eventHandlers.set(event, handler);
+      return () => eventHandlers.delete(event);
+    });
+
+    let stopTransport: (() => void) | undefined;
+    let stopStores: (() => void) | undefined;
+    try {
+      const firstBackend = new StorageService(dataDir);
+      await firstBackend.init();
+      const project = await firstBackend.addProject(
+        createProject("https://example.test/owner/project.git"),
+      );
+      const environmentSnapshot = await firstBackend.addEnvironment(
+        createEnvironment(project.id, {
+          name: "Before restart",
+          environmentType: "local",
+        }),
+      );
+      let activeBackend = firstBackend;
+      const commands = createCommandRegistry();
+      const commandContext = () => ({ storage: activeBackend }) as never;
+      const invokeCommand = async (name: string, args: Record<string, unknown>) => {
+        const command = commands.get(name);
+        if (!command) throw new Error(`Missing command: ${name}`);
+        return command(args, commandContext());
+      };
+      const manifestCalls: Array<{
+        knownGeneration?: string;
+        knownRevisions?: Record<string, string>;
+      }> = [];
+
+      useSessionStore.setState({
+        loadSessionsForEnvironment: mock(async () => undefined),
+      } as never);
+      stopStores = startStoreResourceSync({
+        getConfig: async () => ({}) as never,
+        getProjects: async () =>
+          await invokeCommand("get_projects", {}) as never,
+        getEnvironmentSnapshots: async (projectId: string) =>
+          await invokeCommand("get_environment_snapshots", { projectId }) as never,
+      });
+      stopTransport = startResourceSync({
+        loadManifest: async (knownGeneration, knownRevisions) => {
+          manifestCalls.push({ knownGeneration, knownRevisions });
+          return await invokeCommand("get_resource_revision_manifest", {
+            knownGeneration,
+            knownRevisions,
+          }) as never;
+        },
+      });
+
+      await tick();
+      expect(useProjectStore.getState().projects).toEqual([project]);
+      expect(useEnvironmentStore.getState().environments).toEqual([
+        expect.objectContaining({
+          id: environmentSnapshot.id,
+          name: environmentSnapshot.name,
+        }),
+      ]);
+      const firstGeneration = manifestCalls[0]?.knownGeneration;
+      expect(firstGeneration).toBeUndefined();
+
+      const restartedBackend = new StorageService(dataDir);
+      await restartedBackend.init();
+      activeBackend = restartedBackend;
+      await restartedBackend.updateProject(project.id, { name: "After restart" });
+      await restartedBackend.updateEnvironment(environmentSnapshot.id, {
+        name: "After restart",
+      });
+
+      const connected = eventHandlers.get(
+        nativeEvents.NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+      );
+      if (!connected) throw new Error("Connection listener did not attach");
+      // The first connection announcement shares the attach-time reconciliation
+      // window and is deliberately coalesced. A subsequent announcement models
+      // the backend process reconnect that must retain the first generation.
+      connected({ payload: undefined });
+      connected({ payload: undefined });
+      await tick();
+
+      expect(manifestCalls).toHaveLength(2);
+      expect(manifestCalls[1]?.knownGeneration).toEqual(expect.any(String));
+      expect(manifestCalls[1]?.knownGeneration).not.toBe(
+        restartedBackend.getResourceGeneration(),
+      );
+      expect(useProjectStore.getState().projects).toEqual([
+        expect.objectContaining({ id: project.id, name: "After restart" }),
+      ]);
+      expect(useEnvironmentStore.getState().environments).toEqual([
+        expect.objectContaining({ id: environmentSnapshot.id, name: "After restart" }),
+      ]);
+    } finally {
+      stopTransport?.();
+      stopStores?.();
+      listenMock.mockImplementation(async () => () => undefined);
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not let an older project snapshot overwrite a newer collection", async () => {
+    detach?.();
+    const stale = { id: "project-stale", name: "stale", order: 0 } as never;
+    const current = { id: "project-current", name: "current", order: 0 } as never;
+    let resolveProjects!: (projects: never[]) => void;
+    const getProjects = mock()
+      .mockImplementationOnce(() => new Promise<never[]>((resolve) => {
+        resolveProjects = resolve;
+      }))
+      .mockImplementation(async () => [current]);
+    detach = startTestStoreResourceSync({
+      getProjects: getProjects as never,
+      getEnvironmentSnapshots: mock(async () => []) as never,
+    });
+
+    requestResourceResync();
+    await tick(0);
+    useProjectStore.setState({ projects: [current] });
+    resolveProjects([stale]);
+    await tick();
+
+    expect(useProjectStore.getState().projects).toEqual([current]);
+    expect(getProjects).toHaveBeenCalledTimes(2);
+  });
+
+  test("reruns project hydration when its mutation version changes mid-read", async () => {
+    detach?.();
+    const initial = { id: "project-initial", name: "initial", order: 0 } as never;
+    const stale = { id: "project-stale", name: "stale", order: 0 } as never;
+    const converged = { id: "project-current", name: "current", order: 0 } as never;
+    useProjectStore.setState({ projects: [initial] });
+    let resolveProjects!: (projects: never[]) => void;
+    const getProjects = mock()
+      .mockImplementationOnce(() => new Promise<never[]>((resolve) => {
+        resolveProjects = resolve;
+      }))
+      .mockImplementation(async () => [converged]);
+    detach = startTestStoreResourceSync({
+      getProjects: getProjects as never,
+      getEnvironmentSnapshots: mock(async () => []) as never,
+    });
+
+    requestResourceResync();
+    await tick(0);
+    // Leave the array identity alone so this specifically exercises the
+    // applyProjectSnapshot mutation-version rejection path.
+    invalidateProjectSnapshots();
+    resolveProjects([stale]);
+    await tick();
+
+    expect(getProjects).toHaveBeenCalledTimes(2);
+    expect(useProjectStore.getState().projects).toEqual([converged]);
+  });
+
+  test("does not let an older environment snapshot overwrite a newer collection", async () => {
+    detach?.();
+    const project = { id: "project-1", name: "project", order: 0 } as never;
+    const stale = environment("env-stale");
+    const current = environment("env-current");
+    useProjectStore.setState({ projects: [project] });
+    let resolveEnvironments!: (environments: Environment[]) => void;
+    const getEnvironmentSnapshots = mock()
+      .mockImplementationOnce(() => new Promise<Environment[]>((resolve) => {
+        resolveEnvironments = resolve;
+      }))
+      .mockImplementation(async () => [current]);
+    detach = startTestStoreResourceSync({
+      getProjects: mock(async () => [project]) as never,
+      getEnvironmentSnapshots: getEnvironmentSnapshots as never,
+    });
+
+    requestResourceResync();
+    await tick(0);
+    useEnvironmentStore.setState({ environments: [current] });
+    resolveEnvironments([stale]);
+    await tick();
+
+    expect(useEnvironmentStore.getState().environments).toEqual([current]);
+    expect(getEnvironmentSnapshots).toHaveBeenCalledTimes(2);
+  });
+
   test("rehydrates project and environment collections without mounted UI loaders", async () => {
     detach?.();
     const project = { id: "project-new", name: "new", order: 0 } as never;
@@ -1199,6 +1405,34 @@ describe("authoritative resync", () => {
     expect(setConfig).toHaveBeenCalledWith({ theme: "dark" });
   });
 
+  test("retries failed project and environment collection reads", async () => {
+    detach?.();
+    const project = { id: "project-1", name: "project", order: 0 } as never;
+    const authoritativeEnvironment = environment("env-1");
+    const getProjects = mock()
+      .mockImplementationOnce(async () => { throw new Error("projects offline"); })
+      .mockImplementation(async () => [project]);
+    const getEnvironmentSnapshots = mock()
+      .mockImplementationOnce(async () => { throw new Error("environments offline"); })
+      .mockImplementation(async () => [authoritativeEnvironment]);
+    useProjectStore.setState({ projects: [project] });
+    detach = startTestStoreResourceSync({
+      getProjects: getProjects as never,
+      getEnvironmentSnapshots: getEnvironmentSnapshots as never,
+    });
+
+    requestResourceResync();
+    await tick();
+    requestResourceResync();
+    await tick();
+
+    expect(getProjects).toHaveBeenCalledTimes(2);
+    expect(getEnvironmentSnapshots).toHaveBeenCalledTimes(2);
+    expect(useEnvironmentStore.getState().environments).toEqual([
+      authoritativeEnvironment,
+    ]);
+  });
+
   test("does not let an older config read overwrite a newer event refresh", async () => {
     detach?.();
     let resolveOlder: ((value: unknown) => void) | undefined;
@@ -1324,6 +1558,79 @@ describe("authoritative resync", () => {
     expect(getPaneLayout.mock.calls.map(([id]) => id).sort()).toEqual(["env-1", "env-2"]);
   });
 
+  test("retries a deferred pane read that fails after initial hydration", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    useProjectStore.setState({ projects: [{ id: "project-1" } as never] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.beginHydration("env-1");
+    const getPaneLayout = mock()
+      .mockImplementationOnce(async () => { throw new Error("pane offline"); })
+      .mockImplementation(async () => null);
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+
+    requestResourceResync();
+    await tick(0);
+    expect(getPaneLayout).not.toHaveBeenCalled();
+    usePaneLayoutStore.getState().finishHydration("env-1");
+    await tick();
+    expect(getPaneLayout).toHaveBeenCalledTimes(1);
+
+    requestResourceResync();
+    await tick();
+    expect(getPaneLayout).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not acknowledge a pane manifest revision until deferred hydration succeeds", async () => {
+    detach?.();
+    useEnvironmentStore.setState({ environments: [environment("env-1")] });
+    const paneStore = usePaneLayoutStore.getState();
+    paneStore.initialize(null, "env-1");
+    paneStore.beginHydration("env-1");
+    const getPaneLayout = mock()
+      .mockImplementationOnce(async () => { throw new Error("pane offline"); })
+      .mockImplementation(async () => null);
+    detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
+    const manifestArguments: Array<{ generation?: string; revisions?: unknown }> = [];
+    const loadManifest = mock(async (generation?: string, revisions?: unknown) => {
+      manifestArguments.push({ generation, revisions });
+      return {
+        generation: "a".repeat(32),
+        reset: false,
+        revisions: { "pane-layout": "b".repeat(32) },
+      };
+    });
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    let intervalCallback: (() => void) | undefined;
+    globalThis.setInterval = ((callback: TimerHandler) => {
+      intervalCallback = callback as () => void;
+      return 42 as unknown as ReturnType<typeof setInterval>;
+    }) as unknown as typeof setInterval;
+    globalThis.clearInterval = mock(() => undefined) as unknown as typeof clearInterval;
+    let stopResourceSync: (() => void) | null = null;
+    try {
+      stopResourceSync = startResourceSync({ loadManifest });
+      await tick(10);
+      expect(getPaneLayout).not.toHaveBeenCalled();
+      usePaneLayoutStore.getState().finishHydration("env-1");
+      await tick();
+      expect(getPaneLayout).toHaveBeenCalledTimes(1);
+
+      intervalCallback?.();
+      await tick();
+
+      expect(getPaneLayout).toHaveBeenCalledTimes(2);
+      expect(manifestArguments).toHaveLength(2);
+      expect(manifestArguments[1]).toEqual({ generation: undefined, revisions: {} });
+    } finally {
+      stopResourceSync?.();
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
   test("coalesces a resync requested while one is running into one follow-up", async () => {
     detach?.();
     let releaseFirst!: () => void;
@@ -1345,6 +1652,135 @@ describe("authoritative resync", () => {
     releaseFirst();
     await tick();
     expect(getConfig).toHaveBeenCalledTimes(2);
+  });
+
+  test("unions selective resource sets queued behind an active resync", async () => {
+    detach?.();
+    let releaseConfig!: () => void;
+    const blocked = new Promise<void>((resolve) => { releaseConfig = resolve; });
+    const getConfig = mock(async () => {
+      await blocked;
+      return { theme: "dark" };
+    });
+    const loadTasks = mock(async () => {});
+    useKanbanStore.setState({ currentProjectId: "project-1", loadTasks } as never);
+    detach = startTestStoreResourceSync({ getConfig: getConfig as never });
+    const stableGeneration = "a".repeat(32);
+
+    startResourceSync({ loadManifest: async () => ({
+      generation: stableGeneration,
+      reset: false,
+      revisions: { config: "b".repeat(32) },
+    }) });
+    await tick(0);
+    startResourceSync({ loadManifest: async () => ({
+      generation: stableGeneration,
+      reset: false,
+      revisions: { kanban: "c".repeat(32) },
+    }) });
+    await tick(10);
+    expect(getConfig).toHaveBeenCalledTimes(1);
+    expect(loadTasks).not.toHaveBeenCalled();
+
+    releaseConfig();
+    await tick();
+    expect(loadTasks).toHaveBeenCalledWith("project-1");
+  });
+
+  test("keeps a queued full resync authoritative over later selective requests", async () => {
+    detach?.();
+    let releaseConfig!: () => void;
+    const blocked = new Promise<void>((resolve) => { releaseConfig = resolve; });
+    const getConfig = mock()
+      .mockImplementationOnce(async () => {
+        await blocked;
+        return { theme: "first" };
+      })
+      .mockImplementation(async () => ({ theme: "full" }));
+    const getProjects = mock(async () => []);
+    detach = startTestStoreResourceSync({
+      getConfig: getConfig as never,
+      getProjects: getProjects as never,
+    });
+    const stableGeneration = "a".repeat(32);
+
+    startResourceSync({ loadManifest: async () => ({
+      generation: stableGeneration,
+      reset: false,
+      revisions: { config: "b".repeat(32) },
+    }) });
+    await tick(0);
+    requestResourceResync();
+    startResourceSync({ loadManifest: async () => ({
+      generation: stableGeneration,
+      reset: false,
+      revisions: { "feature-plan": "c".repeat(32) },
+    }) });
+    await tick(10);
+    releaseConfig();
+    await tick();
+
+    expect(getConfig).toHaveBeenCalledTimes(2);
+    expect(getProjects).toHaveBeenCalledTimes(1);
+  });
+
+  test("hydrates only resources named by a selective manifest", async () => {
+    detach?.();
+    const getConfig = mock(async () => ({ theme: "dark" }));
+    const getProjects = mock(async () => []);
+    const getEnvironmentSnapshots = mock(async () => []);
+    detach = startTestStoreResourceSync({
+      getConfig: getConfig as never,
+      getProjects: getProjects as never,
+      getEnvironmentSnapshots: getEnvironmentSnapshots as never,
+    });
+
+    startResourceSync({ loadManifest: async () => ({
+      generation: "a".repeat(32),
+      reset: false,
+      revisions: { config: "b".repeat(32) },
+    }) });
+    await tick();
+
+    expect(getConfig).toHaveBeenCalledTimes(1);
+    expect(getProjects).not.toHaveBeenCalled();
+    expect(getEnvironmentSnapshots).not.toHaveBeenCalled();
+  });
+
+  test("converges a generation reset through manifest phases into final stores", async () => {
+    detach?.();
+    const order: string[] = [];
+    const project = { id: "project-new", name: "new", order: 0 } as never;
+    const authoritativeEnvironment = {
+      ...environment("env-new"),
+      projectId: "project-new",
+    };
+    detach = startTestStoreResourceSync({
+      getProjects: mock(async () => {
+        order.push("project");
+        return [project];
+      }) as never,
+      getEnvironmentSnapshots: mock(async () => {
+        order.push("environment");
+        return [authoritativeEnvironment];
+      }) as never,
+    });
+
+    startResourceSync({ loadManifest: async () => ({
+      generation: "a".repeat(32),
+      reset: true,
+      revisions: {
+        project: "b".repeat(32),
+        environment: "c".repeat(32),
+      },
+    }) });
+    await tick();
+
+    expect(order).toEqual(["project", "environment"]);
+    expect(useProjectStore.getState().projects).toEqual([project]);
+    expect(useEnvironmentStore.getState().environments).toEqual([
+      authoritativeEnvironment,
+    ]);
   });
 });
 

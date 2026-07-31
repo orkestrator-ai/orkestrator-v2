@@ -68,9 +68,9 @@ Primary areas:
       rollout.
 - [ ] Compare broad-sweep results with replay/manifest results during soak.
 - [ ] Confirm all inactive-environment resources converge.
-- [x] Replace broad transfer with a slower manifest check and targeted hydration;
-      focused automated equivalence and failure-retry coverage passes, while the
-      longer manual soak remains open below.
+- [x] Replace broad transfer with a slower manifest check and targeted
+      hydration. Automated and manual equivalence verification remain tracked
+      separately below.
 - [x] Keep an explicit full-reconcile action for diagnosis and recovery.
 
 ## Required tests
@@ -87,8 +87,10 @@ Primary areas:
 - [x] An undeliverable replay window reconciles instead of dropping the client.
 - [x] A throw mid-handshake unregisters the client and releases the gauge.
 - [x] Resource manifest returns stable revisions for unchanged state.
-- [x] Conditional snapshot returns unchanged without its body.
-- [x] Backend restart invalidates old cursors and converges.
+- [x] Conditional snapshot commands return unchanged without their bodies.
+- [x] Backend restart invalidates old manifest revisions.
+- [x] Backend restart converges the renderer stores through the command and
+      manifest boundaries.
 - [x] Slow clients cannot make handshake buffers unbounded.
 
 ## Manual verification
@@ -224,8 +226,9 @@ Record:
   config, environment snapshots, sessions, pane layouts, looped reviews, build
   pipelines, prompt queues, Kanban, project notes, and feature plans return an
   `unchanged` envelope without reading or returning the body.
-- The renderer tracks revisions only after every requested hydration succeeds.
-  Failed reads leave knowledge behind so the next check retries. Generation
+- The renderer acknowledges revisions only after the corresponding hydration
+  handler completes successfully. An unsuccessful hydration leaves that
+  revision unacknowledged so a later manifest check can retry it. Generation
   resets hydrate projects first, environments second, and dependent resources
   last. Project and environment manifest hydration is owned by the global store
   binding rather than the sidebar hooks, so a closed mobile drawer cannot omit
@@ -233,19 +236,31 @@ Record:
 - The former broad one-minute sweep is replaced by a five-minute manifest
   check. Replay misses and generation changes use the same targeted path;
   explicit full reconciliation is retained for diagnosis and recovery.
-- Focused automated checks cover stable revisions, cross-process writes,
-  body-less unchanged snapshots, restart invalidation, ordered convergence,
-  changed-resource-only hydration, failed-hydration retry, and the existing
-  resource binding and replay behavior. Manual multi-environment, constrained
-  network, and iOS background/foreground soak verification remains open.
-- The final focused run passed all four TypeScript projects plus 19 protocol,
-  20 backend storage, 151 renderer synchronization, 40 hook, 156 gateway, 82
-  web-gateway, and 304 command-registry tests (with one live-Docker test
-  skipped).
-- `bun run test` is not yet signed off. The bounded runner reaches an unrelated
-  pre-existing native-session storage failure: `listNativeAgentSessions()`
-  applies `Object.values()` to the newer `{ sessions, opaque, migrated }`
-  migration envelope, so downstream native-agent tests receive three envelope
-  fields instead of the stored session list. The same implementation is
-  present at `HEAD` independently of this milestone patch; the full-suite exit
-  criterion therefore remains unchecked.
+- Existing automated coverage exercises stable revisions, cross-process writes,
+  the storage-level body-less snapshot helper, storage restart invalidation,
+  renderer generation-reset ordering, changed-resource-only hydration,
+  failed-hydration retry, and the existing resource binding and replay
+  behavior. New command-registry cases exercise manifest validation, paired and
+  malformed cursor handling, legacy responses, and changed and unchanged
+  envelopes for all eleven manifest-backed commands. A renderer integration
+  case now carries a generation change through two real `StorageService`
+  instances, the real command registry, manifest reconnect handling, and the
+  final project and environment stores. Manual multi-environment,
+  constrained-network, and iOS background/foreground soak verification remains
+  open.
+- Passing follow-up checks:
+  - all seven TypeScript project typechecks (web, web-public, backend, desktop,
+    protocol, Codex bridge, and Claude bridge)
+  - `bun run build` (four Turbo build tasks)
+  - backend native-session storage/service focus (151 tests)
+  - backend resource manifest storage focus (25 tests)
+  - protocol resource manifest focus (23 tests)
+  - command registry focus (352 passed, 1 skipped)
+  - renderer resource/store synchronization focus (97 tests)
+  - renderer `App` focus (51 tests)
+  - project/environment hook focus (44 tests)
+  - isolated root suite (3,576 passed, 1 skipped)
+  - `bun run test`: workspace, root, bridge, protocol-lockfile, and iOS groups
+    passed; the iOS simulator group executed 40 tests
+- The full-suite run is signed off. The combined exit criterion remains open
+  only for the manual soak checks listed above.

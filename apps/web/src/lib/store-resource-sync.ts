@@ -34,7 +34,11 @@ import { useFeaturePlanStore } from "@/stores/featurePlanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import { useProjectStore } from "@/stores/projectStore";
+import {
+  applyProjectSnapshot,
+  getProjectMutationVersion,
+  useProjectStore,
+} from "@/stores/projectStore";
 import { useSessionStore } from "@/stores/sessionStore";
 import type { ResourceManifestKind } from "@orkestrator/protocol/resource-events";
 
@@ -59,6 +63,12 @@ interface StoreResourceSyncOptions {
   onPaneLayoutWriteSettled?: typeof onPaneLayoutWriteSettled;
 }
 
+interface DeferredPaneLayoutRefresh {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+
 export function startStoreResourceSync(
   options: StoreResourceSyncOptions = {},
 ): () => void {
@@ -69,7 +79,10 @@ export function startStoreResourceSync(
   let pendingResyncResources: Set<ResourceManifestKind> | null | undefined;
   let resyncPromise: Promise<void> | null = null;
   const paneLayoutRequestGenerations = new Map<string, number>();
-  const deferredPaneLayoutRefreshes = new Set<string>();
+  const deferredPaneLayoutRefreshes = new Map<
+    string,
+    DeferredPaneLayoutRefresh
+  >();
   const declinedPaneLayoutRefreshes = new Set<string>();
 
   const refreshConfig = async (): Promise<void> => {
@@ -126,8 +139,21 @@ export function startStoreResourceSync(
     const paneStore = usePaneLayoutStore.getState();
     const hydration = paneStore.hydration.get(environmentId);
     if (hydration === "pending") {
-      deferredPaneLayoutRefreshes.add(environmentId);
-      return;
+      const existing = deferredPaneLayoutRefreshes.get(environmentId);
+      if (existing) return existing.promise;
+
+      let resolve!: () => void;
+      let reject!: (error: unknown) => void;
+      const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+      });
+      deferredPaneLayoutRefreshes.set(environmentId, {
+        promise,
+        resolve,
+        reject,
+      });
+      return promise;
     }
     if (hydration !== "done") return;
 
@@ -227,20 +253,27 @@ export function startStoreResourceSync(
   ));
 
   unsubscribes.push(usePaneLayoutStore.subscribe((state, previous) => {
-    for (const environmentId of [...deferredPaneLayoutRefreshes]) {
+    for (const [environmentId, deferred] of [...deferredPaneLayoutRefreshes]) {
       if (
         previous.hydration.get(environmentId) === "pending"
         && state.hydration.get(environmentId) === "done"
       ) {
-        deferredPaneLayoutRefreshes.delete(environmentId);
-        requestPaneLayoutRefresh(environmentId);
+        void refreshPaneLayout(environmentId).then(
+          () => deferred.resolve(),
+          (error) => deferred.reject(error),
+        ).finally(() => {
+          if (deferredPaneLayoutRefreshes.get(environmentId) === deferred) {
+            deferredPaneLayoutRefreshes.delete(environmentId);
+          }
+        });
       }
     }
     // An environment that left the pane store will never settle a write or
     // finish hydrating, so its queued replays would be retained forever.
-    for (const environmentId of [...deferredPaneLayoutRefreshes]) {
+    for (const [environmentId, deferred] of [...deferredPaneLayoutRefreshes]) {
       if (!state.hydration.has(environmentId)) {
         deferredPaneLayoutRefreshes.delete(environmentId);
+        deferred.resolve();
       }
     }
     for (const environmentId of [...declinedPaneLayoutRefreshes]) {
@@ -250,6 +283,15 @@ export function startStoreResourceSync(
       }
     }
   }));
+
+  const queueSelectiveResync = (resource: ResourceManifestKind): void => {
+    // A full request already subsumes this retry. Otherwise keep it in the
+    // same serialized resync loop so the manifest handler does not resolve —
+    // and acknowledge its revision — until a non-stale snapshot is applied.
+    if (pendingResyncResources === null) return;
+    pendingResyncResources ??= new Set();
+    pendingResyncResources.add(resource);
+  };
 
   const resyncAll = async (
     resources: ReadonlySet<ResourceManifestKind> | null,
@@ -262,15 +304,30 @@ export function startStoreResourceSync(
     let failed = false;
 
     if (includes("project")) {
+      const projectStoreAtRequest = useProjectStore.getState();
+      const projectsAtRequest = projectStoreAtRequest.projects;
+      const mutationVersion = getProjectMutationVersion();
       try {
         const projects = await (options.getProjects ?? getProjects)();
-        if (!disposed) useProjectStore.getState().setProjects(projects);
+        // A live refresh, local mutation, or newer manifest read may have
+        // installed a newer collection while this request was in flight. Both
+        // guards are needed: the mutation version covers optimistic writes,
+        // while array identity orders concurrent authoritative reads.
+        const accepted = (
+          !disposed
+          && useProjectStore.getState().projects === projectsAtRequest
+          && applyProjectSnapshot(projects, mutationVersion)
+        );
+        if (!disposed && !accepted) {
+          queueSelectiveResync("project");
+        }
       } catch (error) {
         failed = true;
         console.warn("[store-resource-sync] Authoritative project resync failed:", error);
       }
     }
     if (includes("environment")) {
+      const environmentsAtRequest = useEnvironmentStore.getState().environments;
       try {
         // This phase runs after the project phase, so it sees projects added or
         // removed while the renderer was inactive. Install all project scopes
@@ -279,8 +336,14 @@ export function startStoreResourceSync(
         const snapshots = await Promise.all(projectIds.map((projectId) =>
           (options.getEnvironmentSnapshots ?? getEnvironmentSnapshots)(projectId)
         ));
-        if (!disposed) {
+        const accepted = (
+          !disposed
+          && useEnvironmentStore.getState().environments === environmentsAtRequest
+        );
+        if (accepted) {
           useEnvironmentStore.getState().setEnvironments(snapshots.flat());
+        } else if (!disposed) {
+          queueSelectiveResync("environment");
         }
       } catch (error) {
         failed = true;
@@ -459,6 +522,9 @@ export function startStoreResourceSync(
 
   return () => {
     disposed = true;
+    for (const deferred of deferredPaneLayoutRefreshes.values()) {
+      deferred.resolve();
+    }
     deferredPaneLayoutRefreshes.clear();
     declinedPaneLayoutRefreshes.clear();
     paneLayoutRequestGenerations.clear();

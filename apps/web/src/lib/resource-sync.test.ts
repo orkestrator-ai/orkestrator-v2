@@ -617,6 +617,70 @@ describe("startResourceSync", () => {
 });
 
 describe("manifest reconciliation", () => {
+  test.each([
+    ["a rejected manifest", async () => { throw new Error("manifest offline"); }],
+    ["a malformed manifest", async () => ({ generation: "bad" }) as never],
+  ])("falls back to a full reconciliation for %s", async (_label, loadManifest) => {
+    const requests: Array<{ resources: string[] | null; reason: string }> = [];
+    onResourceResync((request) => {
+      requests.push({
+        resources: request.resources === null ? null : [...request.resources],
+        reason: request.reason,
+      });
+    });
+
+    startResourceSync({ loadManifest });
+    await tick(20);
+
+    expect(requests).toEqual([{ resources: null, reason: "explicit" }]);
+  });
+
+  test("coalesces requests arriving during a manifest load into one follow-up", async () => {
+    let resolveFirst!: (manifest: ResourceRevisionManifest) => void;
+    const first = new Promise<ResourceRevisionManifest>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const stable = {
+      generation: "a".repeat(32),
+      reset: false,
+      revisions: {},
+    } satisfies ResourceRevisionManifest;
+    const loadManifest = mock()
+      .mockImplementationOnce(() => first)
+      .mockImplementation(async () => stable);
+
+    startResourceSync({ loadManifest });
+    await tick(10);
+    const resource = listenCalls.find(({ event }) => event === "resource-changed");
+    resource?.handler({ payload: change({ revision: 10 }) });
+    resource?.handler({ payload: change({ revision: 12 }) });
+    resource?.handler({ payload: change({ revision: 20 }) });
+    resource?.handler({ payload: change({ revision: 22 }) });
+    expect(loadManifest).toHaveBeenCalledTimes(1);
+
+    resolveFirst(stable);
+    await tick(20);
+
+    expect(loadManifest).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not hydrate a manifest that resolves after disposal", async () => {
+    let resolveManifest!: (manifest: ResourceRevisionManifest) => void;
+    const loadManifest = mock(() => new Promise<ResourceRevisionManifest>((resolve) => {
+      resolveManifest = resolve;
+    }));
+    const resync = mock(() => undefined);
+    onResourceResync(resync);
+
+    const stop = startResourceSync({ loadManifest });
+    await tick(10);
+    stop();
+    resolveManifest(fullManifest());
+    await tick(20);
+
+    expect(resync).not.toHaveBeenCalled();
+  });
+
   test("hydrates a generation reset in project, environment, dependent order", async () => {
     const requests: Array<string[] | null> = [];
     onResourceResync((request) => {
@@ -722,5 +786,41 @@ describe("manifest reconciliation", () => {
     expect(argumentsSeen).toHaveLength(2);
     expect(argumentsSeen[1]?.generation).toBeUndefined();
     expect(argumentsSeen[1]?.revisions).toEqual({});
+  });
+
+  test("does not advance known revisions after an asynchronous handler rejection", async () => {
+    const argumentsSeen: Array<{
+      generation?: string;
+      revisions?: Partial<ResourceRevisionMap>;
+    }> = [];
+    const loadManifest = async (
+      generation?: string,
+      revisions?: Partial<ResourceRevisionMap>,
+    ): Promise<ResourceRevisionManifest> => {
+      argumentsSeen.push({ generation, revisions });
+      return {
+        generation: "a".repeat(32),
+        reset: false,
+        revisions: { config: "b".repeat(32) },
+      };
+    };
+    let reject = true;
+    onResourceResync(async () => {
+      await Promise.resolve();
+      if (reject) {
+        reject = false;
+        throw new Error("async hydration failed");
+      }
+    });
+    startResourceSync({ loadManifest });
+    await tick(20);
+
+    const resource = listenCalls.find(({ event }) => event === "resource-changed");
+    resource?.handler({ payload: change({ revision: 10 }) });
+    resource?.handler({ payload: change({ revision: 12 }) });
+    await tick(20);
+
+    expect(argumentsSeen).toHaveLength(2);
+    expect(argumentsSeen[1]).toEqual({ generation: undefined, revisions: {} });
   });
 });

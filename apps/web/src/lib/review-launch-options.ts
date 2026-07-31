@@ -50,7 +50,7 @@ const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] = [
 ];
 
 export function buildReviewModelCatalog(
-  environmentId: string | undefined,
+  environmentId: string | null | undefined,
 ): ReviewModelCatalog {
   const liveClaudeModels = useClaudeStore.getState().models.map((model) => ({
     id: model.id,
@@ -77,9 +77,11 @@ export function buildReviewModelCatalog(
     }));
 
   const openCodeState = useOpenCodeStore.getState();
-  const liveOpenCodeModels = environmentId
-    ? openCodeState.getModels(environmentId)
-    : Array.from(openCodeState.models.values())
+  const liveOpenCodeModels = environmentId === null
+    ? []
+    : environmentId
+      ? openCodeState.getModels(environmentId)
+      : Array.from(openCodeState.models.values())
         .flat()
         .filter(
           (model, index, models) =>

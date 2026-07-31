@@ -207,6 +207,132 @@ describe("useBuildPipeline", () => {
     expect(github.taskSnapshot.comments).toEqual([{ text: "@grace: Please fix" }]);
   });
 
+  test("preserves supported Linear metadata and both comment attribution forms", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromLinearIssue({
+        ...linearIssue,
+        creatorName: "Grace",
+        assigneeName: "Ada",
+        createdAt: "2026-07-28",
+        projectName: "Desktop",
+        cycleName: "July",
+        comments: [
+          {
+            id: "comment-attributed",
+            body: "Attributed comment",
+            authorName: "Ada",
+            createdAt: "2026-07-29",
+            updatedAt: "2026-07-30",
+          },
+          {
+            id: "comment-anonymous",
+            body: "Unattributed comment",
+            createdAt: "2026-07-30",
+          },
+        ],
+      }, "project-1", "local");
+    });
+
+    const input = startInput() as Record<string, any>;
+    expect(input.source).toEqual({
+      type: "linear",
+      issueId: "linear-id",
+      issueIdentifier: "ENG-42",
+      issueUrl: "https://linear.example/ENG-42",
+      status: "In Progress",
+      teamKey: "ENG",
+      updatedAt: "2026-07-29",
+    });
+    expect(input.taskSnapshot.comments).toEqual([
+      { text: "Linear issue: ENG-42" },
+      { text: "URL: https://linear.example/ENG-42" },
+      { text: "Status: In Progress" },
+      { text: "Ada: Attributed comment" },
+      { text: "Unattributed comment" },
+    ]);
+    // Creator, assignee, and creation dates are accepted input metadata, but
+    // are deliberately not invented as fields on the narrower protocol source.
+    expect(input.source).not.toHaveProperty("creatorName");
+    expect(input.source).not.toHaveProperty("assigneeName");
+    expect(input.source).not.toHaveProperty("createdAt");
+  });
+
+  test("omits optional Linear context when it is unavailable", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromLinearIssue({
+        ...linearIssue,
+        description: "",
+        status: "",
+        url: undefined,
+        teamKey: undefined,
+        comments: [],
+      }, "project-1", "local");
+    });
+
+    const input = startInput() as Record<string, any>;
+    expect(input.namingPrompt).toBe("ENG-42\n\nLinear title");
+    expect(input.taskSnapshot.comments).toEqual([
+      { text: "Linear issue: ENG-42" },
+    ]);
+    expect(input.source).toEqual(expect.objectContaining({
+      issueUrl: undefined,
+      status: "",
+      teamKey: undefined,
+    }));
+  });
+
+  test("preserves supported GitHub dates and both comment attribution forms", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromGitHubIssue({
+        ...githubIssue,
+        authorLogin: "grace",
+        assigneeLogins: ["ada", "linus"],
+        createdAt: "2026-07-28",
+        updatedAt: "2026-07-30",
+        comments: [
+          {
+            id: 1,
+            body: "Attributed comment",
+            authorLogin: "ada",
+            createdAt: "2026-07-29",
+            updatedAt: "2026-07-30",
+          },
+          {
+            id: "anonymous",
+            body: "Unattributed comment",
+            createdAt: "2026-07-30",
+          },
+        ],
+      }, "project-1", "local");
+    });
+
+    const input = startInput() as Record<string, any>;
+    expect(input.source).toEqual({
+      type: "github",
+      repositoryOwner: "Acme",
+      repositoryName: "Widget",
+      issueNumber: 7,
+      issueUrl: "https://github.com/Acme/Widget/issues/7",
+      status: "open",
+      updatedAt: "2026-07-30",
+    });
+    expect(input.taskSnapshot.comments).toEqual([
+      { text: "@ada: Attributed comment" },
+      { text: "Unattributed comment" },
+    ]);
+    // The protocol source identifies the issue; personal metadata and comment
+    // dates stay out of that durable routing object.
+    expect(input.source).not.toHaveProperty("authorLogin");
+    expect(input.source).not.toHaveProperty("assigneeLogins");
+    expect(input.source).not.toHaveProperty("createdAt");
+  });
+
   test("returns undefined without creating renderer state when the backend rejects start", async () => {
     startBuildPipelineMock.mockRejectedValueOnce(new Error("backend unavailable"));
     const { result } = renderHook(() => useBuildPipeline());
@@ -384,6 +510,81 @@ describe("useBuildPipeline", () => {
     );
   });
 
+  test("finds and focuses an existing build tab inside a nested split tree", async () => {
+    usePaneLayoutStore.setState({
+      environments: new Map([["env-split", {
+        containerId: null,
+        activePaneId: "pane-other",
+        root: {
+          kind: "split",
+          id: "split-root",
+          direction: "horizontal",
+          sizes: [40, 60],
+          depth: 0,
+          children: [
+            {
+              kind: "leaf",
+              id: "pane-other",
+              tabs: [{ id: "terminal", type: "plain" }],
+              activeTabId: "terminal",
+            },
+            {
+              kind: "split",
+              id: "split-nested",
+              direction: "vertical",
+              sizes: [50, 50],
+              depth: 1,
+              children: [
+                {
+                  kind: "leaf",
+                  id: "pane-empty",
+                  tabs: [],
+                  activeTabId: null,
+                },
+                {
+                  kind: "leaf",
+                  id: "pane-build",
+                  tabs: [{
+                    id: "existing-build-tab",
+                    type: "claude-build",
+                    buildTabData: {
+                      environmentId: "env-split",
+                      pipelineId: "pipeline-original",
+                      taskId: "task-split",
+                      isLocal: true,
+                    },
+                  }],
+                  activeTabId: null,
+                },
+              ],
+            },
+          ],
+        },
+      }]]),
+      hydration: new Map(),
+      activeEnvironmentId: null,
+    });
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.navigateToPipeline({
+        id: "pipeline-newer",
+        environmentId: "env-split",
+        environmentType: "local",
+        projectId: "project-1",
+        taskId: "task-split",
+      });
+    });
+
+    const environment = usePaneLayoutStore.getState().environments.get("env-split");
+    expect(buildTabs("env-split").filter((tab) => tab.type === "claude-build"))
+      .toHaveLength(1);
+    expect(environment?.activePaneId).toBe("pane-build");
+    expect(environment && getAllLeaves(environment.root)
+      .find((leaf) => leaf.id === "pane-build")?.activeTabId)
+      .toBe("existing-build-tab");
+  });
+
   test("waits for pending pane hydration before adding and focusing the build tab", async () => {
     const pipeline = buildPipelineFixture({
       id: "pipeline-hydrated",
@@ -512,6 +713,32 @@ describe("useBuildPipeline navigation", () => {
 
     const [tab] = buildTabs("env-container");
     expect(tab?.buildTabData?.isLocal).toBe(false);
+  });
+
+  test("uses stable local defaults when navigation receives a legacy pipeline reference", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.navigateToPipeline({
+        environmentId: "env-legacy",
+        projectId: "project-legacy",
+        taskId: "legacy-42",
+      });
+    });
+
+    const [tab] = buildTabs("env-legacy");
+    expect(tab).toEqual(expect.objectContaining({
+      id: "build-task-legacy-42",
+      type: "claude-build",
+      buildTabData: expect.objectContaining({
+        environmentId: "env-legacy",
+        pipelineId: "task-legacy-42",
+        taskId: "legacy-42",
+        isLocal: true,
+      }),
+    }));
+    expect(useUIStore.getState().selectedProjectId).toBe("project-legacy");
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-legacy");
   });
 
   test("gives up waiting on a hydration that never finishes", async () => {

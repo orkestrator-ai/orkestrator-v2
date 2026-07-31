@@ -91,6 +91,8 @@ class RecordingProvider implements BuildPipelineProvider {
    */
   readonly createdModes: Array<[PipelineSessionPhase, string | undefined]> = [];
   readonly sentModes: Array<string | undefined> = [];
+  /** Session ids this harness was asked to stop, in call order. */
+  readonly aborted: string[] = [];
 
   constructor(
     readonly agent: BuildPipelineAgent,
@@ -161,7 +163,9 @@ class RecordingProvider implements BuildPipelineProvider {
     };
   }
 
-  async abort(_sessionId: string): Promise<void> {}
+  async abort(sessionId: string): Promise<void> {
+    this.aborted.push(sessionId);
+  }
 
   async dispose(): Promise<void> {
     this.disposed += 1;
@@ -379,17 +383,45 @@ async function withBridgeService(
     input: string | URL | Request,
     init: RequestInit = {},
   ) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    const method = input instanceof Request ? input.method : init.method ?? "GET";
+    const rawBody = input instanceof Request
+      ? await input.clone().text()
+      : init.body
+        ? String(init.body)
+        : "";
     requests.push({
       url,
-      body: init.body
-        ? JSON.parse(String(init.body)) as Record<string, unknown>
+      body: rawBody
+        ? JSON.parse(rawBody) as Record<string, unknown>
         : undefined,
     });
+    const pathname = new URL(url).pathname;
+    if (pathname === "/permission" || pathname === "/question") {
+      return Response.json([]);
+    }
+    if (pathname === "/event") {
+      const signal = input instanceof Request ? input.signal : init.signal;
+      return new Response(new ReadableStream({
+        start(controller) {
+          if (signal?.aborted) {
+            controller.close();
+            return;
+          }
+          signal?.addEventListener("abort", () => controller.close(), {
+            once: true,
+          });
+        },
+      }), { headers: { "Content-Type": "text/event-stream" } });
+    }
     if (url.endsWith("/session/create")) {
       return Response.json({ sessionId: `bridge-session-${++sessionCounter}` });
     }
+    if (pathname === "/session" && method === "POST") {
+      return Response.json({ id: `bridge-session-${++sessionCounter}` });
+    }
     if (url.endsWith("/prompt")) return new Response(null, { status: 204 });
+    if (url.includes("/prompt_async")) return new Response(null, { status: 204 });
     if (url.endsWith("/messages")) return Response.json({ messages: [] });
     if (url.includes("/structured-output")) {
       return Response.json({ structuredOutput: null });
@@ -671,9 +703,98 @@ describe("per-step build configuration", () => {
       ]);
     });
   });
+
+  test("uses the global default agent to interpret repository defaults", async () => {
+    await withService(async ({ service, storage, created }) => {
+      await writeDefaults(storage, {
+        global: {
+          defaultAgent: "codex",
+          claudeModel: "global-claude",
+          codexModel: "global-codex",
+          codexReasoningEffort: "medium",
+        },
+        // Older repository entries may omit `defaultAgent`. Their model and
+        // effort still belong to the globally selected harness.
+        repository: {
+          defaultModel: "repo-codex",
+          defaultEffort: "xhigh",
+        },
+      });
+
+      const started = await service.start({
+        ...startInput(),
+        taskId: "task-global-default-agent",
+        agentType: "codex",
+        steps: undefined,
+      });
+      await advanceToStage(service, storage, started.id, "review");
+
+      expect(created).toEqual([
+        {
+          agent: "codex",
+          phase: "build",
+          model: "repo-codex",
+          effort: "xhigh",
+        },
+        {
+          agent: "codex",
+          phase: "review",
+          model: "repo-codex",
+          effort: "xhigh",
+        },
+      ]);
+    });
+  });
 });
 
 describe("per-step provider lifecycle", () => {
+  test("pauses and cancels mixed-agent work through only the session owner", async () => {
+    await withService(async ({ service, storage, providerFor }) => {
+      const claude = providerFor("claude");
+      const codex = providerFor("codex");
+      const pauseTarget = await service.start({
+        ...startInput(),
+        taskId: "task-pause-owner",
+        steps: { build: { agent: "claude" }, review: { agent: "codex" } },
+      });
+      const reviewingForPause = await advanceToStage(
+        service,
+        storage,
+        pauseTarget.id,
+        "review",
+      );
+      const pausedSession = reviewingForPause.sessions.at(-1)!;
+
+      await service.pause(pauseTarget.id);
+
+      expect(codex.aborted).toEqual([pausedSession.sdkSessionId]);
+      expect(claude.aborted).toEqual([]);
+
+      const cancelTarget = await service.start({
+        ...startInput(),
+        taskId: "task-cancel-owner",
+        steps: { build: { agent: "claude" }, review: { agent: "codex" } },
+      });
+      const reviewingForCancel = await advanceToStage(
+        service,
+        storage,
+        cancelTarget.id,
+        "review",
+      );
+      const cancelledSession = reviewingForCancel.sessions.at(-1)!;
+      expect(lastProviderAgents(service).get(cancelTarget.id)).toBe("codex");
+
+      await service.cancel(cancelTarget.id);
+
+      expect(codex.aborted).toEqual([
+        pausedSession.sdkSessionId,
+        cancelledSession.sdkSessionId,
+      ]);
+      expect(claude.aborted).toEqual([]);
+      expect(lastProviderAgents(service).has(cancelTarget.id)).toBe(false);
+    });
+  });
+
   test("disposes only the harnesses no remaining pipeline still uses", async () => {
     await withService(async ({ service, storage, providerFor }) => {
       const claude = providerFor("claude");
@@ -896,6 +1017,43 @@ describe("per-step bridge connections", () => {
     });
   });
 
+  test("passes the global OpenCode model through the production provider", async () => {
+    await withBridgeService(async ({
+      service,
+      storage,
+      requests,
+      invocations,
+      bridges,
+    }) => {
+      bridges.set("opencode", { port: 3212, authToken: "opencode-token" });
+      await writeDefaults(storage, {
+        global: { opencodeModel: "anthropic/claude-sonnet" },
+        repository: {
+          defaultAgent: "claude",
+          defaultModel: "repo-claude",
+        },
+      });
+      const started = await service.start({
+        ...startInput(),
+        taskId: "task-opencode-global-model",
+        steps: { build: { agent: "opencode" } },
+      });
+
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+
+      expect(invocations).toContain("start_local_opencode_server_cmd");
+      const prompt = requests.find((request) =>
+        new URL(request.url).pathname.endsWith("/prompt_async")
+      );
+      expect(prompt?.body?.model).toEqual({
+        providerID: "anthropic",
+        modelID: "claude-sonnet",
+      });
+      expect(JSON.stringify(prompt?.body)).not.toContain("repo-claude");
+    });
+  });
+
   test("fails on the review harness's bridge while the build harness stays healthy", async () => {
     await withBridgeService(async ({
       service,
@@ -931,6 +1089,9 @@ describe("per-step bridge connections", () => {
       // reached is missing from the cache.
       expect(providerCache(service).has("env-1:claude")).toBe(true);
       expect(providerCache(service).has("env-1:codex")).toBe(false);
+      // A semantic bridge failure moves the snapshot to a terminal phase, so
+      // reconnect attribution for the failed pipeline must be released too.
+      expect(lastProviderAgents(service).has(started.id)).toBe(false);
     });
   });
 });

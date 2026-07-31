@@ -817,6 +817,10 @@ export class BuildPipelineService {
       delete pipeline.pendingUserMessages;
       delete pipeline.reviewRetryRequested;
     });
+    // `provider()` records attribution for reconnect handling while a pipeline
+    // is active. Cancellation is a terminal transition, so retaining the id
+    // here would grow the map for every cancelled build until shutdown.
+    this.lastProviderAgent.delete(pipelineId);
     await this.reconcileTerminalState(pipeline);
     if (abortError) throw abortError;
     return pipeline;

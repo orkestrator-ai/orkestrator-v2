@@ -19,6 +19,7 @@ import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelin
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
 const realBackendSnapshot = { ...realBackend };
@@ -170,6 +171,7 @@ describe("BuildChatTab backend projection", () => {
     cancelBuildPipelineMock.mockClear();
     sendMessageMock.mockClear();
     retryReviewMock.mockClear();
+    mockToastError.mockClear();
     getBuildPipelineConditionalMock.mockClear();
     getBuildPipelineConditionalMock.mockImplementation(async () => null);
     useBuildPipelineStore.setState({
@@ -293,6 +295,63 @@ describe("BuildChatTab backend projection", () => {
     fireEvent.click(pause);
     await waitFor(() => expect(pauseBuildPipelineMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(pause.disabled).toBe(false));
+    expect(mockToastError).toHaveBeenCalledWith("Failed to pause build", {
+      description: "pause unavailable",
+    });
+    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe(
+      "building",
+    );
+  });
+
+  test("reports a non-Error resume rejection and re-enables the control", async () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      phase: "paused",
+      backendRevision: 9,
+    });
+    resumeBuildPipelineMock.mockRejectedValueOnce("resume unavailable");
+    render(<BuildChatTab data={{
+      pipelineId: pipeline.id,
+      environmentId: pipeline.environmentId,
+      taskId: pipeline.taskId,
+      isLocal: true,
+    }} />);
+
+    const resume = screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement;
+    fireEvent.click(resume);
+
+    await waitFor(() => expect(resumeBuildPipelineMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(resume.disabled).toBe(false));
+    expect(mockToastError).toHaveBeenCalledWith("Failed to resume build", {
+      description: "resume unavailable",
+    });
+    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe(
+      "paused",
+    );
+  });
+
+  test("reports a cancelled-control failure without replacing the snapshot", async () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      phase: "building",
+      backendRevision: 9,
+    });
+    cancelBuildPipelineMock.mockRejectedValueOnce(503);
+    render(<BuildChatTab data={{
+      pipelineId: pipeline.id,
+      environmentId: pipeline.environmentId,
+      taskId: pipeline.taskId,
+      isLocal: true,
+    }} />);
+
+    const cancel = screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
+    fireEvent.click(cancel);
+
+    await waitFor(() => expect(cancelBuildPipelineMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(cancel.disabled).toBe(false));
+    expect(mockToastError).toHaveBeenCalledWith("Failed to cancel build", {
+      description: "503",
+    });
     expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe(
       "building",
     );
@@ -977,6 +1036,48 @@ describe("BuildChatTab rehydration", () => {
     expect(screen.getByText("Loading build pipeline…")).toBeTruthy();
   });
 
+  test("warns once when hydration rejects and does not retry on store changes", async () => {
+    const hydrationError = new Error("snapshot unavailable");
+    const warnMock = mock(() => {});
+    const realWarn = console.warn;
+    console.warn = warnMock;
+    getBuildPipelineConditionalMock.mockRejectedValueOnce(hydrationError);
+
+    try {
+      render(<BuildChatTab data={{
+        environmentId: "env-1",
+        pipelineId: pipeline.id,
+        taskId: "task-1",
+        isLocal: true,
+      }} />);
+
+      await waitFor(() => {
+        expect(warnMock).toHaveBeenCalledWith(
+          "[BuildChatTab] Failed to hydrate build pipeline:",
+          hydrationError,
+        );
+      });
+
+      // Make the effect observe both a present and then absent snapshot. The
+      // per-pipeline attempt guard must still prevent a second backend read.
+      act(() => {
+        useBuildPipelineStore.getState().replacePipeline(pipeline);
+      });
+      act(() => {
+        useBuildPipelineStore.setState({
+          pipelines: new Map(),
+          buildEnvironmentIds: new Set(),
+        });
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1);
+      expect(warnMock).toHaveBeenCalledTimes(1);
+    } finally {
+      console.warn = realWarn;
+    }
+  });
+
   test("does not fetch when the store already has the snapshot", async () => {
     useBuildPipelineStore.setState({
       pipelines: new Map([[pipeline.id, pipeline]]),
@@ -1084,6 +1185,7 @@ describe("BuildChatTab agent messaging", () => {
     cleanup();
     sendMessageMock.mockClear();
     retryReviewMock.mockClear();
+    mockToastError.mockClear();
     useBuildPipelineStore.setState({
       pipelines: new Map([[running.id, running]]),
       buildEnvironmentIds: new Set(["env-1"]),
@@ -1175,8 +1277,27 @@ describe("BuildChatTab agent messaging", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
     await waitFor(() => expect(sendMessageMock).toHaveBeenCalled());
+    expect(mockToastError).toHaveBeenCalledWith("Failed to send the message", {
+      description: "queue is full",
+    });
     // Losing the user's typing on a transient failure is worse than the failure.
     expect(box.value).toBe("do not lose me");
+  });
+
+  test("formats a non-Error message rejection in the failure toast", async () => {
+    sendMessageMock.mockRejectedValueOnce("queue disconnected");
+    renderTab();
+    const box = screen.getByLabelText("Send a message to the agent") as HTMLTextAreaElement;
+
+    fireEvent.change(box, { target: { value: "keep this draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send the message", {
+        description: "queue disconnected",
+      });
+    });
+    expect(box.value).toBe("keep this draft");
   });
 
   test("refuses to send an empty or whitespace-only message", () => {
@@ -1270,6 +1391,24 @@ describe("BuildChatTab agent messaging", () => {
 
     await waitFor(() => expect(retryReviewMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(retry.disabled).toBe(false));
+    expect(mockToastError).toHaveBeenCalledWith("Failed to restart the review", {
+      description: "no review stage",
+    });
+    expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase)
+      .toBe("building");
+  });
+
+  test("formats a non-Error review restart rejection", async () => {
+    retryReviewMock.mockRejectedValueOnce("review provider offline");
+    renderTab();
+
+    fireEvent.click(screen.getByRole("button", { name: /Retry Review/ }));
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith("Failed to restart the review", {
+        description: "review provider offline",
+      });
+    });
     expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase)
       .toBe("building");
   });

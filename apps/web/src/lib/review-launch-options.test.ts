@@ -63,6 +63,88 @@ describe("buildReviewModelCatalog", () => {
     });
   });
 
+  test("derives Claude effort choices from live capability metadata", () => {
+    useClaudeStore.setState({
+      models: [
+        {
+          id: "supports-effort-without-levels",
+          name: "Supports effort without levels",
+          supportsEffort: true,
+        },
+        {
+          id: "supports-effort-with-empty-levels",
+          name: "Supports effort with empty levels",
+          supportsEffort: true,
+          supportedEffortLevels: [],
+        },
+        {
+          id: "no-effort-without-levels",
+          name: "No effort without levels",
+          supportsEffort: false,
+        },
+        {
+          id: "no-effort-with-empty-levels",
+          name: "No effort with empty levels",
+          supportsEffort: false,
+          supportedEffortLevels: [],
+        },
+      ] as any,
+    });
+
+    expect(buildReviewModelCatalog(undefined).claude).toEqual([
+      expect.objectContaining({
+        id: "supports-effort-without-levels",
+        reasoningEfforts: ["low", "medium", "high"],
+      }),
+      expect.objectContaining({
+        id: "supports-effort-with-empty-levels",
+        reasoningEfforts: ["low", "medium", "high"],
+      }),
+      expect.objectContaining({
+        id: "no-effort-without-levels",
+        reasoningEfforts: [],
+      }),
+      expect.objectContaining({
+        id: "no-effort-with-empty-levels",
+        reasoningEfforts: [],
+      }),
+    ]);
+  });
+
+  test("propagates the resolved Claude model used to match configured defaults", () => {
+    useClaudeStore.setState({
+      models: [{
+        id: "sonnet",
+        name: "Sonnet",
+        supportsEffort: true,
+        resolvedModel: "claude-sonnet-resolved",
+      } as any],
+    });
+
+    expect(buildReviewModelCatalog(undefined).claude).toEqual([
+      expect.objectContaining({
+        id: "sonnet",
+        resolvedModel: "claude-sonnet-resolved",
+      }),
+    ]);
+  });
+
+  test("falls back to supported Codex efforts when live metadata omits them", () => {
+    useCodexStore.setState({
+      models: [{
+        id: "codex-without-efforts",
+        name: "Codex without efforts",
+      } as any],
+    });
+
+    expect(buildReviewModelCatalog(undefined).codex).toEqual([
+      expect.objectContaining({
+        id: "codex-without-efforts",
+        reasoningEfforts: ["medium", "high"],
+      }),
+    ]);
+  });
+
   test("uses safe fallbacks and does not expose stale configured models", () => {
     useClaudeStore.setState({ models: [] });
     useOpenCodeStore.setState({ models: new Map() });
@@ -107,6 +189,19 @@ describe("buildReviewModelCatalog", () => {
     // An environment with no cached catalog still falls back to the placeholder
     // rather than borrowing a sibling's models.
     expect(buildReviewModelCatalog("env-unknown").opencode)
+      .toEqual([{ id: "default", name: "Default", reasoningEfforts: [] }]);
+  });
+
+  test("can explicitly suppress OpenCode aggregation for project-scoped callers", () => {
+    useOpenCodeStore.setState({ models: new Map() });
+    useOpenCodeStore.getState().setModels("env-other-project", [{
+      id: "provider/other-project",
+      name: "Other Project",
+      provider: "Provider",
+      variants: [],
+    } as any]);
+
+    expect(buildReviewModelCatalog(null).opencode)
       .toEqual([{ id: "default", name: "Default", reasoningEfforts: [] }]);
   });
 

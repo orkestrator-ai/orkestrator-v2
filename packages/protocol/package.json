@@ -22,6 +22,7 @@
     "./structured-review": "./src/structured-review.ts",
     "./structured-output": "./src/structured-output.ts",
     "./task-list": "./src/task-list.ts",
+    "./terminal-websocket": "./src/terminal-websocket.ts",
     "./web-client": "./src/web-client.ts"
   },
   "scripts": {

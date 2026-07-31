@@ -11,7 +11,7 @@ marks work as optional.
 | [2](milestone-2.md) | Dynamic body, event-stream, and proxy compression | Not started |
 | [3](milestone-3.md) | Repeated payload and polling reduction | Implemented; manual verification pending |
 | [4](milestone-4.md) | Gateway replay and revision-aware synchronization | In progress — replay transport implemented |
-| [5](milestone-5.md) | Multiplexed terminal WebSocket | Not started |
+| [5](milestone-5.md) | Multiplexed terminal WebSocket | In progress — protocol and HTTP input batching implemented |
 | [6](milestone-6.md) | Large payloads and optional connection brokerage | Not started |
 
 ## Working convention

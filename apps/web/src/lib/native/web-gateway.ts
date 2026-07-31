@@ -7,6 +7,10 @@ import {
 import { readClipboardImageDimensions } from "@/lib/clipboard-image";
 import { GatewayHttpError } from "@/lib/native/gateway-http-error";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import {
+  parseTerminalInputRequest,
+  TerminalHttpInputBatcher,
+} from "@/lib/native/terminal-input-batcher";
 
 const GATEWAY_PREFIX = "/__orkestrator";
 const EVENT_RECONNECT_DELAY_MS = 2_000;
@@ -669,16 +673,35 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     return payload;
   };
 
+  const invokeImmediately = async <T = unknown>(
+    command: string,
+    args?: Record<string, unknown>,
+  ): Promise<T> => {
+    const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/invoke`), {
+      method: "POST",
+      credentials,
+      headers: requestHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ command, args: args ?? {} }),
+    });
+    const payload = await readGatewayResponse<{ result?: T }>(response, "Gateway command failed");
+    return payload.result as T;
+  };
+
+  const terminalInputBatcher = new TerminalHttpInputBatcher(async (request) => {
+    await invokeImmediately(request.command, {
+      sessionId: request.sessionId,
+      data: request.data,
+    });
+  });
+
   return {
     async invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
-      const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/invoke`), {
-        method: "POST",
-        credentials,
-        headers: requestHeaders({ "content-type": "application/json" }),
-        body: JSON.stringify({ command, args: args ?? {} }),
-      });
-      const payload = await readGatewayResponse<{ result?: T }>(response, "Gateway command failed");
-      return payload.result as T;
+      const terminalInput = parseTerminalInputRequest(command, args);
+      if (terminalInput) {
+        await terminalInputBatcher.enqueue(terminalInput);
+        return undefined as T;
+      }
+      return invokeImmediately<T>(command, args);
     },
 
     listen<T = unknown>(event: string, callback: EventCallback<T>): () => void {

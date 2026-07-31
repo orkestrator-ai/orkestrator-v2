@@ -420,6 +420,29 @@ describe("web gateway browser API", () => {
     await expect(api.invoke("get_projects", { projectId: "project-1" })).resolves.toEqual({ ok: true });
   });
 
+  test("micro-batches HTTP terminal typing and flushes Enter in order", async () => {
+    const invokes: Array<{ command: string; args: Record<string, unknown> }> = [];
+    globalThis.fetch = mock(async (_input, init) => {
+      invokes.push(JSON.parse(String(init?.body)) as {
+        command: string;
+        args: Record<string, unknown>;
+      });
+      return new Response(JSON.stringify({}), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const api = createBrowserGatewayApi();
+    const writes = ["h", "i", "\r"].map((data) => api.invoke("terminal_write", {
+      sessionId: "session-1",
+      data,
+    }));
+    await Promise.all(writes);
+
+    expect(invokes).toEqual([{
+      command: "terminal_write",
+      args: { sessionId: "session-1", data: "hi\r" },
+    }]);
+  });
+
   test("connects directly to a configured backend with bearer authentication", async () => {
     globalThis.fetch = mock(async (input, init) => {
       expect(input).toBe("https://workstation.tailnet.ts.net/__orkestrator/invoke");

@@ -1,6 +1,6 @@
 # Milestone 5 — Multiplexed terminal WebSocket
 
-Status: Not started
+Status: In progress — protocol and HTTP input batching implemented
 
 Depends on: Milestone 4
 
@@ -27,25 +27,25 @@ Primary areas:
 
 ### HTTP compatibility improvement
 
-- [ ] Add a 5–10 ms terminal input micro-batch to the HTTP path.
-- [ ] Flush Enter, control sequences, and explicit paste boundaries
+- [x] Add a 5–10 ms terminal input micro-batch to the HTTP path.
+- [x] Flush Enter, control sequences, and explicit paste boundaries
       immediately.
-- [ ] Enforce a hard input buffer limit.
-- [ ] Preserve exact input ordering.
+- [x] Enforce a hard input buffer limit.
+- [x] Preserve exact input ordering.
 - [ ] Measure typing and paste behavior before making WebSocket the default.
 
 ### Protocol definition
 
-- [ ] Version the WebSocket protocol.
-- [ ] Define authentication and origin checks.
-- [ ] Define JSON control frames for subscribe, unsubscribe, resize, generation,
+- [x] Version the WebSocket protocol.
+- [x] Define authentication and origin checks.
+- [x] Define JSON control frames for subscribe, unsubscribe, resize, generation,
       lifecycle, acknowledgement, and errors.
-- [ ] Allocate compact numeric channel IDs after subscription.
-- [ ] Define binary input and output frames with frame type, channel ID,
+- [x] Allocate compact numeric channel IDs after subscription.
+- [x] Define binary input and output frames with frame type, channel ID,
       generation, revision, and raw bytes.
-- [ ] Define maximum control and binary frame sizes.
-- [ ] Define protocol-error and unsupported-version behavior.
-- [ ] Document ordering and resubscription rules.
+- [x] Define maximum control and binary frame sizes.
+- [x] Define protocol-error and unsupported-version behavior.
+- [x] Document ordering and resubscription rules.
 
 ### Gateway implementation
 
@@ -143,4 +143,19 @@ Record:
 - default and fallback-removal decisions;
 - test command results.
 
-No evidence recorded yet.
+Initial implementation evidence:
+
+- Protocol version: v1, negotiated as `orkestrator-terminal.v1`.
+- Wire specification: [`terminal-websocket-protocol.md`](terminal-websocket-protocol.md).
+- Binary codec and bounds: `packages/protocol/src/terminal-websocket.ts`.
+- HTTP fallback batching: 8 ms, 64 KiB accumulated-input ceiling, serialized
+  per terminal. Enter, C0/DEL controls, escape sequences, and paste-sized chunks
+  flush immediately with any preceding printable input.
+- Automated verification on 2026-07-31:
+  - terminal batcher plus browser gateway: 69 passed;
+  - shared protocol package: 157 passed;
+  - terminal hook recovery suite: 44 passed;
+  - backend, web, desktop, and protocol TypeScript checks: passed.
+- WebSocket is not yet the default. Baseline latency/transfer measurements,
+  gateway implementation, browser socket ownership, and compatibility results
+  remain to be recorded.

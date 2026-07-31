@@ -566,6 +566,7 @@ type StructuredUsageRefreshResult =
 async function refreshStructuredRateLimits(
   session: SessionState,
   queryControl: NonNullable<SessionState["queryControl"]>,
+  isCurrent: () => boolean,
 ): Promise<StructuredUsageRefreshResult> {
   const getStructuredUsage =
     queryControl.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
@@ -585,6 +586,7 @@ async function refreshStructuredRateLimits(
       sessions.get(session.id) !== session
       || session.deleting
       || session.queryControl !== queryControl
+      || !isCurrent()
     ) {
       return "unchanged";
     }
@@ -635,37 +637,51 @@ function createStructuredUsageRefreshCoordinator(
   session: SessionState,
   queryControl: NonNullable<SessionState["queryControl"]>,
 ): StructuredUsageRefreshCoordinator {
-  let inFlight: Promise<void> | undefined;
-  let refreshAgain = false;
+  let workerActive = false;
+  let workerPromise = Promise.resolve();
+  let requestedRevision = 0;
+  let completedRevision = 0;
   let timedOut = false;
 
   const run = async (): Promise<void> => {
-    do {
-      refreshAgain = false;
-      const result = await refreshStructuredRateLimits(session, queryControl);
-      if (result === "timed-out") {
-        timedOut = true;
-        refreshAgain = false;
+    try {
+      while (
+        !timedOut
+        && completedRevision < requestedRevision
+        && sessions.get(session.id) === session
+        && session.queryControl === queryControl
+      ) {
+        const requestRevision = requestedRevision;
+        const result = await refreshStructuredRateLimits(
+          session,
+          queryControl,
+          // A rate-limit event or final-result trigger that arrived after this
+          // request began has newer timing information. Let the queued refresh
+          // publish instead of briefly regressing the session to this response.
+          () => requestRevision === requestedRevision,
+        );
+        completedRevision = requestRevision;
+        if (result === "timed-out") {
+          timedOut = true;
+        }
       }
-    } while (
-      refreshAgain
-      && !timedOut
-      && sessions.get(session.id) === session
-      && session.queryControl === queryControl
-    );
+    } finally {
+      // Clear the worker before its promise settles. A trigger in the next
+      // microtask then starts a new worker instead of attaching to a completed
+      // promise and leaving its refresh request stranded.
+      workerActive = false;
+    }
   };
 
   return {
     trigger: () => {
       if (timedOut) return Promise.resolve();
-      if (inFlight) {
-        refreshAgain = true;
-        return inFlight;
+      requestedRevision += 1;
+      if (!workerActive) {
+        workerActive = true;
+        workerPromise = run();
       }
-      inFlight = run().finally(() => {
-        inFlight = undefined;
-      });
-      return inFlight;
+      return workerPromise;
     },
   };
 }

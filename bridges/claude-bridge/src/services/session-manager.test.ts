@@ -581,6 +581,18 @@ async function withWorkspaceCwd<T>(
 // ---------------------------------------------------------------------------
 
 describe("session lifecycle", () => {
+  test("reports no idle transcript sweep before the first sweep runs", () => {
+    expect(getLastIdleTranscriptSweep()).toBeUndefined();
+  });
+
+  test("reports no init data for missing or uninitialized sessions", () => {
+    const session = createSession("not initialized");
+    track(session.id);
+
+    expect(getSessionInitData(session.id)).toBeUndefined();
+    expect(getSessionInitData("session-missing")).toBeUndefined();
+  });
+
   test("createSession produces a session with the expected shape and emits session.updated", () => {
     const { events, stop } = captureEvents();
     try {
@@ -5584,15 +5596,16 @@ describe("getAvailableModels", () => {
   });
 
   test("falls back to the built-in catalog when the SDK query throws", async () => {
-    // Make the next query() call fail so getAvailableModels() hits its catch
-    // branch and returns the hard-coded fallback list.
+    // Make the next query() call fail so the catalog reports the hard-coded
+    // fallback source as well as its models.
     mockQuery.mockImplementationOnce(() => {
       throw new Error("SDK unavailable");
     });
 
-    const models = await getAvailableModels();
+    const catalog = await getAvailableModelCatalog();
 
-    expect(models.map((m) => m.id)).toEqual([
+    expect(catalog.source).toBe("fallback");
+    expect(catalog.models.map((model) => model.id)).toEqual([
       "default",
       "opus[1m]",
       "claude-fable-5[1m]",
@@ -9162,6 +9175,235 @@ describe("rate_limit_event", () => {
         { label: "Weekly", usedPercent: 55 },
       ]);
     } finally {
+      call.finish();
+      await promptPromise;
+    }
+  });
+
+  test("starts a new refresh when a signal arrives as the previous worker settles", async () => {
+    let resolveFirst: ((value: unknown) => void) | undefined;
+    let requestCount = 0;
+    const getStructuredUsage = mock(() => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return new Promise<unknown>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return Promise.resolve({
+        rate_limits_available: true,
+        rate_limits: { five_hour: { utilization: 64 } },
+      });
+    });
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      getStructuredUsage;
+
+    const created = createSession("settlement boundary");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "keep working");
+    const call = await nextQueryCall();
+    let pushedRefreshSignal = false;
+    const stop = eventEmitter.subscribe((event) => {
+      if (
+        !pushedRefreshSignal
+        && event.type === "session.updated"
+        && event.sessionId === created.id
+        && (event.data as { rateLimits?: Array<{ usedPercent?: number }> })
+          .rateLimits?.[0]?.usedPercent === 5
+      ) {
+        pushedRefreshSignal = true;
+        call.push(sparseFiveHourEvent);
+      }
+    });
+
+    try {
+      await waitFor(() => getStructuredUsage.mock.calls.length === 1 && resolveFirst !== undefined);
+      resolveFirst!({
+        rate_limits_available: true,
+        rate_limits: { five_hour: { utilization: 5 } },
+      });
+
+      await waitFor(() => getStructuredUsage.mock.calls.length === 2);
+      await waitFor(() => getSession(created.id)?.rateLimits?.[0]?.usedPercent === 64);
+      expect(pushedRefreshSignal).toBe(true);
+    } finally {
+      stop();
+      call.finish();
+      await promptPromise;
+    }
+  });
+
+  for (const latestResponse of ["rejected", "malformed"] as const) {
+    test(`preserves a newer sparse event when the coalesced refresh is ${latestResponse}`, async () => {
+      let resolveFirst: ((value: unknown) => void) | undefined;
+      let requestCount = 0;
+      const getStructuredUsage = mock(() => {
+        requestCount += 1;
+        if (requestCount === 1) {
+          return new Promise<unknown>((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        if (latestResponse === "rejected") {
+          return Promise.reject(new Error("structured usage unavailable"));
+        }
+        return Promise.resolve(null);
+      });
+      queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+        getStructuredUsage;
+
+      const created = createSession(`stale response ${latestResponse}`);
+      track(created.id);
+      const promptPromise = sendPrompt(created.id, "keep working");
+      const call = await nextQueryCall();
+
+      await waitFor(() => getStructuredUsage.mock.calls.length === 1 && resolveFirst !== undefined);
+      call.push(sparseFiveHourEvent);
+      await waitFor(() => getSession(created.id)?.rateLimits?.[0]?.usedPercent === 42);
+      call.push(successfulUsageResult);
+      call.finish();
+
+      resolveFirst!({
+        rate_limits_available: true,
+        rate_limits: { five_hour: { utilization: 5 } },
+      });
+      await promptPromise;
+
+      expect(getStructuredUsage).toHaveBeenCalledTimes(2);
+      expect(getSession(created.id)?.rateLimits).toEqual([
+        {
+          label: "Five Hour",
+          usedPercent: 42,
+          resetsAt: "2026-07-28T22:30:00.000Z",
+        },
+      ]);
+      expect(getSession(created.id)?.usage?.rateLimits)
+        .toEqual(getSession(created.id)?.rateLimits);
+    });
+  }
+
+  test("ignores a structured response after its session is removed", async () => {
+    let resolveUsage: ((value: unknown) => void) | undefined;
+    let parsed = false;
+    const getStructuredUsage = mock(() => new Promise<unknown>((resolve) => {
+      resolveUsage = resolve;
+    }));
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      getStructuredUsage;
+
+    const created = createSession("removed during usage refresh");
+    track(created.id);
+    const { events, stop } = captureEvents();
+    const promptPromise = sendPrompt(created.id, "keep working");
+    const call = await nextQueryCall();
+    await waitFor(() => getStructuredUsage.mock.calls.length === 1 && resolveUsage !== undefined);
+    const originalControl = created.queryControl;
+
+    try {
+      expect(deleteSession(created.id)).toBe(true);
+      // Keep the detached state pointed at the old control so this exercises
+      // the registry-identity guard independently of the control guard.
+      created.queryControl = originalControl;
+      resolveUsage!({
+        rate_limits_available: true,
+        get rate_limits() {
+          parsed = true;
+          return { five_hour: { utilization: 71 } };
+        },
+      });
+      await waitFor(() => parsed);
+      await promptPromise;
+
+      expect(created.rateLimits).toBeUndefined();
+      expect(events.some((event) =>
+        event.type === "session.updated"
+        && event.sessionId === created.id
+        && "rateLimits" in event.data
+      )).toBe(false);
+    } finally {
+      stop();
+      call.finish();
+    }
+  });
+
+  test("ignores a structured response while its session is being deleted", async () => {
+    let resolveUsage: ((value: unknown) => void) | undefined;
+    let parsed = false;
+    const getStructuredUsage = mock(() => new Promise<unknown>((resolve) => {
+      resolveUsage = resolve;
+    }));
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      getStructuredUsage;
+
+    const created = createSession("deleting during usage refresh");
+    track(created.id);
+    const { events, stop } = captureEvents();
+    const promptPromise = sendPrompt(created.id, "keep working");
+    const call = await nextQueryCall();
+    await waitFor(() => getStructuredUsage.mock.calls.length === 1 && resolveUsage !== undefined);
+
+    try {
+      created.deleting = true;
+      resolveUsage!({
+        rate_limits_available: true,
+        get rate_limits() {
+          parsed = true;
+          return { five_hour: { utilization: 72 } };
+        },
+      });
+      await waitFor(() => parsed);
+
+      expect(created.rateLimits).toBeUndefined();
+      expect(events.some((event) =>
+        event.type === "session.updated"
+        && event.sessionId === created.id
+        && "rateLimits" in event.data
+      )).toBe(false);
+    } finally {
+      created.deleting = false;
+      stop();
+      call.finish();
+      await promptPromise;
+    }
+  });
+
+  test("ignores a structured response from a superseded query control", async () => {
+    let resolveUsage: ((value: unknown) => void) | undefined;
+    let parsed = false;
+    const getStructuredUsage = mock(() => new Promise<unknown>((resolve) => {
+      resolveUsage = resolve;
+    }));
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
+      getStructuredUsage;
+
+    const created = createSession("superseded usage refresh");
+    track(created.id);
+    const { events, stop } = captureEvents();
+    const promptPromise = sendPrompt(created.id, "keep working");
+    const call = await nextQueryCall();
+    await waitFor(() => getStructuredUsage.mock.calls.length === 1 && resolveUsage !== undefined);
+    const originalControl = created.queryControl;
+
+    try {
+      created.queryControl = { close: () => undefined };
+      resolveUsage!({
+        rate_limits_available: true,
+        get rate_limits() {
+          parsed = true;
+          return { five_hour: { utilization: 73 } };
+        },
+      });
+      await waitFor(() => parsed);
+
+      expect(created.rateLimits).toBeUndefined();
+      expect(events.some((event) =>
+        event.type === "session.updated"
+        && event.sessionId === created.id
+        && "rateLimits" in event.data
+      )).toBe(false);
+    } finally {
+      created.queryControl = originalControl;
+      stop();
       call.finish();
       await promptPromise;
     }

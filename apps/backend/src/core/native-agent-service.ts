@@ -5,12 +5,19 @@ import type {
   TaskSnapshotImage,
 } from "@orkestrator/protocol/build-pipeline";
 import {
+  isActiveBuildPhase,
+  isBuildPipeline,
+} from "@orkestrator/protocol/build-pipeline";
+import {
   aggregateAgentActivityState,
   type AgentActivityState,
 } from "@orkestrator/protocol/agent-activity";
 import {
   AGENT_INTERACTION_ORIGINS,
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
   isAgentInteractionPolicy,
+  type AgentInteractionKind,
   type AgentInteractionOrigin,
   type AgentInteractionPolicy,
 } from "@orkestrator/protocol/agent-interactions";
@@ -112,6 +119,30 @@ export interface NativeAgentServiceOptions {
    * retry schedule without sleeping through a 60-second ceiling.
    */
   now?: () => number;
+  /** Disabled by default. Milestone 3 observes and never resolves. */
+  interactionMonitorMode?: "disabled" | "observe-only";
+  interactionMonitorAdoptionEnabled?: boolean;
+  interactionMonitorIntervalMs?: number;
+  interactionMonitorMaxConcurrency?: number;
+  interactionMonitorMaxSessionsPerEnvironment?: number;
+  interactionMonitorRetryBaseMs?: number;
+  interactionMonitorMaxRetries?: number;
+  onInteractionObservation?: (
+    observation: AgentInteractionObservation,
+  ) => void | Promise<void>;
+}
+
+export interface AgentInteractionObservation {
+  provider: BuildPipelineAgent;
+  kind: AgentInteractionKind;
+  workflowSurface: AgentInteractionOrigin;
+  phase: string;
+  firstDetectedAt: number;
+  lastDetectedAt: number;
+  count: number;
+  providerState: "blocked" | "running" | "idle" | "error" | "missing";
+  eventualOutcome?: "expired" | "withdrawn";
+  eventualAt?: number;
 }
 
 const QUEUE_RETRY_BASE_MS = 2_000;
@@ -123,6 +154,13 @@ const ACTIVITY_RETRY_BASE_MS = 2_000;
 const ACTIVITY_RETRY_CEILING_MS = 60_000;
 /** How long "no bridge is running" is trusted before it is re-probed. */
 const ABSENT_BRIDGE_RECHECK_MS = 15_000;
+const INTERACTION_MONITOR_MAX_OBSERVATIONS = 64;
+const INTERACTION_MONITOR_MAX_TRACKED_REQUESTS = 512;
+const INTERACTION_MONITOR_MAX_ADOPTED_SESSIONS = 1_024;
+const INTERACTION_MONITOR_DEFAULT_CONCURRENCY = 4;
+const INTERACTION_MONITOR_DEFAULT_PER_ENVIRONMENT = 8;
+const INTERACTION_MONITOR_DEFAULT_MAX_RETRIES = 5;
+const INTERACTION_MONITOR_DEFAULT_RETRY_BASE_MS = 1_000;
 
 function nonBlank(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -199,15 +237,32 @@ export class NativeAgentService {
    * simultaneous session completions into one environment notification.
    */
   private readonly pendingPrRefreshEnvironmentIds = new Set<string>();
+  private readonly interactionObservations = new Map<string, AgentInteractionObservation>();
+  private readonly trackedInteractions = new Map<
+    string,
+    { observationKey: string; expiresAt?: number; scan: number }
+  >();
+  private readonly interactionRetryAt = new Map<string, number>();
+  private readonly interactionAttempts = new Map<string, number>();
+  private readonly monitoredInteractionSessionKeys = new Set<string>();
+  private readonly observedInteractionRevisions = new Map<string, number>();
   private activityScan: Promise<void> | null = null;
+  private interactionScan: Promise<void> | null = null;
+  private interactionScanNumber = 0;
+  private interactionRevisionReconciliations = 0;
+  private interactionMonitorAdoptionEnabled = true;
   private launchTimer: ReturnType<typeof setInterval> | null = null;
+  private interactionTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
 
   constructor(
     private readonly storage: StorageService,
     private readonly invoke: CommandInvoker,
     private readonly options: NativeAgentServiceOptions = {},
-  ) {}
+  ) {
+    this.interactionMonitorAdoptionEnabled =
+      options.interactionMonitorAdoptionEnabled !== false;
+  }
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
@@ -226,6 +281,14 @@ export class NativeAgentService {
       void this.trackScan(this.drainPromptQueues()).catch(() => undefined);
     }, 2_000);
     this.launchTimer.unref?.();
+    if (this.options.interactionMonitorMode === "observe-only") {
+      await this.reconcileAgentInteractions().catch(() => undefined);
+      if (this.stopped) return;
+      this.interactionTimer = setInterval(() => {
+        void this.reconcileAgentInteractions().catch(() => undefined);
+      }, Math.max(100, this.options.interactionMonitorIntervalMs ?? 2_000));
+      this.interactionTimer.unref?.();
+    }
   }
 
   async ensureSession(
@@ -251,16 +314,23 @@ export class NativeAgentService {
     if (existing) {
       this.assertSessionIdentity(existing, input, key);
       await this.assertEnvironmentLive(input.environmentId);
-      provider.registerSession?.(existing.providerSessionId);
+      provider.registerSession?.(existing.providerSessionId, {
+        origin: existing.origin,
+        interactionPolicy: existing.interactionPolicy,
+        phase: input.phase,
+      });
       const status = await provider.status(existing.providerSessionId);
       await this.assertEnvironmentLive(input.environmentId);
-      if (status !== "missing") return existing;
+      if (status !== "missing") {
+        void this.reconcileAgentInteractions().catch(() => undefined);
+        return existing;
+      }
       await this.storage.invalidateNativeAgentSession(
         key,
         existing.providerSessionId,
       );
     }
-    return this.storage.runWithLiveEnvironment(
+    const session = await this.storage.runWithLiveEnvironment(
       input.environmentId,
       "Native agent session",
       () =>
@@ -276,6 +346,8 @@ export class NativeAgentService {
           () => this.createProviderSession(provider, input),
         ),
     );
+    void this.reconcileAgentInteractions().catch(() => undefined);
+    return session;
   }
 
   async adoptSession(
@@ -302,13 +374,20 @@ export class NativeAgentService {
     );
     await this.assertEnvironmentLive(input.environmentId);
     const provider = await this.provider(input);
-    provider.registerSession?.(input.providerSessionId);
+    provider.registerSession?.(input.providerSessionId, {
+      origin: input.origin ?? "interactive-native",
+      interactionPolicy: input.interactionPolicy
+        ?? ((input.origin === "build-pipeline" || input.origin === "looped-review")
+          ? UNATTENDED_AGENT_INTERACTION_POLICY
+          : INTERACTIVE_AGENT_INTERACTION_POLICY),
+      phase: input.phase,
+    });
     const status = await provider.status(input.providerSessionId);
     await this.assertEnvironmentLive(input.environmentId);
     if (status === "missing") {
       throw new Error("Native agent provider session was not found");
     }
-    return this.storage.adoptNativeAgentSession({
+    const session = await this.storage.adoptNativeAgentSession({
       key,
       environmentId: input.environmentId,
       agent: input.agent,
@@ -318,6 +397,8 @@ export class NativeAgentService {
       interactionPolicy: input.interactionPolicy,
       expectedProviderSessionId: input.expectedProviderSessionId,
     });
+    void this.reconcileAgentInteractions().catch(() => undefined);
+    return session;
   }
 
   async dispatchPrompt(
@@ -329,7 +410,11 @@ export class NativeAgentService {
     }
     const session = await this.ensureSession(input);
     const provider = await this.provider(input);
-    provider.registerSession?.(session.providerSessionId);
+    provider.registerSession?.(session.providerSessionId, {
+      origin: session.origin,
+      interactionPolicy: session.interactionPolicy,
+      phase: input.phase,
+    });
     const result = await this.storage.runWithLiveEnvironment(
       input.environmentId,
       "Native agent prompt",
@@ -369,6 +454,8 @@ export class NativeAgentService {
     this.stopped = true;
     if (this.launchTimer) clearInterval(this.launchTimer);
     this.launchTimer = null;
+    if (this.interactionTimer) clearInterval(this.interactionTimer);
+    this.interactionTimer = null;
     await Promise.allSettled([...this.scanTasks]);
     while (this.launchTasks.size > 0 || this.queueTasks.size > 0) {
       await Promise.allSettled([
@@ -380,6 +467,310 @@ export class NativeAgentService {
       [...this.providers.values()].map((provider) => provider.dispose?.()),
     );
     this.providers.clear();
+  }
+
+  /**
+   * Operational kill switch. Existing adopted sessions keep reconciling so a
+   * request already observed is not stranded; no new session is adopted.
+   */
+  setInteractionMonitorAdoptionEnabled(enabled: boolean): void {
+    this.interactionMonitorAdoptionEnabled = enabled;
+  }
+
+  /** Bounded, content-free evidence suitable for diagnostics and tests. */
+  getInteractionObservations(): AgentInteractionObservation[] {
+    return [...this.interactionObservations.values()].map((entry) => ({ ...entry }));
+  }
+
+  /**
+   * Reconcile provider-owned pending requests without applying policy.
+   *
+   * This is deliberately independent of renderer lifecycle and uses only
+   * authoritative snapshots. Polling adapters have no subscribe/replay gap:
+   * anything that arrives after one snapshot is recovered by the next.
+   */
+  reconcileAgentInteractions(): Promise<void> {
+    if (
+      this.stopped
+      || this.options.interactionMonitorMode !== "observe-only"
+    ) return Promise.resolve();
+    if (this.interactionScan) return this.interactionScan;
+    const scan = this.trackScan(this.reconcileAgentInteractionsOnce())
+      .finally(() => {
+        if (this.interactionScan === scan) this.interactionScan = null;
+      });
+    this.interactionScan = scan;
+    return scan;
+  }
+
+  private interactionPhase(session: PersistedNativeAgentSession): string {
+    if (session.origin === "looped-review") {
+      const segments = session.logicalSessionKey.split(":");
+      const phase = segments[2];
+      if (phase && phase.length <= 256) return phase;
+    }
+    return session.origin === "build-pipeline" ? "pipeline" : "native-session";
+  }
+
+  private observationKey(
+    session: PersistedNativeAgentSession,
+    kind: AgentInteractionKind,
+  ): string {
+    return [session.agent, kind, session.origin, this.interactionPhase(session)].join("\0");
+  }
+
+  private recordInteractionDetection(
+    session: PersistedNativeAgentSession,
+    interactionId: string,
+    kind: AgentInteractionKind,
+    expiresAt: number | undefined,
+    scan: number,
+  ): void {
+    const trackedKey = `${session.key}\0${interactionId}`;
+    const existingTrack = this.trackedInteractions.get(trackedKey);
+    if (existingTrack) {
+      existingTrack.scan = scan;
+      existingTrack.expiresAt = expiresAt;
+      const observation = this.interactionObservations.get(existingTrack.observationKey);
+      if (observation) {
+        observation.lastDetectedAt = this.now();
+        observation.providerState = "blocked";
+      }
+      return;
+    }
+    if (this.trackedInteractions.size >= INTERACTION_MONITOR_MAX_TRACKED_REQUESTS) {
+      return;
+    }
+    const key = this.observationKey(session, kind);
+    const now = this.now();
+    let observation = this.interactionObservations.get(key);
+    if (!observation) {
+      if (this.interactionObservations.size >= INTERACTION_MONITOR_MAX_OBSERVATIONS) {
+        const oldest = [...this.interactionObservations.entries()].sort(
+          ([, left], [, right]) => left.lastDetectedAt - right.lastDetectedAt,
+        )[0]?.[0];
+        if (oldest) this.interactionObservations.delete(oldest);
+      }
+      observation = {
+        provider: session.agent,
+        kind,
+        workflowSurface: session.origin,
+        phase: this.interactionPhase(session),
+        firstDetectedAt: now,
+        lastDetectedAt: now,
+        count: 0,
+        providerState: "blocked",
+      };
+      this.interactionObservations.set(key, observation);
+    }
+    observation.count += 1;
+    observation.lastDetectedAt = now;
+    observation.providerState = "blocked";
+    delete observation.eventualOutcome;
+    delete observation.eventualAt;
+    this.trackedInteractions.set(trackedKey, {
+      observationKey: key,
+      expiresAt,
+      scan,
+    });
+    // Never await a telemetry consumer from provider polling. In particular,
+    // nothing here can feed back into Codex app-server's stdout reader.
+    try {
+      void Promise.resolve(this.options.onInteractionObservation?.({ ...observation }))
+        .catch(() => undefined);
+    } catch {
+      // A diagnostic hook cannot fail or delay provider reconciliation.
+    }
+  }
+
+  private settleMissingInteractions(
+    session: PersistedNativeAgentSession,
+    scan: number,
+    providerState: AgentInteractionObservation["providerState"],
+  ): void {
+    const prefix = `${session.key}\0`;
+    for (const [trackedKey, tracked] of this.trackedInteractions) {
+      if (!trackedKey.startsWith(prefix) || tracked.scan === scan) continue;
+      const observation = this.interactionObservations.get(tracked.observationKey);
+      if (observation) {
+        const now = this.now();
+        observation.providerState = providerState;
+        observation.eventualOutcome = tracked.expiresAt !== undefined
+          && tracked.expiresAt <= now ? "expired" : "withdrawn";
+        observation.eventualAt = now;
+      }
+      this.trackedInteractions.delete(trackedKey);
+    }
+  }
+
+  private async reconcileAgentInteractionsOnce(): Promise<void> {
+    const [environments, nativeSessions, pipelineRecords] = await Promise.all([
+      this.storage.loadEnvironments(),
+      this.storage.listNativeAgentSessions(),
+      this.storage.listAllBuildPipelines(),
+    ]);
+    if (this.stopped) return;
+    const environmentIds = new Set(
+      environments
+        .filter((environment) =>
+          isEnvironmentReadyForAgents(environment)
+          && !environment.deletionRequestedAt
+        )
+        .map((environment) => environment.id),
+    );
+    const pipelineSessions: PersistedNativeAgentSession[] = [];
+    for (const record of pipelineRecords) {
+      if (!isBuildPipeline(record.snapshot) || !isActiveBuildPhase(record.snapshot.phase)) {
+        continue;
+      }
+      const current = record.snapshot.sessions[record.snapshot.currentSessionIndex];
+      if (!current || current.status !== "running") continue;
+      pipelineSessions.push({
+        version: 1,
+        key: `build-pipeline:${record.snapshot.id}:${current.sessionKey}`,
+        environmentId: record.snapshot.environmentId,
+        agent: current.agent ?? record.snapshot.agentType,
+        logicalSessionKey: current.phase,
+        providerSessionId: current.sdkSessionId,
+        origin: current.origin ?? "build-pipeline",
+        interactionPolicy: current.interactionPolicy
+          ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+        createdAt: current.startedAt,
+        updatedAt: current.startedAt,
+      });
+    }
+    const allSessions = [...nativeSessions, ...pipelineSessions];
+    const liveKeys = new Set(allSessions.map((session) => session.key));
+    for (const key of this.monitoredInteractionSessionKeys) {
+      if (liveKeys.has(key)) continue;
+      this.monitoredInteractionSessionKeys.delete(key);
+      this.observedInteractionRevisions.delete(key);
+      const prefix = `${key}\0`;
+      for (const trackedKey of this.trackedInteractions.keys()) {
+        if (trackedKey.startsWith(prefix)) this.trackedInteractions.delete(trackedKey);
+      }
+    }
+    for (const key of this.interactionRetryAt.keys()) {
+      const environmentId = key.split("\0", 1)[0];
+      if (environmentId && environmentIds.has(environmentId)) continue;
+      this.interactionRetryAt.delete(key);
+      this.interactionAttempts.delete(key);
+    }
+    const maxPerEnvironment = Math.max(
+      1,
+      this.options.interactionMonitorMaxSessionsPerEnvironment
+        ?? INTERACTION_MONITOR_DEFAULT_PER_ENVIRONMENT,
+    );
+    const byEnvironment = new Map<string, PersistedNativeAgentSession[]>();
+    for (const session of allSessions) {
+      if (
+        session.interactionPolicy.mode !== "unattended"
+        || !environmentIds.has(session.environmentId)
+      ) continue;
+      const sessions = byEnvironment.get(session.environmentId) ?? [];
+      if (sessions.length >= maxPerEnvironment) continue;
+      if (!this.monitoredInteractionSessionKeys.has(session.key)) {
+        if (
+          !this.interactionMonitorAdoptionEnabled
+          || this.monitoredInteractionSessionKeys.size
+            >= INTERACTION_MONITOR_MAX_ADOPTED_SESSIONS
+        ) continue;
+        this.monitoredInteractionSessionKeys.add(session.key);
+      }
+      sessions.push(session);
+      byEnvironment.set(session.environmentId, sessions);
+    }
+
+    const scan = ++this.interactionScanNumber;
+    const groups = [...byEnvironment.values()];
+    let nextEnvironment = 0;
+    const worker = async (): Promise<void> => {
+      while (!this.stopped) {
+        const sessions = groups[nextEnvironment++];
+        if (!sessions) return;
+        // One environment is processed serially, explicitly bounding its
+        // concurrent monitor work at one while global workers handle others.
+        for (const session of sessions) {
+          const retryKey = `${session.environmentId}\0${session.agent}`;
+          if ((this.interactionRetryAt.get(retryKey) ?? 0) > this.now()) continue;
+          let provider: BuildPipelineProvider | undefined;
+          try {
+            provider = await this.observeProvider(session);
+            if (!provider?.interactions) continue;
+            provider.registerSession?.(session.providerSessionId, {
+              origin: session.origin,
+              interactionPolicy: session.interactionPolicy,
+              phase: this.interactionPhase(session),
+            });
+            const snapshot = await provider.interactions.listPendingInteractions(
+              session.providerSessionId,
+            );
+            const previousRevision = this.observedInteractionRevisions.get(session.key);
+            if (
+              previousRevision !== undefined
+              && snapshot.revision !== previousRevision
+              && snapshot.revision !== previousRevision + 1
+            ) {
+              // A gap, reset, or bridge-generation change is already reconciled:
+              // this is the full authoritative snapshot, never a live-event delta.
+              this.interactionRevisionReconciliations = Math.min(
+                Number.MAX_SAFE_INTEGER,
+                this.interactionRevisionReconciliations + 1,
+              );
+            }
+            this.observedInteractionRevisions.set(session.key, snapshot.revision);
+            for (const request of snapshot.requests) {
+              this.recordInteractionDetection(
+                session,
+                request.id,
+                request.kind,
+                request.expiresAt,
+                scan,
+              );
+            }
+            let providerState: AgentInteractionObservation["providerState"] =
+              snapshot.requests.length > 0 ? "blocked" : "idle";
+            if (snapshot.requests.length === 0) {
+              providerState = await provider.status(session.providerSessionId);
+            }
+            this.settleMissingInteractions(session, scan, providerState);
+            this.interactionAttempts.delete(retryKey);
+            this.interactionRetryAt.delete(retryKey);
+          } catch (error) {
+            const attempts = Math.min(
+              this.options.interactionMonitorMaxRetries
+                ?? INTERACTION_MONITOR_DEFAULT_MAX_RETRIES,
+              (this.interactionAttempts.get(retryKey) ?? 0) + 1,
+            );
+            this.interactionAttempts.set(retryKey, attempts);
+            const base = Math.max(
+              1,
+              this.options.interactionMonitorRetryBaseMs
+                ?? INTERACTION_MONITOR_DEFAULT_RETRY_BASE_MS,
+            );
+            this.interactionRetryAt.set(
+              retryKey,
+              this.now() + Math.min(60_000, base * 2 ** Math.max(0, attempts - 1)),
+            );
+            if (provider) this.evictProvider(session, provider);
+            console.warn(
+              `[native-agent] Interaction observation for ${session.agent} failed:`,
+              error instanceof Error ? error.name : "unknown error",
+            );
+          }
+        }
+      }
+    };
+    await Promise.all(Array.from({
+      length: Math.min(
+        Math.max(
+          1,
+          this.options.interactionMonitorMaxConcurrency
+            ?? INTERACTION_MONITOR_DEFAULT_CONCURRENCY,
+        ),
+        groups.length,
+      ),
+    }, () => worker()));
   }
 
   /**
@@ -497,7 +888,10 @@ export class NativeAgentService {
           }
           this.absentBridgeUntil.delete(groupKey);
           for (const session of group) {
-            provider.registerSession?.(session.providerSessionId);
+            provider.registerSession?.(session.providerSessionId, {
+              origin: session.origin,
+              interactionPolicy: session.interactionPolicy,
+            });
           }
           const batchedActivity = provider.activityBatch
             ? await provider.activityBatch(
@@ -512,7 +906,9 @@ export class NativeAgentService {
                 : await provider.status(session.providerSessionId).then((status) =>
                     status === "missing"
                       ? "missing"
-                      : status === "running" ? "working" : "idle"
+                      : status === "running"
+                        ? "working"
+                        : status === "blocked" ? "waiting" : "idle"
                   );
             if (!activity) {
               throw new ProviderUnavailableError(
@@ -872,7 +1268,7 @@ export class NativeAgentService {
     await this.assertEnvironmentLive(queue.environmentId);
     const status = await provider.status(session.providerSessionId);
     await this.assertEnvironmentLive(queue.environmentId);
-    if (status === "running") return;
+    if (status === "running" || status === "blocked") return;
     if (status !== "idle") {
       await this.deferQueue(
         queueKey,
@@ -1367,6 +1763,14 @@ export class NativeAgentService {
         model: input.model,
         effort: input.reasoningEffort,
         mode: input.sessionMode,
+        interaction: {
+          origin: input.origin ?? "interactive-native",
+          interactionPolicy: input.interactionPolicy
+            ?? ((input.origin === "build-pipeline" || input.origin === "looped-review")
+              ? UNATTENDED_AGENT_INTERACTION_POLICY
+              : INTERACTIVE_AGENT_INTERACTION_POLICY),
+          phase: input.phase,
+        },
       },
     );
     await this.assertEnvironmentLive(input.environmentId);

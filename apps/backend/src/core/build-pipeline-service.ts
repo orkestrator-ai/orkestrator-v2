@@ -29,6 +29,7 @@ import {
   parseStructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { AppConfig, Environment, PersistedBuildPipeline } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
@@ -1033,6 +1034,12 @@ export class BuildPipelineService {
     if (status === "error") {
       throw new Error(`The ${session.label.toLowerCase()} failed`);
     }
+    if (status === "blocked") {
+      // Observe-only Milestone 3 must not advance or fail a phase. The parked
+      // request remains provider-owned until Milestone 4 applies its policy.
+      session.status = "running";
+      return;
+    }
     if (
       pipeline.pendingPromptAttempt
       && pipeline.pendingPromptAttempt.sessionId === session.sdkSessionId
@@ -1253,13 +1260,24 @@ export class BuildPipelineService {
       model,
       effort,
       mode,
+      interaction: {
+        origin: "build-pipeline",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        phase: sessionPhase,
+      },
     });
-    provider.registerSession?.(sessionId);
+    provider.registerSession?.(sessionId, {
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      phase: sessionPhase,
+    });
     const { prompt, schema, images } = await this.promptFor(pipeline, sessionPhase);
     const requestId = randomUUID();
     const session: PipelineSession = {
       phase: sessionPhase,
       agent,
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       iteration: pipeline.iteration,
       sessionKey: `${pipeline.id}:${sessionPhase}:${pipeline.iteration}:${randomUUID()}`,
       sdkSessionId: sessionId,
@@ -1836,14 +1854,24 @@ export class BuildPipelineService {
     const cached = this.providers.get(providerKey);
     if (cached) {
       for (const session of ownSessions) {
-        cached.registerSession?.(session.sdkSessionId);
+        cached.registerSession?.(session.sdkSessionId, {
+          origin: session.origin ?? "build-pipeline",
+          interactionPolicy: session.interactionPolicy
+            ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: session.phase,
+        });
       }
       return cached;
     }
     if (this.options.provider) {
       const provider = await this.options.provider(pipeline, agent);
       for (const session of ownSessions) {
-        provider.registerSession?.(session.sdkSessionId);
+        provider.registerSession?.(session.sdkSessionId, {
+          origin: session.origin ?? "build-pipeline",
+          interactionPolicy: session.interactionPolicy
+            ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: session.phase,
+        });
       }
       this.providers.set(providerKey, provider);
       return provider;
@@ -1867,7 +1895,12 @@ export class BuildPipelineService {
         stagePromptImages(this.invoke, environment, images),
     });
     for (const session of ownSessions) {
-      provider.registerSession?.(session.sdkSessionId);
+      provider.registerSession?.(session.sdkSessionId, {
+        origin: session.origin ?? "build-pipeline",
+        interactionPolicy: session.interactionPolicy
+          ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+        phase: session.phase,
+      });
     }
     this.providers.set(providerKey, provider);
     return provider;

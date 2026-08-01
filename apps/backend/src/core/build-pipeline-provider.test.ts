@@ -2,6 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type { TaskSnapshotImage } from "@orkestrator/protocol/build-pipeline";
 import {
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+  type AgentInteractionRequest,
+  type AgentInteractionResolution,
+} from "@orkestrator/protocol/agent-interactions";
+import {
   AmbiguousPromptDispatchError,
   createBuildPipelineProvider,
   PromptRejectedError,
@@ -82,6 +88,37 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+function declineResolution(request: AgentInteractionRequest): AgentInteractionResolution {
+  return {
+    version: AGENT_INTERACTION_CONTRACT_VERSION,
+    interactionId: request.id,
+    sessionId: request.sessionId,
+    action: "decline",
+    resolvedAt: Math.max(Date.now(), request.createdAt),
+  };
+}
+
+function answerResolution(request: AgentInteractionRequest): AgentInteractionResolution {
+  return {
+    version: AGENT_INTERACTION_CONTRACT_VERSION,
+    interactionId: request.id,
+    sessionId: request.sessionId,
+    action: "answer",
+    resolvedAt: Math.max(Date.now(), request.createdAt),
+    answer: {
+      version: AGENT_INTERACTION_CONTRACT_VERSION,
+      interactionId: request.id,
+      sessionId: request.sessionId,
+      answers: request.presentation.questions.map((question) => ({
+        questionId: question.id,
+        ...(question.options[0]
+          ? { optionIds: [question.options[0].id] }
+          : { freeText: "safe answer" }),
+      })),
+    },
+  };
 }
 
 describe("HTTP build pipeline provider", () => {
@@ -494,6 +531,286 @@ describe("HTTP build pipeline provider", () => {
   });
 });
 
+describe("provider-neutral interaction adapters", () => {
+  test("Claude snapshots and exact response mapping satisfy the shared contract", async () => {
+    const expiresAt = Date.now() + 60_000;
+    let questions: Array<Record<string, unknown>> = [{
+      id: "question-1",
+      sessionId: "session-1",
+      expiresAt,
+      questions: [{
+        question: "Choose",
+        header: "Choice",
+        options: [
+          { label: "same", value: "exact-provider-value", description: "first" },
+          { label: "same", description: "second" },
+          { label: "comma,value" },
+        ],
+        multiSelect: true,
+      }],
+    }];
+    let approvals: Array<Record<string, unknown>> = [{
+      id: "approval-1",
+      sessionId: "session-1",
+      expiresAt,
+    }];
+    const upstream: Array<{ url: string; body: unknown }> = [];
+    const { provider } = httpProvider(async (url, init) => {
+      if (url.endsWith("/questions")) return Response.json({ questions });
+      if (url.endsWith("/plan-approvals")) return Response.json({ approvals });
+      if (url.includes("/questions/question-1/answer")) {
+        upstream.push({ url, body: JSON.parse(String(init.body)) });
+        questions = [];
+        return Response.json({ status: "answered" });
+      }
+      if (url.includes("/plan-approvals/approval-1/respond")) {
+        upstream.push({ url, body: JSON.parse(String(init.body)) });
+        approvals = [];
+        return Response.json({ status: "rejected" });
+      }
+      return Response.json({ status: "idle" });
+    });
+    provider.registerSession?.("session-1", {
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      phase: "build",
+    });
+    const first = await provider.interactions!.listPendingInteractions("session-1");
+    expect(first.requests.map((request) => request.kind)).toEqual([
+      "question",
+      "plan-approval",
+    ]);
+    expect(first.requests[0]!.origin).toBe("build-pipeline");
+    expect(first.requests[0]!.presentation.questions[0]!.options.map((option) => option.id))
+      .toEqual(["q0:o0", "q0:o1", "q0:o2"]);
+
+    const question = first.requests[0]!;
+    await expect(provider.interactions!.resolveInteraction(
+      "other-session",
+      question.id,
+      answerResolution(question),
+    )).resolves.toMatchObject({ result: "rejected" });
+    await expect(provider.interactions!.resolveInteraction(
+      "session-1",
+      question.id,
+      answerResolution(question),
+    )).resolves.toMatchObject({ result: "applied" });
+    expect(upstream[0]!.body).toEqual({ answers: [["exact-provider-value"]] });
+
+    const approval = (await provider.interactions!.listPendingInteractions("session-1"))
+      .requests[0]!;
+    await expect(provider.interactions!.resolveInteraction(
+      "session-1",
+      approval.id,
+      declineResolution(approval),
+    )).resolves.toMatchObject({ result: "applied" });
+    expect(upstream[1]!.body).toEqual({ approved: false });
+    await expect(provider.interactions!.resolveInteraction(
+      "session-1",
+      approval.id,
+      declineResolution(approval),
+    )).resolves.toMatchObject({ result: "stale" });
+  });
+
+  test("Codex recovers from snapshots, rejects stale generations, and resolves once", async () => {
+    const requestedAt = Date.now();
+    const expiresAt = requestedAt + 60_000;
+    let approvals: Array<Record<string, unknown>> = [{
+      approvalId: "approval-1",
+      kind: "command",
+      requestedAt,
+      expiresAt,
+      command: "safe-command",
+    }];
+    let interactions: Array<Record<string, unknown>> = [{
+      interactionId: "question-1",
+      kind: "question",
+      requestedAt,
+      expiresAt,
+      generation: 1,
+      questions: [{
+        id: "language",
+        header: "Language",
+        question: "Choose",
+        isOther: true,
+        isSecret: false,
+        options: [{ label: "TypeScript" }],
+      }],
+    }];
+    const gate = deferred();
+    let approvalResponses = 0;
+    const { provider } = httpProvider(async (url, init) => {
+      if (url.endsWith("/approvals")) return Response.json({ approvals });
+      if (url.endsWith("/interactions")) return Response.json({ interactions });
+      if (url.includes("/approvals/approval-1")) {
+        approvalResponses += 1;
+        await gate.promise;
+        approvals = [];
+        return Response.json({ status: "applied", decision: JSON.parse(String(init.body)).decision });
+      }
+      if (url.includes("/interactions/question-1")) {
+        interactions = [];
+        return Response.json({ status: "applied" });
+      }
+      return Response.json({ status: "idle" });
+    }, codexConnection);
+    provider.registerSession?.("session-1", {
+      origin: "looped-review",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      phase: "discovery",
+    });
+    const snapshot = await provider.interactions!.listPendingInteractions("session-1");
+    expect(snapshot.requests.map((request) => request.kind)).toEqual([
+      "command-approval",
+      "question",
+    ]);
+    const approval = snapshot.requests[0]!;
+    const firstResolution = provider.interactions!.resolveInteraction(
+      "session-1",
+      approval.id,
+      declineResolution(approval),
+    );
+    await waitUntil(() => approvalResponses === 1);
+    await expect(provider.interactions!.resolveInteraction(
+      "session-1",
+      approval.id,
+      declineResolution(approval),
+    )).resolves.toMatchObject({ result: "already-resolved" });
+    gate.resolve();
+    await expect(firstResolution).resolves.toMatchObject({ result: "applied" });
+    expect(approvalResponses).toBe(1);
+
+    const question = (await provider.interactions!.listPendingInteractions("session-1"))
+      .requests[0]!;
+    interactions = [];
+    await expect(provider.interactions!.resolveInteraction(
+      "session-1",
+      question.id,
+      answerResolution(question),
+    )).resolves.toMatchObject({ result: "stale" });
+  });
+
+  test("OpenCode lists input and authorization without auto-answering and preserves values", async () => {
+    const fake = openCodeFake();
+    fake.setPending(
+      [{
+        id: "permission-1",
+        sessionID: "owned-session",
+        permission: "edit",
+        patterns: [],
+        metadata: {},
+        always: [],
+      }],
+      [{
+        id: "question-1",
+        sessionID: "owned-session",
+        questions: [{
+          question: "Choose",
+          header: "Choice",
+          options: [{ label: "comma,value", description: "kept intact" }],
+          multiple: false,
+          custom: true,
+        }],
+      }],
+    );
+    const provider = openCodeActivityProvider(fake);
+    provider.registerSession?.("owned-session", {
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      phase: "review",
+    });
+    const snapshot = await provider.interactions!.listPendingInteractions("owned-session");
+    expect(snapshot.requests.map((request) => request.kind)).toEqual([
+      "question",
+      "permission",
+    ]);
+    expect(fake.permissionReplies).toEqual([]);
+    expect(fake.questionRejections).toEqual([]);
+
+    const question = snapshot.requests[0]!;
+    await expect(provider.interactions!.resolveInteraction(
+      "owned-session",
+      question.id,
+      answerResolution(question),
+    )).resolves.toMatchObject({ result: "applied" });
+    expect(fake.questionReplies[0]).toMatchObject({
+      requestID: "question-1",
+      answers: [["comma,value"]],
+    });
+    const permission = (await provider.interactions!.listPendingInteractions("owned-session"))
+      .requests[0]!;
+    await expect(provider.interactions!.resolveInteraction(
+      "owned-session",
+      permission.id,
+      declineResolution(permission),
+    )).resolves.toMatchObject({ result: "applied" });
+    expect(fake.permissionReplies[0]).toMatchObject({
+      requestID: "permission-1",
+      reply: "reject",
+    });
+    await provider.dispose?.();
+  });
+
+  test("all adapters fail closed on malformed or oversized authoritative snapshots", async () => {
+    const oversized = "x".repeat(300_000);
+    const claude = httpProvider(() => new Response(oversized));
+    await expect(claude.provider.interactions!.listPendingInteractions("session-1"))
+      .rejects.toBeInstanceOf(ProviderUnavailableError);
+
+    const codex = httpProvider((url) => url.endsWith("/approvals")
+      ? Response.json({ approvals: [{ approvalId: "bad", kind: "future" }] })
+      : Response.json({ interactions: [] }), codexConnection);
+    await expect(codex.provider.interactions!.listPendingInteractions("session-1"))
+      .rejects.toBeInstanceOf(ProviderUnavailableError);
+
+    const fake = openCodeFake();
+    fake.setPending([], [{ id: "bad", sessionID: "session-1", questions: [] }]);
+    const opencode = openCodeActivityProvider(fake);
+    await expect(opencode.interactions!.listPendingInteractions("session-1"))
+      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    await opencode.dispose?.();
+  });
+
+  test("HTTP adapters bound the combined snapshot and scope opaque IDs to a session", async () => {
+    const combinedOversized = httpProvider((url) => Response.json(
+      url.endsWith("/questions")
+        ? { questions: [], padding: "x".repeat(140_000) }
+        : { approvals: [], padding: "x".repeat(140_000) },
+    ));
+    await expect(combinedOversized.provider.interactions!.listPendingInteractions("session-1"))
+      .rejects.toBeInstanceOf(ProviderUnavailableError);
+
+    const expiresAt = Date.now() + 60_000;
+    const responses: string[] = [];
+    const scoped = httpProvider((url) => {
+      const sessionId = url.includes("session-a") ? "session-a" : "session-b";
+      if (url.endsWith("/questions")) {
+        return Response.json({
+          questions: [{
+            id: "same-provider-id",
+            expiresAt,
+            questions: [{ question: sessionId, options: [] }],
+          }],
+        });
+      }
+      if (url.endsWith("/plan-approvals")) return Response.json({ approvals: [] });
+      responses.push(url);
+      return Response.json({ status: "answered" });
+    });
+    const requestA = (await scoped.provider.interactions!
+      .listPendingInteractions("session-a")).requests[0]!;
+    const requestB = (await scoped.provider.interactions!
+      .listPendingInteractions("session-b")).requests[0]!;
+    expect(requestA.id).not.toBe(requestB.id);
+    await expect(scoped.provider.interactions!.resolveInteraction(
+      "session-a",
+      requestB.id,
+      answerResolution(requestB),
+    )).resolves.toMatchObject({ result: "rejected" });
+    expect(responses).toEqual([]);
+  });
+});
+
 type EventHarness = {
   stream: AsyncIterable<unknown>;
   push(value: unknown): void;
@@ -551,6 +868,7 @@ type OpenCodeFake = {
   readonly questionListCallCount: number;
   questionListCalls: Array<Record<string, unknown> | undefined>;
   questionRejections: Array<Record<string, unknown>>;
+  questionReplies: Array<Record<string, unknown>>;
   readonly statusCallCount: number;
   statusCalls: Array<Record<string, unknown> | undefined>;
   readonly subscribeCallCount: number;
@@ -584,6 +902,7 @@ function openCodeFake(): OpenCodeFake {
   const promptCalls: Array<Record<string, unknown>> = [];
   let promptError: unknown = null;
   const questionRejections: Array<Record<string, unknown>> = [];
+  const questionReplies: Array<Record<string, unknown>> = [];
   const subscriptions: EventHarness[] = [];
   let subscribeCallCount = 0;
   let subscribeFailures: Array<"throw" | "missing-stream"> = [];
@@ -660,6 +979,13 @@ function openCodeFake(): OpenCodeFake {
         }
         return questionRejectResponse;
       },
+      async reply(parameters: Record<string, unknown>) {
+        questionReplies.push(parameters);
+        pendingQuestions = pendingQuestions.filter(
+          ({ id }) => id !== parameters.requestID,
+        );
+        return { data: true };
+      },
     },
     session: {
       async create() {
@@ -697,6 +1023,7 @@ function openCodeFake(): OpenCodeFake {
     },
     questionListCalls,
     questionRejections,
+    questionReplies,
     get statusCallCount() {
       return statusCalls.length;
     },
@@ -893,7 +1220,7 @@ describe("OpenCode build pipeline provider", () => {
     }
   });
 
-  test("reports a blocked OpenCode session as waiting while status calls it an error", async () => {
+  test("reports a blocked OpenCode session consistently as waiting and blocked", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
     try {
@@ -915,7 +1242,7 @@ describe("OpenCode build pipeline provider", () => {
         new Map([["owned-session", "waiting"]]),
       );
       await expect(provider.activity?.("owned-session")).resolves.toBe("waiting");
-      await expect(provider.status("owned-session")).resolves.toBe("error");
+      await expect(provider.status("owned-session")).resolves.toBe("blocked");
 
       // A wholly-blocked batch is answered from local state. Reading the global
       // session map anyway would be a round trip per sweep that cannot change
@@ -1061,7 +1388,7 @@ describe("OpenCode build pipeline provider", () => {
         requestID: "owned-q",
         directory: "/workspace",
       }]);
-      await expect(provider.status("owned-session")).resolves.toBe("error");
+      await expect(provider.status("owned-session")).resolves.toBe("blocked");
     } finally {
       await provider.dispose?.();
     }
@@ -1255,7 +1582,7 @@ describe("OpenCode build pipeline provider", () => {
         properties: { id: "owned-q", sessionID: "owned-session" },
       });
       await waitUntil(() => fake.questionRejections.length === 1);
-      await expect(provider.status("owned-session")).resolves.toBe("error");
+      await expect(provider.status("owned-session")).resolves.toBe("blocked");
 
       stream.push({
         type: "question.replied",

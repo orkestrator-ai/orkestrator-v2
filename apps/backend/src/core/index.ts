@@ -103,6 +103,14 @@ export class OrkestratorBackend {
         if (!handler) throw new Error(`Unknown backend command: ${command}`);
         return await handler(args, context) as T;
       },
+      {
+        interactionMonitorMode:
+          process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
+            ? "observe-only"
+            : "disabled",
+        interactionMonitorAdoptionEnabled:
+          process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
+      },
     );
     context.nativeAgents = this.nativeAgents;
     this.reapPidServers =

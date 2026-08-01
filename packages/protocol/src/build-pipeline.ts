@@ -2,6 +2,7 @@ import {
   isStructuredReviewReport,
   type StructuredReviewReport,
 } from "./structured-review.js";
+import { isAgentInteractionPolicy } from "./agent-interactions.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
 
@@ -213,6 +214,9 @@ export interface PipelineSession {
    * before per-step harnesses existed, which fall back to `agentType`.
    */
   agent?: BuildPipelineAgent;
+  /** Persisted interaction authority for backend-owned workflow sessions. */
+  origin?: import("./agent-interactions.js").AgentInteractionOrigin;
+  interactionPolicy?: import("./agent-interactions.js").AgentInteractionPolicy;
   iteration: number;
   sessionKey: string;
   sdkSessionId: string;
@@ -487,6 +491,14 @@ function isPipelineSession(value: unknown): value is PipelineSession {
   return SESSION_PHASES.has(value.phase as PipelineSessionPhase)
     && (value.agent === undefined
       || AGENTS.has(value.agent as BuildPipelineAgent))
+    && (
+      (value.origin === undefined && value.interactionPolicy === undefined)
+      || (
+        value.origin === "build-pipeline"
+        && isAgentInteractionPolicy(value.interactionPolicy)
+        && value.interactionPolicy.mode === "unattended"
+      )
+    )
     && isNonNegativeInteger(value.iteration)
     && typeof value.sessionKey === "string"
     && value.sessionKey.length > 0

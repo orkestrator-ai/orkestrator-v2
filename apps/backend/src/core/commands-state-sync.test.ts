@@ -507,10 +507,26 @@ describe("native agent and looped-review controller commands", () => {
       operation: "adopt",
       input,
     }));
+    const observations = [{
+      provider: "codex",
+      kind: "question",
+      workflowSurface: "looped-review",
+      phase: "discovery",
+      firstDetectedAt: 1,
+      lastDetectedAt: 1,
+      count: 1,
+      providerState: "blocked",
+    }];
+    const getInteractionObservations = mock(() => observations);
+    const reconcileAgentInteractions = mock(async () => undefined);
+    const setInteractionMonitorAdoptionEnabled = mock((_enabled: boolean) => undefined);
     const nativeAgents = {
       ensureSession,
       adoptSession,
       dispatchPrompt,
+      getInteractionObservations,
+      reconcileAgentInteractions,
+      setInteractionMonitorAdoptionEnabled,
     } as unknown as NonNullable<CommandContext["nativeAgents"]>;
 
     await withCommands(async (invoke) => {
@@ -660,6 +676,19 @@ describe("native agent and looped-review controller commands", () => {
       expect(ensureSession).toHaveBeenCalledTimes(1);
       expect(dispatchPrompt).toHaveBeenCalledTimes(1);
       expect(adoptSession).toHaveBeenCalledTimes(1);
+
+      await expect(invoke("get_agent_interaction_observations", {}))
+        .resolves.toEqual(observations);
+      await expect(invoke("reconcile_agent_interactions", {}))
+        .resolves.toEqual(observations);
+      expect(reconcileAgentInteractions).toHaveBeenCalledTimes(1);
+      await expect(invoke("set_agent_interaction_monitor_adoption", {
+        enabled: false,
+      })).resolves.toEqual({ enabled: false });
+      expect(setInteractionMonitorAdoptionEnabled).toHaveBeenCalledWith(false);
+      await expect(invoke("set_agent_interaction_monitor_adoption", {
+        enabled: "false",
+      })).rejects.toThrow("enabled to be a boolean");
     }, { nativeAgents });
   });
 

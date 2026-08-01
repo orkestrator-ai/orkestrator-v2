@@ -9,6 +9,7 @@ import type {
 import {
   VERIFICATION_VERDICT_SCHEMA,
 } from "@orkestrator/protocol/build-pipeline";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type {
   JsonSchema,
@@ -1513,6 +1514,23 @@ describe("BuildPipelineService", () => {
       });
     });
   }
+
+  test("persists unattended interaction metadata and keeps blocked work parked", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      provider.status = async () => "blocked";
+      await service.advanceNow(started.id);
+      const blocked = await pipeline(storage, started.id);
+      expect(blocked.phase).toBe("building");
+      expect(blocked.sessions[blocked.currentSessionIndex]).toMatchObject({
+        status: "running",
+        origin: "build-pipeline",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+    });
+  });
 
   test("rejects malformed structured review output instead of advancing", async () => {
     await withService(async (service, storage, provider) => {

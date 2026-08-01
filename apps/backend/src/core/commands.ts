@@ -8975,6 +8975,28 @@ export function createCommandRegistry(
     });
   });
 
+  register("get_agent_interaction_observations", (_args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    return context.nativeAgents.getInteractionObservations();
+  });
+  register("reconcile_agent_interactions", async (_args, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    await context.nativeAgents.reconcileAgentInteractions();
+    return context.nativeAgents.getInteractionObservations();
+  });
+  register("set_agent_interaction_monitor_adoption", ({ enabled }, context) => {
+    if (!context.nativeAgents) {
+      throw new Error("Native agent service is unavailable");
+    }
+    const value = asRequiredBoolean(enabled, "enabled");
+    context.nativeAgents.setInteractionMonitorAdoptionEnabled(value);
+    return { enabled: value };
+  });
+
   register("get_looped_review_workflow", ({ workflowId }, { storage }) =>
     storage.getLoopedReviewWorkflow(asString(workflowId, "workflowId")),
   );

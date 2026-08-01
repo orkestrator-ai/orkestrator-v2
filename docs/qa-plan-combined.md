@@ -165,7 +165,7 @@ policy enabled in production.
 | --- | --- | --- |
 | [1](qa/milestone-1.md) | Contract, facts, bounds, policy, and failure-injection fixtures | Not started |
 | [2](qa/milestone-2.md) | Consistent interactive cards, deadlines, answer fidelity, and secret handling | Implemented; manual verification pending |
-| [3](qa/milestone-3.md) | Provider-neutral backend interaction capability and observe-only monitoring | Not started |
+| [3](qa/milestone-3.md) | Provider-neutral backend interaction capability and observe-only monitoring | Implemented |
 | [4](qa/milestone-4.md) | Uniform build-pipeline enforcement and durable visibility | Not started |
 | [5](qa/milestone-5.md) | Backend-owned looped-review control with the same policy | Not started |
 | [6](qa/milestone-6.md) | Recovery matrix, global activity, accessibility, diagnostics, and operational hardening | Not started |

@@ -3,12 +3,17 @@ import {
   preserveClientPaneSelection,
   reconcilePersistedLayout,
 } from "./pane-layout-restore";
-import type { PersistedPaneLayout, TabInfo } from "@/types/paneLayout";
+import {
+  LEGACY_PANE_LAYOUT_VERSION,
+  PANE_LAYOUT_VERSION,
+  type PersistedPaneLayout,
+  type TabInfo,
+} from "@/types/paneLayout";
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 
 function saved(root: unknown, overrides: Partial<PersistedPaneLayout> = {}): PersistedPaneLayout {
   return {
-    version: 1,
+    version: PANE_LAYOUT_VERSION,
     environmentId: "env-1",
     containerId: "container-1",
     activePaneId: "missing-pane",
@@ -26,9 +31,20 @@ const context = {
 };
 
 describe("reconcilePersistedLayout", () => {
+  test("rejects primitive and other non-object persisted roots", () => {
+    for (const root of [null, undefined, true, 0, "leaf", []]) {
+      expect(reconcilePersistedLayout(saved(root), context), String(root)).toBeNull();
+    }
+  });
+
   test("rejects version, environment, and container mismatches", () => {
     const root = { kind: "leaf", id: "pane", tabs: [{ id: "tab", type: "plain" }], activeTabId: "tab" };
-    expect(reconcilePersistedLayout(saved(root, { version: 2 }), context)).toBeNull();
+    expect(
+      reconcilePersistedLayout(
+        saved(root, { version: PANE_LAYOUT_VERSION + 1 }),
+        context,
+      ),
+    ).toBeNull();
     expect(reconcilePersistedLayout(saved(root, { environmentId: "other" }), context)).toBeNull();
     expect(reconcilePersistedLayout(saved(root, { containerId: "other" }), context)).toBeNull();
   });
@@ -40,6 +56,20 @@ describe("reconcilePersistedLayout", () => {
     // make the first edit after a reload look like a create.
     expect(reconcilePersistedLayout(saved(root, { revision: 12 }), context))
       .toMatchObject({ backendRevision: 12 });
+  });
+
+  test("accepts legacy v1 layouts for one-time selection migration", () => {
+    const root = {
+      kind: "leaf",
+      id: "pane",
+      tabs: [{ id: "tab", type: "plain" }],
+      activeTabId: "tab",
+    };
+
+    expect(reconcilePersistedLayout(
+      saved(root, { version: LEGACY_PANE_LAYOUT_VERSION }),
+      context,
+    )).toMatchObject({ activePaneId: "pane", backendRevision: 1 });
   });
 
   test("sanitizes tabs, one-shot fields, native connection data, and active pointers", () => {

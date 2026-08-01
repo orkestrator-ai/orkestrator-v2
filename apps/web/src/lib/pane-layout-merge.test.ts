@@ -414,6 +414,77 @@ describe("mergePersistedPaneLayouts", () => {
     });
   });
 
+  test("projects a local focus change through a concurrent remote split", () => {
+    const baseRoot = leaf("default", ["a", "b"]);
+    const localRoot = leaf("default", ["a", "b"]);
+    (localRoot as Extract<PaneNode, { kind: "leaf" }>).activeTabId = "b";
+    const remote = input(split(leaf("left", ["a"]), leaf("right", ["b"])));
+
+    const merged = mergePersistedPaneLayouts(
+      input(baseRoot),
+      input(localRoot),
+      remote,
+    );
+
+    expect(merged.activePaneId).toBe("right");
+    expect(merged.root).toMatchObject({
+      children: [
+        { id: "left", activeTabId: "a" },
+        { id: "right", activeTabId: "b" },
+      ],
+    });
+  });
+
+  test("uses explicit focus intent even when the desired value equals the base", () => {
+    const base = input(leaf("default", ["a", "b"]));
+    const remoteRoot = leaf("default", ["a", "b"]);
+    (remoteRoot as Extract<PaneNode, { kind: "leaf" }>).activeTabId = "b";
+
+    const merged = mergePersistedPaneLayouts(base, base, input(remoteRoot), {
+      selectionIntent: {
+        activePaneId: "default",
+        activeTabIds: { default: "a" },
+      },
+    });
+
+    expect(merged.activePaneId).toBe("default");
+    expect(merged.root).toMatchObject({ activeTabId: "a" });
+  });
+
+  test("falls back to a surviving remote selection when the local tab was deleted", () => {
+    const base = input(leaf("default", ["a", "b"]));
+    const localRoot = leaf("default", ["a", "b"]);
+    (localRoot as Extract<PaneNode, { kind: "leaf" }>).activeTabId = "b";
+    const remote = input(leaf("default", ["a"]));
+
+    const merged = mergePersistedPaneLayouts(base, input(localRoot), remote);
+
+    expect(merged.root).toMatchObject({
+      tabs: [{ id: "a" }],
+      activeTabId: "a",
+    });
+  });
+
+  test("falls back from a concurrently removed active pane", () => {
+    const base = input(split(leaf("left", ["a"]), leaf("right", ["b"])));
+    const local = { ...base, activePaneId: "right" };
+    const remote = input(leaf("left", ["a"]));
+
+    const merged = mergePersistedPaneLayouts(base, local, remote);
+
+    expect(merged.activePaneId).toBe("left");
+  });
+
+  test("uses the first surviving pane when all active pane pointers are invalid", () => {
+    const root = split(leaf("left", ["a"]), leaf("right", ["b"]));
+    const base = { ...input(root), activePaneId: "missing-base" };
+    const local = { ...input(root), activePaneId: "missing-local" };
+    const remoteRoot = split(leaf("left", ["a", "remote"]), leaf("right", ["b"]));
+    const remote = { ...input(remoteRoot), activePaneId: "missing-remote" };
+
+    expect(mergePersistedPaneLayouts(base, local, remote).activePaneId).toBe("left");
+  });
+
   test("leaves an emptied pane with a null selection", () => {
     const base = input(split(leaf("left", ["gone"]), leaf("right", ["stay"])));
     const local = input(split(leaf("left", ["gone"]), leaf("right", ["stay"])));

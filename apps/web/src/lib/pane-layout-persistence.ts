@@ -7,6 +7,7 @@ import {
 import {
   isPaneNode,
   mergePersistedPaneLayouts,
+  type PaneLayoutSelectionIntent,
 } from "@/lib/pane-layout-merge";
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -31,11 +32,13 @@ interface PendingPaneLayoutWrite {
   input: PersistedPaneLayoutInput;
   serialized: string;
   baseInput: PersistedPaneLayoutInput;
+  selectionIntent?: PaneLayoutSelectionIntent;
 }
 
 export interface PaneLayoutPersistenceOptions {
   save?: SavePaneLayout;
   load?: LoadPaneLayout;
+  hydrateDependencies?: typeof hydratePaneLayoutDependencies;
   debounceMs?: number;
   maxConflictRetries?: number;
 }
@@ -128,6 +131,54 @@ function withoutSelection(input: PersistedPaneLayoutInput): PersistedPaneLayoutI
   return { ...input, activePaneId: firstLeafId(root), root };
 }
 
+function selectionIntentBetween(
+  previous: PersistedPaneLayoutInput,
+  current: PersistedPaneLayoutInput,
+): PaneLayoutSelectionIntent | undefined {
+  const previousLeaves = new Map<string, string | null>();
+  const currentLeaves = new Map<string, string | null>();
+  const collect = (node: PaneNode, target: Map<string, string | null>): void => {
+    if (node.kind === "leaf") {
+      target.set(node.id, node.activeTabId);
+      return;
+    }
+    collect(node.children[0], target);
+    collect(node.children[1], target);
+  };
+  collect(previous.root, previousLeaves);
+  collect(current.root, currentLeaves);
+
+  const activeTabIds: Record<string, string | null> = {};
+  for (const [paneId, activeTabId] of currentLeaves) {
+    if (previousLeaves.get(paneId) !== activeTabId) {
+      activeTabIds[paneId] = activeTabId;
+    }
+  }
+  const activePaneChanged = previous.activePaneId !== current.activePaneId;
+  if (!activePaneChanged && Object.keys(activeTabIds).length === 0) {
+    return undefined;
+  }
+  return {
+    ...(activePaneChanged ? { activePaneId: current.activePaneId } : {}),
+    ...(Object.keys(activeTabIds).length > 0 ? { activeTabIds } : {}),
+  };
+}
+
+function mergeSelectionIntents(
+  earlier: PaneLayoutSelectionIntent | undefined,
+  later: PaneLayoutSelectionIntent | undefined,
+): PaneLayoutSelectionIntent | undefined {
+  if (!earlier) return later;
+  if (!later) return earlier;
+  return {
+    activePaneId: later.activePaneId ?? earlier.activePaneId,
+    activeTabIds: {
+      ...(earlier.activeTabIds ?? {}),
+      ...(later.activeTabIds ?? {}),
+    },
+  };
+}
+
 type PaneLayoutEnqueue = (
   environmentId: string,
   input: PersistedPaneLayoutInput,
@@ -209,12 +260,18 @@ export function startPaneLayoutPersistence(
 ): () => void {
   const save = options.save ?? backend.savePaneLayout;
   const load = options.load ?? backend.getPaneLayout;
+  const hydrateDependencies =
+    options.hydrateDependencies ?? hydratePaneLayoutDependencies;
   const debounceMs = options.debounceMs ?? 1_000;
   const maxConflictRetries = options.maxConflictRetries ?? 3;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const lastEnqueued = new Map<string, string>();
   const writeChains = new Map<string, Promise<void>>();
   const pendingWrites = new Map<string, PendingPaneLayoutWrite>();
+  // Focus changes can arrive much faster than a backend round trip. Keep only
+  // the newest one behind the current write: every later snapshot contains the
+  // complete selection state, so intermediate focus writes are obsolete.
+  const pendingSelectionWrites = new Map<string, PendingPaneLayoutWrite>();
   const authoritative = new Map<string, AuthoritativePaneLayout>();
 
   const cancelTimer = (environmentId: string) => {
@@ -289,7 +346,7 @@ export function startPaneLayoutPersistence(
     if (hasNewerLocalEdit()) return;
 
     try {
-      await hydratePaneLayoutDependencies(savedInput.root);
+      await hydrateDependencies(savedInput.root);
     } catch (error) {
       console.warn(
         "[PaneLayout] Skipped installing a saved layout whose dependencies "
@@ -331,6 +388,7 @@ export function startPaneLayoutPersistence(
     environmentId: string,
     desiredInput: PersistedPaneLayoutInput,
     writeBaseInput: PersistedPaneLayoutInput,
+    selectionIntent?: PaneLayoutSelectionIntent,
   ): Promise<void> => {
     let desired = desiredInput;
     let base = authoritative.get(environmentId);
@@ -358,6 +416,7 @@ export function startPaneLayoutPersistence(
         writeBaseInput,
         desired,
         base.input,
+        { selectionIntent },
       );
     }
 
@@ -405,6 +464,7 @@ export function startPaneLayoutPersistence(
             commonBase,
             desired,
             remoteInput,
+            { selectionIntent },
           );
         }
         base = { input: remoteInput, revision: current.revision };
@@ -419,12 +479,17 @@ export function startPaneLayoutPersistence(
 
   const enqueueWrite = (
     environmentId: string,
-    { input, serialized, baseInput }: PendingPaneLayoutWrite,
+    { input, serialized, baseInput, selectionIntent }: PendingPaneLayoutWrite,
   ): Promise<void> => {
     const previousWrite = writeChains.get(environmentId) ?? Promise.resolve();
     const nextWrite = previousWrite
       .catch(() => undefined)
-      .then(() => persistWithRebase(environmentId, input, baseInput))
+      .then(() => persistWithRebase(
+        environmentId,
+        input,
+        baseInput,
+        selectionIntent,
+      ))
       .catch((error) => {
         if (lastEnqueued.get(environmentId) === serialized) {
           lastEnqueued.delete(environmentId);
@@ -435,6 +500,17 @@ export function startPaneLayoutPersistence(
     const settle = () => {
       if (writeChains.get(environmentId) !== nextWrite) return;
       writeChains.delete(environmentId);
+      const pendingSelection = pendingSelectionWrites.get(environmentId);
+      if (pendingSelection) {
+        pendingSelectionWrites.delete(environmentId);
+        // The predecessor's completion recorded its older payload. Restore the
+        // queued head before starting it so an unrelated Zustand update cannot
+        // enqueue the same latest selection a second time.
+        lastEnqueued.set(environmentId, pendingSelection.serialized);
+        void enqueueWrite(environmentId, pendingSelection)
+          .catch(reportWriteFailure);
+        return;
+      }
       // Only announce a genuinely idle environment. A queued debounced write
       // would decline the very adoption this signal exists to unblock, and its
       // own settle will follow.
@@ -454,11 +530,33 @@ export function startPaneLayoutPersistence(
     return nextWrite;
   };
 
+  const enqueueLatestSelection = (
+    environmentId: string,
+    write: PendingPaneLayoutWrite,
+  ): void => {
+    if (writeChains.has(environmentId)) {
+      const pending = pendingSelectionWrites.get(environmentId);
+      pendingSelectionWrites.set(environmentId, {
+        ...write,
+        baseInput: pending?.baseInput ?? write.baseInput,
+        selectionIntent: mergeSelectionIntents(
+          pending?.selectionIntent,
+          write.selectionIntent,
+        ),
+      });
+      return;
+    }
+    void enqueueWrite(environmentId, write).catch(reportWriteFailure);
+  };
+
   // Joins the same chain as the debounced writes so ordering holds. Priming
   // `lastEnqueued` also stops the subscriber echoing this exact layout back.
   const enqueueImmediate: PaneLayoutEnqueue = (environmentId, input) => {
     const serialized = JSON.stringify(input);
-    if (pendingWrites.get(environmentId)?.serialized === serialized) {
+    const matchingPending = pendingWrites.get(environmentId)?.serialized === serialized
+      ? pendingWrites.get(environmentId)
+      : undefined;
+    if (matchingPending) {
       cancelTimer(environmentId);
       pendingWrites.delete(environmentId);
     }
@@ -466,7 +564,11 @@ export function startPaneLayoutPersistence(
     return enqueueWrite(environmentId, {
       input,
       serialized,
-      baseInput: authoritative.get(environmentId)?.input ?? input,
+      baseInput:
+        matchingPending?.baseInput
+        ?? authoritative.get(environmentId)?.input
+        ?? input,
+      selectionIntent: matchingPending?.selectionIntent,
     });
   };
 
@@ -503,6 +605,7 @@ export function startPaneLayoutPersistence(
     // another authoritative revision.
     if (
       pendingWrites.has(environmentId)
+      || pendingSelectionWrites.has(environmentId)
       || writeChains.has(environmentId)
     ) {
       return false;
@@ -558,6 +661,7 @@ export function startPaneLayoutPersistence(
       if (!environment || hydration !== "done") {
         cancelTimer(environmentId);
         pendingWrites.delete(environmentId);
+        pendingSelectionWrites.delete(environmentId);
         if (!environment) {
           lastEnqueued.delete(environmentId);
           authoritative.delete(environmentId);
@@ -573,6 +677,7 @@ export function startPaneLayoutPersistence(
       if (previousHydration !== "done") {
         cancelTimer(environmentId);
         pendingWrites.delete(environmentId);
+        pendingSelectionWrites.delete(environmentId);
         lastEnqueued.set(environmentId, serialized);
         authoritative.set(environmentId, {
           input,
@@ -585,30 +690,63 @@ export function startPaneLayoutPersistence(
       if (lastEnqueued.get(environmentId) === serialized) continue;
 
       const previousEnvironment = previous.environments.get(environmentId);
+      const previousInput = previousEnvironment
+        ? createPersistedPaneLayoutInput(previousEnvironment)
+        : input;
+      const selectionIntent = selectionIntentBetween(previousInput, input);
       const selectionOnly = previousEnvironment
         && JSON.stringify(withoutSelection(input))
           === JSON.stringify(withoutSelection(
-            createPersistedPaneLayoutInput(previousEnvironment),
+            previousInput,
           ));
 
       if (selectionOnly) {
+        const pendingStructural = pendingWrites.get(environmentId);
         cancelTimer(environmentId);
         pendingWrites.delete(environmentId);
         lastEnqueued.set(environmentId, serialized);
-        void enqueueWrite(environmentId, {
+        enqueueLatestSelection(environmentId, {
           input,
           serialized,
-          baseInput: authoritative.get(environmentId)?.input ?? input,
-        }).catch(reportWriteFailure);
+          // If focus promotes a structural debounce, retain its original
+          // durable base so the structural mutation remains a local edit during
+          // rebase. Explicit selection intent separately makes A -> B -> A end
+          // on the final A even when A equals that durable base.
+          baseInput:
+            pendingStructural?.baseInput
+            ?? authoritative.get(environmentId)?.input
+            ?? previousInput,
+          selectionIntent: mergeSelectionIntents(
+            pendingStructural?.selectionIntent,
+            selectionIntent,
+          ),
+        });
         continue;
       }
 
       cancelTimer(environmentId);
+      // A later structural snapshot includes the current focus too, so it
+      // supersedes any older coalesced selection waiting behind an in-flight
+      // write.
+      const pendingSelection = pendingSelectionWrites.get(environmentId);
+      pendingSelectionWrites.delete(environmentId);
+      const pendingStructural = pendingWrites.get(environmentId);
       lastEnqueued.set(environmentId, serialized);
       pendingWrites.set(environmentId, {
         input,
         serialized,
-        baseInput: authoritative.get(environmentId)?.input ?? input,
+        baseInput:
+          pendingStructural?.baseInput
+          ?? pendingSelection?.baseInput
+          ?? authoritative.get(environmentId)?.input
+          ?? previousInput,
+        selectionIntent: mergeSelectionIntents(
+          mergeSelectionIntents(
+            pendingStructural?.selectionIntent,
+            pendingSelection?.selectionIntent,
+          ),
+          selectionIntent,
+        ),
       });
       timers.set(environmentId, setTimeout(() => {
         void flushEnvironment(environmentId)?.catch(reportWriteFailure);

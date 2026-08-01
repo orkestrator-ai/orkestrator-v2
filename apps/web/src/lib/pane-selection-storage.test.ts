@@ -237,6 +237,33 @@ describe("read/write/clear", () => {
       Storage.prototype.setItem = original;
     }
   });
+
+  test("treats a getItem failure as an empty record", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    let attempts = 0;
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: () => {
+          attempts += 1;
+          throw new Error("SecurityError");
+        },
+        setItem: () => undefined,
+      } as Pick<Storage, "getItem" | "setItem">,
+    });
+    try {
+      expect(readStoredPaneSelection("env-1")).toBeNull();
+      expect(() =>
+        writeStoredPaneSelection("env-1", { activePaneId: "a", activeTabIds: {} })
+      ).not.toThrow();
+      expect(() => clearStoredPaneSelection("env-1")).not.toThrow();
+      expect(attempts).toBe(3);
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(globalThis, "localStorage", descriptor);
+      }
+    }
+  });
 });
 
 describe("applyStoredPaneSelection", () => {

@@ -9,6 +9,15 @@ interface TabLocation {
   paneId: string;
 }
 
+export interface PaneLayoutSelectionIntent {
+  activePaneId?: string;
+  activeTabIds?: Record<string, string | null>;
+}
+
+export interface PaneLayoutMergeOptions {
+  selectionIntent?: PaneLayoutSelectionIntent;
+}
+
 function clone<T>(value: T): T {
   if (value === undefined) return value;
   return JSON.parse(JSON.stringify(value)) as T;
@@ -268,11 +277,15 @@ export function mergePersistedPaneLayouts(
   base: PersistedPaneLayoutInput,
   local: PersistedPaneLayoutInput,
   remote: PersistedPaneLayoutInput,
+  options: PaneLayoutMergeOptions = {},
 ): PersistedPaneLayoutInput {
   if (!isPaneNode(base.root) || !isPaneNode(local.root) || !isPaneNode(remote.root)) {
     throw new Error("Cannot merge malformed pane layout");
   }
-  if (serialized(local) === serialized(base)) return clone(remote);
+  if (
+    serialized(local) === serialized(base)
+    && !options.selectionIntent
+  ) return clone(remote);
   if (serialized(remote) === serialized(base)) return clone(local);
 
   const baseState = collectTabs(base.root);
@@ -387,6 +400,34 @@ export function mergePersistedPaneLayouts(
     if (placedIds.has(id)) continue;
     orders.get(targetPaneIds.get(id) ?? fallbackPaneId)!.push(id);
   }
+
+  // A topology edit can replace every pane id even though the same tabs
+  // survive. Carry a local tab-selection change through the tab placement map
+  // so it still applies to the pane that now owns that tab.
+  const localActiveTabsByTargetPane = new Map<string, string | null>();
+  for (const localLeaf of localLeaves.values()) {
+    const activeTabId = localLeaf.activeTabId;
+    if (
+      typeof activeTabId !== "string"
+      || activeTabId === baseLeaves.get(localLeaf.id)?.activeTabId
+    ) {
+      continue;
+    }
+    const targetPaneId = targetPaneIds.get(activeTabId);
+    if (targetPaneId) {
+      localActiveTabsByTargetPane.set(targetPaneId, activeTabId);
+    }
+  }
+  for (const [paneId, activeTabId] of Object.entries(
+    options.selectionIntent?.activeTabIds ?? {},
+  )) {
+    if (typeof activeTabId === "string") {
+      const targetPaneId = targetPaneIds.get(activeTabId);
+      if (targetPaneId) localActiveTabsByTargetPane.set(targetPaneId, activeTabId);
+    } else if (leafIds.has(paneId)) {
+      localActiveTabsByTargetPane.set(paneId, null);
+    }
+  }
   for (const leaf of leaves) {
     leaf.tabs = orders.get(leaf.id)!.map((id) => clone(finalTabs.get(id)!));
     const mergedActiveTabId = mergeChangedFields(
@@ -395,8 +436,14 @@ export function mergePersistedPaneLayouts(
       remoteLeaves.get(leaf.id)?.activeTabId,
     );
     const validTabIds = new Set(leaf.tabs.map(({ id }) => id));
+    const hasMappedLocalActiveTab = localActiveTabsByTargetPane.has(leaf.id);
+    const mappedLocalActiveTabId = localActiveTabsByTargetPane.get(leaf.id);
     leaf.activeTabId =
-      typeof mergedActiveTabId === "string" && validTabIds.has(mergedActiveTabId)
+      mappedLocalActiveTabId && validTabIds.has(mappedLocalActiveTabId)
+        ? mappedLocalActiveTabId
+        : hasMappedLocalActiveTab && mappedLocalActiveTabId === null
+          ? null
+        : typeof mergedActiveTabId === "string" && validTabIds.has(mergedActiveTabId)
         ? mergedActiveTabId
         : [
           remoteLeaves.get(leaf.id)?.activeTabId,
@@ -412,8 +459,32 @@ export function mergePersistedPaneLayouts(
     local.activePaneId,
     remote.activePaneId,
   );
+  const baseFocusedTabId = baseLeaves.get(base.activePaneId)?.activeTabId;
+  const localFocusedTabId = localLeaves.get(local.activePaneId)?.activeTabId;
+  const localFocusChanged =
+    options.selectionIntent?.activePaneId !== undefined
+    || options.selectionIntent?.activeTabIds !== undefined
+    || local.activePaneId !== base.activePaneId
+    || localFocusedTabId !== baseFocusedTabId;
+  const intendedActivePaneId =
+    options.selectionIntent?.activePaneId ?? local.activePaneId;
+  const intendedFocusedTabId =
+    options.selectionIntent?.activeTabIds?.[intendedActivePaneId]
+    ?? localLeaves.get(intendedActivePaneId)?.activeTabId
+    ?? localFocusedTabId;
+  const mappedLocalActivePaneId = localFocusChanged
+    ? (
+      validPaneIds.has(intendedActivePaneId)
+        ? intendedActivePaneId
+        : typeof intendedFocusedTabId === "string"
+          ? targetPaneIds.get(intendedFocusedTabId)
+          : undefined
+    )
+    : undefined;
   const activePaneId =
-    typeof mergedActivePaneId === "string" && validPaneIds.has(mergedActivePaneId)
+    mappedLocalActivePaneId && validPaneIds.has(mappedLocalActivePaneId)
+      ? mappedLocalActivePaneId
+      : typeof mergedActivePaneId === "string" && validPaneIds.has(mergedActivePaneId)
       ? mergedActivePaneId
       : [remote.activePaneId, local.activePaneId]
         .find((id) => validPaneIds.has(id))

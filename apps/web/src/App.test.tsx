@@ -21,6 +21,7 @@ import {
   type LoopedReviewWorkflow,
 } from "@/stores/loopedReviewStore";
 import type { AppConfig, Environment } from "@/types";
+import { PANE_LAYOUT_VERSION } from "@/types/paneLayout";
 import { mockToastError } from "../../../tests/mocks/sonner";
 
 import * as realLayout from "@/components/layout";
@@ -485,7 +486,11 @@ function resetAppMocks() {
   mockListBuildPipelines.mockResolvedValue([]);
   appPersistenceLifecycle.length = 0;
   mockStopBuildPipelinePersistence.mockClear();
-  mockMigrateLegacyBuildPipelines.mockClear();
+  mockMigrateLegacyBuildPipelines.mockReset();
+  mockMigrateLegacyBuildPipelines.mockImplementation(async () => {
+    appPersistenceLifecycle.push("migrate-build");
+    return { importedIds: [], skipped: 0 };
+  });
   mockStartBuildPipelinePersistence.mockClear();
   mockSaveLoopedReviewWorkflow.mockClear();
   mockLoopedReviewSupervisorRender.mockClear();
@@ -725,6 +730,68 @@ describe("App background processing mounts", () => {
     }
   });
 
+  test("contains a rejected legacy build-pipeline migration", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+    const migrationError = new Error("migration unavailable");
+    mockMigrateLegacyBuildPipelines.mockRejectedValueOnce(migrationError);
+    const originalWarn = console.warn;
+    const warn = mock(() => undefined);
+    console.warn = warn;
+    try {
+      render(<App />);
+
+      expect(await screen.findByTestId("project-launcher")).toBeTruthy();
+      await waitFor(() => {
+        expect(warn).toHaveBeenCalledWith(
+          "[App] Failed to migrate legacy build pipelines:",
+          migrationError,
+        );
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("contains one looped-review hydration rejection and continues hydrating peers", async () => {
+    resetStores({
+      environments: [
+        makeEnvironment("env-rejected", "project-one"),
+        makeEnvironment("env-restored", "project-two"),
+      ],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+    const hydrationError = new Error("looped reviews unavailable");
+    mockListLoopedReviewWorkflows.mockImplementation(async (environmentId: string) => {
+      if (environmentId === "env-rejected") throw hydrationError;
+      return [];
+    });
+    const originalWarn = console.warn;
+    const warn = mock(() => undefined);
+    console.warn = warn;
+    try {
+      render(<App />);
+
+      await waitFor(() => {
+        expect(mockListLoopedReviewWorkflows.mock.calls.map(([id]) => id).sort()).toEqual([
+          "env-rejected",
+          "env-restored",
+        ]);
+        expect(warn).toHaveBeenCalledWith(
+          "[App] Failed to restore looped reviews for env-rejected:",
+          hydrationError,
+        );
+      });
+      expect(screen.getByTestId("project-launcher")).toBeTruthy();
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   test("hydrates looped reviews for environments and retains their background host", async () => {
     const background = makeEnvironment("env-looped", "project-2");
     resetStores({
@@ -820,7 +887,10 @@ describe("App background processing mounts", () => {
     await waitFor(() => expect(mockSavePaneLayout).toHaveBeenCalledTimes(1));
     expect(mockSavePaneLayout).toHaveBeenCalledWith(
       "env-1",
-      expect.objectContaining({ version: 1, activePaneId: "default" }),
+      expect.objectContaining({
+        version: PANE_LAYOUT_VERSION,
+        activePaneId: "default",
+      }),
       0,
     );
   });

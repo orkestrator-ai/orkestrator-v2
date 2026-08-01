@@ -1,6 +1,7 @@
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import {
   isGitFileStatus,
+  LEGACY_PANE_LAYOUT_VERSION,
   MAX_SPLIT_DEPTH,
   PANE_LAYOUT_VERSION,
   type PaneLeaf,
@@ -212,7 +213,10 @@ export function reconcilePersistedLayout(
 ): EnvironmentPaneState | null {
   if (
     !saved
-    || saved.version !== PANE_LAYOUT_VERSION
+    || (
+      saved.version !== PANE_LAYOUT_VERSION
+      && saved.version !== LEGACY_PANE_LAYOUT_VERSION
+    )
     || saved.environmentId !== context.environmentId
     || saved.containerId !== context.containerId
   ) {

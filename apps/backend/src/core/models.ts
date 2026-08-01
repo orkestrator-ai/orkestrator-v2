@@ -305,7 +305,8 @@ export interface Session {
   hasLaunchedCommand?: boolean;
 }
 
-export const PANE_LAYOUT_VERSION = 1;
+/** Version 2 makes pane and tab selection authoritative in this record. */
+export const PANE_LAYOUT_VERSION = 2;
 
 /**
  * Versioned pane/tab layout persisted by the backend for restore-on-connect.

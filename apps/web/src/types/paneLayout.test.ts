@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   MAX_SPLIT_DEPTH,
+  LEGACY_PANE_LAYOUT_VERSION,
   PANE_LAYOUT_VERSION,
   createDraggableTabId,
   createEdgeDroppableId,
@@ -14,7 +15,8 @@ import {
 
 describe("pane layout runtime helpers", () => {
   test("exports supported schema and depth constants", () => {
-    expect(PANE_LAYOUT_VERSION).toBe(1);
+    expect(LEGACY_PANE_LAYOUT_VERSION).toBe(1);
+    expect(PANE_LAYOUT_VERSION).toBe(2);
     expect(MAX_SPLIT_DEPTH).toBe(9);
   });
 

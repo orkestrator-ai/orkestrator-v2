@@ -192,6 +192,166 @@ describe("pane layout persistence", () => {
     stop();
   });
 
+  test("persists an active-pane-only change immediately", async () => {
+    const splitState: EnvironmentPaneState = {
+      containerId: "container-1",
+      activePaneId: "left",
+      backendRevision: 4,
+      root: {
+        kind: "split",
+        id: "split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "left-tab", type: "plain" }],
+            activeTabId: "left-tab",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [{ id: "right-tab", type: "plain" }],
+            activeTabId: "right-tab",
+          },
+        ],
+      },
+    };
+    usePaneLayoutStore.setState({
+      environments: new Map([["env-1", splitState]]),
+      hydration: new Map([["env-1", "done"]]),
+      activeEnvironmentId: "env-1",
+    });
+    const save = mock(async (environmentId: string, input: LayoutInput) => ({
+      ...createSaved(environmentId, input),
+      revision: 5,
+    }));
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
+
+    usePaneLayoutStore.getState().setActivePane("right", "env-1");
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0]?.[1].activePaneId).toBe("right");
+    stop();
+  });
+
+  test("keeps the latest focus when it returns to the original tab in flight", async () => {
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let revision = 0;
+    const save = mock(async (environmentId: string, input: LayoutInput) => {
+      if (save.mock.calls.length === 1) await firstBlocked;
+      revision += 1;
+      return { ...createSaved(environmentId, input), revision };
+    });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.addTab("default", { id: "a", type: "plain" }, "env-1");
+    store.addTab("default", { id: "b", type: "plain" }, "env-1");
+    store.setActiveTab("default", "a", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+
+    usePaneLayoutStore.getState().setActiveTab("default", "b", "env-1");
+    await waitForTimers();
+    expect(save).toHaveBeenCalledTimes(1);
+    usePaneLayoutStore.getState().setActiveTab("default", "a", "env-1");
+    await waitForTimers();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    await waitForTimers();
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect((save.mock.calls.at(-1)?.[1].root as PaneLeaf).activeTabId).toBe("a");
+    expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId)
+      .toBe("a");
+    stop();
+  });
+
+  test("coalesces a rapid focus burst to one bounded successor write", async () => {
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let revision = 0;
+    const save = mock(async (environmentId: string, input: LayoutInput) => {
+      if (save.mock.calls.length === 1) await firstBlocked;
+      revision += 1;
+      return { ...createSaved(environmentId, input), revision };
+    });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.addTab("default", { id: "a", type: "plain" }, "env-1");
+    store.addTab("default", { id: "b", type: "plain" }, "env-1");
+    store.setActiveTab("default", "a", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+
+    usePaneLayoutStore.getState().setActiveTab("default", "b", "env-1");
+    await waitForTimers();
+    for (let index = 0; index < 500; index += 1) {
+      usePaneLayoutStore.getState().setActiveTab(
+        "default",
+        index % 2 === 0 ? "b" : "a",
+        "env-1",
+      );
+    }
+    expect(save).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    await waitForTimers();
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect((save.mock.calls[1]?.[1].root as PaneLeaf).activeTabId).toBe("a");
+    stop();
+  });
+
+  test("promotes a pending structural edit together with its latest focus", async () => {
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input)
+    );
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.addTab("default", { id: "a", type: "plain" }, "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
+
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "b", type: "plain" },
+      "env-1",
+    );
+    usePaneLayoutStore.getState().setActiveTab("default", "a", "env-1");
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0]?.[1].root).toMatchObject({
+      tabs: [{ id: "a" }, { id: "b" }],
+      activeTabId: "a",
+    });
+    stop();
+  });
+
   test("does not adopt an older snapshot over a queued local tab change", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input)
@@ -320,6 +480,49 @@ describe("pane layout persistence", () => {
     const secondTabs = (save.mock.calls[1]?.[1].root as { tabs: Array<{ id: string }> }).tabs;
     expect(firstTabs.map(({ id }) => id)).toEqual(["tab-1"]);
     expect(secondTabs.map(({ id }) => id)).toEqual(["tab-1", "tab-2"]);
+    stop();
+  });
+
+  test("retains a failed structural write when a later focus snapshot retries it", async () => {
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let revision = 0;
+    const save = mock(async (environmentId: string, input: LayoutInput) => {
+      if (save.mock.calls.length === 1) {
+        await firstBlocked;
+        throw new Error("offline");
+      }
+      revision += 1;
+      return { ...createSaved(environmentId, input), revision };
+    });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.addTab("default", { id: "a", type: "plain" }, "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration(
+      "env-1",
+      usePaneLayoutStore.getState().environments.get("env-1"),
+    );
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      { id: "structural", type: "plain" },
+      "env-1",
+    );
+    await waitForTimers();
+    usePaneLayoutStore.getState().setActiveTab("default", "a", "env-1");
+    releaseFirst();
+    await waitForTimers();
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls[1]?.[1].root).toMatchObject({
+      tabs: [{ id: "a" }, { id: "structural" }],
+      activeTabId: "a",
+    });
     stop();
   });
 
@@ -1142,6 +1345,38 @@ describe("pane layout persistence", () => {
     stop();
   });
 
+  test("establishes a chained CAS base from an identical loaded record", async () => {
+    const input = createPersistedPaneLayoutInput({
+      containerId: "container-1",
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "already-there", type: "plain" }],
+        activeTabId: "already-there",
+      },
+    });
+    const load = mock(async () => ({
+      ...savedResult("env-unhydrated", input),
+      revision: 7,
+    }));
+    const save = mock(async (
+      environmentId: string,
+      layout: LayoutInput,
+      expectedRevision: number,
+    ) => ({
+      ...savedResult(environmentId, layout),
+      revision: expectedRevision + 1,
+    }));
+    const stop = startPaneLayoutPersistence({ save, load, debounceMs: 60_000 });
+
+    await flushPaneLayoutNow("env-unhydrated", input);
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith("env-unhydrated", input, 7);
+    stop();
+  });
+
   test("retries against revision zero when the record vanished mid-conflict", async () => {
     const save = mock(async (
       environmentId: string,
@@ -1426,6 +1661,47 @@ describe("pane layout persistence", () => {
     stop();
   });
 
+  test("does not install a save after hydration becomes stale during dependency loading", async () => {
+    let releaseHydration!: () => void;
+    const hydrationBlocked = new Promise<void>((resolve) => {
+      releaseHydration = resolve;
+    });
+    let hydrationStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      hydrationStarted = resolve;
+    });
+    const hydrateDependencies = mock(async () => {
+      hydrationStarted();
+      await hydrationBlocked;
+    });
+    const save = mock(async (environmentId: string, input: LayoutInput) => ({
+      ...createSaved(environmentId, input),
+      revision: 8,
+    }));
+    const stop = startPaneLayoutPersistence({
+      save,
+      hydrateDependencies,
+      debounceMs: 5,
+    });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "local", type: "plain" }, "env-1");
+
+    await started;
+    usePaneLayoutStore.setState((state) => ({
+      hydration: new Map(state.hydration).set("env-1", "pending"),
+    }));
+    releaseHydration();
+    await waitForTimers();
+
+    expect(hydrateDependencies).toHaveBeenCalledTimes(1);
+    expect(usePaneLayoutStore.getState().environments.get("env-1")?.backendRevision)
+      .toBe(0);
+    stop();
+  });
+
   test("validates a rebased tab against this client's records before installing it", async () => {
     const buildTab = {
       id: "remote-build",
@@ -1551,5 +1827,40 @@ describe("pane layout persistence", () => {
     await waitForTimers();
     expect(settled).toEqual(["env-1", "env-1"]);
     stop();
+  });
+
+  test("isolates a throwing settled handler from later handlers", async () => {
+    const observed: string[] = [];
+    const warn = console.warn;
+    console.warn = mock(() => undefined);
+    const unsubscribeThrowing = onPaneLayoutWriteSettled(() => {
+      throw new Error("listener failed");
+    });
+    const unsubscribeHealthy = onPaneLayoutWriteSettled((environmentId) => {
+      observed.push(environmentId);
+    });
+    try {
+      const save = mock(async (environmentId: string, input: LayoutInput) =>
+        createSaved(environmentId, input)
+      );
+      const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+      const store = usePaneLayoutStore.getState();
+      store.initialize("container-1", "env-1");
+      store.beginHydration("env-1");
+      store.finishHydration("env-1");
+      store.addTab("default", { id: "write", type: "plain" }, "env-1");
+      await waitForTimers();
+
+      expect(observed).toEqual(["env-1"]);
+      expect(console.warn).toHaveBeenCalledWith(
+        "[PaneLayout] A write-settled handler threw:",
+        expect.any(Error),
+      );
+      stop();
+    } finally {
+      unsubscribeThrowing();
+      unsubscribeHealthy();
+      console.warn = warn;
+    }
   });
 });

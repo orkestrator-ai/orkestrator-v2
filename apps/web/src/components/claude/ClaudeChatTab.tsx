@@ -11,6 +11,7 @@ import type { QueueDispatchOutcome } from "@/hooks/useNativeMessageQueue";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
+import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
@@ -123,6 +124,24 @@ const UNMATCHED_EVENT_WARNING_EXEMPT = new Set([
   "system.message",
 ]);
 const EMPTY_BACKGROUND_TASKS = {};
+const EMPTY_CLAUDE_SLASH_COMMANDS: string[] = [];
+const DEFAULT_CLAUDE_SLASH_COMMAND_NAMES = new Set([
+  "/clear",
+  "/compact",
+  "/context",
+  "/cost",
+  "/doctor",
+  "/goal",
+  "/help",
+  "/init",
+  "/logout",
+  "/memory",
+  "/model",
+  "/permissions",
+  "/review",
+  "/status",
+  "/vim",
+]);
 
 type SessionPendingPrompts = {
   questions: Map<string, ClaudeQuestionRequest>;
@@ -406,6 +425,14 @@ export function ClaudeChatTab({
   );
   const session = useClaudeStore(
     useCallback((state) => state.sessions.get(sessionKey), [sessionKey]),
+  );
+  const discoveredSlashCommands = useClaudeStore(
+    useCallback(
+      (state) =>
+        state.sessionInitData.get(environmentId)?.slashCommands
+        ?? EMPTY_CLAUDE_SLASH_COMMANDS,
+      [environmentId],
+    ),
   );
   const promptSuggestion = useClaudeStore(
     useCallback(
@@ -884,9 +911,9 @@ export function ClaudeChatTab({
     return environment?.pendingAgentLaunch === true
       || environment?.startupAgentSession !== undefined;
   });
-  const launchPrompt = backendOwnsStartupPrompt
-    ? handoff.initialPrompt
-    : initialPrompt ?? handoff.initialPrompt;
+  const launchPrompt = backendOwnsStartupPrompt || agentHandoffId
+    ? undefined
+    : initialPrompt;
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
       // NativeAgentService owns the durable initial prompt and its images. A
@@ -902,11 +929,9 @@ export function ClaudeChatTab({
     tabId,
   ]);
   /*
-   * Initialization is blocked while a handoff loads, so by the time the effect
-   * below runs this ref holds the resolved prompt. Reading it through a ref
-   * rather than a dependency keeps the prompt out of the effect's identity: it
-   * resolves a few milliseconds after mount, and re-running initialization then
-   * would tear down an in-flight connect.
+   * Read ordinary launch prompts through a ref so they do not restart an
+   * in-flight connect. Handoff readiness is a separate gate: imported history
+   * never starts a turn by itself.
    */
   const handoffPending = !handoff.ready;
   const launchPromptRef = useRef<string | undefined>(undefined);
@@ -2270,13 +2295,34 @@ export function ClaudeChatTab({
     async (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean, requestId?: string) => {
       if (!client || !session) return "rejected" as const;
 
+      const commandName = text.trim().split(/\s+/)[0]?.toLowerCase();
+      const recognizedSlashCommand =
+        typeof commandName === "string"
+        && commandName.length > 0
+        && (
+          DEFAULT_CLAUDE_SLASH_COMMAND_NAMES.has(commandName)
+          || discoveredSlashCommands.some(
+            (command) => command.split(" - ")[0]!.trim().toLowerCase() === commandName,
+          )
+        );
+      if (handoff.pendingHistory && recognizedSlashCommand) {
+        throw new Error(
+          `Send a normal message to import the transferred history before running ${commandName}.`,
+        );
+      }
+
       const selectedModel = getSelectedModel(sessionKey);
+      const promptText = prependAgentHandoffHistory(handoff.pendingHistory, text);
 
       const userMessage = {
         id: createUuid(),
         role: "user" as const,
-        content: text,
-        parts: [{ type: "text" as const, content: text }],
+        // Keep the optimistic row byte-for-byte aligned with the provider
+        // payload. The handoff display layer strips the known carrier while it
+        // is pending, and an authoritative transcript can then replace the row
+        // without briefly exposing the serialized history.
+        content: promptText,
+        parts: [{ type: "text" as const, content: promptText }],
         timestamp: new Date().toISOString(),
       };
       addMessage(sessionKey, userMessage);
@@ -2323,24 +2369,35 @@ export function ClaudeChatTab({
         .getModels(environmentId)
         .find((m) => m.id === selectedModel)?.supportsFastMode !== false;
 
-      const success = await sendPrompt(client, session.sessionId, text, {
-        model: selectedModel,
-        attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
-        effort,
-        permissionMode,
-        fastMode: fastModeEnabled && modelSupportsFastMode,
-        agent: useClaudeStore.getState().getSelectedAgent(sessionKey),
-        includeLocalSettings: useClaudeStore
-          .getState()
-          .includesLocalSettings(sessionKey),
-        promptSuggestions:
-          useClaudeStore.getState().promptSuggestionOptIn.get(sessionKey) === true,
-        requestId,
-      });
+      let success: Awaited<ReturnType<typeof sendPrompt>>;
+      try {
+        success = await sendPrompt(client, session.sessionId, promptText, {
+          model: selectedModel,
+          attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
+          effort,
+          permissionMode,
+          fastMode: fastModeEnabled && modelSupportsFastMode,
+          agent: useClaudeStore.getState().getSelectedAgent(sessionKey),
+          includeLocalSettings: useClaudeStore
+            .getState()
+            .includesLocalSettings(sessionKey),
+          promptSuggestions:
+            useClaudeStore.getState().promptSuggestionOptIn.get(sessionKey) === true,
+          requestId,
+        });
+      } catch (error) {
+        // A thrown request never produced an accepted dispatch. Remove the
+        // optimistic carrier so useAgentHandoff exposes the pending history to
+        // the retry instead of treating this client-only row as a transcript.
+        removeMessage(sessionKey, userMessage.id);
+        setSessionLoading(sessionKey, false);
+        throw error;
+      }
 
       const accepted = shouldReconcileClaudePrompt(success);
       if (!accepted) {
         console.error("[ClaudeChatTab] Failed to send prompt");
+        removeMessage(sessionKey, userMessage.id);
         setSessionLoading(sessionKey, false);
         return "rejected" as const;
       }
@@ -2363,7 +2420,18 @@ export function ClaudeChatTab({
         ? "unknown" as const
         : "accepted" as const;
     },
-    [client, session, sessionKey, environmentId, getSelectedModel, addMessage, removeMessage, setSessionLoading]
+    [
+      client,
+      session,
+      sessionKey,
+      environmentId,
+      getSelectedModel,
+      addMessage,
+      removeMessage,
+      setSessionLoading,
+      handoff.pendingHistory,
+      discoveredSlashCommands,
+    ]
   );
 
   handleSendRef.current = handleSend;
@@ -2890,7 +2958,14 @@ export function ClaudeChatTab({
           containerId={containerId}
           models={models}
           onSend={async (...args) => {
-            await handleSend(...args);
+            const outcome = await handleSend(...args);
+            if (outcome === "rejected") {
+              // Direct compose submissions must reject their promise so the
+              // shared submit controller retains the draft and attachments for
+              // a retry. Internal callers use handleSendRef directly and keep
+              // the raw dispatch outcome.
+              throw new Error("Claude rejected the prompt. Please try again.");
+            }
           }}
           disabled={!handoff.ready || !client || !session}
           isLoading={session?.isLoading ?? false}

@@ -10,6 +10,7 @@ import {
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
+import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import {
@@ -445,9 +446,9 @@ export function OpenCodeChatTab({
     return environment?.pendingAgentLaunch === true
       || environment?.startupAgentSession !== undefined;
   });
-  const launchPrompt = backendOwnsStartupPrompt
-    ? handoff.initialPrompt
-    : initialPrompt ?? handoff.initialPrompt;
+  const launchPrompt = backendOwnsStartupPrompt || agentHandoffId
+    ? undefined
+    : initialPrompt;
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
       clearTabInitialPrompt(tabId, environmentId);
@@ -460,10 +461,9 @@ export function OpenCodeChatTab({
     tabId,
   ]);
   /*
-   * Read through a ref inside the initialization effect. `launchPrompt` resolves
-   * a few milliseconds after mount for a handoff tab, so listing it as a
-   * dependency would tear down and restart an in-flight connect; `handoffPending`
-   * flips once and is the correct gate.
+   * Read ordinary launch prompts through a ref so they do not restart an
+   * in-flight connect. Handoff readiness is a separate gate: imported history
+   * never starts a turn by itself.
    */
   const handoffPending = !handoff.ready;
   const launchPromptRef = useRef<string | undefined>(undefined);
@@ -2424,6 +2424,30 @@ export function OpenCodeChatTab({
     ) => {
       if (!client || !session) return;
 
+      const trimmedText = text.trim();
+      const commandName = trimmedText.split(/\s+/)[0];
+      const recognizedNativeCommand = commandName
+        && slashCommands.some((command) => command.name === commandName)
+        ? {
+            name: commandName,
+            /*
+             * Sliced from the original text rather than rebuilt from the split
+             * tokens: `split(/\s+/).join(" ")` collapsed every newline, tab and
+             * run of spaces, so a command invoked with a pasted diff or a
+             * multi-line spec reached the server as one flattened line.
+             */
+            arguments:
+              trimmedText.slice(commandName.length).trimStart() || undefined,
+          }
+        : undefined;
+      if (handoff.pendingHistory && recognizedNativeCommand) {
+        throw new Error(
+          `Send a normal message to import the transferred history before running ${commandName}.`,
+        );
+      }
+
+      const promptText = prependAgentHandoffHistory(handoff.pendingHistory, text);
+
       const hasModelOverride = options
         ? Object.prototype.hasOwnProperty.call(options, "model")
         : false;
@@ -2447,7 +2471,7 @@ export function OpenCodeChatTab({
       // Add user message optimistically
       const userMessage = createOptimisticNativeMessage(
         `${OPTIMISTIC_MESSAGE_PREFIX}${createUuid()}`,
-        text,
+        promptText,
         attachments,
       );
       addMessage(sessionKey, userMessage);
@@ -2485,33 +2509,26 @@ export function OpenCodeChatTab({
       }));
 
       // Send prompt
-      const trimmedText = text.trim();
-      const commandName = trimmedText.split(/\s+/)[0];
-      const nativeCommand = commandName && slashCommands.some(
-        (command) => command.name === commandName,
-      )
-        ? {
-            name: commandName,
-            /*
-             * Sliced from the original text rather than rebuilt from the split
-             * tokens: `split(/\s+/).join(" ")` collapsed every newline, tab and
-             * run of spaces, so a command invoked with a pasted diff or a
-             * multi-line spec reached the server as one flattened line.
-             */
-            arguments:
-              trimmedText.slice(commandName.length).trimStart() || undefined,
-          }
-        : undefined;
-      const sendResult = await sendPrompt(client, session.sessionId, text, {
-        model: selectedModel,
-        variant: selectedVariant,
-        mode: selectedMode,
-        agent: selectedAgent,
-        directory: slashCommandDirectory,
-        command: nativeCommand,
-        attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
-        requestId: options?.requestId,
-      });
+      let sendResult: SendPromptResult;
+      try {
+        sendResult = await sendPrompt(client, session.sessionId, promptText, {
+          model: selectedModel,
+          variant: selectedVariant,
+          mode: selectedMode,
+          agent: selectedAgent,
+          directory: slashCommandDirectory,
+          command: recognizedNativeCommand,
+          attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
+          requestId: options?.requestId,
+        });
+      } catch (error) {
+        // The client normally converts provider errors into `success: false`,
+        // but keep the renderer state recoverable if a mock, transport wrapper,
+        // or future SDK version rejects instead.
+        removeMessage(sessionKey, userMessage.id);
+        setSessionLoading(sessionKey, false);
+        throw error;
+      }
 
       if (!sendResult.success) {
         console.error("[OpenCodeChatTab] Failed to send prompt");
@@ -2534,6 +2551,7 @@ export function OpenCodeChatTab({
       session,
       sessionKey,
       environmentId,
+      handoff.pendingHistory,
       getSelectedModel,
       getSelectedVariant,
       getSelectedMode,
@@ -2991,7 +3009,10 @@ export function OpenCodeChatTab({
           slashCommands={slashCommands}
           favoriteModelIds={favoriteModelIds}
           onSend={async (text, attachments) => {
-            await handleSend(text, attachments);
+            const result = await handleSend(text, attachments);
+            if (result && !result.success) {
+              throw new Error(result.error || "Failed to send prompt");
+            }
           }}
           disabled={!handoff.ready || !client || !session}
           isLoading={session?.isLoading ?? false}

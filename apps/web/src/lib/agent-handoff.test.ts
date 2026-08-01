@@ -46,6 +46,7 @@ const {
   mergeAgentHandoffDisplayMessages,
   parseAgentHandoffSnapshot,
   persistAgentHandoff,
+  prependAgentHandoffHistory,
   rememberAgentHandoff,
   resetAgentHandoffCache,
   stripAgentHandoffCarriers,
@@ -190,6 +191,9 @@ describe("agent handoff serialization", () => {
     expect(handoff.bootstrapPrompt).toContain("2 tests passed");
     expect(handoff.bootstrapPrompt).toContain("src/fix.ts");
     expect(handoff.bootstrapPrompt).toContain("never replay");
+    expect(handoff.bootstrapPrompt).not.toContain(
+      "Briefly acknowledge the handoff, state the next concrete action implied by the transcript",
+    );
     expect(handoff.bootstrapPrompt).not.toContain("private intermediate reasoning");
     expect(parseAgentHandoffSnapshot(handoff)).toEqual(handoff);
   });
@@ -279,6 +283,33 @@ describe("agent handoff serialization", () => {
     expect(handoff.stats.toolCallCount).toBe(3);
   });
 
+  test("retains Claude task groups containing reasoning, results, and final text", () => {
+    const finalAnswer = "SUBAGENT FINAL ANSWER: the race is in the replay cursor.";
+    const handoff = createHandoff({
+      messages: [{
+        id: "subagent-findings",
+        role: "assistant",
+        content: finalAnswer,
+        parts: [{
+          type: "task-group",
+          content: "",
+          task: { type: "tool-invocation", content: "review", toolName: "Task" },
+          childTools: [
+            { type: "thinking", content: "Tracing the event order" },
+            { type: "tool-invocation", content: "read", toolName: "Read" },
+            { type: "tool-result", content: "source loaded", toolName: "Read" },
+            { type: "text", content: finalAnswer },
+          ],
+        }],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      }],
+    });
+
+    expect(handoff.messages.map(({ id }) => id)).toEqual(["subagent-findings"]);
+    expect(handoff.stats.droppedMessageCount).toBe(0);
+    expect(handoff.bootstrapPrompt).toContain(finalAnswer);
+  });
+
   test("bounds destination context while retaining the complete visual snapshot", () => {
     const largeMessages = Array.from({ length: 20 }, (_, index): NativeMessage => ({
       id: `m-${index}`,
@@ -360,6 +391,50 @@ describe("agent handoff serialization", () => {
     expect(Number(omitted![1])).toBe(output.length - (8_000 - 38));
   });
 
+  test("keeps a long conversational message intact when the overall context has room", () => {
+    const completeReview = `${"finding details\n".repeat(2_000)}END-OF-REVIEW`;
+    const handoff = createHandoff({
+      messages: [{
+        id: "complete-review",
+        role: "assistant",
+        content: completeReview,
+        parts: [{ type: "text", content: completeReview }],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      }],
+    });
+
+    expect(completeReview.length).toBeGreaterThan(20_000);
+    expect(handoff.bootstrapPrompt).toContain("END-OF-REVIEW");
+    expect(handoff.bootstrapPrompt).not.toContain("characters omitted");
+    expect(handoff.stats.includedMessageCount).toBe(1);
+  });
+
+  test("omits a single conversational record at or above the global prompt budget", () => {
+    for (const size of [
+      AGENT_HANDOFF_PROMPT_BUDGET,
+      AGENT_HANDOFF_PROMPT_BUDGET + 1,
+    ]) {
+      const handoff = createHandoff({
+        id: `single-prompt-budget-${size}`,
+        messages: [{
+          id: "oversized-conversation",
+          role: "assistant",
+          content: "x".repeat(size),
+          parts: [{ type: "text", content: "x".repeat(size) }],
+          createdAt: "2026-07-27T10:00:00.000Z",
+        }],
+      });
+
+      expect(handoff.messages).toHaveLength(1);
+      expect(handoff.stats.includedMessageCount).toBe(0);
+      expect(handoff.stats.omittedMessageCount).toBe(1);
+      expect(handoff.bootstrapPrompt).toContain("remain visible in Orkestrator");
+      expect(handoff.bootstrapPrompt.length).toBeLessThanOrEqual(
+        AGENT_HANDOFF_PROMPT_BUDGET,
+      );
+    }
+  });
+
   test("bounds the retained transcript and always keeps the newest message", () => {
     const bulky = Array.from({ length: 400 }, (_, index): NativeMessage => ({
       id: `bulky-${index}`,
@@ -393,6 +468,163 @@ describe("agent handoff serialization", () => {
     // Dropping it would leave nothing to transfer at all.
     expect(single.messages).toHaveLength(1);
     expect(single.stats.droppedMessageCount).toBe(0);
+  });
+
+  test("accounts for the persisted array frame and combines invalid and budget drops", () => {
+    const createdAt = "2026-07-27T10:00:00.000Z";
+    const makeMessage = (id: string, content: string): NativeMessage => ({
+      id,
+      role: "user",
+      content,
+      parts: [],
+      createdAt,
+    });
+    const newest = makeMessage("newest", "keep me");
+    const emptyOldest = makeMessage("oldest", "");
+    const exactContentLength = AGENT_HANDOFF_SNAPSHOT_BUDGET
+      - 3
+      - JSON.stringify(emptyOldest).length
+      - JSON.stringify(newest).length;
+    const exactOldest = makeMessage("oldest", "x".repeat(exactContentLength));
+    const exact = createHandoff({ messages: [exactOldest, newest] });
+
+    expect(JSON.stringify(exact.messages).length).toBe(AGENT_HANDOFF_SNAPSHOT_BUDGET);
+    expect(exact.messages.map(({ id }) => id)).toEqual(["oldest", "newest"]);
+
+    const recursivePart = {
+      type: "tool-group",
+      content: "",
+      parts: [] as unknown[],
+    };
+    recursivePart.parts.push(recursivePart);
+    const invalid = {
+      id: "invalid",
+      role: "assistant",
+      content: "recursive",
+      parts: [recursivePart],
+      createdAt,
+    } as unknown as NativeMessage;
+    const bounded = createHandoff({
+      messages: [
+        makeMessage("oldest", "x".repeat(exactContentLength + 1)),
+        invalid,
+        newest,
+      ],
+    });
+    expect(bounded.messages.map(({ id }) => id)).toEqual(["newest"]);
+    expect(bounded.stats.droppedMessageCount).toBe(2);
+  });
+
+  test("makes retained messages persistable when opaque values are cyclic or unsupported", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const handoff = createHandoff({
+      id: "persistable",
+      messages: [{
+        id: "opaque-values",
+        role: "assistant",
+        content: "tool evidence",
+        parts: [{
+          type: "tool-invocation",
+          content: "run",
+          toolArgs: { cyclic, unsupported: 1n },
+        }],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      }],
+    });
+
+    expect(() => JSON.stringify(handoff)).not.toThrow();
+    expect(JSON.stringify(handoff.messages)).toContain("[unserializable]");
+    expect(handoff.bootstrapPrompt).toContain("[unserializable]");
+    expect(parseAgentHandoffSnapshot(handoff)).toEqual(handoff);
+  });
+
+  test("preserves repeated references while replacing actual back edges", () => {
+    const sharedPart = { type: "text" as const, content: "shared finding" };
+    const sharedArgs = { path: "src/shared.ts" };
+    const handoff = createHandoff({
+      id: "shared-references",
+      messages: [{
+        id: "dag",
+        role: "assistant",
+        content: "shared",
+        parts: [
+          {
+            type: "tool-group",
+            content: "",
+            parts: [sharedPart, sharedPart],
+          },
+          { type: "tool-invocation", content: "one", toolArgs: sharedArgs },
+          { type: "tool-invocation", content: "two", toolArgs: sharedArgs },
+        ],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      }],
+    });
+
+    expect(handoff.messages).toHaveLength(1);
+    expect(handoff.messages[0]!.parts[0]).toMatchObject({
+      parts: [sharedPart, sharedPart],
+    });
+    expect(handoff.messages[0]!.parts.slice(1).map((part) =>
+      "toolArgs" in part ? part.toolArgs : undefined
+    ))
+      .toEqual([sharedArgs, sharedArgs]);
+    expect(JSON.stringify(handoff.messages)).not.toContain("[unserializable]");
+  });
+
+  test("fails instead of creating a successful empty transfer", () => {
+    const recursivePart = {
+      type: "tool-group",
+      content: "",
+      parts: [] as unknown[],
+    };
+    recursivePart.parts.push(recursivePart);
+    expect(() => createHandoff({
+      messages: [{
+        id: "only-malformed-message",
+        role: "assistant",
+        content: "cannot persist",
+        parts: [recursivePart],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      } as unknown as NativeMessage],
+    })).toThrow("This conversation has no transferable history");
+  });
+
+  test("drops malformed cyclic message structure instead of retaining an unpersistable snapshot", () => {
+    const recursivePart = {
+      type: "tool-group",
+      content: "",
+      parts: [] as unknown[],
+    };
+    recursivePart.parts.push(recursivePart);
+    const malformed = {
+      id: "recursive",
+      role: "assistant",
+      content: "recursive structure",
+      parts: [recursivePart],
+      createdAt: "2026-07-27T10:00:00.000Z",
+    } as unknown as NativeMessage;
+    const handoff = createHandoff({
+      id: "recursive-message",
+      messages: [messages[0]!, malformed, messages[1]!],
+    });
+
+    expect(handoff.messages.map((message) => message.id)).toEqual([
+      "user-1",
+      "assistant-1",
+    ]);
+    expect(handoff.stats.droppedMessageCount).toBe(1);
+    expect(() => JSON.stringify(handoff)).not.toThrow();
+
+    const persisted = createHandoff();
+    const persistedRecursive = {
+      ...persisted,
+      messages: [malformed],
+    };
+    let parsed: unknown;
+    expect(() => { parsed = parseAgentHandoffSnapshot(persistedRecursive); })
+      .not.toThrow();
+    expect(parsed).toBeNull();
   });
 
   test("rebuilds unsafe legacy snapshot prompts from validated fields", () => {
@@ -517,6 +749,14 @@ describe("agent handoff validation and tool counting", () => {
       expect(parseAgentHandoffSnapshot({ ...valid, messages: candidate })).toBeNull();
     }
 
+    for (const createdAt of ["", "not-a-timestamp"]) {
+      const parsed = parseAgentHandoffSnapshot({
+        ...valid,
+        messages: [{ ...messages[0], createdAt }],
+      });
+      expect(parsed?.messages[0]?.createdAt).toBe(valid.createdAt);
+    }
+
     for (const key of [
       "messageCount",
       "toolCallCount",
@@ -630,9 +870,153 @@ describe("agent handoff transcript digest", () => {
     expect(agentHandoffTranscriptDigest([settled]))
       .not.toBe(agentHandoffTranscriptDigest([toolMessage]));
   });
+
+  test("detects same-length content, tool output, metadata and nested-part changes", () => {
+    const nested: NativeMessage[] = [{
+      id: "nested",
+      role: "assistant",
+      content: "same",
+      parts: [{
+        type: "tool-group",
+        content: "",
+        parts: [{
+          type: "tool-invocation",
+          content: "run",
+          toolOutput: "left",
+          toolDiff: { filePath: "a.ts", diff: "+a" },
+        }],
+      }],
+      createdAt: "2026-07-27T10:00:00.000Z",
+      modelId: "model-a",
+    }];
+    const baseline = agentHandoffTranscriptDigest(nested);
+    const variants: NativeMessage[][] = [
+      [{ ...nested[0]!, content: "diff" }],
+      [{ ...nested[0]!, createdAt: "2026-07-27T10:00:00.001Z" }],
+      [{ ...nested[0]!, modelId: "model-b" }],
+      [{
+        ...nested[0]!,
+        parts: [{
+          type: "tool-group",
+          content: "",
+          parts: [{
+            type: "tool-invocation",
+            content: "run",
+            toolOutput: "rift",
+            toolDiff: { filePath: "a.ts", diff: "+a" },
+          }],
+        }],
+      }],
+      [{
+        ...nested[0]!,
+        parts: [{
+          type: "tool-group",
+          content: "",
+          parts: [{
+            type: "tool-invocation",
+            content: "bun",
+            toolOutput: "left",
+            toolDiff: { filePath: "a.ts", diff: "+a" },
+          }],
+        }],
+      }],
+      [{
+        ...nested[0]!,
+        parts: [{
+          type: "tool-group",
+          content: "",
+          parts: [{
+            type: "tool-invocation",
+            content: "run",
+            toolOutput: "left",
+            toolDiff: { filePath: "b.ts", diff: "+b" },
+          }],
+        }],
+      }],
+    ];
+
+    for (const variant of variants) {
+      expect(agentHandoffTranscriptDigest(variant)).not.toBe(baseline);
+    }
+
+    const cyclic = structuredClone(nested);
+    (cyclic[0]!.parts[0] as unknown as Record<string, unknown>).toolArgs = {
+      owner: cyclic[0]!.parts[0],
+    };
+    const cyclicDigest = agentHandoffTranscriptDigest(cyclic);
+    expect(agentHandoffTranscriptDigest(cyclic)).toBe(cyclicDigest);
+    const differentCycle = structuredClone(nested);
+    (differentCycle[0]!.parts[0] as unknown as Record<string, unknown>).toolArgs = {
+      owner: differentCycle,
+    };
+    expect(agentHandoffTranscriptDigest(differentCycle)).not.toBe(cyclicDigest);
+  });
+
+  test("frames adjacent values and handles uncommon JavaScript value kinds", () => {
+    expect(agentHandoffTranscriptDigest(["ab", "c"] as unknown as NativeMessage[]))
+      .not.toBe(agentHandoffTranscriptDigest(["a", "bc"] as unknown as NativeMessage[]));
+
+    const withArgs = (toolArgs: Record<string, unknown>): NativeMessage[] => [{
+      id: "value-kinds",
+      role: "assistant",
+      content: "values",
+      parts: [{ type: "tool-invocation", content: "inspect", toolArgs }],
+      createdAt: "2026-07-27T10:00:00.000Z",
+    }];
+    const baseline = agentHandoffTranscriptDigest(withArgs({
+      nullable: null,
+      bigint: 1n,
+      symbol: Symbol("one"),
+      callback: function firstCallback() {},
+      signed: -0,
+    }));
+    const changed = agentHandoffTranscriptDigest(withArgs({
+      nullable: undefined,
+      bigint: 2n,
+      symbol: Symbol("two"),
+      callback: function secondCallback() {},
+      signed: 0,
+    }));
+    expect(changed).not.toBe(baseline);
+  });
 });
 
 describe("agent handoff carrier recognition and composition", () => {
+  test("prepends history only to the next user prompt and strips it back to that prompt", () => {
+    const handoff = createHandoff();
+    const userPrompt = "Now verify the complete review and commit the fix.";
+    const transported = prependAgentHandoffHistory(handoff.bootstrapPrompt, userPrompt);
+
+    expect(transported.indexOf(handoff.bootstrapPrompt)).toBe(0);
+    expect(transported.indexOf(userPrompt)).toBeGreaterThan(handoff.bootstrapPrompt.length);
+    expect(mergeAgentHandoffDisplayMessages(handoff, [
+      bootstrapMessage(handoff, {
+        content: transported,
+        parts: [{ type: "text", content: transported }],
+      }),
+    ]).map((message) => message.content)).toEqual([
+      "Fix the failing build",
+      "I found the problem.",
+      expect.stringContaining("Continued in"),
+      userPrompt,
+    ]);
+  });
+
+  test("leaves prompts unchanged without usable history and does not prepend twice", () => {
+    const handoff = createHandoff();
+    const prompt = "Continue with the fix.";
+    expect(prependAgentHandoffHistory(undefined, prompt)).toBe(prompt);
+    expect(prependAgentHandoffHistory("", prompt)).toBe(prompt);
+    expect(prependAgentHandoffHistory(" \n\t ", prompt)).toBe(prompt);
+    expect(prependAgentHandoffHistory(handoff.bootstrapPrompt, ""))
+      .toBe(`${handoff.bootstrapPrompt}\n\nThe handoff above is prior conversation history. Respond to the user's new message below as the latest message in that continued conversation:\n\n`);
+    expect(prependAgentHandoffHistory(handoff.bootstrapPrompt, " \n "))
+      .toStartWith(handoff.bootstrapPrompt);
+
+    const once = prependAgentHandoffHistory(handoff.bootstrapPrompt, prompt);
+    expect(prependAgentHandoffHistory(handoff.bootstrapPrompt, once)).toBe(once);
+  });
+
   test("recognizes only a complete matching structural carrier", () => {
     const handoff = createHandoff();
     const bootstrap = bootstrapMessage(handoff);
@@ -660,6 +1044,52 @@ Briefly acknowledge the handoff, state the next concrete action implied by the t
       content: legacy,
       parts: [{ type: "text", content: legacy }],
     }, "legacy-1")).toBe(true);
+  });
+
+  test("extracts legacy carrier messages and removes the obsolete follow-up", () => {
+    const legacy = `<orkestrator-handoff id="legacy-extract" source="claude" destination="codex">
+--- message 1 · USER ---
+Original request
+--- message 2 · ASSISTANT ---
+Completed result
+</orkestrator-handoff>
+
+Briefly acknowledge the handoff, state the next concrete action implied by the transcript, and continue unfinished work when it is safe to do so. Ask the user if the transcript does not establish a safe next action.`;
+    const provider: NativeMessage = {
+      id: "legacy-provider",
+      role: "user",
+      content: legacy,
+      parts: [{ type: "text", content: legacy }],
+      createdAt: "2026-07-27T11:00:00.000Z",
+    };
+    const composed = stripAgentHandoffCarriers(["legacy-extract"], [provider]);
+
+    expect(composed).toEqual([]);
+    const prior = createHandoff({
+      id: "legacy-extract",
+      messages: [
+        {
+          id: "legacy-source-user",
+          role: "user",
+          content: "Original request",
+          parts: [{ type: "text", content: "Original request" }],
+          createdAt: "2026-07-27T10:00:00.000Z",
+        },
+        {
+          id: "legacy-source-assistant",
+          role: "assistant",
+          content: "Completed result",
+          parts: [{ type: "text", content: "Completed result" }],
+          createdAt: "2026-07-27T10:01:00.000Z",
+        },
+      ],
+    });
+    expect(mergeAgentHandoffDisplayMessages(prior, [provider]).map(({ content }) => content))
+      .toEqual([
+        "Original request",
+        "Completed result",
+        expect.stringContaining("Continued in"),
+      ]);
   });
 
   test("composes an exact multi-hop history without nesting the prior carrier", () => {
@@ -850,6 +1280,29 @@ Briefly acknowledge the handoff, state the next concrete action implied by the t
     expect(residual.endsWith("tail text")).toBe(true);
   });
 
+  test("parses adjacent v2 carriers at their first structural close", () => {
+    const first = createHandoff({ id: "adjacent-first" });
+    const second = createHandoff({ id: "adjacent-second" });
+    const adjacent = `${first.bootstrapPrompt}${second.bootstrapPrompt}keep`;
+    const providerMessage = bootstrapMessage(first, {
+      content: adjacent,
+      parts: [{ type: "text", content: adjacent }],
+    });
+
+    expect(stripAgentHandoffCarriers(
+      [first.id, second.id],
+      [providerMessage],
+    )).toEqual([{
+      ...providerMessage,
+      content: "keep",
+      parts: [{ type: "text", content: "keep" }],
+    }]);
+    expect(stripAgentHandoffCarriers([second.id], [providerMessage])[0]!.content)
+      .toStartWith(first.bootstrapPrompt);
+    expect(stripAgentHandoffCarriers([second.id], [providerMessage])[0]!.content)
+      .toEndWith("keep");
+  });
+
   test("strips a consumed carrier whose snapshot has already been deleted", () => {
     /*
      * Resuming another session detaches and deletes the imported transcript, but
@@ -879,6 +1332,37 @@ Briefly acknowledge the handoff, state the next concrete action implied by the t
     expect(stripAgentHandoffCarriers([], providerMessages)).toBe(providerMessages);
     expect(stripAgentHandoffCarriers(["unrelated"], providerMessages))
       .toBe(providerMessages);
+  });
+
+  test("strips a retry carrier after preceding client-only rows", () => {
+    const handoff = createHandoff();
+    const retryPrompt = prependAgentHandoffHistory(
+      handoff.bootstrapPrompt,
+      "Retry the transfer",
+    );
+    const localError: NativeMessage = {
+      id: "error-local",
+      role: "assistant",
+      content: "First send failed",
+      parts: [{ type: "text", content: "First send failed" }],
+      createdAt: "2026-07-27T11:00:00.000Z",
+    };
+    const carrier = bootstrapMessage(handoff, {
+      id: "optimistic-retry",
+      content: retryPrompt,
+      parts: [{ type: "text", content: retryPrompt }],
+    });
+
+    const stripped = stripAgentHandoffCarriers(
+      [handoff.id],
+      [localError, carrier],
+    );
+    expect(stripped.map(({ content }) => content)).toEqual([
+      "First send failed",
+      "Retry the transfer",
+    ]);
+    expect(stripped.some(({ content }) => content.includes("<orkestrator-handoff")))
+      .toBe(false);
   });
 
   test("imported messages are derived from the snapshot alone so callers can memoize", () => {

@@ -412,6 +412,7 @@ let composeAttachments: Array<{
   previewUrl?: string;
   name: string;
 }> = [];
+let lastComposeSendError: unknown;
 
 mock.module("./CodexComposeBar", () => ({
   CodexComposeBar: ({
@@ -449,7 +450,9 @@ mock.module("./CodexComposeBar", () => ({
         data-testid="codex-send"
         disabled={disabled}
         onClick={() => {
-          void onSend(composeText, composeAttachments);
+          void onSend(composeText, composeAttachments).catch((error) => {
+            lastComposeSendError = error;
+          });
         }}
       >
         Send
@@ -988,6 +991,7 @@ describe("CodexChatTab", () => {
     mockClaimPromptQueueHead.mockClear();
     composeText = "Rename the environment";
     composeAttachments = [];
+    lastComposeSendError = undefined;
 
     mockRenameEnvironmentFromPrompt.mockClear();
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
@@ -1170,13 +1174,410 @@ describe("CodexChatTab", () => {
     });
 
     await waitFor(() =>
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false)
+    );
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    composeText = "Verify every finding before continuing";
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() =>
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        SESSION_ID,
+        expect.stringMatching(
+          new RegExp(`"id": "${handoffId}"[\\s\\S]*${composeText}`),
+        ),
+        expect.any(Object),
+      ),
+    );
+  });
+
+  test("reconciles a handoff snapshot echo without duplicating or exposing its carrier", async () => {
+    const handoffId = "codex-snapshot-echo-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    composeText = "Continue from the imported findings";
+    seedEnvironment("handoff-project");
+    mockGetAgentHandoff.mockResolvedValue(agentHandoffRecord(handoffId, bootstrapPrompt));
+    mockGetSessionMessages.mockImplementation(async () => {
+      const prompt = mockSendPrompt.mock.calls.at(-1)?.[2];
+      if (typeof prompt !== "string") return [];
+      return [{
+        id: "server-handoff-snapshot-echo",
+        role: "user" as const,
+        content: prompt,
+        parts: [{ type: "text" as const, content: prompt }],
+        createdAt: "2026-07-27T12:01:00.000Z",
+      }];
+    });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false)
+    );
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const providerMessages = useCodexStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
+      expect(providerMessages.map((message) => message.id)).toEqual([
+        "server-handoff-snapshot-echo",
+      ]);
+      expect(lastVirtualizedMessages.find(
+        (message) => message.id === "server-handoff-snapshot-echo",
+      )).toMatchObject({ content: composeText });
+    });
+    expect(lastVirtualizedMessages.some(
+      (message) => message.id.startsWith("optimistic-"),
+    )).toBe(false);
+    expect(lastVirtualizedMessages.some(
+      (message) => message.content.includes("<orkestrator-handoff"),
+    )).toBe(false);
+  });
+
+  test("retries a definitively rejected handoff prompt with the same request id", async () => {
+    const handoffId = "codex-rejected-retry-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    composeText = "Retry the transferred work";
+    seedEnvironment("handoff-project");
+    mockGetAgentHandoff.mockResolvedValue(agentHandoffRecord(handoffId, bootstrapPrompt));
+    mockSendPrompt
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ status: "processing" });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+      expect(lastComposeSendError).toBeInstanceOf(Error);
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([]);
+    });
+
+    lastComposeSendError = undefined;
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+
+    expect(mockSendPrompt.mock.calls[1]?.[2]).toContain(`"id": "${handoffId}"`);
+    expect(mockSendPrompt.mock.calls[1]?.[3]?.requestId).toBe(
+      mockSendPrompt.mock.calls[0]?.[3]?.requestId,
+    );
+    expect(lastComposeSendError).toBeUndefined();
+  });
+
+  test("retries a thrown handoff dispatch with the same request id", async () => {
+    const handoffId = "codex-thrown-retry-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    composeText = "Retry after the bridge disconnects";
+    seedEnvironment("handoff-project");
+    mockGetAgentHandoff.mockResolvedValue(agentHandoffRecord(handoffId, bootstrapPrompt));
+    mockSendPrompt
+      .mockRejectedValueOnce(new Error("bridge disconnected"))
+      .mockResolvedValueOnce({ status: "processing" });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => {
+      expect(lastComposeSendError).toEqual(new Error("bridge disconnected"));
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([]);
+    });
+
+    lastComposeSendError = undefined;
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+    expect(mockSendPrompt.mock.calls[1]?.[2]).toContain(`"id": "${handoffId}"`);
+    expect(mockSendPrompt.mock.calls[1]?.[3]?.requestId).toBe(
+      mockSendPrompt.mock.calls[0]?.[3]?.requestId,
+    );
+  });
+
+  test("settles an ambiguous handoff dispatch from its authoritative echo", async () => {
+    const handoffId = "codex-ambiguous-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    composeText = "Reconcile this transferred prompt";
+    seedEnvironment("handoff-project");
+    mockGetAgentHandoff.mockResolvedValue(agentHandoffRecord(handoffId, bootstrapPrompt));
+    mockSendPrompt.mockResolvedValue({
+      outcome: "unknown",
+      requestId: "ambiguous-handoff-request",
+    });
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "found",
+      session: { status: "idle", title: "Completed" },
+    });
+    mockGetSessionMessages.mockImplementation(async () => {
+      const prompt = mockSendPrompt.mock.calls.at(-1)?.[2];
+      if (typeof prompt !== "string") return [];
+      return [{
+        id: "server-ambiguous-handoff-echo",
+        role: "user" as const,
+        content: prompt,
+        parts: [{ type: "text" as const, content: prompt }],
+        createdAt: "2026-07-27T12:01:00.000Z",
+      }];
+    });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const state = useCodexStore.getState();
+      expect(state.unconfirmedDispatches.has(SESSION_KEY)).toBe(false);
+      expect(state.sessions.get(SESSION_KEY)).toMatchObject({
+        isLoading: false,
+        error: undefined,
+      });
+      expect(state.sessions.get(SESSION_KEY)?.messages.map((message) => message.id)).toEqual([
+        "server-ambiguous-handoff-echo",
+      ]);
+    });
+    expect(lastVirtualizedMessages.find(
+      (message) => message.id === "server-ambiguous-handoff-echo",
+    )?.content).toBe(composeText);
+  });
+
+  test("prepends a handoff only to the first destination prompt", async () => {
+    const handoffId = "codex-one-shot-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    seedEnvironment("handoff-project");
+    mockGetAgentHandoff.mockResolvedValue(agentHandoffRecord(handoffId, bootstrapPrompt));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false)
+    );
+    composeText = "First destination prompt";
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+
+    composeText = "Second destination prompt";
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
+    expect(mockSendPrompt.mock.calls[1]?.[2]).toBe("Second destination prompt");
+    expect(mockSendPrompt.mock.calls[1]?.[3]?.requestId).not.toBe(
+      mockSendPrompt.mock.calls[0]?.[3]?.requestId,
+    );
+  });
+
+  test("keeps handoff attachments visible and reconciles their authoritative echo", async () => {
+    const handoffId = "codex-attachment-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    composeText = "Inspect this transferred screenshot";
+    composeAttachments = [{
+      id: "handoff-attachment",
+      type: "image",
+      path: "/workspace/handoff.png",
+      previewUrl: "data:image/png;base64,handoff",
+      name: "handoff.png",
+    }];
+    seedEnvironment("handoff-project");
+    mockGetAgentHandoff.mockResolvedValue(agentHandoffRecord(handoffId, bootstrapPrompt));
+    mockGetSessionMessages.mockImplementation(async () => {
+      const prompt = mockSendPrompt.mock.calls.at(-1)?.[2];
+      if (typeof prompt !== "string") return [];
+      return [{
+        id: "server-handoff-attachment-echo",
+        role: "user" as const,
+        content: prompt,
+        parts: [
+          { type: "text" as const, content: prompt },
+          {
+            type: "file" as const,
+            content: "handoff.png",
+            fileUrl: "data:image/png;base64,handoff",
+          },
+        ],
+        createdAt: "2026-07-27T12:01:00.000Z",
+      }];
+    });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
       expect(mockSendPrompt).toHaveBeenCalledWith(
         MOCK_CLIENT,
         SESSION_ID,
         expect.stringContaining(`"id": "${handoffId}"`),
-        expect.any(Object),
-      ),
+        expect.objectContaining({
+          attachments: [{
+            type: "image",
+            path: "/workspace/handoff.png",
+            dataUrl: "data:image/png;base64,handoff",
+            filename: "handoff.png",
+          }],
+        }),
+      );
+      expect(lastVirtualizedMessages.find(
+        (message) => message.id === "server-handoff-attachment-echo",
+      )).toMatchObject({
+        content: composeText,
+        parts: [
+          { type: "text", content: composeText },
+          {
+            type: "file",
+            content: "handoff.png",
+            fileUrl: "data:image/png;base64,handoff",
+          },
+        ],
+      });
+    });
+  });
+
+  test("includes handoff history with an attachment-only first send", async () => {
+    const handoffId = "codex-attachment-only-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    composeText = "";
+    composeAttachments = [{
+      id: "attachment-only",
+      type: "image",
+      path: "/workspace/only.png",
+      previewUrl: "data:image/png;base64,only",
+      name: "only.png",
+    }];
+    seedEnvironment("handoff-project");
+    mockGetAgentHandoff.mockResolvedValue(agentHandoffRecord(handoffId, bootstrapPrompt));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        agentHandoffId={handoffId}
+      />,
     );
+    await waitFor(() =>
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
+    expect(mockSendPrompt.mock.calls[0]?.[3]?.attachments).toHaveLength(1);
+  });
+
+  test("refuses a first handoff slash command without consuming the pending history", async () => {
+    const handoffId = "codex-slash-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    composeText = "/help";
+    seedEnvironment("handoff-project");
+    useCodexStore.getState().setSlashCommands(ENVIRONMENT_ID, [{
+      name: "/help",
+      description: "Show help",
+      source: "builtin",
+    }]);
+    mockGetAgentHandoff.mockResolvedValue(agentHandoffRecord(handoffId, bootstrapPrompt));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      expect(lastComposeSendError).toEqual(new Error(
+        "Slash commands cannot be the first message after a handoff. Send a regular message first, then run the slash command.",
+      ));
+    });
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([]);
+
+    lastComposeSendError = undefined;
+    composeText = "Use the imported context first";
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
+  });
+
+  test("allows an absolute path as the first handoff prompt", async () => {
+    const handoffId = "codex-absolute-path-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    composeText = "/Users/me/file.ts is broken";
+    seedEnvironment("handoff-project");
+    useCodexStore.getState().setSlashCommands(ENVIRONMENT_ID, [{
+      name: "/help",
+      source: "builtin",
+    }]);
+    mockGetAgentHandoff.mockResolvedValue(agentHandoffRecord(handoffId, bootstrapPrompt));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toEndWith(composeText);
+    expect(lastComposeSendError).toBeUndefined();
   });
 
   test("forwards focused-pane search ownership and Codex message content", async () => {

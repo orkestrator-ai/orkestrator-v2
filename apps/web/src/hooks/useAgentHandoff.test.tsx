@@ -24,6 +24,7 @@ mock.module("@/lib/backend", () => ({
 import {
   AGENT_HANDOFF_VERSION,
   createAgentHandoffSnapshot,
+  prependAgentHandoffHistory,
   resetAgentHandoffCache,
   type AgentHandoffSnapshot,
   type AgentProvider,
@@ -107,7 +108,7 @@ describe("useAgentHandoff", () => {
       loading: false,
       ready: true,
       error: null,
-      initialPrompt: undefined,
+      pendingHistory: undefined,
     });
     expect(result.current.displayMessages).toEqual([providerMessage]);
     expect(mockGetAgentHandoff).not.toHaveBeenCalled();
@@ -128,21 +129,21 @@ describe("useAgentHandoff", () => {
       loading: true,
       ready: false,
       error: null,
-      initialPrompt: undefined,
+      pendingHistory: undefined,
     });
 
     await act(async () => pending.resolve(record(snapshot)));
     await waitFor(() => expect(result.current.ready).toBe(true));
 
     expect(result.current.handoff?.id).toBe("handoff-success");
-    expect(result.current.initialPrompt).toBe(snapshot.bootstrapPrompt);
+    expect(result.current.pendingHistory).toBe(snapshot.bootstrapPrompt);
     expect(result.current.displayMessages.map(({ id }) => id)).toEqual([
       "handoff:handoff-success:source:source-1",
       "handoff:handoff-success:boundary",
     ]);
   });
 
-  test("suppresses the initial prompt once the authoritative destination transcript has started", async () => {
+  test("suppresses pending history once the authoritative destination transcript has started", async () => {
     const snapshot = handoff("handoff-restored");
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
     const providerMessage = message(
@@ -156,12 +157,95 @@ describe("useAgentHandoff", () => {
     );
     await waitFor(() => expect(result.current.ready).toBe(true));
 
-    expect(result.current.initialPrompt).toBeUndefined();
+    expect(result.current.pendingHistory).toBeUndefined();
     expect(result.current.displayMessages.map(({ id }) => id)).toEqual([
       "handoff:handoff-restored:source:source-1",
       "handoff:handoff-restored:boundary",
       "provider-restored",
     ]);
+  });
+
+  test.each([
+    ["optimistic", "optimistic-first-send", "Pending user prompt", "user"],
+    ["error", "error-first-send", "The first send failed", "system"],
+    ["system", "system-first-send", "Query stopped by user.", "system"],
+  ] as const)(
+    "keeps pending history after a client-only %s row",
+    async (_kind, id, content, role) => {
+      const snapshot = handoff(`handoff-client-only-${_kind}`);
+      mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
+
+      const { result } = renderHook(() =>
+        useAgentHandoff(
+          snapshot.id,
+          "codex",
+          "env-1",
+          [message(id, role, content)],
+        )
+      );
+      await waitFor(() => expect(result.current.ready).toBe(true));
+
+      expect(result.current.pendingHistory).toBe(snapshot.bootstrapPrompt);
+    },
+  );
+
+  test("consumes pending history when a client-only row contains its structural carrier", async () => {
+    const snapshot = handoff("handoff-optimistic-carrier");
+    const transported = prependAgentHandoffHistory(
+      snapshot.bootstrapPrompt,
+      "Continue from the transfer",
+    );
+    mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
+
+    const { result } = renderHook(() =>
+      useAgentHandoff(
+        snapshot.id,
+        "codex",
+        "env-1",
+        [message("optimistic-carrier", "user", transported)],
+      )
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    expect(result.current.pendingHistory).toBeUndefined();
+    expect(result.current.displayMessages.map((row) => row.content)).toEqual([
+      "Continue the work",
+      expect.stringContaining("Continued in"),
+      "Continue from the transfer",
+    ]);
+  });
+
+  test("hides a retry carrier that follows a client-only error row", async () => {
+    const snapshot = handoff("handoff-retry-after-error");
+    const transported = prependAgentHandoffHistory(
+      snapshot.bootstrapPrompt,
+      "Continue after the error",
+    );
+    mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
+
+    const { result } = renderHook(() =>
+      useAgentHandoff(
+        snapshot.id,
+        "codex",
+        "env-1",
+        [
+          message("error-first-send", "assistant", "First send failed"),
+          message("optimistic-retry", "user", transported),
+        ],
+      )
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    expect(result.current.pendingHistory).toBeUndefined();
+    expect(result.current.displayMessages.map(({ content }) => content)).toEqual([
+      "Continue the work",
+      expect.stringContaining("Continued in"),
+      "First send failed",
+      "Continue after the error",
+    ]);
+    expect(result.current.displayMessages.some(
+      ({ content }) => content.includes("<orkestrator-handoff"),
+    )).toBe(false);
   });
 
   test("reports a missing handoff and leaves the destination usable", async () => {
@@ -192,7 +276,7 @@ describe("useAgentHandoff", () => {
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.handoff).toBeNull();
     expect(result.current.error).toBe("This transfer belongs to another agent.");
-    expect(result.current.initialPrompt).toBeUndefined();
+    expect(result.current.pendingHistory).toBeUndefined();
   });
 
   test("rejects a handoff intended for another environment", async () => {
@@ -208,7 +292,7 @@ describe("useAgentHandoff", () => {
     expect(result.current.error).toBe(
       "This transfer belongs to another environment.",
     );
-    expect(result.current.initialPrompt).toBeUndefined();
+    expect(result.current.pendingHistory).toBeUndefined();
   });
 
   test("shows load errors before provider messages and then unblocks sending", async () => {
@@ -225,7 +309,21 @@ describe("useAgentHandoff", () => {
       "handoff:handoff-error:error",
       "provider-1",
     ]);
-    expect(result.current.initialPrompt).toBeUndefined();
+    expect(result.current.pendingHistory).toBeUndefined();
+  });
+
+  test("uses a safe generic error for a non-Error load rejection", async () => {
+    mockGetAgentHandoff.mockRejectedValueOnce("storage rejected without an Error");
+
+    const { result } = renderHook(() =>
+      useAgentHandoff("handoff-non-error", "codex", "env-1", [])
+    );
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(result.current.error).toBe(
+      "The transferred conversation could not be loaded.",
+    );
+    expect(result.current.pendingHistory).toBeUndefined();
   });
 
   test("ignores a stale load after the requested handoff changes", async () => {
@@ -258,6 +356,88 @@ describe("useAgentHandoff", () => {
     expect(result.current.error).toBeNull();
   });
 
+  test("revalidates an identity change while the original load is in flight", async () => {
+    const pending = deferred<Record<string, unknown> | null>();
+    const snapshot = handoff("handoff-in-flight-identity");
+    mockGetAgentHandoff.mockImplementation(async () => pending.promise);
+
+    const { result, rerender } = renderHook(
+      ({ environmentId }: { environmentId: string }) =>
+        useAgentHandoff(snapshot.id, "codex", environmentId, []),
+      { initialProps: { environmentId: "env-1" } },
+    );
+
+    rerender({ environmentId: "env-2" });
+    expect(result.current).toMatchObject({
+      handoffId: snapshot.id,
+      handoff: null,
+      loading: true,
+      ready: false,
+      error: null,
+    });
+
+    await act(async () => pending.resolve(record(snapshot)));
+    await waitFor(() =>
+      expect(result.current.error).toBe(
+        "This transfer belongs to another environment.",
+      )
+    );
+    expect(result.current.handoff).toBeNull();
+  });
+
+  test("resets synchronously when the handoff is removed during an in-flight load", async () => {
+    const pending = deferred<Record<string, unknown> | null>();
+    const snapshot = handoff("handoff-reset-in-flight");
+    mockGetAgentHandoff.mockImplementationOnce(async () => pending.promise);
+
+    const { result, rerender } = renderHook(
+      ({ handoffId }: { handoffId?: string }) =>
+        useAgentHandoff(handoffId, "codex", "env-1", []),
+      {
+        initialProps: {
+          handoffId: snapshot.id,
+        } as { handoffId: string | undefined },
+      },
+    );
+    expect(result.current.ready).toBe(false);
+
+    rerender({ handoffId: undefined });
+    expect(result.current).toMatchObject({
+      handoffId: null,
+      handoff: null,
+      loading: false,
+      ready: true,
+      error: null,
+      pendingHistory: undefined,
+    });
+
+    await act(async () => pending.resolve(record(snapshot)));
+    expect(result.current).toMatchObject({
+      handoffId: null,
+      handoff: null,
+      loading: false,
+      ready: true,
+      error: null,
+      pendingHistory: undefined,
+    });
+  });
+
+  test("cancels an in-flight load when the consumer unmounts", async () => {
+    const pending = deferred<Record<string, unknown> | null>();
+    const snapshot = handoff("handoff-unmounted");
+    mockGetAgentHandoff.mockImplementationOnce(async () => pending.promise);
+
+    const { result, unmount } = renderHook(() =>
+      useAgentHandoff(snapshot.id, "codex", "env-1", [])
+    );
+    expect(result.current.ready).toBe(false);
+
+    unmount();
+    await act(async () => pending.resolve(record(snapshot)));
+
+    expect(mockGetAgentHandoff).toHaveBeenCalledTimes(1);
+  });
+
   test("closes readiness synchronously when provider or environment changes for the same id", async () => {
     const snapshot = handoff("handoff-revalidated");
     mockGetAgentHandoff.mockResolvedValue(record(snapshot));
@@ -286,14 +466,14 @@ describe("useAgentHandoff", () => {
 
     rerender({ destinationProvider: "opencode", environmentId: "env-1" });
     expect(result.current.ready).toBe(false);
-    expect(result.current.initialPrompt).toBeUndefined();
+    expect(result.current.pendingHistory).toBeUndefined();
     await waitFor(() =>
       expect(result.current.error).toBe("This transfer belongs to another agent.")
     );
 
     rerender({ destinationProvider: "codex", environmentId: "env-2" });
     expect(result.current.ready).toBe(false);
-    expect(result.current.initialPrompt).toBeUndefined();
+    expect(result.current.pendingHistory).toBeUndefined();
     await waitFor(() =>
       expect(result.current.error).toBe(
         "This transfer belongs to another environment.",

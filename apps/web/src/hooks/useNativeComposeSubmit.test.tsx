@@ -140,7 +140,9 @@ describe("useNativeComposeSubmit", () => {
       expect(onQueue).toHaveBeenCalledWith("serialized:hello", []);
       expect(setup.onSend).not.toHaveBeenCalled();
       expect(setup.draft.getDraftText()).toBe(" hello ");
-      expect(mockToastError).toHaveBeenCalledWith("Failed to queue prompt");
+      expect(mockToastError).toHaveBeenCalledWith("Failed to queue prompt", {
+        description: "queue unavailable",
+      });
       expect(consoleError).toHaveBeenCalledWith(
         "[TestComposeBar] Failed to queue prompt:",
         queueError,
@@ -172,11 +174,40 @@ describe("useNativeComposeSubmit", () => {
       expect(setup.draft.getDraftText()).toBe(" hello ");
       expect(setup.draft.getDraftMentions()).toEqual([MENTION]);
       expect(setup.draft.removedAttachmentIds).toEqual([]);
-      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt");
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt", {
+        description: "send unavailable",
+      });
       expect(consoleError).toHaveBeenCalledWith(
         "[TestComposeBar] Failed to send prompt:",
         sendError,
       );
+      expect(result.current.isSending).toBe(false);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("handles a non-Error rejection without inventing error detail", async () => {
+    const onSend = mock(async () => {
+      throw "transport closed";
+    });
+    const setup = makeOptions({ onSend });
+    const originalConsoleError = console.error;
+    console.error = mock(() => {}) as unknown as typeof console.error;
+
+    try {
+      const { result } = renderHook(() =>
+        useNativeComposeSubmit<Attachment>(setup.options),
+      );
+      await act(async () => {
+        await result.current.submit();
+      });
+
+      expect(setup.draft.getDraftText()).toBe(" hello ");
+      expect(setup.draft.getDraftMentions()).toEqual([MENTION]);
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt", {
+        description: undefined,
+      });
       expect(result.current.isSending).toBe(false);
     } finally {
       console.error = originalConsoleError;
@@ -334,7 +365,9 @@ describe("useNativeComposeSubmit", () => {
         await active.result.current.submitPrompt("Address all");
       });
       expect(onSend).toHaveBeenCalledWith("Address all", []);
-      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt");
+    expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt", {
+      description: "send unavailable",
+    });
       expect(consoleError).toHaveBeenCalledWith(
         "[TestComposeBar] Failed to send review follow-up:",
         promptError,

@@ -17,6 +17,7 @@ import {
 } from "@/stores/promptDraftStore";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
+import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useCodexStore, useConfigStore } from "@/stores";
 import {
@@ -589,9 +590,9 @@ export function CodexChatTab({
   const finishBackendStartupTracking = useCallback(() => {
     updateBackendStartupTracking(false);
   }, [updateBackendStartupTracking]);
-  const launchPrompt = backendOwnsStartupPrompt
-    ? handoff.initialPrompt
-    : initialPrompt ?? handoff.initialPrompt;
+  const launchPrompt = backendOwnsStartupPrompt || agentHandoffId
+    ? undefined
+    : initialPrompt;
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
       clearTabInitialPrompt(tabId, environmentId);
@@ -604,10 +605,9 @@ export function CodexChatTab({
     tabId,
   ]);
   /*
-   * Read through a ref inside the initialization effect. `launchPrompt` resolves
-   * a few milliseconds after mount for a handoff tab, so listing it as a
-   * dependency would tear down and restart an in-flight connect; `handoffPending`
-   * flips once and is the correct gate.
+   * Read ordinary launch prompts through a ref so they do not restart an
+   * in-flight connect. Handoff readiness is a separate gate: imported history
+   * never starts a turn by itself.
    */
   const handoffPending = !handoff.ready;
   const launchPromptRef = useRef<string | undefined>(undefined);
@@ -805,8 +805,21 @@ export function CodexChatTab({
     ): Promise<CodexDispatchResult> => {
       if (!client || !session?.sessionId) return "rejected";
 
+      if (
+        handoff.pendingHistory
+        && slashCommands.some(
+          (command) => command.name === text.trim().split(/\s+/)[0],
+        )
+      ) {
+        throw new Error(
+          "Slash commands cannot be the first message after a handoff. Send a regular message first, then run the slash command.",
+        );
+      }
+
+      const promptText = prependAgentHandoffHistory(handoff.pendingHistory, text);
+
       const fingerprint = JSON.stringify({
-        text,
+        text: promptText,
         attachments: attachments.map(({ path, previewUrl, name }) => ({
           path,
           previewUrl,
@@ -831,7 +844,7 @@ export function CodexChatTab({
       };
       const userMessage = createOptimisticNativeMessage(
         `${OPTIMISTIC_MESSAGE_PREFIX}${createUuid()}`,
-        text,
+        promptText,
         attachments,
       );
       addMessage(sessionKey, userMessage);
@@ -867,7 +880,7 @@ export function CodexChatTab({
       dispatchInFlightRef.current += 1;
       let rawSendOutcome: Awaited<ReturnType<typeof sendPrompt>>;
       try {
-        rawSendOutcome = await sendPrompt(client, session.sessionId, text, {
+        rawSendOutcome = await sendPrompt(client, session.sessionId, promptText, {
           attachments: promptAttachments.length > 0 ? promptAttachments : undefined,
           requestId,
         });
@@ -1029,6 +1042,8 @@ export function CodexChatTab({
       client,
       addMessage,
       environmentId,
+      handoff.pendingHistory,
+      slashCommands,
       refreshMessages,
       removeMessage,
       session?.sessionId,
@@ -2702,6 +2717,7 @@ export function CodexChatTab({
     shouldTrackCodexSession,
     setSessionError,
     setSessionLoading,
+    setMessages,
     setSessionPhase,
     setSessionTitle,
     upsertMessage,
@@ -2910,7 +2926,12 @@ export function CodexChatTab({
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}
           onSend={async (text, attachments) => {
-            await handleSend(text, attachments);
+            const outcome = await handleSend(text, attachments);
+            if (outcome === "rejected") {
+              throw new Error(
+                "Codex did not accept the prompt. Your draft was preserved so you can edit or retry it.",
+              );
+            }
           }}
           onQueue={handleQueue}
           onStop={handleStop}

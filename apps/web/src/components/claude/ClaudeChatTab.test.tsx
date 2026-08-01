@@ -478,6 +478,48 @@ function agentHandoffRecord(id: string, bootstrapPrompt: string) {
   };
 }
 
+function completeAgentHandoffRecord(id: string) {
+  const snapshot = createAgentHandoffSnapshot({
+    id,
+    environmentId: ENVIRONMENT_ID,
+    sourceProvider: "codex",
+    destinationProvider: "claude",
+    sourceSessionId: "source-codex-session",
+    messages: [{
+      id: "source-message",
+      role: "user",
+      content: "Continue the transferred task",
+      parts: [{ type: "text", content: "Continue the transferred task" }],
+      createdAt: "2026-07-27T12:00:00.000Z",
+    }],
+  });
+  return {
+    version: 1,
+    id,
+    environmentId: ENVIRONMENT_ID,
+    createdAt: snapshot.createdAt,
+    snapshot,
+  };
+}
+
+function getClaudePromptInput(): HTMLElement {
+  const input = document.querySelector<HTMLElement>(
+    '[data-placeholder="Ask Claude anything..."]',
+  );
+  if (!input) throw new Error("Expected the Claude prompt input");
+  return input;
+}
+
+async function submitClaudePrompt(text: string): Promise<void> {
+  const input = getClaudePromptInput();
+  input.textContent = text;
+  fireEvent.input(input);
+  await waitFor(() =>
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(false)
+  );
+  fireEvent.click(screen.getByTitle("Send message"));
+}
+
 function seedPaneLayout(
   sessionId?: string,
   initialPrompt?: string,
@@ -931,21 +973,272 @@ describe("ClaudeChatTab", () => {
     });
 
     await waitFor(() =>
+      expect(input?.getAttribute("contenteditable")).toBe("true")
+    );
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    input!.textContent = "Verify every finding before continuing";
+    fireEvent.input(input!);
+    await waitFor(() =>
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() =>
       expect(mockSendPrompt).toHaveBeenCalledWith(
         MOCK_CLIENT,
         "session-1",
-        expect.stringContaining(`"id": "${handoffId}"`),
+        expect.stringMatching(
+          new RegExp(`"id": "${handoffId}"[\\s\\S]*Verify every finding`),
+        ),
         expect.any(Object),
       ),
     );
   });
 
-  test("stores the handoff bootstrap before the SSE subscription can overwrite it", async () => {
+  test("removes a rejected handoff prompt and retries with the retained draft and history", async () => {
+    const handoffId = "claude-rejected-handoff";
+    const originalError = console.error;
+    console.error = mock(() => {}) as unknown as typeof console.error;
+    mockGetAgentHandoff.mockResolvedValue(completeAgentHandoffRecord(handoffId));
+    mockSendPrompt
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    try {
+      render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive
+          agentHandoffId={handoffId}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(getClaudePromptInput().getAttribute("contenteditable")).toBe("true")
+      );
+      await submitClaudePrompt("Retry this transferred task");
+
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+      await waitFor(() => {
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([]);
+        expect(getClaudePromptInput().textContent).toBe("Retry this transferred task");
+        expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(false);
+        expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt", {
+          description: "Claude rejected the prompt. Please try again.",
+        });
+      });
+
+      fireEvent.click(screen.getByTitle("Send message"));
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+      expect(mockSendPrompt.mock.calls[1]?.[2]).toEqual(expect.stringMatching(
+        new RegExp(`"id": "${handoffId}"[\\s\\S]*Retry this transferred task`),
+      ));
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("removes a thrown handoff prompt and retries with the retained draft and history", async () => {
+    const handoffId = "claude-thrown-handoff";
+    const sendError = new Error("bridge unavailable");
+    const originalError = console.error;
+    console.error = mock(() => {}) as unknown as typeof console.error;
+    mockGetAgentHandoff.mockResolvedValue(completeAgentHandoffRecord(handoffId));
+    mockSendPrompt
+      .mockRejectedValueOnce(sendError)
+      .mockResolvedValueOnce(true);
+
+    try {
+      render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive
+          agentHandoffId={handoffId}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(getClaudePromptInput().getAttribute("contenteditable")).toBe("true")
+      );
+      await submitClaudePrompt("Resume after transport failure");
+
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+      await waitFor(() => {
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([]);
+        expect(getClaudePromptInput().textContent).toBe("Resume after transport failure");
+        expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(false);
+      });
+
+      fireEvent.click(screen.getByTitle("Send message"));
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+      expect(mockSendPrompt.mock.calls[1]?.[2]).toEqual(expect.stringMatching(
+        new RegExp(`"id": "${handoffId}"[\\s\\S]*Resume after transport failure`),
+      ));
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("refuses a first handoff slash command without consuming its history", async () => {
+    const handoffId = "claude-slash-handoff";
+    mockGetAgentHandoff.mockResolvedValue(completeAgentHandoffRecord(handoffId));
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(getClaudePromptInput().getAttribute("contenteditable")).toBe("true")
+    );
+    await submitClaudePrompt("/compact");
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt", {
+        description:
+          "Send a normal message to import the transferred history before running /compact.",
+      });
+    });
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+    expect(getClaudePromptInput().textContent).toBe("/compact");
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([]);
+
+    getClaudePromptInput().textContent = "Import the context first";
+    fireEvent.input(getClaudePromptInput());
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
+  });
+
+  test("keeps a handoff carrier hidden across optimistic and authoritative state", async () => {
+    const handoffId = "claude-authoritative-handoff";
+    const firstPrompt = "Use the attached design reference";
+    const secondPrompt = "Now summarize the implementation";
+    mockGetAgentHandoff.mockResolvedValue(completeAgentHandoffRecord(handoffId));
+    useClaudeStore.getState().addAttachment(SESSION_KEY, {
+      id: "handoff-attachment",
+      type: "image",
+      path: "/workspace/reference.png",
+      previewUrl: "data:image/png;base64,reference",
+      name: "reference.png",
+    });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(getClaudePromptInput().getAttribute("contenteditable")).toBe("true")
+    );
+    await submitClaudePrompt(firstPrompt);
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+
+    const transportedPrompt = mockSendPrompt.mock.calls[0]?.[2];
+    expect(transportedPrompt).toEqual(expect.stringMatching(
+      new RegExp(`"id": "${handoffId}"[\\s\\S]*${firstPrompt}`),
+    ));
+    expect(mockSendPrompt.mock.calls[0]?.[3]).toEqual(expect.objectContaining({
+      attachments: [{
+        type: "image",
+        path: "/workspace/reference.png",
+        dataUrl: "data:image/png;base64,reference",
+        filename: "reference.png",
+      }],
+    }));
+    expect(
+      useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages[0]?.content,
+    ).toBe(transportedPrompt);
+    await waitFor(() => {
+      expect(lastVirtualizedMessages.filter(
+        (message) => message.content === firstPrompt,
+      )).toHaveLength(1);
+      expect(lastVirtualizedMessages.some(
+        (message) => message.content.includes("orkestrator-handoff"),
+      )).toBe(false);
+    });
+    await waitFor(() => {
+      expect(getClaudePromptInput().textContent).toBe("");
+      expect(useClaudeStore.getState().getAttachments(SESSION_KEY)).toEqual([]);
+    });
+
+    act(() => {
+      useClaudeStore.getState().setSession(SESSION_KEY, {
+        sessionId: "session-1",
+        isLoading: false,
+        messages: [{
+          id: "authoritative-first-prompt",
+          role: "user",
+          content: transportedPrompt!,
+          parts: [{ type: "text", content: transportedPrompt! }],
+          timestamp: "2026-07-27T12:01:00.000Z",
+        }],
+      });
+    });
+
+    await waitFor(() => {
+      expect(lastVirtualizedMessages.filter(
+        (message) => message.content === firstPrompt,
+      )).toHaveLength(1);
+      expect(lastVirtualizedMessages.some(
+        (message) => message.content.includes("orkestrator-handoff"),
+      )).toBe(false);
+    });
+
+    await submitClaudePrompt(secondPrompt);
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+    expect(mockSendPrompt.mock.calls[1]?.[2]).toBe(secondPrompt);
+    expect(mockSendPrompt.mock.calls[1]?.[3]).toEqual(expect.objectContaining({
+      attachments: undefined,
+    }));
+  });
+
+  test("includes handoff history with an attachment-only first send", async () => {
+    const handoffId = "claude-attachment-only-handoff";
+    mockGetAgentHandoff.mockResolvedValue(completeAgentHandoffRecord(handoffId));
+    useClaudeStore.getState().addAttachment(SESSION_KEY, {
+      id: "attachment-only",
+      type: "image",
+      path: "/workspace/only.png",
+      previewUrl: "data:image/png;base64,only",
+      name: "only.png",
+    });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
+    expect((
+      mockSendPrompt.mock.calls[0]?.[3] as { attachments?: unknown[] } | undefined
+    )?.attachments).toHaveLength(1);
+  });
+
+  test("subscribes with inert imported history before the first user prompt", async () => {
     /*
-     * Initialization adds the first prompt to the store and only then subscribes,
-     * so an inbound event cannot wipe the locally added message before it syncs.
-     * Reading the prompt from a stale closure made that branch unreachable for
-     * handoff tabs and pushed every bootstrap onto the post-SSE path instead.
+     * The imported rows come from the durable snapshot, not the provider
+     * transcript. Starting SSE must therefore see an empty destination session,
+     * and must not manufacture the old bootstrap user message just to preserve
+     * those rows.
      */
     const handoffId = "claude-ordered-handoff";
     useClaudeStore.setState({ clients: new Map(), sessions: new Map() });
@@ -983,11 +1276,10 @@ describe("ClaudeChatTab", () => {
       await pending.promise;
     });
 
-    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalled());
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
     expect(messagesWhenSubscribed).not.toBeNull();
-    expect(messagesWhenSubscribed!.some((content) => content.includes(handoffId)))
-      .toBe(true);
-    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    expect(messagesWhenSubscribed as unknown as string[]).toEqual([]);
+    expect(mockSendPrompt).not.toHaveBeenCalled();
   });
 
   test("initializes once when the handoff resolves mid-mount", async () => {
@@ -1059,6 +1351,9 @@ describe("ClaudeChatTab", () => {
             content: "Failed to send message. Please try again.",
           }),
         ]));
+        expect(session?.messages.some(
+          (message) => message.content === "Run the initial Claude task",
+        )).toBe(true);
       });
       expect(
         usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.initialPrompt,
@@ -4418,6 +4713,9 @@ describe("ClaudeChatTab", () => {
           }),
         );
         expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+          (message) => message.content === "Implement the requested screen",
+        )).toBe(false);
       });
       expect(consoleWarn).toHaveBeenCalledWith(
         "[ClaudeChatTab] Failed to rename environment from prompt:",

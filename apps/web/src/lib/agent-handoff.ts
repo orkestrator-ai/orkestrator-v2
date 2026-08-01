@@ -2,6 +2,7 @@ import type {
   NativeMessage,
   NativeMessagePart,
 } from "@/lib/chat/native-message-types";
+import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
 import * as backend from "@/lib/backend";
 
 export const AGENT_HANDOFF_VERSION = 1;
@@ -30,6 +31,9 @@ const HANDOFF_FOLLOW_UP =
   "Briefly acknowledge the handoff, state the next concrete action implied by "
   + "the transcript, and continue unfinished work when it is safe to do so. "
   + "Ask the user if the transcript does not establish a safe next action.";
+const HANDOFF_CURRENT_USER_MESSAGE =
+  "The handoff above is prior conversation history. Respond to the user's new "
+  + "message below as the latest message in that continued conversation:";
 
 export type AgentProvider = "claude" | "codex" | "opencode";
 
@@ -165,9 +169,7 @@ function isNativeMessagePart(value: unknown): value is NativeMessagePart {
     return isNativeMessagePart(value.task)
       && value.task.type === "tool-invocation"
       && Array.isArray(value.childTools)
-      && value.childTools.every(
-        (part) => isNativeMessagePart(part) && part.type === "tool-invocation",
-      );
+      && value.childTools.every(isNativeMessagePart);
   }
   return value.subagentActions === undefined
     || (
@@ -182,12 +184,34 @@ function isNativeMessage(value: unknown): value is NativeMessage {
     typeof value.id !== "string"
     || (value.role !== "user" && value.role !== "assistant" && value.role !== "system")
     || typeof value.content !== "string"
-    || typeof value.createdAt !== "string"
+    || !isValidTimestamp(value.createdAt)
     || !Array.isArray(value.parts)
   ) {
     return false;
   }
   return value.parts.every(isNativeMessagePart);
+}
+
+function normalizeNativeMessages(
+  value: unknown[],
+  fallbackCreatedAt: string,
+): NativeMessage[] | null {
+  try {
+    const normalized = value.map((message) => {
+      if (!isRecord(message)) return message;
+      return typeof message.createdAt === "string" && !isValidTimestamp(message.createdAt)
+        ? { ...message, createdAt: fallbackCreatedAt }
+        : message;
+    });
+    return normalized.every(isNativeMessage)
+      ? normalized as NativeMessage[]
+      : null;
+  } catch {
+    // A malformed persisted object can contain a cycle in `parts` or
+    // `subagentActions`. Validation is a trust boundary and must return null,
+    // not overflow the stack and reject the caller's load promise.
+    return null;
+  }
 }
 
 export function parseAgentHandoffSnapshot(value: unknown): AgentHandoffSnapshot | null {
@@ -205,12 +229,16 @@ export function parseAgentHandoffSnapshot(value: unknown): AgentHandoffSnapshot 
     || (value.sourceModel !== undefined && typeof value.sourceModel !== "string")
     || (value.sourceAgent !== undefined && typeof value.sourceAgent !== "string")
     || !Array.isArray(value.messages)
-    || !value.messages.every(isNativeMessage)
     || typeof value.bootstrapPrompt !== "string"
     || !isRecord(value.stats)
   ) {
     return null;
   }
+  const normalizedMessages = normalizeNativeMessages(
+    value.messages,
+    value.createdAt as string,
+  );
+  if (!normalizedMessages) return null;
   const stats = value.stats;
   if (
     !Number.isInteger(stats.messageCount)
@@ -246,7 +274,7 @@ export function parseAgentHandoffSnapshot(value: unknown): AgentHandoffSnapshot 
       sourceTitle: value.sourceTitle as string | undefined,
       sourceModel: value.sourceModel as string | undefined,
       sourceAgent: value.sourceAgent as string | undefined,
-      messages: value.messages as NativeMessage[],
+      messages: normalizedMessages,
       now: value.createdAt as string,
     });
   } catch {
@@ -304,9 +332,12 @@ function consumeKnownFollowUp(content: string, offset: number): number {
   const remaining = content.slice(offset);
   const match = remaining.match(/^\s*/);
   const followUpStart = offset + (match?.[0].length ?? 0);
-  return content.startsWith(HANDOFF_FOLLOW_UP, followUpStart)
-    ? followUpStart + HANDOFF_FOLLOW_UP.length
-    : offset;
+  for (const suffix of [HANDOFF_FOLLOW_UP, HANDOFF_CURRENT_USER_MESSAGE]) {
+    if (content.startsWith(suffix, followUpStart)) {
+      return followUpStart + suffix.length;
+    }
+  }
+  return offset;
 }
 
 function findStructuralCarrierClose(content: string, from: number): number {
@@ -333,7 +364,7 @@ function parseTranscriptRecord(
     || (value.role !== "user" && value.role !== "assistant" && value.role !== "system")
     || typeof value.body !== "string"
     || typeof value.sourceId !== "string"
-    || !isValidTimestamp(value.createdAt)
+    || typeof value.createdAt !== "string"
   ) {
     return null;
   }
@@ -342,7 +373,9 @@ function parseTranscriptRecord(
     role: value.role,
     content: value.body,
     parts: [{ type: "text", content: value.body }],
-    createdAt: value.createdAt || fallbackCreatedAt,
+    createdAt: isValidTimestamp(value.createdAt)
+      ? value.createdAt
+      : fallbackCreatedAt,
   };
 }
 
@@ -354,7 +387,11 @@ function parseJsonHandoffCarrier(
   const opening = `<orkestrator-handoff format="${HANDOFF_JSON_FORMAT}">`;
   const start = content.indexOf(opening, from);
   if (start < 0) return null;
-  const closeStart = findStructuralCarrierClose(content, start + opening.length);
+  // JSON carrier strings escape `<` and `>`, so the first literal close after
+  // the opening is unambiguously structural. Using the legacy last-close
+  // fallback here swallowed adjacent inert carriers once the automatic
+  // follow-up instruction was removed.
+  const closeStart = content.indexOf(HANDOFF_CLOSE, start + opening.length);
   if (closeStart < 0) return null;
   const carrier = content.slice(start, closeStart + HANDOFF_CLOSE.length);
 
@@ -575,22 +612,30 @@ function stripCarrierFromMessage(
 /**
  * Removes the bootstrap carrier from the destination transcript.
  *
- * Stripping is bound to the *first* provider message, not to the handoff id
- * alone. The id is serialized into the prompt the destination model reads, so
- * an id-only rule lets a prompt-injected model wrap its own output in a forged
- * carrier and have that span deleted from both the visible transcript and the
- * next transfer. Only message 0 can legitimately hold the carrier: the bootstrap
- * prompt is dispatched exactly once, and only into an empty transcript.
+ * Stripping is bound to the first provider-backed message, while allowing local
+ * error/system rows to precede an optimistic retry. The id is serialized into
+ * the prompt the destination model reads, so scanning beyond the first
+ * authoritative row would let a prompt-injected model forge a later carrier and
+ * have it deleted from both the visible transcript and the next transfer.
  */
 function stripAgentHandoffBootstrap(
   handoffIds: ReadonlySet<string>,
   providerMessages: NativeMessage[],
 ): NativeMessage[] {
-  const first = providerMessages[0];
-  if (!first || handoffIds.size === 0) return providerMessages;
-  const stripped = stripCarrierFromMessage(first, handoffIds);
-  if (!stripped.matched) return providerMessages;
-  return [...stripped.residual, ...providerMessages.slice(1)];
+  if (providerMessages.length === 0 || handoffIds.size === 0) return providerMessages;
+  for (let index = 0; index < providerMessages.length; index += 1) {
+    const message = providerMessages[index]!;
+    const stripped = stripCarrierFromMessage(message, handoffIds);
+    if (stripped.matched) {
+      return [
+        ...providerMessages.slice(0, index),
+        ...stripped.residual,
+        ...providerMessages.slice(index + 1),
+      ];
+    }
+    if (!isClientOnlyNativeMessage(message)) return providerMessages;
+  }
+  return providerMessages;
 }
 
 function childParts(part: NativeMessagePart): NativeMessagePart[] {
@@ -695,7 +740,11 @@ function renderMessage(
     role: message.role,
     sourceId: message.id,
     createdAt: message.createdAt,
-    body: truncate(body.trim(), 20_000),
+    // Keep conversational text intact. The record selector below is the one
+    // context-compaction boundary for the complete carrier; applying a second,
+    // fixed per-message cap here silently cut long reviews in half even when
+    // the destination context still had ample room for the whole message.
+    body: body.trim(),
   };
 }
 
@@ -770,34 +819,78 @@ function formatOmissionNotice(omitted: number): string {
  */
 function boundSnapshotMessages(
   messages: NativeMessage[],
+  fallbackCreatedAt: string,
 ): { messages: NativeMessage[]; dropped: number } {
   if (messages.length === 0) return { messages, dropped: 0 };
-  let used = 0;
-  let start = messages.length - 1;
+  // Account for the surrounding array and one comma between retained records,
+  // matching the payload that persistence will actually serialize.
+  let used = 2;
+  let dropped = 0;
+  const retainedNewestFirst: NativeMessage[] = [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    let cost: number;
+    let serialized: string;
+    let persistable: NativeMessage;
     try {
-      cost = JSON.stringify(messages[index]).length;
+      const ancestors: object[] = [];
+      serialized = JSON.stringify(messages[index], function (_key, value: unknown) {
+        if (
+          typeof value === "bigint"
+          || typeof value === "function"
+          || typeof value === "symbol"
+        ) {
+          return "[unserializable]";
+        }
+        if (typeof value === "object" && value !== null) {
+          while (
+            ancestors.length > 0
+            && ancestors.at(-1) !== this
+          ) {
+            ancestors.pop();
+          }
+          if (ancestors.includes(value)) return "[unserializable]";
+          ancestors.push(value);
+        }
+        return value;
+      });
+      persistable = JSON.parse(serialized) as NativeMessage;
+      if (
+        typeof persistable.createdAt === "string"
+        && !isValidTimestamp(persistable.createdAt)
+      ) {
+        persistable.createdAt = fallbackCreatedAt;
+        serialized = JSON.stringify(persistable);
+      }
+      if (!isNativeMessage(persistable)) throw new Error("invalid serialized message");
     } catch {
-      // An unserializable message cannot be persisted at all; treat it as the
-      // oldest retainable boundary rather than letting the save fail later.
+      // Malformed recursive message structure cannot be represented by the
+      // persisted snapshot. Drop only that record and continue retaining valid
+      // history around it; opaque values inside otherwise-valid data are
+      // replaced above with a visible sentinel.
+      dropped += 1;
+      continue;
+    }
+    if (
+      retainedNewestFirst.length > 0
+      && used + 1 + serialized.length > AGENT_HANDOFF_SNAPSHOT_BUDGET
+    ) {
+      dropped += index + 1;
       break;
     }
-    if (index < messages.length - 1 && used + cost > AGENT_HANDOFF_SNAPSHOT_BUDGET) {
-      break;
-    }
-    used += cost;
-    start = index;
+    used += (retainedNewestFirst.length > 0 ? 1 : 0) + serialized.length;
+    retainedNewestFirst.push(persistable);
   }
-  if (start === 0) return { messages, dropped: 0 };
-  return { messages: messages.slice(start), dropped: start };
+  const retained = retainedNewestFirst.reverse();
+  if (messages.length > 0 && retained.length === 0) {
+    throw new Error("This conversation has no transferable history");
+  }
+  return { messages: retained, dropped };
 }
 
 export function createAgentHandoffSnapshot(
   options: CreateAgentHandoffOptions,
 ): AgentHandoffSnapshot {
   const createdAt = options.now ?? new Date().toISOString();
-  const bounded = boundSnapshotMessages(options.messages);
+  const bounded = boundSnapshotMessages(options.messages, createdAt);
   const retainedMessages = bounded.messages;
   const sourceLabel = AGENT_PROVIDER_LABELS[options.sourceProvider];
   const destinationLabel = AGENT_PROVIDER_LABELS[options.destinationProvider];
@@ -830,9 +923,7 @@ ${HANDOFF_TRANSCRIPT_OPEN}
   const transcriptFooter = `
 ${HANDOFF_TRANSCRIPT_CLOSE}`;
   const carrierFooter = `
-${HANDOFF_CLOSE}
-
-${HANDOFF_FOLLOW_UP}`;
+${HANDOFF_CLOSE}`;
   // The notice is emitted *after* the transcript frame, so its worst-case length
   // has to come out of the budget before selection runs. Leaving it uncounted
   // spends budget the frame does not have.
@@ -874,6 +965,28 @@ ${HANDOFF_FOLLOW_UP}`;
   };
 }
 
+/**
+ * Places imported history before the first real destination prompt.
+ *
+ * Creating a handoff must not itself start an agent turn. The destination tab
+ * renders the snapshot immediately, then calls this helper only when the user
+ * submits their next message. The fixed separator is consumed by the carrier
+ * stripper along with the carrier, leaving only `userPrompt` as the visible
+ * destination message.
+ */
+export function prependAgentHandoffHistory(
+  bootstrapPrompt: string | undefined,
+  userPrompt: string,
+): string {
+  if (
+    !bootstrapPrompt?.trim()
+    || userPrompt.startsWith(bootstrapPrompt)
+  ) {
+    return userPrompt;
+  }
+  return `${bootstrapPrompt}\n\n${HANDOFF_CURRENT_USER_MESSAGE}\n\n${userPrompt}`;
+}
+
 export function isAgentHandoffBootstrapMessage(
   message: Pick<NativeMessage, "content" | "parts">,
   handoffId: string,
@@ -886,29 +999,123 @@ export function isAgentHandoffBootstrapMessage(
 }
 
 /**
- * Cheap change signature for a normalized transcript.
+ * Streaming change signature for a normalized transcript.
  *
  * Used to bracket an authoritative read when a provider exposes no revision
- * counter. It compares the same things a deep equality check would notice —
- * message identity, ordering, and the size of every part — without the two full
- * `JSON.stringify` passes over a transcript that can be tens of megabytes.
+ * counter. Every enumerable value contributes to the digest, including nested
+ * parts. Short strings are hashed completely; large strings contribute their
+ * length plus head, tail, and evenly spaced samples. That preserves practical
+ * same-length replacement detection without synchronously walking tens of
+ * megabytes of transcript text on the renderer's main thread.
  */
 export function agentHandoffTranscriptDigest(messages: NativeMessage[]): string {
-  const parts: string[] = [`${messages.length}`];
-  for (const message of messages) {
-    parts.push(
-      `${message.id}${message.role}${message.content.length}`
-      + `${message.parts.length}`,
-    );
-    for (const part of message.parts) {
-      parts.push(
-        `${part.type}${part.content.length}${part.toolState ?? ""}`
-        + `${part.toolOutput?.length ?? 0}${part.toolError?.length ?? 0}`
-        + `${part.toolDiff?.diff?.length ?? 0}`,
-      );
+  let hashA = 0x811c9dc5;
+  let hashB = 0x9e3779b9;
+  let visitedValueCount = 0;
+  const seen = new WeakMap<object, number>();
+  let nextObjectId = 0;
+
+  const update = (value: string) => {
+    // Length framing prevents a different split of adjacent strings from
+    // producing the same byte stream (for example, ["ab", "c"] vs ["a", "bc"]).
+    const hashCode = (code: number) => {
+      hashA = Math.imul(hashA ^ code, 0x01000193) >>> 0;
+      hashB = Math.imul(hashB ^ code, 0x85ebca6b) >>> 0;
+      hashB = ((hashB << 13) | (hashB >>> 19)) >>> 0;
+    };
+    const framed = `${value.length}:`;
+    for (let index = 0; index < framed.length; index += 1) {
+      hashCode(framed.charCodeAt(index));
     }
-  }
-  return parts.join(" ");
+    const completeHashLimit = 4_096;
+    if (value.length <= completeHashLimit) {
+      for (let index = 0; index < value.length; index += 1) {
+        hashCode(value.charCodeAt(index));
+      }
+      return;
+    }
+    const edgeCharacters = 256;
+    const strideSamples = 512;
+    for (let index = 0; index < edgeCharacters; index += 1) {
+      hashCode(value.charCodeAt(index));
+    }
+    for (let sample = 1; sample <= strideSamples; sample += 1) {
+      const index = Math.floor((sample * (value.length - 1)) / (strideSamples + 1));
+      hashCode(value.charCodeAt(index));
+    }
+    for (let index = value.length - edgeCharacters; index < value.length; index += 1) {
+      hashCode(value.charCodeAt(index));
+    }
+  };
+
+  const visit = (value: unknown): void => {
+    visitedValueCount += 1;
+    if (value === null) {
+      update("null");
+      return;
+    }
+    switch (typeof value) {
+      case "undefined":
+        update("undefined");
+        return;
+      case "string":
+        update("string");
+        update(value);
+        return;
+      case "number":
+        update("number");
+        update(Object.is(value, -0) ? "-0" : String(value));
+        return;
+      case "boolean":
+        update(value ? "true" : "false");
+        return;
+      case "bigint":
+        update("bigint");
+        update(String(value));
+        return;
+      case "symbol":
+        update("symbol");
+        update(String(value));
+        return;
+      case "function":
+        update("function");
+        update(value.name);
+        return;
+      case "object":
+        break;
+    }
+
+    const object = value as object;
+    const priorId = seen.get(object);
+    if (priorId !== undefined) {
+      update("reference");
+      update(String(priorId));
+      return;
+    }
+    const objectId = nextObjectId;
+    nextObjectId += 1;
+    seen.set(object, objectId);
+
+    if (Array.isArray(value)) {
+      update("array");
+      update(String(value.length));
+      for (const item of value) visit(item);
+      return;
+    }
+
+    update("object");
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    update(String(keys.length));
+    for (const key of keys) {
+      update(key);
+      visit(record[key]);
+    }
+  };
+
+  visit(messages);
+  return `${visitedValueCount}:${hashA.toString(16).padStart(8, "0")}`
+    + `:${hashB.toString(16).padStart(8, "0")}`;
 }
 
 function prefixImportedMessage(

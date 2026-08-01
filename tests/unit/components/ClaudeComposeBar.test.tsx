@@ -716,7 +716,9 @@ describe("ClaudeComposeBar", () => {
 
     fireEvent.click(addressAll);
     await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt");
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt", {
+        description: "review bridge unavailable",
+      });
       expect(addressAll.hasAttribute("disabled")).toBe(false);
     });
 

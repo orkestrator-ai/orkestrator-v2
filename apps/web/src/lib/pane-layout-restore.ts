@@ -1,6 +1,7 @@
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import {
   isGitFileStatus,
+  LEGACY_PANE_LAYOUT_VERSION,
   MAX_SPLIT_DEPTH,
   PANE_LAYOUT_VERSION,
   type PaneLeaf,
@@ -212,7 +213,10 @@ export function reconcilePersistedLayout(
 ): EnvironmentPaneState | null {
   if (
     !saved
-    || saved.version !== PANE_LAYOUT_VERSION
+    || (
+      saved.version !== PANE_LAYOUT_VERSION
+      && saved.version !== LEGACY_PANE_LAYOUT_VERSION
+    )
     || saved.environmentId !== context.environmentId
     || saved.containerId !== context.containerId
   ) {
@@ -355,8 +359,47 @@ function preserveRendererLocalTabFields(
 }
 
 /**
- * Installs a backend-owned pane/tab snapshot without adopting another
- * renderer's active pane or active tab.
+ * Keeps connection details that only exist in this renderer while accepting
+ * pane and tab selection from the backend snapshot.
+ */
+export function preserveRendererLocalPaneFields(
+  authoritative: EnvironmentPaneState,
+  current: EnvironmentPaneState,
+): EnvironmentPaneState {
+  const currentTabs = new Map<string, TabInfo>();
+  const collectCurrentTabs = (node: PaneNode): void => {
+    if (node.kind === "leaf") {
+      for (const tab of node.tabs) currentTabs.set(tab.id, tab);
+      return;
+    }
+    node.children.forEach(collectCurrentTabs);
+  };
+  collectCurrentTabs(current.root);
+
+  const preserveTabFields = (node: PaneNode): PaneNode => {
+    if (node.kind === "leaf") {
+      return {
+        ...node,
+        tabs: node.tabs.map((tab) =>
+          preserveRendererLocalTabFields(tab, currentTabs.get(tab.id))
+        ),
+      };
+    }
+    return {
+      ...node,
+      children: [
+        preserveTabFields(node.children[0]),
+        preserveTabFields(node.children[1]),
+      ],
+    };
+  };
+
+  return { ...authoritative, root: preserveTabFields(authoritative.root) };
+}
+
+/**
+ * Installs a legacy v1 backend snapshot without adopting its canonical focus
+ * placeholders. Kept only for the bounded v1 migration/refresh window.
  */
 export function preserveClientPaneSelection(
   authoritative: EnvironmentPaneState,

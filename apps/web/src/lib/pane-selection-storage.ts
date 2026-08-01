@@ -1,15 +1,12 @@
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
-import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneNode } from "@/types/paneLayout";
 
 /**
- * Renderer-local storage for which pane and tab this client has focused.
+ * Legacy renderer-local storage for which pane and tab this client focused.
  *
- * Selection is deliberately canonicalised out of the shared backend record:
- * clicking a tab must not write a revision, and must not move another client's
- * focus. That leaves nothing to restore it from after a restart, which is what
- * this module supplies — the same durability as before, without putting
- * selection back on the wire.
+ * Selection is now backend-owned as part of the pane-layout snapshot. These
+ * helpers remain only to read/apply v1 records during migration and clean them
+ * up afterward; current clients never update this storage.
  *
  * Everything here is best-effort. A browser that denies storage, a quota
  * failure, or a corrupt record costs the user their remembered selection and
@@ -112,18 +109,6 @@ function forEachLeaf(node: PaneNode, visit: (leaf: PaneNode) => void): void {
   forEachLeaf(node.children[1], visit);
 }
 
-export function paneSelectionOf(
-  state: EnvironmentPaneState,
-): StoredPaneSelection {
-  const activeTabIds: Record<string, string> = {};
-  forEachLeaf(state.root, (leaf) => {
-    if (leaf.kind === "leaf" && leaf.activeTabId) {
-      activeTabIds[leaf.id] = leaf.activeTabId;
-    }
-  });
-  return { activePaneId: state.activePaneId, activeTabIds };
-}
-
 export function readStoredPaneSelection(
   environmentId: string,
 ): StoredPaneSelection | null {
@@ -132,17 +117,6 @@ export function readStoredPaneSelection(
   );
   if (!entry) return null;
   return { activePaneId: entry.activePaneId, activeTabIds: entry.activeTabIds };
-}
-
-export function writeStoredPaneSelection(
-  environmentId: string,
-  selection: StoredPaneSelection,
-): void {
-  const entries = readEntries().filter(
-    (candidate) => candidate.environmentId !== environmentId,
-  );
-  entries.push({ environmentId, ...selection });
-  writeEntries(entries);
 }
 
 export function clearStoredPaneSelection(environmentId: string): void {
@@ -195,47 +169,4 @@ export function applyStoredPaneSelection(
       ? stored.activePaneId
       : state.activePaneId,
   };
-}
-
-/**
- * Mirrors selection into local storage as the user moves around.
- *
- * Only selection is compared, so this writes on a tab click but not on the
- * structural changes the backend record already covers.
- */
-export function startPaneSelectionPersistence(): () => void {
-  const lastWritten = new Map<string, string>();
-
-  const capture = (
-    environmentId: string,
-    state: EnvironmentPaneState,
-  ): void => {
-    const selection = paneSelectionOf(state);
-    const serialized = JSON.stringify(selection);
-    if (lastWritten.get(environmentId) === serialized) return;
-    lastWritten.set(environmentId, serialized);
-    writeStoredPaneSelection(environmentId, selection);
-  };
-
-  const initial = usePaneLayoutStore.getState();
-  for (const [environmentId, environment] of initial.environments) {
-    if (initial.hydration.get(environmentId) !== "done") continue;
-    lastWritten.set(
-      environmentId,
-      JSON.stringify(paneSelectionOf(environment)),
-    );
-  }
-
-  return usePaneLayoutStore.subscribe((state, previous) => {
-    for (const [environmentId, environment] of state.environments) {
-      if (state.hydration.get(environmentId) !== "done") continue;
-      if (environment === previous.environments.get(environmentId)) continue;
-      capture(environmentId, environment);
-    }
-    for (const environmentId of previous.environments.keys()) {
-      if (!state.environments.has(environmentId)) {
-        lastWritten.delete(environmentId);
-      }
-    }
-  });
 }

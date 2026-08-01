@@ -11,6 +11,25 @@
  */
 export const PANE_LAYOUT_REVISION_CONFLICT_MARKER = "Pane layout revision conflict:";
 
+/**
+ * Shared wire-format versions. Keeping these beside the CAS contract prevents
+ * the renderer and backend from accepting different pane-layout schemas.
+ */
+export const LEGACY_PANE_LAYOUT_VERSION = 1;
+export const PANE_LAYOUT_VERSION = 2;
+
+export const PANE_LAYOUT_UNSUPPORTED_VERSION_MARKER =
+  "Unsupported pane layout version:";
+
+export function paneLayoutUnsupportedVersionMessage(version: number): string {
+  return `${PANE_LAYOUT_UNSUPPORTED_VERSION_MARKER} ${version}`;
+}
+
+export function isPaneLayoutUnsupportedVersion(error: unknown): boolean {
+  return error instanceof Error
+    && error.message.includes(PANE_LAYOUT_UNSUPPORTED_VERSION_MARKER);
+}
+
 export function paneLayoutRevisionConflictMessage(
   expectedRevision: number,
   currentRevision: number,

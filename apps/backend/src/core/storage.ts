@@ -3203,7 +3203,10 @@ export class StorageService {
         revision: currentRevision + 1,
       };
       layouts[environmentId] = saved;
-      await this.saveJson(this.paneLayoutsFile(), layouts);
+      // Selection changes make this a high-churn record. Keep one current
+      // recovery snapshot without rotating five near-identical historical
+      // backups for every focus change.
+      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
       this.announce("pane-layout", environmentId);
       return saved;
     });

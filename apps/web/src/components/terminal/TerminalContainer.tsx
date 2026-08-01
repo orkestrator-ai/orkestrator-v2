@@ -37,8 +37,12 @@ import {
 } from "@/lib/initial-prompt-attachments";
 import { resolveClaudeConfig } from "@/lib/claude-mode-resolver";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
-import { applyStoredPaneSelection } from "@/lib/pane-selection-storage";
 import { createPersistedPaneLayoutInput, flushPaneLayoutNow } from "@/lib/pane-layout-persistence";
+import {
+  applyStoredPaneSelection,
+  clearStoredPaneSelection,
+  readStoredPaneSelection,
+} from "@/lib/pane-selection-storage";
 import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
@@ -51,6 +55,8 @@ import {
   parseDraggableTabId,
   parseEdgeDroppableId,
   isGitFileStatus,
+  LEGACY_PANE_LAYOUT_VERSION,
+  PANE_LAYOUT_VERSION,
   type EdgeDirection,
   type PaneLeaf,
   type PaneNode,
@@ -960,6 +966,9 @@ export function TerminalContainer({
         // allowed to materialize it.
         setPendingNativeLaunch(environmentId, {
           ...pendingNativeLaunch,
+          containerId: isLocalEnvironment ? null : containerId,
+          environmentId,
+          targetPaneId: currentEnvState.activePaneId,
           agentType: backendLaunch.agent,
           launchMode: "native",
           providerSessionId: backendLaunch.providerSessionId,
@@ -1192,7 +1201,8 @@ export function TerminalContainer({
             const latestContainerId = latestIsLocal
               ? null
               : latestEnvironment.containerId;
-            const restored = reconcilePersistedLayout(layoutResult.value, {
+            const persisted = layoutResult.value;
+            const restoredSnapshot = reconcilePersistedLayout(persisted, {
               environmentId,
               containerId: latestContainerId,
               isLocal: latestIsLocal,
@@ -1202,15 +1212,48 @@ export function TerminalContainer({
               hasLoopedReview: (workflowId) =>
                 useLoopedReviewStore.getState().workflows.has(workflowId),
             });
-            // The shared record carries a canonical selection so a tab click
-            // never writes a revision. Re-apply this client's own remembered
-            // pane/tab here, which is the only place a cold start can.
-            paneStore.finishHydration(
-              environmentId,
-              restored
-                ? applyStoredPaneSelection(restored, environmentId)
-                : undefined,
-            );
+            const restored =
+              restoredSnapshot && persisted?.version === LEGACY_PANE_LAYOUT_VERSION
+                ? applyStoredPaneSelection(
+                    restoredSnapshot,
+                    environmentId,
+                    readStoredPaneSelection(environmentId),
+                  )
+                : restoredSnapshot;
+            paneStore.finishHydration(environmentId, restored ?? undefined);
+
+            // A successful migration may have been performed by this renderer
+            // on an earlier launch or by another client. Once v2 is observed,
+            // the renderer-local v1 selection can no longer be useful.
+            if (persisted?.version === PANE_LAYOUT_VERSION) {
+              clearStoredPaneSelection(environmentId);
+            }
+
+            if (restored && persisted?.version === LEGACY_PANE_LAYOUT_VERSION) {
+              // V1 stored canonical focus pointers and relied on renderer-local
+              // storage for the user's actual selection. Install that selection
+              // once, then upgrade the complete reconciled layout through the
+              // normal per-environment CAS chain. The local record is retained
+              // until the v2 write is durable so a transient failure can retry
+              // on the next launch. Updated backends reject v1 writes, keeping a
+              // still-running older renderer from downgrading the record again.
+              const migrated = usePaneLayoutStore
+                .getState()
+                .environments.get(environmentId);
+              if (migrated) {
+                void flushPaneLayoutNow(
+                  environmentId,
+                  createPersistedPaneLayoutInput(migrated),
+                )
+                  .then(() => clearStoredPaneSelection(environmentId))
+                  .catch((error) => {
+                    console.warn(
+                      "[TerminalContainer] Failed to migrate legacy pane selection:",
+                      error,
+                    );
+                  });
+              }
+            }
           });
         return;
       }
@@ -1308,6 +1351,14 @@ export function TerminalContainer({
       }
 
       initialize(containerId, environmentId);
+      // A restored/shared build-only layout can use a non-default pane id.
+      // Seed the ordinary/setup tab into the pane that actually survived
+      // hydration; targeting the literal "default" would be a no-op and make
+      // this effect initialize forever because build tabs are excluded from
+      // `seededTabs` above.
+      const initialPaneId = usePaneLayoutStore
+        .getState()
+        .environments.get(environmentId)?.activePaneId ?? "default";
 
       // Determine initial tab type based on agent options
       let initialTabType: TerminalTabType = "plain";
@@ -1347,7 +1398,7 @@ export function TerminalContainer({
             containerId: isLocalEnvironment ? null : containerId,
             environmentId,
             initialPrompt: pendingInitialPrompt,
-            targetPaneId: "default",
+            targetPaneId: initialPaneId,
             agentType: initialTabType,
             launchMode: useNativeOpenCode || useNativeClaude || useNativeCodex ? "native" : "terminal",
             claudeNativeBackend: useNativeClaude ? claudeNativeBackend : undefined,
@@ -1361,7 +1412,7 @@ export function TerminalContainer({
           type: "plain",
           isSetupTab: true,
         };
-        addTab("default", setupTab, environmentId);
+        addTab(initialPaneId, setupTab, environmentId);
         return;
       }
 
@@ -1397,7 +1448,7 @@ export function TerminalContainer({
             initialCommands: setupCommands,
             isSetupTab: true,
           };
-          addTab("default", setupTab, environmentId);
+          addTab(initialPaneId, setupTab, environmentId);
 
           // Then create agent tab (which becomes active)
           if (useNativeClaude) {
@@ -1410,7 +1461,7 @@ export function TerminalContainer({
               initialAgentModel,
               initialReasoningEffort,
             });
-            addTab("default", agentTab, environmentId);
+            addTab(initialPaneId, agentTab, environmentId);
           } else if (useNativeCodex) {
             const agentTab: TabInfo = {
               id: initialTabId,
@@ -1420,7 +1471,7 @@ export function TerminalContainer({
               initialAgentModel,
               initialReasoningEffort,
             };
-            addTab("default", agentTab, environmentId);
+            addTab(initialPaneId, agentTab, environmentId);
           } else if (useNativeOpenCode) {
             const agentTab: TabInfo = {
               id: initialTabId,
@@ -1430,7 +1481,7 @@ export function TerminalContainer({
               initialAgentModel,
               initialReasoningEffort,
             };
-            addTab("default", agentTab, environmentId);
+            addTab(initialPaneId, agentTab, environmentId);
           } else {
             // Terminal mode agent (claude or opencode)
             const agentTab: TabInfo = {
@@ -1440,7 +1491,7 @@ export function TerminalContainer({
               initialAgentModel,
               initialReasoningEffort,
             };
-            addTab("default", agentTab, environmentId);
+            addTab(initialPaneId, agentTab, environmentId);
           }
         } else if (hasSetupCommands && !launchAgent) {
           // Local + Claude OFF + setup commands: single terminal with setup commands
@@ -1452,7 +1503,7 @@ export function TerminalContainer({
             initialCommands: setupCommands,
             isSetupTab: true,
           };
-          addTab("default", initialTab, environmentId);
+          addTab(initialPaneId, initialTab, environmentId);
         } else if (useNativeOpenCode || useNativeClaude || useNativeCodex) {
           // Local + native mode + no setup commands: directly create native tab.
           // No setup to run means setup is trivially "complete" for this env.
@@ -1474,7 +1525,7 @@ export function TerminalContainer({
               initialAgentModel,
               initialReasoningEffort,
             });
-            addTab("default", initialTab, environmentId);
+            addTab(initialPaneId, initialTab, environmentId);
           } else if (useNativeCodex) {
             const initialTab: TabInfo = {
               id: initialTabId,
@@ -1484,7 +1535,7 @@ export function TerminalContainer({
               initialAgentModel,
               initialReasoningEffort,
             };
-            addTab("default", initialTab, environmentId);
+            addTab(initialPaneId, initialTab, environmentId);
           } else {
             const initialTab: TabInfo = {
               id: initialTabId,
@@ -1494,7 +1545,7 @@ export function TerminalContainer({
               initialAgentModel,
               initialReasoningEffort,
             };
-            addTab("default", initialTab, environmentId);
+            addTab(initialPaneId, initialTab, environmentId);
           }
         } else {
           // Local + terminal mode + no setup commands: create terminal tab.
@@ -1510,7 +1561,7 @@ export function TerminalContainer({
             initialAgentModel,
             initialReasoningEffort,
           };
-          addTab("default", initialTab, environmentId);
+          addTab(initialPaneId, initialTab, environmentId);
         }
       } else if (!hasSetupCommands && environment?.setupScriptsComplete) {
         setWorkspaceReady(environmentId, true);
@@ -1525,7 +1576,7 @@ export function TerminalContainer({
             initialAgentModel,
             initialReasoningEffort,
           });
-          addTab("default", initialTab, environmentId);
+          addTab(initialPaneId, initialTab, environmentId);
         } else if (useNativeCodex) {
           const initialTab: TabInfo = {
             id: initialTabId,
@@ -1535,7 +1586,7 @@ export function TerminalContainer({
             initialAgentModel,
             initialReasoningEffort,
           };
-          addTab("default", initialTab, environmentId);
+          addTab(initialPaneId, initialTab, environmentId);
         } else if (useNativeOpenCode) {
           const initialTab: TabInfo = {
             id: initialTabId,
@@ -1545,7 +1596,7 @@ export function TerminalContainer({
             initialAgentModel,
             initialReasoningEffort,
           };
-          addTab("default", initialTab, environmentId);
+          addTab(initialPaneId, initialTab, environmentId);
         } else {
           const initialTab: TabInfo = {
             id: initialTabId,
@@ -1554,7 +1605,7 @@ export function TerminalContainer({
             initialAgentModel,
             initialReasoningEffort,
           };
-          addTab("default", initialTab, environmentId);
+          addTab(initialPaneId, initialTab, environmentId);
         }
       } else if (!hasSetupCommands && rerunSetupFetchFailedRef.current) {
         setSetupScriptsRunning(environmentId, false);
@@ -1563,7 +1614,7 @@ export function TerminalContainer({
           type: "plain",
           initialPrompt: pendingInitialPrompt,
         };
-        addTab("default", initialTab, environmentId);
+        addTab(initialPaneId, initialTab, environmentId);
       } else if (useNativeOpenCode || useNativeClaude || useNativeCodex) {
         // Container + native mode: start with plain terminal for setup scripts
         setWorkspaceReady(environmentId, false);
@@ -1572,7 +1623,7 @@ export function TerminalContainer({
           containerId,
           environmentId,
           initialPrompt: pendingInitialPrompt,
-          targetPaneId: "default",
+          targetPaneId: initialPaneId,
           agentType: useNativeClaude ? "claude" : useNativeCodex ? "codex" : "opencode",
           launchMode: "native",
           claudeNativeBackend: useNativeClaude ? claudeNativeBackend : undefined,
@@ -1591,7 +1642,7 @@ export function TerminalContainer({
           initialCommands: setupCommands ?? [],
           isSetupTab: true,
         };
-        addTab("default", initialTab, environmentId);
+        addTab(initialPaneId, initialTab, environmentId);
       } else {
         // Container + terminal mode: run workspace setup before opening an agent tab.
         setWorkspaceReady(environmentId, false);
@@ -1602,7 +1653,7 @@ export function TerminalContainer({
             containerId,
             environmentId,
             initialPrompt: pendingInitialPrompt,
-            targetPaneId: "default",
+            targetPaneId: initialPaneId,
             agentType: initialTabType,
             launchMode: "terminal",
             model: initialAgentModel,
@@ -1615,7 +1666,7 @@ export function TerminalContainer({
           initialCommands: setupCommands ?? [],
           isSetupTab: true,
         };
-        addTab("default", initialTab, environmentId);
+        addTab(initialPaneId, initialTab, environmentId);
       }
     }
   }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupCommandsResolved, setupScriptsRunning, environment?.setupScriptsComplete, claudeOptions, initialize, addTab, environmentId, currentEnvState, hydrationStatus, beginHydration, finishHydration, opencodeMode, claudeMode, claudeNativeBackend, codexMode, setWorkspaceReady, consumePendingSetupCommands, setSetupScriptsRunning, setPendingNativeLaunch, setOptions, worktreePath, startInactiveBackendSetup, hasBoundSetupSession, bindBackendSetupSession, setupSessionBindNonce]);
@@ -1681,6 +1732,24 @@ export function TerminalContainer({
         );
 
         const newTabId = STARTUP_AGENT_TAB_ID;
+        const paneStore = usePaneLayoutStore.getState();
+        const livePaneState = paneStore.environments.get(environmentId);
+        const targetPaneId =
+          (paneStore.getPane(pending.targetPaneId, environmentId)
+            ? pending.targetPaneId
+            : livePaneState
+              && paneStore.getPane(livePaneState.activePaneId, environmentId)
+              ? livePaneState.activePaneId
+              : livePaneState
+                ? getAllLeaves(livePaneState.root)[0]?.id
+                : undefined);
+        if (!targetPaneId) {
+          console.warn(
+            "[TerminalContainer] Deferred native launch because no pane is available:",
+            environmentId,
+          );
+          return;
+        }
         if (launchMode === "terminal") {
           const newTab: TabInfo = {
             id: newTabId,
@@ -1689,7 +1758,7 @@ export function TerminalContainer({
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
           };
-          addTab(pending.targetPaneId, newTab, environmentId);
+          addTab(targetPaneId, newTab, environmentId);
         } else if (isClaudeNative) {
           const backend = pending.claudeNativeBackend ?? claudeNativeBackend;
           const newTab = createClaudeNativeLikeTab({
@@ -1703,7 +1772,7 @@ export function TerminalContainer({
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
           });
-          addTab(pending.targetPaneId, newTab, environmentId);
+          addTab(targetPaneId, newTab, environmentId);
         } else if (isCodexNative) {
           const newTab: TabInfo = {
             id: newTabId,
@@ -1718,7 +1787,7 @@ export function TerminalContainer({
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
           };
-          addTab(pending.targetPaneId, newTab, environmentId);
+          addTab(targetPaneId, newTab, environmentId);
         } else {
           // Create OpenCode native tab
           const newTab: TabInfo = {
@@ -1734,7 +1803,7 @@ export function TerminalContainer({
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
           };
-          addTab(pending.targetPaneId, newTab, environmentId);
+          addTab(targetPaneId, newTab, environmentId);
         }
 
         // Clear the pending launch

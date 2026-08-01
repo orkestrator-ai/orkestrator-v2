@@ -185,12 +185,23 @@ function isNativeMessage(value: unknown): value is NativeMessage {
     typeof value.id !== "string"
     || (value.role !== "user" && value.role !== "assistant" && value.role !== "system")
     || typeof value.content !== "string"
-    || typeof value.createdAt !== "string"
+    || !isValidTimestamp(value.createdAt)
     || !Array.isArray(value.parts)
   ) {
     return false;
   }
   return value.parts.every(isNativeMessagePart);
+}
+
+function hasValidNativeMessages(value: unknown[]): value is NativeMessage[] {
+  try {
+    return value.every(isNativeMessage);
+  } catch {
+    // A malformed persisted object can contain a cycle in `parts` or
+    // `subagentActions`. Validation is a trust boundary and must return false,
+    // not overflow the stack and reject the caller's load promise.
+    return false;
+  }
 }
 
 export function parseAgentHandoffSnapshot(value: unknown): AgentHandoffSnapshot | null {
@@ -208,7 +219,7 @@ export function parseAgentHandoffSnapshot(value: unknown): AgentHandoffSnapshot 
     || (value.sourceModel !== undefined && typeof value.sourceModel !== "string")
     || (value.sourceAgent !== undefined && typeof value.sourceAgent !== "string")
     || !Array.isArray(value.messages)
-    || !value.messages.every(isNativeMessage)
+    || !hasValidNativeMessages(value.messages)
     || typeof value.bootstrapPrompt !== "string"
     || !isRecord(value.stats)
   ) {
@@ -786,25 +797,51 @@ function boundSnapshotMessages(
   messages: NativeMessage[],
 ): { messages: NativeMessage[]; dropped: number } {
   if (messages.length === 0) return { messages, dropped: 0 };
-  let used = 0;
-  let start = messages.length - 1;
+  // Account for the surrounding array and one comma between retained records,
+  // matching the payload that persistence will actually serialize.
+  let used = 2;
+  let dropped = 0;
+  const retainedNewestFirst: NativeMessage[] = [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    let cost: number;
+    let serialized: string;
+    let persistable: NativeMessage;
     try {
-      cost = JSON.stringify(messages[index]).length;
+      const seen = new WeakSet<object>();
+      serialized = JSON.stringify(messages[index], (_key, value: unknown) => {
+        if (
+          typeof value === "bigint"
+          || typeof value === "function"
+          || typeof value === "symbol"
+        ) {
+          return "[unserializable]";
+        }
+        if (typeof value === "object" && value !== null) {
+          if (seen.has(value)) return "[unserializable]";
+          seen.add(value);
+        }
+        return value;
+      });
+      persistable = JSON.parse(serialized) as NativeMessage;
+      if (!isNativeMessage(persistable)) throw new Error("invalid serialized message");
     } catch {
-      // An unserializable message cannot be persisted at all; treat it as the
-      // oldest retainable boundary rather than letting the save fail later.
+      // Malformed recursive message structure cannot be represented by the
+      // persisted snapshot. Drop only that record and continue retaining valid
+      // history around it; opaque values inside otherwise-valid data are
+      // replaced above with a visible sentinel.
+      dropped += 1;
+      continue;
+    }
+    if (
+      retainedNewestFirst.length > 0
+      && used + 1 + serialized.length > AGENT_HANDOFF_SNAPSHOT_BUDGET
+    ) {
+      dropped += index + 1;
       break;
     }
-    if (index < messages.length - 1 && used + cost > AGENT_HANDOFF_SNAPSHOT_BUDGET) {
-      break;
-    }
-    used += cost;
-    start = index;
+    used += (retainedNewestFirst.length > 0 ? 1 : 0) + serialized.length;
+    retainedNewestFirst.push(persistable);
   }
-  if (start === 0) return { messages, dropped: 0 };
-  return { messages: messages.slice(start), dropped: start };
+  return { messages: retainedNewestFirst.reverse(), dropped };
 }
 
 export function createAgentHandoffSnapshot(
@@ -899,7 +936,13 @@ export function prependAgentHandoffHistory(
   bootstrapPrompt: string | undefined,
   userPrompt: string,
 ): string {
-  if (!bootstrapPrompt) return userPrompt;
+  if (
+    !bootstrapPrompt?.trim()
+    || !userPrompt.trim()
+    || userPrompt.startsWith(bootstrapPrompt)
+  ) {
+    return userPrompt;
+  }
   return `${bootstrapPrompt}\n\n${HANDOFF_CURRENT_USER_MESSAGE}\n\n${userPrompt}`;
 }
 
@@ -915,29 +958,103 @@ export function isAgentHandoffBootstrapMessage(
 }
 
 /**
- * Cheap change signature for a normalized transcript.
+ * Streaming change signature for a normalized transcript.
  *
  * Used to bracket an authoritative read when a provider exposes no revision
- * counter. It compares the same things a deep equality check would notice —
- * message identity, ordering, and the size of every part — without the two full
- * `JSON.stringify` passes over a transcript that can be tens of megabytes.
+ * counter. Every enumerable value contributes to the digest, including nested
+ * parts and same-length streaming replacements. Values are fed into two
+ * independent 32-bit hashes as they are visited, avoiding a second transcript-
+ * sized serialized string on the renderer's main thread.
  */
 export function agentHandoffTranscriptDigest(messages: NativeMessage[]): string {
-  const parts: string[] = [`${messages.length}`];
-  for (const message of messages) {
-    parts.push(
-      `${message.id}${message.role}${message.content.length}`
-      + `${message.parts.length}`,
-    );
-    for (const part of message.parts) {
-      parts.push(
-        `${part.type}${part.content.length}${part.toolState ?? ""}`
-        + `${part.toolOutput?.length ?? 0}${part.toolError?.length ?? 0}`
-        + `${part.toolDiff?.diff?.length ?? 0}`,
-      );
+  let hashA = 0x811c9dc5;
+  let hashB = 0x9e3779b9;
+  let visitedValueCount = 0;
+  const seen = new WeakMap<object, number>();
+  let nextObjectId = 0;
+
+  const update = (value: string) => {
+    // Length framing prevents a different split of adjacent strings from
+    // producing the same byte stream (for example, ["ab", "c"] vs ["a", "bc"]).
+    const framed = `${value.length}:`;
+    for (const segment of [framed, value]) {
+      for (let index = 0; index < segment.length; index += 1) {
+        const code = segment.charCodeAt(index);
+        hashA = Math.imul(hashA ^ code, 0x01000193) >>> 0;
+        hashB = Math.imul(hashB ^ code, 0x85ebca6b) >>> 0;
+        hashB = ((hashB << 13) | (hashB >>> 19)) >>> 0;
+      }
     }
-  }
-  return parts.join(" ");
+  };
+
+  const visit = (value: unknown): void => {
+    visitedValueCount += 1;
+    if (value === null) {
+      update("null");
+      return;
+    }
+    switch (typeof value) {
+      case "undefined":
+        update("undefined");
+        return;
+      case "string":
+        update("string");
+        update(value);
+        return;
+      case "number":
+        update("number");
+        update(Object.is(value, -0) ? "-0" : String(value));
+        return;
+      case "boolean":
+        update(value ? "true" : "false");
+        return;
+      case "bigint":
+        update("bigint");
+        update(String(value));
+        return;
+      case "symbol":
+        update("symbol");
+        update(String(value));
+        return;
+      case "function":
+        update("function");
+        update(value.name);
+        return;
+      case "object":
+        break;
+    }
+
+    const object = value as object;
+    const priorId = seen.get(object);
+    if (priorId !== undefined) {
+      update("reference");
+      update(String(priorId));
+      return;
+    }
+    const objectId = nextObjectId;
+    nextObjectId += 1;
+    seen.set(object, objectId);
+
+    if (Array.isArray(value)) {
+      update("array");
+      update(String(value.length));
+      for (const item of value) visit(item);
+      return;
+    }
+
+    update("object");
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    update(String(keys.length));
+    for (const key of keys) {
+      update(key);
+      visit(record[key]);
+    }
+  };
+
+  visit(messages);
+  return `${visitedValueCount}:${hashA.toString(16).padStart(8, "0")}`
+    + `:${hashB.toString(16).padStart(8, "0")}`;
 }
 
 function prefixImportedMessage(

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   buildAgentHandoffImportedMessages,
+  isAgentHandoffBootstrapMessage,
   loadAgentHandoff,
   stripAgentHandoffCarriers,
   type AgentHandoffSnapshot,
   type AgentProvider,
 } from "@/lib/agent-handoff";
+import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 interface AgentHandoffState {
@@ -187,7 +189,23 @@ export function useAgentHandoff(
       providerMessages,
     ],
   );
-  const destinationTranscriptStarted = providerMessages.length > 0;
+  const destinationTranscriptStarted = providerMessages.some((message) => {
+    /*
+     * Optimistic sends and locally generated error/system rows are retained in
+     * provider stores, but none proves that the provider accepted the handoff.
+     * Keep the history pending so a definite rejection can be retried. A
+     * structurally valid carrier is the exception: once that transport appears
+     * in the transcript it represents the dispatched handoff even if it still
+     * has an optimistic id while waiting for its authoritative echo.
+     */
+    if (
+      currentState.handoff
+      && isAgentHandoffBootstrapMessage(message, currentState.handoff.id)
+    ) {
+      return true;
+    }
+    return !isClientOnlyNativeMessage(message);
+  });
 
   return {
     handoffId: currentState.handoffId,

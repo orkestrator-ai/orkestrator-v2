@@ -140,7 +140,9 @@ describe("useNativeComposeSubmit", () => {
       expect(onQueue).toHaveBeenCalledWith("serialized:hello", []);
       expect(setup.onSend).not.toHaveBeenCalled();
       expect(setup.draft.getDraftText()).toBe(" hello ");
-      expect(mockToastError).toHaveBeenCalledWith("Failed to queue prompt");
+      expect(mockToastError).toHaveBeenCalledWith("Failed to queue prompt", {
+        description: "queue unavailable",
+      });
       expect(consoleError).toHaveBeenCalledWith(
         "[TestComposeBar] Failed to queue prompt:",
         queueError,
@@ -172,7 +174,9 @@ describe("useNativeComposeSubmit", () => {
       expect(setup.draft.getDraftText()).toBe(" hello ");
       expect(setup.draft.getDraftMentions()).toEqual([MENTION]);
       expect(setup.draft.removedAttachmentIds).toEqual([]);
-      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt");
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt", {
+        description: "send unavailable",
+      });
       expect(consoleError).toHaveBeenCalledWith(
         "[TestComposeBar] Failed to send prompt:",
         sendError,
@@ -334,7 +338,9 @@ describe("useNativeComposeSubmit", () => {
         await active.result.current.submitPrompt("Address all");
       });
       expect(onSend).toHaveBeenCalledWith("Address all", []);
-      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt");
+    expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt", {
+      description: "send unavailable",
+    });
       expect(consoleError).toHaveBeenCalledWith(
         "[TestComposeBar] Failed to send review follow-up:",
         promptError,

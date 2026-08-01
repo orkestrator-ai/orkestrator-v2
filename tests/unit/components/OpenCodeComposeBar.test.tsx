@@ -789,7 +789,9 @@ describe("OpenCodeComposeBar", () => {
       await gate.promise.catch(() => {});
     });
     await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt");
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt", {
+        description: "review bridge unavailable",
+      });
       expect(screen.getByRole("button", { name: "Address all" }).hasAttribute("disabled")).toBe(false);
     });
 

@@ -2218,8 +2218,12 @@ export function ClaudeChatTab({
       const userMessage = {
         id: createUuid(),
         role: "user" as const,
-        content: text,
-        parts: [{ type: "text" as const, content: text }],
+        // Keep the optimistic row byte-for-byte aligned with the provider
+        // payload. The handoff display layer strips the known carrier while it
+        // is pending, and an authoritative transcript can then replace the row
+        // without briefly exposing the serialized history.
+        content: promptText,
+        parts: [{ type: "text" as const, content: promptText }],
         timestamp: new Date().toISOString(),
       };
       addMessage(sessionKey, userMessage);
@@ -2266,24 +2270,35 @@ export function ClaudeChatTab({
         .getModels(environmentId)
         .find((m) => m.id === selectedModel)?.supportsFastMode !== false;
 
-      const success = await sendPrompt(client, session.sessionId, promptText, {
-        model: selectedModel,
-        attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
-        effort,
-        permissionMode,
-        fastMode: fastModeEnabled && modelSupportsFastMode,
-        agent: useClaudeStore.getState().getSelectedAgent(sessionKey),
-        includeLocalSettings: useClaudeStore
-          .getState()
-          .includesLocalSettings(sessionKey),
-        promptSuggestions:
-          useClaudeStore.getState().promptSuggestionOptIn.get(sessionKey) === true,
-        requestId,
-      });
+      let success: Awaited<ReturnType<typeof sendPrompt>>;
+      try {
+        success = await sendPrompt(client, session.sessionId, promptText, {
+          model: selectedModel,
+          attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
+          effort,
+          permissionMode,
+          fastMode: fastModeEnabled && modelSupportsFastMode,
+          agent: useClaudeStore.getState().getSelectedAgent(sessionKey),
+          includeLocalSettings: useClaudeStore
+            .getState()
+            .includesLocalSettings(sessionKey),
+          promptSuggestions:
+            useClaudeStore.getState().promptSuggestionOptIn.get(sessionKey) === true,
+          requestId,
+        });
+      } catch (error) {
+        // A thrown request never produced an accepted dispatch. Remove the
+        // optimistic carrier so useAgentHandoff exposes the pending history to
+        // the retry instead of treating this client-only row as a transcript.
+        removeMessage(sessionKey, userMessage.id);
+        setSessionLoading(sessionKey, false);
+        throw error;
+      }
 
       const accepted = shouldReconcileClaudePrompt(success);
       if (!accepted) {
         console.error("[ClaudeChatTab] Failed to send prompt");
+        removeMessage(sessionKey, userMessage.id);
         setSessionLoading(sessionKey, false);
         return "rejected" as const;
       }
@@ -2830,7 +2845,14 @@ export function ClaudeChatTab({
           containerId={containerId}
           models={models}
           onSend={async (...args) => {
-            await handleSend(...args);
+            const outcome = await handleSend(...args);
+            if (outcome === "rejected") {
+              // Direct compose submissions must reject their promise so the
+              // shared submit controller retains the draft and attachments for
+              // a retry. Queue dispatchers consume the raw outcome from
+              // handleSendRef and keep their existing claim semantics.
+              throw new Error("Claude rejected the prompt. Please try again.");
+            }
           }}
           disabled={!handoff.ready || !client || !session}
           isLoading={session?.isLoading ?? false}

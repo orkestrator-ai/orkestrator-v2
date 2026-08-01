@@ -24,6 +24,7 @@ import {
   OPTIMISTIC_MESSAGE_PREFIX,
   TURN_STOPPED_BY_USER,
   createOptimisticNativeMessage,
+  isClientOnlyNativeMessage,
 } from "@/lib/chat/client-only-messages";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
@@ -803,6 +804,15 @@ export function CodexChatTab({
     ): Promise<CodexDispatchResult> => {
       if (!client || !session?.sessionId) return "rejected";
 
+      if (
+        handoff.pendingHistory
+        && /^\/\S+[^\r\n]*$/.test(text.trim())
+      ) {
+        throw new Error(
+          "Slash commands cannot be the first message after a handoff. Send a regular message first, then run the slash command.",
+        );
+      }
+
       const promptText = prependAgentHandoffHistory(handoff.pendingHistory, text);
 
       const fingerprint = JSON.stringify({
@@ -831,7 +841,7 @@ export function CodexChatTab({
       };
       const userMessage = createOptimisticNativeMessage(
         `${OPTIMISTIC_MESSAGE_PREFIX}${createUuid()}`,
-        text,
+        promptText,
         attachments,
       );
       addMessage(sessionKey, userMessage);
@@ -2484,7 +2494,31 @@ export function CodexChatTab({
             if (event.type === "message.updated") {
               const message = event.data?.message as CodexMessage | undefined;
               if (message?.id) {
-                upsertMessage(sessionKey, message);
+                if (message.role === "user") {
+                  // A user echo is authoritative acknowledgement of an
+                  // optimistic send. Rebuild the authoritative slice and pass
+                  // it through setMessages so content/attachment fingerprinting
+                  // can retire the matching optimistic bubble immediately.
+                  const currentMessages = useCodexStore
+                    .getState()
+                    .sessions.get(sessionKey)?.messages ?? [];
+                  const authoritativeMessages = currentMessages.filter(
+                    (candidate) => !isClientOnlyNativeMessage(candidate),
+                  );
+                  const existingIndex = authoritativeMessages.findIndex(
+                    (candidate) => candidate.id === message.id,
+                  );
+                  setMessages(
+                    sessionKey,
+                    existingIndex < 0
+                      ? [...authoritativeMessages, message]
+                      : authoritativeMessages.map((candidate, index) =>
+                        index === existingIndex ? message : candidate
+                      ),
+                  );
+                } else {
+                  upsertMessage(sessionKey, message);
+                }
               } else {
                 await refreshMessages(client, session.sessionId);
               }
@@ -2670,6 +2704,7 @@ export function CodexChatTab({
     shouldTrackCodexSession,
     setSessionError,
     setSessionLoading,
+    setMessages,
     setSessionPhase,
     setSessionTitle,
     upsertMessage,
@@ -2878,7 +2913,12 @@ export function CodexChatTab({
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}
           onSend={async (text, attachments) => {
-            await handleSend(text, attachments);
+            const outcome = await handleSend(text, attachments);
+            if (outcome === "rejected") {
+              throw new Error(
+                "Codex did not accept the prompt. Your draft was preserved so you can edit or retry it.",
+              );
+            }
           }}
           onQueue={handleQueue}
           onStop={handleStop}

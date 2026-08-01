@@ -125,7 +125,9 @@ export function useNativeComposeSubmit<TAttachment extends { id: string }>({
         `[${agentLabel}ComposeBar] Failed to ${isQueueing ? "queue" : "send"} prompt:`,
         error,
       );
-      toast.error(isQueueing ? "Failed to queue prompt" : "Failed to send prompt");
+      toast.error(isQueueing ? "Failed to queue prompt" : "Failed to send prompt", {
+        description: error instanceof Error ? error.message : undefined,
+      });
     } finally {
       setIsSending(false);
     }
@@ -158,7 +160,9 @@ export function useNativeComposeSubmit<TAttachment extends { id: string }>({
           `[${agentLabel}ComposeBar] Failed to send review follow-up:`,
           error,
         );
-        toast.error("Failed to send prompt");
+        toast.error("Failed to send prompt", {
+          description: error instanceof Error ? error.message : undefined,
+        });
       } finally {
         setIsSending(false);
       }

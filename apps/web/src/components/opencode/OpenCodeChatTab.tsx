@@ -2214,6 +2214,28 @@ export function OpenCodeChatTab({
     ) => {
       if (!client || !session) return;
 
+      const trimmedText = text.trim();
+      const commandName = trimmedText.split(/\s+/)[0];
+      const recognizedNativeCommand = commandName
+        && slashCommands.some((command) => command.name === commandName)
+        ? {
+            name: commandName,
+            /*
+             * Sliced from the original text rather than rebuilt from the split
+             * tokens: `split(/\s+/).join(" ")` collapsed every newline, tab and
+             * run of spaces, so a command invoked with a pasted diff or a
+             * multi-line spec reached the server as one flattened line.
+             */
+            arguments:
+              trimmedText.slice(commandName.length).trimStart() || undefined,
+          }
+        : undefined;
+      if (handoff.pendingHistory && recognizedNativeCommand) {
+        throw new Error(
+          `Send a normal message to import the transferred history before running ${commandName}.`,
+        );
+      }
+
       const promptText = prependAgentHandoffHistory(handoff.pendingHistory, text);
 
       const hasModelOverride = options
@@ -2239,7 +2261,7 @@ export function OpenCodeChatTab({
       // Add user message optimistically
       const userMessage = createOptimisticNativeMessage(
         `${OPTIMISTIC_MESSAGE_PREFIX}${createUuid()}`,
-        text,
+        promptText,
         attachments,
       );
       addMessage(sessionKey, userMessage);
@@ -2277,33 +2299,26 @@ export function OpenCodeChatTab({
       }));
 
       // Send prompt
-      const trimmedText = text.trim();
-      const commandName = trimmedText.split(/\s+/)[0];
-      const nativeCommand = !handoff.pendingHistory
-        && commandName
-        && slashCommands.some((command) => command.name === commandName)
-        ? {
-            name: commandName,
-            /*
-             * Sliced from the original text rather than rebuilt from the split
-             * tokens: `split(/\s+/).join(" ")` collapsed every newline, tab and
-             * run of spaces, so a command invoked with a pasted diff or a
-             * multi-line spec reached the server as one flattened line.
-             */
-            arguments:
-              trimmedText.slice(commandName.length).trimStart() || undefined,
-          }
-        : undefined;
-      const sendResult = await sendPrompt(client, session.sessionId, promptText, {
-        model: selectedModel,
-        variant: selectedVariant,
-        mode: selectedMode,
-        agent: selectedAgent,
-        directory: slashCommandDirectory,
-        command: nativeCommand,
-        attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
-        requestId: options?.requestId,
-      });
+      let sendResult: SendPromptResult;
+      try {
+        sendResult = await sendPrompt(client, session.sessionId, promptText, {
+          model: selectedModel,
+          variant: selectedVariant,
+          mode: selectedMode,
+          agent: selectedAgent,
+          directory: slashCommandDirectory,
+          command: recognizedNativeCommand,
+          attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
+          requestId: options?.requestId,
+        });
+      } catch (error) {
+        // The client normally converts provider errors into `success: false`,
+        // but keep the renderer state recoverable if a mock, transport wrapper,
+        // or future SDK version rejects instead.
+        removeMessage(sessionKey, userMessage.id);
+        setSessionLoading(sessionKey, false);
+        throw error;
+      }
 
       if (!sendResult.success) {
         console.error("[OpenCodeChatTab] Failed to send prompt");
@@ -2773,7 +2788,10 @@ export function OpenCodeChatTab({
           slashCommands={slashCommands}
           favoriteModelIds={favoriteModelIds}
           onSend={async (text, attachments) => {
-            await handleSend(text, attachments);
+            const result = await handleSend(text, attachments);
+            if (result && !result.success) {
+              throw new Error(result.error || "Failed to send prompt");
+            }
           }}
           disabled={!handoff.ready || !client || !session}
           isLoading={session?.isLoading ?? false}

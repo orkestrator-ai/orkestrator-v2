@@ -346,6 +346,7 @@ let composeAttachments: Array<{
   previewUrl?: string;
   name: string;
 }> = [];
+let lastComposeSendError: unknown;
 
 mock.module("./OpenCodeComposeBar", () => ({
   OpenCodeComposeBar: ({
@@ -382,7 +383,10 @@ mock.module("./OpenCodeComposeBar", () => ({
         data-testid="opencode-send"
         disabled={disabled}
         onClick={() => {
-          void onSend(composeText, composeAttachments);
+          lastComposeSendError = undefined;
+          void onSend(composeText, composeAttachments).catch((error) => {
+            lastComposeSendError = error;
+          });
         }}
       >
         Send
@@ -592,6 +596,7 @@ function agentHandoffRecord(id: string, bootstrapPrompt: string) {
 function seedPaneLayout(
   sessionId?: string,
   launchOptions?: { initialAgentModel?: string; initialReasoningEffort?: string },
+  agentHandoffId?: string,
 ) {
   usePaneLayoutStore.setState({
     environments: new Map([
@@ -608,6 +613,7 @@ function seedPaneLayout(
                 openCodeNativeData: createData({ sessionId }),
                 initialAgentModel: launchOptions?.initialAgentModel,
                 initialReasoningEffort: launchOptions?.initialReasoningEffort,
+                agentHandoffId,
               },
             ],
             activeTabId: TAB_ID,
@@ -839,6 +845,7 @@ describe("OpenCodeChatTab", () => {
     });
     composeText = "Rename the environment";
     composeAttachments = [];
+    lastComposeSendError = undefined;
     mockRenameEnvironmentFromPrompt.mockClear();
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
     mockGetAgentHandoff.mockReset();
@@ -1062,6 +1069,290 @@ describe("OpenCodeChatTab", () => {
         expect.any(Object),
       ),
     );
+  });
+
+  test("reconciles the first handoff prompt without duplicating or exposing its carrier", async () => {
+    const handoffId = "opencode-authoritative-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    mockGetAgentHandoff.mockResolvedValue(
+      agentHandoffRecord(handoffId, bootstrapPrompt),
+    );
+    composeText = "Verify the transferred work";
+    composeAttachments = [{
+      id: "handoff-attachment",
+      type: "image",
+      path: "/workspace/handoff.png",
+      previewUrl: "data:image/png;base64,handoff",
+      name: "handoff.png",
+    }];
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("opencode-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("opencode-send"));
+
+    let transported = "";
+    await waitFor(() => {
+      transported = String(mockSendPrompt.mock.calls[0]?.[2] ?? "");
+      expect(transported).toContain(`"id": "${handoffId}"`);
+      expect(transported).toContain(composeText);
+      const optimistic = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages[0];
+      expect(optimistic?.content).toBe(transported);
+      expect(optimistic?.parts).toEqual([
+        { type: "text", content: transported },
+        {
+          type: "file",
+          content: "handoff.png",
+          fileUrl: "data:image/png;base64,handoff",
+        },
+      ]);
+    });
+
+    const authoritativeUser: NativeMessage = {
+      id: "provider-user-handoff",
+      role: "user",
+      content: transported,
+      parts: [
+        { type: "text", content: transported },
+        {
+          type: "file",
+          content: "handoff.png",
+          fileUrl: "data:image/png;base64,handoff",
+        },
+      ],
+      createdAt: "2026-07-27T12:01:00.000Z",
+    };
+    act(() => {
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [authoritativeUser]);
+    });
+
+    await waitFor(() => {
+      const stored = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+      expect(stored.map((message) => message.id)).toEqual(["provider-user-handoff"]);
+      expect(lastVirtualizedMessages.filter(
+        (message) => message.role === "user" && message.content === composeText,
+      )).toHaveLength(1);
+      expect(lastVirtualizedMessages.some(
+        (message) => message.content.includes("<orkestrator-handoff"),
+      )).toBe(false);
+    });
+
+    const authoritativeAssistant = nativeMessage(
+      "provider-assistant-handoff",
+      "Transferred work verified",
+    );
+    act(() => {
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [
+        authoritativeUser,
+        authoritativeAssistant,
+      ]);
+    });
+    await waitFor(() => {
+      expect(lastVirtualizedMessages.filter(
+        (message) => message.role === "user" && message.content === composeText,
+      )).toHaveLength(1);
+      expect(lastVirtualizedMessages.some(
+        (message) => message.content.includes("<orkestrator-handoff"),
+      )).toBe(false);
+      expect(lastVirtualizedMessages.at(-1)?.content).toBe("Transferred work verified");
+    });
+
+    act(() => {
+      useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, false);
+    });
+    composeAttachments = [];
+    composeText = "This is a later prompt";
+    fireEvent.click(screen.getByTestId("opencode-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+    expect(mockSendPrompt.mock.calls[1]?.[2]).toBe(composeText);
+  });
+
+  test("keeps handoff history pending after a rejected send and retries with it", async () => {
+    const handoffId = "opencode-rejected-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    mockGetAgentHandoff.mockResolvedValue(
+      agentHandoffRecord(handoffId, bootstrapPrompt),
+    );
+    mockSendPrompt
+      .mockResolvedValueOnce({ success: false, error: "Prompt rejected" })
+      .mockResolvedValueOnce({ success: true, requestId: "retry-request" });
+    composeText = "Retry with the imported context";
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("opencode-send").hasAttribute("disabled")).toBe(false)
+    );
+
+    fireEvent.click(screen.getByTestId("opencode-send"));
+    await waitFor(() => {
+      expect(lastComposeSendError).toEqual(new Error("Prompt rejected"));
+      const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+      expect(messages.some((message) => message.id.startsWith("optimistic-"))).toBe(false);
+      expect(messages.some((message) => message.id.startsWith("error-"))).toBe(true);
+    });
+
+    fireEvent.click(screen.getByTestId("opencode-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+    expect(mockSendPrompt.mock.calls[1]?.[2]).toContain(`"id": "${handoffId}"`);
+    expect(mockSendPrompt.mock.calls[1]?.[2]).toContain(composeText);
+  });
+
+  test("keeps handoff history pending after an unexpected send rejection", async () => {
+    const handoffId = "opencode-thrown-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    mockGetAgentHandoff.mockResolvedValue(
+      agentHandoffRecord(handoffId, bootstrapPrompt),
+    );
+    mockSendPrompt
+      .mockRejectedValueOnce(new Error("transport unavailable"))
+      .mockResolvedValueOnce({ success: true, requestId: "retry-after-throw" });
+    composeText = "Retry after transport failure";
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("opencode-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("opencode-send"));
+    await waitFor(() => {
+      expect(lastComposeSendError).toEqual(new Error("transport unavailable"));
+      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.isLoading).toBe(false);
+    });
+
+    fireEvent.click(screen.getByTestId("opencode-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+    expect(mockSendPrompt.mock.calls[1]?.[2]).toContain(`"id": "${handoffId}"`);
+  });
+
+  test("ignores client-only error and system rows when deciding whether handoff history is pending", async () => {
+    const handoffId = "opencode-client-only-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    mockGetAgentHandoff.mockResolvedValue(
+      agentHandoffRecord(handoffId, bootstrapPrompt),
+    );
+    useOpenCodeStore.getState().addMessage(SESSION_KEY, {
+      id: "error-local",
+      role: "assistant",
+      content: "Previous local error",
+      parts: [{ type: "text", content: "Previous local error" }],
+      createdAt: "2026-07-27T12:00:01.000Z",
+    });
+    useOpenCodeStore.getState().addMessage(SESSION_KEY, {
+      id: "system-local",
+      role: "system",
+      content: "Previous local state",
+      parts: [{ type: "text", content: "Previous local state" }],
+      createdAt: "2026-07-27T12:00:02.000Z",
+    });
+    composeText = "Continue despite local rows";
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("opencode-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("opencode-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalled());
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
+  });
+
+  test("refuses a native slash command before consuming pending handoff history", async () => {
+    const handoffId = "opencode-native-command-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    mockGetAgentHandoff.mockResolvedValue(
+      agentHandoffRecord(handoffId, bootstrapPrompt),
+    );
+    useOpenCodeStore.getState().setSlashCommands(ENVIRONMENT_ID, [{
+      name: "/review",
+      description: "Review the branch",
+    }]);
+    composeText = "/review";
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("opencode-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("opencode-send"));
+    await waitFor(() => {
+      expect(lastComposeSendError).toEqual(new Error(
+        "Send a normal message to import the transferred history before running /review.",
+      ));
+    });
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+    expect(mockRenameEnvironmentFromPrompt).not.toHaveBeenCalled();
+    expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages).toEqual([]);
+
+    composeText = "Import the context first";
+    fireEvent.click(screen.getByTestId("opencode-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
+    expect(mockSendPrompt.mock.calls[0]?.[3]?.command).toBeUndefined();
+  });
+
+  test("forwards the directly selected agent with the first handoff prompt", async () => {
+    const handoffId = "opencode-selected-agent-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    mockGetAgentHandoff.mockResolvedValue(
+      agentHandoffRecord(handoffId, bootstrapPrompt),
+    );
+    useOpenCodeStore.getState().setSelectedAgent(SESSION_KEY, "security-reviewer");
+    composeText = "Continue with the selected specialist";
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("opencode-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("opencode-send"));
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        expect.stringContaining(`"id": "${handoffId}"`),
+        expect.objectContaining({ agent: "security-reviewer" }),
+      );
+    });
   });
 
   test("initializes once when a handoff resolves during a cold start", async () => {
@@ -2907,6 +3198,12 @@ describe("OpenCodeChatTab", () => {
   });
 
   test("writes a manually resumed session id and transcript to both stores", async () => {
+    const handoffId = "handoff-cleared-by-resume";
+    seedPaneLayout(undefined, undefined, handoffId);
+    mockGetAgentHandoff.mockResolvedValue(agentHandoffRecord(
+      handoffId,
+      `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`,
+    ));
     const resumedMessage: NativeMessage = {
       id: "resumed-message",
       role: "assistant",
@@ -2917,7 +3214,14 @@ describe("OpenCodeChatTab", () => {
     mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
       sessionId === "resumed-opencode" ? [resumedMessage] : []
     );
-    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
     fireEvent.click(await screen.findByTestId("opencode-resume-choice"));
@@ -2936,6 +3240,10 @@ describe("OpenCodeChatTab", () => {
       });
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId)
         .toBe("resumed-opencode");
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]).toMatchObject({
+        agentHandoffId: undefined,
+        consumedAgentHandoffId: handoffId,
+      });
     });
   });
 

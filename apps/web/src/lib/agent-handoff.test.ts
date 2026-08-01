@@ -379,6 +379,32 @@ describe("agent handoff serialization", () => {
     expect(handoff.stats.includedMessageCount).toBe(1);
   });
 
+  test("omits a single conversational record at or above the global prompt budget", () => {
+    for (const size of [
+      AGENT_HANDOFF_PROMPT_BUDGET,
+      AGENT_HANDOFF_PROMPT_BUDGET + 1,
+    ]) {
+      const handoff = createHandoff({
+        id: `single-prompt-budget-${size}`,
+        messages: [{
+          id: "oversized-conversation",
+          role: "assistant",
+          content: "x".repeat(size),
+          parts: [{ type: "text", content: "x".repeat(size) }],
+          createdAt: "2026-07-27T10:00:00.000Z",
+        }],
+      });
+
+      expect(handoff.messages).toHaveLength(1);
+      expect(handoff.stats.includedMessageCount).toBe(0);
+      expect(handoff.stats.omittedMessageCount).toBe(1);
+      expect(handoff.bootstrapPrompt).toContain("remain visible in Orkestrator");
+      expect(handoff.bootstrapPrompt.length).toBeLessThanOrEqual(
+        AGENT_HANDOFF_PROMPT_BUDGET,
+      );
+    }
+  });
+
   test("bounds the retained transcript and always keeps the newest message", () => {
     const bulky = Array.from({ length: 400 }, (_, index): NativeMessage => ({
       id: `bulky-${index}`,
@@ -412,6 +438,67 @@ describe("agent handoff serialization", () => {
     // Dropping it would leave nothing to transfer at all.
     expect(single.messages).toHaveLength(1);
     expect(single.stats.droppedMessageCount).toBe(0);
+  });
+
+  test("makes retained messages persistable when opaque values are cyclic or unsupported", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const handoff = createHandoff({
+      id: "persistable",
+      messages: [{
+        id: "opaque-values",
+        role: "assistant",
+        content: "tool evidence",
+        parts: [{
+          type: "tool-invocation",
+          content: "run",
+          toolArgs: { cyclic, unsupported: 1n },
+        }],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      }],
+    });
+
+    expect(() => JSON.stringify(handoff)).not.toThrow();
+    expect(JSON.stringify(handoff.messages)).toContain("[unserializable]");
+    expect(handoff.bootstrapPrompt).toContain("[unserializable]");
+    expect(parseAgentHandoffSnapshot(handoff)).toEqual(handoff);
+  });
+
+  test("drops malformed cyclic message structure instead of retaining an unpersistable snapshot", () => {
+    const recursivePart = {
+      type: "tool-group",
+      content: "",
+      parts: [] as unknown[],
+    };
+    recursivePart.parts.push(recursivePart);
+    const malformed = {
+      id: "recursive",
+      role: "assistant",
+      content: "recursive structure",
+      parts: [recursivePart],
+      createdAt: "2026-07-27T10:00:00.000Z",
+    } as unknown as NativeMessage;
+    const handoff = createHandoff({
+      id: "recursive-message",
+      messages: [messages[0]!, malformed, messages[1]!],
+    });
+
+    expect(handoff.messages.map((message) => message.id)).toEqual([
+      "user-1",
+      "assistant-1",
+    ]);
+    expect(handoff.stats.droppedMessageCount).toBe(1);
+    expect(() => JSON.stringify(handoff)).not.toThrow();
+
+    const persisted = createHandoff();
+    const persistedRecursive = {
+      ...persisted,
+      messages: [malformed],
+    };
+    let parsed: unknown;
+    expect(() => { parsed = parseAgentHandoffSnapshot(persistedRecursive); })
+      .not.toThrow();
+    expect(parsed).toBeNull();
   });
 
   test("rebuilds unsafe legacy snapshot prompts from validated fields", () => {
@@ -507,6 +594,7 @@ describe("agent handoff validation and tool counting", () => {
       [{ ...messages[0], role: "tool" }],
       [{ ...messages[0], content: null }],
       [{ ...messages[0], createdAt: null }],
+      [{ ...messages[0], createdAt: "not-a-timestamp" }],
       [{ ...messages[0], parts: null }],
       [{ ...messages[0], parts: [{ type: "unknown", content: "" }] }],
       [{ ...messages[0], parts: [{ type: "text", content: 1 }] }],
@@ -649,6 +737,81 @@ describe("agent handoff transcript digest", () => {
     expect(agentHandoffTranscriptDigest([settled]))
       .not.toBe(agentHandoffTranscriptDigest([toolMessage]));
   });
+
+  test("detects same-length content, tool output, metadata and nested-part changes", () => {
+    const nested: NativeMessage[] = [{
+      id: "nested",
+      role: "assistant",
+      content: "same",
+      parts: [{
+        type: "tool-group",
+        content: "",
+        parts: [{
+          type: "tool-invocation",
+          content: "run",
+          toolOutput: "left",
+          toolDiff: { filePath: "a.ts", diff: "+a" },
+        }],
+      }],
+      createdAt: "2026-07-27T10:00:00.000Z",
+      modelId: "model-a",
+    }];
+    const baseline = agentHandoffTranscriptDigest(nested);
+    const variants: NativeMessage[][] = [
+      [{ ...nested[0]!, content: "diff" }],
+      [{ ...nested[0]!, createdAt: "2026-07-27T10:00:00.001Z" }],
+      [{ ...nested[0]!, modelId: "model-b" }],
+      [{
+        ...nested[0]!,
+        parts: [{
+          type: "tool-group",
+          content: "",
+          parts: [{
+            type: "tool-invocation",
+            content: "run",
+            toolOutput: "rift",
+            toolDiff: { filePath: "a.ts", diff: "+a" },
+          }],
+        }],
+      }],
+      [{
+        ...nested[0]!,
+        parts: [{
+          type: "tool-group",
+          content: "",
+          parts: [{
+            type: "tool-invocation",
+            content: "bun",
+            toolOutput: "left",
+            toolDiff: { filePath: "a.ts", diff: "+a" },
+          }],
+        }],
+      }],
+      [{
+        ...nested[0]!,
+        parts: [{
+          type: "tool-group",
+          content: "",
+          parts: [{
+            type: "tool-invocation",
+            content: "run",
+            toolOutput: "left",
+            toolDiff: { filePath: "b.ts", diff: "+b" },
+          }],
+        }],
+      }],
+    ];
+
+    for (const variant of variants) {
+      expect(agentHandoffTranscriptDigest(variant)).not.toBe(baseline);
+    }
+
+    const cyclic = structuredClone(nested);
+    (cyclic[0]!.parts[0] as unknown as Record<string, unknown>).toolArgs = {
+      owner: cyclic[0]!.parts[0],
+    };
+    expect(() => agentHandoffTranscriptDigest(cyclic)).not.toThrow();
+  });
 });
 
 describe("agent handoff carrier recognition and composition", () => {
@@ -670,6 +833,18 @@ describe("agent handoff carrier recognition and composition", () => {
       expect.stringContaining("Continued in"),
       userPrompt,
     ]);
+  });
+
+  test("leaves prompts unchanged without usable history and does not prepend twice", () => {
+    const handoff = createHandoff();
+    const prompt = "Continue with the fix.";
+    expect(prependAgentHandoffHistory(undefined, prompt)).toBe(prompt);
+    expect(prependAgentHandoffHistory("", prompt)).toBe(prompt);
+    expect(prependAgentHandoffHistory(" \n\t ", prompt)).toBe(prompt);
+    expect(prependAgentHandoffHistory(handoff.bootstrapPrompt, " \n ")).toBe(" \n ");
+
+    const once = prependAgentHandoffHistory(handoff.bootstrapPrompt, prompt);
+    expect(prependAgentHandoffHistory(handoff.bootstrapPrompt, once)).toBe(once);
   });
 
   test("recognizes only a complete matching structural carrier", () => {
@@ -887,6 +1062,29 @@ Briefly acknowledge the handoff, state the next concrete action implied by the t
     ]);
     expect(residual.startsWith("middle text")).toBe(true);
     expect(residual.endsWith("tail text")).toBe(true);
+  });
+
+  test("parses adjacent v2 carriers at their first structural close", () => {
+    const first = createHandoff({ id: "adjacent-first" });
+    const second = createHandoff({ id: "adjacent-second" });
+    const adjacent = `${first.bootstrapPrompt}${second.bootstrapPrompt}keep`;
+    const providerMessage = bootstrapMessage(first, {
+      content: adjacent,
+      parts: [{ type: "text", content: adjacent }],
+    });
+
+    expect(stripAgentHandoffCarriers(
+      [first.id, second.id],
+      [providerMessage],
+    )).toEqual([{
+      ...providerMessage,
+      content: "keep",
+      parts: [{ type: "text", content: "keep" }],
+    }]);
+    expect(stripAgentHandoffCarriers([second.id], [providerMessage])[0]!.content)
+      .toStartWith(first.bootstrapPrompt);
+    expect(stripAgentHandoffCarriers([second.id], [providerMessage])[0]!.content)
+      .toEndWith("keep");
   });
 
   test("strips a consumed carrier whose snapshot has already been deleted", () => {

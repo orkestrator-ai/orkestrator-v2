@@ -73,6 +73,27 @@ describe("messagePartExpansionStore", () => {
     expect(keys().has("msg-1-part-504")).toBe(true);
   });
 
+  test("applies the shared cap when agent and non-agent disclosures coexist", () => {
+    for (let index = 0; index < 250; index++) {
+      setExpanded(`msg-${index}-part-0/thinking`, true);
+    }
+    for (let index = 0; index < 251; index++) {
+      setExpanded(
+        `native-agent:${JSON.stringify(["environment-1", `msg-${index}`])}:subagent:id:agent-${index}`,
+        true,
+      );
+    }
+
+    expect(keys().size).toBe(500);
+    expect(keys().has("msg-0-part-0/thinking")).toBe(false);
+    expect(keys().has("msg-1-part-0/thinking")).toBe(true);
+    expect(
+      keys().has(
+        `native-agent:${JSON.stringify(["environment-1", "msg-250"])}:subagent:id:agent-250`,
+      ),
+    ).toBe(true);
+  });
+
   test("reset clears every remembered key", () => {
     setExpanded("msg-1-part-0", true);
     setExpanded("msg-2-part-0", true);

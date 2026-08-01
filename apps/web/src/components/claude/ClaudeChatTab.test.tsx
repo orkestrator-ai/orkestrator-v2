@@ -4789,7 +4789,7 @@ describe("ClaudeChatTab", () => {
     expect(preview.src).toBe("data:image/png;base64,chat-container-base64");
     expect(mockReadContainerFileBase64).toHaveBeenCalledWith(
       "container-preview",
-      "/workspace/.orkestrator/clipboard/clipboard.png",
+      ".orkestrator/clipboard/clipboard.png",
     );
     expect(mockReadFileBase64).not.toHaveBeenCalled();
   });

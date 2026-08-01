@@ -34,6 +34,8 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
    * the picture.
    */
   containerId?: string;
+  /** Stable environment/session identity for persisted message disclosures. */
+  agentExpansionScope: string;
 
   connectionState: NativeConnectionState;
   errorMessage?: string | null;
@@ -109,6 +111,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   agentLabel,
   isActive,
   containerId,
+  agentExpansionScope,
   connectionState,
   errorMessage,
   serverLog,
@@ -250,6 +253,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               previousMessage={previous}
               assistantLabel={agentLabel}
               containerId={containerId}
+              agentExpansionScope={agentExpansionScope}
               actions={messageActions?.(message)}
               resolveModelLabel={resolveModelLabel}
             />

@@ -115,45 +115,37 @@ interface NativeMessageProps {
   previousMessage?: NativeMessageType | null;
   assistantLabel?: string;
   containerId?: string;
+  /** Stable transcript/environment identity used to isolate persisted disclosures. */
+  agentExpansionScope?: string;
   actions?: ReactNode;
   resolveModelLabel?: (modelId: string) => string;
 }
 
-interface AgentExpansionContextValue {
-  expandedKeys: ReadonlySet<string>;
-  setExpanded: (key: string, expanded: boolean) => void;
-}
+const AgentExpansionScopeContext = createContext("native-message");
 
-const AgentExpansionContext = createContext<AgentExpansionContextValue | null>(null);
-
-function getAgentExpansionKey(part: NativeAgentActivityPart): string {
+function getAgentExpansionKey(
+  part: NativeAgentActivityPart,
+  partKey: string,
+): string {
   if (part.type === "task-group") {
-    return `task:${
-      part.task.toolUseId ??
-      part.task.subagentId ??
-      part.task.toolName ??
-      part.content ??
-      "agent"
-    }`;
+    const durableId = part.task.toolUseId?.trim() || part.task.subagentId?.trim();
+    return durableId ? `task:id:${durableId}` : `task:part:${partKey}`;
   }
 
-  return `subagent:${
-    part.subagentId ??
-    part.toolUseId ??
-    part.subagentName ??
-    part.content ??
-    "agent"
-  }`;
+  const durableId = part.subagentId?.trim() || part.toolUseId?.trim();
+  return durableId ? `subagent:id:${durableId}` : `subagent:part:${partKey}`;
 }
 
-function useAgentExpansion(part: NativeAgentActivityPart) {
-  const expansionContext = useContext(AgentExpansionContext)!;
-  const expansionKey = getAgentExpansionKey(part);
-
-  return [
-    expansionContext.expandedKeys.has(expansionKey),
-    (expanded: boolean) => expansionContext.setExpanded(expansionKey, expanded),
-  ] as const;
+function useAgentExpansion(part: NativeAgentActivityPart, partKey: string) {
+  const expansionScope = useContext(AgentExpansionScopeContext);
+  const expansionKey = getAgentExpansionKey(part, partKey);
+  // Active agents live in a virtualized row that can be unmounted while Claude
+  // streams or while the reader scrolls. Persist the user's explicit toggle in
+  // the same bounded store used by thinking/JSON disclosures so those routine
+  // remounts cannot silently collapse the agent again.
+  return useMessagePartExpansion(
+    `native-agent:${expansionScope}:${expansionKey}`,
+  );
 }
 
 /** Render a thinking/reasoning part inline - expandable to show the full text */
@@ -607,27 +599,33 @@ function generateDiffFromBeforeAfter(
     content: string;
   }> = [];
 
+  // An empty file has zero lines. String#split would otherwise turn it into a
+  // single empty line and render a synthetic `-` or `+` that disagrees with the
+  // zero-line statistics shown in the collapsed row.
+  const contentLines = (content: string): string[] =>
+    content.length === 0 ? [] : content.split("\n");
+
   // If we have both before and after, show the diff
   if (before !== undefined && after !== undefined) {
     // Add removed lines
-    const beforeLines = before.split("\n");
+    const beforeLines = contentLines(before);
     for (const line of beforeLines) {
       result.push({ type: "remove", content: `-${line}` });
     }
     // Add added lines
-    const afterLines = after.split("\n");
+    const afterLines = contentLines(after);
     for (const line of afterLines) {
       result.push({ type: "add", content: `+${line}` });
     }
   } else if (after !== undefined) {
     // Only additions (write/new content)
-    const afterLines = after.split("\n");
+    const afterLines = contentLines(after);
     for (const line of afterLines) {
       result.push({ type: "add", content: `+${line}` });
     }
   } else if (before !== undefined) {
     // Only deletions
-    const beforeLines = before.split("\n");
+    const beforeLines = contentLines(before);
     for (const line of beforeLines) {
       result.push({ type: "remove", content: `-${line}` });
     }
@@ -1013,14 +1011,32 @@ function parseLocalFilePathFromUrl(fileUrl: string): string | null {
   }
 }
 
-function isSafeContainerPath(path: string): boolean {
+function getSafeContainerRelativePath(path: string): string | null {
   if (!path || path.includes("\0") || path.includes("\n") || path.includes("\r")) {
-    return false;
+    return null;
   }
   if (path.split(/[\\/]+/).some((segment) => segment === "..")) {
-    return false;
+    return null;
   }
-  return !path.startsWith("/") || path === "/workspace" || path.startsWith("/workspace/");
+  if (/^[a-z]:[\\/]/i.test(path) || path.startsWith("\\")) {
+    return null;
+  }
+  if (path.startsWith("/workspace/")) {
+    const relativePath = path.slice("/workspace/".length);
+    if (
+      !relativePath ||
+      relativePath.startsWith("/") ||
+      relativePath.startsWith("\\") ||
+      /^[a-z]:[\\/]/i.test(relativePath)
+    ) {
+      return null;
+    }
+    return relativePath;
+  }
+  if (path.startsWith("/")) {
+    return null;
+  }
+  return path;
 }
 
 function FilePart({
@@ -1067,13 +1083,15 @@ function FilePart({
         ? parseLocalFilePathFromUrl(fileUrl)
         : null;
 
-      if (containerId && !localFilePath) {
-        if (!isSafeContainerPath(path)) {
+      if (containerId) {
+        const containerPath = localFilePath ?? path;
+        const relativePath = getSafeContainerRelativePath(containerPath);
+        if (!relativePath) {
           throw new Error("Unsafe container image path");
         }
 
-        const base64 = await readContainerFileBase64(containerId, path);
-        const mimeType = getMimeType(path);
+        const base64 = await readContainerFileBase64(containerId, relativePath);
+        const mimeType = getMimeType(containerPath);
         setImageSrc(`data:${mimeType};base64,${base64}`);
         setPreviewOpen(true);
         return;
@@ -1271,7 +1289,13 @@ function getSubagentPreview(
   }
 
   if (latestAction.type === "text") {
-    return latestAction.content;
+    return latestAction.content.trim() || "Response";
+  }
+  if (latestAction.type === "thinking") {
+    return "Thinking";
+  }
+  if (latestAction.type === "file") {
+    return latestAction.content.trim() || "File";
   }
 
   const command =
@@ -1322,7 +1346,7 @@ function SubagentPart({
   containerId?: string;
   partKey: string;
 }) {
-  const [isOpen, setIsOpen] = useAgentExpansion(part);
+  const [isOpen, setIsOpen] = useAgentExpansion(part, partKey);
   const subagentActions = part.subagentActions ?? [];
   const hasExternalUsage = typeof part.toolUseCount === "number";
   const tokenOnlyUsage = shouldShowTokenOnlyAgentUsage(part);
@@ -1388,7 +1412,7 @@ function SubagentPart({
 
       <CollapsibleContent className="mt-1">
         <div className="border-l border-border/40 pl-3">
-          {part.subagentPrompt ? (
+          {part.subagentPrompt?.trim() ? (
             <div className="mb-3 border-l border-border/30 pl-3">
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
                 Task
@@ -1432,6 +1456,10 @@ function AgentGroupPart({
   containerId?: string;
   partKey: string;
 }) {
+  if (part.parts.length === 0) {
+    return null;
+  }
+
   const activeCount = part.parts.filter((child) => {
     return getNativeAgentStatus(child) === "active";
   }).length;
@@ -1504,7 +1532,7 @@ function TaskGroupPart({
   containerId?: string;
   partKey: string;
 }) {
-  const [isOpen, setIsOpen] = useAgentExpansion(part);
+  const [isOpen, setIsOpen] = useAgentExpansion(part, partKey);
   const toolLabel =
     getToolTitleDisplayName(
       part.task.toolTitle,
@@ -1768,6 +1796,7 @@ export const NativeMessage = memo(function NativeMessage({
   previousMessage = null,
   assistantLabel = "Assistant",
   containerId,
+  agentExpansionScope,
   actions: messageActions,
   resolveModelLabel,
 }: NativeMessageProps) {
@@ -1779,24 +1808,19 @@ export const NativeMessage = memo(function NativeMessage({
   message = normalizedMessage;
   previousMessage = normalizedPreviousMessage;
 
-  const [expandedAgentKeys, setExpandedAgentKeys] = useState<Set<string>>(
-    () => new Set(),
+  // A container id can legitimately appear after this row mounts (notably in
+  // build-pipeline tabs) or change when a container is recreated. Freeze the
+  // namespace at mount so such lifecycle updates do not silently collapse an
+  // open disclosure. Production transcript owners pass their stable
+  // environment/session identity; the initial container remains a safe fallback
+  // for direct callers.
+  const [stableAgentExpansionScope] = useState(
+    () => agentExpansionScope ?? containerId ?? "host",
   );
-  const setAgentExpanded = useCallback((key: string, expanded: boolean) => {
-    setExpandedAgentKeys((current) => {
-      const next = new Set(current);
-      if (expanded) {
-        next.add(key);
-      } else {
-        next.delete(key);
-      }
-      return next;
-    });
-  }, []);
-  const agentExpansionValue = useMemo<AgentExpansionContextValue>(
-    () => ({ expandedKeys: expandedAgentKeys, setExpanded: setAgentExpanded }),
-    [expandedAgentKeys, setAgentExpanded],
-  );
+  const messageAgentExpansionScope = JSON.stringify([
+    stableAgentExpansionScope,
+    message.id,
+  ]);
 
   const isUser = message.role === "user";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
@@ -1878,7 +1902,7 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   return (
-    <AgentExpansionContext.Provider value={agentExpansionValue}>
+    <AgentExpansionScopeContext.Provider value={messageAgentExpansionScope}>
       <MessageShell
         isUser={isUser}
         authorLabel={
@@ -1915,7 +1939,7 @@ export const NativeMessage = memo(function NativeMessage({
           />
         )}
       </MessageShell>
-    </AgentExpansionContext.Provider>
+    </AgentExpansionScopeContext.Provider>
   );
 });
 

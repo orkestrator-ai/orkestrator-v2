@@ -1774,6 +1774,7 @@ export function ClaudeTmuxChatTab({
                   previousMessage={previousMessage}
                   assistantLabel="Claude"
                   containerId={containerId}
+                  agentExpansionScope={environmentId}
                   resolveModelLabel={resolveModelLabel}
                 />
               )}

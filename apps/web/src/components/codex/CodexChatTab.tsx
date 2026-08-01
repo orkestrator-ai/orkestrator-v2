@@ -2831,6 +2831,7 @@ export function CodexChatTab({
 
   return (
     <NativeChatShell
+      agentExpansionScope={environmentId}
       agentLabel="Codex"
       isActive={ownsGlobalShortcuts}
       containerId={containerId}

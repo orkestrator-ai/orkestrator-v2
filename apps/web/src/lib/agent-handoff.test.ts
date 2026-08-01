@@ -46,6 +46,7 @@ const {
   mergeAgentHandoffDisplayMessages,
   parseAgentHandoffSnapshot,
   persistAgentHandoff,
+  prependAgentHandoffHistory,
   rememberAgentHandoff,
   resetAgentHandoffCache,
   stripAgentHandoffCarriers,
@@ -360,6 +361,24 @@ describe("agent handoff serialization", () => {
     expect(Number(omitted![1])).toBe(output.length - (8_000 - 38));
   });
 
+  test("keeps a long conversational message intact when the overall context has room", () => {
+    const completeReview = `${"finding details\n".repeat(2_000)}END-OF-REVIEW`;
+    const handoff = createHandoff({
+      messages: [{
+        id: "complete-review",
+        role: "assistant",
+        content: completeReview,
+        parts: [{ type: "text", content: completeReview }],
+        createdAt: "2026-07-27T10:00:00.000Z",
+      }],
+    });
+
+    expect(completeReview.length).toBeGreaterThan(20_000);
+    expect(handoff.bootstrapPrompt).toContain("END-OF-REVIEW");
+    expect(handoff.bootstrapPrompt).not.toContain("characters omitted");
+    expect(handoff.stats.includedMessageCount).toBe(1);
+  });
+
   test("bounds the retained transcript and always keeps the newest message", () => {
     const bulky = Array.from({ length: 400 }, (_, index): NativeMessage => ({
       id: `bulky-${index}`,
@@ -633,6 +652,26 @@ describe("agent handoff transcript digest", () => {
 });
 
 describe("agent handoff carrier recognition and composition", () => {
+  test("prepends history only to the next user prompt and strips it back to that prompt", () => {
+    const handoff = createHandoff();
+    const userPrompt = "Now verify the complete review and commit the fix.";
+    const transported = prependAgentHandoffHistory(handoff.bootstrapPrompt, userPrompt);
+
+    expect(transported.indexOf(handoff.bootstrapPrompt)).toBe(0);
+    expect(transported.indexOf(userPrompt)).toBeGreaterThan(handoff.bootstrapPrompt.length);
+    expect(mergeAgentHandoffDisplayMessages(handoff, [
+      bootstrapMessage(handoff, {
+        content: transported,
+        parts: [{ type: "text", content: transported }],
+      }),
+    ]).map((message) => message.content)).toEqual([
+      "Fix the failing build",
+      "I found the problem.",
+      expect.stringContaining("Continued in"),
+      userPrompt,
+    ]);
+  });
+
   test("recognizes only a complete matching structural carrier", () => {
     const handoff = createHandoff();
     const bootstrap = bootstrapMessage(handoff);

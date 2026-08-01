@@ -1157,10 +1157,19 @@ describe("CodexChatTab", () => {
     });
 
     await waitFor(() =>
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false)
+    );
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    composeText = "Verify every finding before continuing";
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() =>
       expect(mockSendPrompt).toHaveBeenCalledWith(
         MOCK_CLIENT,
         SESSION_ID,
-        expect.stringContaining(`"id": "${handoffId}"`),
+        expect.stringMatching(
+          new RegExp(`"id": "${handoffId}"[\\s\\S]*${composeText}`),
+        ),
         expect.any(Object),
       ),
     );

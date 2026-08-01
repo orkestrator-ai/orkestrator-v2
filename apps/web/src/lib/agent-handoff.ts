@@ -30,6 +30,9 @@ const HANDOFF_FOLLOW_UP =
   "Briefly acknowledge the handoff, state the next concrete action implied by "
   + "the transcript, and continue unfinished work when it is safe to do so. "
   + "Ask the user if the transcript does not establish a safe next action.";
+const HANDOFF_CURRENT_USER_MESSAGE =
+  "The handoff above is prior conversation history. Respond to the user's new "
+  + "message below as the latest message in that continued conversation:";
 
 export type AgentProvider = "claude" | "codex" | "opencode";
 
@@ -304,9 +307,12 @@ function consumeKnownFollowUp(content: string, offset: number): number {
   const remaining = content.slice(offset);
   const match = remaining.match(/^\s*/);
   const followUpStart = offset + (match?.[0].length ?? 0);
-  return content.startsWith(HANDOFF_FOLLOW_UP, followUpStart)
-    ? followUpStart + HANDOFF_FOLLOW_UP.length
-    : offset;
+  for (const suffix of [HANDOFF_FOLLOW_UP, HANDOFF_CURRENT_USER_MESSAGE]) {
+    if (content.startsWith(suffix, followUpStart)) {
+      return followUpStart + suffix.length;
+    }
+  }
+  return offset;
 }
 
 function findStructuralCarrierClose(content: string, from: number): number {
@@ -354,7 +360,11 @@ function parseJsonHandoffCarrier(
   const opening = `<orkestrator-handoff format="${HANDOFF_JSON_FORMAT}">`;
   const start = content.indexOf(opening, from);
   if (start < 0) return null;
-  const closeStart = findStructuralCarrierClose(content, start + opening.length);
+  // JSON carrier strings escape `<` and `>`, so the first literal close after
+  // the opening is unambiguously structural. Using the legacy last-close
+  // fallback here swallowed adjacent inert carriers once the automatic
+  // follow-up instruction was removed.
+  const closeStart = content.indexOf(HANDOFF_CLOSE, start + opening.length);
   if (closeStart < 0) return null;
   const carrier = content.slice(start, closeStart + HANDOFF_CLOSE.length);
 
@@ -695,7 +705,11 @@ function renderMessage(
     role: message.role,
     sourceId: message.id,
     createdAt: message.createdAt,
-    body: truncate(body.trim(), 20_000),
+    // Keep conversational text intact. The record selector below is the one
+    // context-compaction boundary for the complete carrier; applying a second,
+    // fixed per-message cap here silently cut long reviews in half even when
+    // the destination context still had ample room for the whole message.
+    body: body.trim(),
   };
 }
 
@@ -830,9 +844,7 @@ ${HANDOFF_TRANSCRIPT_OPEN}
   const transcriptFooter = `
 ${HANDOFF_TRANSCRIPT_CLOSE}`;
   const carrierFooter = `
-${HANDOFF_CLOSE}
-
-${HANDOFF_FOLLOW_UP}`;
+${HANDOFF_CLOSE}`;
   // The notice is emitted *after* the transcript frame, so its worst-case length
   // has to come out of the budget before selection runs. Leaving it uncounted
   // spends budget the frame does not have.
@@ -872,6 +884,23 @@ ${HANDOFF_FOLLOW_UP}`;
       droppedMessageCount: bounded.dropped,
     },
   };
+}
+
+/**
+ * Places imported history before the first real destination prompt.
+ *
+ * Creating a handoff must not itself start an agent turn. The destination tab
+ * renders the snapshot immediately, then calls this helper only when the user
+ * submits their next message. The fixed separator is consumed by the carrier
+ * stripper along with the carrier, leaving only `userPrompt` as the visible
+ * destination message.
+ */
+export function prependAgentHandoffHistory(
+  bootstrapPrompt: string | undefined,
+  userPrompt: string,
+): string {
+  if (!bootstrapPrompt) return userPrompt;
+  return `${bootstrapPrompt}\n\n${HANDOFF_CURRENT_USER_MESSAGE}\n\n${userPrompt}`;
 }
 
 export function isAgentHandoffBootstrapMessage(

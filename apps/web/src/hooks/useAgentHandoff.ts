@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   buildAgentHandoffImportedMessages,
-  isAgentHandoffBootstrapMessage,
   loadAgentHandoff,
   stripAgentHandoffCarriers,
   type AgentHandoffSnapshot,
@@ -49,7 +48,8 @@ export function useAgentHandoff(
   consumedHandoffId?: string,
 ): AgentHandoffState & {
   ready: boolean;
-  initialPrompt?: string;
+  /** History to prepend only when the user submits the first destination prompt. */
+  pendingHistory?: string;
   displayMessages: NativeMessage[];
 } {
   const [state, setState] = useState<StoredAgentHandoffState>(EMPTY_STATE);
@@ -187,11 +187,6 @@ export function useAgentHandoff(
       providerMessages,
     ],
   );
-  const bootstrapAlreadyPresent = currentState.handoff
-    ? providerMessages.some((message) =>
-        isAgentHandoffBootstrapMessage(message, currentState.handoff!.id)
-      )
-    : false;
   const destinationTranscriptStarted = providerMessages.length > 0;
 
   return {
@@ -200,8 +195,8 @@ export function useAgentHandoff(
     loading: currentState.loading,
     error: currentState.error,
     ready,
-    initialPrompt:
-      ready && !destinationTranscriptStarted && !bootstrapAlreadyPresent
+    pendingHistory:
+      ready && !destinationTranscriptStarted
         ? currentState.handoff?.bootstrapPrompt
         : undefined,
     displayMessages,

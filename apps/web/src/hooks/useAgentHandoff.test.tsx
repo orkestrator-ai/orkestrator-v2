@@ -107,7 +107,7 @@ describe("useAgentHandoff", () => {
       loading: false,
       ready: true,
       error: null,
-      initialPrompt: undefined,
+      pendingHistory: undefined,
     });
     expect(result.current.displayMessages).toEqual([providerMessage]);
     expect(mockGetAgentHandoff).not.toHaveBeenCalled();
@@ -128,21 +128,21 @@ describe("useAgentHandoff", () => {
       loading: true,
       ready: false,
       error: null,
-      initialPrompt: undefined,
+      pendingHistory: undefined,
     });
 
     await act(async () => pending.resolve(record(snapshot)));
     await waitFor(() => expect(result.current.ready).toBe(true));
 
     expect(result.current.handoff?.id).toBe("handoff-success");
-    expect(result.current.initialPrompt).toBe(snapshot.bootstrapPrompt);
+    expect(result.current.pendingHistory).toBe(snapshot.bootstrapPrompt);
     expect(result.current.displayMessages.map(({ id }) => id)).toEqual([
       "handoff:handoff-success:source:source-1",
       "handoff:handoff-success:boundary",
     ]);
   });
 
-  test("suppresses the initial prompt once the authoritative destination transcript has started", async () => {
+  test("suppresses pending history once the authoritative destination transcript has started", async () => {
     const snapshot = handoff("handoff-restored");
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
     const providerMessage = message(
@@ -156,7 +156,7 @@ describe("useAgentHandoff", () => {
     );
     await waitFor(() => expect(result.current.ready).toBe(true));
 
-    expect(result.current.initialPrompt).toBeUndefined();
+    expect(result.current.pendingHistory).toBeUndefined();
     expect(result.current.displayMessages.map(({ id }) => id)).toEqual([
       "handoff:handoff-restored:source:source-1",
       "handoff:handoff-restored:boundary",
@@ -192,7 +192,7 @@ describe("useAgentHandoff", () => {
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.handoff).toBeNull();
     expect(result.current.error).toBe("This transfer belongs to another agent.");
-    expect(result.current.initialPrompt).toBeUndefined();
+    expect(result.current.pendingHistory).toBeUndefined();
   });
 
   test("rejects a handoff intended for another environment", async () => {
@@ -208,7 +208,7 @@ describe("useAgentHandoff", () => {
     expect(result.current.error).toBe(
       "This transfer belongs to another environment.",
     );
-    expect(result.current.initialPrompt).toBeUndefined();
+    expect(result.current.pendingHistory).toBeUndefined();
   });
 
   test("shows load errors before provider messages and then unblocks sending", async () => {
@@ -225,7 +225,7 @@ describe("useAgentHandoff", () => {
       "handoff:handoff-error:error",
       "provider-1",
     ]);
-    expect(result.current.initialPrompt).toBeUndefined();
+    expect(result.current.pendingHistory).toBeUndefined();
   });
 
   test("ignores a stale load after the requested handoff changes", async () => {
@@ -286,14 +286,14 @@ describe("useAgentHandoff", () => {
 
     rerender({ destinationProvider: "opencode", environmentId: "env-1" });
     expect(result.current.ready).toBe(false);
-    expect(result.current.initialPrompt).toBeUndefined();
+    expect(result.current.pendingHistory).toBeUndefined();
     await waitFor(() =>
       expect(result.current.error).toBe("This transfer belongs to another agent.")
     );
 
     rerender({ destinationProvider: "codex", environmentId: "env-2" });
     expect(result.current.ready).toBe(false);
-    expect(result.current.initialPrompt).toBeUndefined();
+    expect(result.current.pendingHistory).toBeUndefined();
     await waitFor(() =>
       expect(result.current.error).toBe(
         "This transfer belongs to another environment.",

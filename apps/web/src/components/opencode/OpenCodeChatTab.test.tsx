@@ -1046,10 +1046,19 @@ describe("OpenCodeChatTab", () => {
     });
 
     await waitFor(() =>
+      expect(screen.getByTestId("opencode-send").hasAttribute("disabled")).toBe(false)
+    );
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    composeText = "Verify every finding before continuing";
+    fireEvent.click(screen.getByTestId("opencode-send"));
+    await waitFor(() =>
       expect(mockSendPrompt).toHaveBeenCalledWith(
         MOCK_CLIENT,
         "session-1",
-        expect.stringContaining(`"id": "${handoffId}"`),
+        expect.stringMatching(
+          new RegExp(`"id": "${handoffId}"[\\s\\S]*${composeText}`),
+        ),
         expect.any(Object),
       ),
     );

@@ -11,6 +11,7 @@ import type { QueueDispatchOutcome } from "@/hooks/useNativeMessageQueue";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
+import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
@@ -877,9 +878,9 @@ export function ClaudeChatTab({
     return environment?.pendingAgentLaunch === true
       || environment?.startupAgentSession !== undefined;
   });
-  const launchPrompt = backendOwnsStartupPrompt
-    ? handoff.initialPrompt
-    : initialPrompt ?? handoff.initialPrompt;
+  const launchPrompt = backendOwnsStartupPrompt || agentHandoffId
+    ? undefined
+    : initialPrompt;
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
       // NativeAgentService owns the durable initial prompt and its images. A
@@ -895,11 +896,9 @@ export function ClaudeChatTab({
     tabId,
   ]);
   /*
-   * Initialization is blocked while a handoff loads, so by the time the effect
-   * below runs this ref holds the resolved prompt. Reading it through a ref
-   * rather than a dependency keeps the prompt out of the effect's identity: it
-   * resolves a few milliseconds after mount, and re-running initialization then
-   * would tear down an in-flight connect.
+   * Read ordinary launch prompts through a ref so they do not restart an
+   * in-flight connect. Handoff readiness is a separate gate: imported history
+   * never starts a turn by itself.
    */
   const handoffPending = !handoff.ready;
   const launchPromptRef = useRef<string | undefined>(undefined);
@@ -2214,6 +2213,7 @@ export function ClaudeChatTab({
       if (!client || !session) return "rejected" as const;
 
       const selectedModel = getSelectedModel(sessionKey);
+      const promptText = prependAgentHandoffHistory(handoff.pendingHistory, text);
 
       const userMessage = {
         id: createUuid(),
@@ -2266,7 +2266,7 @@ export function ClaudeChatTab({
         .getModels(environmentId)
         .find((m) => m.id === selectedModel)?.supportsFastMode !== false;
 
-      const success = await sendPrompt(client, session.sessionId, text, {
+      const success = await sendPrompt(client, session.sessionId, promptText, {
         model: selectedModel,
         attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
         effort,
@@ -2299,7 +2299,17 @@ export function ClaudeChatTab({
         ? "unknown" as const
         : "accepted" as const;
     },
-    [client, session, sessionKey, environmentId, getSelectedModel, addMessage, removeMessage, setSessionLoading]
+    [
+      client,
+      session,
+      sessionKey,
+      environmentId,
+      getSelectedModel,
+      addMessage,
+      removeMessage,
+      setSessionLoading,
+      handoff.pendingHistory,
+    ]
   );
 
   handleSendRef.current = handleSend;

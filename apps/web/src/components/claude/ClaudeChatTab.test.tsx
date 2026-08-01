@@ -916,21 +916,34 @@ describe("ClaudeChatTab", () => {
     });
 
     await waitFor(() =>
+      expect(input?.getAttribute("contenteditable")).toBe("true")
+    );
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    input!.textContent = "Verify every finding before continuing";
+    fireEvent.input(input!);
+    await waitFor(() =>
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() =>
       expect(mockSendPrompt).toHaveBeenCalledWith(
         MOCK_CLIENT,
         "session-1",
-        expect.stringContaining(`"id": "${handoffId}"`),
+        expect.stringMatching(
+          new RegExp(`"id": "${handoffId}"[\\s\\S]*Verify every finding`),
+        ),
         expect.any(Object),
       ),
     );
   });
 
-  test("stores the handoff bootstrap before the SSE subscription can overwrite it", async () => {
+  test("subscribes with inert imported history before the first user prompt", async () => {
     /*
-     * Initialization adds the first prompt to the store and only then subscribes,
-     * so an inbound event cannot wipe the locally added message before it syncs.
-     * Reading the prompt from a stale closure made that branch unreachable for
-     * handoff tabs and pushed every bootstrap onto the post-SSE path instead.
+     * The imported rows come from the durable snapshot, not the provider
+     * transcript. Starting SSE must therefore see an empty destination session,
+     * and must not manufacture the old bootstrap user message just to preserve
+     * those rows.
      */
     const handoffId = "claude-ordered-handoff";
     useClaudeStore.setState({ clients: new Map(), sessions: new Map() });
@@ -968,11 +981,10 @@ describe("ClaudeChatTab", () => {
       await pending.promise;
     });
 
-    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalled());
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
     expect(messagesWhenSubscribed).not.toBeNull();
-    expect(messagesWhenSubscribed!.some((content) => content.includes(handoffId)))
-      .toBe(true);
-    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    expect(messagesWhenSubscribed as unknown as string[]).toEqual([]);
+    expect(mockSendPrompt).not.toHaveBeenCalled();
   });
 
   test("initializes once when the handoff resolves mid-mount", async () => {

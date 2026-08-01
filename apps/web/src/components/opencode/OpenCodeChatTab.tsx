@@ -10,6 +10,7 @@ import {
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
+import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import {
@@ -413,9 +414,9 @@ export function OpenCodeChatTab({
     return environment?.pendingAgentLaunch === true
       || environment?.startupAgentSession !== undefined;
   });
-  const launchPrompt = backendOwnsStartupPrompt
-    ? handoff.initialPrompt
-    : initialPrompt ?? handoff.initialPrompt;
+  const launchPrompt = backendOwnsStartupPrompt || agentHandoffId
+    ? undefined
+    : initialPrompt;
   useEffect(() => {
     if (backendOwnsStartupPrompt && initialPrompt) {
       clearTabInitialPrompt(tabId, environmentId);
@@ -428,10 +429,9 @@ export function OpenCodeChatTab({
     tabId,
   ]);
   /*
-   * Read through a ref inside the initialization effect. `launchPrompt` resolves
-   * a few milliseconds after mount for a handoff tab, so listing it as a
-   * dependency would tear down and restart an in-flight connect; `handoffPending`
-   * flips once and is the correct gate.
+   * Read ordinary launch prompts through a ref so they do not restart an
+   * in-flight connect. Handoff readiness is a separate gate: imported history
+   * never starts a turn by itself.
    */
   const handoffPending = !handoff.ready;
   const launchPromptRef = useRef<string | undefined>(undefined);
@@ -2214,6 +2214,8 @@ export function OpenCodeChatTab({
     ) => {
       if (!client || !session) return;
 
+      const promptText = prependAgentHandoffHistory(handoff.pendingHistory, text);
+
       const hasModelOverride = options
         ? Object.prototype.hasOwnProperty.call(options, "model")
         : false;
@@ -2277,9 +2279,9 @@ export function OpenCodeChatTab({
       // Send prompt
       const trimmedText = text.trim();
       const commandName = trimmedText.split(/\s+/)[0];
-      const nativeCommand = commandName && slashCommands.some(
-        (command) => command.name === commandName,
-      )
+      const nativeCommand = !handoff.pendingHistory
+        && commandName
+        && slashCommands.some((command) => command.name === commandName)
         ? {
             name: commandName,
             /*
@@ -2292,7 +2294,7 @@ export function OpenCodeChatTab({
               trimmedText.slice(commandName.length).trimStart() || undefined,
           }
         : undefined;
-      const sendResult = await sendPrompt(client, session.sessionId, text, {
+      const sendResult = await sendPrompt(client, session.sessionId, promptText, {
         model: selectedModel,
         variant: selectedVariant,
         mode: selectedMode,
@@ -2324,6 +2326,7 @@ export function OpenCodeChatTab({
       session,
       sessionKey,
       environmentId,
+      handoff.pendingHistory,
       getSelectedModel,
       getSelectedVariant,
       getSelectedMode,

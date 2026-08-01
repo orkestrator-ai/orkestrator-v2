@@ -30,6 +30,7 @@ import type {
 } from "../types/index.js";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
+import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 import {
   isRootAssistantRecord,
   normalizeBackendModelId,
@@ -171,8 +172,8 @@ const planApprovalResolvers = new Map<
 >();
 
 // Timeouts for user interactions (5 minutes)
-const QUESTION_TIMEOUT_MS = 5 * 60 * 1000;
-const PLAN_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+const QUESTION_TIMEOUT_MS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
+const PLAN_APPROVAL_TIMEOUT_MS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
 
 /**
  * Reason a session operation refused, carried as a plain string property.
@@ -1693,7 +1694,9 @@ export async function claimPromptDispatch(
   // this, another request can start while persistence is in flight, leaving a
   // request id accepted on disk for a turn that sendPrompt later refuses.
   const previousStatus = session.status;
+  const previousTurnStartedAt = session.turnStartedAt;
   session.status = "running";
+  session.turnStartedAt ??= new Date().toISOString();
   claimedPromptDispatches.set(sessionId, requestId);
 
   const outcome = (async () => {
@@ -1728,7 +1731,10 @@ export async function claimPromptDispatch(
       await dispatch.started;
     } catch (error) {
       claimedPromptDispatches.delete(sessionId);
-      if (!session.deleting) session.status = previousStatus;
+      if (!session.deleting) {
+        session.status = previousStatus;
+        session.turnStartedAt = previousTurnStartedAt;
+      }
       retainedRequestIds.delete(requestId);
       try {
         await updateSessionPreferences(sdkSessionId, {
@@ -1753,7 +1759,10 @@ export async function claimPromptDispatch(
     await outcome;
   } catch (error) {
     claimedPromptDispatches.delete(sessionId);
-    if (!session.deleting) session.status = previousStatus;
+    if (!session.deleting) {
+      session.status = previousStatus;
+      session.turnStartedAt = previousTurnStartedAt;
+    }
     retainedRequestIds.delete(requestId);
     throw error;
   } finally {
@@ -1901,6 +1910,7 @@ export function abortSession(sessionId: string): boolean {
   if (session && session.abortController) {
     session.abortController.abort();
     session.status = "idle";
+    session.turnStartedAt = undefined;
     session.abortController = undefined;
     releaseQueryControl(session);
 
@@ -3281,6 +3291,7 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
     // session, but leave its stopped query stopped.
     session.deleting = false;
     session.status = "idle";
+    session.turnStartedAt = undefined;
     throw error;
   }
 }
@@ -4308,6 +4319,7 @@ export async function sendPrompt(
   }
 
   const statusBeforeStartup = session.status;
+  const turnStartedAtBeforeStartup = session.turnStartedAt;
   const abortControllerBeforeStartup = session.abortController;
   const errorBeforeStartup = session.error;
   const lastActivityBeforeStartup = session.lastActivity;
@@ -4346,6 +4358,8 @@ export async function sendPrompt(
   const abortController = new AbortController();
   session.abortController = abortController;
   session.status = "running";
+  // Preserve the original user-turn clock across bridge-internal re-prompts.
+  session.turnStartedAt ??= new Date().toISOString();
 
   // The UI maps its plan-mode toggle onto exactly these two permission modes,
   // so a prompt carrying one of them is an authoritative statement of the
@@ -4374,6 +4388,7 @@ export async function sendPrompt(
           session.abortController = abortControllerBeforeStartup;
         }
         session.status = statusBeforeStartup;
+        session.turnStartedAt = turnStartedAtBeforeStartup;
         session.error = errorBeforeStartup;
         session.lastActivity = lastActivityBeforeStartup;
         session.persistedMessagesLoaded = persistedMessagesLoadedBeforeStartup;
@@ -4489,7 +4504,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   eventEmitter.emit({
     type: "session.updated",
     sessionId,
-    data: { status: "running" },
+    data: { status: "running", turnStartedAt: session.turnStartedAt },
   });
 
   const startedAt = Date.now();
@@ -4703,7 +4718,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
             try {
               const answers = await Promise.race([answerPromise, timeoutPromise]);
-              console.log("[session-manager] Received answers for question:", questionId, answers);
+              console.log("[session-manager] Received question answers", {
+                questionId,
+                answerCount: Object.keys(answers).length,
+              });
 
               // Return the answers to the SDK
               return {
@@ -4803,7 +4821,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
             try {
               const response = await Promise.race([approvalPromise, timeoutPromise]);
-              console.log("[session-manager] Plan approval result:", approvalId, response);
+              console.log("[session-manager] Plan approval result", {
+                approvalId,
+                approved: response.approved,
+                hasFeedback:
+                  typeof response.feedback === "string" && response.feedback.length > 0,
+              });
 
               if (response.approved) {
                 // User approved - emit exit event and allow the tool.
@@ -6042,6 +6065,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     }
 
     session.status = "idle";
+    session.turnStartedAt = undefined;
     session.abortController = undefined;
 
     eventEmitter.emit({
@@ -6097,6 +6121,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         );
       }
       session.status = "error";
+      session.turnStartedAt = undefined;
       session.error = error instanceof Error ? error.message : String(error);
       session.abortController = undefined;
       cleanupPendingInteractions(sessionId);
@@ -6193,7 +6218,10 @@ export function answerQuestion(
     return false;
   }
 
-  console.log("[session-manager] Answering question:", requestId, "with answers:", answers);
+  console.log("[session-manager] Answering question", {
+    requestId,
+    answerCount: Object.keys(answers).length,
+  });
 
   const resolver = questionResolvers.get(requestId);
   if (resolver) {
@@ -6270,7 +6298,11 @@ export function respondToPlanApproval(
     return false;
   }
 
-  console.log("[session-manager] Responding to plan approval:", requestId, "approved:", approved, "feedback:", feedback);
+  console.log("[session-manager] Responding to plan approval", {
+    requestId,
+    approved,
+    hasFeedback: typeof feedback === "string" && feedback.length > 0,
+  });
 
   const resolver = planApprovalResolvers.get(requestId);
   if (resolver) {

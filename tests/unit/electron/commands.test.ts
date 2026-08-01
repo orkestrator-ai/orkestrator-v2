@@ -15938,6 +15938,7 @@ describe("storage-backed command delegation", () => {
 describe("pane layout commands", () => {
   test("validates and forwards pane layout envelopes", async () => {
     const persisted = {
+      // Reads stay version-agnostic so the renderer can migrate legacy data.
       version: 1,
       environmentId: "env-1",
       containerId: null,
@@ -15971,7 +15972,7 @@ describe("pane layout commands", () => {
     await commands.get("save_pane_layout")?.({
       environmentId: "env-1",
       layout: {
-        version: 1,
+        version: 2,
         containerId: null,
         activePaneId: "default",
         root,
@@ -15980,7 +15981,7 @@ describe("pane layout commands", () => {
     }, context);
 
     expect(savePaneLayout).toHaveBeenCalledWith("env-1", {
-      version: 1,
+      version: 2,
       containerId: null,
       activePaneId: "default",
       root,
@@ -15993,23 +15994,35 @@ describe("pane layout commands", () => {
     expect(deletePaneLayout).toHaveBeenCalledWith("env-1");
     await expect(commands.get("save_pane_layout")?.({
       environmentId: "env-1",
-      layout: { version: 2, containerId: null, activePaneId: "default", root },
-      expectedRevision: 0,
-    }, context)).rejects.toThrow("Unsupported pane layout version");
-    await expect(commands.get("save_pane_layout")?.({
-      environmentId: "env-1",
-      layout: { version: 1, containerId: null, activePaneId: "", root },
+      layout: { version: 2, containerId: null, activePaneId: "", root },
       expectedRevision: 0,
     }, context)).rejects.toThrow("non-empty");
     await expect(commands.get("save_pane_layout")?.({
       environmentId: "env-1",
-      layout: { version: 1, containerId: null, activePaneId: "default", root: [] },
+      layout: { version: 2, containerId: null, activePaneId: "default", root: [] },
       expectedRevision: 0,
     }, context)).rejects.toThrow("layout.root");
     await expect(commands.get("save_pane_layout")?.({
       environmentId: "env-1",
-      layout: { version: 1, containerId: null, activePaneId: "default", root },
+      layout: { version: 2, containerId: null, activePaneId: "default", root },
     }, context)).rejects.toThrow("Expected expectedRevision to be a number");
+  });
+
+  test("rejects older and future pane layout writes before reaching storage", async () => {
+    const savePaneLayout = mock(async () => ({}));
+    const context = { storage: { savePaneLayout } } as unknown as CommandContext;
+    const commands = createCommandRegistry();
+    const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+
+    for (const version of [1, 3]) {
+      await expect(commands.get("save_pane_layout")?.({
+        environmentId: "env-1",
+        layout: { version, containerId: null, activePaneId: "default", root },
+        expectedRevision: 0,
+      }, context)).rejects.toThrow(`Unsupported pane layout version: ${version}`);
+    }
+
+    expect(savePaneLayout).not.toHaveBeenCalled();
   });
 
   test("rejects a non-numeric expectedRevision before reaching storage", async () => {
@@ -16017,7 +16030,7 @@ describe("pane layout commands", () => {
     const context = { storage: { savePaneLayout } } as unknown as CommandContext;
     const commands = createCommandRegistry();
     const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
-    const layout = { version: 1, containerId: null, activePaneId: "default", root };
+    const layout = { version: 2, containerId: null, activePaneId: "default", root };
 
     for (const expectedRevision of ["0", null, Number.NaN, Number.POSITIVE_INFINITY]) {
       await expect(commands.get("save_pane_layout")?.({
@@ -16040,7 +16053,7 @@ describe("pane layout commands", () => {
 
     const rejection = await commands.get("save_pane_layout")?.({
       environmentId: "env-1",
-      layout: { version: 1, containerId: null, activePaneId: "default", root },
+      layout: { version: 2, containerId: null, activePaneId: "default", root },
       expectedRevision: 3,
     }, context).then(() => null, (error: unknown) => error);
 
@@ -16048,7 +16061,7 @@ describe("pane layout commands", () => {
     // The renderer's rebase-and-retry path keys off this predicate alone.
     expect(isPaneLayoutRevisionConflict(rejection)).toBe(true);
     expect(savePaneLayout).toHaveBeenCalledWith("env-1", {
-      version: 1,
+      version: 2,
       containerId: null,
       activePaneId: "default",
       root,

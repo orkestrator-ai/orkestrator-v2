@@ -550,12 +550,12 @@ describe("codexStore session cleanup", () => {
       ]),
     });
     usePromptDraftStore.getState().setDraftValue(
-      codexInteractionDraftKey("interaction-target"),
+      codexInteractionDraftKey(targetKey, "interaction-target"),
       "answer",
       "target",
     );
     usePromptDraftStore.getState().setDraftValue(
-      codexInteractionDraftKey("interaction-other"),
+      codexInteractionDraftKey(otherKey, "interaction-other"),
       "answer",
       "other",
     );
@@ -587,12 +587,12 @@ describe("codexStore session cleanup", () => {
     }
     expect(
       usePromptDraftStore.getState().drafts.has(
-        codexInteractionDraftKey("interaction-target"),
+        codexInteractionDraftKey(targetKey, "interaction-target"),
       ),
     ).toBe(false);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        codexInteractionDraftKey("interaction-other"),
+        codexInteractionDraftKey(otherKey, "interaction-other"),
       ),
     ).toBe(true);
   });
@@ -1341,12 +1341,12 @@ describe("codexStore pending interactions", () => {
     store.addPendingInteraction(SESSION_KEY, interaction("int-1"));
     store.addPendingInteraction(otherEnvKey, interaction("int-2"));
     usePromptDraftStore.getState().setDraftValue(
-      codexInteractionDraftKey("int-1"),
+      codexInteractionDraftKey(SESSION_KEY, "int-1"),
       "answer",
       "target",
     );
     usePromptDraftStore.getState().setDraftValue(
-      codexInteractionDraftKey("int-2"),
+      codexInteractionDraftKey(otherEnvKey, "int-2"),
       "answer",
       "other",
     );
@@ -1357,12 +1357,12 @@ describe("codexStore pending interactions", () => {
     expect(useCodexStore.getState().pendingInteractions.has(otherEnvKey)).toBe(true);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        codexInteractionDraftKey("int-1"),
+        codexInteractionDraftKey(SESSION_KEY, "int-1"),
       ),
     ).toBe(false);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        codexInteractionDraftKey("int-2"),
+        codexInteractionDraftKey(otherEnvKey, "int-2"),
       ),
     ).toBe(true);
   });

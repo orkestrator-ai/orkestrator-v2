@@ -30,8 +30,8 @@ import {
  * enqueuing, so re-applying an identical snapshot enqueues nothing.
  *
  * Pane/tab snapshots are included in the subscriber set. Their active-pane and
- * active-tab pointers are preserved locally by the pane-layout binding, so a
- * tab created on mobile appears on desktop without stealing desktop focus.
+ * active-tab pointers are authoritative too, so the most recently selected tab
+ * is restored consistently across mobile, web, and desktop reconnects.
  */
 
 type ResourceHandler = (change: ResourceChange) => void;

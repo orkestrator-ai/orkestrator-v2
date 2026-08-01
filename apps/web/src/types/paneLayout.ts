@@ -1,7 +1,14 @@
 import type { TabType } from "@/contexts";
+export {
+  LEGACY_PANE_LAYOUT_VERSION,
+  PANE_LAYOUT_VERSION,
+} from "@orkestrator/protocol/pane-layout";
 
-export const PANE_LAYOUT_VERSION = 1;
-
+/**
+ * Version 2 makes pane and tab selection authoritative in the shared layout.
+ * Version 1 records used canonical first-pane/first-tab pointers and kept the
+ * user's real selection in renderer-local storage.
+ */
 export interface PersistedPaneLayout {
   version: number;
   environmentId: string;

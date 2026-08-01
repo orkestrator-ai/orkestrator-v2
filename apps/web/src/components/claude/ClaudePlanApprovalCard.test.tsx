@@ -264,13 +264,13 @@ describe("ClaudePlanApprovalCard", () => {
   });
 
   test.each([
-    ["error response", async () => "error" as const, {
+    ["error response", async () => "error" as const, false, {
       description: "Claude is still waiting for a decision. Please try again.",
     }],
-    ["transport error", async () => {
-      throw new Error("bridge unavailable");
-    }, { description: "bridge unavailable" }],
-  ])("keeps the approval retryable and reports a %s", async (_label, response, expectedToast) => {
+    ["unknown transport outcome", async () => "unknown" as const, true, {
+      description: "The decision outcome is unknown. Reconnect or refresh Claude before trying again.",
+    }],
+  ])("keeps the approval visible and reports a %s", async (_label, response, retryBlocked, expectedToast) => {
     /**
      * The card staying enabled is not a signal on its own — the turn is fully
      * blocked on this answer, so a response that never landed has to say so.
@@ -283,7 +283,7 @@ describe("ClaudePlanApprovalCard", () => {
       fireEvent.click(screen.getByRole("button", { name: "Approve Plan" }));
 
       await waitFor(() =>
-        expect(screen.getByRole("button", { name: "Approve Plan" }).hasAttribute("disabled")).toBe(false),
+        expect(screen.getByRole("button", { name: "Approve Plan" }).hasAttribute("disabled")).toBe(retryBlocked),
       );
       expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
       expect(mockToastError).toHaveBeenCalledWith("Failed to approve plan", expectedToast);
@@ -293,15 +293,16 @@ describe("ClaudePlanApprovalCard", () => {
   });
 
   test.each([
-    ["error response", async () => "error" as const, {
+    ["error response", async () => "error" as const, false, {
       description: "Claude is still waiting for a decision. Please try again.",
     }],
-    ["transport error", async () => {
-      throw new Error("bridge unavailable");
-    }, { description: "bridge unavailable" }],
-  ])("keeps feedback rejection available for retry and reports a %s", async (
+    ["unknown transport outcome", async () => "unknown" as const, true, {
+      description: "The feedback outcome is unknown. Reconnect or refresh Claude before trying again.",
+    }],
+  ])("keeps feedback rejection visible and reports a %s", async (
     _label,
     response,
+    retryBlocked,
     expectedToast,
   ) => {
     respondToPlanApprovalMock.mockImplementation(response);
@@ -313,7 +314,7 @@ describe("ClaudePlanApprovalCard", () => {
       fireEvent.click(screen.getByRole("button", { name: "Submit Feedback" }));
 
       await waitFor(() =>
-        expect(screen.getByRole("button", { name: "Submit Feedback" }).hasAttribute("disabled")).toBe(false),
+        expect(screen.getByRole("button", { name: "Submit Feedback" }).hasAttribute("disabled")).toBe(retryBlocked),
       );
       expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
       expect(mockToastError).toHaveBeenCalledWith("Failed to send plan feedback", expectedToast);
@@ -336,6 +337,27 @@ describe("ClaudePlanApprovalCard", () => {
       expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
       expect(mockToastError).toHaveBeenCalledWith("Failed to dismiss plan", {
         description: "Claude is still waiting for a decision. Please try again.",
+      });
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
+  test("blocks retry when a plan dismissal has an unknown outcome", async () => {
+    respondToPlanApprovalMock.mockImplementation(async () => "unknown");
+    const consoleError = console.error;
+    console.error = (() => {}) as typeof console.error;
+    try {
+      renderCard();
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled"))
+          .toBe(true),
+      );
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
+      expect(mockToastError).toHaveBeenCalledWith("Failed to dismiss plan", {
+        description: "The dismissal outcome is unknown. Reconnect or refresh Claude before trying again.",
       });
     } finally {
       console.error = consoleError;
@@ -414,7 +436,7 @@ describe("ClaudePlanApprovalCard", () => {
     fireEvent.change(screen.getByPlaceholderText(/describe what you'd like/i), {
       target: { value: "stale feedback" },
     });
-    const draftKey = claudePlanApprovalDraftKey("approval-1");
+    const draftKey = claudePlanApprovalDraftKey("session-1", "approval-1");
     expect(usePromptDraftStore.getState().drafts.has(draftKey)).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Submit Feedback" }));

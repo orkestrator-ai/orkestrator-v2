@@ -1,6 +1,7 @@
-import { afterAll, describe, expect, test, mock, beforeEach } from "bun:test";
+import { afterAll, describe, expect, test, mock, beforeEach, spyOn } from "bun:test";
 import { Hono } from "hono";
 import { TaskRegistry } from "@orkestrator/protocol/task-list";
+import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 
 // Snapshot the real session-manager BEFORE installing the route's stub mock.
 // Bun's `mock.module(...)` is process-global, so without this restore step the
@@ -317,10 +318,22 @@ describe("session routes", () => {
   // --- GET /session/:id ---
   describe("GET /session/:id", () => {
     test("returns session details", async () => {
+      const turnStartedAt = "2026-01-01T00:00:05.000Z";
+      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
+        ? {
+            id,
+            title: "Test",
+            status: "running" as const,
+            turnStartedAt,
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+          }
+        : undefined);
       const res = await app.request("/session/s-1");
       expect(res.status).toBe(200);
       const data = await jsonBody(res);
       expect(data.id).toBe("s-1");
+      expect(data.turnStartedAt).toBe(turnStartedAt);
       expect(Object.hasOwn(data, "planMode")).toBe(false);
     });
 
@@ -587,21 +600,49 @@ describe("session routes", () => {
     });
 
     test("returns 202 with valid prompt", async () => {
+      const turnStartedAt = "2026-01-01T00:00:05.000Z";
+      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
+        ? {
+            id,
+            title: "Test",
+            status: "idle" as const,
+            turnStartedAt,
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+          }
+        : undefined);
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Hello Claude",
       });
       expect(res.status).toBe(202);
       const data = await jsonBody(res);
       expect(data.status).toBe("processing");
+      expect(data.turnStartedAt).toBe(turnStartedAt);
     });
 
     test("durably claims a stable request id before dispatch", async () => {
+      const turnStartedAt = "2026-01-01T00:00:06.000Z";
+      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
+        ? {
+            id,
+            title: "Test",
+            status: "idle" as const,
+            turnStartedAt,
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+          }
+        : undefined);
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Launch once",
         requestId: "initial-prompt:env-1:tab-1",
       });
 
       expect(res.status).toBe(202);
+      expect(await jsonBody(res)).toEqual({
+        status: "processing",
+        requestId: "initial-prompt:env-1:tab-1",
+        turnStartedAt,
+      });
       expect(mockClaimPromptDispatch).toHaveBeenCalledWith(
         "s-1",
         "initial-prompt:env-1:tab-1",
@@ -678,6 +719,19 @@ describe("session routes", () => {
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
+    test("returns 404 when the session disappears during a durable request-id claim", async () => {
+      mockClaimPromptDispatch.mockResolvedValueOnce("not-found");
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Launch once",
+        requestId: "initial-prompt:env-1:gone",
+      });
+
+      expect(res.status).toBe(404);
+      expect(await jsonBody(res)).toEqual({ error: "Session not found" });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
     test("does not acknowledge a claimed prompt whose SDK startup barrier rejects", async () => {
       mockSendPrompt.mockRejectedValueOnce(new Error("attachment unreadable"));
 
@@ -710,6 +764,17 @@ describe("session routes", () => {
     });
 
     test("forwards a structured schema and stable request id", async () => {
+      const turnStartedAt = "2026-01-01T00:00:07.000Z";
+      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
+        ? {
+            id,
+            title: "Test",
+            status: "idle" as const,
+            turnStartedAt,
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+          }
+        : undefined);
       const outputSchema = { type: "object", properties: { summary: { type: "string" } } };
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Review",
@@ -721,6 +786,7 @@ describe("session routes", () => {
       expect(await jsonBody(res)).toMatchObject({
         status: "processing",
         requestId: "structured-1",
+        turnStartedAt,
       });
       expect(mockSendPrompt).toHaveBeenCalledWith(
         "s-1",
@@ -781,6 +847,17 @@ describe("session routes", () => {
      * `outputSchema`, which left every ordinary prompt unprotected.
      */
     test("deduplicates an unstructured prompt carrying a repeated request id", async () => {
+      const turnStartedAt = "2026-01-01T00:00:08.000Z";
+      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
+        ? {
+            id,
+            title: "Test",
+            status: "running" as const,
+            turnStartedAt,
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+          }
+        : undefined);
       mockGetPromptDispatchState.mockReturnValueOnce("processing");
       const duplicate = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "rm the temp dir",
@@ -792,6 +869,7 @@ describe("session routes", () => {
         status: "processing",
         requestId: "plain-1",
         duplicate: true,
+        turnStartedAt,
       });
       expect(mockGetPromptDispatchState).toHaveBeenCalledWith("s-1", "plain-1");
       expect(mockSendPrompt).not.toHaveBeenCalled();
@@ -869,6 +947,29 @@ describe("session routes", () => {
       expect(res.status).toBe(202);
       await Promise.resolve();
       expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    test("returns 409 for a requestless prompt while a turn is already running", async () => {
+      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
+        ? {
+            id,
+            title: "Test",
+            status: "running" as const,
+            turnStartedAt: "2026-01-01T00:00:08.000Z",
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+          }
+        : undefined);
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Another turn",
+      });
+
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toEqual({
+        error: "Session is already processing a prompt",
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
     test("returns 404 for unknown session", async () => {
@@ -1270,7 +1371,43 @@ describe("session routes", () => {
       expect(callArgs[1]).toEqual({ "Pick a color": "blue" });
     });
 
-    test("joins multiple selected answers with comma", async () => {
+    test("does not write answer content to bridge logs", async () => {
+      const secretAnswer = "private-answer-that-must-not-be-logged";
+      mockGetPendingQuestions.mockImplementationOnce(() => [
+        {
+          id: "q-private",
+          sessionId: "s-1",
+          questions: [
+            {
+              question: "Private question",
+              header: "Private",
+              options: [],
+            },
+          ],
+        },
+      ]);
+      const debugSpy = spyOn(console, "debug").mockImplementation(() => undefined);
+
+      try {
+        const res = await jsonRequest(
+          "POST",
+          "/session/s-1/questions/q-private/answer",
+          { answers: [[secretAnswer]] },
+        );
+
+        expect(res.status).toBe(200);
+        expect(JSON.stringify(debugSpy.mock.calls)).not.toContain(secretAnswer);
+        expect(debugSpy).toHaveBeenCalledWith("[session] Prepared question answers", {
+          questionId: "q-private",
+          questionCount: 1,
+          answerCount: 1,
+        });
+      } finally {
+        debugSpy.mockRestore();
+      }
+    });
+
+    test("serializes multi-select answers unambiguously when labels contain commas", async () => {
       mockGetPendingQuestions.mockImplementationOnce(() => [
         {
           id: "q-2",
@@ -1279,7 +1416,8 @@ describe("session routes", () => {
             {
               question: "Pick languages",
               header: "Languages",
-              options: [{ label: "ts" }, { label: "py" }, { label: "go" }],
+              options: [{ label: "TypeScript, strict" }, { label: "Python" }],
+              multiSelect: true,
             },
           ],
         },
@@ -1288,11 +1426,40 @@ describe("session routes", () => {
       const res = await jsonRequest(
         "POST",
         "/session/s-1/questions/q-2/answer",
-        { answers: [["ts", "py"]] },
+        { answers: [["TypeScript, strict", "Python"]] },
       );
       expect(res.status).toBe(200);
       const callArgs = mockAnswerQuestion.mock.calls[0];
-      expect(callArgs[1]).toEqual({ "Pick languages": "ts, py" });
+      expect(callArgs[1]).toEqual({
+        "Pick languages": JSON.stringify(["TypeScript, strict", "Python"]),
+      });
+    });
+
+    test("preserves a single-select option plus custom answer without ambiguity", async () => {
+      mockGetPendingQuestions.mockImplementationOnce(() => [
+        {
+          id: "q-option-custom",
+          sessionId: "s-1",
+          questions: [
+            {
+              question: "Pick a color",
+              header: "Color",
+              options: [{ label: "Red" }],
+              multiSelect: false,
+            },
+          ],
+        },
+      ]);
+
+      const res = await jsonRequest(
+        "POST",
+        "/session/s-1/questions/q-option-custom/answer",
+        { answers: [["Red", "Magenta, with sparkle 🦊"]] },
+      );
+      expect(res.status).toBe(200);
+      expect(mockAnswerQuestion.mock.calls[0]?.[1]).toEqual({
+        "Pick a color": JSON.stringify(["Red", "Magenta, with sparkle 🦊"]),
+      });
     });
 
     test("maps answers to multiple questions in order", async () => {
@@ -1317,7 +1484,7 @@ describe("session routes", () => {
       expect(callArgs[1]).toEqual({ "First?": "a", "Second?": "b" });
     });
 
-    test("handles missing answer slots as empty strings", async () => {
+    test("rejects missing answer slots instead of resolving a partial response", async () => {
       mockGetPendingQuestions.mockImplementationOnce(() => [
         {
           id: "q-4",
@@ -1334,9 +1501,8 @@ describe("session routes", () => {
         "/session/s-1/questions/q-4/answer",
         { answers: [["a"]] }, // only one answer for two questions
       );
-      expect(res.status).toBe(200);
-      const callArgs = mockAnswerQuestion.mock.calls[0];
-      expect(callArgs[1]).toEqual({ "Q1?": "a", "Q2?": "" });
+      expect(res.status).toBe(400);
+      expect(mockAnswerQuestion).not.toHaveBeenCalled();
     });
 
     test("returns 400 when answers is missing", async () => {
@@ -1355,6 +1521,97 @@ describe("session routes", () => {
         { answers: "not-an-array" },
       );
       expect(res.status).toBe(400);
+    });
+
+    test("rejects malformed nested answers without resolving the question", async () => {
+      const pending = {
+        id: "q-malformed",
+        sessionId: "s-1",
+        questions: [
+          { question: "Pick?", header: "P", options: [{ label: "a" }] },
+        ],
+      };
+      for (const answers of [
+        ["not-an-array"],
+        [["valid", 42]],
+        [[{ label: "forged" }]],
+      ]) {
+        mockGetPendingQuestions.mockImplementationOnce(() => [pending]);
+        const res = await jsonRequest(
+          "POST",
+          "/session/s-1/questions/q-malformed/answer",
+          { answers },
+        );
+        expect(res.status).toBe(400);
+      }
+      expect(mockAnswerQuestion).not.toHaveBeenCalled();
+    });
+
+    test("rejects extra question rows and bounded-answer overflows", async () => {
+      const pending = {
+        id: "q-bounded",
+        sessionId: "s-1",
+        questions: [
+          { question: "Pick?", header: "P", options: [{ label: "a" }] },
+        ],
+      };
+      const invalidAnswers = [
+        [[]],
+        [["a"], ["extra"]],
+        [Array.from({ length: 17 }, (_, index) => `answer-${index}`)],
+        [["x".repeat(16_385)]],
+      ];
+      for (const answers of invalidAnswers) {
+        mockGetPendingQuestions.mockImplementationOnce(() => [pending]);
+        const res = await jsonRequest(
+          "POST",
+          "/session/s-1/questions/q-bounded/answer",
+          { answers },
+        );
+        expect(res.status).toBe(400);
+      }
+      expect(mockAnswerQuestion).not.toHaveBeenCalled();
+    });
+
+    test("rejects a collectively oversized answer payload", async () => {
+      const questions = Array.from({ length: 16 }, (_, index) => ({
+        question: `Question ${index}?`,
+        header: String(index),
+        options: [],
+      }));
+      mockGetPendingQuestions.mockImplementationOnce(() => [{
+        id: "q-oversized",
+        sessionId: "s-1",
+        questions,
+      }]);
+      const answers = questions.map(() =>
+        // Large enough to exceed the semantic 256 KiB answer limit, but small
+        // enough to pass the request-body cap and exercise this validator.
+        Array.from({ length: 16 }, () => "x".repeat(1_021)));
+      const res = await jsonRequest(
+        "POST",
+        "/session/s-1/questions/q-oversized/answer",
+        { answers },
+      );
+      expect(res.status).toBe(400);
+      expect(mockAnswerQuestion).not.toHaveBeenCalled();
+    });
+
+    test("rejects an oversized request body before parsing JSON", async () => {
+      const oversizedInvalidJson = "{".repeat(
+        AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes + 2_048,
+      );
+
+      const res = await app.request("/session/s-1/questions/q-oversized-body/answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: oversizedInvalidJson,
+      });
+
+      expect(res.status).toBe(413);
+      expect(await jsonBody(res)).toEqual({ error: "Question answer request is too large" });
+      expect(mockGetPendingQuestions).not.toHaveBeenCalled();
+      expect(mockAnswerQuestion).not.toHaveBeenCalled();
     });
 
     /**
@@ -1519,6 +1776,35 @@ describe("session routes", () => {
       expect(res.status).toBe(200);
       const data = await jsonBody(res);
       expect(data.status).toBe("rejected");
+    });
+
+    test("does not write plan feedback to bridge logs", async () => {
+      const privateFeedback = "private-plan-feedback-that-must-not-be-logged";
+      mockGetPendingPlanApprovals.mockImplementationOnce(() => [{
+        id: "a-private",
+        sessionId: "s-1",
+        toolUseId: "tool-private",
+      }]);
+      const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
+
+      try {
+        const res = await jsonRequest(
+          "POST",
+          "/session/s-1/plan-approvals/a-private/respond",
+          { approved: false, feedback: privateFeedback },
+        );
+
+        expect(res.status).toBe(200);
+        expect(JSON.stringify(logSpy.mock.calls)).not.toContain(privateFeedback);
+        expect(logSpy).toHaveBeenCalledWith("[session] Plan approval response received", {
+          sessionId: "s-1",
+          approvalId: "a-private",
+          approved: false,
+          hasFeedback: true,
+        });
+      } finally {
+        logSpy.mockRestore();
+      }
     });
 
     test("returns 400 when approved is not boolean", async () => {
@@ -1975,6 +2261,26 @@ describe("persisted session routes", () => {
       expect(res.status).toBe(202);
       expect(await jsonBody(res)).toEqual({ status: "processing" });
       expect(mockSendPrompt).toHaveBeenCalledWith("s-1", "/compact");
+    });
+
+    test("contains a background compaction rejection after accepting the request", async () => {
+      const logged = mock(() => {});
+      const originalError = console.error;
+      console.error = logged;
+      try {
+        mockSendPrompt.mockRejectedValueOnce(new Error("provider disconnected"));
+
+        const res = await jsonRequest("POST", "/session/s-1/compact");
+        expect(res.status).toBe(202);
+        expect(await jsonBody(res)).toEqual({ status: "processing" });
+        await Promise.resolve();
+        expect(logged).toHaveBeenCalledWith(
+          "[session] Claude compaction failed:",
+          expect.objectContaining({ message: "provider disconnected" }),
+        );
+      } finally {
+        console.error = originalError;
+      }
     });
 
     test("returns 404 for an unknown session", async () => {

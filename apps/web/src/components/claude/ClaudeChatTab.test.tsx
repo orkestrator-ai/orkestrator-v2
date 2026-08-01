@@ -11,6 +11,7 @@ import type {
   ClaudeModel,
   ClaudeModelCatalogSnapshot,
   ClaudePlanApprovalRequest,
+  ClaudePromptSendOutcome,
   ClaudeQuestionRequest,
 } from "@/lib/claude-client";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
@@ -78,7 +79,7 @@ const mockSendPrompt = mock<
     _sessionId: string,
     _prompt: string,
     _options?: { requestId?: string; outputSchema?: unknown },
-  ) => Promise<boolean>
+  ) => Promise<ClaudePromptSendOutcome | boolean>
 >(async () => true);
 const mockGetStructuredOutput = mock<
   (
@@ -426,6 +427,20 @@ function createData(overrides: Partial<ClaudeNativeData> = {}): ClaudeNativeData
     isLocal: false,
     ...overrides,
   };
+}
+
+function PaneBackedClaudeChatTab() {
+  const paneEnvironment = usePaneLayoutStore(
+    (state) => state.environments.get(ENVIRONMENT_ID),
+  );
+  if (!paneEnvironment || paneEnvironment.root.kind !== "leaf") {
+    throw new Error("Expected pane leaf");
+  }
+  const tab = paneEnvironment.root.tabs.find((candidate) => candidate.id === TAB_ID);
+  if (!tab?.claudeNativeData) {
+    throw new Error("Expected Claude pane tab");
+  }
+  return <ClaudeChatTab tabId={TAB_ID} data={tab.claudeNativeData} isActive />;
 }
 
 function agentHandoffRecord(id: string, bootstrapPrompt: string) {
@@ -1349,6 +1364,39 @@ describe("ClaudeChatTab", () => {
     }
   });
 
+  test("replaces the provisional timer when an initial prompt is accepted", async () => {
+    const turnStartedAt = Date.parse("2026-08-01T09:15:00.000Z");
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    seedPaneLayout(undefined, "Run the initial Claude task");
+    mockSendPrompt.mockResolvedValue({
+      ok: true,
+      outcome: "accepted",
+      status: "processing",
+      requestId: "initial-prompt:env-1:tab-1",
+      turnStartedAt,
+      duplicate: false,
+    });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt="Run the initial Claude task"
+      />,
+    );
+
+    await waitFor(() => {
+      const session = useClaudeStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.isLoading).toBe(true);
+      expect(session?.loadingStartedAt).toBe(turnStartedAt);
+    });
+  });
+
   test("discards the renderer startup prompt when the backend owns the launch", async () => {
     const initialPrompt = "Backend-owned startup task";
     useClaudeStore.setState({ clients: new Map(), sessions: new Map() });
@@ -1662,6 +1710,7 @@ describe("ClaudeChatTab", () => {
   });
 
   test("refresh requests replace the transcript and reconcile server state", async () => {
+    const turnStartedAt = Date.parse("2026-08-01T09:30:00.000Z");
     const { rerender } = render(
       <ClaudeChatTab
         tabId={TAB_ID}
@@ -1683,7 +1732,11 @@ describe("ClaudeChatTab", () => {
       timestamp: "2026-07-16T12:00:00.000Z",
     };
     mockGetSessionMessages.mockResolvedValue([serverMessage]);
-    mockGetSession.mockResolvedValue({ status: "running", title: "Server title" });
+    mockGetSession.mockResolvedValue({
+      status: "running",
+      title: "Server title",
+      turnStartedAt,
+    });
     mockGetPendingQuestions.mockResolvedValue([
       { id: "question-1", sessionId: "session-1", questions: [] },
     ]);
@@ -1713,6 +1766,7 @@ describe("ClaudeChatTab", () => {
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
         messages: [serverMessage],
         isLoading: true,
+        loadingStartedAt: turnStartedAt,
         title: "Server title",
       });
       expect(useClaudeStore.getState().pendingQuestions.has("question-1")).toBe(true);
@@ -2362,6 +2416,7 @@ describe("ClaudeChatTab", () => {
   describe("shared SSE event handling", () => {
     test("rehydrates transcript, status, questions, and approvals after a replay gap", async () => {
       const channel = eventChannel();
+      const turnStartedAt = Date.parse("2026-08-01T10:00:00.000Z");
       mockSubscribeToEvents.mockImplementation(() => channel.stream);
 
       render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
@@ -2379,6 +2434,7 @@ describe("ClaudeChatTab", () => {
         sessionId: "session-1",
         status: "running",
         title: "Recovered session",
+        turnStartedAt,
       });
       mockGetSessionMessages.mockReset();
       mockGetSessionMessages.mockResolvedValue([replayedMessage]);
@@ -2412,6 +2468,7 @@ describe("ClaudeChatTab", () => {
         expect(state.sessions.get(SESSION_KEY)).toMatchObject({
           messages: [replayedMessage],
           isLoading: true,
+          loadingStartedAt: turnStartedAt,
           title: "Recovered session",
         });
         expect(state.pendingQuestions.has("fresh-question")).toBe(true);
@@ -3311,7 +3368,8 @@ describe("ClaudeChatTab", () => {
   });
 
   test("restores running state after a healthy fast reconnect reads an active session", async () => {
-    mockGetSession.mockResolvedValueOnce({ status: "running" });
+    const turnStartedAt = Date.parse("2026-07-31T20:00:00.000Z");
+    mockGetSession.mockResolvedValueOnce({ status: "running", turnStartedAt });
 
     render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
@@ -3319,6 +3377,9 @@ describe("ClaudeChatTab", () => {
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true),
     );
     expect(mockGetSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+    expect(
+      useClaudeStore.getState().sessions.get(SESSION_KEY)?.loadingStartedAt,
+    ).toBe(turnStartedAt);
     expect(screen.queryByText(/Completed in/)).toBeNull();
   });
 
@@ -3659,8 +3720,123 @@ describe("ClaudeChatTab", () => {
     expect(restoredTab?.claudeNativeData?.sessionId).toBe(restoredSessionId);
   });
 
-  test("replaces a restored session that the bridge confirms has expired", async () => {
+  test("adopts a late backend projection over a cached temporary session", async () => {
+    const projectedSessionId = "backend-startup-claude";
+    const projectedMessage: ClaudeMessageType = {
+      id: "backend-startup-message",
+      role: "user",
+      content: "Backend-dispatched startup prompt",
+      parts: [{ type: "text", content: "Backend-dispatched startup prompt" }],
+      timestamp: "2026-07-31T12:00:00.000Z",
+    };
+    const projectedQuestion: ClaudeQuestionRequest = {
+      id: "backend-startup-question",
+      sessionId: projectedSessionId,
+      questions: [],
+    };
+    mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+      sessionId === projectedSessionId ? [projectedMessage] : []
+    );
+    mockGetSession.mockImplementation(async (_client, sessionId) =>
+      sessionId === projectedSessionId
+        ? { status: "running" }
+        : { status: "idle" }
+    );
+    mockGetPendingQuestions.mockResolvedValue([projectedQuestion]);
+
+    seedPaneLayout();
+    render(<PaneBackedClaudeChatTab />);
+    await waitFor(() => expect(mockCheckHealth).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      usePaneLayoutStore.getState().updateTabNativeSessionId(
+        TAB_ID,
+        projectedSessionId,
+        ENVIRONMENT_ID,
+      );
+    });
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: projectedSessionId,
+        messages: [projectedMessage],
+        isLoading: true,
+      });
+      expect(useClaudeStore.getState().pendingQuestions.get(projectedQuestion.id))
+        .toMatchObject(projectedQuestion);
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("does not let an obsolete cold adoption overwrite a newer projection", async () => {
+    const firstProjection = "first-backend-claude";
+    const secondProjection = "second-backend-claude";
+    const adoption = deferred<Awaited<ReturnType<typeof mockAdoptNativeAgentSession>>>();
+    const secondMessage: ClaudeMessageType = {
+      id: "second-projection-message",
+      role: "assistant",
+      content: "Keep the newest backend projection",
+      parts: [{ type: "text", content: "Keep the newest backend projection" }],
+      timestamp: "2026-07-31T12:30:00.000Z",
+    };
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+    }));
+    seedPaneLayout(firstProjection);
+    mockAdoptNativeAgentSession.mockImplementationOnce(() => adoption.promise);
+    mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+      sessionId === secondProjection ? [secondMessage] : []
+    );
+    mockGetSession.mockResolvedValue({ status: "running" });
+
+    const view = render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: firstProjection })}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ providerSessionId: firstProjection }),
+    ));
+
+    view.rerender(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: secondProjection })}
+        isActive
+      />,
+    );
+    await act(async () => {
+      adoption.resolve({
+        id: "adopted-first",
+        environmentId: ENVIRONMENT_ID,
+        agent: "claude",
+        logicalSessionKey: SESSION_KEY,
+        providerSessionId: firstProjection,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        dispatchedRequestIds: [],
+      });
+      await adoption.promise;
+    });
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: secondProjection,
+        messages: [secondMessage],
+        isLoading: true,
+      });
+      expect(
+        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId,
+      ).toBe(secondProjection);
+    });
+  });
+
+  test("atomically replaces a warm restored session that the bridge confirms has expired", async () => {
     const expiredSessionId = "expired-claude-session";
+    const replacement = deferred<MockCreatedSession>();
     useClaudeStore.setState({
       sessions: new Map(),
       contextUsage: new Map([
@@ -3682,17 +3858,21 @@ describe("ClaudeChatTab", () => {
       if (sessionId === expiredSessionId) throw new MockSessionNotFoundError();
       return [];
     });
+    mockCreateSession.mockImplementationOnce(() => replacement.promise);
 
-    render(
-      <ClaudeChatTab
-        tabId={TAB_ID}
-        data={createData({ sessionId: expiredSessionId })}
-        isActive
-      />,
-    );
+    render(<PaneBackedClaudeChatTab />);
+
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+    expect(
+      usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId,
+    ).toBe(expiredSessionId);
+
+    await act(async () => {
+      replacement.resolve({ sessionId: "session-1" });
+      await replacement.promise;
+    });
 
     await waitFor(() => {
-      expect(mockCreateSession).toHaveBeenCalled();
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId)
         .toBe("session-1");
       expect(
@@ -3778,7 +3958,7 @@ describe("ClaudeChatTab", () => {
     }
   });
 
-  test("cold-restores a persisted session with its transcript", async () => {
+  test("cold-adopts a projected session over a conflicting cached identity", async () => {
     const restoredSessionId = "cold-restored-claude";
     const restoredMessage: ClaudeMessageType = {
       id: "restored-message",
@@ -3790,11 +3970,24 @@ describe("ClaudeChatTab", () => {
     useClaudeStore.setState((state) => ({
       ...state,
       clients: new Map(),
-      sessions: new Map(),
+      sessions: new Map([
+        [
+          SESSION_KEY,
+          {
+            sessionId: "temporary-renderer-session",
+            messages: [],
+            isLoading: false,
+          },
+        ],
+      ]),
     }));
     seedPaneLayout(restoredSessionId);
     mockGetSessionMessages.mockResolvedValue([restoredMessage]);
-    mockGetSession.mockResolvedValue({ status: "idle" });
+    mockGetSession.mockResolvedValue({ status: "running" });
+    mockGetPendingPlanApprovals.mockResolvedValue([{
+      id: "cold-startup-approval",
+      sessionId: restoredSessionId,
+    }]);
 
     render(
       <ClaudeChatTab
@@ -3808,10 +4001,15 @@ describe("ClaudeChatTab", () => {
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
         sessionId: restoredSessionId,
         messages: [restoredMessage],
-        isLoading: false,
+        isLoading: true,
       });
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("cold-startup-approval"))
+        .toBe(true);
     });
     expect(mockGetSessionMessages).toHaveBeenCalledWith(expect.anything(), restoredSessionId);
+    expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith(expect.objectContaining({
+      providerSessionId: restoredSessionId,
+    }));
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
@@ -3942,11 +4140,13 @@ describe("ClaudeChatTab", () => {
   });
 
   test("hydrates rate limits, suggestions, and background tasks from a resumed session", async () => {
+    const turnStartedAt = Date.parse("2026-08-01T10:30:00.000Z");
     mockGetSession.mockImplementation(async (_client, sessionId) =>
       sessionId === "resumed-claude"
         ? {
             id: sessionId,
             status: "running",
+            turnStartedAt,
             rateLimits: [{ label: "Five hour", usedPercent: 42 }],
             promptSuggestion: "Continue with the remaining tests",
             backgroundTasks: {
@@ -3971,6 +4171,7 @@ describe("ClaudeChatTab", () => {
       expect(state.sessions.get(SESSION_KEY)).toMatchObject({
         sessionId: "resumed-claude",
         isLoading: true,
+        loadingStartedAt: turnStartedAt,
       });
       expect(state.rateLimits.get(SESSION_KEY)).toEqual([
         { label: "Five hour", usedPercent: 42 },
@@ -4405,6 +4606,33 @@ describe("ClaudeChatTab", () => {
       (candidate) => candidate.role === "user" && candidate.content === ADDRESS_ALL_REVIEW_PROMPT,
     );
     expect(sentMessage?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  test("replaces the provisional timer when a normal prompt is accepted", async () => {
+    const turnStartedAt = Date.parse("2026-08-01T09:45:00.000Z");
+    mockSendPrompt.mockResolvedValue({
+      ok: true,
+      outcome: "accepted",
+      status: "processing",
+      requestId: "normal-prompt",
+      turnStartedAt,
+      duplicate: false,
+    });
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    const input = document.querySelector<HTMLElement>(
+      '[data-placeholder="Ask Claude anything..."]',
+    );
+    expect(input).toBeTruthy();
+    input!.textContent = "Implement the timer fix";
+    fireEvent.input(input!);
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => {
+      const session = useClaudeStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.isLoading).toBe(true);
+      expect(session?.loadingStartedAt).toBe(turnStartedAt);
+    });
   });
 
   test("sends a normal review as Markdown without a structured output schema", async () => {
@@ -5213,6 +5441,7 @@ describe("ClaudeChatTab", () => {
      * for as long as the turn is stalled.
      */
     installTimerHarness(1_000_000);
+    const watchdogTurnStartedAt = Date.parse("2026-08-01T10:45:00.000Z");
     const catalogGate = deferred<Awaited<ReturnType<typeof mockGetClaudeModelCatalog>>>();
     const serverMessage: ClaudeMessageType = {
       id: "server-message",
@@ -5272,6 +5501,10 @@ describe("ClaudeChatTab", () => {
 
     // ...and the watchdog is genuinely armed again once the user's pass is done,
     // so the gate above throttled it rather than disabling it.
+    mockGetSession.mockResolvedValue({
+      status: "running",
+      turnStartedAt: watchdogTurnStartedAt,
+    });
     mockedNow += 5_000;
     await act(async () => {
       intervalCallback?.();
@@ -5279,6 +5512,9 @@ describe("ClaudeChatTab", () => {
     });
     await flushAsyncWork();
     expect(mockGetSession.mock.calls.length).toBeGreaterThan(sessionReadsForManualRefresh);
+    expect(
+      useClaudeStore.getState().sessions.get(SESSION_KEY)?.loadingStartedAt,
+    ).toBe(watchdogTurnStartedAt);
   });
 
   test("a background watchdog refresh silently preserves a newer session update", async () => {
@@ -6477,6 +6713,7 @@ describe("ClaudeChatTab", () => {
     });
 
     test("marks a backend-dispatched turn running and removes the stale completion state", async () => {
+      const turnStartedAt = Date.parse("2026-08-01T10:15:00.000Z");
       await withChannel(async (channel) => {
         act(() => useClaudeStore.getState().setSessionLoading(SESSION_KEY, false));
         expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
@@ -6484,12 +6721,17 @@ describe("ClaudeChatTab", () => {
         channel.push({
           type: "session.updated",
           sessionId: "session-1",
-          data: { status: "running" },
+          data: {
+            status: "running",
+            turnStartedAt: "2026-08-01T10:15:00.000Z",
+          },
         } as any);
 
-        await waitFor(() =>
-          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true),
-        );
+        await waitFor(() => {
+          const session = useClaudeStore.getState().sessions.get(SESSION_KEY);
+          expect(session?.isLoading).toBe(true);
+          expect(session?.loadingStartedAt).toBe(turnStartedAt);
+        });
         expect(screen.queryByText(/Completed in/)).toBeNull();
         expect(screen.getByRole("status").textContent).toContain("Claude is thinking...");
       });

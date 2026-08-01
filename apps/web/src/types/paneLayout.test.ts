@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   MAX_SPLIT_DEPTH,
+  LEGACY_PANE_LAYOUT_VERSION,
   PANE_LAYOUT_VERSION,
   createDraggableTabId,
   createEdgeDroppableId,
@@ -11,10 +12,17 @@ import {
   parseDraggableTabId,
   parseEdgeDroppableId,
 } from "./paneLayout";
+import {
+  LEGACY_PANE_LAYOUT_VERSION as SHARED_LEGACY_PANE_LAYOUT_VERSION,
+  PANE_LAYOUT_VERSION as SHARED_PANE_LAYOUT_VERSION,
+} from "@orkestrator/protocol/pane-layout";
 
 describe("pane layout runtime helpers", () => {
   test("exports supported schema and depth constants", () => {
-    expect(PANE_LAYOUT_VERSION).toBe(1);
+    expect(LEGACY_PANE_LAYOUT_VERSION).toBe(1);
+    expect(PANE_LAYOUT_VERSION).toBe(2);
+    expect(LEGACY_PANE_LAYOUT_VERSION).toBe(SHARED_LEGACY_PANE_LAYOUT_VERSION);
+    expect(PANE_LAYOUT_VERSION).toBe(SHARED_PANE_LAYOUT_VERSION);
     expect(MAX_SPLIT_DEPTH).toBe(9);
   });
 

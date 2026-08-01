@@ -156,6 +156,7 @@ const mockGetSessionStatus = mock<
     phase?: CodexSessionPhase;
     title?: string;
     error?: string;
+    turnStartedAt?: number;
   } | null>
 >(async () => ({ status: "idle" }));
 const mockLookupSessionStatus = mock<
@@ -389,6 +390,7 @@ mock.module("@/lib/codex-client", () => ({
     && ["starting", "running", "cancelling", "recovering", "idle", "failed"].includes(value),
   lookupSessionStatus: mockLookupSessionStatus,
   parseApproval: realCodexClientSnapshot.parseApproval,
+  parseCodexTurnStartedAt: realCodexClientSnapshot.parseCodexTurnStartedAt,
   // The interaction and usage paths run their SSE payloads through the real
   // validators for the same reason `parseApproval` does: a permissive stub
   // would let the suite accept a frame the app itself would refuse.
@@ -889,6 +891,17 @@ function seedPaneLayout(
     ]),
     activeEnvironmentId: ENVIRONMENT_ID,
   });
+}
+
+/** Mirrors the production pane container by projecting the tab data from the store. */
+function PaneProjectedCodexChatTab({ tabId = TAB_ID }: { tabId?: string }) {
+  const data = usePaneLayoutStore((state) => {
+    const root = state.environments.get(ENVIRONMENT_ID)?.root;
+    if (!root || root.kind !== "leaf") return undefined;
+    return root.tabs.find((tab) => tab.id === tabId)?.codexNativeData;
+  });
+  if (!data) throw new Error("Expected projected Codex pane data");
+  return <CodexChatTab tabId={tabId} data={data} isActive />;
 }
 
 function seedCodexStore(messages: ReturnType<typeof createMessage>[] = []) {
@@ -1942,6 +1955,83 @@ describe("CodexChatTab", () => {
     expect(restoredTab?.codexNativeData?.sessionId).toBe(restoredSessionId);
   });
 
+  test("adopts a backend startup session projected after an empty session was cached", async () => {
+    const startupTabId = "startup-agent";
+    const startupSessionKey = createSessionKey(ENVIRONMENT_ID, startupTabId);
+    const temporarySessionId = "temporary-empty-session";
+    const backendSessionId = "backend-prompted-session";
+    const initialPromptMessage = createMessage(
+      "backend-initial-prompt",
+      "Run the initial setup audit",
+    );
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((environment) =>
+        environment.id === ENVIRONMENT_ID
+          ? { ...environment, pendingAgentLaunch: true, setupScriptsComplete: true }
+          : environment
+      ),
+    }));
+    useCodexStore.setState((state) => ({
+      ...state,
+      sessions: new Map(state.sessions).set(startupSessionKey, {
+        sessionId: temporarySessionId,
+        messages: [],
+        isLoading: false,
+        title: "Temporary session",
+      }),
+    }));
+    usePaneLayoutStore.setState((state) => {
+      const environments = new Map(state.environments);
+      const layout = environments.get(ENVIRONMENT_ID);
+      if (!layout || layout.root.kind !== "leaf") {
+        throw new Error("Expected pane leaf for startup projection test");
+      }
+      environments.set(ENVIRONMENT_ID, {
+        ...layout,
+        root: {
+          ...layout.root,
+          tabs: [
+            ...layout.root.tabs,
+            {
+              id: startupTabId,
+              type: "codex-native" as const,
+              codexNativeData: createData(),
+            },
+          ],
+        },
+      });
+      return { environments };
+    });
+    mockGetSessionMessages.mockResolvedValue([initialPromptMessage]);
+
+    render(<PaneProjectedCodexChatTab tabId={startupTabId} />);
+    await waitFor(() => expect(mockCheckHealth).toHaveBeenCalled());
+
+    // Setup completion publishes the backend-created, already-prompted session
+    // shortly after the tab's temporary session reached the reconnect fast path.
+    act(() => {
+      usePaneLayoutStore.getState().updateTabNativeSessionId(
+        startupTabId,
+        backendSessionId,
+        ENVIRONMENT_ID,
+      );
+    });
+
+    await waitFor(() => {
+      expect(mockGetSessionStatus).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        backendSessionId,
+        { throwOnError: true },
+      );
+      expect(useCodexStore.getState().sessions.get(startupSessionKey)).toMatchObject({
+        sessionId: backendSessionId,
+        messages: [initialPromptMessage],
+      });
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
   test("keeps a restored session usable when best-effort backend adoption fails", async () => {
     const restoredSessionId = "adoption-failed-codex-session";
     const restoredMessage = createMessage(
@@ -2023,6 +2113,61 @@ describe("CodexChatTab", () => {
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
+  test("cold adoption fully replaces a conflicting cached session", async () => {
+    const temporarySessionId = "cold-temporary-codex";
+    const projectedSessionId = "cold-projected-codex";
+    const restoredMessage = createMessage(
+      "cold-projected-message",
+      "Backend-owned startup transcript",
+    );
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map([[SESSION_KEY, {
+        sessionId: temporarySessionId,
+        messages: [],
+        isLoading: false,
+        title: "Temporary session",
+        error: "stale temporary error",
+      }]]),
+    }));
+    seedPaneLayout();
+    usePaneLayoutStore.getState().updateTabNativeSessionId(
+      TAB_ID,
+      projectedSessionId,
+      ENVIRONMENT_ID,
+    );
+    mockGetSessionStatus.mockResolvedValue({
+      status: "running",
+      title: "Backend startup",
+    });
+    mockGetSessionMessages.mockResolvedValue([restoredMessage]);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: projectedSessionId })}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: projectedSessionId,
+        messages: [restoredMessage],
+        isLoading: true,
+        title: "Backend startup",
+        error: undefined,
+      });
+    });
+    expect(mockGetSessionStatus).toHaveBeenCalledWith(
+      expect.anything(),
+      projectedSessionId,
+      { throwOnError: true },
+    );
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
   test("keeps a restored session on transient status failure and succeeds on retry", async () => {
     const restoredSessionId = "transient-codex";
     useCodexStore.setState((state) => ({ ...state, sessions: new Map() }));
@@ -2050,30 +2195,40 @@ describe("CodexChatTab", () => {
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
-  test("replaces a confirmed-missing restored session and writes the new id to the pane", async () => {
+  test("atomically replaces a reactively projected missing session", async () => {
     const missingSessionId = "missing-codex";
+    const replacement = deferred<{ sessionId: string; title?: string }>();
     useCodexStore.setState((state) => ({ ...state, sessions: new Map() }));
     seedPaneLayout();
     usePaneLayoutStore.getState().updateTabNativeSessionId(TAB_ID, missingSessionId, ENVIRONMENT_ID);
     mockGetSessionStatus.mockResolvedValueOnce(null);
+    mockCreateSession.mockImplementationOnce(() => replacement.promise);
 
-    render(
-      <CodexChatTab
-        tabId={TAB_ID}
-        data={createData({ sessionId: missingSessionId })}
-        isActive
-      />,
-    );
+    render(<PaneProjectedCodexChatTab />);
+
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(1));
+    // Keep the durable projection until its replacement exists. Publishing an
+    // intermediate undefined value rerenders this wrapper and cancels the
+    // initializer that owns the in-flight creation.
+    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
+      ?.codexNativeData?.sessionId).toBe(missingSessionId);
+
+    await act(async () => {
+      replacement.resolve({ sessionId: "replacement-codex", title: "Replacement" });
+      await replacement.promise;
+    });
 
     await waitFor(() => {
-      expect(mockCreateSession).toHaveBeenCalled();
-      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+        "replacement-codex",
+      );
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.codexNativeData?.sessionId)
-        .toBe("session-1");
+        .toBe("replacement-codex");
     });
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
   });
 
-  test("clears a missing cold-restored session id before creating its replacement", async () => {
+  test("atomically replaces a missing cold-restored session id", async () => {
     const missingSessionId = "cold-missing-codex";
     useCodexStore.setState((state) => ({
       ...state,
@@ -2153,7 +2308,7 @@ describe("CodexChatTab", () => {
         [createInteraction("old-interaction")],
       );
       usePromptDraftStore.getState().setDraftValue(
-        codexInteractionDraftKey("old-interaction"),
+        codexInteractionDraftKey(SESSION_KEY, "old-interaction"),
         "answer",
         "unfinished",
       );
@@ -2169,7 +2324,7 @@ describe("CodexChatTab", () => {
     expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        codexInteractionDraftKey("old-interaction"),
+        codexInteractionDraftKey(SESSION_KEY, "old-interaction"),
       ),
     ).toBe(false);
 
@@ -5033,6 +5188,47 @@ describe("CodexChatTab", () => {
     });
 
     expect(mockRenameEnvironmentFromPrompt).not.toHaveBeenCalled();
+  });
+
+  test("replaces the provisional timer with the accepted prompt timestamp", async () => {
+    const turnStartedAt = Date.parse("2026-08-01T11:00:00.000Z");
+    composeText = "Preserve the backend turn clock";
+    seedEnvironment("timer-fix");
+    mockSendPrompt.mockResolvedValue({
+      status: "processing",
+      requestId: "accepted-prompt",
+      turnStartedAt,
+      duplicate: false,
+    });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockLookupSessionStatus).toHaveBeenCalled();
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+    });
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "found",
+      session: {
+        status: "running",
+        phase: "running",
+        turnStartedAt,
+      },
+    });
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.isLoading).toBe(true);
+      expect(session?.loadingStartedAt).toBe(turnStartedAt);
+    });
   });
 
   test("renames compact Electron timestamp environments on the first prompt", async () => {
@@ -8160,6 +8356,48 @@ describe("CodexChatTab", () => {
   });
 
   describe("session.updated phases", () => {
+    test("rehydrates the bridge turn timestamp when a tab remounts mid-turn", async () => {
+      mockGetSessionStatus.mockResolvedValue({
+        status: "running",
+        phase: "running",
+        turnStartedAt: 2_000,
+      });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true, 9_000);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => {
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.loadingStartedAt)
+          .toBe(2_000);
+      });
+    });
+
+    test("adopts the bridge turn timestamp from a live status frame", async () => {
+      mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield {
+          type: "session.updated",
+          sessionId: SESSION_ID,
+          data: {
+            phase: "running",
+            turnStartedAt: "2026-08-01T12:34:56.000Z",
+          },
+        };
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true, 9_000);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => {
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.loadingStartedAt)
+          .toBe(Date.parse("2026-08-01T12:34:56.000Z"));
+      });
+    });
+
     test("a terminal phase clears the phase and re-enables the composer", async () => {
       mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
       mockSubscribeToEvents.mockImplementation(() => (async function* () {

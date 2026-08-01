@@ -2,6 +2,7 @@
 // Provides typed functions for interacting with the Claude bridge server
 
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import { parseBackendTurnStartedAt } from "./session-timer";
 import { isRendererDebugLoggingEnabled, rendererDebugLog } from "./debug-log";
 import { createUuid } from "./uuid";
 import type {
@@ -532,6 +533,8 @@ export interface ClaudeSession {
   id: string;
   title?: string;
   status: "idle" | "running" | "error";
+  /** Backend-authoritative epoch milliseconds for the active turn. */
+  turnStartedAt?: number;
   createdAt: string;
   lastActivity: string;
   error?: string;
@@ -877,6 +880,10 @@ export async function lookupSession(
       droppedTaskIds,
     );
     const invalidMetadataFields: string[] = [];
+    const turnStartedAt = parseBackendTurnStartedAt(session.turnStartedAt);
+    if (session.turnStartedAt !== undefined && turnStartedAt === undefined) {
+      invalidMetadataFields.push("turnStartedAt");
+    }
     if (session.contextUsage !== undefined && contextUsage === undefined) {
       invalidMetadataFields.push("contextUsage");
     } else {
@@ -908,6 +915,7 @@ export async function lookupSession(
         id: session.id,
         title: session.title as string | undefined,
         status: session.status,
+        ...(turnStartedAt !== undefined ? { turnStartedAt } : {}),
         createdAt: session.createdAt,
         lastActivity: session.lastActivity,
         error: session.error as string | undefined,
@@ -1036,6 +1044,8 @@ export type ClaudePromptSendOutcome =
       outcome: "accepted";
       status: "processing" | "already-processed";
       requestId: string;
+      /** Backend-authoritative epoch milliseconds for the active turn. */
+      turnStartedAt?: number;
       duplicate: boolean;
     }
   | {
@@ -1148,7 +1158,9 @@ export async function sendPrompt(
       requestId?: unknown;
       status?: unknown;
       duplicate?: unknown;
+      turnStartedAt?: unknown;
     };
+    const turnStartedAt = parseBackendTurnStartedAt(body.turnStartedAt);
     return {
       ok: true,
       outcome: "accepted",
@@ -1156,6 +1168,7 @@ export async function sendPrompt(
         ? "already-processed"
         : "processing",
       requestId: typeof body.requestId === "string" ? body.requestId : requestId,
+      ...(turnStartedAt !== undefined ? { turnStartedAt } : {}),
       duplicate: body.duplicate === true,
     };
   } catch (error) {
@@ -1461,7 +1474,8 @@ export type ClaudeApprovalResponseResult =
   | "applied"
   | "stale"
   | "forbidden"
-  | "error";
+  | "error"
+  | "unknown";
 
 /** Maps a bridge reply onto the shared outcome union. */
 function approvalResponseResult(response: Response): ClaudeApprovalResponseResult {
@@ -1493,7 +1507,12 @@ export async function answerQuestion(
     return approvalResponseResult(response);
   } catch (error) {
     console.error("[claude-client] Failed to answer question:", error);
-    return "error";
+    try {
+      const pending = await getPendingQuestions(client, sessionId, { throwOnError: true });
+      return pending.some((question) => question.id === questionId) ? "error" : "stale";
+    } catch {
+      return "unknown";
+    }
   }
 }
 
@@ -1514,7 +1533,12 @@ export async function dismissQuestion(
     return approvalResponseResult(response);
   } catch (error) {
     console.error("[claude-client] Failed to dismiss question:", error);
-    return "error";
+    try {
+      const pending = await getPendingQuestions(client, sessionId, { throwOnError: true });
+      return pending.some((question) => question.id === questionId) ? "error" : "stale";
+    } catch {
+      return "unknown";
+    }
   }
 }
 
@@ -1544,7 +1568,12 @@ export async function respondToPlanApproval(
     return approvalResponseResult(response);
   } catch (error) {
     console.error("[claude-client] Failed to respond to plan approval:", error);
-    return "error";
+    try {
+      const pending = await getPendingPlanApprovals(client, sessionId, { throwOnError: true });
+      return pending.some((approval) => approval.id === approvalId) ? "error" : "stale";
+    } catch {
+      return "unknown";
+    }
   }
 }
 

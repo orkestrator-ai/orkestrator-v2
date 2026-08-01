@@ -7,13 +7,21 @@ import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { writeStoredPaneSelection } from "@/lib/pane-selection-storage";
+import {
+  readStoredPaneSelection,
+} from "@/lib/pane-selection-storage";
+import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 import {
   useLoopedReviewStore,
   type LoopedReviewWorkflow,
 } from "@/stores/loopedReviewStore";
 import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
-import type { PaneLeaf, PersistedPaneLayout } from "@/types/paneLayout";
+import {
+  LEGACY_PANE_LAYOUT_VERSION,
+  PANE_LAYOUT_VERSION,
+  type PaneLeaf,
+  type PersistedPaneLayout,
+} from "@/types/paneLayout";
 import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession } from "@/types";
 import type { CollisionDetection } from "@dnd-kit/core";
 import * as realBackend from "@/lib/backend";
@@ -21,6 +29,19 @@ import * as realSetupCommands from "@/lib/setup-commands";
 import { requestTerminalBrowserTab } from "@/lib/terminal-links";
 import * as realDndKitCore from "@dnd-kit/core";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
+
+const LEGACY_SELECTION_STORAGE_KEY = "orkestrator.pane-selection.v1";
+
+function writeStoredPaneSelection(
+  environmentId: string,
+  selection: { activePaneId: string; activeTabIds: Record<string, string> },
+): void {
+  localStorage.setItem(LEGACY_SELECTION_STORAGE_KEY, JSON.stringify({
+    version: 1,
+    entries: [{ environmentId, ...selection }],
+  }));
+}
 
 const realBackendSnapshot = { ...realBackend };
 const realSetupCommandsSnapshot = { ...realSetupCommands };
@@ -181,7 +202,9 @@ mock.module("./TerminalPortalHost", () => ({
 }));
 
 mock.module("./InitializationLogs", () => ({
-  InitializationLogs: () => null,
+  InitializationLogs: ({ containerId }: { containerId: string }) => (
+    <div data-testid="initialization-logs">{containerId}</div>
+  ),
 }));
 
 const {
@@ -383,7 +406,7 @@ describe("TerminalContainer", () => {
 
   test("restores a backend pane layout before default tab seeding", async () => {
     getPaneLayoutMock.mockResolvedValue({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
       containerId: "container-hidden",
       activePaneId: "restored-pane",
@@ -445,7 +468,7 @@ describe("TerminalContainer", () => {
       usePaneLayoutStore.getState().hydration.get("env-hidden"),
     ).toBeUndefined();
     getPaneLayoutMock.mockResolvedValue({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
       containerId: "container-hidden",
       activePaneId: "restored-pane",
@@ -581,15 +604,12 @@ describe("TerminalContainer", () => {
     expect(state.containerId).toBe("container-hidden");
   });
 
-  test("restores this client's own pane and tab selection on a cold start", async () => {
-    // The shared record carries a canonical selection so that clicking a tab
-    // never writes a revision and never moves another client's focus. Without
-    // the local mirror, every restart would drop the user on the first tab.
+  test("restores the backend pane and tab selection on a cold start", async () => {
     getPaneLayoutMock.mockResolvedValue({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
       containerId: "container-hidden",
-      activePaneId: "left",
+      activePaneId: "right",
       root: {
         kind: "split",
         id: "split",
@@ -604,7 +624,7 @@ describe("TerminalContainer", () => {
               { id: "left-a", type: "plain" },
               { id: "left-b", type: "plain" },
             ],
-            activeTabId: "left-a",
+            activeTabId: "left-b",
           },
           {
             kind: "leaf",
@@ -613,17 +633,18 @@ describe("TerminalContainer", () => {
               { id: "right-a", type: "plain" },
               { id: "right-b", type: "plain" },
             ],
-            activeTabId: "right-a",
+            activeTabId: "right-b",
           },
         ],
       },
       updatedAt: "2026-01-01T00:00:00.000Z",
       revision: 3,
     });
+    // A stale value from versions that kept focus in localStorage must not
+    // override the backend-owned selection.
     writeStoredPaneSelection("env-hidden", {
-      activePaneId: "right",
-      // "gone" no longer exists in the restored layout and must be ignored.
-      activeTabIds: { left: "left-b", right: "right-b", missing: "gone" },
+      activePaneId: "left",
+      activeTabIds: { left: "left-a", right: "right-a" },
     });
 
     render(
@@ -647,12 +668,160 @@ describe("TerminalContainer", () => {
           { id: "right", activeTabId: "right-b" },
         ],
       });
+      expect(readStoredPaneSelection("env-hidden")).toBeNull();
     });
+  });
+
+  test("migrates legacy local focus into a v2 backend layout before deleting it", async () => {
+    const legacy: PersistedPaneLayout = {
+      version: LEGACY_PANE_LAYOUT_VERSION,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      // V1 intentionally persisted canonical pointers rather than real focus.
+      activePaneId: "left",
+      root: {
+        kind: "split",
+        id: "split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "left-a", type: "plain" }],
+            activeTabId: "left-a",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [
+              { id: "right-a", type: "plain" },
+              { id: "right-b", type: "plain" },
+            ],
+            activeTabId: "right-a",
+          },
+        ],
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 7,
+    };
+    getPaneLayoutMock.mockResolvedValue(legacy);
+    writeStoredPaneSelection("env-hidden", {
+      activePaneId: "right",
+      activeTabIds: { left: "left-a", right: "right-b" },
+    });
+    savePaneLayoutMock.mockImplementationOnce(async (environmentId, layout) => ({
+      ...layout,
+      environmentId,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      revision: 8,
+    }));
+    const stopPersistence = startPaneLayoutPersistence({
+      save: savePaneLayoutMock,
+      load: getPaneLayoutMock,
+      debounceMs: 5,
+    });
+
+    try {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-hidden"
+            containerId="container-hidden"
+            isContainerRunning
+            isActive={false}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const restored = usePaneLayoutStore.getState().environments.get("env-hidden");
+        expect(restored?.activePaneId).toBe("right");
+        expect(restored?.root).toMatchObject({
+          children: [
+            { id: "left", activeTabId: "left-a" },
+            { id: "right", activeTabId: "right-b" },
+          ],
+        });
+        expect(savePaneLayoutMock).toHaveBeenCalledWith(
+          "env-hidden",
+          expect.objectContaining({
+            version: PANE_LAYOUT_VERSION,
+            activePaneId: "right",
+            root: expect.objectContaining({
+              children: expect.arrayContaining([
+                expect.objectContaining({ id: "right", activeTabId: "right-b" }),
+              ]),
+            }),
+          }),
+          7,
+        );
+        expect(readStoredPaneSelection("env-hidden")).toBeNull();
+      });
+    } finally {
+      stopPersistence();
+    }
+  });
+
+  test("retains legacy focus when its v2 migration write fails", async () => {
+    getPaneLayoutMock.mockResolvedValue({
+      version: LEGACY_PANE_LAYOUT_VERSION,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "default",
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "first", type: "plain" },
+          { id: "remembered", type: "plain" },
+        ],
+        activeTabId: "first",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 4,
+    });
+    writeStoredPaneSelection("env-hidden", {
+      activePaneId: "default",
+      activeTabIds: { default: "remembered" },
+    });
+    savePaneLayoutMock.mockRejectedValueOnce(new Error("backend unavailable"));
+    const stopPersistence = startPaneLayoutPersistence({
+      save: savePaneLayoutMock,
+      load: getPaneLayoutMock,
+      debounceMs: 5,
+    });
+
+    try {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-hidden"
+            containerId="container-hidden"
+            isContainerRunning
+            isActive={false}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => expect(savePaneLayoutMock).toHaveBeenCalled());
+      await waitFor(() => {
+        expect(readStoredPaneSelection("env-hidden")).toEqual({
+          activePaneId: "default",
+          activeTabIds: { default: "remembered" },
+        });
+      });
+      expect(usePaneLayoutStore.getState().getPane("default", "env-hidden")?.activeTabId)
+        .toBe("remembered");
+    } finally {
+      stopPersistence();
+    }
   });
 
   test("falls back to the layout's own selection when nothing was remembered", async () => {
     getPaneLayoutMock.mockResolvedValue({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
       containerId: "container-hidden",
       activePaneId: "restored-pane",
@@ -698,7 +867,7 @@ describe("TerminalContainer", () => {
       }),
     );
     getPaneLayoutMock.mockResolvedValue({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
       containerId: null,
       activePaneId: "restored-pane",
@@ -782,7 +951,7 @@ describe("TerminalContainer", () => {
     extraTabs: Array<Record<string, unknown>> = [],
   ) => {
     getPaneLayoutMock.mockResolvedValue({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
       containerId: null,
       activePaneId: "restored-pane",
@@ -867,6 +1036,23 @@ describe("TerminalContainer", () => {
     expect(getEnvironmentSetupSessionMock.mock.calls.length).toBeGreaterThan(1);
     expect(setupTabIds()).toEqual(["default"]);
   }, 15000);
+
+  test("retires an unbound setup tab after exhausting session lookup retries", async () => {
+    getEnvironmentSetupSessionMock.mockRejectedValue(new Error("gateway unavailable"));
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(
+      () => {
+        expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(3);
+        expect(setupTabIds()).toEqual([]);
+      },
+      { timeout: 10_000 },
+    );
+    const [replacement] = usePaneLayoutStore.getState().getAllTabs("env-hidden");
+    expect(replacement).toMatchObject({ type: "plain" });
+    expect(replacement?.isSetupTab).toBeUndefined();
+  }, 15_000);
 
   test("binds every restored backend-managed setup tab, not just the first", async () => {
     // Binding one tab per effect run relied on the run repeating to reach the
@@ -966,6 +1152,114 @@ describe("TerminalContainer", () => {
     ).toEqual(["agent"]);
   });
 
+  test("restores a persisted build tab when its authoritative pipeline exists", async () => {
+    const pipeline = buildPipelineFixture({
+      id: "pipeline-restored",
+      environmentId: "env-hidden",
+      environmentType: "containerized",
+      taskId: "task-restored",
+    });
+    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    getPaneLayoutMock.mockResolvedValue({
+      version: PANE_LAYOUT_VERSION,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [{
+          id: "restored-build",
+          type: "claude-build",
+          buildTabData: {
+            environmentId: "stale-environment",
+            pipelineId: pipeline.id,
+            taskId: pipeline.taskId,
+            isLocal: true,
+          },
+        }],
+        activeTabId: "restored-build",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 3,
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const tabs = usePaneLayoutStore.getState().getAllTabs("env-hidden");
+      expect(tabs).toHaveLength(2);
+      expect(tabs).toContainEqual(expect.objectContaining({
+        id: "restored-build",
+        type: "claude-build",
+        buildTabData: {
+          environmentId: "env-hidden",
+          pipelineId: pipeline.id,
+          taskId: pipeline.taskId,
+          isLocal: false,
+        },
+      }));
+      expect(tabs).toContainEqual(expect.objectContaining({
+        id: "default",
+        type: "plain",
+      }));
+      expect(usePaneLayoutStore.getState().getPane("restored-pane", "env-hidden"))
+        .not.toBeNull();
+    });
+  });
+
+  test("filters a persisted build tab when its pipeline is absent", async () => {
+    getPaneLayoutMock.mockResolvedValue({
+      version: PANE_LAYOUT_VERSION,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [{
+          id: "orphan-build",
+          type: "claude-build",
+          buildTabData: {
+            environmentId: "env-hidden",
+            pipelineId: "missing-pipeline",
+            taskId: "missing-task",
+            isLocal: false,
+          },
+        }],
+        activeTabId: "orphan-build",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 3,
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const tabs = usePaneLayoutStore.getState().getAllTabs("env-hidden");
+      expect(tabs.some((tab) => tab.type === "claude-build")).toBe(false);
+      expect(tabs).toContainEqual(expect.objectContaining({ type: "plain" }));
+    });
+  });
+
   test("reconstructs a looped-review tab only after its authoritative workflow hydrates", async () => {
     const workflowId = useLoopedReviewStore.getState().createWorkflow({
       environmentId: "env-hidden",
@@ -986,7 +1280,7 @@ describe("TerminalContainer", () => {
       revision: 3,
     }]);
     getPaneLayoutMock.mockResolvedValue({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
       containerId: "container-hidden",
       activePaneId: "restored-pane",
@@ -1037,7 +1331,7 @@ describe("TerminalContainer", () => {
   test("restores ordinary tabs when looped-review hydration rejects", async () => {
     listLoopedReviewWorkflowsMock.mockRejectedValue(new Error("workflow store unavailable"));
     getPaneLayoutMock.mockResolvedValue({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
       containerId: "container-hidden",
       activePaneId: "restored-pane",
@@ -1104,7 +1398,7 @@ describe("TerminalContainer", () => {
 
   test("falls back to a default layout when the persisted tree is malformed", async () => {
     getPaneLayoutMock.mockResolvedValue({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
       containerId: "container-hidden",
       activePaneId: "broken",
@@ -1132,7 +1426,7 @@ describe("TerminalContainer", () => {
 
   test("rejects a layout for a stale container and seeds the current container", async () => {
     getPaneLayoutMock.mockResolvedValue({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-hidden",
       containerId: "stale-container",
       activePaneId: "restored",
@@ -2421,6 +2715,67 @@ describe("TerminalContainer", () => {
     });
   });
 
+  test("falls back to the live active pane when a pending launch target disappeared", async () => {
+    usePaneLayoutStore.setState({
+      environments: new Map([["env-hidden", {
+        root: {
+          kind: "leaf",
+          id: "survivor",
+          tabs: [{ id: "existing", type: "plain" }],
+          activeTabId: "existing",
+        },
+        activePaneId: "survivor",
+        containerId: "container-hidden",
+      }]]),
+      hydration: new Map([["env-hidden", "done"]]),
+      activeEnvironmentId: null,
+    } as never);
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden" ? { ...env, setupScriptsComplete: true } : env
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+      workspaceReadyEnvironments: new Set(["env-hidden"]),
+    }));
+    useClaudeOptionsStore.setState({
+      options: {},
+      pendingNativeLaunches: {
+        "env-hidden": {
+          containerId: "container-hidden",
+          environmentId: "env-hidden",
+          targetPaneId: "removed-pane",
+          agentType: "codex",
+          launchMode: "native",
+        },
+      },
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const survivor = usePaneLayoutStore.getState().getPane(
+        "survivor",
+        "env-hidden",
+      );
+      expect(survivor?.tabs).toContainEqual(expect.objectContaining({
+        id: "startup-agent",
+        type: "codex-native",
+      }));
+      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden"))
+        .toBeUndefined();
+    });
+  });
+
   /**
    * Put "env-hidden" in the state a mobile reload leaves behind: setup already
    * finished, the durable launch intent still set, a setup-only persisted layout,
@@ -2637,6 +2992,59 @@ describe("TerminalContainer", () => {
     expect(setEnvironmentPendingAgentLaunchMock).not.toHaveBeenCalled();
   });
 
+  test("replaces a stale renderer launch with the backend running session", async () => {
+    setupDurableLaunchEnvironment({
+      defaultAgent: "codex",
+      codexMode: "native",
+      pendingAgentLaunch: false,
+      startupAgentSession: {
+        tabId: "startup-agent",
+        agent: "codex",
+        style: "native",
+        providerSessionId: "backend-provider-session",
+        status: "running",
+        model: "backend-model",
+        reasoningEffort: "high",
+        startedAt: "2026-07-29T12:00:00.000Z",
+      },
+    });
+    useClaudeOptionsStore.setState({
+      options: {},
+      pendingNativeLaunches: {
+        "env-hidden": {
+          containerId: "stale-container",
+          environmentId: "env-hidden",
+          initialPrompt: "stale prompt that must not be dispatched",
+          targetPaneId: "default",
+          agentType: "claude",
+          launchMode: "native",
+          providerSessionId: "stale-provider-session",
+          model: "stale-model",
+          reasoningEffort: "low",
+        },
+      },
+    });
+
+    renderHiddenTerminal();
+
+    await waitFor(() => {
+      const startupTabs = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .filter((tab) => tab.id === "startup-agent");
+      expect(startupTabs).toHaveLength(1);
+      expect(startupTabs[0]).toMatchObject({
+        type: "codex-native",
+        codexNativeData: { sessionId: "backend-provider-session" },
+        initialAgentModel: "backend-model",
+        initialReasoningEffort: "high",
+      });
+      expect(startupTabs[0]?.initialPrompt).toBeUndefined();
+    });
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .some((tab) => tab.id !== "startup-agent" && tab.type.endsWith("native")),
+    ).toBe(false);
+  });
+
   test.each(["starting", "error"] as const)(
     "does not project or clear a backend-owned %s startup session",
     async (status) => {
@@ -2675,6 +3083,99 @@ describe("TerminalContainer", () => {
       ).toBe(true);
     },
   );
+
+  test("toasts each distinct startup error once and allows a later retry to re-report it", async () => {
+    setupDurableLaunchEnvironment({
+      name: "Hidden environment",
+      startupAgentSession: {
+        tabId: "startup-agent",
+        agent: "codex",
+        style: "native",
+        status: "error",
+        error: "Provider refused the launch",
+      },
+    });
+    renderHiddenTerminal();
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith(
+        "codex could not start in Hidden environment",
+        { description: "Provider refused the launch", duration: 10_000 },
+      );
+    });
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        branch: "unrelated-render",
+      });
+    });
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        startupAgentSession: {
+          tabId: "startup-agent",
+          agent: "codex",
+          style: "native",
+          status: "error",
+          error: "Session handshake timed out",
+        },
+      });
+    });
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        startupAgentSession: {
+          tabId: "startup-agent",
+          agent: "codex",
+          style: "native",
+          status: "starting",
+        },
+      });
+    });
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        startupAgentSession: {
+          tabId: "startup-agent",
+          agent: "codex",
+          style: "native",
+          status: "error",
+          error: "Session handshake timed out",
+        },
+      });
+    });
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(3));
+
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        startupAgentSession: {
+          tabId: "startup-agent",
+          agent: "codex",
+          style: "native",
+          status: "starting",
+        },
+      });
+    });
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        startupAgentSession: {
+          tabId: "startup-agent",
+          agent: "codex",
+          style: "native",
+          status: "error",
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledTimes(4);
+      expect(mockToastError).toHaveBeenLastCalledWith(
+        "codex could not start in Hidden environment",
+        { description: "The agent could not be started.", duration: 10_000 },
+      );
+    });
+  });
 
   test("stops carrying the options once the agent surface acknowledges them", async () => {
     setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
@@ -3455,6 +3956,54 @@ describe("TerminalContainer", () => {
     });
   });
 
+  test("keeps the workspace ready when setup completes before ensure returns", async () => {
+    let resolveSetup!: (result: EnsureEnvironmentSetupResult) => void;
+    ensureEnvironmentSetupMock.mockImplementationOnce(
+      () => new Promise<EnsureEnvironmentSetupResult>((resolve) => {
+        resolveSetup = resolve;
+      }),
+    );
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(ensureEnvironmentSetupMock).toHaveBeenCalledTimes(1));
+    // Reproduce the lifecycle event winning the race with the outstanding
+    // ensure call. The response still describes setup as running.
+    act(() => {
+      const store = useEnvironmentStore.getState();
+      store.setSetupCommandsResolved("env-hidden", true);
+      store.setSetupScriptsRunning("env-hidden", false);
+      store.setWorkspaceReady("env-hidden", true);
+    });
+    act(() => {
+      resolveSetup({
+        setupCommands: [TEST_CONTAINER_SETUP_COMMAND],
+        setupManagedByBackend: true,
+        setupStarted: true,
+        setupSessionId: "env-hidden:setup",
+        environment: {
+          ...useEnvironmentStore.getState().getEnvironmentById("env-hidden")!,
+          setupScriptsComplete: false,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden"))
+        .toBe(false);
+      expect(useEnvironmentStore.getState().isWorkspaceReady("env-hidden")).toBe(true);
+    });
+  });
+
   test("falls back to a usable plain tab when backend setup returns no result", async () => {
     ensureEnvironmentSetupMock.mockResolvedValueOnce(undefined as never);
 
@@ -4030,6 +4579,80 @@ describe("TerminalContainer", () => {
     fireEvent.click(screen.getByRole("button", { name: /create script/i }));
     expect(onCreateScript).toHaveBeenCalledTimes(1);
     expect(onCreateScript.mock.calls[0]?.[0]).toContain("setup");
+  });
+
+  test("renders the no-environment and container-creation overlay variants", () => {
+    const noEnvironment = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="missing-environment"
+          containerId={null}
+          isContainerRunning={false}
+        />
+      </TerminalProvider>,
+    );
+    expect(screen.getByText("Select an environment from the sidebar to get started."))
+      .toBeTruthy();
+    noEnvironment.unmount();
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning={false}
+          isContainerCreating
+          onStartContainer={mock(() => {})}
+        />
+      </TerminalProvider>,
+    );
+    expect(screen.getByTestId("initialization-logs").textContent)
+      .toBe("container-hidden");
+    expect(screen.queryByRole("button", { name: /start container/i })).toBeNull();
+  });
+
+  test("renders local creation and stopped overlays with environment wording", () => {
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((environment) =>
+        environment.id === "env-hidden"
+          ? {
+              ...environment,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: undefined,
+            }
+          : environment
+      ),
+    }));
+    const creating = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isContainerCreating
+        />
+      </TerminalProvider>,
+    );
+    expect(screen.getByText("Creating worktree...")).toBeTruthy();
+    creating.unmount();
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isContainerCreating={false}
+          onStartContainer={mock(() => {})}
+        />
+      </TerminalProvider>,
+    );
+    expect(screen.getByText("Environment not started")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /start environment/i })).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: /create script/i }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   describe("createFileTab", () => {
@@ -4672,6 +5295,30 @@ describe("TerminalContainer", () => {
             workflowId: "workflow-1",
           }),
         }));
+    });
+
+    test("rejects a looped-review tab without a workflow id", async () => {
+      const refused = mock((_created: boolean) => {});
+      const originalTabs = usePaneLayoutStore.getState().getAllTabs("env-visible");
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="looped-review"
+            options={{}}
+            onResult={refused}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => expect(refused).toHaveBeenCalledWith(false));
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
+        .toEqual(originalTabs);
     });
 
     test("reports refusal instead of claiming a looped-review tab was created", async () => {

@@ -2,13 +2,17 @@ import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { hydrateLoopedReviewWorkflow } from "@/lib/looped-review-persistence";
 import {
   preserveClientPaneSelection,
+  preserveRendererLocalPaneFields,
   reconcilePersistedLayout,
 } from "@/lib/pane-layout-restore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
-import type { PersistedPaneLayout } from "@/types/paneLayout";
+import {
+  LEGACY_PANE_LAYOUT_VERSION,
+  type PersistedPaneLayout,
+} from "@/types/paneLayout";
 
 /**
  * The one way a backend-owned pane snapshot becomes renderer state.
@@ -100,7 +104,8 @@ export async function hydratePaneLayoutDependencies(
 
 /**
  * Validates a backend snapshot against this client's environment and stores,
- * then re-applies this renderer's own pane/tab selection over the result.
+ * then preserves only renderer-local connection fields. Pane and tab selection
+ * come from the backend snapshot so reconnecting clients share the last focus.
  *
  * Returns null when the snapshot cannot be trusted for this client: the
  * environment is gone, its container generation moved on, or the record itself
@@ -132,5 +137,10 @@ export function reconcileAuthoritativePaneLayout(
   });
   if (!restored) return null;
 
-  return preserveClientPaneSelection(restored, current);
+  // V1 stored canonical first-pane/first-tab placeholders, not real focus.
+  // Until its migration write succeeds, keep this renderer's selection while
+  // still adopting structural changes and renderer-local connection fields.
+  return saved.version === LEGACY_PANE_LAYOUT_VERSION
+    ? preserveClientPaneSelection(restored, current)
+    : preserveRendererLocalPaneFields(restored, current);
 }

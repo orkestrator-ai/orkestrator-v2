@@ -84,7 +84,12 @@ export interface NativeChatStoreSlice<TClient, TMessage, TAttachment, TQueued> {
   upsertMessage: (sessionKey: string, message: TMessage) => void;
   removeMessage: (sessionKey: string, messageId: string) => void;
   setMessages: (sessionKey: string, messages: TMessage[]) => void;
-  setSessionLoading: (sessionKey: string, isLoading: boolean) => void;
+  setSessionLoading: (
+    sessionKey: string,
+    isLoading: boolean,
+    /** Backend-authoritative epoch milliseconds for the active turn. */
+    startedAt?: number,
+  ) => void;
   setSessionError: (sessionKey: string, error: string | undefined) => void;
   setSessionTitle: (sessionKey: string, title: string | undefined) => void;
 
@@ -277,13 +282,16 @@ export function createNativeChatStoreSlice<
         return { sessions: next };
       }),
 
-    setSessionLoading: (sessionKey, isLoading) =>
+    setSessionLoading: (sessionKey, isLoading, startedAt) =>
       set((state) => {
         const session = state.sessions.get(sessionKey);
         if (!session) return state;
         const next = new Map(state.sessions);
         const revisions = new Map(state.sessionLoadingRevisions);
-        next.set(sessionKey, updateTimedSessionLoading(session, isLoading));
+        next.set(
+          sessionKey,
+          updateTimedSessionLoading(session, isLoading, Date.now(), startedAt),
+        );
         revisions.set(
           sessionKey,
           (state.sessionLoadingRevisions.get(sessionKey) ?? 0) + 1,

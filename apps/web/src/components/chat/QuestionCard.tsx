@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { AlertTriangle, Check, Circle, HelpCircle, X } from "lucide-react";
+import { Check, Circle, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,8 @@ import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 
 /** Agent-neutral option shape. `value` falls back to `label` when absent. */
 export interface QuestionCardOption {
+  /** Stable presentation identity, distinct from label and provider value. */
+  id?: string;
   label: string;
   description?: string;
   value?: string;
@@ -17,12 +19,16 @@ export interface QuestionCardOption {
 
 /** Agent-neutral question shape. */
 export interface QuestionCardQuestion {
+  /** Stable provider question identity used to namespace its draft fields. */
+  id?: string;
   question: string;
   header?: string;
   options?: QuestionCardOption[];
   multiSelect?: boolean;
   /** Per-question override of the card-level `allowCustomAnswer`. */
   allowCustomAnswer?: boolean;
+  /** Secret answers stay in component memory and never enter the draft store. */
+  secret?: boolean;
 }
 
 /**
@@ -33,9 +39,22 @@ export interface QuestionCardQuestion {
  * the agent before the prompt stops blocking the turn. Returning `false` leaves
  * the card retryable and produces a user-visible delivery failure.
  */
+export type SubmitAnswersOutcome = boolean | void | {
+  applied: boolean;
+  message?: string;
+  /** False when the transport outcome could not be reconciled safely. */
+  retryable?: boolean;
+};
+
 export type SubmitAnswersHandler = (
   answers: string[][],
-) => Promise<boolean | void> | boolean | void;
+) => Promise<SubmitAnswersOutcome> | SubmitAnswersOutcome;
+
+type DismissOutcome = boolean | void | {
+  applied: boolean;
+  message?: string;
+  retryable?: boolean;
+};
 
 interface QuestionCardProps {
   agentLabel: string;
@@ -43,7 +62,7 @@ interface QuestionCardProps {
   title: string;
   questions: QuestionCardQuestion[];
   onSubmit: SubmitAnswersHandler;
-  onDismiss?: () => Promise<boolean | void> | boolean | void;
+  onDismiss?: () => Promise<DismissOutcome> | DismissOutcome;
   initialAnswers?: string[][];
   allowCustomAnswer?: boolean;
   allowOptionDeselect?: boolean;
@@ -58,6 +77,8 @@ interface QuestionCardProps {
    */
   exclusiveSingleSelect?: boolean;
   hideDismiss?: boolean;
+  dismissLabel?: string;
+  customAnswerPlaceholder?: string;
   /**
    * Stable key for keeping in-progress answers in the prompt-draft store so
    * they survive the card unmounting (environment/tab switches). Wrappers
@@ -74,6 +95,37 @@ function optionValue(option: QuestionCardOption): string {
   return option.value ?? option.label;
 }
 
+function optionToken(option: QuestionCardOption, index: number): string {
+  return `__orkestrator_option__:${index}:${option.id ?? ""}`;
+}
+
+type AnswerEntry =
+  | { kind: "option"; token: string; value: string }
+  | { kind: "custom"; value: string };
+
+function questionDraftId(question: QuestionCardQuestion, index: number): string {
+  return question.id ?? `question-${index}`;
+}
+
+function initialAnswerEntries(
+  question: QuestionCardQuestion,
+  initial: string[],
+): AnswerEntry[] {
+  const unused = new Set((question.options ?? []).map((_, index) => index));
+  return initial.map((answer) => {
+    const match = (question.options ?? []).findIndex(
+      (option, index) => unused.has(index) && optionValue(option) === answer,
+    );
+    if (match < 0) return { kind: "custom", value: answer };
+    unused.delete(match);
+    return {
+      kind: "option",
+      token: optionToken(question.options![match]!, match),
+      value: answer,
+    };
+  });
+}
+
 /** Single question item with options and/or a custom text input. */
 function QuestionItem({
   info,
@@ -86,28 +138,29 @@ function QuestionItem({
   allowOptionDeselect,
   exclusiveSingleSelect,
   disabled,
+  customAnswerPlaceholder,
 }: {
   info: QuestionCardQuestion;
-  answer: string[];
+  answer: AnswerEntry[];
   customText: string;
-  onAnswerChange: (newAnswer: string[]) => void;
+  onAnswerChange: (newAnswer: AnswerEntry[]) => void;
   onCustomTextChange: (newText: string) => void;
-  onOptionSelect?: (label: string, nextAnswer: string[]) => void;
+  onOptionSelect?: (label: string, nextAnswer: AnswerEntry[]) => void;
   allowCustomAnswer: boolean;
   allowOptionDeselect: boolean;
   exclusiveSingleSelect: boolean;
   disabled: boolean;
+  customAnswerPlaceholder?: string;
 }) {
   const hasOptions = !!info.options && info.options.length > 0;
   const isMultiple = info.multiSelect ?? false;
-  const optionValues = useMemo(
-    () => new Set((info.options ?? []).map(optionValue)),
-    [info.options],
-  );
   // Custom answers committed via Enter that are not in the option list.
   const committedCustomAnswers = useMemo(
-    () => answer.filter((a) => !optionValues.has(a)),
-    [answer, optionValues],
+    () => answer.filter(
+      (entry): entry is Extract<AnswerEntry, { kind: "custom" }> =>
+        entry.kind === "custom",
+    ),
+    [answer],
   );
 
   /**
@@ -122,25 +175,28 @@ function QuestionItem({
     exclusiveSingleSelect && !isMultiple && customText.trim().length > 0;
 
   const handleOptionClick = useCallback(
-    (value: string) => {
-      let nextAnswer: string[];
+    (token: string, value: string) => {
+      let nextAnswer: AnswerEntry[];
+      const isSelected = answer.some(
+        (entry) => entry.kind === "option" && entry.token === token,
+      );
       if (isMultiple) {
-        nextAnswer = answer.includes(value)
-          ? answer.filter((a) => a !== value)
-          : [...answer, value];
+        nextAnswer = isSelected
+          ? answer.filter((entry) => entry.kind !== "option" || entry.token !== token)
+          : [...answer, { kind: "option", token, value }];
       } else if (draftSupersedesAnswer) {
         // The draft is the current answer and the selection is drawn as
         // cleared, so a click picks the option rather than toggling a
         // selection the user cannot see.
-        nextAnswer = [value];
+        nextAnswer = [{ kind: "option", token, value }];
         onCustomTextChange("");
-      } else if (answer.includes(value)) {
+      } else if (isSelected) {
         nextAnswer = allowOptionDeselect ? [] : answer;
       } else if (exclusiveSingleSelect) {
-        nextAnswer = [value];
+        nextAnswer = [{ kind: "option", token, value }];
       } else {
         // Preserve committed custom answers when switching option in single-select.
-        nextAnswer = [...committedCustomAnswers, value];
+        nextAnswer = [...committedCustomAnswers, { kind: "option", token, value }];
       }
       onAnswerChange(nextAnswer);
       onOptionSelect?.(value, nextAnswer);
@@ -162,21 +218,21 @@ function QuestionItem({
   const handleCustomSubmit = useCallback(() => {
     const trimmed = customText.trim();
     if (!trimmed) return;
-    if (answer.includes(trimmed)) {
+    if (committedCustomAnswers.some((entry) => entry.value === trimmed)) {
       onCustomTextChange("");
       return;
     }
     if (isMultiple) {
-      onAnswerChange([...answer, trimmed]);
+      onAnswerChange([...answer, { kind: "custom", value: trimmed }]);
     } else if (exclusiveSingleSelect) {
       // The question asked for one answer, so the custom text replaces the
       // selected option rather than joining it.
-      onAnswerChange([trimmed]);
+      onAnswerChange([{ kind: "custom", value: trimmed }]);
     } else {
       // Single-select allows one custom chip at a time; keep the selected
       // option alongside it, mirroring handleOptionClick.
-      const selectedOption = answer.filter((a) => optionValues.has(a));
-      onAnswerChange([...selectedOption, trimmed]);
+      const selectedOption = answer.filter((entry) => entry.kind === "option");
+      onAnswerChange([...selectedOption, { kind: "custom", value: trimmed }]);
     }
     onCustomTextChange("");
   }, [
@@ -186,12 +242,12 @@ function QuestionItem({
     exclusiveSingleSelect,
     onAnswerChange,
     onCustomTextChange,
-    optionValues,
+    committedCustomAnswers,
   ]);
 
   const handleRemoveCustomAnswer = useCallback(
-    (label: string) => {
-      onAnswerChange(answer.filter((a) => a !== label));
+    (target: Extract<AnswerEntry, { kind: "custom" }>) => {
+      onAnswerChange(answer.filter((entry) => entry !== target));
     },
     [answer, onAnswerChange],
   );
@@ -220,14 +276,18 @@ function QuestionItem({
       {hasOptions && (
         <div className="space-y-1">
           {info.options!.map((option, optIndex) => {
+            const token = optionToken(option, optIndex);
             const value = optionValue(option);
-            const isSelected = !draftSupersedesAnswer && answer.includes(value);
+            const isSelected = !draftSupersedesAnswer && answer.some(
+              (entry) => entry.kind === "option" && entry.token === token,
+            );
             return (
               <button
                 key={optIndex}
                 type="button"
                 disabled={disabled}
-                onClick={() => handleOptionClick(value)}
+                onClick={() => handleOptionClick(token, value)}
+                aria-pressed={isSelected}
                 className={cn(
                   "w-full rounded-md px-3 py-2.5 text-left transition-colors",
                   "hover:bg-muted/70 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1",
@@ -270,22 +330,24 @@ function QuestionItem({
       {/* Committed custom answers, so the user can see what will be submitted. */}
       {committedCustomAnswers.length > 0 && !draftSupersedesAnswer && (
         <div className="flex flex-wrap gap-1.5 pt-1">
-          {committedCustomAnswers.map((label) => (
+          {committedCustomAnswers.map((entry, index) => (
             <span
-              key={label}
+              key={info.secret ? index : `${index}:${entry.value}`}
               className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs text-primary"
             >
               <Check className="h-3 w-3" />
-              <span className="max-w-[28ch] truncate">{label}</span>
+              <span className="max-w-[28ch] truncate">
+                {info.secret ? "Secret entered" : entry.value}
+              </span>
               <button
                 type="button"
                 disabled={disabled}
-                onClick={() => handleRemoveCustomAnswer(label)}
+                onClick={() => handleRemoveCustomAnswer(entry)}
                 className={cn(
                   "-mr-0.5 ml-0.5 rounded-full p-0.5 hover:bg-primary/20",
                   disabled && "cursor-not-allowed opacity-60 hover:bg-transparent",
                 )}
-                aria-label={`Remove ${label}`}
+                aria-label={info.secret ? "Remove secret answer" : `Remove ${entry.value}`}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -297,10 +359,11 @@ function QuestionItem({
       {allowCustomAnswer && (
         <div className="pt-2">
           <Input
+            type={info.secret ? "password" : "text"}
             placeholder={
-              hasOptions
+              customAnswerPlaceholder ?? (hasOptions
                 ? "Type your own answer (press Enter to add)"
-                : "Type your answer"
+                : "Type your answer")
             }
             value={customText}
             onChange={(e) => onCustomTextChange(e.target.value)}
@@ -308,6 +371,11 @@ function QuestionItem({
             disabled={disabled}
             className="h-9 border-muted-foreground/20 bg-transparent text-sm focus:border-primary"
           />
+          {info.secret && (
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Secret input stays only in this card and is lost if you leave it.
+            </p>
+          )}
           {customText.trim().length > 0 && (
             <p className="mt-1 text-[11px] text-muted-foreground">
               Your typed answer will be included when you submit.
@@ -340,55 +408,111 @@ export function QuestionCard({
   submitOnOptionSelect = false,
   exclusiveSingleSelect = false,
   hideDismiss = false,
+  dismissLabel = "Dismiss",
+  customAnswerPlaceholder,
   draftKey,
   expiresAt,
 }: QuestionCardProps) {
-  const [answers, setAnswers] = usePromptDraftField<string[][]>(
+  const [answers, setAnswers] = usePromptDraftField<Record<string, AnswerEntry[]>>(
     draftKey,
-    "answers",
-    () => questions.map((_, i) => [...(initialAnswers?.[i] ?? [])]),
+    "answersByQuestion",
+    () => Object.fromEntries(questions.flatMap((question, i) =>
+      question.secret
+        ? []
+        : [[
+            questionDraftId(question, i),
+            initialAnswerEntries(question, initialAnswers?.[i] ?? []),
+          ]],
+    )),
   );
   /**
    * In-progress custom text per question, lifted here so it survives navigation
    * between questions (QuestionItem remounts on index change) and so it can be
    * included at submit even if the user never pressed Enter.
    */
-  const [customTexts, setCustomTexts] = usePromptDraftField<string[]>(
+  const [customTexts, setCustomTexts] = usePromptDraftField<Record<string, string>>(
     draftKey,
-    "customTexts",
-    () => questions.map(() => ""),
+    "customTextsByQuestion",
+    () => Object.fromEntries(questions.flatMap((question, i) =>
+      question.secret ? [] : [[questionDraftId(question, i), ""]],
+    )),
+  );
+  // Secrets intentionally use component state only. They survive navigation
+  // inside this mounted wizard, but not tab/environment unmount or restart.
+  const [secretAnswers, setSecretAnswers] = useState<AnswerEntry[][]>(() =>
+    questions.map((question, i) =>
+      question.secret
+        ? initialAnswerEntries(question, initialAnswers?.[i] ?? [])
+        : []),
+  );
+  const [secretCustomTexts, setSecretCustomTexts] = useState<string[]>(() =>
+    questions.map(() => ""),
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [currentQuestionIndex, setCurrentQuestionIndex] =
+  const [inlineError, setInlineError] = useState<string | null>(null);
+  const [retryBlocked, setRetryBlocked] = useState(false);
+  const [storedQuestionIndex, setCurrentQuestionIndex] =
     usePromptDraftField<number>(draftKey, "currentQuestionIndex", () => 0);
-  const { remaining, expired } = usePromptDeadline(expiresAt);
+  const { expired } = usePromptDeadline(expiresAt);
 
   const questionCount = questions.length;
+  const currentQuestionIndex = Number.isInteger(storedQuestionIndex)
+    && storedQuestionIndex >= 0
+    && storedQuestionIndex < questionCount
+    ? storedQuestionIndex
+    : 0;
   const currentQuestion = questions[currentQuestionIndex];
-  const currentAnswer = answers[currentQuestionIndex] || [];
-  const currentCustomText = customTexts[currentQuestionIndex] ?? "";
+  const answerForIndex = useCallback(
+    (i: number) => {
+      const question = questions[i];
+      if (!question) return [];
+      return question.secret
+        ? secretAnswers[i] ?? []
+        : answers[questionDraftId(question, i)] ?? [];
+    },
+    [answers, questions, secretAnswers],
+  );
+  const customTextForIndex = useCallback(
+    (i: number) => {
+      const question = questions[i];
+      if (!question) return "";
+      return question.secret
+        ? secretCustomTexts[i] ?? ""
+        : customTexts[questionDraftId(question, i)] ?? "";
+    },
+    [customTexts, questions, secretCustomTexts],
+  );
+  const currentAnswer = answerForIndex(currentQuestionIndex);
+  const currentCustomText = customTextForIndex(currentQuestionIndex);
 
   const mergeAnswerForIndex = useCallback(
-    (i: number): string[] => {
-      const committed = answers[i] ?? [];
-      const draft = (customTexts[i] ?? "").trim();
-      if (!draft || committed.includes(draft)) return committed;
+    (i: number): AnswerEntry[] => {
+      const committed = answerForIndex(i);
+      const draft = customTextForIndex(i).trim();
+      if (!draft || committed.some(
+        (entry) => entry.kind === "custom" && entry.value === draft,
+      )) return committed;
       // Uncommitted text obeys the same exclusivity rule as a committed chip,
       // or a never-pressed-Enter draft would smuggle a second answer through.
       // `QuestionItem` draws the superseded option and chip as cleared while the
       // draft is present, so the card shows exactly what this returns.
       if (exclusiveSingleSelect && !(questions[i]?.multiSelect ?? false)) {
-        return [draft];
+        return [{ kind: "custom", value: draft }];
       }
-      return [...committed, draft];
+      return [...committed, { kind: "custom", value: draft }];
     },
-    [answers, customTexts, exclusiveSingleSelect, questions],
+    [answerForIndex, customTextForIndex, exclusiveSingleSelect, questions],
+  );
+
+  const serializeAnswer = useCallback(
+    (answer: AnswerEntry[]): string[] => answer.map((entry) => entry.value),
+    [],
   );
 
   const questionHasAnswer = useCallback(
     (i: number): boolean =>
-      (answers[i]?.length ?? 0) > 0 || (customTexts[i] ?? "").trim().length > 0,
-    [answers, customTexts],
+      answerForIndex(i).length > 0 || customTextForIndex(i).trim().length > 0,
+    [answerForIndex, customTextForIndex],
   );
 
   const hasCurrentAnswer = questionHasAnswer(currentQuestionIndex);
@@ -404,53 +528,86 @@ export function QuestionCard({
   );
 
   const handleAnswerChange = useCallback(
-    (newAnswer: string[]) => {
+    (newAnswer: AnswerEntry[]) => {
+      if (questions[currentQuestionIndex]?.secret) {
+        setSecretAnswers((prev) => {
+          const updated = [...prev];
+          updated[currentQuestionIndex] = newAnswer;
+          return updated;
+        });
+        return;
+      }
       setAnswers((prev) => {
-        const updated = [...prev];
-        updated[currentQuestionIndex] = newAnswer;
-        return updated;
+        return {
+          ...prev,
+          [questionDraftId(questions[currentQuestionIndex]!, currentQuestionIndex)]: newAnswer,
+        };
       });
     },
-    [currentQuestionIndex],
+    [currentQuestionIndex, questions],
   );
 
   const handleCustomTextChange = useCallback(
     (newText: string) => {
+      if (questions[currentQuestionIndex]?.secret) {
+        setSecretCustomTexts((prev) => {
+          const updated = [...prev];
+          updated[currentQuestionIndex] = newText;
+          return updated;
+        });
+        return;
+      }
       setCustomTexts((prev) => {
-        const updated = [...prev];
-        updated[currentQuestionIndex] = newText;
-        return updated;
+        return {
+          ...prev,
+          [questionDraftId(questions[currentQuestionIndex]!, currentQuestionIndex)]: newText,
+        };
       });
     },
-    [currentQuestionIndex],
+    [currentQuestionIndex, questions],
   );
 
   const submitAnswers = useCallback(
-    async (effectiveAnswers: string[][]) => {
+    async (effectiveAnswers: AnswerEntry[][]) => {
       if (expired) return;
+      setInlineError(null);
+      setRetryBlocked(false);
       setIsSubmitting(true);
       try {
-        const submitted = await onSubmit(effectiveAnswers);
-        if (submitted === false) {
+        const submitted = await onSubmit(
+          effectiveAnswers.map(serializeAnswer),
+        );
+        const applied = typeof submitted === "object" ? submitted.applied : submitted !== false;
+        if (!applied) {
+          const message = typeof submitted === "object" && submitted.message
+            ? submitted.message
+            : `${agentLabel} is still waiting for a response. Please try again.`;
+          setInlineError(message);
+          setRetryBlocked(
+            typeof submitted === "object" && submitted.retryable === false,
+          );
           toast.error("Failed to send your answer", {
-            description: `${agentLabel} is still waiting for a response. Please try again.`,
+            description: message,
           });
         }
       } catch (error) {
         console.error(`[${agentLabel}QuestionCard] Failed to submit answer:`, error);
+        const message = `The response outcome is unknown. Reconnect or refresh ${agentLabel} to verify whether it was received.`;
+        setInlineError(message);
+        setRetryBlocked(true);
         toast.error("Failed to send your answer", {
-          description: `${agentLabel} is still waiting for a response. Please try again.`,
+          description: message,
         });
       } finally {
         setIsSubmitting(false);
       }
     },
-    [agentLabel, expired, onSubmit],
+    [agentLabel, expired, onSubmit, serializeAnswer],
   );
 
   const handleNext = useCallback(async () => {
     if (currentQuestionIndex < questionCount - 1) {
-      setCurrentQuestionIndex((prev) => prev + 1);
+      setCurrentQuestionIndex(currentQuestionIndex + 1);
       return;
     }
     /**
@@ -477,7 +634,7 @@ export function QuestionCard({
   ]);
 
   const handleOptionSelect = useCallback(
-    (_label: string, nextAnswer: string[]) => {
+    (_label: string, nextAnswer: AnswerEntry[]) => {
       if (!submitOnOptionSelect || isSubmitting || expired || nextAnswer.length === 0) return;
       if (questionCount !== 1) return;
       void submitAnswers([nextAnswer]);
@@ -487,16 +644,26 @@ export function QuestionCard({
 
   const handleDismiss = useCallback(async () => {
     if (isSubmitting || expired || !onDismiss) return;
+    setInlineError(null);
+    setRetryBlocked(false);
     setIsSubmitting(true);
     try {
       const dismissed = await onDismiss();
-      if (dismissed === false) {
+      const applied = typeof dismissed === "object" ? dismissed.applied : dismissed !== false;
+      if (!applied) {
+        const message = typeof dismissed === "object" && dismissed.message
+          ? dismissed.message
+          : `${agentLabel} is still waiting for a response. Please try again.`;
+        setInlineError(message);
+        setRetryBlocked(typeof dismissed === "object" && dismissed.retryable === false);
         toast.error("Failed to dismiss this question", {
-          description: `${agentLabel} is still waiting for a response. Please try again.`,
+          description: message,
         });
       }
     } catch (error) {
       console.error(`[${agentLabel}QuestionCard] Failed to dismiss question:`, error);
+      setInlineError(`${agentLabel} is still waiting for a response. Please try again.`);
+      setRetryBlocked(true);
       toast.error("Failed to dismiss this question", {
         description: `${agentLabel} is still waiting for a response. Please try again.`,
       });
@@ -506,9 +673,7 @@ export function QuestionCard({
   }, [agentLabel, expired, isSubmitting, onDismiss]);
 
   const isLastQuestion = currentQuestionIndex === questionCount - 1;
-  const nextButtonText = isSubmitting
-    ? "Submitting..."
-    : isLastQuestion
+  const nextButtonText = isLastQuestion
       ? "Submit"
       : "Next";
 
@@ -518,37 +683,73 @@ export function QuestionCard({
   }
 
   return (
-    <BlockingPromptCard>
-      <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-2.5">
-        <HelpCircle className="h-4 w-4 text-muted-foreground" />
-        <span className="text-sm font-medium text-foreground">{title}</span>
-        {questionCount === 1 ? (
-          <span className="text-xs text-muted-foreground">1 question</span>
-        ) : (
-          <span className="text-xs text-muted-foreground">
-            {answeredCount}/{questionCount} answered
-          </span>
-        )}
-        {questionCount > 1 && answeredCount === questionCount && (
-          <Check className="ml-auto h-3.5 w-3.5 text-green-500" />
-        )}
-        {!expired && remaining && (
-          <span className="ml-auto text-xs tabular-nums text-muted-foreground" aria-live="off">
-            {remaining}
-          </span>
-        )}
-      </div>
-
+    <BlockingPromptCard
+      title={title}
+      meta={
+        <span className="inline-flex items-center gap-1.5">
+          {questionCount === 1
+            ? "1 question"
+            : `${answeredCount}/${questionCount} answered`}
+          {questionCount > 1 && answeredCount === questionCount && (
+            <Check className="ml-auto h-3.5 w-3.5 text-green-500" aria-hidden />
+          )}
+        </span>
+      }
+      expiresAt={expiresAt}
+      state={expired ? "invalid" : isSubmitting ? "submitting" : inlineError ? "retryable-error" : "pending"}
+      error={inlineError}
+      role="group"
+      aria-label={title}
+      arrivalAnnouncement={`${title}. ${questionCount} ${questionCount === 1 ? "question" : "questions"}.`}
+      actions={
+        <>
+          {!hideDismiss && onDismiss && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleDismiss}
+              disabled={isSubmitting || expired || retryBlocked}
+              className="mr-auto text-muted-foreground hover:text-foreground"
+            >
+              {dismissLabel}
+            </Button>
+          )}
+          {questionCount > 1 && currentQuestionIndex > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentQuestionIndex(currentQuestionIndex - 1)}
+              disabled={isSubmitting || expired || retryBlocked}
+            >
+              Back
+            </Button>
+          )}
+          <Button
+            size="sm"
+            onClick={handleNext}
+            disabled={!hasCurrentAnswer || isSubmitting || expired || retryBlocked}
+          >
+            {nextButtonText}
+          </Button>
+        </>
+      }
+    >
       {questionCount > 1 && (
-        <div className="flex items-center gap-1 border-b border-border bg-muted/20 px-4 py-2">
+        <div
+          className="flex max-w-full items-center gap-1 overflow-x-auto border-b border-border bg-muted/20 px-3 py-2 sm:px-4"
+          aria-label="Questions"
+        >
           {questions.map((q, index) => {
             const isAnswered = questionHasAnswer(index);
             const isActive = index === currentQuestionIndex;
             return (
               <button
-                key={index}
+                key={q.id ?? index}
                 type="button"
+                aria-current={isActive ? "step" : undefined}
+                aria-controls={`question-panel-${q.id ?? index}`}
                 onClick={() => setCurrentQuestionIndex(index)}
+                disabled={isSubmitting || expired || retryBlocked}
                 className={cn(
                   "flex items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors",
                   isActive
@@ -580,60 +781,26 @@ export function QuestionCard({
       )}
 
       <div className="p-4">
-        <QuestionItem
-          key={currentQuestionIndex}
-          info={currentQuestion}
-          answer={currentAnswer}
-          customText={currentCustomText}
-          onAnswerChange={handleAnswerChange}
-          onCustomTextChange={handleCustomTextChange}
-          onOptionSelect={handleOptionSelect}
-          allowCustomAnswer={currentQuestion.allowCustomAnswer ?? allowCustomAnswer}
-          allowOptionDeselect={allowOptionDeselect}
-          exclusiveSingleSelect={exclusiveSingleSelect}
-          disabled={isSubmitting || expired}
-        />
+        <div
+          id={`question-panel-${currentQuestion.id ?? currentQuestionIndex}`}
+          role={questionCount > 1 ? "tabpanel" : undefined}
+        >
+          <QuestionItem
+            key={currentQuestion.id ?? currentQuestionIndex}
+            info={currentQuestion}
+            answer={currentAnswer}
+            customText={currentCustomText}
+            onAnswerChange={handleAnswerChange}
+            onCustomTextChange={handleCustomTextChange}
+            onOptionSelect={handleOptionSelect}
+            allowCustomAnswer={currentQuestion.allowCustomAnswer ?? allowCustomAnswer}
+            allowOptionDeselect={allowOptionDeselect}
+            exclusiveSingleSelect={exclusiveSingleSelect}
+            disabled={isSubmitting || expired || retryBlocked}
+            customAnswerPlaceholder={customAnswerPlaceholder}
+          />
+        </div>
       </div>
-
-      {expired ? (
-        <div className="flex items-center gap-1.5 border-t border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
-          <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
-          This request expired and was declined.
-        </div>
-      ) : (
-        <div className="flex items-center justify-between border-t border-border bg-muted/30 px-4 py-3">
-        {!hideDismiss && onDismiss && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleDismiss}
-            disabled={isSubmitting}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            Dismiss
-          </Button>
-        )}
-        <div className="flex items-center gap-2">
-          {questionCount > 1 && currentQuestionIndex > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentQuestionIndex((prev) => prev - 1)}
-              disabled={isSubmitting}
-            >
-              Back
-            </Button>
-          )}
-          <Button
-            size="sm"
-            onClick={handleNext}
-            disabled={!hasCurrentAnswer || isSubmitting}
-          >
-            {nextButtonText}
-          </Button>
-        </div>
-        </div>
-      )}
     </BlockingPromptCard>
   );
 }

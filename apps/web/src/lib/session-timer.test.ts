@@ -1,11 +1,59 @@
 import { describe, expect, test } from "bun:test";
 import {
+  findLatestBackendUserTurnStartedAt,
+  parseBackendTurnStartedAt,
   reconcileTimedSession,
   type TimedSessionState,
   updateTimedSessionLoading,
 } from "./session-timer";
 
 describe("session-timer helpers", () => {
+  test("parses backend timestamps and rejects malformed clocks", () => {
+    expect(parseBackendTurnStartedAt("2026-07-31T20:00:00.000Z"))
+      .toBe(Date.parse("2026-07-31T20:00:00.000Z"));
+    expect(parseBackendTurnStartedAt(1234)).toBeUndefined();
+    expect(parseBackendTurnStartedAt("not-a-date")).toBeUndefined();
+    expect(parseBackendTurnStartedAt(-1)).toBeUndefined();
+  });
+
+  test("finds the current backend user turn without reusing an older turn", () => {
+    const messages = [
+      { id: "server-old", role: "user", createdAt: "2026-07-31T20:00:00.000Z" },
+      { id: "assistant", role: "assistant", createdAt: "2026-07-31T20:01:00.000Z" },
+      { id: "optimistic-new", role: "user", createdAt: "2026-07-31T20:02:00.000Z" },
+    ];
+    expect(findLatestBackendUserTurnStartedAt(
+      messages,
+      (message) => !message.id.startsWith("optimistic-"),
+    )).toBeUndefined();
+
+    messages[2] = {
+      id: "server-new",
+      role: "user",
+      createdAt: "2026-07-31T20:02:03.000Z",
+    };
+    expect(findLatestBackendUserTurnStartedAt(
+      messages,
+      (message) => !message.id.startsWith("optimistic-"),
+    )).toBe(Date.parse("2026-07-31T20:02:03.000Z"));
+  });
+
+  test.each([
+    ["missing", undefined],
+    ["malformed", "not-a-date"],
+  ])(
+    "does not reuse an older backend turn when the current clock is %s",
+    (_label, createdAt) => {
+      const messages = [
+        { id: "server-old", role: "user", createdAt: "2026-07-31T20:00:00.000Z" },
+        { id: "assistant", role: "assistant", createdAt: "2026-07-31T20:01:00.000Z" },
+        { id: "server-current", role: "user", createdAt },
+      ];
+
+      expect(findLatestBackendUserTurnStartedAt(messages)).toBeUndefined();
+    },
+  );
+
   test("stamps the current time for a newly started loading session", () => {
     const incoming: TimedSessionState = {
       isLoading: true,
@@ -112,5 +160,18 @@ describe("session-timer helpers", () => {
     };
 
     expect(updateTimedSessionLoading(loading, true, 9000)).toBe(loading);
+  });
+
+  test("replaces a renderer start with an authoritative backend timestamp", () => {
+    const loading: TimedSessionState = {
+      isLoading: true,
+      loadingStartedAt: 5000,
+      lastCompletedElapsedSeconds: null,
+    };
+
+    const reconciled = updateTimedSessionLoading(loading, true, 9000, 2000);
+
+    expect(reconciled.loadingStartedAt).toBe(2000);
+    expect(reconciled.lastCompletedElapsedSeconds).toBeNull();
   });
 });

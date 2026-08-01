@@ -122,6 +122,13 @@ export interface ThreadContext {
   messages: NormalizedMessage[];
   activeTurn: TurnAccumulator | null;
   phase: SessionPhase;
+  /**
+   * Backend wall-clock time at which the current turn entered `starting`.
+   *
+   * Kept on the canonical thread rather than a renderer so every attached
+   * client — including one opened mid-turn — observes the same elapsed time.
+   */
+  turnStartedAt?: string;
   error?: string;
   /** Set while a dispatch is mid-flight, so a second tab cannot interleave. */
   dispatchInFlight: boolean;
@@ -496,6 +503,21 @@ export class ThreadRegistry {
   }
 
   setPhase(context: ThreadContext, phase: SessionPhase, error?: string): void {
+    if (phase === "starting") {
+      // Preserve this through running/cancelling/recovering so reconnects never
+      // restart the timer from the client's observation time.
+      context.turnStartedAt = new Date(this.now()).toISOString();
+    } else if (
+      (phase === "running" || phase === "cancelling" || phase === "recovering")
+      && context.turnStartedAt === undefined
+      && context.activeTurn
+    ) {
+      // Recovery can reconstruct an active accumulator without passing through
+      // `starting` in this process. Its timestamp is still backend-owned.
+      context.turnStartedAt = context.activeTurn.startedAt;
+    } else if (phase === "idle" || phase === "failed") {
+      context.turnStartedAt = undefined;
+    }
     context.phase = phase;
     context.error = phase === "failed" ? error : undefined;
   }

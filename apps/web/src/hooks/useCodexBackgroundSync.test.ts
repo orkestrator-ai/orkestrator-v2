@@ -168,7 +168,7 @@ describe("Codex background synchronization", () => {
   });
 
   test("rehydrates pending input while a background turn is running", async () => {
-    seedLoadingSession();
+    seedLoadingSession(9_000);
     const approval: CodexApproval = {
       approvalId: "approval-1",
       kind: "command",
@@ -203,7 +203,11 @@ describe("Codex background synchronization", () => {
       dependencies: dependencies(
         {
           kind: "found",
-          session: { status: "running", phase: "running" },
+          session: {
+            status: "running",
+            phase: "running",
+            turnStartedAt: 2_000,
+          },
         },
         [],
         [approval],
@@ -213,7 +217,10 @@ describe("Codex background synchronization", () => {
 
     await synchronizer.reconcileNow();
 
-    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+      isLoading: true,
+      loadingStartedAt: 2_000,
+    });
     expect(useCodexStore.getState().pendingApprovals.get(SESSION_KEY))
       .toEqual([approval]);
     expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY))

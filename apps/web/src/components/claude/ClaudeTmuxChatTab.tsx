@@ -26,6 +26,7 @@ import { useMediaQuery, useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
+import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
@@ -133,6 +134,7 @@ import {
 } from "@/lib/backend";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { getClaudeTmuxCapturePolling } from "@/lib/claude-tmux-polling";
+import { serializeClaudeQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 import type { FileCandidate, FileMention } from "@/types";
 
@@ -728,7 +730,7 @@ export function ClaudeTmuxChatTab({
                     if (!cancelled) {
                       addPendingPermission(
                         storeKey,
-                        payloadToPermission(hook.id, hook.payload),
+                        payloadToPermission(hook.id, hook.payload, hookTiming(hook)),
                       );
                       setError(String(e));
                     }
@@ -869,7 +871,11 @@ export function ClaudeTmuxChatTab({
           }
           applyTranscriptLine(storeKey, ev.line);
           break;
-        case "hook":
+        case "hook": {
+          const timing = {
+            requestedAt: ev.requested_at,
+            expiresAt: ev.expires_at,
+          };
           // Drive the "Claude is thinking…" indicator from the same hook
           // events Claude Code emits for the agent lifecycle. We rely on
           // UserPromptSubmit/Stop here rather than transcript content so
@@ -882,29 +888,30 @@ export function ClaudeTmuxChatTab({
           if (ev.event_kind === "PreToolUse") {
             const toolName = hookToolName(ev.payload);
             if (toolName === "AskUserQuestion") {
-              addPendingQuestion(storeKey, payloadToQuestion(ev.event_id, ev.payload));
+              addPendingQuestion(storeKey, payloadToQuestion(ev.event_id, ev.payload, timing));
             } else if (toolName === "ExitPlanMode") {
-              addPendingPlan(storeKey, payloadToPlan(ev.event_id, ev.payload));
+              addPendingPlan(storeKey, payloadToPlan(ev.event_id, ev.payload, timing));
             } else {
-              addPendingApproval(storeKey, payloadToApproval(ev.event_id, ev.payload));
+              addPendingApproval(storeKey, payloadToApproval(ev.event_id, ev.payload, timing));
             }
           } else if (ev.event_kind === "PermissionRequest") {
             if (isQuestionPermissionPayload(ev.payload)) {
               void autoAllowPermissionHook(tabId, environmentId, ev.event_id, ev.payload).catch((e) => {
                 addPendingPermission(
                   storeKey,
-                  payloadToPermission(ev.event_id, ev.payload),
+                  payloadToPermission(ev.event_id, ev.payload, timing),
                 );
                 setError(String(e));
               });
               removePendingPermission(storeKey, ev.event_id);
             } else {
-              addPendingPermission(storeKey, payloadToPermission(ev.event_id, ev.payload));
+              addPendingPermission(storeKey, payloadToPermission(ev.event_id, ev.payload, timing));
             }
           } else if (ev.event_kind === "Elicitation") {
-            addPendingElicitation(storeKey, payloadToElicitation(ev.event_id, ev.payload));
+            addPendingElicitation(storeKey, payloadToElicitation(ev.event_id, ev.payload, timing));
           }
           break;
+        }
         case "hook-timed-out":
           if (ev.event_kind === "PreToolUse") {
             removePendingApproval(storeKey, ev.event_id);
@@ -1817,11 +1824,12 @@ export function ClaudeTmuxChatTab({
                       sessionId: tabState?.sessionId ?? tabId,
                       questions: q.questions,
                       toolUseId: q.eventId,
+                      expiresAt: q.expiresAt,
                     }}
                     onSubmitAnswers={(answers) => handleQuestionAnswer(q, answers)}
                     onDismiss={() => handleQuestionReject(q)}
                     // Cleared by claudeTmuxStore when the question resolves.
-                    draftKey={tmuxQuestionDraftKey(q.eventId)}
+                    draftKey={tmuxQuestionDraftKey(storeKey, q.eventId)}
                   />
                 ))}
 
@@ -1829,6 +1837,7 @@ export function ClaudeTmuxChatTab({
                   <TmuxPlanCard
                     key={p.eventId}
                     plan={p}
+                    sessionKey={storeKey}
                     onRespond={(approved, feedback) =>
                       handlePlanResponse(p, approved, feedback)
                     }
@@ -1849,6 +1858,7 @@ export function ClaudeTmuxChatTab({
                   <TmuxElicitationCard
                     key={e.eventId}
                     elicitation={e}
+                    sessionKey={storeKey}
                     onRespond={(action, content) =>
                       handleElicitationResponse(e, action, content)
                     }
@@ -2070,15 +2080,17 @@ function StartScreen({
 
 function TmuxPlanCard({
   plan,
+  sessionKey,
   onRespond,
 }: {
   plan: TmuxPendingPlan;
-  onRespond: (approved: boolean, feedback?: string) => void;
+  sessionKey: string;
+  onRespond: (approved: boolean, feedback?: string) => Promise<void> | void;
 }) {
   // The feedback draft survives the tab unmounting (environment switches) by
   // living in the prompt-draft store; claudeTmuxStore clears it when the plan
   // request resolves or is withdrawn.
-  const draftKey = tmuxPlanDraftKey(plan.eventId);
+  const draftKey = tmuxPlanDraftKey(sessionKey, plan.eventId);
   const [showFeedback, setShowFeedback] = usePromptDraftField<boolean>(
     draftKey,
     "showFeedback",
@@ -2089,11 +2101,26 @@ function TmuxPlanCard({
     "feedback",
     () => "",
   );
+  const [submitting, setSubmitting] = useState(false);
+  const respond = async (approved: boolean, nextFeedback?: string) => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await onRespond(approved, nextFeedback);
+    } finally {
+      setSubmitting(false);
+    }
+  };
   return (
-    <div className="rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-3 mb-3">
-      <div className="text-xs uppercase tracking-wide text-amber-300 mb-2">
-        Plan ready for review
-      </div>
+    <BlockingPromptCard
+      title="Plan ready for review"
+      expiresAt={plan.expiresAt}
+      state={submitting ? "submitting" : "pending"}
+      aria-label="Claude plan ready for review"
+      arrivalAnnouncement="Claude is waiting for a plan decision."
+      className="mb-3"
+    >
+      <div className="px-3 py-3">
       {plan.planFilePath && (
         <div className="text-xs font-mono text-muted-foreground mb-2 break-all">
           {plan.planFilePath}
@@ -2123,16 +2150,18 @@ function TmuxPlanCard({
           variant="outline"
           size="sm"
           onClick={() =>
-            showFeedback ? onRespond(false, feedback) : setShowFeedback(true)
+            showFeedback ? void respond(false, feedback) : setShowFeedback(true)
           }
+          disabled={submitting}
         >
           Request changes
         </Button>
-        <Button size="sm" onClick={() => onRespond(true)}>
+        <Button size="sm" onClick={() => void respond(true)} disabled={submitting}>
           Approve plan
         </Button>
       </div>
-    </div>
+      </div>
+    </BlockingPromptCard>
   );
 }
 
@@ -2141,13 +2170,28 @@ function TmuxPermissionCard({
   onRespond,
 }: {
   permission: TmuxPendingPermission;
-  onRespond: (allow: boolean, updatedPermissions?: unknown[]) => void;
+  onRespond: (allow: boolean, updatedPermissions?: unknown[]) => Promise<void> | void;
 }) {
+  const [submitting, setSubmitting] = useState(false);
+  const respond = async (allow: boolean, updatedPermissions?: unknown[]) => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await onRespond(allow, updatedPermissions);
+    } finally {
+      setSubmitting(false);
+    }
+  };
   return (
-    <div className="rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-3 mb-3">
-      <div className="text-xs uppercase tracking-wide text-amber-300 mb-2">
-        Claude needs permission
-      </div>
+    <BlockingPromptCard
+      title="Claude needs permission"
+      expiresAt={permission.expiresAt}
+      state={submitting ? "submitting" : "pending"}
+      aria-label="Claude needs permission"
+      arrivalAnnouncement="Claude is waiting for a permission decision."
+      className="mb-3"
+    >
+      <div className="px-3 py-3">
       <div className="text-sm font-mono text-amber-100 mb-2">
         {permission.toolName}
       </div>
@@ -2156,7 +2200,7 @@ function TmuxPermissionCard({
         toolInput={permission.toolInput}
       />
       <div className="flex flex-wrap justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={() => onRespond(false)}>
+        <Button variant="outline" size="sm" onClick={() => void respond(false)} disabled={submitting}>
           Deny
         </Button>
         {permission.permissionSuggestions.map((suggestion, index) => (
@@ -2164,47 +2208,93 @@ function TmuxPermissionCard({
             key={index}
             variant="outline"
             size="sm"
-            onClick={() => onRespond(true, [suggestion])}
+            onClick={() => void respond(true, [suggestion])}
+            disabled={submitting}
           >
             Always allow
           </Button>
         ))}
-        <Button size="sm" onClick={() => onRespond(true)}>
+        <Button size="sm" onClick={() => void respond(true)} disabled={submitting}>
           Allow
         </Button>
       </div>
-    </div>
+      </div>
+    </BlockingPromptCard>
   );
 }
 
 function TmuxElicitationCard({
   elicitation,
+  sessionKey,
   onRespond,
 }: {
   elicitation: TmuxPendingElicitation;
+  sessionKey: string;
   onRespond: (
     action: "accept" | "decline" | "cancel",
     content?: Record<string, string>,
-  ) => void;
+  ) => Promise<void> | void;
 }) {
-  const fields = elicitationSchemaFields(elicitation.requestedSchema);
+  const fields = useMemo(
+    () => elicitationSchemaFields(elicitation.requestedSchema),
+    [elicitation.requestedSchema],
+  );
   // Typed field values survive the tab unmounting; claudeTmuxStore clears the
   // draft when the elicitation resolves or is withdrawn.
   const [values, setValues] = usePromptDraftField<Record<string, string>>(
-    tmuxElicitationDraftKey(elicitation.eventId),
+    tmuxElicitationDraftKey(sessionKey, elicitation.eventId),
     "values",
     () => ({}),
   );
+  const [secretValues, setSecretValues] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  // A draft created by an older renderer may contain a value whose schema now
+  // marks it secret. Scrub that legacy copy as soon as the card mounts; current
+  // secret edits never enter the draft store in the first place.
+  useEffect(() => {
+    const sensitiveKeys = fields
+      .filter((field) => field.sensitive)
+      .map((field) => field.key);
+    if (!sensitiveKeys.some((key) => Object.hasOwn(values, key))) return;
+    setValues((previous) => {
+      const next = { ...previous };
+      for (const key of sensitiveKeys) delete next[key];
+      return next;
+    });
+  }, [fields, setValues, values]);
+  const resolvedValues = {
+    ...Object.fromEntries(
+      Object.entries(values).filter(([key]) =>
+        !fields.some((field) => field.key === key && field.sensitive)),
+    ),
+    ...secretValues,
+  };
+  const respond = async (
+    action: "accept" | "decline" | "cancel",
+    content?: Record<string, string>,
+  ) => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await onRespond(action, content);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
-    <div className="rounded-lg border border-purple-700/60 bg-purple-950/20 px-3 py-3 mb-3">
-      <div className="text-xs uppercase tracking-wide text-purple-300 mb-2">
-        MCP server requested input
-      </div>
+    <BlockingPromptCard
+      title="MCP server requested input"
+      description={elicitation.message}
+      meta={elicitation.mcpServerName}
+      expiresAt={elicitation.expiresAt}
+      state={submitting ? "submitting" : "pending"}
+      aria-label="Claude MCP input request"
+      arrivalAnnouncement="Claude is waiting for MCP input."
+      className="mb-3"
+    >
+      <div className="px-3 py-3">
       <div className="text-sm font-medium mb-1">{elicitation.mcpServerName}</div>
-      <div className="text-sm text-muted-foreground mb-3">
-        {elicitation.message}
-      </div>
       {elicitation.url && (
         <div className="mb-3 text-xs font-mono break-all rounded border border-border bg-background/60 px-2 py-1.5">
           {elicitation.url}
@@ -2216,29 +2306,36 @@ function TmuxElicitationCard({
             <label key={field.key} className="block text-xs">
               <span className="mb-1 block text-muted-foreground">{field.label}</span>
               <input
-                value={values[field.key] ?? ""}
-                onChange={(e) =>
-                  setValues((prev) => ({ ...prev, [field.key]: e.target.value }))
-                }
+                value={(field.sensitive ? secretValues : values)[field.key] ?? ""}
+                onChange={(e) => {
+                  const setter = field.sensitive ? setSecretValues : setValues;
+                  setter((prev) => ({ ...prev, [field.key]: e.target.value }));
+                }}
                 className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm focus:outline-none"
                 type={field.sensitive ? "password" : "text"}
               />
+              {field.sensitive && (
+                <span className="mt-1 block text-[11px] text-muted-foreground">
+                  Secret input stays only in this card and is lost if you leave it.
+                </span>
+              )}
             </label>
           ))}
         </div>
       )}
       <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={() => onRespond("cancel")}>
+        <Button variant="ghost" size="sm" onClick={() => void respond("cancel")} disabled={submitting}>
           Cancel
         </Button>
-        <Button variant="outline" size="sm" onClick={() => onRespond("decline")}>
+        <Button variant="outline" size="sm" onClick={() => void respond("decline")} disabled={submitting}>
           Decline
         </Button>
-        <Button size="sm" onClick={() => onRespond("accept", values)}>
+        <Button size="sm" onClick={() => void respond("accept", resolvedValues)} disabled={submitting}>
           Submit
         </Button>
       </div>
-    </div>
+      </div>
+    </BlockingPromptCard>
   );
 }
 
@@ -2467,23 +2564,34 @@ function pendingSnapshotFromHooks(hooks: TmuxPendingHook[]) {
   const elicitations: TmuxPendingElicitation[] = [];
 
   for (const hook of hooks) {
+    const timing = hookTiming(hook);
     if (hook.kind === "PreToolUse") {
       const toolName = hookToolName(hook.payload);
       if (toolName === "AskUserQuestion") {
-        questions.push(payloadToQuestion(hook.id, hook.payload));
+        questions.push(payloadToQuestion(hook.id, hook.payload, timing));
       } else if (toolName === "ExitPlanMode") {
-        plans.push(payloadToPlan(hook.id, hook.payload));
+        plans.push(payloadToPlan(hook.id, hook.payload, timing));
       } else {
-        approvals.push(payloadToApproval(hook.id, hook.payload));
+        approvals.push(payloadToApproval(hook.id, hook.payload, timing));
       }
     } else if (hook.kind === "PermissionRequest") {
-      permissions.push(payloadToPermission(hook.id, hook.payload));
+      permissions.push(payloadToPermission(hook.id, hook.payload, timing));
     } else if (hook.kind === "Elicitation") {
-      elicitations.push(payloadToElicitation(hook.id, hook.payload));
+      elicitations.push(payloadToElicitation(hook.id, hook.payload, timing));
     }
   }
 
   return { approvals, questions, plans, permissions, elicitations };
+}
+
+function hookTiming(hook: TmuxPendingHook): {
+  requestedAt?: number;
+  expiresAt?: number;
+} {
+  return {
+    ...(hook.requestedAt !== undefined ? { requestedAt: hook.requestedAt } : {}),
+    ...(hook.expiresAt !== undefined ? { expiresAt: hook.expiresAt } : {}),
+  };
 }
 
 function shouldAutoAllowPermissionHook(hook: TmuxPendingHook): boolean {
@@ -2563,7 +2671,10 @@ function questionAnswersToRecord(
 ): Record<string, string> {
   const mapped: Record<string, string> = {};
   questions.forEach((question, index) => {
-    mapped[question.question] = (answers[index] ?? []).join(", ");
+    mapped[question.question] = serializeClaudeQuestionAnswer(
+      answers[index] ?? [],
+      question.multiSelect === true,
+    );
   });
   return mapped;
 }
@@ -2634,13 +2745,15 @@ function elicitationSchemaFields(schema: Record<string, unknown> | null): Array<
     const field = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
     const title = typeof field.title === "string" ? field.title : key;
     const format = typeof field.format === "string" ? field.format : "";
+    const sensitiveMarker = `${key} ${title} ${format}`;
     return {
       key,
       label: title,
       sensitive:
-        format.toLowerCase().includes("password") ||
-        key.toLowerCase().includes("password") ||
-        key.toLowerCase().includes("token"),
+        field.writeOnly === true
+        || field.sensitive === true
+        || /password|passphrase|secret|token|credential|api[\s_-]*key|private[\s_-]*key/i
+          .test(sensitiveMarker),
     };
   });
 }
@@ -3527,15 +3640,31 @@ function ApprovalCard({
     eventId: string;
     toolName: string;
     toolInput: Record<string, unknown>;
+    expiresAt?: number;
   };
-  onApprove: () => void;
-  onDeny: () => void;
+  onApprove: () => Promise<void> | void;
+  onDeny: () => Promise<void> | void;
 }) {
+  const [submitting, setSubmitting] = useState(false);
+  const respond = async (action: () => Promise<void> | void) => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await action();
+    } finally {
+      setSubmitting(false);
+    }
+  };
   return (
-    <div className="rounded-lg border-2 border-amber-700/60 bg-amber-950/20 px-3 py-3 mb-3">
-      <div className="text-xs uppercase tracking-wide text-amber-400 mb-2">
-        Claude wants to use a tool
-      </div>
+    <BlockingPromptCard
+      title="Claude wants to use a tool"
+      expiresAt={approval.expiresAt}
+      state={submitting ? "submitting" : "pending"}
+      aria-label={`Claude wants to use ${approval.toolName}`}
+      arrivalAnnouncement="Claude is waiting for a tool decision."
+      className="mb-3"
+    >
+      <div className="px-3 py-3">
       <div className="text-sm font-mono text-amber-200 mb-2">
         {approval.toolName}
       </div>
@@ -3546,20 +3675,23 @@ function ApprovalCard({
       <div className="flex gap-2">
         <button
           type="button"
-          onClick={onApprove}
+          onClick={() => void respond(onApprove)}
+          disabled={submitting}
           className="flex-1 px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium"
         >
           Allow
         </button>
         <button
           type="button"
-          onClick={onDeny}
+          onClick={() => void respond(onDeny)}
+          disabled={submitting}
           className="flex-1 px-3 py-1.5 rounded bg-red-800 hover:bg-red-700 text-white text-sm font-medium"
         >
           Deny
         </button>
       </div>
-    </div>
+      </div>
+    </BlockingPromptCard>
   );
 }
 

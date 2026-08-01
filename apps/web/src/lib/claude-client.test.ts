@@ -61,6 +61,15 @@ function mockFetchStatus(status: number) {
   ) as unknown as typeof fetch;
 }
 
+function mockFetchSequence(steps: Array<Response | Error>) {
+  globalThis.fetch = mock(async () => {
+    const next = steps.shift();
+    if (!next) throw new Error("Unexpected fetch");
+    if (next instanceof Error) throw next;
+    return next;
+  }) as unknown as typeof fetch;
+}
+
 describe("claude-client", () => {
   let client: ClaudeClient;
 
@@ -232,6 +241,28 @@ describe("claude-client", () => {
       });
     });
 
+    test("parses the backend turn clock for a running session", async () => {
+      mockFetchJson({
+        id: "s-1",
+        status: "running",
+        turnStartedAt: "2026-07-31T20:00:00.000Z",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+      });
+
+      const result = await lookupSession(client, "s-1");
+      expect(result).toEqual({
+        kind: "found",
+        session: {
+          id: "s-1",
+          status: "running",
+          turnStartedAt: Date.parse("2026-07-31T20:00:00.000Z"),
+          createdAt: "2026-01-01",
+          lastActivity: "2026-01-01",
+        },
+      });
+    });
+
     test("returns null on 404", async () => {
       mockFetchStatus(404);
       expect(await getSession(client, "s-missing")).toBeNull();
@@ -287,6 +318,7 @@ describe("claude-client", () => {
         ],
         [{ promptSuggestion: { text: "not a string" } }, "promptSuggestion"],
         [{ planMode: "yes" }, "planMode"],
+        [{ turnStartedAt: "yesterday-ish" }, "turnStartedAt"],
         [{ backgroundTasks: "none" }, "backgroundTasks"],
       ] as const) {
         mockFetchJson({ ...base, ...malformed });
@@ -937,13 +969,17 @@ describe("claude-client", () => {
     });
 
     test("returns the accepted request identity on 202", async () => {
-      mockFetchJson({ status: "processing" }, 202);
+      mockFetchJson({
+        status: "processing",
+        turnStartedAt: "2026-07-31T20:00:00.000Z",
+      }, 202);
       const result = await sendPrompt(client, "s-1", "Hello");
       expect(result).toMatchObject({
         ok: true,
         outcome: "accepted",
         status: "processing",
         requestId: expect.any(String),
+        turnStartedAt: Date.parse("2026-07-31T20:00:00.000Z"),
       });
     });
 
@@ -1785,9 +1821,23 @@ describe("claude-client", () => {
       expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("applied");
     });
 
-    test("returns error on network failure", async () => {
+    test("reports an unknown outcome when transport and reconciliation fail", async () => {
       mockFetchError();
+      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("unknown");
+    });
+
+    test("reconciles an ambiguous answer against the pending snapshot", async () => {
+      mockFetchSequence([
+        new Error("network error"),
+        new Response(JSON.stringify({ questions: [{ id: "q-1" }] })),
+      ]);
       expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("error");
+
+      mockFetchSequence([
+        new Error("network error"),
+        new Response(JSON.stringify({ questions: [] })),
+      ]);
+      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("stale");
     });
 
     // 409 is the bridge saying the window closed; 404 is "no such session",
@@ -1825,7 +1875,21 @@ describe("claude-client", () => {
       expect(await dismissQuestion(client, "s-1", "q-1")).toBe("error");
 
       mockFetchError();
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe("unknown");
+    });
+
+    test("reconciles an ambiguous dismissal against the pending snapshot", async () => {
+      mockFetchSequence([
+        new Error("network error"),
+        new Response(JSON.stringify({ questions: [{ id: "q-1" }] })),
+      ]);
       expect(await dismissQuestion(client, "s-1", "q-1")).toBe("error");
+
+      mockFetchSequence([
+        new Error("network error"),
+        new Response(JSON.stringify({ questions: [] })),
+      ]);
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe("stale");
     });
   });
 
@@ -1852,7 +1916,21 @@ describe("claude-client", () => {
       expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("error");
 
       mockFetchError();
+      expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("unknown");
+    });
+
+    test("reconciles an ambiguous plan response against the pending snapshot", async () => {
+      mockFetchSequence([
+        new Error("network error"),
+        new Response(JSON.stringify({ approvals: [{ id: "a-1" }] })),
+      ]);
       expect(await respondToPlanApproval(client, "s-1", "a-1", true)).toBe("error");
+
+      mockFetchSequence([
+        new Error("network error"),
+        new Response(JSON.stringify({ approvals: [] })),
+      ]);
+      expect(await respondToPlanApproval(client, "s-1", "a-1", false)).toBe("stale");
     });
   });
 

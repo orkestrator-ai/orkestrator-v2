@@ -20,6 +20,7 @@ import {
 } from "@/lib/chat/client-only-messages";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
+import { findLatestBackendUserTurnStartedAt } from "@/lib/session-timer";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { shouldReconnectEventSubscription } from "@/stores/createNativeChatStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -176,6 +177,32 @@ const EMPTY_MODEL_PREFERENCES = EMPTY_OPENCODE_MODEL_PREFERENCES;
 const EMPTY_SLASH_COMMANDS: OpenCodeSlashCommand[] = [];
 const EMPTY_MODELS: OpenCodeModel[] = [];
 
+function getOpenCodeTurnStartedAt(
+  messages: readonly OpenCodeMessage[],
+): number | undefined {
+  return findLatestBackendUserTurnStartedAt(
+    messages,
+    (message) => !message.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX),
+  );
+}
+
+function getLatestOpenCodeBackendUserMessageId(
+  messages: readonly OpenCodeMessage[],
+): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "user") continue;
+    return message.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX)
+      ? undefined
+      : message.id;
+  }
+  return undefined;
+}
+
+function isOpenCodeTurnActive(status: string | null): boolean {
+  return status === "busy" || status === "retry";
+}
+
 
 function resolveModelSelection(input: {
   availableModels: OpenCodeModel[];
@@ -242,6 +269,7 @@ export function OpenCodeChatTab({
   refreshRequestId = 0,
 }: OpenCodeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
+  const projectedSessionId = data.sessionId;
   // Initialize as "connected" if we already have a client and session from a previous init.
   // This avoids even a single frame of spinner when switching back to an already-connected env.
   const [connectionState, setConnectionState] = useState<ConnectionState>(() => {
@@ -263,6 +291,10 @@ export function OpenCodeChatTab({
   const tabSessionIdRef = useRef<string | null>(null);
   // Track if this tab has been initialized (to differentiate first mount vs re-activation)
   const isInitializedRef = useRef(false);
+  // Invalidates async initialization work when its props change underneath it.
+  // `mounted` protects unmounts; the generation also protects overlapping effect
+  // instances when a projected backend session arrives during an awaited probe.
+  const initializationGenerationRef = useRef(0);
   // Track if initial prompt has been sent (to prevent duplicate sends)
   const initialPromptSentRef = useRef(false);
   const initialLaunchOptionsRef = useRef({
@@ -854,7 +886,11 @@ export function OpenCodeChatTab({
 
     setMessages(sessionKey, messages);
     if (status) {
-      setSessionLoading(sessionKey, status !== "idle");
+      setSessionLoading(
+        sessionKey,
+        isOpenCodeTurnActive(status),
+        isOpenCodeTurnActive(status) ? getOpenCodeTurnStartedAt(messages) : undefined,
+      );
     }
     await syncPendingRequests(activeClient, sessionId, {
       throwOnError: true,
@@ -928,11 +964,25 @@ export function OpenCodeChatTab({
     // Debounce rapid re-initialization
     const now = Date.now();
     const timeSinceLastInit = now - lastInitTimeRef.current;
-    if (timeSinceLastInit < INIT_DEBOUNCE_MS && isInitializedRef.current) {
+    const cachedSessionId = useOpenCodeStore
+      .getState()
+      .sessions.get(sessionKey)?.sessionId;
+    const projectedSessionChanged = Boolean(
+      projectedSessionId && cachedSessionId !== projectedSessionId,
+    );
+    if (
+      !projectedSessionChanged
+      && timeSinceLastInit < INIT_DEBOUNCE_MS
+      && isInitializedRef.current
+    ) {
       return;
     }
 
     let mounted = true;
+    const initializationGeneration = ++initializationGenerationRef.current;
+    const isCurrentInitialization = () =>
+      mounted
+      && initializationGeneration === initializationGenerationRef.current;
 
     async function initialize() {
       try {
@@ -941,14 +991,17 @@ export function OpenCodeChatTab({
         // reconnect instantly. This makes environment switching near-instant.
         let existingClient = useOpenCodeStore.getState().clients.get(environmentId);
         const existingSession = useOpenCodeStore.getState().sessions.get(sessionKey);
-        if (existingClient && !await checkClientHealth(existingClient)) {
-          if (!mounted) return;
-          // A restarted OpenCode server rotates its Basic credential. Keeping
-          // this SDK client would make both REST rehydration and the shared SSE
-          // loop retry the obsolete password forever.
-          closeEventSubscription(environmentId);
-          setClient(environmentId, null);
-          existingClient = undefined;
+        if (existingClient) {
+          const isHealthy = await checkClientHealth(existingClient);
+          if (!isCurrentInitialization()) return;
+          if (!isHealthy) {
+            // A restarted OpenCode server rotates its Basic credential. Keeping
+            // this SDK client would make both REST rehydration and the shared SSE
+            // loop retry the obsolete password forever.
+            closeEventSubscription(environmentId);
+            setClient(environmentId, null);
+            existingClient = undefined;
+          }
         }
         /**
          * Seed this sessionKey's model/variant before either warm path returns.
@@ -994,7 +1047,7 @@ export function OpenCodeChatTab({
               );
               return { models: EMPTY_MODELS, defaults: {} };
             });
-            if (!mounted) return;
+            if (!isCurrentInitialization()) return;
             if (refreshedModels.length > 0) {
               setModels(environmentId, refreshedModels);
               liveModels = refreshedModels;
@@ -1037,7 +1090,11 @@ export function OpenCodeChatTab({
           // copy — and let the initial prompt fall back to the server default.
           setLaunchOptionsSettled(true);
         }
-        if (existingClient && existingSession?.sessionId) {
+        if (
+          existingClient
+          && existingSession?.sessionId
+          && (!projectedSessionId || existingSession.sessionId === projectedSessionId)
+        ) {
           console.debug("[OpenCodeChatTab] Fast reconnect - reusing existing client and session", {
             tabId,
             environmentId,
@@ -1116,7 +1173,13 @@ export function OpenCodeChatTab({
                 useOpenCodeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0
               ) === loadingRevisionBeforeSnapshot
             ) {
-              setSessionLoading(sessionKey, status !== "idle");
+              setSessionLoading(
+                sessionKey,
+                isOpenCodeTurnActive(status),
+                isOpenCodeTurnActive(status)
+                  ? getOpenCodeTurnStartedAt(messages)
+                  : undefined,
+              );
             }
           }).catch((error) => {
             console.warn("[OpenCodeChatTab] Fast reconnect rehydration failed:", error);
@@ -1136,33 +1199,54 @@ export function OpenCodeChatTab({
           setConnectionState("connecting");
           setErrorMessage(null);
 
-          if (data.sessionId) {
+          if (projectedSessionId) {
             const availableSessions = await listSessions(existingClient);
-            if (availableSessions.some((session) => session.id === data.sessionId)) {
-              await adoptNativeAgentSession({
-                environmentId,
-                agent: "opencode",
-                logicalSessionKey: sessionKey,
-                providerSessionId: data.sessionId,
-              });
-              const messages = await getSessionMessages(existingClient, data.sessionId);
-              if (!mounted) return;
-              tabSessionIdRef.current = data.sessionId;
-              updateTabNativeSessionId(tabId, data.sessionId, environmentId);
-              isInitializedRef.current = true;
-              setSession(sessionKey, {
-                sessionId: data.sessionId,
-                messages,
-                isLoading: false,
-              });
-              setConnectionState("connected");
-              if (!hasActiveEventSubscription(environmentId)) {
-                startSharedEventSubscription(existingClient);
+            if (!isCurrentInitialization()) return;
+            if (availableSessions.some((session) => session.id === projectedSessionId)) {
+              const [messages, status] = await Promise.all([
+                getSessionMessages(existingClient, projectedSessionId, {
+                  throwOnError: true,
+                }),
+                getSessionStatus(existingClient, projectedSessionId, {
+                  throwOnError: true,
+                }),
+              ]);
+              if (!isCurrentInitialization()) return;
+
+              // A session can disappear after listSessions. Treat that as the
+              // same atomic replacement case instead of adopting a dead id.
+              if (status) {
+                await adoptNativeAgentSession({
+                  environmentId,
+                  agent: "opencode",
+                  logicalSessionKey: sessionKey,
+                  providerSessionId: projectedSessionId,
+                });
+                if (!isCurrentInitialization()) return;
+                tabSessionIdRef.current = projectedSessionId;
+                isInitializedRef.current = true;
+                setSession(sessionKey, {
+                  sessionId: projectedSessionId,
+                  messages,
+                  isLoading: isOpenCodeTurnActive(status),
+                  loadingStartedAt:
+                    isOpenCodeTurnActive(status)
+                      ? getOpenCodeTurnStartedAt(messages)
+                      : undefined,
+                });
+                // Publish to the pane only after the session store can rehydrate
+                // a subscribed remount with the same authoritative identity.
+                updateTabNativeSessionId(tabId, projectedSessionId, environmentId);
+                setConnectionState("connected");
+                if (!hasActiveEventSubscription(environmentId)) {
+                  startSharedEventSubscription(existingClient);
+                }
+                await syncPendingRequests(existingClient, projectedSessionId, {
+                  shouldApply: isCurrentInitialization,
+                });
+                return;
               }
-              await syncPendingRequests(existingClient, data.sessionId);
-              return;
             }
-            updateTabNativeSessionId(tabId, undefined, environmentId);
           }
 
           const ensured = await ensureNativeAgentSession({
@@ -1176,14 +1260,13 @@ export function OpenCodeChatTab({
             createdAt: ensured.createdAt,
             updatedAt: ensured.updatedAt,
           };
-          if (!mounted) return;
+          if (!isCurrentInitialization()) return;
 
           if (!newSession) {
             throw new Error("Failed to create OpenCode session");
           }
 
           tabSessionIdRef.current = newSession.id;
-          updateTabNativeSessionId(tabId, newSession.id, environmentId);
           isInitializedRef.current = true;
 
           setSession(sessionKey, {
@@ -1191,6 +1274,7 @@ export function OpenCodeChatTab({
             messages: [],
             isLoading: false,
           });
+          updateTabNativeSessionId(tabId, newSession.id, environmentId);
 
           setConnectionState("connected");
 
@@ -1369,68 +1453,138 @@ export function OpenCodeChatTab({
           .getState()
           .sessions.get(sessionKey);
         let existingSessionId =
-          existingSessionFromRef || existingSessionFromStore?.sessionId || data.sessionId;
+          projectedSessionId
+          ?? existingSessionFromRef
+          ?? existingSessionFromStore?.sessionId;
 
         if (existingSessionId) {
           const availableSessions = await listSessions(sdkClient);
+          if (!isCurrentInitialization()) return;
           if (!availableSessions.some((session) => session.id === existingSessionId)) {
-            updateTabNativeSessionId(tabId, undefined, environmentId);
             existingSessionId = undefined;
           }
         }
 
         if (existingSessionId) {
-          await adoptNativeAgentSession({
-            environmentId,
-            agent: "opencode",
-            logicalSessionKey: sessionKey,
-            providerSessionId: existingSessionId,
-          });
-          // Restore session from store - component may have remounted
-          tabSessionIdRef.current = existingSessionId;
-          updateTabNativeSessionId(tabId, existingSessionId, environmentId);
-          isInitializedRef.current = true;
-          setConnectionState("connected");
-
-          // Start shared event subscription if not already running
-          startSharedEventSubscription(sdkClient);
-
-          // Sync pending interactions in case we missed early SSE events
-          await syncPendingRequests(sdkClient, existingSessionId);
-
           // Refresh messages from server to ensure latest state on reconnection.
           // A restored pane on a new client has no in-memory session yet, so it
           // must hydrate the transcript rather than installing an empty shell.
+          let snapshot: [
+            Awaited<ReturnType<typeof getSessionMessages>>,
+            Awaited<ReturnType<typeof getSessionStatus>>,
+          ] | null;
+          let snapshotError: unknown;
+          let snapshotFailed = false;
           try {
-            const messages = await getSessionMessages(
-              sdkClient,
-              existingSessionId,
-            );
-            if (!mounted) return;
-
-            if (existingSessionFromStore) {
-              // setMessages preserves client-side error messages (ERROR_MESSAGE_PREFIX)
-              // from the existing session state when replacing server messages.
-              setMessages(sessionKey, messages);
-            } else {
-              setSession(sessionKey, {
-                sessionId: existingSessionId,
-                messages,
-                isLoading: false,
-              });
-            }
+            snapshot = await Promise.all([
+              getSessionMessages(sdkClient, existingSessionId, {
+                throwOnError: true,
+              }),
+              getSessionStatus(sdkClient, existingSessionId, {
+                throwOnError: true,
+              }),
+            ]);
+            if (!isCurrentInitialization()) return;
           } catch (err) {
-            if (existingSessionFromStore) {
-              console.warn(
-                "[OpenCodeChatTab] Failed to refresh messages on reconnect:",
-                err,
-              );
-              // Keep existing messages from store if refresh fails
+            if (existingSessionFromStore?.sessionId === existingSessionId) {
+              snapshot = null;
+              snapshotError = err;
+              snapshotFailed = true;
             } else {
               throw err;
             }
           }
-        } else {
+
+          if (snapshotFailed) {
+            console.warn(
+              "[OpenCodeChatTab] Failed to refresh messages on reconnect:",
+              snapshotError,
+            );
+            if (!isCurrentInitialization()) return;
+            // A transcript outage does not remove the requirement to claim the
+            // logical session. Keep adoption outside the fetch catch so its
+            // failure reaches the outer initialization error boundary.
+            await adoptNativeAgentSession({
+              environmentId,
+              agent: "opencode",
+              logicalSessionKey: sessionKey,
+              providerSessionId: existingSessionId,
+            });
+            if (!isCurrentInitialization()) return;
+            // Keep existing messages and loading state from the store if the
+            // authoritative snapshot is temporarily unavailable.
+            tabSessionIdRef.current = existingSessionId;
+            isInitializedRef.current = true;
+            updateTabNativeSessionId(tabId, existingSessionId, environmentId);
+            setConnectionState("connected");
+            startSharedEventSubscription(sdkClient);
+            await syncPendingRequests(sdkClient, existingSessionId, {
+              shouldApply: isCurrentInitialization,
+            });
+          }
+
+          if (snapshot) {
+            const [messages, status] = snapshot;
+            // The session may have vanished after listSessions. Leave the old
+            // pane projection in place until its replacement is ready below.
+            if (!status) {
+              existingSessionId = undefined;
+            } else {
+              // Adoption is intentionally outside the snapshot-fallback catch:
+              // a failed logical-session claim must never be mistaken for a
+              // harmless transcript outage.
+              await adoptNativeAgentSession({
+                environmentId,
+                agent: "opencode",
+                logicalSessionKey: sessionKey,
+                providerSessionId: existingSessionId,
+              });
+              if (!isCurrentInitialization()) return;
+
+              // Install the provider identity before pending reconciliation;
+              // syncPendingRequests deliberately rejects snapshots for any
+              // identity other than the one currently held by this sessionKey.
+              tabSessionIdRef.current = existingSessionId;
+              isInitializedRef.current = true;
+
+              if (existingSessionFromStore?.sessionId === existingSessionId) {
+                // setMessages preserves client-side error messages (ERROR_MESSAGE_PREFIX)
+                // from the existing session state when replacing server messages.
+                setMessages(sessionKey, messages);
+                setSessionLoading(
+                  sessionKey,
+                  isOpenCodeTurnActive(status),
+                  isOpenCodeTurnActive(status)
+                    ? getOpenCodeTurnStartedAt(messages)
+                    : undefined,
+                );
+              } else {
+                setSession(sessionKey, {
+                  sessionId: existingSessionId,
+                  messages,
+                  isLoading: isOpenCodeTurnActive(status),
+                  loadingStartedAt:
+                    isOpenCodeTurnActive(status)
+                      ? getOpenCodeTurnStartedAt(messages)
+                      : undefined,
+                });
+              }
+              updateTabNativeSessionId(tabId, existingSessionId, environmentId);
+              setConnectionState("connected");
+
+              // Start shared event subscription only after the snapshot is in
+              // the store, so an immediate frame cannot be overwritten by it.
+              startSharedEventSubscription(sdkClient);
+
+              // Sync pending interactions in case we missed early SSE events.
+              await syncPendingRequests(sdkClient, existingSessionId, {
+                shouldApply: isCurrentInitialization,
+              });
+            }
+          }
+        }
+
+        if (!existingSessionId) {
           // First initialization - create a new session
           const ensured = await ensureNativeAgentSession({
             environmentId,
@@ -1443,11 +1597,10 @@ export function OpenCodeChatTab({
             createdAt: ensured.createdAt,
             updatedAt: ensured.updatedAt,
           };
-          if (!mounted) return;
+          if (!isCurrentInitialization()) return;
 
           // Store the session ID in the ref for future re-activations
           tabSessionIdRef.current = newSession.id;
-          updateTabNativeSessionId(tabId, newSession.id, environmentId);
           isInitializedRef.current = true;
 
           setSession(sessionKey, {
@@ -1455,6 +1608,7 @@ export function OpenCodeChatTab({
             messages: [],
             isLoading: false,
           });
+          updateTabNativeSessionId(tabId, newSession.id, environmentId);
 
           setConnectionState("connected");
 
@@ -1462,7 +1616,9 @@ export function OpenCodeChatTab({
           startSharedEventSubscription(sdkClient);
 
           // Sync pending interactions in case we missed early SSE events
-          await syncPendingRequests(sdkClient, newSession.id);
+          await syncPendingRequests(sdkClient, newSession.id, {
+            shouldApply: isCurrentInitialization,
+          });
         }
       } catch (error) {
         if (!mounted) return;
@@ -1538,6 +1694,9 @@ export function OpenCodeChatTab({
 
     return () => {
       mounted = false;
+      if (initializationGenerationRef.current === initializationGeneration) {
+        initializationGenerationRef.current += 1;
+      }
       // NOTE: We do NOT close the event subscription here - it's shared per environment
       // The subscription will be closed when the environment is cleaned up
       // We also don't clear the client - it's shared per environment
@@ -1559,6 +1718,7 @@ export function OpenCodeChatTab({
     setSelectedVariant,
     setupPending,
     initAttempt,
+    projectedSessionId,
   ]);
 
   useEffect(() => {
@@ -1616,6 +1776,16 @@ export function OpenCodeChatTab({
       const lastReloadTimeBySession = new Map<string, number>();
       const pendingReloads = new Map<string, NodeJS.Timeout>();
       const reloadGenerationByKey = new Map<string, number>();
+      /*
+       * A live busy edge does not identify the turn it starts. Keep only a
+       * newly observed backend user message as a possible clock source; the
+       * existing transcript may end with the previous completed turn when a
+       * queued prompt is dispatched while its tab is unmounted.
+       */
+      const pendingBackendTurnClockBySession = new Map<
+        string,
+        { messageId: string; startedAt: number | undefined }
+      >();
 
       const beginReloadGeneration = (reloadKey: string) => {
         const generation = (reloadGenerationByKey.get(reloadKey) ?? 0) + 1;
@@ -1750,15 +1920,20 @@ export function OpenCodeChatTab({
                 .getState()
                 .sessions.get(sessionKey);
               if (currentSession?.sessionId !== sessionId) return;
-              setMessages(
-                sessionKey,
-                includeSubagents
-                  ? messages
-                  : carryOverOpenCodeSubagentHydration(
-                      currentSession.messages,
-                      messages,
-                    ),
-              );
+              const reconciledMessages = includeSubagents
+                ? messages
+                : carryOverOpenCodeSubagentHydration(
+                    currentSession.messages,
+                    messages,
+                  );
+              setMessages(sessionKey, reconciledMessages);
+              if (currentSession.isLoading) {
+                setSessionLoading(
+                  sessionKey,
+                  true,
+                  getOpenCodeTurnStartedAt(reconciledMessages),
+                );
+              }
             } catch (error) {
               console.warn(
                 "[OpenCodeChatTab] Failed to refresh session transcript:",
@@ -1841,6 +2016,24 @@ export function OpenCodeChatTab({
           const merged = mergeOpenCodeMessageInfo(existingMessage, rawInfo);
           if (!merged) return false;
           upsertMessage(sessionTabId, merged);
+          if (
+            merged.role === "user"
+            && !merged.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX)
+          ) {
+            const reconciledMessages = [
+              ...(sessionState?.messages.filter((message) => message.id !== merged.id) ?? []),
+              merged,
+            ];
+            const startedAt = getOpenCodeTurnStartedAt(reconciledMessages);
+            if (sessionState?.isLoading) {
+              setSessionLoading(sessionTabId, true, startedAt);
+            } else if (!existingMessage) {
+              pendingBackendTurnClockBySession.set(sessionTabId, {
+                messageId: merged.id,
+                startedAt,
+              });
+            }
+          }
           return true;
         };
 
@@ -1981,13 +2174,30 @@ export function OpenCodeChatTab({
                 || props?.status?.type === "retry"
               )
             ) {
-              setSessionLoading(sessionTabId, true);
+              const pendingClock = pendingBackendTurnClockBySession.get(sessionTabId);
+              const currentMessages = useOpenCodeStore
+                .getState()
+                .sessions.get(sessionTabId)?.messages ?? sessionState.messages;
+              const authoritativeStartedAt =
+                pendingClock
+                && getLatestOpenCodeBackendUserMessageId(currentMessages)
+                  === pendingClock.messageId
+                  ? pendingClock.startedAt
+                  : undefined;
+              pendingBackendTurnClockBySession.delete(sessionTabId);
+              setSessionLoading(
+                sessionTabId,
+                true,
+                authoritativeStartedAt,
+              );
             } else if (isFinalEvent) {
+              pendingBackendTurnClockBySession.delete(sessionTabId);
               setSessionLoading(sessionTabId, false);
             }
 
             // Handle errors
             if (eventType === "session.error") {
+              pendingBackendTurnClockBySession.delete(sessionTabId);
               console.error("[OpenCodeChatTab] Session error:", props?.error);
               setSessionLoading(sessionTabId, false);
               const errorMsg = formatOpenCodeError(props?.error);
@@ -2528,7 +2738,10 @@ export function OpenCodeChatTab({
       if (!client) return;
 
       try {
-        const messages = await getSessionMessages(client, sessionId);
+        const [messages, status] = await Promise.all([
+          getSessionMessages(client, sessionId),
+          getSessionStatus(client, sessionId, { throwOnError: true }),
+        ]);
         await adoptNativeAgentSession({
           environmentId,
           agent: "opencode",
@@ -2554,7 +2767,15 @@ export function OpenCodeChatTab({
         const resumedUsage = summarizeOpenCodeUsage(messages, models);
         useOpenCodeStore.setState((state) => {
           const sessions = new Map(state.sessions);
-          sessions.set(sessionKey, { sessionId, messages, isLoading: false });
+          const isLoading = isOpenCodeTurnActive(status);
+          sessions.set(sessionKey, {
+            sessionId,
+            messages,
+            isLoading,
+            loadingStartedAt:
+              isLoading ? getOpenCodeTurnStartedAt(messages) : undefined,
+            lastCompletedElapsedSeconds: isLoading ? null : undefined,
+          });
           const contextUsage = new Map(state.contextUsage);
           if (resumedUsage) contextUsage.set(sessionKey, resumedUsage);
           else contextUsage.delete(sessionKey);

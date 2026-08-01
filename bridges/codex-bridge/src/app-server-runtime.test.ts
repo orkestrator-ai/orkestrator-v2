@@ -1723,7 +1723,8 @@ describe("session lifecycle", () => {
   });
 
   test("the first prompt creates the thread and dispatches a turn", async () => {
-    const h = await harness();
+    const turnStartedAt = Date.parse("2026-08-01T12:34:56.000Z");
+    const h = await harness({}, { now: () => turnStartedAt });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const invalidationsBefore = getTranscriptCatalogInvalidationCountForTesting();
 
@@ -1735,7 +1736,24 @@ describe("session lifecycle", () => {
 
     expect(outcome).toMatchObject({
       ok: true,
-      result: { status: "processing", requestId: "req-1", threadId: "thread-1", turnId: "turn-1" },
+      result: {
+        status: "processing",
+        requestId: "req-1",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turnStartedAt: "2026-08-01T12:34:56.000Z",
+      },
+    });
+    expect(h.runtime.getStatus(sessionId)?.turnStartedAt)
+      .toBe("2026-08-01T12:34:56.000Z");
+    expect(h.events).toContainEqual({
+      type: "session.updated",
+      sessionId,
+      data: {
+        status: "running",
+        phase: "starting",
+        turnStartedAt: "2026-08-01T12:34:56.000Z",
+      },
     });
     const methods = h.child().requests.map((r) => r.method);
     expect(methods).toContain("thread/start");
@@ -2221,6 +2239,7 @@ describe("session lifecycle", () => {
     expect(messages[1]!.content).toBe("Hi there, final.");
     expect(h.runtime.getStatus(sessionId)!.messageRevision).toBeGreaterThan(streamingRevision);
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
+    expect(h.runtime.getStatus(sessionId)?.turnStartedAt).toBeUndefined();
     expect(h.events.some((event) => event.type === "session.idle")).toBe(true);
     expect(h.events.findLastIndex((event) => event.type === "message.patched"))
       .toBeLessThan(h.events.findLastIndex((event) => event.type === "session.idle"));
@@ -2756,7 +2775,9 @@ describe("session lifecycle", () => {
 
 describe("at-most-once dispatch", () => {
   test("a duplicate request id while running attaches to the existing turn", async () => {
-    const h = await harness();
+    const h = await harness({}, {
+      now: () => Date.parse("2026-08-01T12:34:56.000Z"),
+    });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
 
@@ -2768,8 +2789,15 @@ describe("at-most-once dispatch", () => {
 
     expect(again).toMatchObject({
       ok: true,
-      result: { status: "processing", duplicate: true, turnId: "turn-1" },
+      result: {
+        status: "processing",
+        duplicate: true,
+        turnId: "turn-1",
+        turnStartedAt: "2026-08-01T12:34:56.000Z",
+      },
     });
+    expect(h.runtime.getStatus(sessionId)?.turnStartedAt)
+      .toBe("2026-08-01T12:34:56.000Z");
     // Exactly one turn was dispatched.
     expect(h.child().requests.filter((r) => r.method === "turn/start")).toHaveLength(1);
   });
@@ -2923,6 +2951,7 @@ describe("at-most-once dispatch", () => {
 
   test("an ambiguous dispatch that did run stays running until its terminal event", async () => {
     let hangNextTurn = false;
+    let now = Date.parse("2026-08-01T12:00:00.000Z");
     const h = await harness({
       "turn/start": () => (hangNextTurn ? NO_RESPONSE : { turn: { id: "turn-1" } }),
       // The write landed: app-server is executing this request right now.
@@ -2937,7 +2966,7 @@ describe("at-most-once dispatch", () => {
           ],
         }),
       }),
-    });
+    }, { now: () => now });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-0", attachments: [] });
     const firstTurnIdle = h.waitForEvent(
@@ -2949,6 +2978,7 @@ describe("at-most-once dispatch", () => {
     });
     await firstTurnIdle;
 
+    now = Date.parse("2026-08-01T12:05:00.000Z");
     hangNextTurn = true;
     const pending = h.runtime.prompt(sessionId, {
       prompt: "second",
@@ -2963,6 +2993,7 @@ describe("at-most-once dispatch", () => {
         status: "processing",
         requestId: "req-1",
         turnId: "turn-9",
+        turnStartedAt: "2026-08-01T12:05:00.000Z",
         duplicate: true,
       },
     });
@@ -2970,6 +3001,8 @@ describe("at-most-once dispatch", () => {
 
     // Reporting idle here would let the build pipeline advance on a live turn.
     expect(phaseToExternalStatus(h.runtime.getStatus(sessionId)!.phase)).toBe("running");
+    expect(h.runtime.getStatus(sessionId)?.turnStartedAt)
+      .toBe("2026-08-01T12:05:00.000Z");
     expect(h.runtime.getJournal().get("req-1")).toMatchObject({ state: "accepted" });
 
     // The adopted turn is tracked, so its terminal event finalizes normally.
@@ -4117,7 +4150,9 @@ describe("crash recovery", () => {
   });
 
   test("an active turn becomes recovering, not idle or error", async () => {
-    const h = await harness();
+    const h = await harness({}, {
+      now: () => Date.parse("2026-08-01T12:34:56.000Z"),
+    });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
 
@@ -4128,6 +4163,7 @@ describe("crash recovery", () => {
     expect(status.phase).toBe("recovering");
     // A crash must not masquerade as a completed turn.
     expect(status.status).toBe("running");
+    expect(status.turnStartedAt).toBe("2026-08-01T12:34:56.000Z");
   });
 
   /**
@@ -4192,6 +4228,8 @@ describe("crash recovery", () => {
           ],
         }),
       }),
+    }, {
+      now: () => Date.parse("2026-08-01T12:34:56.000Z"),
     });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
@@ -4202,7 +4240,10 @@ describe("crash recovery", () => {
     await h.drain();
 
     // Still executing, so it must not be reported idle or accept a new prompt.
-    expect(h.runtime.getStatus(sessionId)!.status).toBe("running");
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "running",
+      turnStartedAt: "2026-08-01T12:34:56.000Z",
+    });
   });
 
   test("a turn that failed on the dead child is finalized as failed", async () => {
@@ -7248,8 +7289,9 @@ describe("native review", () => {
 
   async function reviewableSession(
     extraHandlers: Record<string, (params: Record<string, unknown>) => unknown> = {},
+    options: Parameters<typeof harness>[1] = {},
   ) {
-    const h = await harness({ ...REVIEW_HANDLERS, ...extraHandlers });
+    const h = await harness({ ...REVIEW_HANDLERS, ...extraHandlers }, options);
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
     h.child().notify("turn/completed", {
@@ -7269,7 +7311,9 @@ describe("native review", () => {
   });
 
   test("starts the review turn and streams into its assistant message", async () => {
-    const { h, sessionId } = await reviewableSession();
+    const { h, sessionId } = await reviewableSession({}, {
+      now: () => Date.parse("2026-08-01T12:34:56.000Z"),
+    });
 
     const started = await h.runtime.startNativeReview(sessionId, {
       type: "baseBranch",
@@ -7279,6 +7323,17 @@ describe("native review", () => {
     expect(h.runtime.getStatus(sessionId)).toMatchObject({
       status: "running",
       turnId: "turn-review",
+      turnStartedAt: "2026-08-01T12:34:56.000Z",
+    });
+    await h.drain();
+    expect(h.events).toContainEqual({
+      type: "session.updated",
+      sessionId,
+      data: {
+        status: "running",
+        phase: "running",
+        turnStartedAt: "2026-08-01T12:34:56.000Z",
+      },
     });
     expect(h.child().requests.find((request) => request.method === "review/start")?.params)
       .toMatchObject({ target: { type: "baseBranch", branch: "main" }, delivery: "inline" });
@@ -7405,6 +7460,8 @@ describe("native review", () => {
           turns: [{ id: "turn-review", status: "inProgress", items: [] }],
         }),
       }),
+    }, {
+      now: () => Date.parse("2026-08-01T12:34:56.000Z"),
     });
     expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" }))
       .toEqual({ outcome: "accepted", turnId: "turn-review" });
@@ -7416,6 +7473,7 @@ describe("native review", () => {
     expect(h.runtime.getStatus(sessionId)).toMatchObject({
       status: "running",
       turnId: "turn-review",
+      turnStartedAt: "2026-08-01T12:34:56.000Z",
     });
     expect(h.runtime.getJournal().get("review-turn-review")).toBeUndefined();
   });
@@ -7423,6 +7481,8 @@ describe("native review", () => {
   test("review-start rejection after a child crash preserves the recovering phase", async () => {
     const { h, sessionId } = await reviewableSession({
       "review/start": () => NO_RESPONSE,
+    }, {
+      now: () => Date.parse("2026-08-01T12:34:56.000Z"),
     });
     const review = h.runtime.startNativeReview(sessionId, {
       type: "uncommittedChanges",
@@ -7434,6 +7494,7 @@ describe("native review", () => {
     expect(h.runtime.getStatus(sessionId)).toMatchObject({
       status: "running",
       phase: "recovering",
+      turnStartedAt: "2026-08-01T12:34:56.000Z",
     });
   });
 });

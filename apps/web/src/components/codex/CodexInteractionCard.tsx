@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import { Check, Circle, ExternalLink, HelpCircle } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { toast } from "sonner";
+import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { openInBrowser } from "@/lib/backend";
-import { cn } from "@/lib/utils";
 import {
+  fetchPendingInteractions,
   respondToInteraction,
   type CodexClient,
   type CodexInteraction,
@@ -15,6 +16,7 @@ import {
   codexInteractionDraftKey,
   usePromptDraftField,
 } from "@/stores/promptDraftStore";
+import { CodexQuestionCard } from "./CodexQuestionCard";
 
 interface CodexInteractionCardProps {
   interaction: CodexInteraction;
@@ -64,32 +66,46 @@ export function CodexInteractionCard({
   sessionId,
   sessionKey,
 }: CodexInteractionCardProps) {
+  if (interaction.kind === "question") {
+    return (
+      <CodexQuestionCard
+        interaction={interaction}
+        client={client}
+        sessionId={sessionId}
+        sessionKey={sessionKey}
+      />
+    );
+  }
+  return (
+    <CodexMcpInteractionCard
+      interaction={interaction}
+      client={client}
+      sessionId={sessionId}
+      sessionKey={sessionKey}
+    />
+  );
+}
+
+function CodexMcpInteractionCard({
+  interaction,
+  client,
+  sessionId,
+  sessionKey,
+}: CodexInteractionCardProps) {
   const remove = useCodexStore((state) => state.removePendingInteraction);
   // In-progress input lives in the prompt-draft store so it survives the tab
   // unmounting; `codexStore` clears it when the interaction resolves or is
   // withdrawn (removePendingInteraction / setPendingInteractions / sweeps).
-  const draftKey = codexInteractionDraftKey(interaction.interactionId);
-  // Selection is tracked by option *index*, never by label: labels are
-  // untrusted MCP-supplied text and are not de-duplicated upstream, so two
-  // options can share one. Keying/selecting by label would make them a single
-  // control. The submitted answer is still the label — that is the wire format.
-  const [answers, setAnswers] = usePromptDraftField<Record<string, number[]>>(
-    draftKey,
-    "answers",
-    () => ({}),
-  );
+  const draftKey = codexInteractionDraftKey(sessionKey, interaction.interactionId);
   const [form, setForm] = usePromptDraftField<Record<string, unknown>>(
     draftKey,
     "form",
     () => ({}),
   );
-  const [freeText, setFreeText] = usePromptDraftField<Record<string, string>>(
-    draftKey,
-    "freeText",
-    () => ({}),
-  );
+  const [secretForm, setSecretForm] = useState<Record<string, unknown>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryBlocked, setRetryBlocked] = useState(false);
   const schema = object(interaction.schema);
   const properties = object(schema.properties);
   const externalUrl = safeExternalUrl(interaction.url);
@@ -99,38 +115,22 @@ export function CodexInteractionCard({
       : [],
   );
 
-  // Selected indices become labels here — indices are a local rendering
-  // concern, the bridge only understands labels.
-  const resolvedAnswers = useMemo(() => {
-    const entries: Record<string, string[]> = {};
-    for (const question of interaction.questions ?? []) {
-      const selected = (answers[question.id] ?? [])
-        .map((index) => question.options?.[index]?.label)
-        .filter((label): label is string => typeof label === "string");
-      if (selected.length > 0) {
-        entries[question.id] = selected;
-        continue;
-      }
-      const typed = freeText[question.id]?.trim() ?? "";
-      if (typed) entries[question.id] = [typed];
-    }
-    return entries;
-  }, [answers, freeText, interaction.questions]);
+  const isSensitiveField = (key: string, definition: Record<string, unknown>) =>
+    definition.writeOnly === true
+    || (typeof definition.format === "string"
+      && /password|secret|token/i.test(definition.format))
+    || /password|secret|token/i.test(key);
+  const resolvedForm = useMemo(() => ({ ...form, ...secretForm }), [form, secretForm]);
 
   const canSubmit = useMemo(() => {
-    if (interaction.kind === "question") {
-      return (interaction.questions ?? []).every(
-        (question) => (resolvedAnswers[question.id]?.length ?? 0) > 0,
-      );
-    }
     if (interaction.kind === "mcp-form") {
       return [...required].every((key) => {
-        const value = form[key];
+        const value = resolvedForm[key];
         return value !== undefined && value !== "";
       });
     }
     return Boolean(externalUrl);
-  }, [externalUrl, form, interaction.kind, interaction.questions, required, resolvedAnswers]);
+  }, [externalUrl, interaction.kind, required, resolvedForm]);
 
   const openExternalForm = async () => {
     if (!externalUrl) return;
@@ -148,6 +148,7 @@ export function CodexInteractionCard({
   const submit = async (action: "accept" | "decline" | "cancel") => {
     setSubmitting(true);
     setError(null);
+    setRetryBlocked(false);
     const result = await respondToInteraction(
       client,
       sessionId,
@@ -155,8 +156,7 @@ export function CodexInteractionCard({
       action === "accept"
         ? {
             action,
-            ...(interaction.kind === "question" ? { answers: resolvedAnswers } : {}),
-            ...(interaction.kind === "mcp-form" ? { content: form } : {}),
+            ...(interaction.kind === "mcp-form" ? { content: resolvedForm } : {}),
           }
         : { action },
     );
@@ -169,6 +169,28 @@ export function CodexInteractionCard({
       setSubmitting(false);
       return;
     }
+    if (result === "unknown") {
+      try {
+        const pending = await fetchPendingInteractions(client, sessionId);
+        if (!pending.some((candidate) => candidate.interactionId === interaction.interactionId)) {
+          remove(sessionKey, interaction.interactionId);
+          setSubmitting(false);
+          return;
+        }
+        const message = "The connection dropped, but Codex is still waiting. It is safe to retry.";
+        setError(message);
+        toast.error(message);
+        setSubmitting(false);
+        return;
+      } catch {
+        const message = "The response outcome is unknown. Reconnect or refresh Codex before trying again.";
+        setRetryBlocked(true);
+        setError(message);
+        toast.error(message);
+        setSubmitting(false);
+        return;
+      }
+    }
     const message =
       result === "forbidden"
         ? "Codex refused this response. The interaction may have been reassigned or the session locked."
@@ -179,90 +201,37 @@ export function CodexInteractionCard({
   };
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
-      <div className="flex items-start gap-2 border-b border-border bg-muted/50 px-4 py-2.5">
-        <HelpCircle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-        <div className="min-w-0">
-          <div className="text-sm font-medium text-foreground">
-            {interaction.kind === "question" ? "Codex has a question" : "MCP input requested"}
-          </div>
-          {interaction.message ? (
-            <div className="mt-0.5 text-xs text-muted-foreground">
-              {interaction.message}
-            </div>
-          ) : null}
-          {interaction.serverName ? (
-            <div className="mt-0.5 font-mono text-[10px] text-muted-foreground/70">
-              {interaction.serverName}
-            </div>
-          ) : null}
-        </div>
-      </div>
-
+    <BlockingPromptCard
+      title="MCP input requested"
+      description={interaction.message}
+      meta={interaction.serverName}
+      expiresAt={interaction.expiresAt}
+      state={submitting ? "submitting" : error ? "retryable-error" : "pending"}
+      error={error}
+      role="group"
+      aria-label="MCP input requested by Codex"
+      arrivalAnnouncement="Codex is waiting for MCP input."
+      actions={
+        <>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={submitting || retryBlocked}
+            onClick={() => void submit("cancel")}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={submitting || retryBlocked || !canSubmit}
+            onClick={() => void submit("accept")}
+          >
+            {interaction.kind === "mcp-url" ? "I’ve completed it" : "Submit"}
+          </Button>
+        </>
+      }
+    >
       <div className="max-h-72 space-y-4 overflow-y-auto p-4">
-        {interaction.kind === "question"
-          ? interaction.questions?.map((question) => (
-              <div key={question.id} className="space-y-2">
-                <div>
-                  <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                    {question.header}
-                  </div>
-                  <div className="mt-1 text-sm text-foreground">{question.question}</div>
-                </div>
-                {question.options?.map((option, index) => {
-                  const selected = answers[question.id]?.includes(index) ?? false;
-                  return (
-                    <button
-                      key={`${question.id}:${index}`}
-                      type="button"
-                      aria-pressed={selected}
-                      onClick={() => {
-                        setAnswers((current) => ({
-                          ...current,
-                          [question.id]: selected ? [] : [index],
-                        }));
-                        if (!selected) {
-                          setFreeText((current) => ({ ...current, [question.id]: "" }));
-                        }
-                      }}
-                      className={cn(
-                        "flex w-full items-start gap-2 rounded-md px-3 py-2 text-left transition-colors hover:bg-muted",
-                        selected && "bg-muted",
-                      )}
-                    >
-                      {selected
-                        ? <Check className="mt-0.5 h-4 w-4 shrink-0" />
-                        : <Circle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />}
-                      <span>
-                        <span className="block text-sm">{option.label}</span>
-                        {option.description ? (
-                          <span className="block text-xs text-muted-foreground">
-                            {option.description}
-                          </span>
-                        ) : null}
-                      </span>
-                    </button>
-                  );
-                })}
-                {question.isOther || !question.options?.length ? (
-                  <Input
-                    type={question.isSecret ? "password" : "text"}
-                    aria-label={`Answer for ${question.question}`}
-                    value={freeText[question.id] ?? ""}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setFreeText((current) => ({ ...current, [question.id]: value }));
-                      if (value) {
-                        setAnswers((current) => ({ ...current, [question.id]: [] }));
-                      }
-                    }}
-                    placeholder="Type your answer"
-                  />
-                ) : null}
-              </div>
-            ))
-          : null}
-
         {interaction.kind === "mcp-form"
           ? Object.entries(properties).map(([key, rawDefinition]) => {
               const definition = object(rawDefinition);
@@ -275,6 +244,12 @@ export function CodexInteractionCard({
               const options = Array.isArray(definition.enum)
                 ? definition.enum.filter((value): value is string => typeof value === "string")
                 : [];
+              const sensitive = isSensitiveField(key, definition);
+              const fieldValue = sensitive ? secretForm[key] : form[key];
+              const setFieldValue = (value: unknown) => {
+                const setter = sensitive ? setSecretForm : setForm;
+                setter((current) => ({ ...current, [key]: value }));
+              };
               return (
                 <label key={key} className="block space-y-1.5">
                   <span className="text-xs font-medium text-foreground">
@@ -286,19 +261,13 @@ export function CodexInteractionCard({
                   {definition.type === "boolean" ? (
                     <input
                       type="checkbox"
-                      checked={form[key] === true}
-                      onChange={(event) => setForm((current) => ({
-                        ...current,
-                        [key]: event.target.checked,
-                      }))}
+                      checked={fieldValue === true}
+                      onChange={(event) => setFieldValue(event.target.checked)}
                     />
                   ) : options.length > 0 ? (
                     <select
-                      value={String(form[key] ?? "")}
-                      onChange={(event) => setForm((current) => ({
-                        ...current,
-                        [key]: event.target.value,
-                      }))}
+                      value={String(fieldValue ?? "")}
+                      onChange={(event) => setFieldValue(event.target.value)}
                       className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
                     >
                       <option value="">Select…</option>
@@ -306,19 +275,25 @@ export function CodexInteractionCard({
                     </select>
                   ) : (
                     <Input
-                      type={definition.type === "number" || definition.type === "integer"
-                        ? "number"
-                        : "text"}
-                      value={String(form[key] ?? "")}
-                      onChange={(event) => setForm((current) => ({
-                        ...current,
-                        [key]: coerceFormFieldValue(
+                      type={sensitive
+                        ? "password"
+                        : definition.type === "number" || definition.type === "integer"
+                          ? "number"
+                          : "text"}
+                      value={String(fieldValue ?? "")}
+                      onChange={(event) => setFieldValue(
+                        coerceFormFieldValue(
                           event.target.value,
                           definition.type,
                         ),
-                      }))}
+                      )}
                     />
                   )}
+                  {sensitive ? (
+                    <span className="block text-[11px] text-muted-foreground">
+                      Secret input stays only in this card and is lost if you leave it.
+                    </span>
+                  ) : null}
                 </label>
               );
             })
@@ -335,43 +310,6 @@ export function CodexInteractionCard({
           </Button>
         ) : null}
       </div>
-
-      {error ? (
-        <div
-          role="alert"
-          className="border-t border-destructive/30 bg-destructive/10 px-4 py-2.5 text-xs text-destructive-foreground"
-        >
-          {error}
-        </div>
-      ) : null}
-
-      <div className="flex justify-end gap-2 border-t border-border bg-muted/30 px-4 py-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={submitting}
-          onClick={() => void submit("cancel")}
-        >
-          Cancel
-        </Button>
-        {interaction.kind !== "mcp-url" ? (
-          <Button
-            size="sm"
-            disabled={submitting || !canSubmit}
-            onClick={() => void submit("accept")}
-          >
-            Submit
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            disabled={submitting || !canSubmit}
-            onClick={() => void submit("accept")}
-          >
-            I’ve completed it
-          </Button>
-        )}
-      </div>
-    </div>
+    </BlockingPromptCard>
   );
 }

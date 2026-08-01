@@ -321,7 +321,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       for (const [requestId, question] of pendingQuestions) {
         if (question.sessionId === session.sessionId) {
           pendingQuestions.delete(requestId);
-          sweptDraftKeys.push(openCodeQuestionDraftKey(requestId));
+          sweptDraftKeys.push(openCodeQuestionDraftKey(question.sessionId, requestId));
         }
       }
       const pendingPermissions = new Map(state.pendingPermissions);
@@ -365,7 +365,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
       for (const [requestId, question] of newPendingQuestions) {
         if (environmentSessionIds.has(question.sessionId)) {
           newPendingQuestions.delete(requestId);
-          sweptDraftKeys.push(openCodeQuestionDraftKey(requestId));
+          sweptDraftKeys.push(openCodeQuestionDraftKey(question.sessionId, requestId));
         }
       }
 
@@ -404,6 +404,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
     }),
 
   removePendingQuestion: (requestId) => {
+    const question = get().pendingQuestions.get(requestId);
     set((state) => {
       const next = new Map(state.pendingQuestions);
       next.delete(requestId);
@@ -412,9 +413,11 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
     // The request is resolved (answered, rejected, or withdrawn), so the
     // in-progress answer draft must not survive to a future request that
     // happens to reuse this id.
-    usePromptDraftStore
-      .getState()
-      .clearDraft(openCodeQuestionDraftKey(requestId));
+    if (question) {
+      usePromptDraftStore
+        .getState()
+        .clearDraft(openCodeQuestionDraftKey(question.sessionId, requestId));
+    }
   },
 
   addPendingPermission: (permission) =>

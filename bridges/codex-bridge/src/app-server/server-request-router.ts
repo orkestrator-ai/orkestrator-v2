@@ -29,6 +29,7 @@ import {
 } from "./approvals.js";
 import type { InboundServerRequest } from "./envelope-validation.js";
 import type { EngineGeneration } from "../engine/types.js";
+import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 import {
   buildInteractionResponse,
   describeInteraction,
@@ -151,7 +152,7 @@ const DEFAULT_RESPONSE_TIMEOUT_MS = 10_000;
  * is not cut off, and short enough that a forgotten prompt does not pin a turn
  * open indefinitely.
  */
-const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60_000;
+const DEFAULT_APPROVAL_TIMEOUT_MS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
 
 interface PendingApproval {
   key: string;
@@ -683,6 +684,17 @@ export class ServerRequestRouter {
     clearTimeout(parked.timer);
     this.parkedKeys.delete(parked.key);
     if (resolution === "answered") this.counts.interactionsAnswered += 1;
+
+    if (resolution === "timed-out") {
+      this.explain(parked.record, "Codex input request timed out and was cancelled.");
+    } else if (resolution === "engine-restarted") {
+      this.explain(
+        parked.record,
+        "Codex input request was withdrawn because the provider restarted.",
+      );
+    } else if (resolution === "session-closed") {
+      this.explain(parked.record, "Codex input request was cancelled when the session closed.");
+    }
 
     try {
       this.options.onInteractionResolved?.(parked.request, answer, resolution);

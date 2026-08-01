@@ -262,12 +262,12 @@ describe("openCodeStore clearSession", () => {
       questions: [],
     });
     usePromptDraftStore.getState().setDraftValue(
-      openCodeQuestionDraftKey("question-closed"),
+      openCodeQuestionDraftKey("session-closed", "question-closed"),
       "answer",
       "target",
     );
     usePromptDraftStore.getState().setDraftValue(
-      openCodeQuestionDraftKey("question-kept"),
+      openCodeQuestionDraftKey("session-kept", "question-kept"),
       "answer",
       "other",
     );
@@ -311,12 +311,12 @@ describe("openCodeStore clearSession", () => {
     expect(next.getPendingPermission("permission-kept")).toBeTruthy();
     expect(
       usePromptDraftStore.getState().drafts.has(
-        openCodeQuestionDraftKey("question-closed"),
+        openCodeQuestionDraftKey("session-closed", "question-closed"),
       ),
     ).toBe(false);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        openCodeQuestionDraftKey("question-kept"),
+        openCodeQuestionDraftKey("session-kept", "question-kept"),
       ),
     ).toBe(true);
   });
@@ -343,12 +343,12 @@ describe("openCodeStore clearSession", () => {
       questions: [],
     } as never);
     usePromptDraftStore.getState().setDraftValue(
-      openCodeQuestionDraftKey("req-1"),
+      openCodeQuestionDraftKey("session-closed", "req-1"),
       "answer",
       "target",
     );
     usePromptDraftStore.getState().setDraftValue(
-      openCodeQuestionDraftKey("req-2"),
+      openCodeQuestionDraftKey("session-other", "req-2"),
       "answer",
       "other",
     );
@@ -360,12 +360,12 @@ describe("openCodeStore clearSession", () => {
     expect(next.getPendingQuestion("req-2")).toBeTruthy();
     expect(
       usePromptDraftStore.getState().drafts.has(
-        openCodeQuestionDraftKey("req-1"),
+        openCodeQuestionDraftKey("session-closed", "req-1"),
       ),
     ).toBe(false);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        openCodeQuestionDraftKey("req-2"),
+        openCodeQuestionDraftKey("session-other", "req-2"),
       ),
     ).toBe(true);
   });
@@ -901,12 +901,12 @@ describe("openCodeStore pending permissions", () => {
       questions: [],
     });
     usePromptDraftStore.getState().setDraftValue(
-      openCodeQuestionDraftKey("question-a"),
+      openCodeQuestionDraftKey("session-1", "question-a"),
       "answer",
       "target",
     );
     usePromptDraftStore.getState().setDraftValue(
-      openCodeQuestionDraftKey("question-c"),
+      openCodeQuestionDraftKey("session-3", "question-c"),
       "answer",
       "other",
     );
@@ -918,12 +918,12 @@ describe("openCodeStore pending permissions", () => {
     expect(useOpenCodeStore.getState().getPendingPermission("perm-c")).toBeDefined();
     expect(
       usePromptDraftStore.getState().drafts.has(
-        openCodeQuestionDraftKey("question-a"),
+        openCodeQuestionDraftKey("session-1", "question-a"),
       ),
     ).toBe(false);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        openCodeQuestionDraftKey("question-c"),
+        openCodeQuestionDraftKey("session-3", "question-c"),
       ),
     ).toBe(true);
   });

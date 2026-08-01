@@ -202,6 +202,8 @@ export interface SessionState {
   titleGenerationPending?: boolean;
   messages: NormalizedMessage[];
   status: "idle" | "running" | "error";
+  /** Backend-authoritative ISO timestamp for the active user turn. */
+  turnStartedAt?: string;
   abortController?: AbortController;
   createdAt: Date;
   lastActivity: Date;

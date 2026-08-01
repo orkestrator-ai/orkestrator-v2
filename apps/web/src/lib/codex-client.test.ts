@@ -883,6 +883,25 @@ describe("codex-client getSessionStatus", () => {
       expect(unavailableTransport.error.message).toBe("timed out");
     }
   });
+
+  test("parses the backend turn start timestamp from a running status", async () => {
+    mockFetch(async () => Response.json({
+      status: "running",
+      phase: "running",
+      turnStartedAt: "2026-08-01T12:34:56.000Z",
+    }));
+
+    await expect(lookupSessionStatus(client, "session-1")).resolves.toEqual({
+      kind: "found",
+      session: {
+        status: "running",
+        phase: "running",
+        title: undefined,
+        error: undefined,
+        turnStartedAt: Date.parse("2026-08-01T12:34:56.000Z"),
+      },
+    });
+  });
 });
 
 describe("codex-client sendPrompt", () => {
@@ -945,6 +964,7 @@ describe("codex-client sendPrompt", () => {
           requestId: "request-1",
           threadId: "thread-9",
           turnId: "turn-3",
+          turnStartedAt: "2026-08-01T12:34:56.000Z",
         }),
         { status: 202 },
       ),
@@ -958,6 +978,7 @@ describe("codex-client sendPrompt", () => {
       requestId: "request-1",
       threadId: "thread-9",
       turnId: "turn-3",
+      turnStartedAt: Date.parse("2026-08-01T12:34:56.000Z"),
       duplicate: false,
     });
   });

@@ -1451,6 +1451,14 @@ describe("sendPrompt", () => {
       const promptPromise = sendPrompt(session.id, "Hello Claude");
       const call = await nextQueryCall();
       expect(call.options.includePartialMessages).toBe(true);
+      const turnStartedAt = getSession(session.id)?.turnStartedAt;
+      expect(typeof turnStartedAt).toBe("string");
+      expect(Date.parse(turnStartedAt!)).toBeLessThanOrEqual(Date.now());
+      expect(events).toContainEqual({
+        type: "session.updated",
+        sessionId: session.id,
+        data: { status: "running", turnStartedAt },
+      });
 
       // System init - sdkSessionId should be captured
       call.push({
@@ -1480,6 +1488,7 @@ describe("sendPrompt", () => {
 
       const stored = getSession(session.id)!;
       expect(stored.status).toBe("idle");
+      expect(stored.turnStartedAt).toBeUndefined();
       expect(stored.sdkSessionId).toBe("sdk-session-xyz");
       expect(stored.messages).toHaveLength(2);
       expect(stored.messages[0]?.role).toBe("user");

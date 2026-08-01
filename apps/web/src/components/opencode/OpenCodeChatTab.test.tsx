@@ -1820,16 +1820,25 @@ describe("OpenCodeChatTab", () => {
 
   describe("fast reconnect hydration", () => {
     test("hydrates a non-empty transcript and busy status", async () => {
+      const turnStartedAt = "2026-07-16T11:59:00.000Z";
+      const userMessage: NativeMessage = {
+        id: "server-user-reconnect",
+        role: "user",
+        content: "keep going",
+        parts: [{ type: "text", content: "keep going" }],
+        createdAt: turnStartedAt,
+      };
       const serverMessage = nativeMessage("server-reconnect");
-      mockGetSessionMessages.mockResolvedValue([serverMessage]);
+      mockGetSessionMessages.mockResolvedValue([userMessage, serverMessage]);
       mockGetSessionStatus.mockResolvedValue("busy");
 
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
       await waitFor(() => {
         expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
-          messages: [serverMessage],
+          messages: [userMessage, serverMessage],
           isLoading: true,
+          loadingStartedAt: Date.parse(turnStartedAt),
         });
       });
     });

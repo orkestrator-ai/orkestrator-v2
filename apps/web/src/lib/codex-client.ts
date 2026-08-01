@@ -1,6 +1,7 @@
 import type { NativeMessage, NativeMessagePart } from "./chat/native-message-types";
 import type { ContextUsageSnapshot } from "./context-usage";
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import { parseBackendTurnStartedAt } from "./session-timer";
 import {
   isStructuredOutputResult,
   structuredOutputFailure,
@@ -115,6 +116,7 @@ interface CodexSessionStatusResponse {
   error?: string;
   threadId?: string | null;
   turnId?: string;
+  turnStartedAt?: string;
   requestId?: string;
   engineGeneration?: number;
   messageRevision?: number;
@@ -278,6 +280,8 @@ export interface CodexSessionStatus {
   error?: string;
   threadId?: string | null;
   turnId?: string;
+  /** Backend-authoritative epoch milliseconds for the active turn. */
+  turnStartedAt?: number;
   /** The prompt request id this turn is executing, for reconnect reconciliation. */
   requestId?: string;
   engineGeneration?: number;
@@ -1084,6 +1088,7 @@ export async function lookupSessionStatus(
       throw new Error("Codex session status response was malformed");
     }
     const contextUsage = parseContextUsage(data.contextUsage);
+    const turnStartedAt = parseCodexTurnStartedAt(data.turnStartedAt);
     // Spread in only when present, so the response shape is unchanged for a
     // bridge that does not report them.
     return {
@@ -1095,6 +1100,7 @@ export async function lookupSessionStatus(
         ...(isCodexSessionPhase(data.phase) ? { phase: data.phase } : {}),
         ...(typeof data.threadId === "string" ? { threadId: data.threadId } : {}),
         ...(typeof data.turnId === "string" ? { turnId: data.turnId } : {}),
+        ...(turnStartedAt !== undefined ? { turnStartedAt } : {}),
         ...(typeof data.requestId === "string" ? { requestId: data.requestId } : {}),
         ...(typeof data.engineGeneration === "number"
           ? { engineGeneration: data.engineGeneration }
@@ -1150,7 +1156,13 @@ export interface CodexPromptAcceptedResponse {
   requestId?: string;
   threadId?: string | null;
   turnId?: string;
+  /** Backend-authoritative epoch milliseconds for the active turn. */
+  turnStartedAt?: number;
   duplicate?: boolean;
+}
+
+export function parseCodexTurnStartedAt(value: unknown): number | undefined {
+  return parseBackendTurnStartedAt(value);
 }
 
 export type CodexPromptSendOutcome =
@@ -1222,13 +1234,15 @@ export async function sendPrompt(
       return { outcome: "rejected", httpStatus: response.status };
     }
 
-    const data = (await response.json().catch(() => ({}))) as Partial<CodexPromptAcceptedResponse>;
+    const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const turnStartedAt = parseCodexTurnStartedAt(data.turnStartedAt);
     return {
       outcome: "accepted",
       status: data.status === "already-processed" ? "already-processed" : "processing",
       requestId: typeof data.requestId === "string" ? data.requestId : requestId,
       threadId: typeof data.threadId === "string" ? data.threadId : null,
       turnId: typeof data.turnId === "string" ? data.turnId : undefined,
+      ...(turnStartedAt !== undefined ? { turnStartedAt } : {}),
       duplicate: data.duplicate === true,
     };
   } catch (error) {

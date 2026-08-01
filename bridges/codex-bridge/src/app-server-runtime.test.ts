@@ -1723,7 +1723,8 @@ describe("session lifecycle", () => {
   });
 
   test("the first prompt creates the thread and dispatches a turn", async () => {
-    const h = await harness();
+    const turnStartedAt = Date.parse("2026-08-01T12:34:56.000Z");
+    const h = await harness({}, { now: () => turnStartedAt });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const invalidationsBefore = getTranscriptCatalogInvalidationCountForTesting();
 
@@ -1735,7 +1736,24 @@ describe("session lifecycle", () => {
 
     expect(outcome).toMatchObject({
       ok: true,
-      result: { status: "processing", requestId: "req-1", threadId: "thread-1", turnId: "turn-1" },
+      result: {
+        status: "processing",
+        requestId: "req-1",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turnStartedAt: "2026-08-01T12:34:56.000Z",
+      },
+    });
+    expect(h.runtime.getStatus(sessionId)?.turnStartedAt)
+      .toBe("2026-08-01T12:34:56.000Z");
+    expect(h.events).toContainEqual({
+      type: "session.updated",
+      sessionId,
+      data: {
+        status: "running",
+        phase: "starting",
+        turnStartedAt: "2026-08-01T12:34:56.000Z",
+      },
     });
     const methods = h.child().requests.map((r) => r.method);
     expect(methods).toContain("thread/start");
@@ -2221,6 +2239,7 @@ describe("session lifecycle", () => {
     expect(messages[1]!.content).toBe("Hi there, final.");
     expect(h.runtime.getStatus(sessionId)!.messageRevision).toBeGreaterThan(streamingRevision);
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
+    expect(h.runtime.getStatus(sessionId)?.turnStartedAt).toBeUndefined();
     expect(h.events.some((event) => event.type === "session.idle")).toBe(true);
     expect(h.events.findLastIndex((event) => event.type === "message.patched"))
       .toBeLessThan(h.events.findLastIndex((event) => event.type === "session.idle"));

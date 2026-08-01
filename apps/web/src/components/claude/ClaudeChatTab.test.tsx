@@ -3016,7 +3016,8 @@ describe("ClaudeChatTab", () => {
   });
 
   test("restores running state after a healthy fast reconnect reads an active session", async () => {
-    mockGetSession.mockResolvedValueOnce({ status: "running" });
+    const turnStartedAt = Date.parse("2026-07-31T20:00:00.000Z");
+    mockGetSession.mockResolvedValueOnce({ status: "running", turnStartedAt });
 
     render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
@@ -3024,6 +3025,9 @@ describe("ClaudeChatTab", () => {
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true),
     );
     expect(mockGetSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+    expect(
+      useClaudeStore.getState().sessions.get(SESSION_KEY)?.loadingStartedAt,
+    ).toBe(turnStartedAt);
     expect(screen.queryByText(/Completed in/)).toBeNull();
   });
 

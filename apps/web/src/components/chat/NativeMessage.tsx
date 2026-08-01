@@ -1,8 +1,6 @@
 import {
-  createContext,
   memo,
   useCallback,
-  useContext,
   useState,
   useMemo,
   useEffect,
@@ -119,13 +117,6 @@ interface NativeMessageProps {
   resolveModelLabel?: (modelId: string) => string;
 }
 
-interface AgentExpansionContextValue {
-  expandedKeys: ReadonlySet<string>;
-  setExpanded: (key: string, expanded: boolean) => void;
-}
-
-const AgentExpansionContext = createContext<AgentExpansionContextValue | null>(null);
-
 function getAgentExpansionKey(part: NativeAgentActivityPart): string {
   if (part.type === "task-group") {
     return `task:${
@@ -147,13 +138,12 @@ function getAgentExpansionKey(part: NativeAgentActivityPart): string {
 }
 
 function useAgentExpansion(part: NativeAgentActivityPart) {
-  const expansionContext = useContext(AgentExpansionContext)!;
   const expansionKey = getAgentExpansionKey(part);
-
-  return [
-    expansionContext.expandedKeys.has(expansionKey),
-    (expanded: boolean) => expansionContext.setExpanded(expansionKey, expanded),
-  ] as const;
+  // Active agents live in a virtualized row that can be unmounted while Claude
+  // streams or while the reader scrolls. Persist the user's explicit toggle in
+  // the same bounded store used by thinking/JSON disclosures so those routine
+  // remounts cannot silently collapse the agent again.
+  return useMessagePartExpansion(`native-agent:${expansionKey}`);
 }
 
 /** Render a thinking/reasoning part inline - expandable to show the full text */
@@ -1779,25 +1769,6 @@ export const NativeMessage = memo(function NativeMessage({
   message = normalizedMessage;
   previousMessage = normalizedPreviousMessage;
 
-  const [expandedAgentKeys, setExpandedAgentKeys] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const setAgentExpanded = useCallback((key: string, expanded: boolean) => {
-    setExpandedAgentKeys((current) => {
-      const next = new Set(current);
-      if (expanded) {
-        next.add(key);
-      } else {
-        next.delete(key);
-      }
-      return next;
-    });
-  }, []);
-  const agentExpansionValue = useMemo<AgentExpansionContextValue>(
-    () => ({ expandedKeys: expandedAgentKeys, setExpanded: setAgentExpanded }),
-    [expandedAgentKeys, setAgentExpanded],
-  );
-
   const isUser = message.role === "user";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
   const isSystem = message.role === "system" || message.id.startsWith(SYSTEM_MESSAGE_PREFIX);
@@ -1878,44 +1849,42 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   return (
-    <AgentExpansionContext.Provider value={agentExpansionValue}>
-      <MessageShell
-        isUser={isUser}
-        authorLabel={
-          isUser
-            ? "You"
-            : assistantAuthorLabel
-        }
-        timestampLabel={formatTime(message.createdAt)}
-        durationLabel={durationLabel}
-        showHeader={!isContinuation}
-        className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
-        onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
-        actions={(isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
-          <>
-            {messageActions}
-            {(isUser ? userCopyContent : assistantCopyContent) ? (
-              <MessageCopyButton
-                content={isUser ? userCopyContent : assistantCopyContent}
-                wrapperClassName="mt-0 pr-0"
-              />
-            ) : null}
-          </>
-        ) : undefined}
-      >
-        {renderMessageParts(message, { showTextCopy: false, containerId })}
+    <MessageShell
+      isUser={isUser}
+      authorLabel={
+        isUser
+          ? "You"
+          : assistantAuthorLabel
+      }
+      timestampLabel={formatTime(message.createdAt)}
+      durationLabel={durationLabel}
+      showHeader={!isContinuation}
+      className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
+      onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
+      actions={(isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
+        <>
+          {messageActions}
+          {(isUser ? userCopyContent : assistantCopyContent) ? (
+            <MessageCopyButton
+              content={isUser ? userCopyContent : assistantCopyContent}
+              wrapperClassName="mt-0 pr-0"
+            />
+          ) : null}
+        </>
+      ) : undefined}
+    >
+      {renderMessageParts(message, { showTextCopy: false, containerId })}
 
-        {!hasTextParts && message.content && (
-          <TextPart
-            content={message.content}
-            showCopy={false}
-            truncateUserPrompt={isUser}
-            renderJsonPayload={!isUser}
-            expansionKey={`${message.id}-content/json`}
-          />
-        )}
-      </MessageShell>
-    </AgentExpansionContext.Provider>
+      {!hasTextParts && message.content && (
+        <TextPart
+          content={message.content}
+          showCopy={false}
+          truncateUserPrompt={isUser}
+          renderJsonPayload={!isUser}
+          expansionKey={`${message.id}-content/json`}
+        />
+      )}
+    </MessageShell>
   );
 });
 

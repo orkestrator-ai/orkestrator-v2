@@ -1267,6 +1267,36 @@ describe("NativeMessage task list rendering", () => {
     ).toBe("true");
   });
 
+  test("keeps an expanded agent open when its virtualized row remounts", () => {
+    const message = makeMessage([
+      {
+        type: "subagent",
+        content: "Reviewer",
+        subagentId: "agent-remount",
+        subagentName: "Reviewer",
+        subagentPrompt: "Inspect the streaming transcript",
+        toolState: "pending",
+        subagentActions: [],
+      },
+    ]);
+
+    const first = render(<NativeMessage message={message} />);
+    fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
+    expect(
+      screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
+    ).toBe("true");
+
+    first.unmount();
+    render(<NativeMessage message={message} />);
+
+    const remountedTrigger = screen.getByRole("button", { name: /reviewer/i });
+    expect(remountedTrigger.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Inspect the streaming transcript")).toBeTruthy();
+
+    fireEvent.click(remountedTrigger);
+    expect(remountedTrigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
   test("propagates the container id through grouped subagent actions", async () => {
     const message = makeMessage([
       {

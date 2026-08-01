@@ -11,6 +11,26 @@ export const AGENT_INTERACTION_POLICY_VERSION = 1 as const;
 export const AGENT_INTERACTION_JOURNAL_VERSION = 1 as const;
 export const AGENT_INTERACTION_SUMMARY_VERSION = 1 as const;
 
+/** Product-owned deadline used unless a provider publishes a shorter one. */
+export const AGENT_INTERACTION_DEFAULT_TIMEOUT_MS = 5 * 60 * 1_000;
+
+/**
+ * Claude's AskUserQuestion boundary accepts one string per question. JSON is
+ * used for multi-select so labels containing commas remain unambiguous.
+ */
+export function serializeClaudeQuestionAnswer(
+  values: readonly string[],
+  multiple: boolean,
+): string {
+  // Claude's UI deliberately permits a single-select option and an additional
+  // custom answer. Preserve that long-standing pair instead of silently
+  // dropping everything after the first value. JSON is also the only lossless
+  // representation when a value itself contains commas, quotes, or unicode.
+  return multiple || values.length > 1
+    ? JSON.stringify(values)
+    : values[0] ?? "";
+}
+
 export const AGENT_INTERACTION_LIMITS = Object.freeze({
   maxPendingRequests: 64,
   maxQuestionsPerRequest: 16,

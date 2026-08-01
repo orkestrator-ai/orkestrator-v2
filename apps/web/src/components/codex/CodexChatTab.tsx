@@ -1240,7 +1240,7 @@ export function CodexChatTab({
       const withdrawnInteractionDraftKeys = (
         useCodexStore.getState().pendingInteractions.get(sessionKey) ?? []
       ).map((interaction) =>
-        codexInteractionDraftKey(interaction.interactionId)
+        codexInteractionDraftKey(sessionKey, interaction.interactionId)
       );
       useCodexStore.setState((state) => {
         const sessions = new Map(state.sessions);

@@ -1,5 +1,6 @@
 // Session management routes
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import {
   createOrRecoverSession,
   getSession,
@@ -27,6 +28,10 @@ import {
   setSessionPreferences,
   clearPromptSuggestion,
 } from "../services/session-manager.js";
+import {
+  AGENT_INTERACTION_LIMITS,
+  serializeClaudeQuestionAnswer,
+} from "@orkestrator/protocol/agent-interactions";
 import type {
   CreateSessionResponse,
   SessionListResponse,
@@ -36,6 +41,16 @@ import { isJsonSchema } from "@orkestrator/protocol/structured-output";
 
 const session = new Hono();
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+// Leave room for the small `{ "answers": ... }` JSON envelope while keeping
+// the body consumed by Hono bounded before `c.req.json()` allocates a parsed
+// object. The semantic answer payload is still capped separately below.
+const MAX_QUESTION_ANSWER_REQUEST_BYTES =
+  AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes + 1_024;
+
+const questionAnswerBodyLimit = bodyLimit({
+  maxSize: MAX_QUESTION_ANSWER_REQUEST_BYTES,
+  onError: (c) => c.json({ error: "Question answer request is too large" }, 413),
+});
 
 /**
  * Map a session-manager refusal onto a status code.
@@ -86,6 +101,26 @@ function isValidImageDataUrl(value: string): boolean {
     && /^[A-Za-z0-9+/]+={0,2}$/.test(data)
     && decodedBytes <= MAX_IMAGE_ATTACHMENT_BYTES
   );
+}
+
+function isBoundedClaudeQuestionAnswers(
+  value: unknown,
+  questionCount: number,
+): value is string[][] {
+  if (!Array.isArray(value) || value.length !== questionCount) return false;
+  if (value.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest) return false;
+  if (Buffer.byteLength(JSON.stringify(value), "utf8")
+    > AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes) {
+    return false;
+  }
+  return value.every((answers) =>
+    Array.isArray(answers)
+    && answers.length > 0
+    && answers.length <= AGENT_INTERACTION_LIMITS.maxAnswerCount
+    && answers.every((answer) =>
+      typeof answer === "string"
+      && Buffer.byteLength(answer, "utf8")
+        <= AGENT_INTERACTION_LIMITS.maxFreeTextBytes));
 }
 
 // Create a new session
@@ -750,7 +785,7 @@ session.get("/:id/init", (c) => {
 });
 
 // Answer a question
-session.post("/:id/questions/:questionId/answer", async (c) => {
+session.post("/:id/questions/:questionId/answer", questionAnswerBodyLimit, async (c) => {
   const sessionId = c.req.param("id");
   const questionId = c.req.param("questionId");
 
@@ -761,7 +796,7 @@ session.post("/:id/questions/:questionId/answer", async (c) => {
 
   try {
     const body = await c.req.json();
-    const answersArray = body.answers as string[][];
+    const answersArray: unknown = body.answers;
 
     if (!answersArray || !Array.isArray(answersArray)) {
       return c.json({ error: "Answers array is required" }, 400);
@@ -779,16 +814,29 @@ session.post("/:id/questions/:questionId/answer", async (c) => {
       );
     }
 
+    if (!isBoundedClaudeQuestionAnswers(
+      answersArray,
+      pendingQuestion.questions.length,
+    )) {
+      return c.json({ error: "Answers must be a bounded string array for every question" }, 400);
+    }
+
     // Convert string[][] to Record<string, string>
     // Map each question's text to its answer(s) joined as a string
     const answersRecord: Record<string, string> = {};
     pendingQuestion.questions.forEach((q, index) => {
       const questionAnswers = answersArray[index] || [];
-      // Join multiple answers with commas, or use first answer if single
-      answersRecord[q.question] = questionAnswers.join(", ");
+      answersRecord[q.question] = serializeClaudeQuestionAnswer(
+        questionAnswers,
+        q.multiSelect === true,
+      );
     });
 
-    console.log("[session] Converted answers from array to record:", answersRecord);
+    console.debug("[session] Prepared question answers", {
+      questionId,
+      questionCount: pendingQuestion.questions.length,
+      answerCount: answersArray.reduce((count, answers) => count + answers.length, 0),
+    });
 
     const answered = answerQuestion(questionId, answersRecord);
 
@@ -856,7 +904,7 @@ session.post("/:id/plan-approvals/:approvalId/respond", async (c) => {
       sessionId,
       approvalId,
       approved,
-      feedback,
+      hasFeedback: typeof feedback === "string" && feedback.length > 0,
     });
 
     const responded = respondToPlanApproval(approvalId, approved, feedback);

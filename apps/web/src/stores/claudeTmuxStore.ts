@@ -82,6 +82,8 @@ export interface TmuxPendingApproval {
   toolInput: Record<string, unknown>;
   payload: unknown;
   receivedAt: string;
+  requestedAt?: number;
+  expiresAt?: number;
 }
 
 /** Structured AskUserQuestion hook awaiting the user's answers. */
@@ -91,6 +93,8 @@ export interface TmuxPendingQuestion {
   toolInput: Record<string, unknown>;
   payload: unknown;
   receivedAt: string;
+  requestedAt?: number;
+  expiresAt?: number;
 }
 
 /** Structured ExitPlanMode hook awaiting plan approval. */
@@ -102,6 +106,8 @@ export interface TmuxPendingPlan {
   toolInput: Record<string, unknown>;
   payload: unknown;
   receivedAt: string;
+  requestedAt?: number;
+  expiresAt?: number;
 }
 
 /** PermissionRequest hook awaiting an allow/deny decision. */
@@ -112,6 +118,8 @@ export interface TmuxPendingPermission {
   permissionSuggestions: unknown[];
   payload: unknown;
   receivedAt: string;
+  requestedAt?: number;
+  expiresAt?: number;
 }
 
 /** MCP Elicitation hook awaiting form/url response. */
@@ -124,6 +132,8 @@ export interface TmuxPendingElicitation {
   requestedSchema: Record<string, unknown> | null;
   payload: unknown;
   receivedAt: string;
+  requestedAt?: number;
+  expiresAt?: number;
 }
 
 /** An informational hook event (Notification / Stop / etc.). */
@@ -287,12 +297,12 @@ function patchTab(
  * Draft-store keys for every pending prompt on a tab, so sweeps that drop the
  * prompts (resetTab, replacePendingHooks) drop their in-progress input too.
  */
-function tabPromptDraftKeys(tab: TmuxTabState | undefined): string[] {
+function tabPromptDraftKeys(tab: TmuxTabState | undefined, sessionKey: string): string[] {
   if (!tab) return [];
   return [
-    ...tab.pendingQuestions.map((q) => tmuxQuestionDraftKey(q.eventId)),
-    ...tab.pendingPlans.map((p) => tmuxPlanDraftKey(p.eventId)),
-    ...tab.pendingElicitations.map((e) => tmuxElicitationDraftKey(e.eventId)),
+    ...tab.pendingQuestions.map((q) => tmuxQuestionDraftKey(sessionKey, q.eventId)),
+    ...tab.pendingPlans.map((p) => tmuxPlanDraftKey(sessionKey, p.eventId)),
+    ...tab.pendingElicitations.map((e) => tmuxElicitationDraftKey(sessionKey, e.eventId)),
   ];
 }
 
@@ -320,7 +330,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     const stateKey = resolveStateKey(get().tabs, tabId);
     // The tab's pending prompts are dropped below, so their in-progress input
     // drafts must not resurface if an event id is ever seen again.
-    const sweptDraftKeys = tabPromptDraftKeys(get().tabs.get(stateKey));
+    const sweptDraftKeys = tabPromptDraftKeys(get().tabs.get(stateKey), stateKey);
     set((state) => {
       const attachments = new Map(state.attachments);
       const draftText = new Map(state.draftText);
@@ -391,7 +401,10 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     );
     // The question is resolved (answered, rejected, or withdrawn), so its
     // in-progress answer draft goes with it.
-    usePromptDraftStore.getState().clearDraft(tmuxQuestionDraftKey(eventId));
+    const stateKey = resolveStateKey(get().tabs, tabId);
+    usePromptDraftStore.getState().clearDraft(
+      tmuxQuestionDraftKey(stateKey, eventId),
+    );
   },
 
   addPendingPlan: (tabId, plan) =>
@@ -411,7 +424,10 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
       })),
     );
     // The plan request is resolved, so its feedback draft goes with it.
-    usePromptDraftStore.getState().clearDraft(tmuxPlanDraftKey(eventId));
+    const stateKey = resolveStateKey(get().tabs, tabId);
+    usePromptDraftStore.getState().clearDraft(
+      tmuxPlanDraftKey(stateKey, eventId),
+    );
   },
 
   addPendingPermission: (tabId, permission) =>
@@ -452,7 +468,10 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
       })),
     );
     // The elicitation is resolved, so its typed field values go with it.
-    usePromptDraftStore.getState().clearDraft(tmuxElicitationDraftKey(eventId));
+    const stateKey = resolveStateKey(get().tabs, tabId);
+    usePromptDraftStore.getState().clearDraft(
+      tmuxElicitationDraftKey(stateKey, eventId),
+    );
   },
 
   replacePendingHooks: (tabId, pending) => {
@@ -465,9 +484,10 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
         pendingQuestions: pending.questions,
         pendingPlans: pending.plans,
         pendingElicitations: pending.elicitations,
-      }),
+      }, resolveStateKey(get().tabs, tabId)),
     );
-    const withdrawnDraftKeys = tabPromptDraftKeys(get().tabs.get(tabId)).filter(
+    const stateKey = resolveStateKey(get().tabs, tabId);
+    const withdrawnDraftKeys = tabPromptDraftKeys(get().tabs.get(stateKey), stateKey).filter(
       (draftKey) => !keptKeys.has(draftKey),
     );
 
@@ -1024,10 +1044,23 @@ function stableHash(line: TranscriptLine): string {
   return `h${(h >>> 0).toString(36)}`;
 }
 
+function promptTimingFields(timing: {
+  requestedAt?: number;
+  expiresAt?: number;
+}): { requestedAt?: number; expiresAt?: number } {
+  return {
+    ...(timing.requestedAt !== undefined
+      ? { requestedAt: timing.requestedAt }
+      : {}),
+    ...(timing.expiresAt !== undefined ? { expiresAt: timing.expiresAt } : {}),
+  };
+}
+
 /** Build a `TmuxPendingApproval` from a hook payload. */
 export function payloadToApproval(
   eventId: string,
   payload: unknown,
+  timing: { requestedAt?: number; expiresAt?: number } = {},
 ): TmuxPendingApproval {
   const p = (payload ?? {}) as Record<string, unknown>;
   const toolName =
@@ -1043,13 +1076,15 @@ export function payloadToApproval(
     toolName,
     toolInput,
     payload,
-    receivedAt: new Date().toISOString(),
+    receivedAt: new Date(timing.requestedAt ?? Date.now()).toISOString(),
+    ...promptTimingFields(timing),
   };
 }
 
 export function payloadToQuestion(
   eventId: string,
   payload: unknown,
+  timing: { requestedAt?: number; expiresAt?: number } = {},
 ): TmuxPendingQuestion {
   const p = (payload ?? {}) as Record<string, unknown>;
   const toolInput = payloadToolInput(p);
@@ -1061,13 +1096,15 @@ export function payloadToQuestion(
     questions,
     toolInput,
     payload,
-    receivedAt: new Date().toISOString(),
+    receivedAt: new Date(timing.requestedAt ?? Date.now()).toISOString(),
+    ...promptTimingFields(timing),
   };
 }
 
 export function payloadToPlan(
   eventId: string,
   payload: unknown,
+  timing: { requestedAt?: number; expiresAt?: number } = {},
 ): TmuxPendingPlan {
   const p = (payload ?? {}) as Record<string, unknown>;
   const toolInput = payloadToolInput(p);
@@ -1083,13 +1120,15 @@ export function payloadToPlan(
         : [],
     toolInput,
     payload,
-    receivedAt: new Date().toISOString(),
+    receivedAt: new Date(timing.requestedAt ?? Date.now()).toISOString(),
+    ...promptTimingFields(timing),
   };
 }
 
 export function payloadToPermission(
   eventId: string,
   payload: unknown,
+  timing: { requestedAt?: number; expiresAt?: number } = {},
 ): TmuxPendingPermission {
   const p = (payload ?? {}) as Record<string, unknown>;
   return {
@@ -1102,13 +1141,15 @@ export function payloadToPermission(
         ? p.permissionSuggestions
         : [],
     payload,
-    receivedAt: new Date().toISOString(),
+    receivedAt: new Date(timing.requestedAt ?? Date.now()).toISOString(),
+    ...promptTimingFields(timing),
   };
 }
 
 export function payloadToElicitation(
   eventId: string,
   payload: unknown,
+  timing: { requestedAt?: number; expiresAt?: number } = {},
 ): TmuxPendingElicitation {
   const p = (payload ?? {}) as Record<string, unknown>;
   const requestedSchema = p.requested_schema ?? p.requestedSchema;
@@ -1124,7 +1165,8 @@ export function payloadToElicitation(
         ? (requestedSchema as Record<string, unknown>)
         : null,
     payload,
-    receivedAt: new Date().toISOString(),
+    receivedAt: new Date(timing.requestedAt ?? Date.now()).toISOString(),
+    ...promptTimingFields(timing),
   };
 }
 

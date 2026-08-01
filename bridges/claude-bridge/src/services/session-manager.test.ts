@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, jest, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import * as realChildProcess from "node:child_process";
 import * as realFs from "node:fs";
@@ -4643,6 +4643,40 @@ describe("AskUserQuestion flow", () => {
     expect(answerQuestion("missing", {})).toBe(false);
   });
 
+  test("logs question settlement metadata without answer content", async () => {
+    const session = createSession("question-log-redaction");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "ask privately");
+    const call = await nextQueryCall();
+    const canUseToolPromise = call.options.canUseTool!("AskUserQuestion", {
+      questions: [{ question: "Private question", header: "Private", options: [] }],
+    });
+    await waitFor(() => getPendingQuestions(session.id).length === 1);
+    const [pending] = getPendingQuestions(session.id);
+    const privateAnswer = "private-answer-that-must-not-be-logged";
+    const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
+
+    try {
+      expect(answerQuestion(pending!.id, { "Private question": privateAnswer })).toBe(true);
+      await expect(canUseToolPromise).resolves.toMatchObject({ behavior: "allow" });
+
+      expect(JSON.stringify(logSpy.mock.calls)).not.toContain(privateAnswer);
+      expect(logSpy.mock.calls).toContainEqual([
+        "[session-manager] Answering question",
+        { requestId: pending!.id, answerCount: 1 },
+      ]);
+      expect(logSpy.mock.calls).toContainEqual([
+        "[session-manager] Received question answers",
+        { questionId: pending!.id, answerCount: 1 },
+      ]);
+    } finally {
+      logSpy.mockRestore();
+    }
+
+    call.finish();
+    await promptPromise;
+  });
+
   test("denies duplicate question text instead of overwriting one answer", async () => {
     const session = createSession("duplicate-question-text");
     track(session.id);
@@ -4831,11 +4865,36 @@ describe("plan approval flow", () => {
     await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
     const [approval] = getPendingPlanApprovals(session.id);
 
-    expect(respondToPlanApproval(approval!.id, false, "needs more detail")).toBe(true);
+    const privateFeedback = "needs more detail";
+    const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
+    let result: { behavior: string; message?: string };
+    try {
+      expect(respondToPlanApproval(approval!.id, false, privateFeedback)).toBe(true);
+      result = (await canUseToolPromise) as { behavior: string; message?: string };
 
-    const result = (await canUseToolPromise) as { behavior: string; message?: string };
+      expect(JSON.stringify(logSpy.mock.calls)).not.toContain(privateFeedback);
+      expect(logSpy.mock.calls).toContainEqual([
+        "[session-manager] Responding to plan approval",
+        {
+          requestId: approval!.id,
+          approved: false,
+          hasFeedback: true,
+        },
+      ]);
+      expect(logSpy.mock.calls).toContainEqual([
+        "[session-manager] Plan approval result",
+        {
+          approvalId: approval!.id,
+          approved: false,
+          hasFeedback: true,
+        },
+      ]);
+    } finally {
+      logSpy.mockRestore();
+    }
+
     expect(result.behavior).toBe("deny");
-    expect(result.message).toContain("needs more detail");
+    expect(result.message).toContain(privateFeedback);
 
     // Finish the original turn. session-manager will then re-prompt with the
     // captured rejection feedback - serve a quick success for that re-prompt.

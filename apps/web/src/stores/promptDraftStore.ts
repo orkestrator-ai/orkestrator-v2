@@ -11,9 +11,9 @@ import { create } from "zustand";
  * authoritative pending-request state (bridge snapshot via the agent stores).
  * A draft kept in component state therefore silently vanished mid-answer. The
  * drafts live here instead — same pattern as `messagePartExpansionStore` —
- * keyed by the stable request id, and the store that owns the pending request
- * clears them when the request resolves (submitted, rejected, or withdrawn),
- * so a stale draft can never reappear on a future request that reuses an id.
+ * keyed by stable session and request identities, and the store that owns the
+ * pending request clears them when the request resolves (submitted, rejected,
+ * or withdrawn), so a stale draft can never reappear on a reused request id.
  *
  * Renderer-only state: none of this needs to survive an app restart.
  */
@@ -80,19 +80,28 @@ export const usePromptDraftStore = create<PromptDraftState>((set) => ({
  * Key builders shared by the cards and by the stores that clear drafts on
  * resolution. Namespaced so ids from different agents can never collide.
  */
-export const claudeQuestionDraftKey = (requestId: string) =>
-  `claude-question:${requestId}`;
-export const claudePlanApprovalDraftKey = (requestId: string) =>
-  `claude-plan-approval:${requestId}`;
-export const openCodeQuestionDraftKey = (requestId: string) =>
-  `opencode-question:${requestId}`;
-export const codexInteractionDraftKey = (interactionId: string) =>
-  `codex-interaction:${interactionId}`;
-export const tmuxQuestionDraftKey = (eventId: string) =>
-  `tmux-question:${eventId}`;
-export const tmuxPlanDraftKey = (eventId: string) => `tmux-plan:${eventId}`;
-export const tmuxElicitationDraftKey = (eventId: string) =>
-  `tmux-elicitation:${eventId}`;
+function scopedDraftKey(
+  provider: string,
+  sessionId: string,
+  requestId: string,
+): string {
+  return `${provider}:${encodeURIComponent(sessionId)}:${encodeURIComponent(requestId)}`;
+}
+
+export const claudeQuestionDraftKey = (sessionId: string, requestId: string) =>
+  scopedDraftKey("claude-question", sessionId, requestId);
+export const claudePlanApprovalDraftKey = (sessionId: string, requestId: string) =>
+  scopedDraftKey("claude-plan-approval", sessionId, requestId);
+export const openCodeQuestionDraftKey = (sessionId: string, requestId: string) =>
+  scopedDraftKey("opencode-question", sessionId, requestId);
+export const codexInteractionDraftKey = (sessionKey: string, interactionId: string) =>
+  scopedDraftKey("codex-interaction", sessionKey, interactionId);
+export const tmuxQuestionDraftKey = (sessionKey: string, eventId: string) =>
+  scopedDraftKey("tmux-question", sessionKey, eventId);
+export const tmuxPlanDraftKey = (sessionKey: string, eventId: string) =>
+  scopedDraftKey("tmux-plan", sessionKey, eventId);
+export const tmuxElicitationDraftKey = (sessionKey: string, eventId: string) =>
+  scopedDraftKey("tmux-elicitation", sessionKey, eventId);
 
 /**
  * `useState` drop-in whose value survives unmount by living in the draft
@@ -109,10 +118,30 @@ export function usePromptDraftField<T>(
   field: string,
   initial: () => T,
 ): [T, Dispatch<SetStateAction<T>>] {
-  // Fallback state; also the stable once-per-mount initial value used when the
-  // store has no draft yet.
-  const [localValue, setLocalValue] = useState<T>(initial);
-  const initialRef = useRef(localValue);
+  type FieldIdentity = {
+    draftKey: string | undefined;
+    field: string;
+    value: T;
+  };
+
+  // Keep one initializer result per key/field identity. Components can be
+  // reused in-place for a different authoritative request, so carrying the old
+  // identity's fallback into the new request would leak its initial answer or
+  // navigation index.
+  const identityRef = useRef<FieldIdentity | null>(null);
+  if (
+    identityRef.current === null
+    || identityRef.current.draftKey !== draftKey
+    || identityRef.current.field !== field
+  ) {
+    identityRef.current = { draftKey, field, value: initial() };
+  }
+  const fallbackValue = identityRef.current.value;
+  const [localField, setLocalField] = useState<FieldIdentity>(() => ({
+    draftKey,
+    field,
+    value: fallbackValue,
+  }));
 
   const stored = usePromptDraftStore((state) =>
     draftKey === undefined ? undefined : state.drafts.get(draftKey)?.[field],
@@ -121,13 +150,22 @@ export function usePromptDraftField<T>(
   const setValue = useCallback<Dispatch<SetStateAction<T>>>(
     (action) => {
       if (draftKey === undefined) {
-        setLocalValue(action);
+        setLocalField((previousField) => {
+          const previous = previousField.draftKey === draftKey
+            && previousField.field === field
+            ? previousField.value
+            : identityRef.current!.value;
+          const value = typeof action === "function"
+            ? (action as (prev: T) => T)(previous)
+            : action;
+          return { draftKey, field, value };
+        });
         return;
       }
       const store = usePromptDraftStore.getState();
       const current = store.drafts.get(draftKey)?.[field];
       const previous =
-        current === undefined ? initialRef.current : (current as T);
+        current === undefined ? identityRef.current!.value : (current as T);
       const next =
         typeof action === "function"
           ? (action as (prev: T) => T)(previous)
@@ -138,7 +176,12 @@ export function usePromptDraftField<T>(
   );
 
   if (draftKey === undefined) {
-    return [localValue, setValue];
+    return [
+      localField.draftKey === draftKey && localField.field === field
+        ? localField.value
+        : fallbackValue,
+      setValue,
+    ];
   }
-  return [stored === undefined ? initialRef.current : (stored as T), setValue];
+  return [stored === undefined ? fallbackValue : (stored as T), setValue];
 }

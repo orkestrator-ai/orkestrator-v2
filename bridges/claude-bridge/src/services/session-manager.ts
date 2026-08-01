@@ -30,6 +30,7 @@ import type {
 } from "../types/index.js";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
+import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 import {
   isRootAssistantRecord,
   normalizeBackendModelId,
@@ -171,8 +172,8 @@ const planApprovalResolvers = new Map<
 >();
 
 // Timeouts for user interactions (5 minutes)
-const QUESTION_TIMEOUT_MS = 5 * 60 * 1000;
-const PLAN_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+const QUESTION_TIMEOUT_MS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
+const PLAN_APPROVAL_TIMEOUT_MS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
 
 /**
  * Reason a session operation refused, carried as a plain string property.
@@ -4703,7 +4704,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
             try {
               const answers = await Promise.race([answerPromise, timeoutPromise]);
-              console.log("[session-manager] Received answers for question:", questionId, answers);
+              console.log("[session-manager] Received question answers", {
+                questionId,
+                answerCount: Object.keys(answers).length,
+              });
 
               // Return the answers to the SDK
               return {
@@ -4803,7 +4807,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
             try {
               const response = await Promise.race([approvalPromise, timeoutPromise]);
-              console.log("[session-manager] Plan approval result:", approvalId, response);
+              console.log("[session-manager] Plan approval result", {
+                approvalId,
+                approved: response.approved,
+                hasFeedback:
+                  typeof response.feedback === "string" && response.feedback.length > 0,
+              });
 
               if (response.approved) {
                 // User approved - emit exit event and allow the tool.
@@ -6193,7 +6202,10 @@ export function answerQuestion(
     return false;
   }
 
-  console.log("[session-manager] Answering question:", requestId, "with answers:", answers);
+  console.log("[session-manager] Answering question", {
+    requestId,
+    answerCount: Object.keys(answers).length,
+  });
 
   const resolver = questionResolvers.get(requestId);
   if (resolver) {
@@ -6270,7 +6282,11 @@ export function respondToPlanApproval(
     return false;
   }
 
-  console.log("[session-manager] Responding to plan approval:", requestId, "approved:", approved, "feedback:", feedback);
+  console.log("[session-manager] Responding to plan approval", {
+    requestId,
+    approved,
+    hasFeedback: typeof feedback === "string" && feedback.length > 0,
+  });
 
   const resolver = planApprovalResolvers.get(requestId);
   if (resolver) {

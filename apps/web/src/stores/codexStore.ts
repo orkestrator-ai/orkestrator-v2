@@ -431,7 +431,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
     const kept = new Set(interactions.map((entry) => entry.interactionId));
     const withdrawnDraftKeys = (get().pendingInteractions.get(sessionKey) ?? [])
       .filter((entry) => !kept.has(entry.interactionId))
-      .map((entry) => codexInteractionDraftKey(entry.interactionId));
+      .map((entry) => codexInteractionDraftKey(sessionKey, entry.interactionId));
 
     set((state) => {
       const existing = state.pendingInteractions.get(sessionKey) ?? [];
@@ -484,7 +484,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
     // survive to a future interaction that happens to reuse this id.
     usePromptDraftStore
       .getState()
-      .clearDraft(codexInteractionDraftKey(interactionId));
+      .clearDraft(codexInteractionDraftKey(sessionKey, interactionId));
   },
 
   setContextUsage: (sessionKey, usage) =>
@@ -599,7 +599,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
     for (const [sessionKey, interactions] of get().pendingInteractions) {
       if (!sessionKey.startsWith(prefix)) continue;
       for (const entry of interactions) {
-        sweptDraftKeys.push(codexInteractionDraftKey(entry.interactionId));
+        sweptDraftKeys.push(codexInteractionDraftKey(sessionKey, entry.interactionId));
       }
     }
 
@@ -614,7 +614,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
 
   clearSession: (sessionKey) => {
     const sweptDraftKeys = (get().pendingInteractions.get(sessionKey) ?? []).map(
-      (entry) => codexInteractionDraftKey(entry.interactionId),
+      (entry) => codexInteractionDraftKey(sessionKey, entry.interactionId),
     );
     set((state) =>
       buildClearSessionPatch(state, sessionKey, CODEX_SESSION_KEYED_MAPS),

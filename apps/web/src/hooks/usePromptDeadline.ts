@@ -29,9 +29,12 @@ export function usePromptDeadline(expiresAt?: number): {
 
   useEffect(() => {
     if (expiresAt === undefined || invalid || remaining === null) return;
-    const timer = setInterval(() => setTick((tick) => tick + 1), 1000);
+    const timer = setInterval(() => {
+      setTick((tick) => tick + 1);
+      if (Date.now() >= expiresAt) clearInterval(timer);
+    }, 1000);
     return () => clearInterval(timer);
-  }, [expiresAt, invalid, remaining]);
+  }, [expiresAt, invalid]);
 
   return {
     remaining,

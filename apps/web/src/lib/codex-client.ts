@@ -379,7 +379,13 @@ export interface CodexApproval {
  * `stale` is expected, not exceptional: the five-minute window can close while the
  * user is deciding, and a restart withdraws the request outright.
  */
-export type CodexApprovalResponseResult = "applied" | "stale" | "forbidden" | "error";
+export type CodexApprovalResponseResult =
+  | "applied"
+  | "stale"
+  | "forbidden"
+  | "error"
+  /** No HTTP response arrived, so the provider may already have applied it. */
+  | "unknown";
 
 export interface CodexInteractionOption {
   label: string;
@@ -1380,7 +1386,7 @@ export async function respondToApproval(
     return "error";
   } catch (error) {
     console.error("[codex-client] Failed to respond to approval:", error);
-    return "error";
+    return "unknown";
   }
 }
 
@@ -1426,7 +1432,7 @@ export async function respondToInteraction(
     return "error";
   } catch (error) {
     console.error("[codex-client] Failed to respond to interaction:", error);
-    return "error";
+    return "unknown";
   }
 }
 

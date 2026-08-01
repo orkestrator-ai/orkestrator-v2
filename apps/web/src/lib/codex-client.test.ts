@@ -1827,7 +1827,7 @@ describe("codex-client approvals", () => {
     expect(await respondToApproval(client, "s", "a", "deny")).toBe("error");
 
     mockFetchError(new Error("offline"));
-    expect(await respondToApproval(client, "s", "a", "deny")).toBe("error");
+    expect(await respondToApproval(client, "s", "a", "deny")).toBe("unknown");
   });
 
   test("reports the entries it drops so a protocol change is not silent", async () => {
@@ -2189,11 +2189,11 @@ describe("codex-client interactions", () => {
       ).toBe(expected as CodexApprovalResponseResult);
     });
 
-    test("reports error rather than throwing when the request fails outright", async () => {
+    test("reports an unknown outcome rather than throwing when transport fails", async () => {
       mockFetchError(new Error("network down"));
       expect(
         await respondToInteraction(client, "session-1", "int-1", { action: "cancel" }),
-      ).toBe("error");
+      ).toBe("unknown");
     });
   });
 });

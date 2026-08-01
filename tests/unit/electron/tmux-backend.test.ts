@@ -1947,20 +1947,60 @@ exit 0
       const sessionRoot = path.join(runtimeRoot, "sessions", status.session_id);
       const pendingDir = path.join(sessionRoot, "pending");
       const responseDir = path.join(sessionRoot, "response");
+      const timingDir = path.join(sessionRoot, "timing");
       await fs.mkdir(pendingDir, { recursive: true });
-      await fs.writeFile(path.join(pendingDir, "PreToolUse-event-1.json"), JSON.stringify({ tool_name: "Edit" }));
+      const hookEventId = "1700000000-event-1";
+      await fs.writeFile(path.join(pendingDir, `PreToolUse-${hookEventId}.json`), JSON.stringify({ tool_name: "Edit" }));
+      await fs.writeFile(
+        path.join(timingDir, `PreToolUse-${hookEventId}.json`),
+        JSON.stringify({ requestedAt: 1_700_000_000_123, expiresAt: 1_700_000_300_123 }),
+      );
+      const invalidTimingEventIds = [
+        "event-legacy",
+        "1700000000oops-malformed",
+        "0-zero",
+        "-1-negative",
+        "9007199254740992-unsafe-seconds",
+        "9007199254740-unsafe-milliseconds",
+      ];
+      await Promise.all(invalidTimingEventIds.map((eventId) =>
+        fs.writeFile(
+          path.join(pendingDir, `PermissionRequest-${eventId}.json`),
+          JSON.stringify({ tool_name: "Edit" }),
+        )
+      ));
 
-      await expect(invoke(handlers, "claude_tmux_pending_hooks", { tabId: "tab-1", environmentId: environment.id })).resolves.toEqual([
-        { id: "event-1", kind: "PreToolUse", payload: { tool_name: "Edit" } },
-      ]);
+      const pendingHooks = await invoke(
+        handlers,
+        "claude_tmux_pending_hooks",
+        { tabId: "tab-1", environmentId: environment.id },
+      ) as Array<Record<string, unknown>>;
+      expect(pendingHooks).toContainEqual({
+        id: hookEventId,
+        kind: "PreToolUse",
+        payload: { tool_name: "Edit" },
+        requestedAt: 1_700_000_000_123,
+        expiresAt: 1_700_000_300_123,
+      });
+      for (const eventId of invalidTimingEventIds) {
+        expect(pendingHooks).toContainEqual({
+          id: eventId,
+          kind: "PermissionRequest",
+          payload: { tool_name: "Edit" },
+        });
+        const pending = pendingHooks.find((hook) => hook.id === eventId);
+        expect(pending).not.toHaveProperty("requestedAt");
+        expect(pending).not.toHaveProperty("expiresAt");
+      }
 
       await invoke(
         handlers,
         "claude_tmux_reply_hook",
-        { tabId: "tab-1", environmentId: environment.id, eventKind: "PreToolUse", eventId: "event-1", response: { ok: true } },
+        { tabId: "tab-1", environmentId: environment.id, eventKind: "PreToolUse", eventId: hookEventId, response: { ok: true } },
       );
-      await expect(fs.readFile(path.join(responseDir, "PreToolUse-event-1.json"), "utf8")).resolves.toBe(JSON.stringify({ ok: true }));
-      await expect(fs.stat(path.join(pendingDir, "PreToolUse-event-1.json"))).rejects.toThrow();
+      await expect(fs.readFile(path.join(responseDir, `PreToolUse-${hookEventId}.json`), "utf8")).resolves.toBe(JSON.stringify({ ok: true }));
+      await expect(fs.stat(path.join(pendingDir, `PreToolUse-${hookEventId}.json`))).rejects.toThrow();
+      await expect(fs.stat(path.join(timingDir, `PreToolUse-${hookEventId}.json`))).rejects.toThrow();
       await expect(invoke(
         handlers,
         "claude_tmux_reply_hook",
@@ -2013,6 +2053,84 @@ exit 0
       expect(Object.keys(terminalPayload)).toEqual(["text", "full"]);
       expect(terminalPayload.full).toBe(true);
       expect(terminalPayload.text).toBe("\u001b[H\u001b[2Jbypass permissions on");
+    });
+  });
+
+  test("generated blocking hooks use an integer timeout and fail closed on expiry", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-hook-timeout", environmentId: environment.id },
+        context,
+      ) as { session_id: string };
+
+      const installedScript = await fs.readFile(path.join(runtimeRoot, "hook.sh"), "utf8");
+      const timeout = installedScript.match(/^TIMEOUT_SECS=(\d+)$/m);
+      expect(timeout?.[1]).toBe("300");
+      expect(installedScript).toContain("REQUESTED_AT_MS=\"$(epoch_millis)\"");
+      expect(installedScript).toContain("EXPIRES_AT_MS=$((REQUESTED_AT_MS + TIMEOUT_SECS * 1000))");
+      expect(installedScript).toContain("sleep \"$TIMEOUT_SECS\" &");
+      expect(installedScript).not.toContain("TIMEOUT_SECS * 4");
+
+      // Exercise the real generated shell branches without waiting five
+      // minutes. Only this disposable test copy receives a zero timeout.
+      const immediateScript = installedScript.replace(/^TIMEOUT_SECS=\d+$/m, "TIMEOUT_SECS=0");
+      const immediateScriptPath = path.join(runtimeRoot, "hook-immediate-timeout.sh");
+      await fs.writeFile(immediateScriptPath, immediateScript);
+
+      const runHook = (kind: "PreToolUse" | "PermissionRequest" | "Elicitation") => {
+        const result = spawnSync("bash", [immediateScriptPath, kind], {
+          encoding: "utf8",
+          input: JSON.stringify({ session_id: status.session_id }),
+        });
+        expect(result.status).toBe(0);
+        expect(result.stderr).toBe("");
+        return JSON.parse(result.stdout) as unknown;
+      };
+
+      expect(runHook("PreToolUse")).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "Approval timed out without a user response.",
+        },
+      });
+      expect(runHook("PermissionRequest")).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PermissionRequest",
+          decision: {
+            behavior: "deny",
+            message: "Permission request timed out without a user response.",
+          },
+        },
+      });
+      expect(runHook("Elicitation")).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "Elicitation",
+          action: "cancel",
+        },
+      });
+
+      const sessionRoot = path.join(runtimeRoot, "sessions", status.session_id);
+      expect(await fs.readdir(path.join(sessionRoot, "pending"))).toEqual([]);
+      expect(await fs.readdir(path.join(sessionRoot, "timing"))).toEqual([]);
+      expect(await fs.readdir(path.join(sessionRoot, "timeout"))).toHaveLength(3);
+
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-hook-timeout", environmentId: environment.id },
+        context,
+      );
     });
   });
 

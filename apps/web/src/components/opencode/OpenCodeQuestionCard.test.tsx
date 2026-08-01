@@ -21,15 +21,17 @@ import {
   usePromptDraftStore,
 } from "@/stores/promptDraftStore";
 import type {
+  OpenCodeInteractionResponseResult,
   OpencodeClient,
   QuestionRequest,
 } from "@/lib/opencode-client";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 import * as realOpenCodeClient from "@/lib/opencode-client";
 const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
 
-const replyMock = mock(async () => true);
-const rejectMock = mock(async () => true);
+const replyMock = mock(async (): Promise<OpenCodeInteractionResponseResult> => "applied");
+const rejectMock = mock(async (): Promise<OpenCodeInteractionResponseResult> => "applied");
 
 mock.module("@/lib/opencode-client", () => ({
   ...realOpenCodeClientSnapshot,
@@ -71,9 +73,10 @@ function makeQuestion(
 
 beforeEach(() => {
   replyMock.mockReset();
-  replyMock.mockResolvedValue(true);
+  replyMock.mockResolvedValue("applied");
   rejectMock.mockReset();
-  rejectMock.mockResolvedValue(true);
+  rejectMock.mockResolvedValue("applied");
+  mockToastError.mockClear();
   useOpenCodeStore.setState({
     pendingQuestions: new Map(),
   });
@@ -103,6 +106,40 @@ describe("OpenCodeQuestionCard", () => {
         [["Web", "Desktop"]],
       );
     });
+  });
+
+  test("keeps duplicate option labels independently selectable", async () => {
+    const question = makeQuestion({
+      questions: [{
+        question: "Choose both matching targets",
+        header: "Targets",
+        options: [
+          { label: "Same", description: "First target" },
+          { label: "Same", description: "Second target" },
+        ],
+        multiple: true,
+        custom: false,
+      }],
+    });
+    render(<OpenCodeQuestionCard question={question} client={CLIENT} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /First target/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Second target/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => {
+      expect(replyMock).toHaveBeenCalledWith(
+        CLIENT,
+        question.id,
+        [["Same", "Same"]],
+      );
+    });
+  });
+
+  test("does not fabricate a countdown when OpenCode publishes no deadline", () => {
+    render(<OpenCodeQuestionCard question={makeQuestion()} client={CLIENT} />);
+
+    expect(screen.queryByLabelText(/Time remaining/i)).toBeNull();
   });
 
   test("treats custom as enabled by default and keeps single-select answers exclusive", async () => {
@@ -147,7 +184,7 @@ describe("OpenCodeQuestionCard", () => {
   });
 
   test("keeps the question and unlocks controls after a failed reply", async () => {
-    replyMock.mockResolvedValue(false);
+    replyMock.mockResolvedValue("pending");
     const question = makeQuestion();
     useOpenCodeStore.getState().addPendingQuestion(question);
     render(<OpenCodeQuestionCard question={question} client={CLIENT} />);
@@ -163,9 +200,9 @@ describe("OpenCodeQuestionCard", () => {
   });
 
   test("locks submission while the reply is in flight", async () => {
-    let resolveReply!: (value: boolean) => void;
+    let resolveReply!: (value: OpenCodeInteractionResponseResult) => void;
     replyMock.mockImplementation(
-      () => new Promise<boolean>((resolve) => {
+      () => new Promise<OpenCodeInteractionResponseResult>((resolve) => {
         resolveReply = resolve;
       }),
     );
@@ -174,15 +211,15 @@ describe("OpenCodeQuestionCard", () => {
     fireEvent.click(screen.getByRole("button", { name: /Web/ }));
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Submitting..." }).hasAttribute("disabled")).toBe(
+      expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(
         true,
       );
     });
-    fireEvent.click(screen.getByRole("button", { name: "Submitting..." }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(replyMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      resolveReply(true);
+      resolveReply("applied");
     });
   });
 
@@ -212,7 +249,7 @@ describe("OpenCodeQuestionCard", () => {
     expect(
       usePromptDraftStore
         .getState()
-        .drafts.has(openCodeQuestionDraftKey(question.id)),
+        .drafts.has(openCodeQuestionDraftKey(question.sessionId, question.id)),
     ).toBe(false);
   });
 
@@ -228,12 +265,60 @@ describe("OpenCodeQuestionCard", () => {
     });
 
     cleanup();
-    rejectMock.mockResolvedValue(false);
+    rejectMock.mockClear();
+    rejectMock.mockResolvedValue("pending");
     useOpenCodeStore.getState().addPendingQuestion(question);
     render(<OpenCodeQuestionCard question={question} client={CLIENT} />);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     });
     expect(useOpenCodeStore.getState().getPendingQuestion(question.id)).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "OpenCode is still waiting for a response. Please try again.",
+    );
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to dismiss this question",
+      {
+        description: "OpenCode is still waiting for a response. Please try again.",
+      },
+    );
+
+    const dismiss = screen.getByRole("button", { name: "Dismiss" });
+    expect(dismiss.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(dismiss);
+    await waitFor(() => expect(rejectMock).toHaveBeenCalledTimes(2));
+  });
+
+  test("removes a question that is no longer pending without claiming the reply landed", async () => {
+    replyMock.mockResolvedValue("gone");
+    const question = makeQuestion();
+    useOpenCodeStore.getState().addPendingQuestion(question);
+    render(<OpenCodeQuestionCard question={question} client={CLIENT} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Web/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getPendingQuestion(question.id)).toBeUndefined();
+    });
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test("fails closed when the reply outcome is unknown", async () => {
+    replyMock.mockResolvedValue("unknown");
+    const question = makeQuestion();
+    useOpenCodeStore.getState().addPendingQuestion(question);
+    render(<OpenCodeQuestionCard question={question} client={CLIENT} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Web/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    });
+
+    expect(useOpenCodeStore.getState().getPendingQuestion(question.id)).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The response outcome is unknown. Reconnect or refresh OpenCode before trying again.",
+    );
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
   });
 });

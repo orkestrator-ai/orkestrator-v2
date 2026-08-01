@@ -767,6 +767,7 @@ describe("interactive questions and MCP elicitation", () => {
       resolution: "cancelled",
       timedOut: true,
     });
+    expect(h.transcript.at(-1)?.message).toContain("timed out");
   });
 
   test("a shorter autoResolutionMs shortens the park, it does not extend it", async () => {
@@ -847,6 +848,7 @@ describe("interactive questions and MCP elicitation", () => {
     expect(h.answers[0]!.result).toEqual({ answers: {} });
     expect(h.resolved[0]!.resolution).toBe("session-closed");
     expect(h.router.getParkedInteractions()).toHaveLength(0);
+    expect(h.transcript.at(-1)?.message).toContain("session closed");
   });
 
   test("abandonThread ignores interactions on other threads", async () => {
@@ -878,6 +880,7 @@ describe("interactive questions and MCP elicitation", () => {
       resolution: "cancelled",
     });
     expect(h.resolved[0]!.resolution).toBe("engine-restarted");
+    expect(h.transcript.at(-1)?.message).toContain("provider restarted");
   });
 
   test("abandonGeneration leaves another generation's interaction alone", async () => {

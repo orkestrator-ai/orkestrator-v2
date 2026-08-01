@@ -1752,7 +1752,7 @@ describe("CodexChatTab", () => {
         [createInteraction("old-interaction")],
       );
       usePromptDraftStore.getState().setDraftValue(
-        codexInteractionDraftKey("old-interaction"),
+        codexInteractionDraftKey(SESSION_KEY, "old-interaction"),
         "answer",
         "unfinished",
       );
@@ -1768,7 +1768,7 @@ describe("CodexChatTab", () => {
     expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
     expect(
       usePromptDraftStore.getState().drafts.has(
-        codexInteractionDraftKey("old-interaction"),
+        codexInteractionDraftKey(SESSION_KEY, "old-interaction"),
       ),
     ).toBe(false);
 

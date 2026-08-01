@@ -107,10 +107,12 @@ export function ClaudePlanApprovalCard({
     (state) => state.removePendingPlanApproval,
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [inlineError, setInlineError] = useState<string | null>(null);
+  const [retryBlocked, setRetryBlocked] = useState(false);
   // The rejection-feedback draft survives the card unmounting (environment
   // switches) by living in the prompt-draft store; `claudeStore.
   // removePendingPlanApproval` clears it when this approval resolves.
-  const draftKey = claudePlanApprovalDraftKey(approval.id);
+  const draftKey = claudePlanApprovalDraftKey(sessionId, approval.id);
   const [showFeedback, setShowFeedback] = usePromptDraftField<boolean>(
     draftKey,
     "showFeedback",
@@ -129,6 +131,8 @@ export function ClaudePlanApprovalCard({
 
   const handleApprove = useCallback(async () => {
     if (expired) return;
+    setInlineError(null);
+    setRetryBlocked(false);
     setIsSubmitting(true);
     try {
       const result = await respondToPlanApproval(client, sessionId, approval.id, true);
@@ -144,10 +148,17 @@ export function ClaudePlanApprovalCard({
         // The card stays retryable, but the turn is fully blocked on this
         // answer: without a toast the user has no signal it never landed.
         console.error("[ClaudePlanApprovalCard] Plan approval was not delivered");
-        toast.error(APPROVE_FAILURE_TITLE, { description: RETRY_HINT });
+        const message = result === "unknown"
+          ? "The decision outcome is unknown. Reconnect or refresh Claude before trying again."
+          : RETRY_HINT;
+        setInlineError(message);
+        setRetryBlocked(result === "unknown");
+        toast.error(APPROVE_FAILURE_TITLE, { description: message });
       }
     } catch (err) {
       console.error("[ClaudePlanApprovalCard] Failed to approve plan:", err);
+      setInlineError(describeError(err));
+      setRetryBlocked(true);
       toast.error(APPROVE_FAILURE_TITLE, { description: describeError(err) });
     } finally {
       setIsSubmitting(false);
@@ -163,6 +174,8 @@ export function ClaudePlanApprovalCard({
     }
 
     setIsSubmitting(true);
+    setInlineError(null);
+    setRetryBlocked(false);
     try {
       const result = await respondToPlanApproval(
         client,
@@ -181,10 +194,17 @@ export function ClaudePlanApprovalCard({
         removePendingPlanApproval(approval.id);
       } else {
         console.error("[ClaudePlanApprovalCard] Plan feedback was not delivered");
-        toast.error(REJECT_FAILURE_TITLE, { description: RETRY_HINT });
+        const message = result === "unknown"
+          ? "The feedback outcome is unknown. Reconnect or refresh Claude before trying again."
+          : RETRY_HINT;
+        setInlineError(message);
+        setRetryBlocked(result === "unknown");
+        toast.error(REJECT_FAILURE_TITLE, { description: message });
       }
     } catch (err) {
       console.error("[ClaudePlanApprovalCard] Failed to reject plan:", err);
+      setInlineError(describeError(err));
+      setRetryBlocked(true);
       toast.error(REJECT_FAILURE_TITLE, { description: describeError(err) });
     } finally {
       setIsSubmitting(false);
@@ -194,6 +214,8 @@ export function ClaudePlanApprovalCard({
   const handleDismiss = useCallback(() => {
     if (expired) return;
     // Dismissing is treated as rejection without feedback
+    setInlineError(null);
+    setRetryBlocked(false);
     setIsSubmitting(true);
     respondToPlanApproval(client, sessionId, approval.id, false)
       .then((result) => {
@@ -207,11 +229,20 @@ export function ClaudePlanApprovalCard({
         // that never landed, so the card stays and the user is told.
         if (result === "forbidden" || result === "error") {
           console.error("[ClaudePlanApprovalCard] Plan dismissal was not delivered");
+          setInlineError(RETRY_HINT);
           toast.error(DISMISS_FAILURE_TITLE, { description: RETRY_HINT });
+        }
+        if (result === "unknown") {
+          const message = "The dismissal outcome is unknown. Reconnect or refresh Claude before trying again.";
+          setInlineError(message);
+          setRetryBlocked(true);
+          toast.error(DISMISS_FAILURE_TITLE, { description: message });
         }
       })
       .catch((err) => {
         console.error("[ClaudePlanApprovalCard] Failed to dismiss plan:", err);
+        setInlineError(describeError(err));
+        setRetryBlocked(true);
         toast.error(DISMISS_FAILURE_TITLE, { description: describeError(err) });
       })
       .finally(() => {
@@ -220,7 +251,13 @@ export function ClaudePlanApprovalCard({
   }, [client, sessionId, approval.id, expired, removePendingPlanApproval]);
 
   return (
-    <BlockingPromptCard>
+    <BlockingPromptCard
+      state={isSubmitting ? "submitting" : inlineError ? "retryable-error" : "pending"}
+      error={inlineError}
+      role="group"
+      aria-label="Claude plan ready for review"
+      arrivalAnnouncement="Claude is waiting for a plan decision."
+    >
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-2.5 bg-amber-500/10 border-b border-border">
         <FileText className="w-4 h-4 text-amber-500" />
@@ -276,7 +313,7 @@ export function ClaudePlanApprovalCard({
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
               className="min-h-[80px] text-sm bg-transparent border-muted-foreground/20 focus:border-primary resize-none"
-              disabled={isSubmitting || expired}
+              disabled={isSubmitting || expired || retryBlocked}
             />
           </div>
         )}
@@ -294,7 +331,7 @@ export function ClaudePlanApprovalCard({
           variant="ghost"
           size="sm"
           onClick={handleDismiss}
-          disabled={isSubmitting}
+          disabled={isSubmitting || retryBlocked}
           className="text-muted-foreground hover:text-foreground"
         >
           Dismiss
@@ -304,7 +341,7 @@ export function ClaudePlanApprovalCard({
             variant="outline"
             size="sm"
             onClick={handleReject}
-            disabled={isSubmitting}
+            disabled={isSubmitting || retryBlocked}
             className={cn(
               "gap-1.5",
               showFeedback && "text-destructive hover:text-destructive"
@@ -316,7 +353,7 @@ export function ClaudePlanApprovalCard({
           <Button
             size="sm"
             onClick={handleApprove}
-            disabled={isSubmitting}
+            disabled={isSubmitting || retryBlocked}
             className="gap-1.5 bg-green-600 hover:bg-green-700"
           >
             <Check className="w-3.5 h-3.5" />

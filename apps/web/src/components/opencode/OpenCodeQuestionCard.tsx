@@ -23,10 +23,14 @@ export function OpenCodeQuestionCard({
 
   const questions = useMemo<QuestionCardQuestion[]>(
     () =>
-      question.questions.map((info) => ({
+      question.questions.map((info, questionIndex) => ({
+        id: `${question.id}:question:${questionIndex}`,
         question: info.question,
         header: info.header,
-        options: info.options,
+        options: info.options.map((option, optionIndex) => ({
+          ...option,
+          id: `${question.id}:question:${questionIndex}:option:${optionIndex}`,
+        })),
         // OpenCode names these `multiple` and `custom`; `custom` defaults to true.
         multiSelect: info.multiple,
         allowCustomAnswer: info.custom !== false,
@@ -36,21 +40,38 @@ export function OpenCodeQuestionCard({
 
   const handleSubmit = useCallback(
     async (answers: string[][]) => {
-      const success = await replyToQuestion(client, question.id, answers);
-      if (success) {
+      const result = await replyToQuestion(client, question.id, answers);
+      if (result === "applied" || result === "gone") {
         removePendingQuestion(question.id);
+        return true;
       }
-      return success;
+      if (result === "unknown") {
+        return {
+          applied: false,
+          retryable: false,
+          message: "The response outcome is unknown. Reconnect or refresh OpenCode before trying again.",
+        };
+      }
+      return false;
     },
     [client, question.id, removePendingQuestion],
   );
 
   const handleDismiss = useCallback(async () => {
-    const success = await rejectQuestion(client, question.id);
-    if (success) {
+    const result = await rejectQuestion(client, question.id);
+    if (result === "applied" || result === "gone") {
       // The loading state is cleared by SSE events in OpenCodeChatTab.
       removePendingQuestion(question.id);
+      return true;
     }
+    if (result === "unknown") {
+      return {
+        applied: false,
+        retryable: false,
+        message: "The dismissal outcome is unknown. Reconnect or refresh OpenCode before trying again.",
+      };
+    }
+    return false;
   }, [client, question.id, removePendingQuestion]);
 
   return (
@@ -65,7 +86,7 @@ export function OpenCodeQuestionCard({
       exclusiveSingleSelect
       // Cleared by `openCodeStore.removePendingQuestion` when the request
       // resolves, so in-progress answers survive tab switches until then.
-      draftKey={openCodeQuestionDraftKey(question.id)}
+      draftKey={openCodeQuestionDraftKey(question.sessionId, question.id)}
     />
   );
 }

@@ -24,10 +24,12 @@ const realCodexClientSnapshot = { ...realCodexClient };
 const respondMock = mock(
   async (): Promise<CodexApprovalResponseResult> => "applied",
 );
+const fetchPendingApprovalsMock = mock(async () => [] as CodexApproval[]);
 
 mock.module("@/lib/codex-client", () => ({
   ...realCodexClientSnapshot,
   respondToApproval: respondMock,
+  fetchPendingApprovals: fetchPendingApprovalsMock,
 }));
 
 afterAll(() => {
@@ -71,6 +73,8 @@ function renderCard(approval: CodexApproval) {
 beforeEach(() => {
   respondMock.mockClear();
   respondMock.mockImplementation(async () => "applied");
+  fetchPendingApprovalsMock.mockReset();
+  fetchPendingApprovalsMock.mockResolvedValue([]);
   useCodexStore.setState({ pendingApprovals: new Map() });
   useCodexStore.getState().addPendingApproval(SESSION_KEY, makeApproval());
 });
@@ -249,6 +253,46 @@ describe("CodexApprovalCard", () => {
     expect(screen.getByRole("button", { name: "Approve" }).hasAttribute("disabled")).toBe(false);
   });
 
+  test("reconciles an unknown transport outcome before enabling a retry", async () => {
+    const approval = makeApproval();
+    fetchPendingApprovalsMock.mockResolvedValue([approval]);
+    respondMock.mockResolvedValue("unknown");
+    renderCard(approval);
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() =>
+      expect(fetchPendingApprovalsMock).toHaveBeenCalledWith(CLIENT, "session-1"),
+    );
+    expect(screen.getByRole("alert").textContent).toMatch(/safe to retry/i);
+    expect(screen.getByRole("button", { name: "Approve" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  test("removes an approval when reconciliation proves an unknown response resolved", async () => {
+    respondMock.mockResolvedValue("unknown");
+    fetchPendingApprovalsMock.mockResolvedValue([]);
+    renderCard(makeApproval());
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() =>
+      expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false),
+    );
+  });
+
+  test("blocks retry when an unknown outcome cannot be reconciled", async () => {
+    respondMock.mockResolvedValue("unknown");
+    fetchPendingApprovalsMock.mockRejectedValue(new Error("bridge offline"));
+    renderCard(makeApproval());
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/outcome is unknown/i);
+    for (const label of ["Decline", "Cancel turn", "Approve for session", "Approve"]) {
+      expect(screen.getByRole("button", { name: label }).hasAttribute("disabled")).toBe(true);
+    }
+  });
+
   test("a second click while in flight does not send twice", async () => {
     let release: ((value: CodexApprovalResponseResult) => void) | undefined;
     respondMock.mockImplementation(
@@ -306,7 +350,10 @@ describe("CodexApprovalCard", () => {
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Decline" })).toBeNull();
     expect(screen.queryByText(/NaN/)).toBeNull();
-    expect(screen.getByText("This request expired and was declined.")).toBeTruthy();
+    expect(screen.getByText(
+      "This request has an invalid deadline and cannot be answered safely.",
+    )).toBeTruthy();
+    expect(screen.queryByText("This request expired and was declined.")).toBeNull();
   });
 
   test("a different button cannot be used while a decision is in flight", async () => {

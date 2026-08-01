@@ -231,6 +231,7 @@ export function ClaudeChatTab({
   const isInitializedRef = useRef(false);
   const initialPromptSentRef = useRef(false);
   const slashCmdCleanupRef = useRef<(() => void) | null>(null);
+  const initializationSequenceRef = useRef(0);
   const manualRefreshSequenceRef = useRef(0);
   /**
    * Bumped by *every* refresh, manual or watchdog-driven.
@@ -1036,6 +1037,9 @@ export function ClaudeChatTab({
     }
 
     let mounted = true;
+    const initializationSequence = ++initializationSequenceRef.current;
+    const isCurrentInitialization = () =>
+      mounted && initializationSequenceRef.current === initializationSequence;
 
     async function initialize() {
       try {
@@ -1051,7 +1055,7 @@ export function ClaudeChatTab({
         ) {
           const existingSessionId = existingSession.sessionId;
           const isCurrentFastReconnect = () => {
-            if (!mounted) return false;
+            if (!isCurrentInitialization()) return false;
             const currentState = useClaudeStore.getState();
             return (
               currentState.clients.get(environmentId) === existingClient
@@ -1176,7 +1180,7 @@ export function ClaudeChatTab({
           let resolvedModels = models;
           if (!useClaudeStore.getState().modelCatalogs.has(environmentId)) {
             resolvedModels = await loadAuthoritativeModels(bridgeClient);
-            if (!mounted) return;
+            if (!isCurrentInitialization()) return;
           }
 
           const currentSelectedModel = getSelectedModel(sessionKey);
@@ -1191,9 +1195,9 @@ export function ClaudeChatTab({
           if (projectedSessionId) {
             try {
               const restoredMessages = await getSessionMessages(bridgeClient, projectedSessionId);
-              if (!mounted) return;
+              if (!isCurrentInitialization()) return;
               const restoredServerSession = await getSession(bridgeClient, projectedSessionId);
-              if (!mounted) return;
+              if (!isCurrentInitialization()) return;
 
               tabSessionIdRef.current = projectedSessionId;
               updateTabNativeSessionId(tabId, projectedSessionId, environmentId);
@@ -1214,7 +1218,6 @@ export function ClaudeChatTab({
               return;
             } catch (error) {
               if (!(error instanceof SessionNotFoundError)) throw error;
-              updateTabNativeSessionId(tabId, undefined, environmentId);
             }
           }
 
@@ -1224,10 +1227,9 @@ export function ClaudeChatTab({
             logicalSessionKey: sessionKey,
           });
           const newSession = { sessionId: ensured.providerSessionId };
-          if (!mounted) return;
+          if (!isCurrentInitialization()) return;
 
           tabSessionIdRef.current = newSession.sessionId;
-          updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
           isInitializedRef.current = true;
           seedInitialFastMode();
 
@@ -1236,6 +1238,7 @@ export function ClaudeChatTab({
             messages: [],
             isLoading: false,
           });
+          updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
 
           setConnectionState("connected");
 
@@ -1285,7 +1288,7 @@ export function ClaudeChatTab({
             };
           }
 
-          if (!mounted) return;
+          if (!isCurrentInitialization()) return;
 
           if (!localStatus.port) {
             throw new Error("Local server started but no port available");
@@ -1322,7 +1325,7 @@ export function ClaudeChatTab({
             };
           }
 
-          if (!mounted) return;
+          if (!isCurrentInitialization()) return;
 
           if (!status.hostPort) {
             throw new Error("Server started but no port available");
@@ -1352,6 +1355,7 @@ export function ClaudeChatTab({
         } catch (error) {
           throw classifyNewEnvironmentConnectionStartupError(error);
         }
+        if (!isCurrentInitialization()) return;
         console.debug("[ClaudeChatTab] Claude bridge health:", healthy);
         if (!healthy) {
           throw new RetryableNewEnvironmentConnectionError(
@@ -1360,7 +1364,7 @@ export function ClaudeChatTab({
         }
         const modelsStart = Date.now();
         const availableModels = await loadAuthoritativeModels(bridgeClient);
-        if (!mounted) return;
+        if (!isCurrentInitialization()) return;
         console.debug("[ClaudeChatTab] Available models:", availableModels, "durationMs:", Date.now() - modelsStart);
 
         // Set default model if not already selected
@@ -1437,6 +1441,7 @@ export function ClaudeChatTab({
               error,
             );
           });
+          if (!isCurrentInitialization()) return;
           updateTabNativeSessionId(tabId, existingSessionId, environmentId);
           isInitializedRef.current = true;
           console.debug("[ClaudeChatTab] Reconnecting to existing session", {
@@ -1456,7 +1461,7 @@ export function ClaudeChatTab({
           // Refresh messages from server to ensure we have latest state
           try {
             const messages = await getSessionMessages(bridgeClient, existingSessionId);
-            if (!mounted) return;
+            if (!isCurrentInitialization()) return;
             if (storeHasExistingSession) {
               // The store owns client-only message preservation and
               // de-duplication. Appending errors here as well would publish the
@@ -1464,7 +1469,7 @@ export function ClaudeChatTab({
               setMessages(sessionKey, messages);
             } else {
               const serverSession = await getSession(bridgeClient, existingSessionId);
-              if (!mounted) return;
+              if (!isCurrentInitialization()) return;
               replaceSessionIdentity(sessionKey, {
                 sessionId: existingSessionId,
                 messages,
@@ -1482,15 +1487,15 @@ export function ClaudeChatTab({
                 logicalSessionKey: sessionKey,
               });
               const newSession = { sessionId: ensured.providerSessionId };
-              if (!mounted) return;
+              if (!isCurrentInitialization()) return;
               seedInitialFastMode();
               tabSessionIdRef.current = newSession.sessionId;
-              updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
               replaceSessionIdentity(sessionKey, {
                 sessionId: newSession.sessionId,
                 messages: [],
                 isLoading: false,
               });
+              updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
             } else if (storeHasExistingSession) {
               console.warn("[ClaudeChatTab] Failed to refresh messages on reconnect:", err);
               // Keep existing messages from store if refresh fails
@@ -1514,7 +1519,7 @@ export function ClaudeChatTab({
             logicalSessionKey: sessionKey,
           });
           const newSession = { sessionId: ensured.providerSessionId };
-          if (!mounted) return;
+          if (!isCurrentInitialization()) return;
 
           tabSessionIdRef.current = newSession.sessionId;
           updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
@@ -1620,7 +1625,7 @@ export function ClaudeChatTab({
           }
         }
       } catch (error) {
-        if (!mounted) return;
+        if (!isCurrentInitialization()) return;
         let message = "Connection failed";
         if (error instanceof Error) {
           message = error.message;
@@ -1659,7 +1664,7 @@ export function ClaudeChatTab({
           setConnectionState("connecting");
           setErrorMessage(null);
           window.setTimeout(() => {
-            if (!mounted) return;
+            if (!isCurrentInitialization()) return;
             if (Date.now() > retryWindowExpiresAt) {
               setConnectionState("error");
               setErrorMessage(message);

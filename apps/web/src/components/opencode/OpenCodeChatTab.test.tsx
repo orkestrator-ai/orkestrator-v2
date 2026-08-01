@@ -63,9 +63,13 @@ const mockCreateSession = mock(async (_client?: unknown) => ({
 const mockGetSessionMessages = mock<
   (_client: unknown, _sessionId: string, _options?: unknown) => Promise<NativeMessage[]>
 >(async () => []);
-const mockGetSessionStatus = mock(
-  async () => null as "idle" | "busy" | "retry" | null,
-);
+const mockGetSessionStatus = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _options?: { throwOnError?: boolean },
+  ) => Promise<"idle" | "busy" | "retry" | null>
+>(async () => null);
 const mockGetStructuredOutput = mock<
   (_client: unknown, _sessionId: string, _requestId?: string) => Promise<any>
 >(async () => null);
@@ -625,6 +629,17 @@ function seedPaneLayout(
   });
 }
 
+function PaneBackedOpenCodeChatTab() {
+  const data = usePaneLayoutStore((state) => {
+    const root = state.environments.get(ENVIRONMENT_ID)?.root;
+    if (!root || root.kind !== "leaf") return undefined;
+    return root.tabs.find((tab) => tab.id === TAB_ID)?.openCodeNativeData;
+  });
+
+  if (!data) return null;
+  return <OpenCodeChatTab tabId={TAB_ID} data={data} isActive />;
+}
+
 function resetStores(name = "20260415-123456") {
   useOpenCodeStore.setState({
     serverStatus: new Map(),
@@ -847,6 +862,7 @@ describe("OpenCodeChatTab", () => {
     mockGetAgentHandoff.mockReset();
     mockGetAgentHandoff.mockResolvedValue(null);
     mockAdoptNativeAgentSession.mockClear();
+    mockEnsureNativeAgentSession.mockClear();
     mockSendPrompt.mockClear();
     mockSendPrompt.mockImplementation(async () => ({
       success: true,
@@ -2138,7 +2154,11 @@ describe("OpenCodeChatTab", () => {
         logicalSessionKey: SESSION_KEY,
         providerSessionId: restoredSessionId,
       });
-      expect(mockGetSessionMessages).toHaveBeenCalledWith(MOCK_CLIENT, restoredSessionId);
+      expect(mockGetSessionMessages).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        restoredSessionId,
+        { throwOnError: true },
+      );
       expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
         sessionId: restoredSessionId,
         messages: [restoredUserMessage],
@@ -2152,6 +2172,123 @@ describe("OpenCodeChatTab", () => {
     if (!restoredRoot || restoredRoot.kind !== "leaf") throw new Error("Expected pane leaf");
     const restoredTab = restoredRoot.tabs.find((tab) => tab.id === TAB_ID);
     expect(restoredTab?.openCodeNativeData?.sessionId).toBe(restoredSessionId);
+  });
+
+  test("adopts a late projected session with its busy status and pending requests", async () => {
+    const projectedSessionId = "backend-startup-opencode";
+    const projectedMessage = nativeMessage(
+      "backend-startup-message",
+      "Prompt dispatched by the backend",
+    );
+    const permission: PermissionRequest = {
+      id: "backend-startup-permission",
+      sessionId: projectedSessionId,
+      permission: "edit",
+      patterns: ["src/**"],
+      metadata: {},
+      always: [],
+    };
+    const question: QuestionRequest = {
+      id: "backend-startup-question",
+      sessionId: projectedSessionId,
+      questions: [{
+        question: "Continue the startup task?",
+        header: "Continue",
+        options: [],
+      }],
+    };
+
+    render(<PaneBackedOpenCodeChatTab />);
+    await waitFor(() => expect(mockGetSessionStatus).toHaveBeenCalled());
+    await flushReactMicrotasks();
+
+    mockListSessions.mockResolvedValue([
+      { id: projectedSessionId, createdAt: "2026-04-15T10:00:00.000Z" },
+    ]);
+    mockGetSessionStatus.mockResolvedValue("idle");
+    mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+      sessionId === projectedSessionId ? [projectedMessage] : []
+    );
+    mockGetSessionStatus.mockImplementation(async (_client, sessionId) =>
+      sessionId === projectedSessionId ? "busy" : "idle"
+    );
+    mockGetPendingPermissions.mockResolvedValue([permission]);
+    mockGetPendingQuestions.mockResolvedValue([question]);
+
+    act(() => {
+      usePaneLayoutStore.getState().updateTabNativeSessionId(
+        TAB_ID,
+        projectedSessionId,
+        ENVIRONMENT_ID,
+      );
+    });
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: projectedSessionId,
+        messages: [projectedMessage],
+        isLoading: true,
+      });
+    });
+    expect(
+      await screen.findByTestId(`opencode-permission-card-${permission.id}`),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId(`opencode-question-card-${question.id}`),
+    ).toBeTruthy();
+    expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith({
+      environmentId: ENVIRONMENT_ID,
+      agent: "opencode",
+      logicalSessionKey: SESSION_KEY,
+      providerSessionId: projectedSessionId,
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("does not let an obsolete health probe overwrite a newer projection", async () => {
+    const projectedSessionId = "projected-during-health";
+    const firstHealth = deferred<boolean>();
+    mockCheckClientHealth
+      .mockImplementationOnce(() => firstHealth.promise)
+      .mockResolvedValue(true);
+    mockListSessions.mockResolvedValue([
+      { id: projectedSessionId, createdAt: "2026-04-15T10:00:00.000Z" },
+    ]);
+    mockGetSessionStatus.mockResolvedValue("idle");
+
+    render(<PaneBackedOpenCodeChatTab />);
+    await waitFor(() => expect(mockCheckClientHealth).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      usePaneLayoutStore.getState().updateTabNativeSessionId(
+        TAB_ID,
+        projectedSessionId,
+        ENVIRONMENT_ID,
+      );
+    });
+
+    await waitFor(() => expect(mockCheckClientHealth).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+        projectedSessionId,
+      );
+    });
+
+    await act(async () => {
+      firstHealth.resolve(true);
+      await firstHealth.promise;
+    });
+    await flushReactMicrotasks();
+
+    expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+      projectedSessionId,
+    );
+    expect(
+      usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
+        ?.openCodeNativeData?.sessionId,
+    ).toBe(projectedSessionId);
+    expect(mockAdoptNativeAgentSession).toHaveBeenCalledTimes(1);
+    expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
   test("cold-restores a persisted session with its transcript", async () => {
@@ -2198,8 +2335,64 @@ describe("OpenCodeChatTab", () => {
       logicalSessionKey: SESSION_KEY,
       providerSessionId: restoredSessionId,
     });
-    expect(mockGetSessionMessages).toHaveBeenCalledWith(expect.anything(), restoredSessionId);
+    expect(mockGetSessionMessages).toHaveBeenCalledWith(
+      expect.anything(),
+      restoredSessionId,
+      { throwOnError: true },
+    );
     expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("cold-restores pending requests only after installing the projected identity", async () => {
+    const restoredSessionId = "cold-restored-with-pending";
+    const permission: PermissionRequest = {
+      id: "cold-restored-permission",
+      sessionId: restoredSessionId,
+      permission: "write",
+      patterns: ["docs/**"],
+      metadata: {},
+      always: [],
+    };
+    const question: QuestionRequest = {
+      id: "cold-restored-question",
+      sessionId: restoredSessionId,
+      questions: [{
+        question: "Apply the pending change?",
+        header: "Apply",
+        options: [],
+      }],
+    };
+    useOpenCodeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    seedPaneLayout(restoredSessionId);
+    mockListSessions.mockResolvedValue([
+      { id: restoredSessionId, createdAt: "2026-04-15T10:00:00.000Z" },
+    ]);
+    mockGetSessionStatus.mockResolvedValue("busy");
+    mockGetPendingPermissions.mockResolvedValue([permission]);
+    mockGetPendingQuestions.mockResolvedValue([question]);
+
+    render(<PaneBackedOpenCodeChatTab />);
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: restoredSessionId,
+        isLoading: true,
+      });
+      expect(useOpenCodeStore.getState().pendingPermissions.get(permission.id))
+        .toEqual(permission);
+      expect(useOpenCodeStore.getState().pendingQuestions.get(question.id))
+        .toEqual(question);
+    });
+    expect(
+      screen.getByTestId(`opencode-permission-card-${permission.id}`),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId(`opencode-question-card-${question.id}`),
+    ).toBeTruthy();
   });
 
   test("replaces a missing restored session and persists the replacement id", async () => {
@@ -2224,7 +2417,7 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
-  test("clears a missing restored session id before replacement creation finishes", async () => {
+  test("atomically replaces a missing projected session after creation finishes", async () => {
     const missingSessionId = "missing-while-replacing";
     const replacement = deferred<{
       id: string;
@@ -2235,20 +2428,14 @@ describe("OpenCodeChatTab", () => {
     mockListSessions.mockResolvedValue([]);
     mockCreateSession.mockImplementation(() => replacement.promise);
 
-    render(
-      <OpenCodeChatTab
-        tabId={TAB_ID}
-        data={createData({ sessionId: missingSessionId })}
-        isActive
-      />,
-    );
+    render(<PaneBackedOpenCodeChatTab />);
 
     await waitFor(() => {
       expect(mockCreateSession).toHaveBeenCalledWith(MOCK_CLIENT);
       expect(
         usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
           ?.openCodeNativeData?.sessionId,
-      ).toBeUndefined();
+      ).toBe(missingSessionId);
     });
     expect(useOpenCodeStore.getState().sessions.has(SESSION_KEY)).toBe(false);
 
@@ -2263,7 +2450,47 @@ describe("OpenCodeChatTab", () => {
       expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.sessionId).toBe(
         "replacement-after-cleanup",
       );
+      expect(
+        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
+          ?.openCodeNativeData?.sessionId,
+      ).toBe("replacement-after-cleanup");
     });
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps a projected id unchanged when backend adoption rejects", async () => {
+    const projectedSessionId = "projected-adoption-rejected";
+    seedPaneLayout(projectedSessionId);
+    useOpenCodeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map([[SESSION_KEY, {
+        sessionId: projectedSessionId,
+        messages: [nativeMessage("stored-before-adoption-rejection")],
+        isLoading: false,
+      }]]),
+    }));
+    mockListSessions.mockResolvedValue([
+      { id: projectedSessionId, createdAt: "2026-04-15T10:00:00.000Z" },
+    ]);
+    mockGetSessionStatus.mockResolvedValue("idle");
+    mockAdoptNativeAgentSession.mockRejectedValueOnce(
+      new Error("projected adoption rejected"),
+    );
+
+    render(<PaneBackedOpenCodeChatTab />);
+
+    expect(
+      await screen.findByText("Error: projected adoption rejected"),
+    ).toBeTruthy();
+    expect(
+      usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]
+        ?.openCodeNativeData?.sessionId,
+    ).toBe(projectedSessionId);
+    expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+      projectedSessionId,
+    );
+    expect(mockEnsureNativeAgentSession).not.toHaveBeenCalled();
   });
 
   test("preserves a stored transcript when cold reconnect hydration rejects", async () => {

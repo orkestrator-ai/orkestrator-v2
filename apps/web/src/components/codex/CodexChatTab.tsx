@@ -1521,10 +1521,12 @@ export function CodexChatTab({
               projectedSessionId,
               { throwOnError: true },
             );
+            if (!mounted) return;
             if (restoredStatus) {
               const restoredMessages = await getSessionMessages(cachedClient, projectedSessionId);
               if (!mounted) return;
               await adoptRestoredSession(projectedSessionId);
+              if (!mounted) return;
               setSession(sessionKey, {
                 sessionId: projectedSessionId,
                 messages: restoredMessages,
@@ -1541,7 +1543,6 @@ export function CodexChatTab({
               acknowledgeInitialLaunchOptions();
               return;
             }
-            updateTabNativeSessionId(tabId, undefined, environmentId);
           }
 
           const created = await createSession(cachedClient, {
@@ -1695,13 +1696,21 @@ export function CodexChatTab({
         const existingStatus = existingSessionId
           ? await getSessionStatus(nextClient, existingSessionId, { throwOnError: true })
           : null;
+        if (!mounted) return;
         if (existingSessionId && existingStatus) {
           const messages = await getSessionMessages(nextClient, existingSessionId);
           if (!mounted) return;
           await adoptRestoredSession(existingSessionId);
-          if (existingSession) {
+          if (!mounted) return;
+          if (existingSession?.sessionId === existingSessionId) {
+            // Preserve client-only transcript parts when reconnecting the same
+            // identity; setMessages performs the store's normal merge.
             setMessages(sessionKey, messages);
           } else {
+            // A projected backend session can supersede a short-lived cached
+            // session. Replace the whole identity and its authoritative metadata;
+            // updating only the transcript would leave later requests and events
+            // targeting the stale cached id.
             setSession(sessionKey, {
               sessionId: existingSessionId,
               messages,
@@ -1712,9 +1721,6 @@ export function CodexChatTab({
           }
           updateTabNativeSessionId(tabId, existingSessionId, environmentId);
         } else {
-          if (existingSessionId) {
-            updateTabNativeSessionId(tabId, undefined, environmentId);
-          }
           const coldFastMode = seedInitialFastMode(codexState);
           const created = await createSession(nextClient, {
             model: resolvedModel,
@@ -1723,6 +1729,7 @@ export function CodexChatTab({
             fastMode: coldFastMode,
             clientSessionKey: sessionKey,
           });
+          if (!mounted) return;
           setSession(sessionKey, {
             sessionId: created.sessionId,
             messages: [],

@@ -1543,6 +1543,67 @@ describe("CodexChatTab", () => {
     expect(restoredTab?.codexNativeData?.sessionId).toBe(restoredSessionId);
   });
 
+  test("adopts a backend startup session projected after an empty session was cached", async () => {
+    const startupTabId = "startup-agent";
+    const startupSessionKey = createSessionKey(ENVIRONMENT_ID, startupTabId);
+    const temporarySessionId = "temporary-empty-session";
+    const backendSessionId = "backend-prompted-session";
+    const initialPromptMessage = createMessage(
+      "backend-initial-prompt",
+      "Run the initial setup audit",
+    );
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((environment) =>
+        environment.id === ENVIRONMENT_ID
+          ? { ...environment, pendingAgentLaunch: true, setupScriptsComplete: true }
+          : environment
+      ),
+    }));
+    useCodexStore.setState((state) => ({
+      ...state,
+      sessions: new Map(state.sessions).set(startupSessionKey, {
+        sessionId: temporarySessionId,
+        messages: [],
+        isLoading: false,
+        title: "Temporary session",
+      }),
+    }));
+    mockGetSessionMessages.mockResolvedValue([initialPromptMessage]);
+
+    const { rerender } = render(
+      <CodexChatTab
+        tabId={startupTabId}
+        data={createData()}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(mockCheckHealth).toHaveBeenCalled());
+
+    // Setup completion publishes the backend-created, already-prompted session
+    // shortly after the tab's temporary session reached the reconnect fast path.
+    rerender(
+      <CodexChatTab
+        tabId={startupTabId}
+        data={createData({ sessionId: backendSessionId })}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetSessionStatus).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        backendSessionId,
+        { throwOnError: true },
+      );
+      expect(useCodexStore.getState().sessions.get(startupSessionKey)).toMatchObject({
+        sessionId: backendSessionId,
+        messages: [initialPromptMessage],
+      });
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
   test("keeps a restored session usable when best-effort backend adoption fails", async () => {
     const restoredSessionId = "adoption-failed-codex-session";
     const restoredMessage = createMessage(

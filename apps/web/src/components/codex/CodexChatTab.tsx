@@ -204,6 +204,7 @@ export function CodexChatTab({
   refreshRequestId = 0,
 }: CodexChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
+  const projectedSessionId = data.sessionId;
   // Initialize as "connected" if we already have a client and session from a previous init.
   // This avoids even a single frame of spinner when switching back to an already-connected env.
   const [connectionState, setConnectionState] = useState<ConnectionState>(() => {
@@ -1429,8 +1430,21 @@ export function CodexChatTab({
       }
     }
 
+    const cachedSessionId = useCodexStore
+      .getState()
+      .sessions.get(sessionKey)?.sessionId;
+    const projectedSessionChanged = Boolean(
+      projectedSessionId && cachedSessionId !== projectedSessionId,
+    );
     const now = Date.now();
-    if (now - lastInitTimeRef.current < 1000 && isInitializedRef.current) return;
+    // A backend-owned startup can project the prompted provider session just
+    // after this tab initialized a temporary empty one. Session identity is not
+    // a duplicate render: it must bypass the debounce and replace the cache.
+    if (
+      !projectedSessionChanged
+      && now - lastInitTimeRef.current < 1000
+      && isInitializedRef.current
+    ) return;
     lastInitTimeRef.current = now;
 
     let mounted = true;
@@ -1442,7 +1456,11 @@ export function CodexChatTab({
         // and reconnect instantly. This makes environment switching near-instant.
         const cachedClient = useCodexStore.getState().clients.get(environmentId);
         const cachedSession = useCodexStore.getState().sessions.get(sessionKey);
-        if (cachedClient && cachedSession?.sessionId) {
+        if (
+          cachedClient
+          && cachedSession?.sessionId
+          && (!projectedSessionId || cachedSession.sessionId === projectedSessionId)
+        ) {
           acknowledgeInitialLaunchOptions();
           console.debug("[CodexChatTab] Fast reconnect - reusing existing client and session", {
             tabId,
@@ -1497,24 +1515,24 @@ export function CodexChatTab({
           });
 
           const warmFastMode = seedInitialFastMode(codexState);
-          if (data.sessionId) {
+          if (projectedSessionId) {
             const restoredStatus = await getSessionStatus(
               cachedClient,
-              data.sessionId,
+              projectedSessionId,
               { throwOnError: true },
             );
             if (restoredStatus) {
-              const restoredMessages = await getSessionMessages(cachedClient, data.sessionId);
+              const restoredMessages = await getSessionMessages(cachedClient, projectedSessionId);
               if (!mounted) return;
-              await adoptRestoredSession(data.sessionId);
+              await adoptRestoredSession(projectedSessionId);
               setSession(sessionKey, {
-                sessionId: data.sessionId,
+                sessionId: projectedSessionId,
                 messages: restoredMessages,
                 isLoading: restoredStatus.status === "running",
                 title: restoredStatus.title,
                 error: restoredStatus.status === "error" ? restoredStatus.error : undefined,
               });
-              updateTabNativeSessionId(tabId, data.sessionId, environmentId);
+              updateTabNativeSessionId(tabId, projectedSessionId, environmentId);
               setSelectedModel(sessionKey, resolvedSelection.model);
               setSelectedMode(sessionKey, resolvedMode);
               setSelectedReasoningEffort(sessionKey, resolvedSelection.reasoningEffort);
@@ -1671,7 +1689,9 @@ export function CodexChatTab({
         const resolvedReasoningEffort = resolvedSelection.reasoningEffort;
 
         const existingSession = useCodexStore.getState().sessions.get(sessionKey);
-        const existingSessionId = existingSession?.sessionId || data.sessionId;
+        // The pane projection is durable and may have been written by the
+        // backend after this component cached a short-lived empty session.
+        const existingSessionId = projectedSessionId ?? existingSession?.sessionId;
         const existingStatus = existingSessionId
           ? await getSessionStatus(nextClient, existingSessionId, { throwOnError: true })
           : null;
@@ -1801,6 +1821,7 @@ export function CodexChatTab({
     isLocal,
     initAttempt,
     queueLength,
+    projectedSessionId,
     sessionKey,
     setClient,
     setModels,

@@ -268,6 +268,7 @@ export function OpenCodeChatTab({
   refreshRequestId = 0,
 }: OpenCodeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
+  const projectedSessionId = data.sessionId;
   // Initialize as "connected" if we already have a client and session from a previous init.
   // This avoids even a single frame of spinner when switching back to an already-connected env.
   const [connectionState, setConnectionState] = useState<ConnectionState>(() => {
@@ -959,7 +960,17 @@ export function OpenCodeChatTab({
     // Debounce rapid re-initialization
     const now = Date.now();
     const timeSinceLastInit = now - lastInitTimeRef.current;
-    if (timeSinceLastInit < INIT_DEBOUNCE_MS && isInitializedRef.current) {
+    const cachedSessionId = useOpenCodeStore
+      .getState()
+      .sessions.get(sessionKey)?.sessionId;
+    const projectedSessionChanged = Boolean(
+      projectedSessionId && cachedSessionId !== projectedSessionId,
+    );
+    if (
+      !projectedSessionChanged
+      && timeSinceLastInit < INIT_DEBOUNCE_MS
+      && isInitializedRef.current
+    ) {
       return;
     }
 
@@ -1068,7 +1079,11 @@ export function OpenCodeChatTab({
           // copy — and let the initial prompt fall back to the server default.
           setLaunchOptionsSettled(true);
         }
-        if (existingClient && existingSession?.sessionId) {
+        if (
+          existingClient
+          && existingSession?.sessionId
+          && (!projectedSessionId || existingSession.sessionId === projectedSessionId)
+        ) {
           console.debug("[OpenCodeChatTab] Fast reconnect - reusing existing client and session", {
             tabId,
             environmentId,
@@ -1173,25 +1188,25 @@ export function OpenCodeChatTab({
           setConnectionState("connecting");
           setErrorMessage(null);
 
-          if (data.sessionId) {
+          if (projectedSessionId) {
             const availableSessions = await listSessions(existingClient);
-            if (availableSessions.some((session) => session.id === data.sessionId)) {
+            if (availableSessions.some((session) => session.id === projectedSessionId)) {
               await adoptNativeAgentSession({
                 environmentId,
                 agent: "opencode",
                 logicalSessionKey: sessionKey,
-                providerSessionId: data.sessionId,
+                providerSessionId: projectedSessionId,
               });
               const [messages, status] = await Promise.all([
-                getSessionMessages(existingClient, data.sessionId),
-                getSessionStatus(existingClient, data.sessionId, { throwOnError: true }),
+                getSessionMessages(existingClient, projectedSessionId),
+                getSessionStatus(existingClient, projectedSessionId, { throwOnError: true }),
               ]);
               if (!mounted) return;
-              tabSessionIdRef.current = data.sessionId;
-              updateTabNativeSessionId(tabId, data.sessionId, environmentId);
+              tabSessionIdRef.current = projectedSessionId;
+              updateTabNativeSessionId(tabId, projectedSessionId, environmentId);
               isInitializedRef.current = true;
               setSession(sessionKey, {
-                sessionId: data.sessionId,
+                sessionId: projectedSessionId,
                 messages,
                 isLoading: isOpenCodeTurnActive(status),
                 loadingStartedAt:
@@ -1203,7 +1218,7 @@ export function OpenCodeChatTab({
               if (!hasActiveEventSubscription(environmentId)) {
                 startSharedEventSubscription(existingClient);
               }
-              await syncPendingRequests(existingClient, data.sessionId);
+              await syncPendingRequests(existingClient, projectedSessionId);
               return;
             }
             updateTabNativeSessionId(tabId, undefined, environmentId);
@@ -1413,7 +1428,9 @@ export function OpenCodeChatTab({
           .getState()
           .sessions.get(sessionKey);
         let existingSessionId =
-          existingSessionFromRef || existingSessionFromStore?.sessionId || data.sessionId;
+          projectedSessionId
+          ?? existingSessionFromRef
+          ?? existingSessionFromStore?.sessionId;
 
         if (existingSessionId) {
           const availableSessions = await listSessions(sdkClient);
@@ -1454,7 +1471,7 @@ export function OpenCodeChatTab({
             ]);
             if (!mounted) return;
 
-            if (existingSessionFromStore) {
+            if (existingSessionFromStore?.sessionId === existingSessionId) {
               // setMessages preserves client-side error messages (ERROR_MESSAGE_PREFIX)
               // from the existing session state when replacing server messages.
               setMessages(sessionKey, messages);
@@ -1477,7 +1494,7 @@ export function OpenCodeChatTab({
               });
             }
           } catch (err) {
-            if (existingSessionFromStore) {
+            if (existingSessionFromStore?.sessionId === existingSessionId) {
               console.warn(
                 "[OpenCodeChatTab] Failed to refresh messages on reconnect:",
                 err,
@@ -1616,6 +1633,7 @@ export function OpenCodeChatTab({
     setSelectedVariant,
     setupPending,
     initAttempt,
+    projectedSessionId,
   ]);
 
   useEffect(() => {

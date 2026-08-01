@@ -38,6 +38,22 @@ describe("session-timer helpers", () => {
     )).toBe(Date.parse("2026-07-31T20:02:03.000Z"));
   });
 
+  test.each([
+    ["missing", undefined],
+    ["malformed", "not-a-date"],
+  ])(
+    "does not reuse an older backend turn when the current clock is %s",
+    (_label, createdAt) => {
+      const messages = [
+        { id: "server-old", role: "user", createdAt: "2026-07-31T20:00:00.000Z" },
+        { id: "assistant", role: "assistant", createdAt: "2026-07-31T20:01:00.000Z" },
+        { id: "server-current", role: "user", createdAt },
+      ];
+
+      expect(findLatestBackendUserTurnStartedAt(messages)).toBeUndefined();
+    },
+  );
+
   test("stamps the current time for a newly started loading session", () => {
     const incoming: TimedSessionState = {
       isLoading: true,

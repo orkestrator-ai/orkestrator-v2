@@ -185,6 +185,19 @@ function getOpenCodeTurnStartedAt(
   );
 }
 
+function getLatestOpenCodeBackendUserMessageId(
+  messages: readonly OpenCodeMessage[],
+): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "user") continue;
+    return message.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX)
+      ? undefined
+      : message.id;
+  }
+  return undefined;
+}
+
 function isOpenCodeTurnActive(status: string | null): boolean {
   return status === "busy" || status === "retry";
 }
@@ -1660,6 +1673,16 @@ export function OpenCodeChatTab({
       const lastReloadTimeBySession = new Map<string, number>();
       const pendingReloads = new Map<string, NodeJS.Timeout>();
       const reloadGenerationByKey = new Map<string, number>();
+      /*
+       * A live busy edge does not identify the turn it starts. Keep only a
+       * newly observed backend user message as a possible clock source; the
+       * existing transcript may end with the previous completed turn when a
+       * queued prompt is dispatched while its tab is unmounted.
+       */
+      const pendingBackendTurnClockBySession = new Map<
+        string,
+        { messageId: string; startedAt: number | undefined }
+      >();
 
       const beginReloadGeneration = (reloadKey: string) => {
         const generation = (reloadGenerationByKey.get(reloadKey) ?? 0) + 1;
@@ -1893,16 +1916,20 @@ export function OpenCodeChatTab({
           if (
             merged.role === "user"
             && !merged.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX)
-            && sessionState?.isLoading
           ) {
-            setSessionLoading(
-              sessionTabId,
-              true,
-              getOpenCodeTurnStartedAt([
-                ...(sessionState.messages.filter((message) => message.id !== merged.id)),
-                merged,
-              ]),
-            );
+            const reconciledMessages = [
+              ...(sessionState?.messages.filter((message) => message.id !== merged.id) ?? []),
+              merged,
+            ];
+            const startedAt = getOpenCodeTurnStartedAt(reconciledMessages);
+            if (sessionState?.isLoading) {
+              setSessionLoading(sessionTabId, true, startedAt);
+            } else if (!existingMessage) {
+              pendingBackendTurnClockBySession.set(sessionTabId, {
+                messageId: merged.id,
+                startedAt,
+              });
+            }
           }
           return true;
         };
@@ -2044,17 +2071,30 @@ export function OpenCodeChatTab({
                 || props?.status?.type === "retry"
               )
             ) {
+              const pendingClock = pendingBackendTurnClockBySession.get(sessionTabId);
+              const currentMessages = useOpenCodeStore
+                .getState()
+                .sessions.get(sessionTabId)?.messages ?? sessionState.messages;
+              const authoritativeStartedAt =
+                pendingClock
+                && getLatestOpenCodeBackendUserMessageId(currentMessages)
+                  === pendingClock.messageId
+                  ? pendingClock.startedAt
+                  : undefined;
+              pendingBackendTurnClockBySession.delete(sessionTabId);
               setSessionLoading(
                 sessionTabId,
                 true,
-                getOpenCodeTurnStartedAt(sessionState.messages),
+                authoritativeStartedAt,
               );
             } else if (isFinalEvent) {
+              pendingBackendTurnClockBySession.delete(sessionTabId);
               setSessionLoading(sessionTabId, false);
             }
 
             // Handle errors
             if (eventType === "session.error") {
+              pendingBackendTurnClockBySession.delete(sessionTabId);
               console.error("[OpenCodeChatTab] Session error:", props?.error);
               setSessionLoading(sessionTabId, false);
               const errorMsg = formatOpenCodeError(props?.error);

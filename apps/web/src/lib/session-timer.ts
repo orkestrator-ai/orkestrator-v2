@@ -27,8 +27,10 @@ export function findLatestBackendUserTurnStartedAt<
     // The latest user message is still optimistic, so the backend has not yet
     // supplied a clock for this turn. Never fall through to the previous turn.
     if (!isBackendMessage(message)) return undefined;
-    const startedAt = parseBackendTurnStartedAt(message.createdAt);
-    if (startedAt !== undefined) return startedAt;
+    // This is the current backend turn even when its clock is absent or
+    // malformed. Falling through would silently attach the previous turn's
+    // valid clock to the current one.
+    return parseBackendTurnStartedAt(message.createdAt);
   }
   return undefined;
 }

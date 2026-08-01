@@ -3290,6 +3290,7 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
     // session, but leave its stopped query stopped.
     session.deleting = false;
     session.status = "idle";
+    session.turnStartedAt = undefined;
     throw error;
   }
 }

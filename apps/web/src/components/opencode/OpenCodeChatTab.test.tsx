@@ -123,7 +123,10 @@ import type {
   QuestionRequest,
 } from "@/lib/opencode-client";
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
-import { TURN_STOPPED_BY_USER } from "@/lib/chat/client-only-messages";
+import {
+  OPTIMISTIC_MESSAGE_PREFIX,
+  TURN_STOPPED_BY_USER,
+} from "@/lib/chat/client-only-messages";
 import type {
   OpenCodeModelCatalogSnapshot,
   OpenCodeModelRef,
@@ -1773,7 +1776,12 @@ describe("OpenCodeChatTab", () => {
   });
 
   test("applies a busy status returned by a refresh", async () => {
-    const refreshedMessage = nativeMessage("refresh-with-busy-status");
+    const turnStartedAt = "2026-07-16T11:58:00.000Z";
+    const refreshedMessage: NativeMessage = {
+      ...nativeMessage("refresh-with-busy-status"),
+      role: "user",
+      createdAt: turnStartedAt,
+    };
     render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
     await flushReactMicrotasks();
     mockGetSessionMessages.mockResolvedValue([refreshedMessage]);
@@ -1786,6 +1794,7 @@ describe("OpenCodeChatTab", () => {
     expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
       messages: [refreshedMessage],
       isLoading: true,
+      loadingStartedAt: Date.parse(turnStartedAt),
     });
   });
 
@@ -2100,11 +2109,19 @@ describe("OpenCodeChatTab", () => {
 
   test("rehydrates the session id saved in a restored pane tab", async () => {
     const restoredSessionId = "restored-opencode-session";
+    const turnStartedAt = "2026-04-15T09:59:00.000Z";
+    const restoredUserMessage: NativeMessage = {
+      ...nativeMessage("restored-user", "Continue restored work"),
+      role: "user",
+      createdAt: turnStartedAt,
+    };
     useOpenCodeStore.setState({ sessions: new Map() });
     seedPaneLayout(restoredSessionId);
     mockListSessions.mockResolvedValue([
       { id: restoredSessionId, createdAt: "2026-04-15T10:00:00.000Z" },
     ]);
+    mockGetSessionMessages.mockResolvedValue([restoredUserMessage]);
+    mockGetSessionStatus.mockResolvedValue("busy");
 
     render(
       <OpenCodeChatTab
@@ -2122,9 +2139,12 @@ describe("OpenCodeChatTab", () => {
         providerSessionId: restoredSessionId,
       });
       expect(mockGetSessionMessages).toHaveBeenCalledWith(MOCK_CLIENT, restoredSessionId);
-      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
-        restoredSessionId,
-      );
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: restoredSessionId,
+        messages: [restoredUserMessage],
+        isLoading: true,
+        loadingStartedAt: Date.parse(turnStartedAt),
+      });
     });
     expect(mockCreateSession).not.toHaveBeenCalled();
     const restoredRoot = usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)?.root;
@@ -2136,12 +2156,13 @@ describe("OpenCodeChatTab", () => {
 
   test("cold-restores a persisted session with its transcript", async () => {
     const restoredSessionId = "cold-restored-opencode";
+    const turnStartedAt = "2026-04-15T09:58:00.000Z";
     const restoredMessage: NativeMessage = {
       id: "restored-message",
-      role: "assistant",
+      role: "user",
       content: "Persisted OpenCode transcript",
       parts: [{ type: "text", content: "Persisted OpenCode transcript" }],
-      createdAt: "2026-04-15T10:00:00.000Z",
+      createdAt: turnStartedAt,
     };
     useOpenCodeStore.setState((state) => ({
       ...state,
@@ -2153,6 +2174,7 @@ describe("OpenCodeChatTab", () => {
       { id: restoredSessionId, createdAt: "2026-04-15T10:00:00.000Z" },
     ]);
     mockGetSessionMessages.mockResolvedValue([restoredMessage]);
+    mockGetSessionStatus.mockResolvedValue("retry");
 
     render(
       <OpenCodeChatTab
@@ -2166,6 +2188,8 @@ describe("OpenCodeChatTab", () => {
       expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
         sessionId: restoredSessionId,
         messages: [restoredMessage],
+        isLoading: true,
+        loadingStartedAt: Date.parse(turnStartedAt),
       });
     });
     expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith({
@@ -2907,16 +2931,18 @@ describe("OpenCodeChatTab", () => {
   });
 
   test("writes a manually resumed session id and transcript to both stores", async () => {
+    const turnStartedAt = "2026-04-15T09:57:00.000Z";
     const resumedMessage: NativeMessage = {
       id: "resumed-message",
-      role: "assistant",
+      role: "user",
       content: "Resumed OpenCode transcript",
       parts: [{ type: "text", content: "Resumed OpenCode transcript" }],
-      createdAt: "2026-04-15T10:00:00.000Z",
+      createdAt: turnStartedAt,
     };
     mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
       sessionId === "resumed-opencode" ? [resumedMessage] : []
     );
+    mockGetSessionStatus.mockResolvedValue("busy");
     render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
     fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
@@ -2933,6 +2959,8 @@ describe("OpenCodeChatTab", () => {
       expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
         sessionId: "resumed-opencode",
         messages: [resumedMessage],
+        isLoading: true,
+        loadingStartedAt: Date.parse(turnStartedAt),
       });
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId)
         .toBe("resumed-opencode");
@@ -4735,6 +4763,177 @@ describe("OpenCodeChatTab", () => {
       );
       expect(screen.queryByText(/Completed in/)).toBeNull();
       expect(screen.getByRole("status").textContent).toContain("OpenCode is thinking...");
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("does not reuse the previous turn clock for new busy and retry edges", async () => {
+      const previousTurnStartedAt = "2026-07-16T10:00:00.000Z";
+      const observedBusyAt = Date.parse("2026-07-16T12:05:00.000Z");
+      Date.now = () => observedBusyAt;
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [
+        {
+          ...nativeMessage("previous-user", "Previous turn"),
+          role: "user",
+          createdAt: previousTurnStartedAt,
+        },
+        nativeMessage("previous-assistant", "Previous answer"),
+      ]);
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      channel.push({
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "busy" } },
+      });
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().getSession(SESSION_KEY)).toMatchObject({
+          isLoading: true,
+          loadingStartedAt: observedBusyAt,
+        });
+      });
+      expect(
+        useOpenCodeStore.getState().getSession(SESSION_KEY)?.loadingStartedAt,
+      ).not.toBe(Date.parse(previousTurnStartedAt));
+
+      channel.push({
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "retry" } },
+      });
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().getSession(SESSION_KEY)?.loadingStartedAt,
+        ).toBe(observedBusyAt);
+      });
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("corrects an optimistic busy clock when the backend user message arrives", async () => {
+      const optimisticStartedAt = Date.parse("2026-07-16T12:05:00.000Z");
+      const backendStartedAt = Date.parse("2026-07-16T12:04:57.000Z");
+      Date.now = () => optimisticStartedAt;
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [{
+        ...nativeMessage("optimistic-current", "Queued work"),
+        id: `${OPTIMISTIC_MESSAGE_PREFIX}current`,
+        role: "user",
+        createdAt: new Date(optimisticStartedAt).toISOString(),
+      }]);
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      channel.push({
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "busy" } },
+      });
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().getSession(SESSION_KEY)?.loadingStartedAt,
+        ).toBe(optimisticStartedAt);
+      });
+
+      channel.push({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "server-current-user",
+            sessionID: "session-1",
+            role: "user",
+            time: { created: backendStartedAt },
+          },
+        },
+      });
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().getSession(SESSION_KEY)?.loadingStartedAt,
+        ).toBe(backendStartedAt);
+      });
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("uses a newly observed backend user clock when it precedes the busy edge", async () => {
+      const observedBusyAt = Date.parse("2026-07-16T12:05:00.000Z");
+      const backendStartedAt = Date.parse("2026-07-16T12:04:58.000Z");
+      Date.now = () => observedBusyAt;
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      channel.push({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "server-before-busy",
+            sessionID: "session-1",
+            role: "user",
+            time: { created: backendStartedAt },
+          },
+        },
+      });
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages.at(-1)?.id,
+        ).toBe("server-before-busy");
+      });
+      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.isLoading).toBe(false);
+
+      channel.push({
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "busy" } },
+      });
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().getSession(SESSION_KEY)).toMatchObject({
+          isLoading: true,
+          loadingStartedAt: backendStartedAt,
+        });
+      });
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("corrects a running turn clock from an authoritative transcript reconcile", async () => {
+      const rendererStartedAt = Date.parse("2026-07-16T12:05:00.000Z");
+      const backendStartedAt = "2026-07-16T12:04:55.000Z";
+      Date.now = () => rendererStartedAt;
+      const backendUser: NativeMessage = {
+        ...nativeMessage("reconciled-server-user", "Continue in background"),
+        role: "user",
+        createdAt: backendStartedAt,
+      };
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true));
+      mockGetSessionMessages.mockClear();
+      mockGetSessionMessages.mockResolvedValue([backendUser]);
+
+      channel.push({
+        type: "session.updated",
+        properties: { info: { id: "session-1" } },
+      });
+      await waitFor(() => {
+        expect(mockGetSessionMessages).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          "session-1",
+          { throwOnError: true, includeSubagents: false },
+        );
+        expect(useOpenCodeStore.getState().getSession(SESSION_KEY)).toMatchObject({
+          messages: [backendUser],
+          isLoading: true,
+          loadingStartedAt: Date.parse(backendStartedAt),
+        });
+      });
 
       useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
       channel.close();

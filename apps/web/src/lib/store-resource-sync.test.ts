@@ -70,6 +70,7 @@ const {
   useProjectStore,
 } = await import("@/stores/projectStore");
 const { useSessionStore } = await import("@/stores/sessionStore");
+const { PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
 
 const startTestStoreResourceSync = (
   options: Parameters<typeof startStoreResourceSync>[0] = {},
@@ -370,7 +371,7 @@ describe("pane-layout binding", () => {
     );
 
     const getPaneLayout = mock(async () => ({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
       containerId: null,
       activePaneId: "default",
@@ -424,7 +425,7 @@ describe("pane-layout binding", () => {
     paneStore.beginHydration("env-1");
 
     const getPaneLayout = mock(async () => ({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
       containerId: null,
       activePaneId: "default",
@@ -501,7 +502,7 @@ describe("pane-layout binding", () => {
       usePaneLayoutStore.getState().environments.get("env-1"),
     );
     const getPaneLayout = mock(async () => ({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
       containerId: null,
       activePaneId: "default",
@@ -596,7 +597,7 @@ describe("pane-layout binding", () => {
       return {} as never;
     });
     const getPaneLayout = mock(async () => ({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
       containerId: null,
       activePaneId: "default",
@@ -668,7 +669,7 @@ describe("pane-layout binding", () => {
       return undefined;
     });
     const getPaneLayout = mock(async () => ({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
       containerId: null,
       activePaneId: "default",
@@ -762,7 +763,7 @@ describe("pane-layout binding", () => {
       .getAllTabs("env-1")
       .map(({ id }) => id);
     resolveLayout({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
       containerId: "container-a",
       activePaneId: "default",
@@ -810,7 +811,7 @@ describe("pane-layout binding", () => {
     }));
     detach = startTestStoreResourceSync({ getPaneLayout: getPaneLayout as never });
     const saved = (tabId: string, revision: number) => ({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
       containerId: null,
       activePaneId: "default",
@@ -864,7 +865,7 @@ describe("pane-layout binding", () => {
       })
       .mockImplementationOnce(async () => null)
       .mockImplementationOnce(async () => ({
-        version: 1,
+        version: PANE_LAYOUT_VERSION,
         environmentId: "env-1",
         containerId: null,
         activePaneId: "default",
@@ -873,7 +874,7 @@ describe("pane-layout binding", () => {
         revision: 2,
       }))
       .mockImplementationOnce(async () => ({
-        version: 1,
+        version: PANE_LAYOUT_VERSION,
         environmentId: "env-1",
         containerId: null,
         activePaneId: "default",
@@ -917,7 +918,7 @@ describe("pane-layout binding", () => {
     );
 
     const remoteLayout = (revision: number) => ({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
       containerId: null,
       activePaneId: "default",
@@ -1009,7 +1010,7 @@ describe("pane-layout binding", () => {
         environments: [{ ...environment("env-1"), worktreePath: "/tmp/after" } as never],
       });
       return {
-        version: 1,
+        version: PANE_LAYOUT_VERSION,
         environmentId: "env-1",
         containerId: null,
         activePaneId: "default",
@@ -1050,7 +1051,7 @@ describe("pane-layout binding", () => {
     const getPaneLayout = mock(async () => {
       useEnvironmentStore.setState({ environments: [] });
       return {
-        version: 1,
+        version: PANE_LAYOUT_VERSION,
         environmentId: "env-1",
         containerId: null,
         activePaneId: "default",
@@ -1096,7 +1097,7 @@ describe("pane-layout binding", () => {
     const getPaneLayout = mock(async () => {
       usePaneLayoutStore.setState({ hydration: new Map() });
       return {
-        version: 1,
+        version: PANE_LAYOUT_VERSION,
         environmentId: "env-1",
         containerId: null,
         activePaneId: "default",
@@ -1149,7 +1150,7 @@ describe("pane-layout binding", () => {
         } as never],
       });
       return {
-        version: 1,
+        version: PANE_LAYOUT_VERSION,
         environmentId: "env-1",
         containerId: null,
         activePaneId: "default",
@@ -1189,7 +1190,7 @@ describe("pane-layout binding", () => {
     );
 
     const staleLayout = {
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
       containerId: null,
       activePaneId: "default",
@@ -1210,7 +1211,7 @@ describe("pane-layout binding", () => {
       revision: 8,
     };
     const freshLayout = {
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
       containerId: null,
       activePaneId: "default",
@@ -1298,7 +1299,7 @@ describe("pane-layout binding", () => {
       usePaneLayoutStore.getState().environments.get("env-1"),
     );
     const getPaneLayout = mock(async () => ({
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       environmentId: "env-1",
       containerId: null,
       activePaneId: "default",

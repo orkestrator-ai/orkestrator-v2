@@ -4,6 +4,7 @@ import type {
   PersistedPaneLayoutInput,
   TabInfo,
 } from "@/types/paneLayout";
+import { PANE_LAYOUT_VERSION } from "@/types/paneLayout";
 import {
   isPaneNode,
   mergePersistedPaneLayouts,
@@ -31,7 +32,7 @@ function split(left: PaneNode, right: PaneNode): PaneNode {
 
 function input(root: PaneNode): PersistedPaneLayoutInput {
   return {
-    version: 1,
+    version: PANE_LAYOUT_VERSION,
     containerId: null,
     activePaneId: root.kind === "leaf" ? root.id : "left",
     root,
@@ -369,13 +370,13 @@ describe("mergePersistedPaneLayouts", () => {
     const base = input(leaf("default", ["base"]));
     const localRoot = split(leaf("left", ["base", "local"]), leaf("right", ["only"]));
     const local: PersistedPaneLayoutInput = {
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       containerId: "container-1",
       activePaneId: "right",
       root: localRoot,
     };
     const remote: PersistedPaneLayoutInput = {
-      version: 1,
+      version: PANE_LAYOUT_VERSION,
       containerId: "container-1",
       activePaneId: "default",
       root: leaf("default", ["base", "remote"]),
@@ -496,6 +497,77 @@ describe("mergePersistedPaneLayouts", () => {
       children: [
         { id: "left", tabs: [], activeTabId: null },
         { id: "right", activeTabId: "stay" },
+      ],
+    });
+  });
+
+  test("a tab intent in an unfocused pane does not override remote pane focus", () => {
+    const baseRoot = split(leaf("left", ["a", "b"]), leaf("right", ["c", "d"]));
+    const localRoot = structuredClone(baseRoot);
+    const remoteRoot = structuredClone(baseRoot);
+    if (localRoot.kind !== "split" || remoteRoot.kind !== "split") {
+      throw new Error("expected split fixtures");
+    }
+    localRoot.children[1] = {
+      ...localRoot.children[1] as Extract<PaneNode, { kind: "leaf" }>,
+      activeTabId: "d",
+    };
+
+    const merged = mergePersistedPaneLayouts(
+      input(baseRoot),
+      input(localRoot),
+      { ...input(remoteRoot), activePaneId: "right" },
+      { selectionIntent: { activeTabIds: { right: "d" } } },
+    );
+
+    expect(merged.activePaneId).toBe("right");
+  });
+
+  test("ignores an explicit null selection when concurrent tabs survive", () => {
+    const base = input(split(leaf("left", ["old"]), leaf("right", ["stay"])));
+    const local = input(split(leaf("left", []), leaf("right", ["stay"])));
+    const remoteRoot = split(leaf("left", ["c", "d"]), leaf("right", ["stay"]));
+    if (remoteRoot.kind !== "split" || remoteRoot.children[0].kind !== "leaf") {
+      throw new Error("expected split fixture");
+    }
+    remoteRoot.children[0].activeTabId = "d";
+
+    const merged = mergePersistedPaneLayouts(base, local, input(remoteRoot), {
+      selectionIntent: { activeTabIds: { left: null } },
+    });
+
+    expect(merged.root).toMatchObject({
+      children: [{ id: "left", activeTabId: "d" }, { id: "right" }],
+    });
+  });
+
+  test("does not re-key local selection into a remotely selected surviving pane", () => {
+    const baseRoot = split(leaf("left", ["x", "y"]), leaf("right", ["c", "d"]));
+    if (baseRoot.kind !== "split" || baseRoot.children[0].kind !== "leaf") {
+      throw new Error("expected split fixture");
+    }
+    baseRoot.children[0].activeTabId = "y";
+    const localRoot = structuredClone(baseRoot);
+    if (localRoot.kind !== "split" || localRoot.children[0].kind !== "leaf") {
+      throw new Error("expected split fixture");
+    }
+    localRoot.children[0].activeTabId = "x";
+    const remoteRoot = split(leaf("left", ["y"]), leaf("right", ["c", "d", "x"]));
+    if (remoteRoot.kind !== "split" || remoteRoot.children[1].kind !== "leaf") {
+      throw new Error("expected split fixture");
+    }
+    remoteRoot.children[1].activeTabId = "d";
+
+    const merged = mergePersistedPaneLayouts(
+      input(baseRoot),
+      input(localRoot),
+      input(remoteRoot),
+    );
+
+    expect(merged.root).toMatchObject({
+      children: [
+        { id: "left", activeTabId: "y" },
+        { id: "right", activeTabId: "d" },
       ],
     });
   });

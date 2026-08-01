@@ -23,6 +23,7 @@ import {
   type ResourceManifestKind,
   type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
+import { paneLayoutUnsupportedVersionMessage } from "@orkestrator/protocol/pane-layout";
 import {
   PANE_LAYOUT_VERSION,
   type AgentModelConfigKey,
@@ -8630,7 +8631,7 @@ export function createCommandRegistry(
     const value = asRecord(layout, "layout");
     const version = asNumber(value.version, "layout.version");
     if (version !== PANE_LAYOUT_VERSION) {
-      throw new Error(`Unsupported pane layout version: ${version}`);
+      throw new Error(paneLayoutUnsupportedVersionMessage(version));
     }
     const activePaneId = asString(value.activePaneId, "layout.activePaneId").trim();
     if (!activePaneId) throw new Error("Expected layout.activePaneId to be non-empty");

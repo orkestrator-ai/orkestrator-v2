@@ -1,19 +1,28 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  type EnvironmentPaneState,
-  usePaneLayoutStore,
-} from "@/stores/paneLayoutStore";
+import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import type { PaneNode } from "@/types/paneLayout";
 import {
   applyStoredPaneSelection,
   clearStoredPaneSelection,
-  paneSelectionOf,
   readStoredPaneSelection,
-  startPaneSelectionPersistence,
-  writeStoredPaneSelection,
 } from "./pane-selection-storage";
 
 const STORAGE_KEY = "orkestrator.pane-selection.v1";
+
+function writeStoredPaneSelection(
+  environmentId: string,
+  selection: { activePaneId: string; activeTabIds: Record<string, string> },
+): void {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  const parsed = raw ? JSON.parse(raw) as { entries?: unknown[] } : {};
+  const entries = (parsed.entries ?? []).filter((entry) =>
+    !!entry
+    && typeof entry === "object"
+    && (entry as { environmentId?: unknown }).environmentId !== environmentId
+  );
+  entries.push({ environmentId, ...selection });
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, entries }));
+}
 
 function leaf(id: string, tabIds: string[], activeTabId?: string | null): PaneNode {
   return {
@@ -41,45 +50,14 @@ function paneState(root: PaneNode, activePaneId: string): EnvironmentPaneState {
 
 beforeEach(() => {
   localStorage.clear();
-  usePaneLayoutStore.setState({
-    environments: new Map(),
-    hydration: new Map(),
-    activeEnvironmentId: null,
-  });
 });
 
 afterEach(() => {
   localStorage.clear();
 });
 
-describe("paneSelectionOf", () => {
-  test("captures the selected tab of every pane and the active pane", () => {
-    const state = paneState(
-      split(leaf("left", ["a", "b"], "b"), leaf("right", ["c"], "c")),
-      "right",
-    );
-
-    expect(paneSelectionOf(state)).toEqual({
-      activePaneId: "right",
-      activeTabIds: { left: "b", right: "c" },
-    });
-  });
-
-  test("omits a pane with nothing selected", () => {
-    const state = paneState(
-      split(leaf("left", [], null), leaf("right", ["c"], "c")),
-      "left",
-    );
-
-    expect(paneSelectionOf(state)).toEqual({
-      activePaneId: "left",
-      activeTabIds: { right: "c" },
-    });
-  });
-});
-
-describe("read/write/clear", () => {
-  test("round-trips a selection per environment", () => {
+describe("read/clear", () => {
+  test("reads a legacy selection per environment", () => {
     writeStoredPaneSelection("env-1", {
       activePaneId: "right",
       activeTabIds: { left: "b" },
@@ -100,20 +78,6 @@ describe("read/write/clear", () => {
     expect(readStoredPaneSelection("env-unknown")).toBeNull();
   });
 
-  test("a second write replaces rather than duplicates an environment", () => {
-    writeStoredPaneSelection("env-1", { activePaneId: "a", activeTabIds: { a: "1" } });
-    writeStoredPaneSelection("env-1", { activePaneId: "b", activeTabIds: { b: "2" } });
-
-    expect(readStoredPaneSelection("env-1")).toEqual({
-      activePaneId: "b",
-      activeTabIds: { b: "2" },
-    });
-    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY)!) as {
-      entries: unknown[];
-    };
-    expect(raw.entries).toHaveLength(1);
-  });
-
   test("clearing removes only the named environment", () => {
     writeStoredPaneSelection("env-1", { activePaneId: "a", activeTabIds: {} });
     writeStoredPaneSelection("env-2", { activePaneId: "b", activeTabIds: {} });
@@ -131,43 +95,6 @@ describe("read/write/clear", () => {
     clearStoredPaneSelection("env-missing");
 
     expect(localStorage.getItem(STORAGE_KEY)).toBe(before);
-  });
-
-  test("evicts the oldest environments past the bound", () => {
-    for (let index = 0; index < 70; index += 1) {
-      writeStoredPaneSelection(`env-${index}`, {
-        activePaneId: "default",
-        activeTabIds: { default: `tab-${index}` },
-      });
-    }
-
-    // 64 is the cap, so the six oldest are gone and the newest survive.
-    expect(readStoredPaneSelection("env-0")).toBeNull();
-    expect(readStoredPaneSelection("env-5")).toBeNull();
-    expect(readStoredPaneSelection("env-6")).not.toBeNull();
-    expect(readStoredPaneSelection("env-69")).not.toBeNull();
-    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY)!) as {
-      entries: unknown[];
-    };
-    expect(raw.entries).toHaveLength(64);
-  });
-
-  test("trims to stay inside the byte bound", () => {
-    const wide = (seed: string) => {
-      const activeTabIds: Record<string, string> = {};
-      for (let index = 0; index < 200; index += 1) {
-        activeTabIds[`pane-${seed}-${index}`] = `tab-${seed}-${index}`.padEnd(60, "x");
-      }
-      return { activePaneId: "default", activeTabIds };
-    };
-    for (let index = 0; index < 20; index += 1) {
-      writeStoredPaneSelection(`env-${index}`, wide(String(index)));
-    }
-
-    expect(localStorage.getItem(STORAGE_KEY)!.length).toBeLessThanOrEqual(64 * 1024);
-    // Whatever survives, it is the most recent write.
-    expect(readStoredPaneSelection("env-19")).not.toBeNull();
-    expect(readStoredPaneSelection("env-0")).toBeNull();
   });
 
   test("treats a corrupt or foreign record as empty rather than throwing", () => {
@@ -212,29 +139,12 @@ describe("read/write/clear", () => {
       },
     });
     try {
-      expect(() =>
-        writeStoredPaneSelection("env-1", { activePaneId: "a", activeTabIds: {} })
-      ).not.toThrow();
       expect(readStoredPaneSelection("env-1")).toBeNull();
       expect(() => clearStoredPaneSelection("env-1")).not.toThrow();
     } finally {
       if (descriptor) {
         Object.defineProperty(globalThis, "localStorage", descriptor);
       }
-    }
-  });
-
-  test("survives a setItem that rejects the write", () => {
-    const original = Storage.prototype.setItem;
-    Storage.prototype.setItem = () => {
-      throw new Error("QuotaExceededError");
-    };
-    try {
-      expect(() =>
-        writeStoredPaneSelection("env-1", { activePaneId: "a", activeTabIds: {} })
-      ).not.toThrow();
-    } finally {
-      Storage.prototype.setItem = original;
     }
   });
 
@@ -253,11 +163,8 @@ describe("read/write/clear", () => {
     });
     try {
       expect(readStoredPaneSelection("env-1")).toBeNull();
-      expect(() =>
-        writeStoredPaneSelection("env-1", { activePaneId: "a", activeTabIds: {} })
-      ).not.toThrow();
       expect(() => clearStoredPaneSelection("env-1")).not.toThrow();
-      expect(attempts).toBe(3);
+      expect(attempts).toBe(2);
     } finally {
       if (descriptor) {
         Object.defineProperty(globalThis, "localStorage", descriptor);
@@ -314,78 +221,6 @@ describe("applyStoredPaneSelection", () => {
     expect(applied.activePaneId).toBe("right");
     expect(applied.root).toMatchObject({
       children: [{ id: "left" }, { id: "right", activeTabId: "d" }],
-    });
-  });
-});
-
-describe("startPaneSelectionPersistence", () => {
-  const hydrate = (environmentId: string, state: EnvironmentPaneState) => {
-    usePaneLayoutStore.setState((previous) => ({
-      environments: new Map(previous.environments).set(environmentId, state),
-      hydration: new Map(previous.hydration).set(environmentId, "done"),
-    }));
-  };
-
-  test("mirrors a selection change", () => {
-    const stop = startPaneSelectionPersistence();
-    hydrate("env-1", paneState(leaf("default", ["a", "b"], "a"), "default"));
-    hydrate("env-1", paneState(leaf("default", ["a", "b"], "b"), "default"));
-    stop();
-
-    expect(readStoredPaneSelection("env-1")).toEqual({
-      activePaneId: "default",
-      activeTabIds: { default: "b" },
-    });
-  });
-
-  test("does not write for a change that leaves selection alone", () => {
-    const stop = startPaneSelectionPersistence();
-    hydrate("env-1", paneState(leaf("default", ["a"], "a"), "default"));
-    const afterFirst = localStorage.getItem(STORAGE_KEY);
-    // Adding a tab without selecting it is a structural change the shared
-    // backend record already covers.
-    hydrate("env-1", paneState(leaf("default", ["a", "b"], "a"), "default"));
-    stop();
-
-    expect(localStorage.getItem(STORAGE_KEY)).toBe(afterFirst);
-  });
-
-  test("ignores an environment that has not finished hydrating", () => {
-    const stop = startPaneSelectionPersistence();
-    usePaneLayoutStore.setState({
-      environments: new Map([
-        ["env-1", paneState(leaf("default", ["a"], "a"), "default")],
-      ]),
-      hydration: new Map([["env-1", "pending"]]),
-    });
-    stop();
-
-    expect(readStoredPaneSelection("env-1")).toBeNull();
-  });
-
-  test("does not re-mirror state that already existed when it started", () => {
-    hydrate("env-1", paneState(leaf("default", ["a"], "a"), "default"));
-    const stop = startPaneSelectionPersistence();
-    // A remount must not overwrite the remembered selection with whatever the
-    // store happens to hold before the user has touched anything.
-    usePaneLayoutStore.setState((previous) => ({
-      activeEnvironmentId: "env-1",
-      environments: previous.environments,
-    }));
-    stop();
-
-    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
-  });
-
-  test("stops mirroring once detached", () => {
-    const stop = startPaneSelectionPersistence();
-    hydrate("env-1", paneState(leaf("default", ["a", "b"], "a"), "default"));
-    stop();
-    hydrate("env-1", paneState(leaf("default", ["a", "b"], "b"), "default"));
-
-    expect(readStoredPaneSelection("env-1")).toEqual({
-      activePaneId: "default",
-      activeTabIds: { default: "a" },
     });
   });
 });

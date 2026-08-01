@@ -1,5 +1,11 @@
-import { isPaneLayoutRevisionConflict } from "@orkestrator/protocol/pane-layout";
+import {
+  isPaneLayoutRevisionConflict,
+  isPaneLayoutUnsupportedVersion,
+  paneLayoutUnsupportedVersionMessage,
+} from "@orkestrator/protocol/pane-layout";
+import { toast } from "sonner";
 import * as backend from "@/lib/backend";
+import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
 import {
   hydratePaneLayoutDependencies,
   reconcileAuthoritativePaneLayout,
@@ -40,6 +46,7 @@ export interface PaneLayoutPersistenceOptions {
   load?: LoadPaneLayout;
   hydrateDependencies?: typeof hydratePaneLayoutDependencies;
   debounceMs?: number;
+  selectionDebounceMs?: number;
   maxConflictRetries?: number;
 }
 
@@ -249,6 +256,16 @@ export function flushPaneLayoutNow(
     ) {
       return;
     }
+    if (currentInput && currentInput.version > input.version) {
+      throw new Error(paneLayoutUnsupportedVersionMessage(currentInput.version));
+    }
+    // A version upgrade is the one divergent write that is safe without a
+    // mounted persistence loop: the caller reconciled this exact older record
+    // before producing the upgraded input, and still supplies its CAS token.
+    if (currentInput && currentInput.version < input.version) {
+      await save(environmentId, input, current.revision);
+      return;
+    }
     throw new Error(
       "Cannot safely flush pane layout without an authoritative merge base",
     );
@@ -263,8 +280,11 @@ export function startPaneLayoutPersistence(
   const hydrateDependencies =
     options.hydrateDependencies ?? hydratePaneLayoutDependencies;
   const debounceMs = options.debounceMs ?? 1_000;
+  const selectionDebounceMs =
+    options.selectionDebounceMs ?? Math.min(debounceMs, 200);
   const maxConflictRetries = options.maxConflictRetries ?? 3;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const selectionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const lastEnqueued = new Map<string, string>();
   const writeChains = new Map<string, Promise<void>>();
   const pendingWrites = new Map<string, PendingPaneLayoutWrite>();
@@ -273,11 +293,18 @@ export function startPaneLayoutPersistence(
   // complete selection state, so intermediate focus writes are obsolete.
   const pendingSelectionWrites = new Map<string, PendingPaneLayoutWrite>();
   const authoritative = new Map<string, AuthoritativePaneLayout>();
+  const reportedVersionFailures = new Set<string>();
 
   const cancelTimer = (environmentId: string) => {
     const timer = timers.get(environmentId);
     if (timer) clearTimeout(timer);
     timers.delete(environmentId);
+  };
+
+  const cancelSelectionTimer = (environmentId: string) => {
+    const timer = selectionTimers.get(environmentId);
+    if (timer) clearTimeout(timer);
+    selectionTimers.delete(environmentId);
   };
 
   const persistedInput = (
@@ -396,6 +423,11 @@ export function startPaneLayoutPersistence(
       const current = await load(environmentId);
       const currentInput = current ? persistedInput(current) : null;
       if (current && currentInput) {
+        if (currentInput.version > desiredInput.version) {
+          throw new Error(
+            paneLayoutUnsupportedVersionMessage(currentInput.version),
+          );
+        }
         if (JSON.stringify(currentInput) !== JSON.stringify(desiredInput)) {
           throw new Error(
             "Cannot safely persist pane layout without an authoritative merge base",
@@ -430,6 +462,7 @@ export function startPaneLayoutPersistence(
         });
         lastEnqueued.set(environmentId, JSON.stringify(savedInput));
         await installSavedLayout(environmentId, saved, savedInput, desiredInput);
+        clearStoredPaneSelection(environmentId);
         return;
       } catch (error) {
         if (!isPaneLayoutRevisionConflict(error) || attempt >= maxConflictRetries) {
@@ -446,6 +479,13 @@ export function startPaneLayoutPersistence(
           // a valid CAS base. Replace it with the renderer-validated local tree.
           base = { input: desired, revision: current.revision };
           continue;
+        }
+        // A renderer that cannot interpret a future schema must not replace it
+        // with its own default tree during conflict recovery.
+        if (remoteInput.version > desired.version) {
+          throw new Error(
+            paneLayoutUnsupportedVersionMessage(remoteInput.version),
+          );
         }
         // Layouts from another container generation are not a common merge
         // base. Retaining any of their tabs would resurrect stale sessions
@@ -473,8 +513,19 @@ export function startPaneLayoutPersistence(
     }
   };
 
-  const reportWriteFailure = (error: unknown): void => {
+  const reportWriteFailure = (environmentId: string, error: unknown): void => {
     console.error("[PaneLayout] Failed to persist pane layout:", error);
+    if (
+      isPaneLayoutUnsupportedVersion(error)
+      && !reportedVersionFailures.has(environmentId)
+    ) {
+      reportedVersionFailures.add(environmentId);
+      toast.error("Pane layout changes are not being saved", {
+        description:
+          "This client and the Orkestrator backend use different layout versions. Update both before rearranging tabs.",
+        duration: 10_000,
+      });
+    }
   };
 
   const enqueueWrite = (
@@ -502,13 +553,17 @@ export function startPaneLayoutPersistence(
       writeChains.delete(environmentId);
       const pendingSelection = pendingSelectionWrites.get(environmentId);
       if (pendingSelection) {
+        // A short focus debounce owns this successor. It will enqueue behind
+        // the current chain when its timer fires; settling the predecessor must
+        // not bypass that bound.
+        if (selectionTimers.has(environmentId)) return;
         pendingSelectionWrites.delete(environmentId);
         // The predecessor's completion recorded its older payload. Restore the
         // queued head before starting it so an unrelated Zustand update cannot
         // enqueue the same latest selection a second time.
         lastEnqueued.set(environmentId, pendingSelection.serialized);
         void enqueueWrite(environmentId, pendingSelection)
-          .catch(reportWriteFailure);
+          .catch((error) => reportWriteFailure(environmentId, error));
         return;
       }
       // Only announce a genuinely idle environment. A queued debounced write
@@ -534,19 +589,21 @@ export function startPaneLayoutPersistence(
     environmentId: string,
     write: PendingPaneLayoutWrite,
   ): void => {
-    if (writeChains.has(environmentId)) {
-      const pending = pendingSelectionWrites.get(environmentId);
-      pendingSelectionWrites.set(environmentId, {
-        ...write,
-        baseInput: pending?.baseInput ?? write.baseInput,
-        selectionIntent: mergeSelectionIntents(
-          pending?.selectionIntent,
-          write.selectionIntent,
-        ),
-      });
-      return;
-    }
-    void enqueueWrite(environmentId, write).catch(reportWriteFailure);
+    const pending = pendingSelectionWrites.get(environmentId);
+    pendingSelectionWrites.set(environmentId, {
+      ...write,
+      baseInput: pending?.baseInput ?? write.baseInput,
+      selectionIntent: mergeSelectionIntents(
+        pending?.selectionIntent,
+        write.selectionIntent,
+      ),
+    });
+    cancelSelectionTimer(environmentId);
+    selectionTimers.set(environmentId, setTimeout(() => {
+      void flushSelectionEnvironment(environmentId)?.catch((error) =>
+        reportWriteFailure(environmentId, error)
+      );
+    }, selectionDebounceMs));
   };
 
   // Joins the same chain as the debounced writes so ordering holds. Priming
@@ -560,15 +617,25 @@ export function startPaneLayoutPersistence(
       cancelTimer(environmentId);
       pendingWrites.delete(environmentId);
     }
+    // The immediate snapshot contains the latest selection too, so it
+    // supersedes a coalesced focus write. Carry that write's original merge
+    // base and explicit A -> B -> A intent into this flush.
+    const pendingSelection = pendingSelectionWrites.get(environmentId);
+    cancelSelectionTimer(environmentId);
+    pendingSelectionWrites.delete(environmentId);
     lastEnqueued.set(environmentId, serialized);
     return enqueueWrite(environmentId, {
       input,
       serialized,
       baseInput:
         matchingPending?.baseInput
+        ?? pendingSelection?.baseInput
         ?? authoritative.get(environmentId)?.input
         ?? input,
-      selectionIntent: matchingPending?.selectionIntent,
+      selectionIntent: mergeSelectionIntents(
+        matchingPending?.selectionIntent,
+        pendingSelection?.selectionIntent,
+      ),
     });
   };
 
@@ -580,18 +647,35 @@ export function startPaneLayoutPersistence(
     return enqueueWrite(environmentId, pending);
   };
 
+  const flushSelectionEnvironment = (
+    environmentId: string,
+  ): Promise<void> | undefined => {
+    const pending = pendingSelectionWrites.get(environmentId);
+    if (!pending) return undefined;
+    cancelSelectionTimer(environmentId);
+    pendingSelectionWrites.delete(environmentId);
+    return enqueueWrite(environmentId, pending);
+  };
+
   const flushAll = (): Promise<void> => Promise.all(
-    [...pendingWrites.keys()].map((environmentId) =>
-      flushEnvironment(environmentId) ?? Promise.resolve()
+    [...new Set([
+      ...pendingWrites.keys(),
+      ...pendingSelectionWrites.keys(),
+    ])].map((environmentId) =>
+      flushEnvironment(environmentId)
+      ?? flushSelectionEnvironment(environmentId)
+      ?? Promise.resolve()
     ),
   ).then(() => undefined);
 
   const handlePageHide = () => {
-    void flushAll().catch(reportWriteFailure);
+    void flushAll().catch((error) => reportWriteFailure("pagehide", error));
   };
   const handleVisibilityChange = () => {
     if (document.visibilityState === "hidden") {
-      void flushAll().catch(reportWriteFailure);
+      void flushAll().catch((error) =>
+        reportWriteFailure("visibility", error)
+      );
     }
   };
 
@@ -660,6 +744,7 @@ export function startPaneLayoutPersistence(
 
       if (!environment || hydration !== "done") {
         cancelTimer(environmentId);
+        cancelSelectionTimer(environmentId);
         pendingWrites.delete(environmentId);
         pendingSelectionWrites.delete(environmentId);
         if (!environment) {
@@ -676,6 +761,7 @@ export function startPaneLayoutPersistence(
       // Prime the cache without echoing it back to the backend on connect.
       if (previousHydration !== "done") {
         cancelTimer(environmentId);
+        cancelSelectionTimer(environmentId);
         pendingWrites.delete(environmentId);
         pendingSelectionWrites.delete(environmentId);
         lastEnqueued.set(environmentId, serialized);
@@ -725,6 +811,7 @@ export function startPaneLayoutPersistence(
       }
 
       cancelTimer(environmentId);
+      cancelSelectionTimer(environmentId);
       // A later structural snapshot includes the current focus too, so it
       // supersedes any older coalesced selection waiting behind an in-flight
       // write.
@@ -749,7 +836,9 @@ export function startPaneLayoutPersistence(
         ),
       });
       timers.set(environmentId, setTimeout(() => {
-        void flushEnvironment(environmentId)?.catch(reportWriteFailure);
+        void flushEnvironment(environmentId)?.catch((error) =>
+          reportWriteFailure(environmentId, error)
+        );
       }, debounceMs));
     }
   });
@@ -763,6 +852,6 @@ export function startPaneLayoutPersistence(
     // Start all pending writes while the renderer/backend connection is still
     // available. pagehide/visibilitychange normally provide an earlier flush;
     // this is the final safety net for controlled React teardown.
-    void flushAll().catch(reportWriteFailure);
+    void flushAll().catch((error) => reportWriteFailure("teardown", error));
   };
 }

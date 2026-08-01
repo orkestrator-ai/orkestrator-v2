@@ -1,9 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import {
+  isPaneLayoutUnsupportedVersion,
   isPaneLayoutRevisionConflict,
+  LEGACY_PANE_LAYOUT_VERSION,
+  PANE_LAYOUT_VERSION,
   PANE_LAYOUT_REVISION_CONFLICT_MARKER,
   paneLayoutRevisionConflictMessage,
+  paneLayoutUnsupportedVersionMessage,
 } from "./pane-layout";
+
+test("owns the pane layout schema versions shared by web and backend", () => {
+  expect(LEGACY_PANE_LAYOUT_VERSION).toBe(1);
+  expect(PANE_LAYOUT_VERSION).toBe(2);
+});
+
+test("recognizes unsupported-version errors through transport prefixes", () => {
+  const message = paneLayoutUnsupportedVersionMessage(3);
+  expect(message).toBe("Unsupported pane layout version: 3");
+  expect(isPaneLayoutUnsupportedVersion(new Error(message))).toBe(true);
+  expect(isPaneLayoutUnsupportedVersion(new Error(`IPC failed: ${message}`)))
+    .toBe(true);
+  expect(isPaneLayoutUnsupportedVersion(message)).toBe(false);
+});
 
 describe("paneLayoutRevisionConflictMessage", () => {
   test("names both revisions and leads with the shared marker", () => {

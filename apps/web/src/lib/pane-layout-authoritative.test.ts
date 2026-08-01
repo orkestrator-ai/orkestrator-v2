@@ -31,7 +31,7 @@ const {
 const { useBuildPipelineStore } = await import("@/stores/buildPipelineStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const { useLoopedReviewStore } = await import("@/stores/loopedReviewStore");
-const { PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
+const { LEGACY_PANE_LAYOUT_VERSION, PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
 
 type PaneNode = import("@/types/paneLayout").PaneNode;
 type PersistedPaneLayout = import("@/types/paneLayout").PersistedPaneLayout;
@@ -239,6 +239,23 @@ describe("reconcileAuthoritativePaneLayout", () => {
     expect((restored!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id))
       .toEqual(["tab-1", "tab-2"]);
     expect((restored!.root as { activeTabId: string }).activeTabId).toBe("tab-1");
+  });
+
+  test("does not treat a legacy record's canonical pointers as real focus", () => {
+    const currentRoot = leaf("default", [
+      { id: "tab-1", type: "plain" },
+      { id: "tab-2", type: "plain" },
+    ]);
+    if (currentRoot.kind !== "leaf") throw new Error("expected leaf");
+    currentRoot.activeTabId = "tab-2";
+
+    const restored = reconcileAuthoritativePaneLayout(
+      "env-1",
+      { ...persisted(plainRoot), version: LEGACY_PANE_LAYOUT_VERSION },
+      paneState(currentRoot),
+    );
+
+    expect(restored?.root).toMatchObject({ activeTabId: "tab-2" });
   });
 
   test("refuses a snapshot for an environment this client no longer has", () => {

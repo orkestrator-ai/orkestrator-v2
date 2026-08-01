@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   preserveClientPaneSelection,
+  preserveRendererLocalPaneFields,
   reconcilePersistedLayout,
 } from "./pane-layout-restore";
 import {
@@ -39,12 +40,12 @@ describe("reconcilePersistedLayout", () => {
 
   test("rejects version, environment, and container mismatches", () => {
     const root = { kind: "leaf", id: "pane", tabs: [{ id: "tab", type: "plain" }], activeTabId: "tab" };
-    expect(
-      reconcilePersistedLayout(
-        saved(root, { version: PANE_LAYOUT_VERSION + 1 }),
+    for (const version of [0, -1, PANE_LAYOUT_VERSION + 1, "2", undefined]) {
+      expect(reconcilePersistedLayout(
+        { ...saved(root), version } as unknown as PersistedPaneLayout,
         context,
-      ),
-    ).toBeNull();
+      )).toBeNull();
+    }
     expect(reconcilePersistedLayout(saved(root, { environmentId: "other" }), context)).toBeNull();
     expect(reconcilePersistedLayout(saved(root, { containerId: "other" }), context)).toBeNull();
   });
@@ -594,7 +595,7 @@ describe("reconcilePersistedLayout", () => {
   });
 });
 
-describe("preserveClientPaneSelection", () => {
+describe("pane field preservation", () => {
   test("adds backend tabs without changing the client's active tab", () => {
     const current = {
       containerId: "container-1",
@@ -723,7 +724,7 @@ describe("preserveClientPaneSelection", () => {
       },
     };
 
-    const reconciled = preserveClientPaneSelection(authoritative, current);
+    const reconciled = preserveRendererLocalPaneFields(authoritative, current);
     if (reconciled.root.kind !== "leaf") {
       throw new Error("expected leaf");
     }
@@ -875,7 +876,7 @@ describe("preserveClientPaneSelection", () => {
       },
     };
 
-    const reconciled = preserveClientPaneSelection(authoritative, current);
+    const reconciled = preserveRendererLocalPaneFields(authoritative, current);
     if (reconciled.root.kind !== "split") throw new Error("expected split");
     const moved = reconciled.root.children[1];
     if (moved.kind !== "leaf") throw new Error("expected moved leaf");

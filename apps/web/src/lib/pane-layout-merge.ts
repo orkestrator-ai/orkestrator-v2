@@ -414,17 +414,29 @@ export function mergePersistedPaneLayouts(
       continue;
     }
     const targetPaneId = targetPaneIds.get(activeTabId);
-    if (targetPaneId) {
+    if (
+      targetPaneId
+      && (targetPaneId === localLeaf.id || !leafIds.has(localLeaf.id))
+    ) {
       localActiveTabsByTargetPane.set(targetPaneId, activeTabId);
     }
   }
   for (const [paneId, activeTabId] of Object.entries(
     options.selectionIntent?.activeTabIds ?? {},
   )) {
+    // A stale intent for a pane that this local snapshot already removed must
+    // not select a tab in whichever surviving pane now owns that id.
+    const sourcePaneSurvives = leafIds.has(paneId);
     if (typeof activeTabId === "string") {
       const targetPaneId = targetPaneIds.get(activeTabId);
-      if (targetPaneId) localActiveTabsByTargetPane.set(targetPaneId, activeTabId);
-    } else if (leafIds.has(paneId)) {
+      if (
+        targetPaneId
+        && (targetPaneId === paneId || !sourcePaneSurvives)
+        && (sourcePaneSurvives || localLeaves.has(paneId))
+      ) {
+        localActiveTabsByTargetPane.set(targetPaneId, activeTabId);
+      }
+    } else if (sourcePaneSurvives) {
       localActiveTabsByTargetPane.set(paneId, null);
     }
   }
@@ -441,7 +453,9 @@ export function mergePersistedPaneLayouts(
     leaf.activeTabId =
       mappedLocalActiveTabId && validTabIds.has(mappedLocalActiveTabId)
         ? mappedLocalActiveTabId
-        : hasMappedLocalActiveTab && mappedLocalActiveTabId === null
+        : hasMappedLocalActiveTab
+          && mappedLocalActiveTabId === null
+          && leaf.tabs.length === 0
           ? null
         : typeof mergedActiveTabId === "string" && validTabIds.has(mergedActiveTabId)
         ? mergedActiveTabId
@@ -461,13 +475,17 @@ export function mergePersistedPaneLayouts(
   );
   const baseFocusedTabId = baseLeaves.get(base.activePaneId)?.activeTabId;
   const localFocusedTabId = localLeaves.get(local.activePaneId)?.activeTabId;
-  const localFocusChanged =
-    options.selectionIntent?.activePaneId !== undefined
-    || options.selectionIntent?.activeTabIds !== undefined
-    || local.activePaneId !== base.activePaneId
-    || localFocusedTabId !== baseFocusedTabId;
   const intendedActivePaneId =
     options.selectionIntent?.activePaneId ?? local.activePaneId;
+  const hasFocusedPaneTabIntent = Object.prototype.hasOwnProperty.call(
+    options.selectionIntent?.activeTabIds ?? {},
+    intendedActivePaneId,
+  );
+  const localFocusChanged =
+    options.selectionIntent?.activePaneId !== undefined
+    || hasFocusedPaneTabIntent
+    || local.activePaneId !== base.activePaneId
+    || localFocusedTabId !== baseFocusedTabId;
   const intendedFocusedTabId =
     options.selectionIntent?.activeTabIds?.[intendedActivePaneId]
     ?? localLeaves.get(intendedActivePaneId)?.activeTabId

@@ -15938,7 +15938,8 @@ describe("storage-backed command delegation", () => {
 describe("pane layout commands", () => {
   test("validates and forwards pane layout envelopes", async () => {
     const persisted = {
-      version: 2,
+      // Reads stay version-agnostic so the renderer can migrate legacy data.
+      version: 1,
       environmentId: "env-1",
       containerId: null,
       activePaneId: "default",
@@ -16007,17 +16008,19 @@ describe("pane layout commands", () => {
     }, context)).rejects.toThrow("Expected expectedRevision to be a number");
   });
 
-  test("rejects v1 pane layout writes before reaching storage", async () => {
+  test("rejects older and future pane layout writes before reaching storage", async () => {
     const savePaneLayout = mock(async () => ({}));
     const context = { storage: { savePaneLayout } } as unknown as CommandContext;
     const commands = createCommandRegistry();
     const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
 
-    await expect(commands.get("save_pane_layout")?.({
-      environmentId: "env-1",
-      layout: { version: 1, containerId: null, activePaneId: "default", root },
-      expectedRevision: 0,
-    }, context)).rejects.toThrow("Unsupported pane layout version: 1");
+    for (const version of [1, 3]) {
+      await expect(commands.get("save_pane_layout")?.({
+        environmentId: "env-1",
+        layout: { version, containerId: null, activePaneId: "default", root },
+        expectedRevision: 0,
+      }, context)).rejects.toThrow(`Unsupported pane layout version: ${version}`);
+    }
 
     expect(savePaneLayout).not.toHaveBeenCalled();
   });

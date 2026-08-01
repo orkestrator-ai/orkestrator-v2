@@ -56,6 +56,7 @@ import {
   parseEdgeDroppableId,
   isGitFileStatus,
   LEGACY_PANE_LAYOUT_VERSION,
+  PANE_LAYOUT_VERSION,
   type EdgeDirection,
   type PaneLeaf,
   type PaneNode,
@@ -1221,6 +1222,13 @@ export function TerminalContainer({
                 : restoredSnapshot;
             paneStore.finishHydration(environmentId, restored ?? undefined);
 
+            // A successful migration may have been performed by this renderer
+            // on an earlier launch or by another client. Once v2 is observed,
+            // the renderer-local v1 selection can no longer be useful.
+            if (persisted?.version === PANE_LAYOUT_VERSION) {
+              clearStoredPaneSelection(environmentId);
+            }
+
             if (restored && persisted?.version === LEGACY_PANE_LAYOUT_VERSION) {
               // V1 stored canonical focus pointers and relied on renderer-local
               // storage for the user's actual selection. Install that selection
@@ -1724,6 +1732,24 @@ export function TerminalContainer({
         );
 
         const newTabId = STARTUP_AGENT_TAB_ID;
+        const paneStore = usePaneLayoutStore.getState();
+        const livePaneState = paneStore.environments.get(environmentId);
+        const targetPaneId =
+          (paneStore.getPane(pending.targetPaneId, environmentId)
+            ? pending.targetPaneId
+            : livePaneState
+              && paneStore.getPane(livePaneState.activePaneId, environmentId)
+              ? livePaneState.activePaneId
+              : livePaneState
+                ? getAllLeaves(livePaneState.root)[0]?.id
+                : undefined);
+        if (!targetPaneId) {
+          console.warn(
+            "[TerminalContainer] Deferred native launch because no pane is available:",
+            environmentId,
+          );
+          return;
+        }
         if (launchMode === "terminal") {
           const newTab: TabInfo = {
             id: newTabId,
@@ -1732,7 +1758,7 @@ export function TerminalContainer({
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
           };
-          addTab(pending.targetPaneId, newTab, environmentId);
+          addTab(targetPaneId, newTab, environmentId);
         } else if (isClaudeNative) {
           const backend = pending.claudeNativeBackend ?? claudeNativeBackend;
           const newTab = createClaudeNativeLikeTab({
@@ -1746,7 +1772,7 @@ export function TerminalContainer({
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
           });
-          addTab(pending.targetPaneId, newTab, environmentId);
+          addTab(targetPaneId, newTab, environmentId);
         } else if (isCodexNative) {
           const newTab: TabInfo = {
             id: newTabId,
@@ -1761,7 +1787,7 @@ export function TerminalContainer({
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
           };
-          addTab(pending.targetPaneId, newTab, environmentId);
+          addTab(targetPaneId, newTab, environmentId);
         } else {
           // Create OpenCode native tab
           const newTab: TabInfo = {
@@ -1777,7 +1803,7 @@ export function TerminalContainer({
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
           };
-          addTab(pending.targetPaneId, newTab, environmentId);
+          addTab(targetPaneId, newTab, environmentId);
         }
 
         // Clear the pending launch

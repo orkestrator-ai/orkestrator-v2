@@ -398,8 +398,8 @@ export function preserveRendererLocalPaneFields(
 }
 
 /**
- * Installs a backend-owned pane/tab snapshot without adopting another
- * renderer's active pane or active tab.
+ * Installs a legacy v1 backend snapshot without adopting its canonical focus
+ * placeholders. Kept only for the bounded v1 migration/refresh window.
  */
 export function preserveClientPaneSelection(
   authoritative: EnvironmentPaneState,

@@ -9,7 +9,6 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import {
   readStoredPaneSelection,
-  writeStoredPaneSelection,
 } from "@/lib/pane-selection-storage";
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 import {
@@ -31,6 +30,18 @@ import { requestTerminalBrowserTab } from "@/lib/terminal-links";
 import * as realDndKitCore from "@dnd-kit/core";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
+
+const LEGACY_SELECTION_STORAGE_KEY = "orkestrator.pane-selection.v1";
+
+function writeStoredPaneSelection(
+  environmentId: string,
+  selection: { activePaneId: string; activeTabIds: Record<string, string> },
+): void {
+  localStorage.setItem(LEGACY_SELECTION_STORAGE_KEY, JSON.stringify({
+    version: 1,
+    entries: [{ environmentId, ...selection }],
+  }));
+}
 
 const realBackendSnapshot = { ...realBackend };
 const realSetupCommandsSnapshot = { ...realSetupCommands };
@@ -657,6 +668,7 @@ describe("TerminalContainer", () => {
           { id: "right", activeTabId: "right-b" },
         ],
       });
+      expect(readStoredPaneSelection("env-hidden")).toBeNull();
     });
   });
 
@@ -2700,6 +2712,67 @@ describe("TerminalContainer", () => {
       ).toBeUndefined();
       expect(useEnvironmentStore.getState().isWorkspaceReady("env-hidden")).toBe(true);
       expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(false);
+    });
+  });
+
+  test("falls back to the live active pane when a pending launch target disappeared", async () => {
+    usePaneLayoutStore.setState({
+      environments: new Map([["env-hidden", {
+        root: {
+          kind: "leaf",
+          id: "survivor",
+          tabs: [{ id: "existing", type: "plain" }],
+          activeTabId: "existing",
+        },
+        activePaneId: "survivor",
+        containerId: "container-hidden",
+      }]]),
+      hydration: new Map([["env-hidden", "done"]]),
+      activeEnvironmentId: null,
+    } as never);
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden" ? { ...env, setupScriptsComplete: true } : env
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+      workspaceReadyEnvironments: new Set(["env-hidden"]),
+    }));
+    useClaudeOptionsStore.setState({
+      options: {},
+      pendingNativeLaunches: {
+        "env-hidden": {
+          containerId: "container-hidden",
+          environmentId: "env-hidden",
+          targetPaneId: "removed-pane",
+          agentType: "codex",
+          launchMode: "native",
+        },
+      },
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const survivor = usePaneLayoutStore.getState().getPane(
+        "survivor",
+        "env-hidden",
+      );
+      expect(survivor?.tabs).toContainEqual(expect.objectContaining({
+        id: "startup-agent",
+        type: "codex-native",
+      }));
+      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden"))
+        .toBeUndefined();
     });
   });
 

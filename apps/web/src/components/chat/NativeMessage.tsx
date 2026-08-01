@@ -115,43 +115,30 @@ interface NativeMessageProps {
   previousMessage?: NativeMessageType | null;
   assistantLabel?: string;
   containerId?: string;
+  /** Stable transcript/environment identity used to isolate persisted disclosures. */
+  agentExpansionScope?: string;
   actions?: ReactNode;
   resolveModelLabel?: (modelId: string) => string;
 }
 
-const AgentExpansionScopeContext = createContext<string | null>(null);
+const AgentExpansionScopeContext = createContext("native-message");
 
-function useAgentExpansionScope(): string {
-  const scope = useContext(AgentExpansionScopeContext);
-  if (!scope) {
-    throw new Error("Agent expansion must be rendered within a message scope");
-  }
-  return scope;
-}
-
-function getAgentExpansionKey(part: NativeAgentActivityPart): string {
+function getAgentExpansionKey(
+  part: NativeAgentActivityPart,
+  partKey: string,
+): string {
   if (part.type === "task-group") {
-    return `task:${
-      part.task.toolUseId ??
-      part.task.subagentId ??
-      part.task.toolName ??
-      part.content ??
-      "agent"
-    }`;
+    const durableId = part.task.toolUseId?.trim() || part.task.subagentId?.trim();
+    return durableId ? `task:id:${durableId}` : `task:part:${partKey}`;
   }
 
-  return `subagent:${
-    part.subagentId ??
-    part.toolUseId ??
-    part.subagentName ??
-    part.content ??
-    "agent"
-  }`;
+  const durableId = part.subagentId?.trim() || part.toolUseId?.trim();
+  return durableId ? `subagent:id:${durableId}` : `subagent:part:${partKey}`;
 }
 
-function useAgentExpansion(part: NativeAgentActivityPart) {
-  const expansionScope = useAgentExpansionScope();
-  const expansionKey = getAgentExpansionKey(part);
+function useAgentExpansion(part: NativeAgentActivityPart, partKey: string) {
+  const expansionScope = useContext(AgentExpansionScopeContext);
+  const expansionKey = getAgentExpansionKey(part, partKey);
   // Active agents live in a virtualized row that can be unmounted while Claude
   // streams or while the reader scrolls. Persist the user's explicit toggle in
   // the same bounded store used by thinking/JSON disclosures so those routine
@@ -1031,11 +1018,20 @@ function getSafeContainerRelativePath(path: string): string | null {
   if (path.split(/[\\/]+/).some((segment) => segment === "..")) {
     return null;
   }
-  if (/^[a-z]:[\\/]/i.test(path) || path.startsWith("\\\\")) {
+  if (/^[a-z]:[\\/]/i.test(path) || path.startsWith("\\")) {
     return null;
   }
   if (path.startsWith("/workspace/")) {
-    return path.slice("/workspace/".length) || null;
+    const relativePath = path.slice("/workspace/".length);
+    if (
+      !relativePath ||
+      relativePath.startsWith("/") ||
+      relativePath.startsWith("\\") ||
+      /^[a-z]:[\\/]/i.test(relativePath)
+    ) {
+      return null;
+    }
+    return relativePath;
   }
   if (path.startsWith("/")) {
     return null;
@@ -1295,6 +1291,12 @@ function getSubagentPreview(
   if (latestAction.type === "text") {
     return latestAction.content.trim() || "Response";
   }
+  if (latestAction.type === "thinking") {
+    return "Thinking";
+  }
+  if (latestAction.type === "file") {
+    return latestAction.content.trim() || "File";
+  }
 
   const command =
     typeof latestAction.toolArgs?.command === "string"
@@ -1344,7 +1346,7 @@ function SubagentPart({
   containerId?: string;
   partKey: string;
 }) {
-  const [isOpen, setIsOpen] = useAgentExpansion(part);
+  const [isOpen, setIsOpen] = useAgentExpansion(part, partKey);
   const subagentActions = part.subagentActions ?? [];
   const hasExternalUsage = typeof part.toolUseCount === "number";
   const tokenOnlyUsage = shouldShowTokenOnlyAgentUsage(part);
@@ -1530,7 +1532,7 @@ function TaskGroupPart({
   containerId?: string;
   partKey: string;
 }) {
-  const [isOpen, setIsOpen] = useAgentExpansion(part);
+  const [isOpen, setIsOpen] = useAgentExpansion(part, partKey);
   const toolLabel =
     getToolTitleDisplayName(
       part.task.toolTitle,
@@ -1794,6 +1796,7 @@ export const NativeMessage = memo(function NativeMessage({
   previousMessage = null,
   assistantLabel = "Assistant",
   containerId,
+  agentExpansionScope,
   actions: messageActions,
   resolveModelLabel,
 }: NativeMessageProps) {
@@ -1805,10 +1808,19 @@ export const NativeMessage = memo(function NativeMessage({
   message = normalizedMessage;
   previousMessage = normalizedPreviousMessage;
 
-  // Agent identities are only unique within their containing transcript row.
-  // Add the container when available so the bounded global disclosure store
-  // cannot couple messages from different container-backed environments.
-  const agentExpansionScope = JSON.stringify([containerId ?? null, message.id]);
+  // A container id can legitimately appear after this row mounts (notably in
+  // build-pipeline tabs) or change when a container is recreated. Freeze the
+  // namespace at mount so such lifecycle updates do not silently collapse an
+  // open disclosure. Production transcript owners pass their stable
+  // environment/session identity; the initial container remains a safe fallback
+  // for direct callers.
+  const [stableAgentExpansionScope] = useState(
+    () => agentExpansionScope ?? containerId ?? "host",
+  );
+  const messageAgentExpansionScope = JSON.stringify([
+    stableAgentExpansionScope,
+    message.id,
+  ]);
 
   const isUser = message.role === "user";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
@@ -1890,7 +1902,7 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   return (
-    <AgentExpansionScopeContext.Provider value={agentExpansionScope}>
+    <AgentExpansionScopeContext.Provider value={messageAgentExpansionScope}>
       <MessageShell
         isUser={isUser}
         authorLabel={

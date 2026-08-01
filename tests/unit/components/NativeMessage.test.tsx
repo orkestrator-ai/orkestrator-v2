@@ -317,6 +317,25 @@ describe("NativeMessage", () => {
     expect(mockOpenInBrowser).toHaveBeenCalledWith("https://example.com/docs");
   });
 
+  test("does not ask the system browser to open an empty markdown destination", () => {
+    const message: NativeMessageType = {
+      id: "msg-empty-link",
+      role: "assistant",
+      content: "Read [the missing destination]().",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        { type: "text", content: "Read [the missing destination]()." },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const emptyLink = screen.getByText("the missing destination").closest("a");
+    expect(emptyLink).toBeTruthy();
+    fireEvent.click(emptyLink!);
+    expect(mockOpenInBrowser).not.toHaveBeenCalled();
+  });
+
   test("reports system-browser failures without throwing from link clicks", async () => {
     const consoleError = console.error;
     const mockConsoleError = mock(() => {});
@@ -778,6 +797,12 @@ describe("NativeMessage", () => {
       "../secrets.png",
       "/workspace/../secrets.png",
       "/workspace\\..\\secrets.png",
+      "/workspace//etc/passwd.png",
+      "/workspace/\\etc\\secrets.png",
+      "/workspace/C:\\Users\\Ada\\secrets.png",
+      "C:\\Users\\Ada\\secrets.png",
+      "\\etc\\secrets.png",
+      "\\\\server\\share\\secrets.png",
       "/workspace/bad\0name.png",
       "/workspace/bad\nname.png",
       "/workspace/bad\rname.png",
@@ -1116,6 +1141,43 @@ describe("NativeMessage", () => {
       isDiff: true,
       gitStatus: "M",
     });
+  });
+
+  test.each([
+    ["the file-tab callback is unavailable", "/workspace/src/example.ts", undefined],
+    ["the diff has no file path", undefined, mock(() => {})],
+  ])("omits the edit pop-out when %s", (_reason, filePath, createFileTab) => {
+    const message: NativeMessageType = {
+      id: `msg-edit-no-popout-${filePath ? "callback" : "path"}`,
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: {
+            ...(filePath ? { filePath } : {}),
+            before: "before",
+            after: "after",
+          },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness createFileTab={createFileTab}>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+
+    expect(screen.queryByTitle("Open diff in new tab")).toBeNull();
+    if (createFileTab) {
+      expect(createFileTab).not.toHaveBeenCalled();
+    }
   });
 
   test("renders edit tool labels through the shared display-name helper", () => {
@@ -1658,9 +1720,10 @@ describe("NativeMessage", () => {
     };
 
     render(<NativeMessage message={message} />);
+    const buttonCount = screen.getAllByRole("button").length;
     fireEvent.click(screen.getByRole("button", { name: /reviewer active/i }));
 
-    expect(screen.queryByRole("button", { name: /thinking/i })).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(buttonCount);
   });
 
   test("does not render a shell for an empty tool group", () => {
@@ -2489,7 +2552,7 @@ describe("NativeMessage", () => {
     );
   });
 
-  test("strips query strings from image paths and defaults unknown extensions to png", async () => {
+  test("strips query strings and fragments from image paths and defaults unknown extensions to png", async () => {
     const message: NativeMessageType = {
       id: "msg-mime-query-and-fallback",
       role: "user",
@@ -2497,6 +2560,7 @@ describe("NativeMessage", () => {
       createdAt: "2026-03-07T12:00:00.000Z",
       parts: [
         { type: "file", content: "/workspace/shots/photo.webp?v=2#top" },
+        { type: "file", content: "/workspace/shots/fragment.jpg#preview" },
         { type: "file", content: "/workspace/shots/archive.png.bak" },
       ],
     };
@@ -2512,6 +2576,17 @@ describe("NativeMessage", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() =>
       expect(screen.queryByAltText("photo.webp?v=2#top")).toBeNull(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /fragment\.jpg/i }));
+    const fragment = await screen.findByAltText("fragment.jpg#preview");
+    expect(fragment.getAttribute("src")).toBe(
+      "data:image/jpeg;base64,container-image-base64",
+    );
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByAltText("fragment.jpg#preview")).toBeNull(),
     );
 
     fireEvent.click(screen.getByRole("button", { name: /archive\.png\.bak/i }));

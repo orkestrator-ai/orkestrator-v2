@@ -2957,6 +2957,7 @@ export function OpenCodeChatTab({
 
   return (
     <NativeChatShell
+      agentExpansionScope={environmentId}
       agentLabel="OpenCode"
       isActive={ownsGlobalShortcuts}
       containerId={containerId}

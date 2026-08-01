@@ -2397,6 +2397,7 @@ export function NativeStyleChatPanel({
               message={message}
               previousMessage={previousMessage}
               assistantLabel="Codex"
+              agentExpansionScope={persistKey}
               resolveModelLabel={resolveModelLabel}
             />
           )}

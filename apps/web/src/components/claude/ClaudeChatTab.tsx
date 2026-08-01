@@ -2871,6 +2871,7 @@ export function ClaudeChatTab({
 
   return (
     <NativeChatShell
+      agentExpansionScope={environmentId}
       agentLabel="Claude"
       isActive={ownsGlobalShortcuts}
       containerId={containerId}

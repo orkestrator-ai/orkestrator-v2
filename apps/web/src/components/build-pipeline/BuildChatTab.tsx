@@ -536,6 +536,7 @@ export function BuildChatTab({
                 previousMessage={previous}
                 assistantLabel={agentLabel}
                 containerId={containerId}
+                agentExpansionScope={data.environmentId}
               />
             )}
             emptyState={

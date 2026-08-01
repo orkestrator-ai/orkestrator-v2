@@ -1408,6 +1408,30 @@ describe("NativeMessage task list rendering", () => {
     expect(second.getAttribute("aria-expanded")).toBe("false");
   });
 
+  test("keeps agent expansion open when a container id resolves after mount", () => {
+    const message = makeMessage(
+      [makeStandaloneSubagentPart({
+        subagentId: "late-container-agent",
+        subagentName: "Late container reviewer",
+      })],
+      { id: "late-container-message" },
+    );
+    const view = render(<NativeMessage message={message} />);
+    const trigger = screen.getByRole("button", {
+      name: /late container reviewer/i,
+    });
+
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+
+    view.rerender(<NativeMessage message={message} containerId="container-1" />);
+
+    expect(
+      screen.getByRole("button", { name: /late container reviewer/i })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
   test("isolates id-less task agents with the same generic tool fallback between messages", () => {
     render(
       <>
@@ -1442,6 +1466,38 @@ describe("NativeMessage task list rendering", () => {
 
     const first = screen.getByRole("button", { name: /first task agent/i });
     const second = screen.getByRole("button", { name: /second task agent/i });
+    fireEvent.click(first);
+
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+    expect(second.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("isolates id-less task agents within one message by part position", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          makeAgentTaskGroupPart({
+            task: {
+              toolUseId: undefined,
+              subagentId: undefined,
+              toolName: "Agent",
+              toolArgs: { description: "First positional task" },
+            },
+          }),
+          makeAgentTaskGroupPart({
+            task: {
+              toolUseId: undefined,
+              subagentId: undefined,
+              toolName: "Agent",
+              toolArgs: { description: "Second positional task" },
+            },
+          }),
+        ])}
+      />,
+    );
+
+    const first = screen.getByRole("button", { name: /first positional task/i });
+    const second = screen.getByRole("button", { name: /second positional task/i });
     fireEvent.click(first);
 
     expect(first.getAttribute("aria-expanded")).toBe("true");
@@ -2740,7 +2796,7 @@ describe("NativeMessage agent status and grouping details", () => {
   ];
 
   test.each(taskExpansionIdentityCases)(
-    "persists task-agent expansion keyed by %s across a remount",
+    "persists task-agent expansion with %s input across a remount",
     (identityName, part, triggerName) => {
       const message = makeMessage([part], {
         id: `assistant-task-identity-${identityName.replaceAll(" ", "-")}`,
@@ -2815,7 +2871,7 @@ describe("NativeMessage agent status and grouping details", () => {
   ];
 
   test.each(subagentExpansionIdentityCases)(
-    "persists standalone-agent expansion keyed by %s across a remount",
+    "persists standalone-agent expansion with %s input across a remount",
     (identityName, part, triggerName) => {
       const message = makeMessage([part], {
         id: `assistant-subagent-identity-${identityName.replaceAll(" ", "-")}`,
@@ -2889,6 +2945,36 @@ describe("NativeMessage agent status and grouping details", () => {
     });
     expect(thinkingTrigger.textContent).toContain("Thinking");
     expect(fileTrigger.textContent).toContain("/workspace/review-summary.md");
+  });
+
+  test("previews the latest thinking and file updates in standalone agents", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          makeStandaloneSubagentPart({
+            subagentId: "standalone-thinking-preview",
+            subagentName: "Thinking standalone reviewer",
+            subagentActions: [{ type: "thinking", content: "Inspecting" }],
+          }),
+          makeStandaloneSubagentPart({
+            subagentId: "standalone-file-preview",
+            subagentName: "File standalone reviewer",
+            subagentActions: [
+              { type: "file", content: "/workspace/standalone-review.md" },
+            ],
+          }),
+        ])}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /thinking standalone reviewer/i })
+        .textContent,
+    ).toContain("Thinking");
+    expect(
+      screen.getByRole("button", { name: /file standalone reviewer/i })
+        .textContent,
+    ).toContain("/workspace/standalone-review.md");
   });
 
   test("renders no shell for an empty agent group", () => {

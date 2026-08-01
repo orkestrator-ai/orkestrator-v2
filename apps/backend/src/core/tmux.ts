@@ -2104,7 +2104,16 @@ class TmuxSession {
   }
 
   private emitHook(context: CommandContext, event: PendingHookEvent): void {
+    const wasBusy = this.busy;
     this.updateBusyFromHookKind(event.kind);
+    if (wasBusy && event.kind === "Stop") {
+      void context.notifyAgentTurnCompleted?.(this.environmentId).catch((error) => {
+        console.warn(
+          `[tmux] Failed to schedule PR refresh after agent completion for ${this.environmentId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      });
+    }
     context.emit(CLAUDE_TMUX_EVENT, {
       kind: "hook",
       tab_id: this.tabId,
@@ -3260,7 +3269,22 @@ export class ClaudeStatePollManager {
       // this must not emit: the renderer would adopt a state storage rejected.
       return;
     }
+    const completedTurn = state === "idle" && (
+      poll.lastState === "working"
+      || (
+        poll.lastState === ""
+        && Boolean(environment.prRecheckAfterAgentCompletionArmedAt)
+      )
+    );
     poll.lastState = state;
+    if (completedTurn) {
+      void poll.context.notifyAgentTurnCompleted?.(environment.id).catch((error) => {
+        console.warn(
+          `[tmux] Failed to schedule PR refresh after terminal completion for ${environment.id}:`,
+          error instanceof Error ? error.message : error,
+        );
+      });
+    }
     poll.context.emit(`claude-state-${containerId}`, {
       container_id: containerId,
       state,

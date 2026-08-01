@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
@@ -2911,6 +2911,20 @@ describe("ClaudeStatePollManager", () => {
     await delay(0);
     expect(harness.persisted).toHaveLength(1);
     expect(harness.emitted).toHaveLength(1);
+    harness.manager.shutdown("container-poll");
+  });
+
+  test("notifies backend reconciliation when a terminal agent turn finishes", async () => {
+    const harness = createPollHarness({ states: ["working", "idle"] });
+    const notifyAgentTurnCompleted = mock(async () => undefined);
+    harness.context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
+
+    harness.manager.start("container-poll", harness.context);
+    await waitFor(() => harness.emitted.length === 1);
+    harness.scheduled[0]!();
+    await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 1);
+
+    expect(notifyAgentTurnCompleted).toHaveBeenCalledWith("env-poll");
     harness.manager.shutdown("container-poll");
   });
 

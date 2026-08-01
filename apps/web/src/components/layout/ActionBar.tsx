@@ -344,6 +344,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     hasMergeConflicts,
     viewPR,
     setModeCreatePending,
+    armRefreshAfterAgentCompletion,
   } = usePullRequest({ environmentId: selectedEnvironmentId });
 
   const { deleteEnvironment } = useEnvironments(selectedProjectId, {
@@ -899,18 +900,33 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   }, [createTab, canCreateTab, defaultAgent]);
 
   // Handler for resolving merge conflicts - launches agent tab with conflict resolution prompt
-  const handleResolveConflicts = useCallback((agentOverride?: "claude" | "opencode" | "codex") => {
+  const handleResolveConflicts = useCallback(async (agentOverride?: "claude" | "opencode" | "codex") => {
     if (!createTab || !selectedProjectId || !canCreateTab) return;
 
     const repoConfig = config.repositories[selectedProjectId];
     const targetBranch = repoConfig?.prBaseBranch || "main";
     const resolvePrompt = createResolveConflictsPrompt(targetBranch);
 
+    try {
+      // The backend stores this intent before the turn can be dispatched, so
+      // inactive environments and renderer reloads cannot lose the refresh.
+      await armRefreshAfterAgentCompletion();
+    } catch (error) {
+      console.warn("[ActionBar] Failed to arm PR refresh after conflict resolution:", error);
+    }
+
     createTab(agentOverride || defaultAgent, {
       initialPrompt: resolvePrompt,
       displayTitle: "Resolve",
     });
-  }, [createTab, selectedProjectId, canCreateTab, config.repositories, defaultAgent]);
+  }, [
+    armRefreshAfterAgentCompletion,
+    createTab,
+    selectedProjectId,
+    canCreateTab,
+    config.repositories,
+    defaultAgent,
+  ]);
 
   // Handler for cleaning up (deleting) an environment after PR is merged/closed
   const handleCleanup = useCallback(async () => {

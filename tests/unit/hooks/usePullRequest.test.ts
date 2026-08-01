@@ -10,12 +10,16 @@ const mockGetEnvironmentPrUrl = mock<(environmentId: string) => Promise<string |
 const mockClearEnvironmentPr = mock<(environmentId: string) => Promise<void>>(() => Promise.resolve());
 const mockOpenInBrowser = mock<(url: string) => Promise<void>>(() => Promise.resolve());
 const mockPrMonitorWatch = mock<(environmentId: string, mode: string) => Promise<void>>(() => Promise.resolve());
+const mockArmPrRefreshAfterAgentCompletion = mock<(environmentId: string) => Promise<void>>(
+  () => Promise.resolve(),
+);
 
 mock.module("@/lib/backend", () => ({
   getEnvironmentPrUrl: mockGetEnvironmentPrUrl,
   clearEnvironmentPr: mockClearEnvironmentPr,
   openInBrowser: mockOpenInBrowser,
   prMonitorWatch: mockPrMonitorWatch,
+  armPrRefreshAfterAgentCompletion: mockArmPrRefreshAfterAgentCompletion,
 }));
 
 function monitorState(
@@ -54,12 +58,14 @@ describe("usePullRequest", () => {
     mockClearEnvironmentPr.mockClear();
     mockOpenInBrowser.mockClear();
     mockPrMonitorWatch.mockClear();
+    mockArmPrRefreshAfterAgentCompletion.mockClear();
 
     // Reset to default implementations
     mockGetEnvironmentPrUrl.mockImplementation(() => Promise.resolve(null));
     mockClearEnvironmentPr.mockImplementation(() => Promise.resolve());
     mockOpenInBrowser.mockImplementation(() => Promise.resolve());
     mockPrMonitorWatch.mockImplementation(() => Promise.resolve());
+    mockArmPrRefreshAfterAgentCompletion.mockImplementation(() => Promise.resolve());
   });
 
   test("returns initial state with no environment", () => {
@@ -305,6 +311,16 @@ describe("usePullRequest", () => {
     });
 
     expect(mockPrMonitorWatch).toHaveBeenCalledWith("env-1", "merge-pending");
+  });
+
+  test("arms the backend-owned post-completion PR refresh", async () => {
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await act(async () => {
+      await result.current.armRefreshAfterAgentCompletion();
+    });
+
+    expect(mockArmPrRefreshAfterAgentCompletion).toHaveBeenCalledWith("env-1");
   });
 
   test("a failed mode request is swallowed rather than thrown into the caller", async () => {

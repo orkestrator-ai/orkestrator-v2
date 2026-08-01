@@ -15,6 +15,7 @@ import {
   getPrMonitorDetectionRequest,
   parsePrMonitorDetectionResponse,
   shutdownPrMonitorTracking,
+  toClientEnvironment,
   type CommandContext,
 } from "./commands.js";
 import { StorageService } from "./storage.js";
@@ -1513,6 +1514,53 @@ describe("pr monitor commands", () => {
         });
 
         await expect(invoke("pr_monitor_refresh", { environmentId: "e1" })).resolves.toBeUndefined();
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
+  test("conflict-resolution refresh intent is durable and backend-only", async () => {
+    await withCommands(async (invoke, storage) => {
+      try {
+        await storage.updateEnvironment("e1", {
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: true,
+        });
+
+        await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        });
+
+        const armed = await storage.getEnvironment("e1");
+        expect(armed?.prRecheckAfterAgentCompletionArmedAt).toEqual(expect.any(String));
+        expect(toClientEnvironment(armed!)).not.toHaveProperty(
+          "prRecheckAfterAgentCompletionArmedAt",
+        );
+
+        // A backend completion edge schedules the monitor but does not consume
+        // the intent before GitHub confirms the conflict is actually gone.
+        await invoke("pr_monitor_agent_turn_completed", { environmentId: "e1" });
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBe(
+            armed?.prRecheckAfterAgentCompletionArmedAt,
+          );
+
+        await invoke("set_environment_pr", {
+          environmentId: "e1",
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: false,
+        });
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+
+        await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        });
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
       } finally {
         shutdownPrMonitorTracking();
       }

@@ -1551,6 +1551,11 @@ export async function prMonitorRefresh(environmentId: string): Promise<void> {
   return invoke<void>("pr_monitor_refresh", { environmentId });
 }
 
+/** Durably re-check a conflicting PR when the launched agent turn completes. */
+export async function armPrRefreshAfterAgentCompletion(environmentId: string): Promise<void> {
+  return invoke<void>("arm_pr_refresh_after_agent_completion", { environmentId });
+}
+
 /** Get file tree from a local environment (worktree path) */
 export async function getLocalFileTree(worktreePath: string): Promise<FileNode[]> {
   return invoke<FileNode[]>("get_local_file_tree", { worktreePath });

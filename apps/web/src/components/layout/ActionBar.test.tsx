@@ -81,6 +81,7 @@ const updateTaskMock = mock(async (_taskId: string, _updates: unknown) => {});
 const viewPRMock = mock(() => {});
 const setModeCreatePendingMock = mock(() => {});
 const setModeMergePendingMock = mock(() => {});
+const armRefreshAfterAgentCompletionMock = mock(async () => {});
 const updateProjectMock = mock(async () => {});
 const updateEnvironmentMock = mock(() => {});
 const recreateEnvironmentMock = mock(async () => {});
@@ -504,6 +505,7 @@ mock.module("@/hooks", () => ({
     viewPR: viewPRMock,
     setModeCreatePending: setModeCreatePendingMock,
     setModeMergePending: setModeMergePendingMock,
+    armRefreshAfterAgentCompletion: armRefreshAfterAgentCompletionMock,
   }),
 }));
 
@@ -589,6 +591,8 @@ beforeEach(() => {
   viewPRMock.mockReset();
   setModeCreatePendingMock.mockReset();
   setModeMergePendingMock.mockReset();
+  armRefreshAfterAgentCompletionMock.mockReset();
+  armRefreshAfterAgentCompletionMock.mockImplementation(async () => {});
   updateProjectMock.mockReset();
   updateEnvironmentMock.mockReset();
   recreateEnvironmentMock.mockReset();
@@ -1634,7 +1638,7 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("names PR, resolve, and push workflow tabs", () => {
+  test("names PR, resolve, and push workflow tabs", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -1659,10 +1663,13 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "codex",
-      expect.objectContaining({ displayTitle: "Resolve" }),
-    );
+    await waitFor(() => {
+      expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
+      expect(createTabMock).toHaveBeenLastCalledWith(
+        "codex",
+        expect.objectContaining({ displayTitle: "Resolve" }),
+      );
+    });
 
     currentEnvironment = {
       ...selectedEnvironment,
@@ -1680,7 +1687,7 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("starts PR monitoring and honors environment defaults and one-shot workflow overrides", () => {
+  test("starts PR monitoring and honors environment defaults and one-shot workflow overrides", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       defaultAgent: "opencode",
@@ -1715,10 +1722,13 @@ describe("ActionBar workflow tabs", () => {
     rerender(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     fireEvent.click(screen.getByRole("button", { name: "Resolve with Codex" }));
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "codex",
-      expect.objectContaining({ displayTitle: "Resolve" }),
-    );
+    await waitFor(() => {
+      expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
+      expect(createTabMock).toHaveBeenLastCalledWith(
+        "codex",
+        expect.objectContaining({ displayTitle: "Resolve" }),
+      );
+    });
 
     currentEnvironment = {
       ...currentEnvironment,
@@ -1748,7 +1758,7 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("routes every PR workflow context-menu provider", () => {
+  test("routes every PR workflow context-menu provider", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -1782,10 +1792,12 @@ describe("ActionBar workflow tabs", () => {
     ] as const) {
       fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
       fireEvent.click(screen.getByRole("button", { name: `Resolve with ${label}` }));
-      expect(createTabMock).toHaveBeenLastCalledWith(
-        agent,
-        expect.objectContaining({ displayTitle: "Resolve" }),
-      );
+      await waitFor(() => {
+        expect(createTabMock).toHaveBeenLastCalledWith(
+          agent,
+          expect.objectContaining({ displayTitle: "Resolve" }),
+        );
+      });
     }
 
     currentEnvironment = {

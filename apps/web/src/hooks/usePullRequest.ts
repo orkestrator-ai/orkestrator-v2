@@ -32,6 +32,8 @@ interface UsePullRequestReturn {
   setModeCreatePending: () => void;
   /** Set monitoring mode to merge-pending (1s polling for 20s) */
   setModeMergePending: () => void;
+  /** Ask the backend to refresh this conflicting PR after agent completion. */
+  armRefreshAfterAgentCompletion: () => Promise<void>;
 }
 
 export function usePullRequest({
@@ -115,6 +117,11 @@ export function usePullRequest({
     }
   }, [environmentId]);
 
+  const armRefreshAfterAgentCompletion = useCallback(async () => {
+    if (!environmentId) return;
+    await backend.armPrRefreshAfterAgentCompletion(environmentId);
+  }, [environmentId]);
+
   return {
     prUrl,
     prState,
@@ -125,5 +132,6 @@ export function usePullRequest({
     resetPR,
     setModeCreatePending,
     setModeMergePending,
+    armRefreshAfterAgentCompletion,
   };
 }

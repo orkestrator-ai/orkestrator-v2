@@ -81,6 +81,11 @@ export class OrkestratorBackend {
       agentTools: this.agentTools,
       environmentLifecycleTasks: this.environmentLifecycleTasks,
     } as CommandContext;
+    context.notifyAgentTurnCompleted = async (environmentId: string) => {
+      const handler = this.commands.get("pr_monitor_agent_turn_completed");
+      if (!handler) return;
+      await handler({ environmentId }, context);
+    };
     this.context = context;
     this.buildPipelines = new BuildPipelineService(
       storage,

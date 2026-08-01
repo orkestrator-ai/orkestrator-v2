@@ -176,6 +176,8 @@ export type CommandContext = {
   };
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;
+  /** Backend-owned notification emitted by exact agent turn lifecycles. */
+  notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
 };
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
@@ -765,6 +767,11 @@ const prMonitorService = new PrMonitorService({
         prUrl: detection.url,
         prState: detection.state,
         hasMergeConflicts: detection.hasMergeConflicts,
+        ...(
+          detection.state !== "open" || detection.hasMergeConflicts !== true
+            ? { prRecheckAfterAgentCompletionArmedAt: undefined }
+            : {}
+        ),
       });
       if (detection.state === "merged" && prMonitorContext) {
         scheduleMergeCleanupRecovery(environmentId, prMonitorContext);
@@ -775,6 +782,7 @@ const prMonitorService = new PrMonitorService({
         prUrl: null,
         prState: null,
         hasMergeConflicts: null,
+        prRecheckAfterAgentCompletionArmedAt: undefined,
       });
     },
     findTaskForEnvironment: (environmentId) =>
@@ -2781,6 +2789,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     claudeBridgePid: _claudeBridgePid,
     codexBridgePid: _codexBridgePid,
     pendingRenamePrompt: _pendingRenamePrompt,
+    prRecheckAfterAgentCompletionArmedAt: _prRecheckArm,
     ...client
   } = environment;
   if (
@@ -7891,14 +7900,28 @@ export function createCommandRegistry(
     return result ? toClientEnvironmentSetupStartResult(result) : undefined;
   });
   register("set_environment_pr", async ({ environmentId, prUrl, prState, hasMergeConflicts }, context) => {
-    const updated = await context.storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: asString(prUrl, "prUrl"), prState, hasMergeConflicts });
+    const updated = await context.storage.updateEnvironment(asString(environmentId, "environmentId"), {
+      prUrl: asString(prUrl, "prUrl"),
+      prState,
+      hasMergeConflicts,
+      ...(
+        prState !== "open" || hasMergeConflicts !== true
+          ? { prRecheckAfterAgentCompletionArmedAt: undefined }
+          : {}
+      ),
+    });
     // A PR recorded outside the monitor (e.g. right after a merge command) must
     // enter the monitored set without waiting for a client to rehydrate.
     void syncPrMonitorTracking(context).catch(() => undefined);
     return toClientEnvironment(updated);
   });
   register("clear_environment_pr", async ({ environmentId }, context) => {
-    await context.storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: null, prState: null, hasMergeConflicts: null });
+    await context.storage.updateEnvironment(asString(environmentId, "environmentId"), {
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      prRecheckAfterAgentCompletionArmedAt: undefined,
+    });
     void syncPrMonitorTracking(context).catch(() => undefined);
   });
   register("get_environment_pr_url", async ({ environmentId }, { storage }) => (await storage.getEnvironment(asString(environmentId, "environmentId")))?.prUrl ?? null);
@@ -9936,6 +9959,26 @@ export function createCommandRegistry(
   register("pr_monitor_refresh", async ({ environmentId }, context) => {
     await syncPrMonitorTracking(context);
     prMonitorService.requestCheck(asString(environmentId, "environmentId"));
+  });
+  /**
+   * Durably arm the next completed agent turn to re-check a conflicting PR.
+   * Kept backend-only: renderers continue to derive buttons solely from the
+   * authoritative PR fields projected by environment snapshots/events.
+   */
+  register("arm_pr_refresh_after_agent_completion", async ({ environmentId }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await context.storage.armPrRecheckAfterAgentCompletion(id);
+    if (environment.prRecheckAfterAgentCompletionArmedAt) {
+      await syncPrMonitorTracking(context);
+    }
+  });
+  /** Internal completion edge from native, tmux, or terminal supervision. */
+  register("pr_monitor_agent_turn_completed", async ({ environmentId }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment?.prRecheckAfterAgentCompletionArmedAt) return;
+    await syncPrMonitorTracking(context);
+    prMonitorService.requestCheck(id);
   });
 
   register("start_local_opencode_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "opencode"));

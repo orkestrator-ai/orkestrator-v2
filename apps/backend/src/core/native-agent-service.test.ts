@@ -271,6 +271,59 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("reports one session completion while another same-provider tab stays working", async () => {
+    const sessionActivity = new Map<string, ProviderActivityState>([
+      ["provider-resolve", "working"],
+      ["provider-other", "working"],
+    ]);
+    const { provider } = createProviderStub("codex", {
+      activity: async (sessionId) => sessionActivity.get(sessionId) ?? "missing",
+    });
+    const invoked: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const invoke: Invoke = async <T>(command: string, args?: Record<string, unknown>) => {
+      invoked.push({ command, args });
+      expect(command).toBe("pr_monitor_agent_turn_completed");
+      expect(args).toEqual({ environmentId: "env-1" });
+      return undefined as T;
+    };
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-completion-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      provider: async () => provider,
+      invoke,
+    }, async ({ storage, service }) => {
+      for (const [logicalSessionKey, providerSessionId] of [
+        ["env-env-1:resolve", "provider-resolve"],
+        ["env-env-1:other", "provider-other"],
+      ] as const) {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey,
+          providerSessionId,
+        });
+      }
+
+      await service.reconcileAgentActivity();
+      expect(invoked).toEqual([]);
+
+      sessionActivity.set("provider-resolve", "idle");
+      await service.reconcileAgentActivity();
+
+      expect(invoked).toHaveLength(1);
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivityState: "working",
+      });
+    });
+  });
+
   test.each([
     ["stopped", { status: "stopped" }],
     ["errored", { status: "error" }],

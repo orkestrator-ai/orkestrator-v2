@@ -2357,6 +2357,7 @@ export class StorageService {
         "initialPrompt",
         "initialAgentModel",
         "initialReasoningEffort",
+        "prRecheckAfterAgentCompletionArmedAt",
         "pendingRenamePrompt",
         "createdFromCommit",
         "lastActivityAt",
@@ -2523,6 +2524,30 @@ export class StorageService {
       if ("initialPromptAttachments" in updates) {
         await this.scrubEnvironmentBackups(environmentId, false);
       }
+      this.announce("environment", environmentId, environment.projectId);
+      return environment;
+    });
+  }
+
+  /**
+   * Atomically arms conflict-resolution reconciliation against the latest PR
+   * fields. Serializing the predicate with the write prevents an older Resolve
+   * click from re-arming an intent after a concurrent monitor check already
+   * proved the PR mergeable.
+   */
+  async armPrRecheckAfterAgentCompletion(environmentId: string): Promise<Environment> {
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      if (
+        !environment.prUrl
+        || environment.prState !== "open"
+        || environment.hasMergeConflicts !== true
+      ) return environment;
+
+      environment.prRecheckAfterAgentCompletionArmedAt = new Date().toISOString();
+      await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);
       return environment;
     });

@@ -2546,7 +2546,31 @@ export class StorageService {
         || environment.hasMergeConflicts !== true
       ) return environment;
 
-      environment.prRecheckAfterAgentCompletionArmedAt = new Date().toISOString();
+      const now = Date.now();
+      const previous = environment.prRecheckAfterAgentCompletionArmedAt
+        ? Date.parse(environment.prRecheckAfterAgentCompletionArmedAt)
+        : Number.NEGATIVE_INFINITY;
+      environment.prRecheckAfterAgentCompletionArmedAt = new Date(
+        Number.isFinite(previous) && previous >= now ? previous + 1 : now,
+      ).toISOString();
+      await this.saveEnvironments(environments);
+      this.announce("environment", environmentId, environment.projectId);
+      return environment;
+    });
+  }
+
+  /** Clears only the exact Resolve request whose tab launch failed. */
+  async disarmPrRecheckAfterAgentCompletion(
+    environmentId: string,
+    armedAt: string,
+  ): Promise<Environment> {
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      if (environment.prRecheckAfterAgentCompletionArmedAt !== armedAt) return environment;
+
+      environment.prRecheckAfterAgentCompletionArmedAt = undefined;
       await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);
       return environment;

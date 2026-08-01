@@ -1716,6 +1716,15 @@ class TmuxSession {
    */
   private taskTracker = new TranscriptTaskTracker();
   private busy = false;
+  /**
+   * A Stop hook is a turn boundary even when this backend did not observe the
+   * matching UserPromptSubmit (for example, after a backend restart). The
+   * durable PR-recheck arm in storage decides whether that boundary matters;
+   * this process-local flag only deduplicates duplicate Stop hook files until
+   * another prompt starts.
+   */
+  private stopCompletionObserved = false;
+  private completionGeneration = 0;
   private permissionMode = "bypassPermissions";
   private paneCache: { text: string; hash: string; capturedAt: number } | undefined;
   private paneCaptureInFlight: Promise<{ text: string; hash: string; capturedAt: number }> | undefined;
@@ -2104,16 +2113,8 @@ class TmuxSession {
   }
 
   private emitHook(context: CommandContext, event: PendingHookEvent): void {
-    const wasBusy = this.busy;
     this.updateBusyFromHookKind(event.kind);
-    if (wasBusy && event.kind === "Stop") {
-      void context.notifyAgentTurnCompleted?.(this.environmentId).catch((error) => {
-        console.warn(
-          `[tmux] Failed to schedule PR refresh after agent completion for ${this.environmentId}:`,
-          error instanceof Error ? error.message : error,
-        );
-      });
-    }
+    if (event.kind === "Stop") this.scheduleCompletionNotification(context);
     context.emit(CLAUDE_TMUX_EVENT, {
       kind: "hook",
       tab_id: this.tabId,
@@ -2128,8 +2129,40 @@ class TmuxSession {
   }
 
   private updateBusyFromHookKind(kind: string): void {
-    if (kind === "UserPromptSubmit") this.busy = true;
+    if (kind === "UserPromptSubmit") {
+      this.busy = true;
+      this.completionGeneration += 1;
+      this.stopCompletionObserved = false;
+    }
     if (kind === "Stop") this.busy = false;
+  }
+
+  private scheduleCompletionNotification(context: CommandContext): void {
+    if (this.stopCompletionObserved) return;
+    this.stopCompletionObserved = true;
+    const generation = this.completionGeneration;
+
+    const notification = (async () => {
+      // Storage is authoritative. In particular, a Stop seen immediately after
+      // re-attaching to an existing tmux session is a completion only when the
+      // durable Resolve-conflicts intent is still armed. Conversely an
+      // unarmed startup Stop must not manufacture work for the PR monitor.
+      const environment = await context.storage.getEnvironment(this.environmentId);
+      if (!environment?.prRecheckAfterAgentCompletionArmedAt) return;
+      await context.notifyAgentTurnCompleted?.(this.environmentId);
+    })();
+    void notification.catch((error) => {
+      // Keep the durable arm intact and permit a later Stop to retry delivery.
+      // The hook has already been emitted to the renderer, so this failure is
+      // deliberately confined to the reconciliation side effect.
+      if (this.completionGeneration === generation) {
+        this.stopCompletionObserved = false;
+      }
+      console.warn(
+        `[tmux] Failed to schedule PR refresh after agent completion for ${this.environmentId}:`,
+        error instanceof Error ? error.message : error,
+      );
+    });
   }
 
   async tmuxAlive(): Promise<boolean> {
@@ -3269,12 +3302,14 @@ export class ClaudeStatePollManager {
       // this must not emit: the renderer would adopt a state storage rejected.
       return;
     }
-    const completedTurn = state === "idle" && (
+    // Production hooks write `working` at UserPromptSubmit and `waiting` at
+    // Stop. `idle` is retained for older hook writers and recovery from a
+    // backend restart. Storage's durable PR-recheck intent is authoritative,
+    // so ordinary unarmed terminal turns do not manufacture monitor work.
+    const completedTurn = Boolean(environment.prRecheckAfterAgentCompletionArmedAt)
+      && (state === "idle" || state === "waiting") && (
       poll.lastState === "working"
-      || (
-        poll.lastState === ""
-        && Boolean(environment.prRecheckAfterAgentCompletionArmedAt)
-      )
+      || poll.lastState === ""
     );
     poll.lastState = state;
     if (completedTurn) {

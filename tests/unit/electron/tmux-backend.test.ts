@@ -19,6 +19,7 @@ import {
   INTERACTIVE_SNAPSHOT_MAX_MS,
   INTERACTIVE_SNAPSHOT_MIN_MS,
   isDirectJsonlChild,
+  isMissingTmuxSessionError,
   jsonlByMtimeFindCommand,
   listLocalJsonlByMtime,
   LIVENESS_CHECK_EVERY_TICKS,
@@ -121,6 +122,46 @@ test("Claude tmux selects the agent tool endpoint for its execution backend", ()
   expect(agentToolConnectionTarget("container")).toBe("container");
 });
 
+describe("tmux session cleanup helpers", () => {
+  test("recognizes tmux's ordinary missing-session diagnostics", () => {
+    for (const diagnostic of [
+      "can't find session: missing",
+      "no server running on /tmp/tmux-501/default",
+      "failed to connect to server",
+      "no sessions",
+    ]) {
+      expect(isMissingTmuxSessionError(diagnostic)).toBe(true);
+    }
+    expect(isMissingTmuxSessionError("permission denied")).toBe(false);
+    expect(isMissingTmuxSessionError(new Error("unrelated failure"))).toBe(false);
+  });
+
+  test("derives stable sanitized prefixes and parses list-sessions output", () => {
+    expect(tmuxSessionNamePrefix("environment/with spaces and a long suffix"))
+      .toBe("orkestrator-environmentwiths-");
+    expect(tmuxSessionNamePrefix("///")).toBe("orkestrator-id-");
+    expect(parseTmuxSessionNames(" first \n\nsecond\r\n  third  \n"))
+      .toEqual(["first", "second", "third"]);
+  });
+
+  test("selects only an environment's sessions and fails closed on a contested prefix", () => {
+    const environmentId = "0123456789abcdef-target";
+    const own = tmuxSessionName(environmentId, "tab-own");
+    const other = tmuxSessionName("other", "tab-other");
+    expect(selectReapableTmuxSessions({
+      names: [other, own],
+      environmentId,
+      survivingEnvironmentIds: [environmentId, "other"],
+    })).toEqual([own]);
+
+    expect(selectReapableTmuxSessions({
+      names: [own],
+      environmentId,
+      survivingEnvironmentIds: ["0123456789abcdef-survivor"],
+    })).toEqual([]);
+  });
+});
+
 async function createTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
@@ -215,8 +256,28 @@ case "$command" in
       printf '%s\n' 'kill failed' >&2
       exit 2
     fi
+    if [ -n "\${FAKE_TMUX_MISSING_ON_KILL:-}" ] && [ "$session_name" = "$FAKE_TMUX_MISSING_ON_KILL" ]; then
+      rm -f "$FAKE_TMUX_ALIVE/$session_name" "$FAKE_TMUX_ALIVE/$session_name.mode"
+      printf '%s\n' "can't find session: $session_name" >&2
+      exit 1
+    fi
     [ -n "$session_name" ] && rm -f "$FAKE_TMUX_ALIVE/$session_name" "$FAKE_TMUX_ALIVE/$session_name.mode"
     exit 0
+    ;;
+  list-sessions)
+    found=0
+    for candidate in "$FAKE_TMUX_ALIVE"/orkestrator-*; do
+      [ -f "$candidate" ] || continue
+      name="$(basename "$candidate")"
+      case "$name" in
+        *.mode|*.input|*.fail-capture|*.fail-send) continue ;;
+      esac
+      printf '%s\n' "$name"
+      found=1
+    done
+    [ "$found" = "1" ] && exit 0
+    printf '%s\n' 'no server running' >&2
+    exit 1
     ;;
   capture-pane)
     if [ -n "$session_name" ] && [ -f "$FAKE_TMUX_ALIVE/$session_name.fail-capture" ]; then
@@ -338,6 +399,7 @@ exit 0
   const originalTmuxAlive = process.env.FAKE_TMUX_ALIVE;
   const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
   const originalFailNew = process.env.FAKE_TMUX_FAIL_NEW;
+  const originalMissingOnKill = process.env.FAKE_TMUX_MISSING_ON_KILL;
   const originalNewSessionBarrier = process.env.FAKE_TMUX_NEW_SESSION_BARRIER;
   const originalNoMcpConfig = process.env.FAKE_CLAUDE_NO_MCP_CONFIG;
   process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
@@ -380,6 +442,8 @@ exit 0
     else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
     if (originalFailNew === undefined) delete process.env.FAKE_TMUX_FAIL_NEW;
     else process.env.FAKE_TMUX_FAIL_NEW = originalFailNew;
+    if (originalMissingOnKill === undefined) delete process.env.FAKE_TMUX_MISSING_ON_KILL;
+    else process.env.FAKE_TMUX_MISSING_ON_KILL = originalMissingOnKill;
     if (originalNewSessionBarrier === undefined) {
       delete process.env.FAKE_TMUX_NEW_SESSION_BARRIER;
     } else {
@@ -1349,6 +1413,64 @@ describe("Electron tmux backend command registration", () => {
       await expect(
         cleanupEnvironmentTmux(unreachable.id, context as unknown as CommandContext),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  test("environment teardown fails closed when a surviving environment contests the tmux prefix", async () => {
+    await withFakeTmuxRuntime(async ({ environment, alive, log }) => {
+      const orphanName = tmuxSessionName(environment.id, "orphan-contested");
+      await fs.mkdir(alive, { recursive: true });
+      await fs.writeFile(path.join(alive, orphanName), "");
+      const collidingEnvironment = {
+        ...environment,
+        id: `${environment.id.slice(0, 16)}-survivor`,
+      };
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+          loadEnvironments: async () => [environment, collidingEnvironment],
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      await cleanupEnvironmentTmux(
+        environment.id,
+        context as unknown as CommandContext,
+      );
+
+      expect(existsSync(path.join(alive, orphanName))).toBe(true);
+      expect(await fs.readFile(log, "utf8")).not.toContain(
+        `kill-session -t ${orphanName}`,
+      );
+      await fs.rm(path.join(alive, orphanName), { force: true });
+    });
+  });
+
+  test("environment teardown accepts a session disappearing after list-sessions", async () => {
+    await withFakeTmuxRuntime(async ({ environment, alive, runtimeRoot }) => {
+      const orphanName = tmuxSessionName(environment.id, "orphan-race");
+      await fs.mkdir(alive, { recursive: true });
+      await fs.mkdir(runtimeRoot, { recursive: true });
+      await fs.writeFile(path.join(alive, orphanName), "");
+      process.env.FAKE_TMUX_MISSING_ON_KILL = orphanName;
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+          loadEnvironments: async () => [environment],
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      await expect(cleanupEnvironmentTmux(
+        environment.id,
+        context as unknown as CommandContext,
+      )).resolves.toBeUndefined();
+      expect(existsSync(path.join(alive, orphanName))).toBe(false);
+      await expect(fs.stat(runtimeRoot)).rejects.toThrow();
     });
   });
 
@@ -2914,8 +3036,9 @@ describe("ClaudeStatePollManager", () => {
     harness.manager.shutdown("container-poll");
   });
 
-  test("notifies backend reconciliation when a terminal agent turn finishes", async () => {
-    const harness = createPollHarness({ states: ["working", "idle"] });
+  test("notifies backend reconciliation for production working-to-waiting completion", async () => {
+    const harness = createPollHarness({ states: ["working", "waiting", "idle"] });
+    harness.environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
     const notifyAgentTurnCompleted = mock(async () => undefined);
     harness.context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
 
@@ -2925,6 +3048,57 @@ describe("ClaudeStatePollManager", () => {
     await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 1);
 
     expect(notifyAgentTurnCompleted).toHaveBeenCalledWith("env-poll");
+    harness.scheduled[0]!();
+    await waitFor(() => harness.emitted.length === 3);
+    expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(1);
+    harness.manager.shutdown("container-poll");
+  });
+
+  test("recovers an initially waiting or idle armed turn without notifying for an unarmed poll", async () => {
+    for (const initialState of ["waiting", "idle"] as const) {
+      const armed = createPollHarness({ states: [initialState] });
+      armed.environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
+      const armedNotification = mock(async () => undefined);
+      armed.context.notifyAgentTurnCompleted = armedNotification;
+
+      armed.manager.start("container-poll", armed.context);
+      await waitFor(() => armedNotification.mock.calls.length === 1);
+      expect(armedNotification).toHaveBeenCalledWith("env-poll");
+      armed.manager.shutdown("container-poll");
+    }
+
+    const unarmed = createPollHarness({ states: ["working", "waiting", "idle"] });
+    const unarmedNotification = mock(async () => undefined);
+    unarmed.context.notifyAgentTurnCompleted = unarmedNotification;
+    unarmed.manager.start("container-poll", unarmed.context);
+    await waitFor(() => unarmed.emitted.length === 1);
+    for (let expectedEmits = 2; expectedEmits <= 3; expectedEmits += 1) {
+      unarmed.scheduled[0]!();
+      await waitFor(() => unarmed.emitted.length === expectedEmits);
+    }
+    expect(unarmedNotification).not.toHaveBeenCalled();
+    unarmed.manager.shutdown("container-poll");
+  });
+
+  test("continues polling after a terminal completion notification rejects", async () => {
+    const harness = createPollHarness({ states: ["working", "waiting", "working", "waiting"] });
+    harness.environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
+    let attempts = 0;
+    const notifyAgentTurnCompleted = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("temporary notification failure");
+    });
+    harness.context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
+
+    harness.manager.start("container-poll", harness.context);
+    await waitFor(() => harness.emitted.length === 1);
+    for (let expectedEmits = 2; expectedEmits <= 4; expectedEmits += 1) {
+      harness.scheduled[0]!();
+      await waitFor(() => harness.emitted.length === expectedEmits);
+    }
+
+    await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 2);
+    expect(attempts).toBe(2);
     harness.manager.shutdown("container-poll");
   });
 
@@ -4492,6 +4666,169 @@ describe("live session read paths", () => {
         && (item.payload as { event_id?: string }).event_id === "after-failure"), 5_000);
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  }, 20_000);
+
+  test("notifies once for each armed UserPromptSubmit-to-Stop turn", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
+      const notifyAgentTurnCompleted = mock(async () => undefined);
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        notifyAgentTurnCompleted,
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = { tabId: "tab-completion", environmentId: environment.id };
+      const status = await invoke(handlers, "claude_tmux_start", args, context) as {
+        session_id: string;
+      };
+      const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+      const writeHook = async (kind: "UserPromptSubmit" | "Stop", id: string) => {
+        await fs.writeFile(path.join(pendingDir, `${kind}-${id}.json`), "{}");
+        await waitFor(() => emitted.some((entry) =>
+          entry.event === "claude-tmux:event"
+          && (entry.payload as { event_id?: string }).event_id === id
+        ));
+      };
+
+      await writeHook("UserPromptSubmit", "turn-1-start");
+      await writeHook("Stop", "turn-1-stop");
+      await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 1);
+      await writeHook("Stop", "turn-1-duplicate-stop");
+      await delay(25);
+      expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(1);
+
+      await writeHook("UserPromptSubmit", "turn-2-start");
+      await writeHook("Stop", "turn-2-stop");
+      await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 2);
+      expect(notifyAgentTurnCompleted.mock.calls).toEqual([
+        [environment.id],
+        [environment.id],
+      ]);
+
+      await invoke(handlers, "claude_tmux_stop", args, context);
+    });
+  }, 20_000);
+
+  test("uses the durable arm to recover a Stop after backend reattach", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
+      const notifyAgentTurnCompleted = mock(async () => undefined);
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        notifyAgentTurnCompleted,
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = { tabId: "tab-reattached", environmentId: environment.id };
+      const status = await invoke(handlers, "claude_tmux_start", args, context) as {
+        session_id: string;
+      };
+      const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+
+      // No UserPromptSubmit reaches this TmuxSession instance. This is the
+      // observable state after the backend restarts while Claude is working.
+      await fs.writeFile(path.join(pendingDir, "Stop-after-reattach.json"), "{}");
+      await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 1);
+      expect(notifyAgentTurnCompleted).toHaveBeenCalledWith(environment.id);
+
+      await invoke(handlers, "claude_tmux_stop", args, context);
+    });
+  }, 20_000);
+
+  test("does not drop a back-to-back turn while the prior notification is pending", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
+      const gate = deferred<void>();
+      const notifyAgentTurnCompleted = mock(() => gate.promise);
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        notifyAgentTurnCompleted,
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = { tabId: "tab-overlap", environmentId: environment.id };
+      const status = await invoke(handlers, "claude_tmux_start", args, context) as {
+        session_id: string;
+      };
+      const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+      const writeAndObserve = async (kind: "UserPromptSubmit" | "Stop", id: string) => {
+        await fs.writeFile(path.join(pendingDir, `${kind}-${id}.json`), "{}");
+        await waitFor(() => emitted.some((entry) =>
+          (entry.payload as { event_id?: string }).event_id === id
+        ));
+      };
+
+      await writeAndObserve("UserPromptSubmit", "overlap-start-1");
+      await writeAndObserve("Stop", "overlap-stop-1");
+      await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 1);
+      await writeAndObserve("UserPromptSubmit", "overlap-start-2");
+      await writeAndObserve("Stop", "overlap-stop-2");
+      await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 2);
+
+      gate.resolve();
+      await invoke(handlers, "claude_tmux_stop", args, context);
+    });
+  }, 20_000);
+
+  test("ignores an unarmed Stop and retries a rejected armed notification", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      const notifyAgentTurnCompleted = mock(async () => undefined);
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        notifyAgentTurnCompleted,
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const unarmedArgs = { tabId: "tab-unarmed", environmentId: environment.id };
+      const unarmed = await invoke(handlers, "claude_tmux_start", unarmedArgs, context) as {
+        session_id: string;
+      };
+      const unarmedPending = path.join(runtimeRoot, "sessions", unarmed.session_id, "pending");
+      await fs.writeFile(path.join(unarmedPending, "Stop-unarmed.json"), "{}");
+      await waitFor(() => emitted.some((entry) =>
+        (entry.payload as { event_id?: string }).event_id === "unarmed"
+      ));
+      await delay(25);
+      expect(notifyAgentTurnCompleted).not.toHaveBeenCalled();
+      await invoke(handlers, "claude_tmux_stop", unarmedArgs, context);
+
+      environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
+      let attempts = 0;
+      notifyAgentTurnCompleted.mockImplementation(async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("temporary reconciliation failure");
+      });
+      const retryArgs = { tabId: "tab-retry", environmentId: environment.id };
+      const retry = await invoke(handlers, "claude_tmux_start", retryArgs, context) as {
+        session_id: string;
+      };
+      const retryPending = path.join(runtimeRoot, "sessions", retry.session_id, "pending");
+      await fs.writeFile(path.join(retryPending, "Stop-rejected.json"), "{}");
+      await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 1);
+      await delay(25);
+      await fs.writeFile(path.join(retryPending, "Stop-retry.json"), "{}");
+      await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 2);
+      expect(attempts).toBe(2);
+
+      await invoke(handlers, "claude_tmux_stop", retryArgs, context);
     });
   }, 20_000);
 

@@ -81,7 +81,8 @@ const updateTaskMock = mock(async (_taskId: string, _updates: unknown) => {});
 const viewPRMock = mock(() => {});
 const setModeCreatePendingMock = mock(() => {});
 const setModeMergePendingMock = mock(() => {});
-const armRefreshAfterAgentCompletionMock = mock(async () => {});
+const armRefreshAfterAgentCompletionMock = mock(async (): Promise<string | null> => "armed-at-1");
+const disarmRefreshAfterAgentCompletionMock = mock(async (_armedAt: string) => {});
 const updateProjectMock = mock(async () => {});
 const updateEnvironmentMock = mock(() => {});
 const recreateEnvironmentMock = mock(async () => {});
@@ -506,6 +507,7 @@ mock.module("@/hooks", () => ({
     setModeCreatePending: setModeCreatePendingMock,
     setModeMergePending: setModeMergePendingMock,
     armRefreshAfterAgentCompletion: armRefreshAfterAgentCompletionMock,
+    disarmRefreshAfterAgentCompletion: disarmRefreshAfterAgentCompletionMock,
   }),
 }));
 
@@ -592,7 +594,9 @@ beforeEach(() => {
   setModeCreatePendingMock.mockReset();
   setModeMergePendingMock.mockReset();
   armRefreshAfterAgentCompletionMock.mockReset();
-  armRefreshAfterAgentCompletionMock.mockImplementation(async () => {});
+  armRefreshAfterAgentCompletionMock.mockImplementation(async () => "armed-at-1");
+  disarmRefreshAfterAgentCompletionMock.mockReset();
+  disarmRefreshAfterAgentCompletionMock.mockImplementation(async () => {});
   updateProjectMock.mockReset();
   updateEnvironmentMock.mockReset();
   recreateEnvironmentMock.mockReset();
@@ -1684,6 +1688,165 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).toHaveBeenLastCalledWith(
       "codex",
       expect.objectContaining({ displayTitle: "Git Push" }),
+    );
+  });
+
+  test("arms before launching Resolve and suppresses duplicate launches while arming", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    const events: string[] = [];
+    let resolveArm!: (armedAt: string | null) => void;
+    armRefreshAfterAgentCompletionMock.mockImplementationOnce(() => {
+      events.push("arm");
+      return new Promise((resolve) => {
+        resolveArm = resolve;
+      });
+    });
+    createTabMock.mockImplementationOnce(() => {
+      events.push("create");
+      return true;
+    });
+    render(<ActionBar />);
+
+    const resolveButton = screen.getByRole("button", { name: "Resolve" });
+    fireEvent.click(resolveButton);
+    fireEvent.click(resolveButton);
+
+    expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect((resolveButton as HTMLButtonElement).disabled).toBe(true);
+
+    resolveArm("armed-at-deferred");
+
+    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
+    expect(events).toEqual(["arm", "create"]);
+    expect((resolveButton as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("reports an arm failure but still launches the requested Resolve agent", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    armRefreshAfterAgentCompletionMock.mockRejectedValueOnce(new Error("backend offline"));
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not schedule the PR refresh",
+      expect.objectContaining({ description: expect.stringContaining("still open") }),
+    );
+    expect(disarmRefreshAfterAgentCompletionMock).not.toHaveBeenCalled();
+  });
+
+  test("rolls back the exact refresh arm when Resolve tab creation is refused", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce("armed-at-refused");
+    createTabMock.mockReturnValueOnce(false);
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    await waitFor(() => {
+      expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith("armed-at-refused");
+    });
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open conflict resolution",
+      expect.objectContaining({ description: expect.stringContaining("maximum tab count") }),
+    );
+  });
+
+  test("rolls back the exact refresh arm when Resolve tab creation throws", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce("armed-at-thrown");
+    createTabMock.mockImplementationOnce(() => {
+      throw new Error("pane rejected the tab");
+    });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    await waitFor(() => {
+      expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith("armed-at-thrown");
+    });
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open conflict resolution",
+      { description: "pane rejected the tab" },
+    );
+  });
+
+  test("reports tab refusal and unlocks Resolve when arm rollback rejects", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce("armed-at-rollback-failure");
+    createTabMock.mockReturnValueOnce(false);
+    disarmRefreshAfterAgentCompletionMock.mockRejectedValueOnce(new Error("disarm rejected"));
+    render(<ActionBar />);
+
+    const resolveButton = screen.getByRole("button", { name: "Resolve" });
+    fireEvent.click(resolveButton);
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open conflict resolution",
+      expect.any(Object),
+    ));
+    expect(console.warn).toHaveBeenCalledWith(
+      "[ActionBar] Failed to roll back the PR refresh arm:",
+      expect.any(Error),
+    );
+    expect((resolveButton as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("cancels an armed Resolve launch when the selected environment changes", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    let resolveArm!: (armedAt: string | null) => void;
+    armRefreshAfterAgentCompletionMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveArm = resolve;
+    }));
+    const view = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    currentSelectedEnvironmentId = "env-2";
+    currentOtherEnvironments = [{
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "other-environment",
+      prState: "open",
+      hasMergeConflicts: true,
+    }];
+    view.rerender(<ActionBar />);
+    resolveArm("armed-before-selection-change");
+
+    await waitFor(() => {
+      expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith(
+        "armed-before-selection-change",
+      );
+    });
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open conflict resolution",
+      expect.objectContaining({ description: expect.stringContaining("selected environment changed") }),
     );
   });
 

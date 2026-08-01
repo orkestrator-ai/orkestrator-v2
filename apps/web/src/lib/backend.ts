@@ -1552,8 +1552,21 @@ export async function prMonitorRefresh(environmentId: string): Promise<void> {
 }
 
 /** Durably re-check a conflicting PR when the launched agent turn completes. */
-export async function armPrRefreshAfterAgentCompletion(environmentId: string): Promise<void> {
-  return invoke<void>("arm_pr_refresh_after_agent_completion", { environmentId });
+export async function armPrRefreshAfterAgentCompletion(
+  environmentId: string,
+): Promise<string | null> {
+  return invoke<string | null>("arm_pr_refresh_after_agent_completion", { environmentId });
+}
+
+/** Roll back one exact post-completion refresh arm when its agent launch fails. */
+export async function disarmPrRefreshAfterAgentCompletion(
+  environmentId: string,
+  armedAt: string,
+): Promise<void> {
+  return invoke<void>("disarm_pr_refresh_after_agent_completion", {
+    environmentId,
+    armedAt,
+  });
 }
 
 /** Get file tree from a local environment (worktree path) */

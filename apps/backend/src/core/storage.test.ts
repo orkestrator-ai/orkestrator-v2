@@ -89,6 +89,83 @@ describe("defaultConfig", () => {
   });
 });
 
+describe("PR completion refresh intent", () => {
+  test("rejects missing environments and ignores every ineligible PR state", async () => {
+    await withTemporaryStorage(async (storage) => {
+      await expect(storage.armPrRecheckAfterAgentCompletion("missing"))
+        .rejects.toThrow("Environment not found: missing");
+
+      for (const [index, metadata] of ([
+        { prUrl: null, prState: null, hasMergeConflicts: null },
+        { prUrl: "https://github.com/acme/repo/pull/1", prState: "closed", hasMergeConflicts: true },
+        { prUrl: "https://github.com/acme/repo/pull/1", prState: "open", hasMergeConflicts: false },
+        { prUrl: "https://github.com/acme/repo/pull/1", prState: "open", hasMergeConflicts: null },
+      ] as const).entries()) {
+        const environment = { ...createEnvironment("project-1"), id: `env-${index}`, ...metadata };
+        await storage.addEnvironment(environment);
+        expect((await storage.armPrRecheckAfterAgentCompletion(environment.id))
+          .prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+      }
+    });
+  });
+
+  test("survives restart and token-safe rollback preserves a newer arm", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = {
+        ...createEnvironment("project-1"),
+        id: "env-pr-arm",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open" as const,
+        hasMergeConflicts: true,
+      };
+      await storage.addEnvironment(environment);
+      const first = (await storage.armPrRecheckAfterAgentCompletion(environment.id))
+        .prRecheckAfterAgentCompletionArmedAt!;
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.getEnvironment(environment.id))
+        ?.prRecheckAfterAgentCompletionArmedAt).toBe(first);
+
+      const second = (await restarted.armPrRecheckAfterAgentCompletion(environment.id))
+        .prRecheckAfterAgentCompletionArmedAt!;
+      expect(second).not.toBe(first);
+      expect((await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, first))
+        .prRecheckAfterAgentCompletionArmedAt).toBe(second);
+      expect((await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, second))
+        .prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+      await expect(restarted.disarmPrRecheckAfterAgentCompletion("missing", second))
+        .rejects.toThrow("Environment not found: missing");
+    });
+  });
+
+  test("serializes monitor state ahead of a concurrent stale arm", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = {
+        ...createEnvironment("project-1"),
+        id: "env-pr-race",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open" as const,
+        hasMergeConflicts: true,
+      };
+      await storage.addEnvironment(environment);
+
+      const stateUpdate = storage.updateEnvironment(environment.id, {
+        hasMergeConflicts: false,
+        prRecheckAfterAgentCompletionArmedAt: undefined,
+      });
+      const staleArm = storage.armPrRecheckAfterAgentCompletion(environment.id);
+      await Promise.all([stateUpdate, staleArm]);
+
+      expect(await storage.getEnvironment(environment.id)).toMatchObject({
+        hasMergeConflicts: false,
+      });
+      expect((await storage.getEnvironment(environment.id))
+        ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+    });
+  });
+});
+
 describe("GitHub credential source config migration", () => {
   test.each([
     ["missing source without a PAT", undefined, undefined, true],

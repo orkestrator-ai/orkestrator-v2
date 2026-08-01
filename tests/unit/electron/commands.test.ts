@@ -13466,6 +13466,8 @@ exit 0
       lastActivityAt: "2026-07-23T09:00:00.000Z",
     });
     const { context, emitted } = createContext(environment);
+    const notifyAgentTurnCompleted = mock(async (_environmentId: string) => undefined);
+    context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
     const commands = createCommandRegistry();
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
     const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
@@ -13497,6 +13499,11 @@ exit 0
       environment.id,
       "2026-07-23T10:05:00.000Z",
     );
+    await waitForCondition(
+      () => notifyAgentTurnCompleted.mock.calls.length === 1,
+      "the tracked terminal completion notification",
+    );
+    expect(notifyAgentTurnCompleted).toHaveBeenCalledWith(environment.id);
     expect(environment.hasUnreadWork).toBe(true);
     expect(environment.lastActivityAt).toBe("2026-07-23T10:05:00.000Z");
     await waitForCondition(
@@ -13516,6 +13523,50 @@ exit 0
         activity_kind: "prompt",
       },
     });
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("retries tracked terminal completion persistence and notification before consuming the edge", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-agent-retry-");
+    const environment = createEnvironment({
+      id: "env-local-agent-retry",
+      worktreePath,
+    });
+    const { context, emitted } = createContext(environment);
+    const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
+    recordCompletion.mockRejectedValueOnce(new Error("storage temporarily unavailable"));
+    const notifyAgentTurnCompleted = mock(async (_environmentId: string) => undefined);
+    notifyAgentTurnCompleted.mockRejectedValueOnce(new Error("command temporarily unavailable"));
+    context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
+    const commands = createCommandRegistry();
+
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: true,
+      },
+      context,
+    )).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    await commands.get("local_terminal_write")?.({ sessionId, data: "codex\r" }, context);
+    ptyProcesses[0]?.emitData("done\r\n");
+
+    await waitForCondition(
+      () => recordCompletion.mock.calls.length === 2
+        && notifyAgentTurnCompleted.mock.calls.length === 2,
+      "completion persistence and notification retries",
+    );
+    expect(emitted.filter(({ event, payload }) =>
+      event === "environment-activity-recorded"
+      && (payload as { activity_kind?: string }).activity_kind === "completed"
+    )).toHaveLength(1);
+
+    ptyProcesses[0]?.emitData("late background output");
+    await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+    expect(recordCompletion).toHaveBeenCalledTimes(2);
+    expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(2);
     await commands.get("close_local_terminal_session")?.({ sessionId }, context);
   }, ASYNC_TEST_BUDGET_MS);
 
@@ -13659,6 +13710,8 @@ exit 0
       lastActivityAt: "2026-07-23T09:00:00.000Z",
     });
     const { context } = createContext(environment);
+    const notifyAgentTurnCompleted = mock(async (_environmentId: string) => undefined);
+    context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
     const commands = createCommandRegistry();
     const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
     const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
@@ -13690,6 +13743,11 @@ exit 0
       environment.id,
       "2026-07-23T11:02:00.000Z",
     );
+    await waitForCondition(
+      () => notifyAgentTurnCompleted.mock.calls.length === 1,
+      "the container terminal completion notification",
+    );
+    expect(notifyAgentTurnCompleted).toHaveBeenCalledWith(environment.id);
     expect(environment.hasUnreadWork).toBe(true);
     expect(environment.lastActivityAt).toBe("2026-07-23T11:02:00.000Z");
   });

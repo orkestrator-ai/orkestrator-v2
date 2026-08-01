@@ -42,7 +42,8 @@ export interface PrMonitorTarget {
 export interface PrDetection {
   url: string;
   state: PrState;
-  hasMergeConflicts: boolean;
+  /** Null means GitHub has not determined mergeability yet. */
+  hasMergeConflicts: boolean | null;
 }
 
 /** The slice of a kanban task the reconciliation side effects need. */

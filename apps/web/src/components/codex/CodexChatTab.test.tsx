@@ -1004,7 +1004,11 @@ describe("CodexChatTab", () => {
     mockGetStructuredOutput.mockReset();
     mockGetStructuredOutput.mockResolvedValue(null);
     mockSubscribeToEvents.mockClear();
-    mockSubscribeToEvents.mockImplementation(() => (async function* () {})());
+    mockSubscribeToEvents.mockImplementation(
+      (_client: unknown, signal?: AbortSignal) => (async function* () {
+        await waitForAbort(signal);
+      })(),
+    );
     mockScrollToBottom.mockClear();
     mockUpdateSessionConfig.mockClear();
     mockUpdateSessionConfig.mockImplementation(async () => true);
@@ -3711,6 +3715,87 @@ describe("CodexChatTab", () => {
       expect(state?.messages.map((message) => message.id)).toEqual(["current-event"]);
       expect(state?.error).toBe("turn failed");
       expect(state?.isLoading).toBe(false);
+    });
+  });
+
+  test("updates an active idle tab when another client starts a turn", async () => {
+    const externalTurnStarted = deferred<void>();
+    const externalMessage = createMessage(
+      "mobile-address-all",
+      "Addressing the review findings",
+    );
+    mockSubscribeToEvents.mockImplementation(
+      (_client: unknown, signal?: AbortSignal) => (async function* () {
+        await externalTurnStarted.promise;
+        if (signal?.aborted) return;
+        yield {
+          type: "session.updated",
+          sessionId: SESSION_ID,
+          data: {
+            phase: "running",
+            turnStartedAt: "2026-08-02T09:30:00.000Z",
+          },
+        };
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { message: externalMessage },
+        };
+        await waitForAbort(signal);
+      })(),
+    );
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+
+    act(() => externalTurnStarted.resolve());
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        isLoading: true,
+        loadingStartedAt: Date.parse("2026-08-02T09:30:00.000Z"),
+        messages: [externalMessage],
+      });
+      expect(screen.queryByText("Codex is thinking...")).not.toBeNull();
+    });
+  });
+
+  test("rehydrates externally started work when an idle tab becomes active", async () => {
+    const completedReport = createMessage("review-report", "Review complete");
+    const externalMessage = createMessage(
+      "mobile-address-all-hidden",
+      "Fixing findings started on mobile",
+    );
+    seedCodexStore([completedReport]);
+    mockGetSessionMessages.mockResolvedValue([completedReport]);
+
+    const view = render(
+      <CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />,
+    );
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+    expect(mockSubscribeToEvents).not.toHaveBeenCalled();
+
+    mockLookupSessionStatus.mockClear();
+    mockGetSessionStatus.mockResolvedValue({
+      status: "running",
+      phase: "running",
+      turnStartedAt: Date.parse("2026-08-02T10:00:00.000Z"),
+    });
+    mockGetSessionMessages.mockResolvedValue([completedReport, externalMessage]);
+
+    view.rerender(
+      <CodexChatTab tabId={TAB_ID} data={createData()} isActive />,
+    );
+
+    await waitFor(() => {
+      expect(mockLookupSessionStatus).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        isLoading: true,
+        messages: [completedReport, externalMessage],
+      });
+      expect(screen.queryByText("Codex is thinking...")).not.toBeNull();
     });
   });
 

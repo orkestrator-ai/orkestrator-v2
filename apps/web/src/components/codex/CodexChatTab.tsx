@@ -2379,10 +2379,36 @@ export function CodexChatTab({
     session?.sessionId,
   ]);
 
-  // SSE event subscription. Runs whenever a turn is in progress, including
-  // when the tab is rendered as a hidden background mount (e.g. an off-screen
-  // initial-prompt dispatch), so the response is processed before the
-  // environment unmounts.
+  const previousIsActiveRef = useRef(isActive);
+  useEffect(() => {
+    const becameActive = isActive && !previousIsActiveRef.current;
+    previousIsActiveRef.current = isActive;
+    if (
+      !becameActive
+      || connectionState !== "connected"
+      || !client
+      || !session?.sessionId
+    ) {
+      return;
+    }
+
+    // Hidden tabs intentionally do not keep an idle SSE connection. Reconcile
+    // on activation before treating subsequent frames as incremental updates;
+    // this covers a turn that started (or even completed) on another client
+    // while this tab was not observing the stream.
+    void reconcileSessionState({ forceRefreshMessages: true });
+  }, [
+    client,
+    connectionState,
+    isActive,
+    reconcileSessionState,
+    session?.sessionId,
+  ]);
+
+  // SSE event subscription. The visible tab stays subscribed even while idle,
+  // so a prompt dispatched by mobile or another renderer can deliver its
+  // running edge and transcript updates immediately. Hidden tabs still track
+  // an already-running turn (or a backend-owned startup) until it finishes.
   //
   // A backend-owned startup prompt is the important pre-running exception. The
   // bridge session id is deterministic, so this tab can attach while the
@@ -2390,12 +2416,13 @@ export function CodexChatTab({
   // point the renderer's snapshot legitimately says "idle". Waiting for
   // `isLoading` before subscribing then misses the event that changes it to
   // running, leaving the empty "Ready to build" surface visible until reload.
-  const shouldTrackCodexSession =
+  const shouldTrackRunningCodexSession =
     (session?.isLoading ?? false) || trackingBackendStartupTurn;
+  const shouldObserveCodexSession = isActive || shouldTrackRunningCodexSession;
 
   useEffect(() => {
     if (
-      !shouldTrackCodexSession
+      !shouldObserveCodexSession
       || connectionState !== "connected"
       || !client
       || !session?.sessionId
@@ -2405,7 +2432,8 @@ export function CodexChatTab({
 
     const abortController = new AbortController();
     const shouldTrackSession = () =>
-      trackingBackendStartupTurnRef.current
+      isActive
+      || trackingBackendStartupTurnRef.current
       || useCodexStore.getState().sessions.get(sessionKey)?.isLoading === true;
 
     (async () => {
@@ -2708,13 +2736,14 @@ export function CodexChatTab({
     client,
     connectionState,
     finishBackendStartupTracking,
+    isActive,
     refreshMessages,
     reconcileSessionState,
     removePendingApproval,
     resolveUnconfirmedDispatch,
     session?.sessionId,
     sessionKey,
-    shouldTrackCodexSession,
+    shouldObserveCodexSession,
     setSessionError,
     setSessionLoading,
     setMessages,
@@ -2729,7 +2758,7 @@ export function CodexChatTab({
   // the renderer has not observed the turn-start frame yet.
   useStalledTurnWatchdog({
     agentLabel: "Codex",
-    isLoading: shouldTrackCodexSession,
+    isLoading: shouldTrackRunningCodexSession,
     isReady:
       connectionState === "connected" && !!client && !!session?.sessionId,
     reconcile: () => reconcileSessionState({ forceRefreshMessages: true }),

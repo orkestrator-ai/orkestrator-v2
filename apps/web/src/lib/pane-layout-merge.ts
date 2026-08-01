@@ -278,6 +278,15 @@ export function mergePersistedPaneLayouts(
   const baseState = collectTabs(base.root);
   const localState = collectTabs(local.root);
   const remoteState = collectTabs(remote.root);
+  const baseLeaves = new Map(
+    collectLeaves(base.root).map((leaf) => [leaf.id, leaf]),
+  );
+  const localLeaves = new Map(
+    collectLeaves(local.root).map((leaf) => [leaf.id, leaf]),
+  );
+  const remoteLeaves = new Map(
+    collectLeaves(remote.root).map((leaf) => [leaf.id, leaf]),
+  );
   const localMovedTabIds = explicitlyMovedTabIds(base.root, local.root);
   const localTopologyChanged =
     serialized(topology(local.root)) !== serialized(topology(base.root));
@@ -380,23 +389,40 @@ export function mergePersistedPaneLayouts(
   }
   for (const leaf of leaves) {
     leaf.tabs = orders.get(leaf.id)!.map((id) => clone(finalTabs.get(id)!));
-    leaf.activeTabId = leaf.tabs[0]?.id ?? null;
+    const mergedActiveTabId = mergeChangedFields(
+      baseLeaves.get(leaf.id)?.activeTabId,
+      localLeaves.get(leaf.id)?.activeTabId,
+      remoteLeaves.get(leaf.id)?.activeTabId,
+    );
+    const validTabIds = new Set(leaf.tabs.map(({ id }) => id));
+    leaf.activeTabId =
+      typeof mergedActiveTabId === "string" && validTabIds.has(mergedActiveTabId)
+        ? mergedActiveTabId
+        : [
+          remoteLeaves.get(leaf.id)?.activeTabId,
+          localLeaves.get(leaf.id)?.activeTabId,
+        ].find((id): id is string => typeof id === "string" && validTabIds.has(id))
+          ?? leaf.tabs[0]?.id
+          ?? null;
   }
 
-  const canonicalizeSelection = (node: PaneNode): void => {
-    if (node.kind === "leaf") {
-      node.activeTabId = node.tabs[0]?.id ?? null;
-      return;
-    }
-    canonicalizeSelection(node.children[0]);
-    canonicalizeSelection(node.children[1]);
-  };
-  canonicalizeSelection(root);
+  const validPaneIds = new Set(leaves.map(({ id }) => id));
+  const mergedActivePaneId = mergeChangedFields(
+    base.activePaneId,
+    local.activePaneId,
+    remote.activePaneId,
+  );
+  const activePaneId =
+    typeof mergedActivePaneId === "string" && validPaneIds.has(mergedActivePaneId)
+      ? mergedActivePaneId
+      : [remote.activePaneId, local.activePaneId]
+        .find((id) => validPaneIds.has(id))
+        ?? firstLeaf(root).id;
 
   return {
     version: local.version,
     containerId: local.containerId,
-    activePaneId: firstLeaf(root).id,
+    activePaneId,
     root,
   };
 }

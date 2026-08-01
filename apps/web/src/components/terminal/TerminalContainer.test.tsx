@@ -581,15 +581,12 @@ describe("TerminalContainer", () => {
     expect(state.containerId).toBe("container-hidden");
   });
 
-  test("restores this client's own pane and tab selection on a cold start", async () => {
-    // The shared record carries a canonical selection so that clicking a tab
-    // never writes a revision and never moves another client's focus. Without
-    // the local mirror, every restart would drop the user on the first tab.
+  test("restores the backend pane and tab selection on a cold start", async () => {
     getPaneLayoutMock.mockResolvedValue({
       version: 1,
       environmentId: "env-hidden",
       containerId: "container-hidden",
-      activePaneId: "left",
+      activePaneId: "right",
       root: {
         kind: "split",
         id: "split",
@@ -604,7 +601,7 @@ describe("TerminalContainer", () => {
               { id: "left-a", type: "plain" },
               { id: "left-b", type: "plain" },
             ],
-            activeTabId: "left-a",
+            activeTabId: "left-b",
           },
           {
             kind: "leaf",
@@ -613,17 +610,18 @@ describe("TerminalContainer", () => {
               { id: "right-a", type: "plain" },
               { id: "right-b", type: "plain" },
             ],
-            activeTabId: "right-a",
+            activeTabId: "right-b",
           },
         ],
       },
       updatedAt: "2026-01-01T00:00:00.000Z",
       revision: 3,
     });
+    // A stale value from versions that kept focus in localStorage must not
+    // override the backend-owned selection.
     writeStoredPaneSelection("env-hidden", {
-      activePaneId: "right",
-      // "gone" no longer exists in the restored layout and must be ignored.
-      activeTabIds: { left: "left-b", right: "right-b", missing: "gone" },
+      activePaneId: "left",
+      activeTabIds: { left: "left-a", right: "right-a" },
     });
 
     render(

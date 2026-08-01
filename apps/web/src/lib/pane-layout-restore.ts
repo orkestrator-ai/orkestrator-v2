@@ -355,6 +355,45 @@ function preserveRendererLocalTabFields(
 }
 
 /**
+ * Keeps connection details that only exist in this renderer while accepting
+ * pane and tab selection from the backend snapshot.
+ */
+export function preserveRendererLocalPaneFields(
+  authoritative: EnvironmentPaneState,
+  current: EnvironmentPaneState,
+): EnvironmentPaneState {
+  const currentTabs = new Map<string, TabInfo>();
+  const collectCurrentTabs = (node: PaneNode): void => {
+    if (node.kind === "leaf") {
+      for (const tab of node.tabs) currentTabs.set(tab.id, tab);
+      return;
+    }
+    node.children.forEach(collectCurrentTabs);
+  };
+  collectCurrentTabs(current.root);
+
+  const preserveTabFields = (node: PaneNode): PaneNode => {
+    if (node.kind === "leaf") {
+      return {
+        ...node,
+        tabs: node.tabs.map((tab) =>
+          preserveRendererLocalTabFields(tab, currentTabs.get(tab.id))
+        ),
+      };
+    }
+    return {
+      ...node,
+      children: [
+        preserveTabFields(node.children[0]),
+        preserveTabFields(node.children[1]),
+      ],
+    };
+  };
+
+  return { ...authoritative, root: preserveTabFields(authoritative.root) };
+}
+
+/**
  * Installs a backend-owned pane/tab snapshot without adopting another
  * renderer's active pane or active tab.
  */

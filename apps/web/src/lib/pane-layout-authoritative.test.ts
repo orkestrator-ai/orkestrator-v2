@@ -224,7 +224,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
     { id: "tab-2", type: "plain" },
   ]);
 
-  test("installs the backend tree while keeping this client's selection", () => {
+  test("installs the backend tree and its selection", () => {
     const current = paneState(leaf("default", [{ id: "tab-2", type: "plain" }]));
     current.root = { ...current.root, activeTabId: "tab-2" } as PaneNode;
 
@@ -238,9 +238,7 @@ describe("reconcileAuthoritativePaneLayout", () => {
     expect(restored!.backendRevision).toBe(4);
     expect((restored!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id))
       .toEqual(["tab-1", "tab-2"]);
-    // The snapshot's canonical activeTabId is "tab-1"; this client was on
-    // "tab-2" and must stay there.
-    expect((restored!.root as { activeTabId: string }).activeTabId).toBe("tab-2");
+    expect((restored!.root as { activeTabId: string }).activeTabId).toBe("tab-1");
   });
 
   test("refuses a snapshot for an environment this client no longer has", () => {

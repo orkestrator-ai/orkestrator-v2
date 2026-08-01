@@ -1,7 +1,7 @@
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { hydrateLoopedReviewWorkflow } from "@/lib/looped-review-persistence";
 import {
-  preserveClientPaneSelection,
+  preserveRendererLocalPaneFields,
   reconcilePersistedLayout,
 } from "@/lib/pane-layout-restore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
@@ -100,7 +100,8 @@ export async function hydratePaneLayoutDependencies(
 
 /**
  * Validates a backend snapshot against this client's environment and stores,
- * then re-applies this renderer's own pane/tab selection over the result.
+ * then preserves only renderer-local connection fields. Pane and tab selection
+ * come from the backend snapshot so reconnecting clients share the last focus.
  *
  * Returns null when the snapshot cannot be trusted for this client: the
  * environment is gone, its container generation moved on, or the record itself
@@ -132,5 +133,5 @@ export function reconcileAuthoritativePaneLayout(
   });
   if (!restored) return null;
 
-  return preserveClientPaneSelection(restored, current);
+  return preserveRendererLocalPaneFields(restored, current);
 }

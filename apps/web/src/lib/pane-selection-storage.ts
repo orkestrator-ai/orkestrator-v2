@@ -3,13 +3,11 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneNode } from "@/types/paneLayout";
 
 /**
- * Renderer-local storage for which pane and tab this client has focused.
+ * Legacy renderer-local storage for which pane and tab this client focused.
  *
- * Selection is deliberately canonicalised out of the shared backend record:
- * clicking a tab must not write a revision, and must not move another client's
- * focus. That leaves nothing to restore it from after a restart, which is what
- * this module supplies — the same durability as before, without putting
- * selection back on the wire.
+ * Selection is now backend-owned as part of the pane-layout snapshot. These
+ * helpers remain only to read and clean up records written by older clients;
+ * application startup no longer applies or updates them.
  *
  * Everything here is best-effort. A browser that denies storage, a quota
  * failure, or a corrupt record costs the user their remembered selection and

@@ -37,7 +37,6 @@ import {
 } from "@/lib/initial-prompt-attachments";
 import { resolveClaudeConfig } from "@/lib/claude-mode-resolver";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
-import { applyStoredPaneSelection } from "@/lib/pane-selection-storage";
 import { createPersistedPaneLayoutInput, flushPaneLayoutNow } from "@/lib/pane-layout-persistence";
 import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
 import { createOrkestratorScriptPrompt } from "@/prompts";
@@ -1202,14 +1201,9 @@ export function TerminalContainer({
               hasLoopedReview: (workflowId) =>
                 useLoopedReviewStore.getState().workflows.has(workflowId),
             });
-            // The shared record carries a canonical selection so a tab click
-            // never writes a revision. Re-apply this client's own remembered
-            // pane/tab here, which is the only place a cold start can.
             paneStore.finishHydration(
               environmentId,
-              restored
-                ? applyStoredPaneSelection(restored, environmentId)
-                : undefined,
+              restored ?? undefined,
             );
           });
         return;

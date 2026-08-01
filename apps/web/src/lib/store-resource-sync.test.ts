@@ -348,7 +348,7 @@ describe("looped-review binding", () => {
 });
 
 describe("pane-layout binding", () => {
-  test("shows a tab created by another client without changing local selection", async () => {
+  test("shows a tab created by another client and adopts backend selection", async () => {
     detach?.();
     useEnvironmentStore.setState({ environments: [environment("env-1")] });
     const paneStore = usePaneLayoutStore.getState();
@@ -412,7 +412,7 @@ describe("pane-layout binding", () => {
     const pane = usePaneLayoutStore.getState().getPane("default", "env-1");
     expect(getPaneLayout).toHaveBeenCalledWith("env-1");
     expect(pane?.tabs.map(({ id }) => id)).toEqual(["review-3", "review-4"]);
-    expect(pane?.activeTabId).toBe("review-3");
+    expect(pane?.activeTabId).toBe("review-4");
     expect(pane?.tabs[1]?.claudeNativeData?.sessionId).toBe("session-4");
   });
 

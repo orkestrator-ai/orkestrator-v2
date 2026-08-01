@@ -365,7 +365,7 @@ describe("mergePersistedPaneLayouts", () => {
     ]);
   });
 
-  test("canonicalizes selection and takes identity from the local side", () => {
+  test("merges selection and takes identity from the local side", () => {
     const base = input(leaf("default", ["base"]));
     const localRoot = split(leaf("left", ["base", "local"]), leaf("right", ["only"]));
     const local: PersistedPaneLayoutInput = {
@@ -380,9 +380,6 @@ describe("mergePersistedPaneLayouts", () => {
       activePaneId: "default",
       root: leaf("default", ["base", "remote"]),
     };
-    // Selection is renderer-local, so a merge must emit the same canonical
-    // pointers `createPersistedPaneLayoutInput` writes — never another
-    // client's focus.
     (localRoot as Extract<PaneNode, { kind: "split" }>).children[0] = {
       ...(localRoot as Extract<PaneNode, { kind: "split" }>).children[0],
       activeTabId: "local",
@@ -392,14 +389,29 @@ describe("mergePersistedPaneLayouts", () => {
 
     expect(merged.version).toBe(local.version);
     expect(merged.containerId).toBe("container-1");
-    // Both pointers are the canonical "first" the shared record always carries,
-    // not the local side's "right"/"local" nor the remote side's "default".
-    expect(merged.activePaneId).toBe("left");
+    expect(merged.activePaneId).toBe("right");
     const children = (merged.root as Extract<PaneNode, { kind: "split" }>).children;
-    for (const child of children) {
-      const pane = child as Extract<PaneNode, { kind: "leaf" }>;
-      expect(pane.activeTabId).toBe(pane.tabs[0]!.id);
-    }
+    expect(children[0]).toMatchObject({ id: "left", activeTabId: "local" });
+    expect(children[1]).toMatchObject({ id: "right", activeTabId: "only" });
+  });
+
+  test("takes a later conflicting tab selection while retaining all tabs", () => {
+    const baseRoot = leaf("default", ["a", "b", "c"]);
+    const localRoot = leaf("default", ["a", "b", "c"]);
+    const remoteRoot = leaf("default", ["a", "b", "c"]);
+    (localRoot as Extract<PaneNode, { kind: "leaf" }>).activeTabId = "b";
+    (remoteRoot as Extract<PaneNode, { kind: "leaf" }>).activeTabId = "c";
+
+    const merged = mergePersistedPaneLayouts(
+      input(baseRoot),
+      input(localRoot),
+      input(remoteRoot),
+    );
+
+    expect(merged.root).toMatchObject({
+      tabs: [{ id: "a" }, { id: "b" }, { id: "c" }],
+      activeTabId: "b",
+    });
   });
 
   test("leaves an emptied pane with a null selection", () => {

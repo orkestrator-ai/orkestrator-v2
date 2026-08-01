@@ -161,7 +161,7 @@ describe("pane layout persistence", () => {
     stop();
   });
 
-  test("keeps active pane and tab selection out of the shared snapshot", async () => {
+  test("persists active pane and tab selection immediately", async () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
       createSaved(environmentId, input)
     );
@@ -179,7 +179,11 @@ describe("pane layout persistence", () => {
     usePaneLayoutStore.getState().setActiveTab("default", "tab-1", "env-1");
     await waitForTimers();
 
-    expect(save).not.toHaveBeenCalled();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0]?.[1]).toMatchObject({
+      activePaneId: "default",
+      root: { activeTabId: "tab-1" },
+    });
     const input = createPersistedPaneLayoutInput(
       usePaneLayoutStore.getState().environments.get("env-1")!,
     );
@@ -526,7 +530,7 @@ describe("pane layout persistence", () => {
     expect(directSave).toHaveBeenCalledTimes(1);
   });
 
-  test("canonicalizes every split selection and strips every native host port", () => {
+  test("persists every split selection and strips every native host port", () => {
     const state = {
       containerId: "container-1",
       activePaneId: "right",
@@ -570,10 +574,10 @@ describe("pane layout persistence", () => {
 
     const persisted = createPersistedPaneLayoutInput(state);
 
-    expect(persisted.activePaneId).toBe("left");
+    expect(persisted.activePaneId).toBe("right");
     expect(persisted.root).toMatchObject({
       children: [
-        { activeTabId: "claude" },
+        { activeTabId: "codex" },
         { activeTabId: "opencode" },
       ],
     });

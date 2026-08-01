@@ -85,13 +85,9 @@ function sanitizeTab(tab: TabInfo): TabInfo {
 
 function sanitizeRoot(node: PaneNode): PaneNode {
   if (node.kind === "leaf") {
-    // Selection belongs to this renderer, not to the shared tab registry.
-    // Persist a deterministic placeholder so selecting a tab in one client
-    // neither writes the backend nor changes another client's selection.
     return {
       ...node,
       tabs: node.tabs.map(sanitizeTab),
-      activeTabId: node.tabs[0]?.id ?? null,
     };
   }
   return {
@@ -100,21 +96,36 @@ function sanitizeRoot(node: PaneNode): PaneNode {
   };
 }
 
-function firstLeafId(node: PaneNode): string {
-  return node.kind === "leaf" ? node.id : firstLeafId(node.children[0]);
-}
-
 export function createPersistedPaneLayoutInput(
   state: EnvironmentPaneState,
 ): PersistedPaneLayoutInput {
   return {
     version: PANE_LAYOUT_VERSION,
     containerId: state.containerId,
-    // Like activeTabId, activePaneId is required by the version-1 wire shape
-    // but has no cross-client meaning. Keep it canonical on the shared record.
-    activePaneId: firstLeafId(state.root),
+    activePaneId: state.activePaneId,
     root: sanitizeRoot(state.root),
   };
+}
+
+/**
+ * Returns the structural portion of a layout. Used to recognize a pure focus
+ * change so it can be written immediately instead of waiting behind the normal
+ * structural-layout debounce.
+ */
+function withoutSelection(input: PersistedPaneLayoutInput): PersistedPaneLayoutInput {
+  const stripRoot = (node: PaneNode): PaneNode => {
+    if (node.kind === "leaf") {
+      return { ...node, activeTabId: node.tabs[0]?.id ?? null };
+    }
+    return {
+      ...node,
+      children: [stripRoot(node.children[0]), stripRoot(node.children[1])],
+    };
+  };
+  const root = stripRoot(input.root);
+  const firstLeafId = (node: PaneNode): string =>
+    node.kind === "leaf" ? node.id : firstLeafId(node.children[0]);
+  return { ...input, activePaneId: firstLeafId(root), root };
 }
 
 type PaneLayoutEnqueue = (
@@ -572,6 +583,25 @@ export function startPaneLayoutPersistence(
 
       if (environment === previous.environments.get(environmentId)) continue;
       if (lastEnqueued.get(environmentId) === serialized) continue;
+
+      const previousEnvironment = previous.environments.get(environmentId);
+      const selectionOnly = previousEnvironment
+        && JSON.stringify(withoutSelection(input))
+          === JSON.stringify(withoutSelection(
+            createPersistedPaneLayoutInput(previousEnvironment),
+          ));
+
+      if (selectionOnly) {
+        cancelTimer(environmentId);
+        pendingWrites.delete(environmentId);
+        lastEnqueued.set(environmentId, serialized);
+        void enqueueWrite(environmentId, {
+          input,
+          serialized,
+          baseInput: authoritative.get(environmentId)?.input ?? input,
+        }).catch(reportWriteFailure);
+        continue;
+      }
 
       cancelTimer(environmentId);
       lastEnqueued.set(environmentId, serialized);

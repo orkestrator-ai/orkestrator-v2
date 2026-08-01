@@ -30,6 +30,43 @@ function makeMessage(
   };
 }
 
+type NativeTaskGroupPart = Extract<NativeMessagePart, { type: "task-group" }>;
+type NativeSubagentPart = Extract<NativeMessagePart, { type: "subagent" }>;
+
+function makeAgentTaskGroupPart(
+  overrides: Partial<Omit<NativeTaskGroupPart, "task">> & {
+    task?: Partial<NativeTaskGroupPart["task"]>;
+  } = {},
+): NativeTaskGroupPart {
+  return {
+    type: "task-group",
+    content: "Agent",
+    childTools: [],
+    ...overrides,
+    task: {
+      type: "tool-invocation",
+      content: "Agent",
+      toolName: "Agent",
+      toolTitle: "Agent",
+      toolState: "pending",
+      ...overrides.task,
+    },
+  };
+}
+
+function makeStandaloneSubagentPart(
+  overrides: Partial<NativeSubagentPart> = {},
+): NativeSubagentPart {
+  return {
+    type: "subagent",
+    content: "Reviewer",
+    subagentName: "Reviewer",
+    toolState: "pending",
+    subagentActions: [],
+    ...overrides,
+  };
+}
+
 describe("NativeMessage assistant attribution", () => {
   test("shows the backend-confirmed model instead of the static provider label", () => {
     render(
@@ -1297,6 +1334,148 @@ describe("NativeMessage task list rendering", () => {
     expect(remountedTrigger.getAttribute("aria-expanded")).toBe("false");
   });
 
+  test("isolates matching standalone agent ids between messages", () => {
+    render(
+      <>
+        <NativeMessage
+          message={makeMessage(
+            [makeStandaloneSubagentPart({
+              content: "First reviewer",
+              subagentId: "shared-agent-id",
+              subagentName: "First reviewer",
+            })],
+            { id: "assistant-first-agent" },
+          )}
+        />
+        <NativeMessage
+          message={makeMessage(
+            [makeStandaloneSubagentPart({
+              content: "Second reviewer",
+              subagentId: "shared-agent-id",
+              subagentName: "Second reviewer",
+            })],
+            { id: "assistant-second-agent" },
+          )}
+        />
+      </>,
+    );
+
+    const first = screen.getByRole("button", { name: /first reviewer/i });
+    const second = screen.getByRole("button", { name: /second reviewer/i });
+    fireEvent.click(first);
+
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+    expect(second.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("isolates matching message and agent ids between containers", () => {
+    render(
+      <>
+        <NativeMessage
+          message={makeMessage(
+            [makeStandaloneSubagentPart({
+              content: "First container reviewer",
+              subagentId: "shared-container-agent",
+              subagentName: "First container reviewer",
+            })],
+            { id: "shared-container-message" },
+          )}
+          containerId="container-a"
+        />
+        <NativeMessage
+          message={makeMessage(
+            [makeStandaloneSubagentPart({
+              content: "Second container reviewer",
+              subagentId: "shared-container-agent",
+              subagentName: "Second container reviewer",
+            })],
+            { id: "shared-container-message" },
+          )}
+          containerId="container-b"
+        />
+      </>,
+    );
+
+    const first = screen.getByRole("button", {
+      name: /first container reviewer/i,
+    });
+    const second = screen.getByRole("button", {
+      name: /second container reviewer/i,
+    });
+    fireEvent.click(first);
+
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+    expect(second.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("isolates id-less task agents with the same generic tool fallback between messages", () => {
+    render(
+      <>
+        <NativeMessage
+          message={makeMessage(
+            [makeAgentTaskGroupPart({
+              task: {
+                toolUseId: undefined,
+                subagentId: undefined,
+                toolName: "Agent",
+                toolArgs: { description: "First task agent" },
+              },
+            })],
+            { id: "assistant-first-task" },
+          )}
+        />
+        <NativeMessage
+          message={makeMessage(
+            [makeAgentTaskGroupPart({
+              task: {
+                toolUseId: undefined,
+                subagentId: undefined,
+                toolName: "Agent",
+                toolArgs: { description: "Second task agent" },
+              },
+            })],
+            { id: "assistant-second-task" },
+          )}
+        />
+      </>,
+    );
+
+    const first = screen.getByRole("button", { name: /first task agent/i });
+    const second = screen.getByRole("button", { name: /second task agent/i });
+    fireEvent.click(first);
+
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+    expect(second.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("keeps an expanded task agent open when its virtualized row remounts", () => {
+    const message = makeMessage(
+      [makeAgentTaskGroupPart({
+        task: {
+          toolUseId: "task-remount",
+          toolArgs: {
+            description: "Remount reviewer",
+            prompt: "Inspect the task-group transcript",
+          },
+        },
+      })],
+      { id: "assistant-task-remount" },
+    );
+
+    const first = render(<NativeMessage message={message} />);
+    fireEvent.click(screen.getByRole("button", { name: /remount reviewer/i }));
+    expect(screen.getByText("Inspect the task-group transcript")).toBeTruthy();
+
+    first.unmount();
+    render(<NativeMessage message={message} />);
+
+    const remountedTrigger = screen.getByRole("button", {
+      name: /remount reviewer/i,
+    });
+    expect(remountedTrigger.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Inspect the task-group transcript")).toBeTruthy();
+  });
+
   test("propagates the container id through grouped subagent actions", async () => {
     const message = makeMessage([
       {
@@ -2492,6 +2671,241 @@ describe("NativeMessage agent status and grouping details", () => {
     expect(taskTrigger.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(taskTrigger);
     expect(taskTrigger.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  const taskExpansionIdentityCases: Array<[
+    string,
+    NativeTaskGroupPart,
+    RegExp,
+  ]> = [
+    [
+      "tool-use id",
+      makeAgentTaskGroupPart({
+        task: {
+          toolUseId: "task-tool-use-identity",
+          toolArgs: { description: "Tool-use identity task" },
+        },
+      }),
+      /tool-use identity task/i,
+    ],
+    [
+      "subagent id",
+      makeAgentTaskGroupPart({
+        task: {
+          toolUseId: undefined,
+          subagentId: "task-subagent-identity",
+          toolArgs: { description: "Subagent identity task" },
+        },
+      }),
+      /subagent identity task/i,
+    ],
+    [
+      "tool name",
+      makeAgentTaskGroupPart({
+        task: {
+          toolUseId: undefined,
+          subagentId: undefined,
+          toolName: "ReviewerTool",
+          toolTitle: "ReviewerTool",
+        },
+      }),
+      /reviewertool/i,
+    ],
+    [
+      "part content",
+      makeAgentTaskGroupPart({
+        content: "Content identity task",
+        task: {
+          toolUseId: undefined,
+          subagentId: undefined,
+          toolName: undefined,
+          toolArgs: { description: "Content-keyed task" },
+        },
+      }),
+      /content-keyed task/i,
+    ],
+    [
+      "generic default",
+      makeAgentTaskGroupPart({
+        content: undefined as unknown as string,
+        task: {
+          toolUseId: undefined,
+          subagentId: undefined,
+          toolName: undefined,
+          toolArgs: { description: "Default-keyed task" },
+        },
+      }),
+      /default-keyed task/i,
+    ],
+  ];
+
+  test.each(taskExpansionIdentityCases)(
+    "persists task-agent expansion keyed by %s across a remount",
+    (identityName, part, triggerName) => {
+      const message = makeMessage([part], {
+        id: `assistant-task-identity-${identityName.replaceAll(" ", "-")}`,
+      });
+      const first = render(<NativeMessage message={message} />);
+      fireEvent.click(screen.getByRole("button", { name: triggerName }));
+
+      first.unmount();
+      render(<NativeMessage message={message} />);
+
+      expect(
+        screen.getByRole("button", { name: triggerName }).getAttribute(
+          "aria-expanded",
+        ),
+      ).toBe("true");
+    },
+  );
+
+  const subagentExpansionIdentityCases: Array<[
+    string,
+    NativeSubagentPart,
+    RegExp,
+  ]> = [
+    [
+      "subagent id",
+      makeStandaloneSubagentPart({
+        subagentId: "standalone-subagent-identity",
+        subagentName: "Subagent-id reviewer",
+      }),
+      /subagent-id reviewer/i,
+    ],
+    [
+      "tool-use id",
+      makeStandaloneSubagentPart({
+        subagentId: undefined,
+        toolUseId: "standalone-tool-use-identity",
+        subagentName: "Tool-use reviewer",
+      }),
+      /tool-use reviewer/i,
+    ],
+    [
+      "subagent name",
+      makeStandaloneSubagentPart({
+        subagentId: undefined,
+        toolUseId: undefined,
+        subagentName: "Named identity reviewer",
+      }),
+      /named identity reviewer/i,
+    ],
+    [
+      "part content",
+      makeStandaloneSubagentPart({
+        content: "Content identity reviewer",
+        subagentId: undefined,
+        toolUseId: undefined,
+        subagentName: undefined,
+        subagentRole: "Content-keyed reviewer",
+      }),
+      /content-keyed reviewer/i,
+    ],
+    [
+      "generic default",
+      makeStandaloneSubagentPart({
+        content: undefined as unknown as string,
+        subagentId: undefined,
+        toolUseId: undefined,
+        subagentName: undefined,
+        subagentRole: "Default-keyed reviewer",
+      }),
+      /default-keyed reviewer/i,
+    ],
+  ];
+
+  test.each(subagentExpansionIdentityCases)(
+    "persists standalone-agent expansion keyed by %s across a remount",
+    (identityName, part, triggerName) => {
+      const message = makeMessage([part], {
+        id: `assistant-subagent-identity-${identityName.replaceAll(" ", "-")}`,
+      });
+      const first = render(<NativeMessage message={message} />);
+      fireEvent.click(screen.getByRole("button", { name: triggerName }));
+
+      first.unmount();
+      render(<NativeMessage message={message} />);
+
+      expect(
+        screen.getByRole("button", { name: triggerName }).getAttribute(
+          "aria-expanded",
+        ),
+      ).toBe("true");
+    },
+  );
+
+  test("uses the response fallback for standalone whitespace text and omits a whitespace prompt", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          makeStandaloneSubagentPart({
+            subagentId: "agent-whitespace-text",
+            subagentName: "Whitespace reviewer",
+            subagentPrompt: "  \n\t  ",
+            subagentActions: [{ type: "text", content: "  \n\t  " }],
+          }),
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("Response")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /whitespace reviewer/i }));
+    expect(screen.queryByText("Task")).toBeNull();
+  });
+
+  test("previews the latest thinking and file updates in task agents", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          makeAgentTaskGroupPart({
+            task: {
+              toolUseId: "task-thinking-preview",
+              toolArgs: { description: "Thinking preview reviewer" },
+            },
+            childTools: [{
+              type: "thinking",
+              content: "Inspecting the reducer",
+            }],
+          }),
+          makeAgentTaskGroupPart({
+            task: {
+              toolUseId: "task-file-preview",
+              toolArgs: { description: "File preview reviewer" },
+            },
+            childTools: [{
+              type: "file",
+              content: "/workspace/review-summary.md",
+            }],
+          }),
+        ])}
+      />,
+    );
+
+    const thinkingTrigger = screen.getByRole("button", {
+      name: /thinking preview reviewer/i,
+    });
+    const fileTrigger = screen.getByRole("button", {
+      name: /file preview reviewer/i,
+    });
+    expect(thinkingTrigger.textContent).toContain("Thinking");
+    expect(fileTrigger.textContent).toContain("/workspace/review-summary.md");
+  });
+
+  test("renders no shell for an empty agent group", () => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([
+          { type: "text", content: "Before agents" },
+          { type: "agent-group", content: "", parts: [] },
+          { type: "text", content: "After agents" },
+        ])}
+      />,
+    );
+
+    expect(container.textContent).toContain("Before agents");
+    expect(container.textContent).toContain("After agents");
+    expect(screen.queryByRole("region", { name: /agents/i })).toBeNull();
+    expect(screen.queryByText("Agents")).toBeNull();
   });
 
   test("omits the active badge when every grouped agent has finished", () => {

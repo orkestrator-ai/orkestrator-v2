@@ -1,6 +1,8 @@
 import {
+  createContext,
   memo,
   useCallback,
+  useContext,
   useState,
   useMemo,
   useEffect,
@@ -117,6 +119,16 @@ interface NativeMessageProps {
   resolveModelLabel?: (modelId: string) => string;
 }
 
+const AgentExpansionScopeContext = createContext<string | null>(null);
+
+function useAgentExpansionScope(): string {
+  const scope = useContext(AgentExpansionScopeContext);
+  if (!scope) {
+    throw new Error("Agent expansion must be rendered within a message scope");
+  }
+  return scope;
+}
+
 function getAgentExpansionKey(part: NativeAgentActivityPart): string {
   if (part.type === "task-group") {
     return `task:${
@@ -138,12 +150,15 @@ function getAgentExpansionKey(part: NativeAgentActivityPart): string {
 }
 
 function useAgentExpansion(part: NativeAgentActivityPart) {
+  const expansionScope = useAgentExpansionScope();
   const expansionKey = getAgentExpansionKey(part);
   // Active agents live in a virtualized row that can be unmounted while Claude
   // streams or while the reader scrolls. Persist the user's explicit toggle in
   // the same bounded store used by thinking/JSON disclosures so those routine
   // remounts cannot silently collapse the agent again.
-  return useMessagePartExpansion(`native-agent:${expansionKey}`);
+  return useMessagePartExpansion(
+    `native-agent:${expansionScope}:${expansionKey}`,
+  );
 }
 
 /** Render a thinking/reasoning part inline - expandable to show the full text */
@@ -597,27 +612,33 @@ function generateDiffFromBeforeAfter(
     content: string;
   }> = [];
 
+  // An empty file has zero lines. String#split would otherwise turn it into a
+  // single empty line and render a synthetic `-` or `+` that disagrees with the
+  // zero-line statistics shown in the collapsed row.
+  const contentLines = (content: string): string[] =>
+    content.length === 0 ? [] : content.split("\n");
+
   // If we have both before and after, show the diff
   if (before !== undefined && after !== undefined) {
     // Add removed lines
-    const beforeLines = before.split("\n");
+    const beforeLines = contentLines(before);
     for (const line of beforeLines) {
       result.push({ type: "remove", content: `-${line}` });
     }
     // Add added lines
-    const afterLines = after.split("\n");
+    const afterLines = contentLines(after);
     for (const line of afterLines) {
       result.push({ type: "add", content: `+${line}` });
     }
   } else if (after !== undefined) {
     // Only additions (write/new content)
-    const afterLines = after.split("\n");
+    const afterLines = contentLines(after);
     for (const line of afterLines) {
       result.push({ type: "add", content: `+${line}` });
     }
   } else if (before !== undefined) {
     // Only deletions
-    const beforeLines = before.split("\n");
+    const beforeLines = contentLines(before);
     for (const line of beforeLines) {
       result.push({ type: "remove", content: `-${line}` });
     }
@@ -1003,14 +1024,23 @@ function parseLocalFilePathFromUrl(fileUrl: string): string | null {
   }
 }
 
-function isSafeContainerPath(path: string): boolean {
+function getSafeContainerRelativePath(path: string): string | null {
   if (!path || path.includes("\0") || path.includes("\n") || path.includes("\r")) {
-    return false;
+    return null;
   }
   if (path.split(/[\\/]+/).some((segment) => segment === "..")) {
-    return false;
+    return null;
   }
-  return !path.startsWith("/") || path === "/workspace" || path.startsWith("/workspace/");
+  if (/^[a-z]:[\\/]/i.test(path) || path.startsWith("\\\\")) {
+    return null;
+  }
+  if (path.startsWith("/workspace/")) {
+    return path.slice("/workspace/".length) || null;
+  }
+  if (path.startsWith("/")) {
+    return null;
+  }
+  return path;
 }
 
 function FilePart({
@@ -1057,13 +1087,15 @@ function FilePart({
         ? parseLocalFilePathFromUrl(fileUrl)
         : null;
 
-      if (containerId && !localFilePath) {
-        if (!isSafeContainerPath(path)) {
+      if (containerId) {
+        const containerPath = localFilePath ?? path;
+        const relativePath = getSafeContainerRelativePath(containerPath);
+        if (!relativePath) {
           throw new Error("Unsafe container image path");
         }
 
-        const base64 = await readContainerFileBase64(containerId, path);
-        const mimeType = getMimeType(path);
+        const base64 = await readContainerFileBase64(containerId, relativePath);
+        const mimeType = getMimeType(containerPath);
         setImageSrc(`data:${mimeType};base64,${base64}`);
         setPreviewOpen(true);
         return;
@@ -1261,7 +1293,7 @@ function getSubagentPreview(
   }
 
   if (latestAction.type === "text") {
-    return latestAction.content;
+    return latestAction.content.trim() || "Response";
   }
 
   const command =
@@ -1378,7 +1410,7 @@ function SubagentPart({
 
       <CollapsibleContent className="mt-1">
         <div className="border-l border-border/40 pl-3">
-          {part.subagentPrompt ? (
+          {part.subagentPrompt?.trim() ? (
             <div className="mb-3 border-l border-border/30 pl-3">
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
                 Task
@@ -1422,6 +1454,10 @@ function AgentGroupPart({
   containerId?: string;
   partKey: string;
 }) {
+  if (part.parts.length === 0) {
+    return null;
+  }
+
   const activeCount = part.parts.filter((child) => {
     return getNativeAgentStatus(child) === "active";
   }).length;
@@ -1769,6 +1805,11 @@ export const NativeMessage = memo(function NativeMessage({
   message = normalizedMessage;
   previousMessage = normalizedPreviousMessage;
 
+  // Agent identities are only unique within their containing transcript row.
+  // Add the container when available so the bounded global disclosure store
+  // cannot couple messages from different container-backed environments.
+  const agentExpansionScope = JSON.stringify([containerId ?? null, message.id]);
+
   const isUser = message.role === "user";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
   const isSystem = message.role === "system" || message.id.startsWith(SYSTEM_MESSAGE_PREFIX);
@@ -1849,42 +1890,44 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   return (
-    <MessageShell
-      isUser={isUser}
-      authorLabel={
-        isUser
-          ? "You"
-          : assistantAuthorLabel
-      }
-      timestampLabel={formatTime(message.createdAt)}
-      durationLabel={durationLabel}
-      showHeader={!isContinuation}
-      className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
-      onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
-      actions={(isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
-        <>
-          {messageActions}
-          {(isUser ? userCopyContent : assistantCopyContent) ? (
-            <MessageCopyButton
-              content={isUser ? userCopyContent : assistantCopyContent}
-              wrapperClassName="mt-0 pr-0"
-            />
-          ) : null}
-        </>
-      ) : undefined}
-    >
-      {renderMessageParts(message, { showTextCopy: false, containerId })}
+    <AgentExpansionScopeContext.Provider value={agentExpansionScope}>
+      <MessageShell
+        isUser={isUser}
+        authorLabel={
+          isUser
+            ? "You"
+            : assistantAuthorLabel
+        }
+        timestampLabel={formatTime(message.createdAt)}
+        durationLabel={durationLabel}
+        showHeader={!isContinuation}
+        className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
+        onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
+        actions={(isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
+          <>
+            {messageActions}
+            {(isUser ? userCopyContent : assistantCopyContent) ? (
+              <MessageCopyButton
+                content={isUser ? userCopyContent : assistantCopyContent}
+                wrapperClassName="mt-0 pr-0"
+              />
+            ) : null}
+          </>
+        ) : undefined}
+      >
+        {renderMessageParts(message, { showTextCopy: false, containerId })}
 
-      {!hasTextParts && message.content && (
-        <TextPart
-          content={message.content}
-          showCopy={false}
-          truncateUserPrompt={isUser}
-          renderJsonPayload={!isUser}
-          expansionKey={`${message.id}-content/json`}
-        />
-      )}
-    </MessageShell>
+        {!hasTextParts && message.content && (
+          <TextPart
+            content={message.content}
+            showCopy={false}
+            truncateUserPrompt={isUser}
+            renderJsonPayload={!isUser}
+            expansionKey={`${message.id}-content/json`}
+          />
+        )}
+      </MessageShell>
+    </AgentExpansionScopeContext.Provider>
   );
 });
 

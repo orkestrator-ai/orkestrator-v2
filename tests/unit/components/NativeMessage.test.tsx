@@ -654,10 +654,88 @@ describe("NativeMessage", () => {
     const image = await screen.findByAltText("screenshot.png");
     expect(mockReadContainerFileBase64).toHaveBeenCalledWith(
       "container-1",
-      "/workspace/.orkestrator/clipboard/screenshot.png",
+      ".orkestrator/clipboard/screenshot.png",
     );
     expect(mockReadFileBase64).not.toHaveBeenCalled();
     expect(image.getAttribute("src")).toBe("data:image/png;base64,container-image-base64");
+  });
+
+  test("keeps decoded file URLs inside the container trust boundary", async () => {
+    const message: NativeMessageType = {
+      id: "msg-container-file-url-preview",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "file",
+          content: "/workspace/screen shots/shot.png",
+          fileUrl: "file:///workspace/screen%20shots/shot.png",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} containerId="container-1" />);
+    fireEvent.click(screen.getByRole("button", { name: /shot\.png/i }));
+
+    await screen.findByAltText("shot.png");
+    expect(mockReadContainerFileBase64).toHaveBeenCalledWith(
+      "container-1",
+      "screen shots/shot.png",
+    );
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+  });
+
+  test("rejects a container file URL that resolves outside the workspace", async () => {
+    const consoleError = console.error;
+    console.error = mock(() => {}) as typeof console.error;
+    const message: NativeMessageType = {
+      id: "msg-container-unsafe-file-url",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "file",
+          content: "/workspace/safe-looking.png",
+          fileUrl: "file:///etc/secret.png",
+        },
+      ],
+    };
+
+    try {
+      render(<NativeMessage message={message} containerId="container-1" />);
+      fireEvent.click(screen.getByRole("button", { name: /safe-looking\.png/i }));
+
+      await waitFor(() => expect(screen.getByText("(error)")).toBeTruthy());
+      expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+      expect(mockReadFileBase64).not.toHaveBeenCalled();
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
+  test("rejects the workspace directory itself as a container image path", async () => {
+    const consoleError = console.error;
+    console.error = mock(() => {}) as typeof console.error;
+    const message: NativeMessageType = {
+      id: "msg-container-workspace-root",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/workspace", fileUrl: "preview.png" }],
+    };
+
+    try {
+      render(<NativeMessage message={message} containerId="container-1" />);
+      fireEvent.click(screen.getByRole("button", { name: /workspace/i }));
+
+      await waitFor(() => expect(screen.getByText("(error)")).toBeTruthy());
+      expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+      expect(mockReadFileBase64).not.toHaveBeenCalled();
+    } finally {
+      console.error = consoleError;
+    }
   });
 
   test("does not fall back to host file reads for unsafe container image paths", async () => {
@@ -697,6 +775,7 @@ describe("NativeMessage", () => {
     const consoleError = console.error;
     console.error = mock(() => {}) as typeof console.error;
     const unsafePaths = [
+      "../secrets.png",
       "/workspace/../secrets.png",
       "/workspace\\..\\secrets.png",
       "/workspace/bad\0name.png",
@@ -782,6 +861,49 @@ describe("NativeMessage", () => {
     const remoteImage = await screen.findByAltText("remote.webp");
     expect(remoteImage.getAttribute("src")).toBe(remoteUrl);
     expect(mockReadFileBase64).not.toHaveBeenCalled();
+  });
+
+  test("opens HTTP image previews without local file reads", async () => {
+    const remoteUrl = "http://example.com/remote.gif";
+    const message: NativeMessageType = {
+      id: "msg-http-preview",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "remote.gif", fileUrl: remoteUrl }],
+    };
+
+    render(<NativeMessage message={message} />);
+    fireEvent.click(screen.getByRole("button", { name: /remote\.gif/i }));
+
+    const image = await screen.findByAltText("remote.gif");
+    expect(image.getAttribute("src")).toBe(remoteUrl);
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+    expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+  });
+
+  test("decodes percent-encoded Unix paths from file URLs", async () => {
+    const message: NativeMessageType = {
+      id: "msg-unix-file-url-preview",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "file",
+          content: "error #1.png",
+          fileUrl: "file:///tmp/screen%20shots/error%20%231.png",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+    fireEvent.click(screen.getByRole("button", { name: /error #1\.png/i }));
+
+    await screen.findByAltText("error #1.png");
+    expect(mockReadFileBase64).toHaveBeenCalledWith(
+      "/tmp/screen shots/error #1.png",
+    );
   });
 
   test("reads decoded local image paths from file URLs", async () => {
@@ -918,6 +1040,39 @@ describe("NativeMessage", () => {
       });
       expect(mockReadFileBase64).toHaveBeenCalledWith("/tmp/missing.png");
       expect(screen.queryByAltText("missing.png")).toBeNull();
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
+  test("retries a failed local image preview read", async () => {
+    const consoleError = console.error;
+    console.error = mock(() => {}) as typeof console.error;
+    mockReadFileBase64
+      .mockImplementationOnce(async () => {
+        throw new Error("transient read failure");
+      })
+      .mockImplementationOnce(async () => "retry-base64");
+    const message: NativeMessageType = {
+      id: "msg-file-preview-retry",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/retry.png" }],
+    };
+
+    try {
+      render(<NativeMessage message={message} />);
+      const trigger = screen.getByRole("button", { name: /retry\.png/i });
+
+      fireEvent.click(trigger);
+      await waitFor(() => expect(screen.getByText("(error)")).toBeTruthy());
+
+      fireEvent.click(trigger);
+      const image = await screen.findByAltText("retry.png");
+      expect(image.getAttribute("src")).toBe("data:image/png;base64,retry-base64");
+      expect(screen.queryByText("(error)")).toBeNull();
+      expect(mockReadFileBase64).toHaveBeenCalledTimes(2);
     } finally {
       console.error = consoleError;
     }
@@ -1159,6 +1314,56 @@ describe("NativeMessage", () => {
 
     expect(screen.getByText("-removed only")).toBeTruthy();
     expect(screen.getByText("+created only")).toBeTruthy();
+  });
+
+  test("treats empty before and after metadata as zero diff lines", () => {
+    const message: NativeMessageType = {
+      id: "msg-edit-empty-boundaries",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Write",
+          toolState: "success",
+          toolDiff: { filePath: "/workspace/created.ts", before: "", after: "created" },
+        },
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: { filePath: "/workspace/deleted.ts", before: "removed", after: "" },
+        },
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: { filePath: "/workspace/empty.ts", before: "", after: "" },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    const created = screen.getByRole("button", { name: /write created\.ts \+1 success/i });
+    const deleted = screen.getByRole("button", { name: /edit deleted\.ts -1 success/i });
+    const empty = screen.getByRole("button", { name: /edit empty\.ts success/i });
+    expect((empty as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(created);
+    fireEvent.click(deleted);
+    expect(screen.getByText("+created")).toBeTruthy();
+    expect(screen.getByText("-removed")).toBeTruthy();
+    expect(screen.queryByText("+")).toBeNull();
+    expect(screen.queryByText("-")).toBeNull();
   });
 
   test("falls back from diff metadata without change markers to before and after", () => {
@@ -2258,6 +2463,32 @@ describe("NativeMessage", () => {
     );
   });
 
+  test.each([
+    ["gif", "image/gif"],
+    ["jpeg", "image/jpeg"],
+    ["bmp", "image/bmp"],
+    ["ico", "image/x-icon"],
+    ["tif", "image/tiff"],
+    ["tiff", "image/tiff"],
+  ])("maps .%s container images to %s", async (extension, mimeType) => {
+    const filename = `alias.${extension}`;
+    const message: NativeMessageType = {
+      id: `msg-container-mime-${extension}`,
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: `/workspace/${filename}` }],
+    };
+
+    render(<NativeMessage message={message} containerId="container-1" />);
+    fireEvent.click(screen.getByRole("button", { name: filename }));
+
+    const image = await screen.findByAltText(filename);
+    expect(image.getAttribute("src")).toBe(
+      `data:${mimeType};base64,container-image-base64`,
+    );
+  });
+
   test("strips query strings from image paths and defaults unknown extensions to png", async () => {
     const message: NativeMessageType = {
       id: "msg-mime-query-and-fallback",
@@ -2452,5 +2683,212 @@ describe("NativeMessage", () => {
     rerender(<NativeMessage message={overBoundaryMessage} />);
 
     expect(screen.getByRole("button", { name: "show more" })).toBeTruthy();
+  });
+
+  test("renders explicit system roles with system-message styling", () => {
+    const message: NativeMessageType = {
+      id: "ordinary-message-id",
+      role: "system",
+      content: "Workspace configuration changed",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [],
+    };
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Workspace configuration changed")).toBeTruthy();
+    expect(container.querySelector(".italic")).toBeTruthy();
+    expect(screen.queryByText("Assistant")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
+  });
+
+  test("shows a fresh assistant header after a previous error in the same minute", () => {
+    const previousMessage: NativeMessageType = {
+      id: "error-previous-response",
+      role: "assistant",
+      content: "Temporary bridge failure",
+      createdAt: "2026-03-07T12:00:05.000Z",
+      parts: [],
+    };
+    const message: NativeMessageType = {
+      id: "assistant-after-error",
+      role: "assistant",
+      content: "Recovered response",
+      createdAt: "2026-03-07T12:00:20.000Z",
+      parts: [{ type: "text", content: "Recovered response" }],
+    };
+
+    render(
+      <NativeMessage
+        message={message}
+        previousMessage={previousMessage}
+        assistantLabel="Worker"
+      />,
+    );
+
+    expect(screen.getByText("Worker")).toBeTruthy();
+    expect(screen.getByText("Recovered response")).toBeTruthy();
+  });
+
+  test("uses message content for copying when the only text part is whitespace", async () => {
+    const message: NativeMessageType = {
+      id: "msg-whitespace-text-copy-fallback",
+      role: "user",
+      content: "Fallback copy content",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "text", content: "  \n\t " }],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.queryByText("Fallback copy content")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
+
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith("Fallback copy content");
+    });
+  });
+
+  test("joins multiple assistant text parts when copying the message", async () => {
+    const message: NativeMessageType = {
+      id: "msg-multiple-assistant-text-copy",
+      role: "assistant",
+      content: "Legacy combined content",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        { type: "text", content: "First assistant block" },
+        { type: "text", content: "Second assistant block" },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("First assistant block")).toBeTruthy();
+    expect(screen.getByText("Second assistant block")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Copy text" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith(
+        "First assistant block\n\nSecond assistant block",
+      );
+    });
+  });
+
+  test("trims model IDs before resolving and rendering assistant labels", () => {
+    const resolveModelLabel = mock((modelId: string) => `  ${modelId} label  `);
+    const message: NativeMessageType = {
+      id: "msg-trimmed-model-id",
+      role: "assistant",
+      content: "Model-labelled response",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      modelId: "  gpt-example  ",
+      parts: [{ type: "text", content: "Model-labelled response" }],
+    };
+
+    render(
+      <NativeMessage
+        message={message}
+        assistantLabel="Fallback assistant"
+        resolveModelLabel={resolveModelLabel}
+      />,
+    );
+
+    expect(resolveModelLabel).toHaveBeenCalledWith("gpt-example");
+    expect(screen.getByText("gpt-example label")).toBeTruthy();
+    expect(screen.queryByText("Fallback assistant")).toBeNull();
+  });
+
+  test("omits a filename summary for generic tool paths ending in a separator", () => {
+    const message: NativeMessageType = {
+      id: "msg-tool-trailing-separator",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolArgs: { file_path: "/workspace/src/" },
+          toolState: "success",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const trigger = screen.getByRole("button", { name: /read success/i });
+    expect(trigger.textContent).not.toContain("workspace");
+    expect(trigger.textContent).not.toContain("src");
+
+    fireEvent.click(trigger);
+    expect(screen.getByText(/"file_path": "\/workspace\/src\/"/)).toBeTruthy();
+  });
+
+  test("uses an edit tool title when a trailing-separator path has no filename", () => {
+    const message: NativeMessageType = {
+      id: "msg-edit-title-without-filename",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolTitle: "Apply Workspace Patch",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/",
+            before: "old value",
+            after: "new value",
+          },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    const trigger = screen.getByRole("button", {
+      name: /edit apply workspace patch \+1 -1 success/i,
+    });
+    expect(trigger.textContent).not.toContain("src");
+
+    fireEvent.click(trigger);
+    expect(screen.getByText("/workspace/src/")).toBeTruthy();
+    expect(screen.getByText("-old value")).toBeTruthy();
+    expect(screen.getByText("+new value")).toBeTruthy();
+  });
+
+  test("expands generic tools that have output but no arguments", () => {
+    const message: NativeMessageType = {
+      id: "msg-generic-output-only",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Inspect",
+          toolName: "Inspect",
+          toolState: "success",
+          toolOutput: "Inspection completed without input arguments.",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const trigger = screen.getByRole("button", { name: /inspect success/i });
+    expect((trigger as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText("Inspection completed without input arguments.")).toBeNull();
+
+    fireEvent.click(trigger);
+    expect(screen.getByText("Inspection completed without input arguments.")).toBeTruthy();
   });
 });

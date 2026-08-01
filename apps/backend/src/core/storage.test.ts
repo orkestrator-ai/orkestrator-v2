@@ -89,6 +89,146 @@ describe("defaultConfig", () => {
   });
 });
 
+describe("PR completion refresh intent", () => {
+  test("rejects missing environments and ignores every ineligible PR state", async () => {
+    await withTemporaryStorage(async (storage) => {
+      await expect(storage.armPrRecheckAfterAgentCompletion("missing"))
+        .rejects.toThrow("Environment not found: missing");
+
+      for (const [index, metadata] of ([
+        { prUrl: null, prState: null, hasMergeConflicts: null },
+        { prUrl: "https://github.com/acme/repo/pull/1", prState: "closed", hasMergeConflicts: true },
+        { prUrl: "https://github.com/acme/repo/pull/1", prState: "open", hasMergeConflicts: false },
+        { prUrl: "https://github.com/acme/repo/pull/1", prState: "open", hasMergeConflicts: null },
+      ] as const).entries()) {
+        const environment = { ...createEnvironment("project-1"), id: `env-${index}`, ...metadata };
+        await storage.addEnvironment(environment);
+        expect((await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt)
+          .toBeNull();
+      }
+    });
+  });
+
+  test("survives restart and token-safe rollback preserves a newer arm", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = {
+        ...createEnvironment("project-1"),
+        id: "env-pr-arm",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open" as const,
+        hasMergeConflicts: true,
+      };
+      await storage.addEnvironment(environment);
+      const first = (await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.getEnvironment(environment.id))
+        ?.prRecheckAfterAgentCompletionArmedAt).toBe(first);
+
+      const second = (await restarted.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
+      expect(second).not.toBe(first);
+      expect((await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, first))
+        .prRecheckAfterAgentCompletionArmedAt).toBe(second);
+      expect((await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, second))
+        .prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+      await expect(restarted.disarmPrRecheckAfterAgentCompletion("missing", second))
+        .rejects.toThrow("Environment not found: missing");
+    });
+  });
+
+  test("returns no token when a later arm is refused without exposing the existing token", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = {
+        ...createEnvironment("project-1"),
+        id: "env-pr-refused-rearm",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open" as const,
+        hasMergeConflicts: true,
+      };
+      await storage.addEnvironment(environment);
+      const first = await storage.armPrRecheckAfterAgentCompletion(environment.id);
+      await storage.updateEnvironment(environment.id, { hasMergeConflicts: null });
+
+      const refused = await storage.armPrRecheckAfterAgentCompletion(environment.id);
+
+      expect(first.armedAt).toEqual(expect.any(String));
+      expect(refused.armedAt).toBeNull();
+      expect(refused.environment.prRecheckAfterAgentCompletionArmedAt).toBe(first.armedAt!);
+    });
+  });
+
+  test("generates strictly increasing arm tokens in the same millisecond and after clock rollback", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = {
+        ...createEnvironment("project-1"),
+        id: "env-pr-monotonic-arm",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open" as const,
+        hasMergeConflicts: true,
+      };
+      await storage.addEnvironment(environment);
+      const now = spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      try {
+        const first = (await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
+        const second = (await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
+        now.mockReturnValue(1_700_000_000_000);
+        const third = (await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
+
+        expect(Date.parse(second)).toBe(Date.parse(first) + 1);
+        expect(Date.parse(third)).toBe(Date.parse(second) + 1);
+      } finally {
+        now.mockRestore();
+      }
+    });
+  });
+
+  test("replaces an unparseable stored arm token", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = {
+        ...createEnvironment("project-1"),
+        id: "env-pr-invalid-arm",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open" as const,
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "not-a-date",
+      };
+      await storage.addEnvironment(environment);
+
+      const armedAt = (await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt;
+
+      expect(armedAt).toEqual(expect.any(String));
+      expect(Number.isFinite(Date.parse(armedAt!))).toBe(true);
+    });
+  });
+
+  test("serializes monitor state ahead of a concurrent stale arm", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = {
+        ...createEnvironment("project-1"),
+        id: "env-pr-race",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open" as const,
+        hasMergeConflicts: true,
+      };
+      await storage.addEnvironment(environment);
+
+      const stateUpdate = storage.updateEnvironment(environment.id, {
+        hasMergeConflicts: false,
+        prRecheckAfterAgentCompletionArmedAt: undefined,
+      });
+      const staleArm = storage.armPrRecheckAfterAgentCompletion(environment.id);
+      await Promise.all([stateUpdate, staleArm]);
+
+      expect(await storage.getEnvironment(environment.id)).toMatchObject({
+        hasMergeConflicts: false,
+      });
+      expect((await storage.getEnvironment(environment.id))
+        ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+    });
+  });
+});
+
 describe("GitHub credential source config migration", () => {
   test.each([
     ["missing source without a PAT", undefined, undefined, true],

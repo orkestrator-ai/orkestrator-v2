@@ -67,6 +67,7 @@ const {
   setEnvironmentUnread,
   setEnvironmentPendingAgentLaunch,
   setEnvironmentInitialPrompt,
+  setEnvironmentPr,
   cacheOpenCodeModelCatalog,
   cacheAgentModelCatalog,
   claimFeaturePlanBuild,
@@ -91,6 +92,24 @@ describe("backend setup wrappers", () => {
 
     expect(invokeMock.mock.calls).toEqual([
       ["set_environment_setup_complete", { environmentId: "env-1", complete: true }],
+    ]);
+  });
+
+  test("passes explicit tri-state PR metadata to the backend", async () => {
+    await setEnvironmentPr(
+      "env-1",
+      "https://github.com/acme/repo/pull/7",
+      "open",
+      null,
+    );
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_environment_pr", {
+        environmentId: "env-1",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: null,
+      }],
     ]);
   });
 
@@ -585,10 +604,12 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
-  test("forwards authoritative PR-monitor snapshot, watch, and refresh commands", async () => {
+  test("forwards authoritative PR-monitor and completion-refresh commands exactly", async () => {
     await backendWrappers.getPrMonitorState();
     await backendWrappers.prMonitorWatch("env-1", "merge-pending");
     await backendWrappers.prMonitorRefresh("env-1");
+    await backendWrappers.armPrRefreshAfterAgentCompletion("env-1");
+    await backendWrappers.disarmPrRefreshAfterAgentCompletion("env-1", "armed-at-1");
 
     expect(invokeMock.mock.calls).toEqual([
       ["get_pr_monitor_state"],
@@ -597,6 +618,11 @@ describe("backend setup wrappers", () => {
         mode: "merge-pending",
       }],
       ["pr_monitor_refresh", { environmentId: "env-1" }],
+      ["arm_pr_refresh_after_agent_completion", { environmentId: "env-1" }],
+      ["disarm_pr_refresh_after_agent_completion", {
+        environmentId: "env-1",
+        armedAt: "armed-at-1",
+      }],
     ]);
   });
 

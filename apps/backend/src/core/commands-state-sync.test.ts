@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,6 +15,7 @@ import {
   getPrMonitorDetectionRequest,
   parsePrMonitorDetectionResponse,
   shutdownPrMonitorTracking,
+  toClientEnvironment,
   type CommandContext,
 } from "./commands.js";
 import { StorageService } from "./storage.js";
@@ -1519,6 +1520,244 @@ describe("pr monitor commands", () => {
     });
   });
 
+  test("conflict-resolution refresh intent is durable and backend-only", async () => {
+    await withCommands(async (invoke, storage) => {
+      try {
+        await storage.updateEnvironment("e1", {
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: true,
+        });
+
+        const armedAt = await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        }) as string;
+
+        const armed = await storage.getEnvironment("e1");
+        expect(armed?.prRecheckAfterAgentCompletionArmedAt).toEqual(expect.any(String));
+        expect(armed?.prRecheckAfterAgentCompletionArmedAt).toBe(armedAt);
+        expect(toClientEnvironment(armed!)).not.toHaveProperty(
+          "prRecheckAfterAgentCompletionArmedAt",
+        );
+
+        // A backend completion edge schedules the monitor but does not consume
+        // the intent before GitHub confirms the conflict is actually gone.
+        await invoke("pr_monitor_agent_turn_completed", { environmentId: "e1" });
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBe(
+            armed?.prRecheckAfterAgentCompletionArmedAt,
+          );
+
+        // GitHub's indeterminate result must not consume the durable request.
+        await invoke("set_environment_pr", {
+          environmentId: "e1",
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: null,
+        });
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBe(armedAt);
+
+        await invoke("set_environment_pr", {
+          environmentId: "e1",
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: false,
+        });
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+
+        const refusedArm = await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        });
+        expect(refusedArm).toBeNull();
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+
+        await storage.updateEnvironment("e1", {
+          prState: "open",
+          hasMergeConflicts: true,
+        });
+        await invoke("arm_pr_refresh_after_agent_completion", { environmentId: "e1" });
+        await invoke("set_environment_pr", {
+          environmentId: "e1",
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "merged",
+          hasMergeConflicts: null,
+        });
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+
+        await storage.updateEnvironment("e1", {
+          prState: "open",
+          hasMergeConflicts: true,
+        });
+        const disappearanceArm = await invoke(
+          "arm_pr_refresh_after_agent_completion",
+          { environmentId: "e1" },
+        ) as string;
+        const knownRequest = getPrMonitorDetectionRequest({
+          environmentId: "e1",
+          branch: "main",
+          kind: "local",
+          worktreePath: "/tmp/worktree",
+          ready: true,
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: true,
+        });
+        expect(() => parsePrMonitorDetectionResponse(knownRequest, "not-json"))
+          .toThrow("Failed to parse gh pr view output");
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBe(disappearanceArm);
+
+        // The monitor's upstream-disappearance effect uses the same clear.
+        await invoke("clear_environment_pr", { environmentId: "e1" });
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
+  test("set_environment_pr validates required metadata without clearing an arm", async () => {
+    await withCommands(async (invoke, storage) => {
+      try {
+        await storage.updateEnvironment("e1", {
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: true,
+        });
+        const armedAt = await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        }) as string;
+
+        for (const [args, message] of [
+          [{ environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "open" }, "Expected hasMergeConflicts to be a boolean or null"],
+          [{ environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "draft", hasMergeConflicts: false }, "Expected prState to be open, merged, or closed"],
+          [{ environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "open", hasMergeConflicts: "no" }, "Expected hasMergeConflicts to be a boolean or null"],
+          [{ environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "open", hasMergeConflicts: false, extra: true }, "Unexpected arguments field: extra"],
+        ] as const) {
+          await expect(invoke("set_environment_pr", args)).rejects.toThrow(message);
+          expect((await storage.getEnvironment("e1"))
+            ?.prRecheckAfterAgentCompletionArmedAt).toBe(armedAt);
+        }
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
+  test("returns the rollback token when monitor hydration fails after persistence", async () => {
+    await withCommands(async (invoke, storage) => {
+      const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        await storage.updateEnvironment("e1", {
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: true,
+        });
+        const loadEnvironments = storage.loadEnvironments.bind(storage);
+        let calls = 0;
+        const loadSpy = spyOn(storage, "loadEnvironments").mockImplementation(async () => {
+          calls += 1;
+          if (calls === 2) throw new Error("temporary storage read failure");
+          return loadEnvironments();
+        });
+
+        const armedAt = await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        }) as string;
+        expect(armedAt).toEqual(expect.any(String));
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBe(armedAt);
+        expect(warning).toHaveBeenCalledWith(
+          "[pr-monitor] Failed to track armed environment e1:",
+          "temporary storage read failure",
+        );
+        loadSpy.mockRestore();
+      } finally {
+        warning.mockRestore();
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
+  test("token-safe disarm cannot clear a newer Resolve request", async () => {
+    await withCommands(async (invoke, storage) => {
+      try {
+        await storage.updateEnvironment("e1", {
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: true,
+        });
+        const first = await invoke("arm_pr_refresh_after_agent_completion", { environmentId: "e1" }) as string;
+        const second = await invoke("arm_pr_refresh_after_agent_completion", { environmentId: "e1" }) as string;
+        expect(second).not.toBe(first);
+
+        await invoke("disarm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+          armedAt: first,
+        });
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBe(second);
+
+        await expect(invoke("disarm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        })).rejects.toThrow("Expected armedAt to be a string");
+        await expect(invoke("disarm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+          armedAt: 123,
+        })).rejects.toThrow("Expected armedAt to be a string");
+        await expect(invoke("disarm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+          armedAt: second,
+          extra: true,
+        })).rejects.toThrow("Unexpected arguments field: extra");
+        await expect(invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+          extra: true,
+        })).rejects.toThrow("Unexpected arguments field: extra");
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBe(second);
+
+        await invoke("disarm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+          armedAt: second,
+        });
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
+  test("a refused arm never returns a token owned by an earlier Resolve request", async () => {
+    await withCommands(async (invoke, storage) => {
+      try {
+        await storage.updateEnvironment("e1", {
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: true,
+        });
+        const first = await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        }) as string;
+        await storage.updateEnvironment("e1", { hasMergeConflicts: null });
+
+        expect(await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        })).toBeNull();
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBe(first);
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
   test("snapshot reconciliation tracks environments with a stored PR", async () => {
     await withCommands(async (invoke, storage) => {
       try {
@@ -1569,7 +1808,7 @@ describe("pr monitor commands", () => {
       ready: true,
       prUrl: "https://github.com/acme/repo/pull/7",
       prState: "open",
-      hasMergeConflicts: false,
+      hasMergeConflicts: null,
     });
     expect(known.args).toEqual([
       "pr", "view", "https://github.com/acme/repo/pull/7",
@@ -1585,7 +1824,15 @@ describe("pr monitor commands", () => {
     }))).toEqual({
       url: "https://github.com/acme/repo/pull/7",
       state: "merged",
-      hasMergeConflicts: false,
+      hasMergeConflicts: null,
+    });
+    expect(parsePrMonitorDetectionResponse(known, JSON.stringify({
+      url: "https://github.com/acme/repo/pull/7",
+      state: "OPEN",
+    }))).toEqual({
+      url: "https://github.com/acme/repo/pull/7",
+      state: "open",
+      hasMergeConflicts: null,
     });
     expect(() => parsePrMonitorDetectionResponse(known, JSON.stringify({
       url: "https://github.com/acme/repo/pull/8",

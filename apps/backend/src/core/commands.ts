@@ -176,6 +176,8 @@ export type CommandContext = {
   };
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;
+  /** Backend-owned notification emitted by exact agent turn lifecycles. */
+  notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
 };
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
@@ -223,6 +225,16 @@ const terminalSessionIdsByStableKey = new Map<string, string>();
 const terminalStableKeysBySessionId = new Map<string, string>();
 const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalActivityArmed = new Set<string>();
+const terminalActivityGenerations = new Map<string, number>();
+const terminalActivityCompletions = new Map<string, number>();
+type TerminalActivityCompletionState = {
+  id: string;
+  generation: number;
+  cancelled: boolean;
+  retryTimers: Set<ReturnType<typeof setTimeout>>;
+};
+const terminalActivityCompletionStates = new Map<number, TerminalActivityCompletionState>();
+let nextTerminalActivityGeneration = 0;
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 /** Per-process bearer tokens for renderer → local Codex bridge requests. */
 const localCodexBridgeTokens = new Map<string, string>();
@@ -765,6 +777,11 @@ const prMonitorService = new PrMonitorService({
         prUrl: detection.url,
         prState: detection.state,
         hasMergeConflicts: detection.hasMergeConflicts,
+        ...(
+          detection.state !== "open" || detection.hasMergeConflicts === false
+            ? { prRecheckAfterAgentCompletionArmedAt: undefined }
+            : {}
+        ),
       });
       if (detection.state === "merged" && prMonitorContext) {
         scheduleMergeCleanupRecovery(environmentId, prMonitorContext);
@@ -775,6 +792,7 @@ const prMonitorService = new PrMonitorService({
         prUrl: null,
         prState: null,
         hasMergeConflicts: null,
+        prRecheckAfterAgentCompletionArmedAt: undefined,
       });
     },
     findTaskForEnvironment: (environmentId) =>
@@ -1686,7 +1704,7 @@ async function renameEnvironmentFromPrompt(
 export type PrDetectionResult = {
   url: string;
   state: PrState;
-  hasMergeConflicts: boolean;
+  hasMergeConflicts: boolean | null;
 };
 
 type MergePrResult = {
@@ -2690,13 +2708,20 @@ function isValidPrUrl(value: unknown): value is string {
 function buildPrDetectionCandidate(entry: GhPrListEntry): { rank: number; updatedAt: string; result: PrDetectionResult } | null {
   const state = parsePrState(entry.state);
   if (!state || !isValidPrUrl(entry.url)) return null;
+  const mergeable = typeof entry.mergeable === "string"
+    ? entry.mergeable.toUpperCase()
+    : null;
   return {
     rank: prStateRank(state),
     updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
     result: {
       url: entry.url,
       state,
-      hasMergeConflicts: typeof entry.mergeable === "string" && entry.mergeable.toUpperCase() === "CONFLICTING",
+      hasMergeConflicts: mergeable === "CONFLICTING"
+        ? true
+        : mergeable === "MERGEABLE"
+          ? false
+          : null,
     },
   };
 }
@@ -2781,6 +2806,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     claudeBridgePid: _claudeBridgePid,
     codexBridgePid: _codexBridgePid,
     pendingRenamePrompt: _pendingRenamePrompt,
+    prRecheckAfterAgentCompletionArmedAt: _prRecheckArm,
     ...client
   } = environment;
   if (
@@ -3165,6 +3191,139 @@ function getTrackedTerminalEnvironmentId(id: string): string | null {
     : config.activityEnvironmentId ?? null;
 }
 
+const TERMINAL_ACTIVITY_PERSIST_RETRY_DELAYS_MS = [100, 250, 500] as const;
+const TERMINAL_COMPLETION_NOTIFY_RETRY_DELAYS_MS = [100, 250, 500] as const;
+
+function finishTrackedTerminalCompletion(id: string, generation: number): void {
+  if (terminalActivityGenerations.get(id) === generation) {
+    terminalActivityArmed.delete(id);
+  }
+  if (terminalActivityCompletions.get(id) === generation) {
+    terminalActivityCompletions.delete(id);
+  }
+  const state = terminalActivityCompletionStates.get(generation);
+  if (state?.id === id) {
+    for (const timer of state.retryTimers) clearTimeout(timer);
+    terminalActivityCompletionStates.delete(generation);
+  }
+}
+
+function isTrackedTerminalCompletionActive(id: string, generation: number): boolean {
+  const state = terminalActivityCompletionStates.get(generation);
+  return state?.id === id && !state.cancelled;
+}
+
+function scheduleTrackedTerminalCompletionRetry(
+  id: string,
+  generation: number,
+  callback: () => void,
+  delay: number,
+): void {
+  const state = terminalActivityCompletionStates.get(generation);
+  if (!state || state.id !== id || state.cancelled) return;
+  const timer = setTimeout(() => {
+    state.retryTimers.delete(timer);
+    if (!state.cancelled) callback();
+  }, delay);
+  timer.unref?.();
+  state.retryTimers.add(timer);
+}
+
+function cancelTrackedTerminalCompletions(id: string): void {
+  for (const [generation, state] of terminalActivityCompletionStates) {
+    if (state.id !== id) continue;
+    state.cancelled = true;
+    for (const timer of state.retryTimers) clearTimeout(timer);
+    terminalActivityCompletionStates.delete(generation);
+  }
+}
+
+function notifyTrackedTerminalCompletion(
+  id: string,
+  environmentId: string,
+  generation: number,
+  context: CommandContext,
+  attempt = 0,
+): void {
+  if (!isTrackedTerminalCompletionActive(id, generation)) return;
+  const notify = context.notifyAgentTurnCompleted;
+  if (!notify) {
+    finishTrackedTerminalCompletion(id, generation);
+    return;
+  }
+  void notify(environmentId).then(
+    () => finishTrackedTerminalCompletion(id, generation),
+    (error) => {
+      const delay = TERMINAL_COMPLETION_NOTIFY_RETRY_DELAYS_MS[attempt];
+      if (delay !== undefined) {
+        scheduleTrackedTerminalCompletionRetry(
+          id,
+          generation,
+          () => notifyTrackedTerminalCompletion(
+            id,
+            environmentId,
+            generation,
+            context,
+            attempt + 1,
+          ),
+          delay,
+        );
+        return;
+      }
+      finishTrackedTerminalCompletion(id, generation);
+      console.error("Failed to notify terminal agent completion", {
+        environmentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
+}
+
+function persistTrackedTerminalCompletion(
+  id: string,
+  environmentId: string,
+  occurredAt: string,
+  generation: number,
+  context: CommandContext,
+  attempt = 0,
+): void {
+  if (!isTrackedTerminalCompletionActive(id, generation)) return;
+  void context.storage.recordEnvironmentCompletion(environmentId, occurredAt)
+    .then((environment) => {
+      if (!isTrackedTerminalCompletionActive(id, generation)) return;
+      context.emit("environment-activity-recorded", {
+        environment_id: environment.id,
+        occurred_at: environment.lastActivityAt ?? occurredAt,
+        activity_kind: "completed",
+      });
+      notifyTrackedTerminalCompletion(id, environmentId, generation, context);
+    })
+    .catch((error) => {
+      const delay = TERMINAL_ACTIVITY_PERSIST_RETRY_DELAYS_MS[attempt];
+      if (delay !== undefined) {
+        scheduleTrackedTerminalCompletionRetry(
+          id,
+          generation,
+          () => persistTrackedTerminalCompletion(
+            id,
+            environmentId,
+            occurredAt,
+            generation,
+            context,
+            attempt + 1,
+          ),
+          delay,
+        );
+        return;
+      }
+      finishTrackedTerminalCompletion(id, generation);
+      console.error("Failed to record terminal environment activity", {
+        environmentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+}
+
 function persistTerminalActivity(
   id: string,
   context: CommandContext,
@@ -3178,19 +3337,32 @@ function persistTerminalActivity(
   const environmentId = getTrackedTerminalEnvironmentId(id);
   if (!environmentId) return;
   if (activityKind === "completed") {
-    terminalActivityArmed.delete(id);
+    const generation = terminalActivityGenerations.get(id) ?? 0;
+    if (terminalActivityCompletions.get(id) === generation) return;
+    terminalActivityCompletions.set(id, generation);
+    terminalActivityCompletionStates.set(generation, {
+      id,
+      generation,
+      cancelled: false,
+      retryTimers: new Set(),
+    });
+    persistTrackedTerminalCompletion(
+      id,
+      environmentId,
+      new Date().toISOString(),
+      generation,
+      context,
+    );
+    return;
   }
 
   const occurredAt = new Date().toISOString();
-  const persistActivity = activityKind === "completed"
-    ? context.storage.recordEnvironmentCompletion.bind(context.storage)
-    : context.storage.recordEnvironmentActivity.bind(context.storage);
-  void persistActivity(environmentId, occurredAt)
+  void context.storage.recordEnvironmentActivity(environmentId, occurredAt)
     .then((environment) => {
       context.emit("environment-activity-recorded", {
         environment_id: environment.id,
         occurred_at: environment.lastActivityAt ?? occurredAt,
-        activity_kind: activityKind,
+        activity_kind: "prompt",
       });
     })
     .catch((error) => {
@@ -3203,6 +3375,8 @@ function persistTerminalActivity(
 
 function recordTerminalInputActivity(id: string, data: string, context: CommandContext): void {
   if (!/[\r\n]/.test(data) || !getTrackedTerminalEnvironmentId(id)) return;
+  nextTerminalActivityGeneration += 1;
+  terminalActivityGenerations.set(id, nextTerminalActivityGeneration);
   terminalActivityArmed.add(id);
   persistTerminalActivity(id, context, "prompt");
 }
@@ -3237,6 +3411,9 @@ function cleanupTerminalSession(
   if (activityTimer) clearTimeout(activityTimer);
   terminalActivityTimers.delete(id);
   terminalActivityArmed.delete(id);
+  terminalActivityGenerations.delete(id);
+  terminalActivityCompletions.delete(id);
+  if (options.explicit) cancelTrackedTerminalCompletions(id);
   terminalProcesses.delete(id);
   const stableKey = terminalStableKeysBySessionId.get(id);
   const retainStableState = !options.explicit
@@ -7890,15 +8067,38 @@ export function createCommandRegistry(
     );
     return result ? toClientEnvironmentSetupStartResult(result) : undefined;
   });
-  register("set_environment_pr", async ({ environmentId, prUrl, prState, hasMergeConflicts }, context) => {
-    const updated = await context.storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: asString(prUrl, "prUrl"), prState, hasMergeConflicts });
+  register("set_environment_pr", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "prUrl", "prState", "hasMergeConflicts"], "arguments");
+    const environmentId = asString(args.environmentId, "environmentId");
+    const prUrl = asString(args.prUrl, "prUrl");
+    const prState = parsePrState(args.prState);
+    if (!prState) throw new Error("Expected prState to be open, merged, or closed");
+    const hasMergeConflicts = args.hasMergeConflicts;
+    if (hasMergeConflicts !== null && typeof hasMergeConflicts !== "boolean") {
+      throw new Error("Expected hasMergeConflicts to be a boolean or null");
+    }
+    const updated = await context.storage.updateEnvironment(environmentId, {
+      prUrl,
+      prState,
+      hasMergeConflicts,
+      ...(
+        prState !== "open" || hasMergeConflicts === false
+          ? { prRecheckAfterAgentCompletionArmedAt: undefined }
+          : {}
+      ),
+    });
     // A PR recorded outside the monitor (e.g. right after a merge command) must
     // enter the monitored set without waiting for a client to rehydrate.
     void syncPrMonitorTracking(context).catch(() => undefined);
     return toClientEnvironment(updated);
   });
   register("clear_environment_pr", async ({ environmentId }, context) => {
-    await context.storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: null, prState: null, hasMergeConflicts: null });
+    await context.storage.updateEnvironment(asString(environmentId, "environmentId"), {
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      prRecheckAfterAgentCompletionArmedAt: undefined,
+    });
     void syncPrMonitorTracking(context).catch(() => undefined);
   });
   register("get_environment_pr_url", async ({ environmentId }, { storage }) => (await storage.getEnvironment(asString(environmentId, "environmentId")))?.prUrl ?? null);
@@ -9936,6 +10136,45 @@ export function createCommandRegistry(
   register("pr_monitor_refresh", async ({ environmentId }, context) => {
     await syncPrMonitorTracking(context);
     prMonitorService.requestCheck(asString(environmentId, "environmentId"));
+  });
+  /**
+   * Durably arm the next completed agent turn to re-check a conflicting PR.
+   * Kept backend-only: renderers continue to derive buttons solely from the
+   * authoritative PR fields projected by environment snapshots/events.
+   */
+  register("arm_pr_refresh_after_agent_completion", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    const id = asString(args.environmentId, "environmentId");
+    const { armedAt } = await context.storage.armPrRecheckAfterAgentCompletion(id);
+    if (armedAt) {
+      // The durable token must still reach the caller if monitor hydration is
+      // temporarily unavailable, otherwise a failed tab launch cannot roll it
+      // back. Completion reconciliation retries hydration before requesting a
+      // check.
+      await syncPrMonitorTracking(context).catch((error) => {
+        console.warn(
+          `[pr-monitor] Failed to track armed environment ${id}:`,
+          error instanceof Error ? error.message : error,
+        );
+      });
+    }
+    return armedAt;
+  });
+  /** Rolls back a failed Resolve launch without consuming a newer request. */
+  register("disarm_pr_refresh_after_agent_completion", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "armedAt"], "arguments");
+    await context.storage.disarmPrRecheckAfterAgentCompletion(
+      asString(args.environmentId, "environmentId"),
+      asString(args.armedAt, "armedAt"),
+    );
+  });
+  /** Internal completion edge from native, tmux, or terminal supervision. */
+  register("pr_monitor_agent_turn_completed", async ({ environmentId }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment?.prRecheckAfterAgentCompletionArmedAt) return;
+    await syncPrMonitorTracking(context);
+    prMonitorService.requestCheck(id);
   });
 
   register("start_local_opencode_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "opencode"));

@@ -134,6 +134,39 @@ describe("agent-tools lifecycle", () => {
   });
 });
 
+test("reports registered commands and routes agent completion through the registry", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-command-route-"));
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    agentTools: fakeAgentTools(),
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  });
+  try {
+    expect(backend.hasCommand("pr_monitor_agent_turn_completed")).toBe(true);
+    expect(backend.hasCommand("not_a_backend_command")).toBe(false);
+
+    const internal = backend as unknown as {
+      context: {
+        storage: StorageService;
+        notifyAgentTurnCompleted: (environmentId: string) => Promise<void>;
+      };
+    };
+    const getEnvironment = spyOn(internal.context.storage, "getEnvironment");
+    await internal.context.notifyAgentTurnCompleted("missing-env");
+    expect(getEnvironment).toHaveBeenCalledWith("missing-env");
+  } finally {
+    await backend.shutdown().catch(() => undefined);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;

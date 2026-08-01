@@ -32,6 +32,10 @@ interface UsePullRequestReturn {
   setModeCreatePending: () => void;
   /** Set monitoring mode to merge-pending (1s polling for 20s) */
   setModeMergePending: () => void;
+  /** Ask the backend to refresh this conflicting PR after agent completion. */
+  armRefreshAfterAgentCompletion: () => Promise<string | null>;
+  /** Roll back the exact refresh arm when its corresponding agent launch fails. */
+  disarmRefreshAfterAgentCompletion: (armedAt: string) => Promise<void>;
 }
 
 export function usePullRequest({
@@ -55,27 +59,27 @@ export function usePullRequest({
 
   // View the PR in the default browser
   const viewPR = useCallback(async () => {
-    if (!prUrl) {
+    setError(null);
+    let url = prUrl;
+    if (!url) {
       // Fallback: try to get the PR URL from the backend
       if (environmentId) {
         try {
-          const url = await backend.getEnvironmentPrUrl(environmentId);
-          if (url) {
-            await backend.openInBrowser(url);
-            return;
-          }
+          url = await backend.getEnvironmentPrUrl(environmentId);
         } catch (err) {
           console.error("Failed to get PR URL:", err);
         }
       }
 
       // If still no URL, set error
-      setError("No PR URL available");
-      return;
+      if (!url) {
+        setError("No PR URL available");
+        return;
+      }
     }
 
     try {
-      await backend.openInBrowser(prUrl);
+      await backend.openInBrowser(url);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to open browser";
       setError(message);
@@ -115,6 +119,16 @@ export function usePullRequest({
     }
   }, [environmentId]);
 
+  const armRefreshAfterAgentCompletion = useCallback(async () => {
+    if (!environmentId) return null;
+    return backend.armPrRefreshAfterAgentCompletion(environmentId);
+  }, [environmentId]);
+
+  const disarmRefreshAfterAgentCompletion = useCallback(async (armedAt: string) => {
+    if (!environmentId) return;
+    await backend.disarmPrRefreshAfterAgentCompletion(environmentId, armedAt);
+  }, [environmentId]);
+
   return {
     prUrl,
     prState,
@@ -125,5 +139,7 @@ export function usePullRequest({
     resetPR,
     setModeCreatePending,
     setModeMergePending,
+    armRefreshAfterAgentCompletion,
+    disarmRefreshAfterAgentCompletion,
   };
 }

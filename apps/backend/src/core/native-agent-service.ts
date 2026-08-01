@@ -188,6 +188,17 @@ export class NativeAgentService {
   private readonly activityRetryAt = new Map<string, number>();
   private readonly activityAttempts = new Map<string, number>();
   private readonly absentBridgeUntil = new Map<string, number>();
+  /** Last provider-owned state per durable session, used for exact turn edges. */
+  private readonly observedSessionActivity = new Map<
+    string,
+    { providerSessionId: string; state: AgentActivityState }
+  >();
+  /**
+   * Environments whose exact completion edge has not yet reached the PR
+   * monitor. Delivery is retried by later sweeps, while the set coalesces
+   * simultaneous session completions into one environment notification.
+   */
+  private readonly pendingPrRefreshEnvironmentIds = new Set<string>();
   private activityScan: Promise<void> | null = null;
   private launchTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
@@ -340,6 +351,14 @@ export class NativeAgentService {
               model: input.model,
               effort: input.reasoningEffort,
             });
+            // Provider acceptance is the authoritative working edge. Record it
+            // before the durable dispatch bookkeeping completes so a newer
+            // idle activity snapshot cannot be overwritten by a late return
+            // from storage.
+            this.observedSessionActivity.set(durable.key, {
+              providerSessionId: durable.providerSessionId,
+              state: "working",
+            });
           },
         ),
     );
@@ -403,6 +422,7 @@ export class NativeAgentService {
       string,
       Record<string, { state: AgentActivityState; updatedAt: string }>
     >();
+    const completionCandidates = new Set<string>();
     const failedEnvironments = new Set<string>();
     const groups = new Map<string, PersistedNativeAgentSession[]>();
     for (const [environmentId, environmentSessions] of sessionsByEnvironment) {
@@ -428,6 +448,7 @@ export class NativeAgentService {
         if (!entry) return;
         const [groupKey, group] = entry;
         const first = group[0]!;
+        const environment = environmentsById.get(first.environmentId)!;
         // A group whose last read failed stays untouched until its backoff
         // expires. Its environment is still withheld from the commit below:
         // publishing an aggregate built from a group we deliberately skipped
@@ -442,7 +463,12 @@ export class NativeAgentService {
         // every two seconds to re-learn an answer that cannot have changed.
         if ((this.absentBridgeUntil.get(groupKey) ?? 0) > this.now()) {
           for (const session of group) {
-            this.recordActivity(activityByEnvironment, session, "idle");
+            if (this.recordActivity(
+              activityByEnvironment,
+              session,
+              "idle",
+              Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
+            )) completionCandidates.add(session.environmentId);
           }
           continue;
         }
@@ -454,7 +480,12 @@ export class NativeAgentService {
             // executing. That is an answer, not a failure — recording it is
             // what retires a `working` indicator left behind by a crash.
             for (const session of group) {
-              this.recordActivity(activityByEnvironment, session, "idle");
+              if (this.recordActivity(
+                activityByEnvironment,
+                session,
+                "idle",
+                Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
+              )) completionCandidates.add(session.environmentId);
             }
             this.activityAttempts.delete(groupKey);
             this.activityRetryAt.delete(groupKey);
@@ -495,7 +526,12 @@ export class NativeAgentService {
               );
               continue;
             }
-            this.recordActivity(activityByEnvironment, session, activity);
+            if (this.recordActivity(
+              activityByEnvironment,
+              session,
+              activity,
+              Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
+            )) completionCandidates.add(session.environmentId);
           }
           this.activityAttempts.delete(groupKey);
           this.activityRetryAt.delete(groupKey);
@@ -519,6 +555,38 @@ export class NativeAgentService {
       ),
     );
     if (this.stopped) return;
+
+    // An exact per-session completion must not wait for the environment-wide
+    // aggregate to become idle: another tab using the same provider may still
+    // be working. The command is backend-internal and only acts when durable
+    // conflict-resolution intent is armed.
+    for (const environmentId of completionCandidates) {
+      this.pendingPrRefreshEnvironmentIds.add(environmentId);
+    }
+    const armedEnvironmentIds = new Set(
+      environments
+        .filter((environment) =>
+          Boolean(environment.prRecheckAfterAgentCompletionArmedAt)
+        )
+        .map((environment) => environment.id),
+    );
+    for (const environmentId of this.pendingPrRefreshEnvironmentIds) {
+      if (!armedEnvironmentIds.has(environmentId)) {
+        this.pendingPrRefreshEnvironmentIds.delete(environmentId);
+      }
+    }
+    await this.flushPendingPrRefreshNotifications();
+
+    const liveSessionsByKey = new Map(
+      sessions
+        .filter((session) => environmentsById.has(session.environmentId))
+        .map((session) => [session.key, session.providerSessionId]),
+    );
+    for (const [key, observed] of this.observedSessionActivity) {
+      if (liveSessionsByKey.get(key) !== observed.providerSessionId) {
+        this.observedSessionActivity.delete(key);
+      }
+    }
 
     for (const environment of environments) {
       if (failedEnvironments.has(environment.id)) continue;
@@ -553,7 +621,16 @@ export class NativeAgentService {
     >,
     session: PersistedNativeAgentSession,
     state: AgentActivityState,
-  ): void {
+    countUnknownIdleAsCompletion: boolean,
+  ): boolean {
+    const observed = this.observedSessionActivity.get(session.key);
+    const previous = observed?.providerSessionId === session.providerSessionId
+      ? observed.state
+      : undefined;
+    this.observedSessionActivity.set(session.key, {
+      providerSessionId: session.providerSessionId,
+      state,
+    });
     const sources = activityByEnvironment.get(session.environmentId) ?? {};
     sources[session.key] = {
       state,
@@ -562,6 +639,43 @@ export class NativeAgentService {
       updatedAt: "1970-01-01T00:00:00.000Z",
     };
     activityByEnvironment.set(session.environmentId, sources);
+    return state === "idle"
+      && (
+        previous === "working"
+        || (observed === undefined && countUnknownIdleAsCompletion)
+      );
+  }
+
+  /** Deliver pending completion notifications with the same bound as status IO. */
+  private async flushPendingPrRefreshNotifications(): Promise<void> {
+    const environmentIds = [...this.pendingPrRefreshEnvironmentIds];
+    let nextEnvironment = 0;
+    const worker = async (): Promise<void> => {
+      while (!this.stopped) {
+        const environmentId = environmentIds[nextEnvironment++];
+        if (!environmentId) return;
+        try {
+          await this.invoke("pr_monitor_agent_turn_completed", { environmentId });
+          this.pendingPrRefreshEnvironmentIds.delete(environmentId);
+        } catch (error) {
+          console.warn(
+            `[native-agent] Failed to schedule PR refresh after completion for ${environmentId}:`,
+            error instanceof Error ? error.name : "unknown error",
+          );
+        }
+      }
+    };
+    await Promise.all(
+      Array.from(
+        {
+          length: Math.min(
+            ACTIVITY_STATUS_CONCURRENCY,
+            environmentIds.length,
+          ),
+        },
+        () => worker(),
+      ),
+    );
   }
 
   /**

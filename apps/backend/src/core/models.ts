@@ -200,6 +200,14 @@ export interface Environment {
   prUrl: string | null;
   prState: PrState | null;
   hasMergeConflicts: boolean | null;
+  /**
+   * Durable backend intent armed by the Resolve action.
+   *
+   * Agent completion asks the PR monitor for an immediate authoritative check;
+   * the intent remains armed while GitHub still reports conflicts so an
+   * unrelated concurrent turn cannot consume it.
+   */
+  prRecheckAfterAgentCompletionArmedAt?: string;
   createdAt: string;
   /** Last prompt dispatch or agent completion/waiting transition. */
   lastActivityAt?: string;
@@ -269,6 +277,7 @@ export type ClientEnvironment = Omit<
   Environment,
   | "agentActivitySources"
   | "frontendAgentActivityObservers"
+  | "prRecheckAfterAgentCompletionArmedAt"
   | "initialPromptAttachments"
   | "claudeModelCatalog"
   | "opencodePid"

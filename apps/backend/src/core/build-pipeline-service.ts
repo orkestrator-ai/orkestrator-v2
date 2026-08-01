@@ -313,7 +313,7 @@ function resumePromptFor(phase: ResumableBuildPhase): string | null {
 type PullRequestDetection = {
   url: string;
   state: "open" | "merged" | "closed";
-  hasMergeConflicts: boolean;
+  hasMergeConflicts: boolean | null;
 };
 
 /**
@@ -1563,7 +1563,7 @@ export class BuildPipelineService {
       return;
     }
     await this.persistPullRequest(pipeline, detection);
-    if (detection.hasMergeConflicts) {
+    if (detection.hasMergeConflicts === true) {
       await this.startStage(pipeline, "resolve-conflicts", "resolving-conflicts");
       return;
     }
@@ -1576,8 +1576,14 @@ export class BuildPipelineService {
       throw new Error("The pull request could not be found after conflict resolution");
     }
     await this.persistPullRequest(pipeline, detection);
-    if (detection.hasMergeConflicts) {
+    if (detection.hasMergeConflicts === true) {
       throw new Error("Merge conflicts could not be fully resolved automatically");
+    }
+    if (detection.hasMergeConflicts === null) {
+      // GitHub computes mergeability asynchronously. Keep the durable phase in
+      // place until a later supervisor pass has evidence that the conflict is
+      // actually gone; an indeterminate answer is not successful resolution.
+      return;
     }
     await this.complete(pipeline);
   }
@@ -1605,7 +1611,10 @@ export class BuildPipelineService {
       typeof result.url !== "string"
       || !result.url
       || !["open", "merged", "closed"].includes(result.state)
-      || typeof result.hasMergeConflicts !== "boolean"
+      || (
+        result.hasMergeConflicts !== null
+        && typeof result.hasMergeConflicts !== "boolean"
+      )
     ) {
       throw new Error("Pull request detection returned an invalid result");
     }

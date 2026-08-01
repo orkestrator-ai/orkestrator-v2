@@ -2357,6 +2357,7 @@ export class StorageService {
         "initialPrompt",
         "initialAgentModel",
         "initialReasoningEffort",
+        "prRecheckAfterAgentCompletionArmedAt",
         "pendingRenamePrompt",
         "createdFromCommit",
         "lastActivityAt",
@@ -2523,6 +2524,59 @@ export class StorageService {
       if ("initialPromptAttachments" in updates) {
         await this.scrubEnvironmentBackups(environmentId, false);
       }
+      this.announce("environment", environmentId, environment.projectId);
+      return environment;
+    });
+  }
+
+  /**
+   * Atomically arms conflict-resolution reconciliation against the latest PR
+   * fields. Serializing the predicate with the write prevents an older Resolve
+   * click from re-arming an intent after a concurrent monitor check already
+   * proved the PR mergeable.
+   */
+  async armPrRecheckAfterAgentCompletion(
+    environmentId: string,
+  ): Promise<{ environment: Environment; armedAt: string | null }> {
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      if (
+        !environment.prUrl
+        || environment.prState !== "open"
+        || environment.hasMergeConflicts !== true
+      ) return { environment, armedAt: null };
+
+      const now = Date.now();
+      const previous = environment.prRecheckAfterAgentCompletionArmedAt
+        ? Date.parse(environment.prRecheckAfterAgentCompletionArmedAt)
+        : Number.NEGATIVE_INFINITY;
+      environment.prRecheckAfterAgentCompletionArmedAt = new Date(
+        Number.isFinite(previous) && previous >= now ? previous + 1 : now,
+      ).toISOString();
+      await this.saveEnvironments(environments);
+      this.announce("environment", environmentId, environment.projectId);
+      return {
+        environment,
+        armedAt: environment.prRecheckAfterAgentCompletionArmedAt,
+      };
+    });
+  }
+
+  /** Clears only the exact Resolve request whose tab launch failed. */
+  async disarmPrRecheckAfterAgentCompletion(
+    environmentId: string,
+    armedAt: string,
+  ): Promise<Environment> {
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      if (environment.prRecheckAfterAgentCompletionArmedAt !== armedAt) return environment;
+
+      environment.prRecheckAfterAgentCompletionArmedAt = undefined;
+      await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);
       return environment;
     });

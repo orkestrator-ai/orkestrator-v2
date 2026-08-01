@@ -77,7 +77,7 @@ import {
 export interface PrDetectionResult {
   url: string;
   state: PrState;
-  hasMergeConflicts: boolean;
+  hasMergeConflicts: boolean | null;
 }
 
 // Typed command wrapper for the Electron backend.
@@ -714,7 +714,7 @@ export async function setEnvironmentPr(
   environmentId: string,
   prUrl: string,
   prState: PrState,
-  hasMergeConflicts?: boolean | null
+  hasMergeConflicts: boolean | null
 ): Promise<Environment> {
   return invoke<Environment>("set_environment_pr", { environmentId, prUrl, prState, hasMergeConflicts });
 }
@@ -1549,6 +1549,24 @@ export async function prMonitorWatch(environmentId: string, mode: PrMonitorMode)
 /** Requests an immediate PR check for an environment already being monitored. */
 export async function prMonitorRefresh(environmentId: string): Promise<void> {
   return invoke<void>("pr_monitor_refresh", { environmentId });
+}
+
+/** Durably re-check a conflicting PR when the launched agent turn completes. */
+export async function armPrRefreshAfterAgentCompletion(
+  environmentId: string,
+): Promise<string | null> {
+  return invoke<string | null>("arm_pr_refresh_after_agent_completion", { environmentId });
+}
+
+/** Roll back one exact post-completion refresh arm when its agent launch fails. */
+export async function disarmPrRefreshAfterAgentCompletion(
+  environmentId: string,
+  armedAt: string,
+): Promise<void> {
+  return invoke<void>("disarm_pr_refresh_after_agent_completion", {
+    environmentId,
+    armedAt,
+  });
 }
 
 /** Get file tree from a local environment (worktree path) */

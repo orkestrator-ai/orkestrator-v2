@@ -10,12 +10,20 @@ const mockGetEnvironmentPrUrl = mock<(environmentId: string) => Promise<string |
 const mockClearEnvironmentPr = mock<(environmentId: string) => Promise<void>>(() => Promise.resolve());
 const mockOpenInBrowser = mock<(url: string) => Promise<void>>(() => Promise.resolve());
 const mockPrMonitorWatch = mock<(environmentId: string, mode: string) => Promise<void>>(() => Promise.resolve());
+const mockArmPrRefreshAfterAgentCompletion = mock<(environmentId: string) => Promise<string | null>>(
+  () => Promise.resolve("armed-at-1"),
+);
+const mockDisarmPrRefreshAfterAgentCompletion = mock<
+  (environmentId: string, armedAt: string) => Promise<void>
+>(() => Promise.resolve());
 
 mock.module("@/lib/backend", () => ({
   getEnvironmentPrUrl: mockGetEnvironmentPrUrl,
   clearEnvironmentPr: mockClearEnvironmentPr,
   openInBrowser: mockOpenInBrowser,
   prMonitorWatch: mockPrMonitorWatch,
+  armPrRefreshAfterAgentCompletion: mockArmPrRefreshAfterAgentCompletion,
+  disarmPrRefreshAfterAgentCompletion: mockDisarmPrRefreshAfterAgentCompletion,
 }));
 
 function monitorState(
@@ -54,12 +62,16 @@ describe("usePullRequest", () => {
     mockClearEnvironmentPr.mockClear();
     mockOpenInBrowser.mockClear();
     mockPrMonitorWatch.mockClear();
+    mockArmPrRefreshAfterAgentCompletion.mockClear();
+    mockDisarmPrRefreshAfterAgentCompletion.mockClear();
 
     // Reset to default implementations
     mockGetEnvironmentPrUrl.mockImplementation(() => Promise.resolve(null));
     mockClearEnvironmentPr.mockImplementation(() => Promise.resolve());
     mockOpenInBrowser.mockImplementation(() => Promise.resolve());
     mockPrMonitorWatch.mockImplementation(() => Promise.resolve());
+    mockArmPrRefreshAfterAgentCompletion.mockImplementation(() => Promise.resolve("armed-at-1"));
+    mockDisarmPrRefreshAfterAgentCompletion.mockImplementation(() => Promise.resolve());
   });
 
   test("returns initial state with no environment", () => {
@@ -168,6 +180,23 @@ describe("usePullRequest", () => {
     expect(mockOpenInBrowser).toHaveBeenCalledWith("https://github.com/test/repo/pull/456");
   });
 
+  test("viewPR reports browser rejection after fetching a missing URL", async () => {
+    mockGetEnvironmentPrUrl.mockResolvedValueOnce("https://github.com/test/repo/pull/456");
+    mockOpenInBrowser.mockRejectedValueOnce(new Error("browser unavailable"));
+    useEnvironmentStore.setState({
+      environments: [createMockEnvironment({ id: "env-1", prUrl: null })],
+      isLoading: false,
+      error: null,
+    });
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await act(async () => {
+      await result.current.viewPR();
+    });
+
+    expect(result.current.error).toBe("browser unavailable");
+  });
+
   test("viewPR sets error when no prUrl available", async () => {
     const env = createMockEnvironment({
       id: "env-1",
@@ -189,6 +218,23 @@ describe("usePullRequest", () => {
     });
 
     expect(result.current.error).toBe("No PR URL available");
+  });
+
+  test("viewPR handles a rejected fallback URL lookup", async () => {
+    mockGetEnvironmentPrUrl.mockRejectedValueOnce(new Error("backend unavailable"));
+    useEnvironmentStore.setState({
+      environments: [createMockEnvironment({ id: "env-1", prUrl: null })],
+      isLoading: false,
+      error: null,
+    });
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await act(async () => {
+      await result.current.viewPR();
+    });
+
+    expect(result.current.error).toBe("No PR URL available");
+    expect(mockOpenInBrowser).not.toHaveBeenCalled();
   });
 
   test("viewPR sets error on browser open failure", async () => {
@@ -214,6 +260,27 @@ describe("usePullRequest", () => {
     });
 
     expect(result.current.error).toBe("Failed to open browser");
+  });
+
+  test("viewPR clears a stale error after a later successful open", async () => {
+    mockOpenInBrowser
+      .mockRejectedValueOnce(new Error("browser unavailable"))
+      .mockResolvedValueOnce(undefined);
+    useEnvironmentStore.setState({
+      environments: [createMockEnvironment({
+        id: "env-1",
+        prUrl: "https://github.com/test/repo/pull/123",
+      })],
+      isLoading: false,
+      error: null,
+    });
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await act(async () => result.current.viewPR());
+    expect(result.current.error).toBe("browser unavailable");
+    await act(async () => result.current.viewPR());
+
+    expect(result.current.error).toBeNull();
   });
 
   test("resetPR clears the PR URL", async () => {
@@ -307,6 +374,68 @@ describe("usePullRequest", () => {
     expect(mockPrMonitorWatch).toHaveBeenCalledWith("env-1", "merge-pending");
   });
 
+  test("arms the backend-owned post-completion PR refresh", async () => {
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    let armedAt: string | null | undefined;
+    await act(async () => {
+      armedAt = await result.current.armRefreshAfterAgentCompletion();
+    });
+
+    expect(mockArmPrRefreshAfterAgentCompletion).toHaveBeenCalledWith("env-1");
+    expect(armedAt).toBe("armed-at-1");
+  });
+
+  test("arm refresh is a null no-op without an environment", async () => {
+    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+
+    let armedAt: string | null | undefined;
+    await act(async () => {
+      armedAt = await result.current.armRefreshAfterAgentCompletion();
+    });
+
+    expect(armedAt).toBeNull();
+    expect(mockArmPrRefreshAfterAgentCompletion).not.toHaveBeenCalled();
+  });
+
+  test("arm refresh propagates backend rejection to its caller", async () => {
+    mockArmPrRefreshAfterAgentCompletion.mockRejectedValueOnce(new Error("arm rejected"));
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await expect(result.current.armRefreshAfterAgentCompletion()).rejects.toThrow("arm rejected");
+  });
+
+  test("disarms the exact backend-owned refresh token", async () => {
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await act(async () => {
+      await result.current.disarmRefreshAfterAgentCompletion("armed-at-1");
+    });
+
+    expect(mockDisarmPrRefreshAfterAgentCompletion).toHaveBeenCalledWith(
+      "env-1",
+      "armed-at-1",
+    );
+  });
+
+  test("disarm refresh is a no-op without an environment", async () => {
+    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+
+    await act(async () => {
+      await result.current.disarmRefreshAfterAgentCompletion("armed-at-1");
+    });
+
+    expect(mockDisarmPrRefreshAfterAgentCompletion).not.toHaveBeenCalled();
+  });
+
+  test("disarm refresh propagates backend rejection to its caller", async () => {
+    mockDisarmPrRefreshAfterAgentCompletion.mockRejectedValueOnce(new Error("disarm rejected"));
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await expect(result.current.disarmRefreshAfterAgentCompletion("armed-at-1"))
+      .rejects.toThrow("disarm rejected");
+  });
+
   test("a failed mode request is swallowed rather than thrown into the caller", async () => {
     mockPrMonitorWatch.mockImplementation(() => Promise.reject(new Error("backend offline")));
     const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
@@ -318,11 +447,35 @@ describe("usePullRequest", () => {
     await waitFor(() => expect(mockPrMonitorWatch).toHaveBeenCalledTimes(1));
   });
 
+  test("a failed create-pending request is contained by the hook", async () => {
+    mockPrMonitorWatch.mockRejectedValueOnce(new Error("backend offline"));
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    act(() => {
+      result.current.setModeCreatePending();
+    });
+
+    await waitFor(() => expect(mockPrMonitorWatch).toHaveBeenCalledWith(
+      "env-1",
+      "create-pending",
+    ));
+  });
+
   test("setModeCreatePending does nothing when no environmentId", () => {
     const { result } = renderHook(() => usePullRequest({ environmentId: null }));
 
     act(() => {
       result.current.setModeCreatePending();
+    });
+
+    expect(mockPrMonitorWatch).not.toHaveBeenCalled();
+  });
+
+  test("setModeMergePending does nothing when no environmentId", () => {
+    const { result } = renderHook(() => usePullRequest({ environmentId: null }));
+
+    act(() => {
+      result.current.setModeMergePending();
     });
 
     expect(mockPrMonitorWatch).not.toHaveBeenCalled();

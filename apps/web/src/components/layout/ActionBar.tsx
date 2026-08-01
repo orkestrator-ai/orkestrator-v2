@@ -271,6 +271,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [mergingEnvironmentId, setMergingEnvironmentId] = useState<string | null>(null);
   const [mergeError, setMergeError] = useState<string | null>(null);
+  const [resolveLaunchEnvironmentId, setResolveLaunchEnvironmentId] = useState<string | null>(null);
+  const resolveLaunchEnvironmentIdRef = useRef<string | null>(null);
+  const selectedEnvironmentIdRef = useRef(selectedEnvironmentId);
+  selectedEnvironmentIdRef.current = selectedEnvironmentId;
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [loopedReviewDialogOpen, setLoopedReviewDialogOpen] = useState(false);
   const reviewLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -344,6 +348,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     hasMergeConflicts,
     viewPR,
     setModeCreatePending,
+    armRefreshAfterAgentCompletion,
+    disarmRefreshAfterAgentCompletion,
   } = usePullRequest({ environmentId: selectedEnvironmentId });
 
   const { deleteEnvironment } = useEnvironments(selectedProjectId, {
@@ -899,18 +905,84 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   }, [createTab, canCreateTab, defaultAgent]);
 
   // Handler for resolving merge conflicts - launches agent tab with conflict resolution prompt
-  const handleResolveConflicts = useCallback((agentOverride?: "claude" | "opencode" | "codex") => {
-    if (!createTab || !selectedProjectId || !canCreateTab) return;
+  const handleResolveConflicts = useCallback(async (agentOverride?: "claude" | "opencode" | "codex") => {
+    const operationEnvironmentId = selectedEnvironmentId;
+    if (
+      !createTab
+      || !operationEnvironmentId
+      || !selectedProjectId
+      || !canCreateTab
+      || resolveLaunchEnvironmentIdRef.current !== null
+    ) return;
+
+    resolveLaunchEnvironmentIdRef.current = operationEnvironmentId;
+    setResolveLaunchEnvironmentId(operationEnvironmentId);
 
     const repoConfig = config.repositories[selectedProjectId];
     const targetBranch = repoConfig?.prBaseBranch || "main";
     const resolvePrompt = createResolveConflictsPrompt(targetBranch);
+    let armedAt: string | null = null;
 
-    createTab(agentOverride || defaultAgent, {
-      initialPrompt: resolvePrompt,
-      displayTitle: "Resolve",
-    });
-  }, [createTab, selectedProjectId, canCreateTab, config.repositories, defaultAgent]);
+    const rollBackArm = async () => {
+      if (!armedAt) return;
+      try {
+        await disarmRefreshAfterAgentCompletion(armedAt);
+      } catch (error) {
+        console.warn("[ActionBar] Failed to roll back the PR refresh arm:", error);
+      }
+    };
+
+    try {
+      // The backend stores this intent before the turn can be dispatched, so
+      // inactive environments and renderer reloads cannot lose the refresh.
+      armedAt = await armRefreshAfterAgentCompletion();
+    } catch (error) {
+      console.warn("[ActionBar] Failed to arm PR refresh after conflict resolution:", error);
+      toast.error("Could not schedule the PR refresh", {
+        description: "Conflict resolution will still open, but PR status may need a manual refresh.",
+      });
+    }
+
+    try {
+      if (selectedEnvironmentIdRef.current !== operationEnvironmentId) {
+        await rollBackArm();
+        toast.error("Could not open conflict resolution", {
+          description: "The selected environment changed before the agent could launch.",
+        });
+        return;
+      }
+
+      const created = createTab(agentOverride || defaultAgent, {
+        initialPrompt: resolvePrompt,
+        displayTitle: "Resolve",
+      });
+      if (!created) {
+        await rollBackArm();
+        toast.error("Could not open conflict resolution", {
+          description: "The environment may no longer be ready or the maximum tab count was reached.",
+        });
+      }
+    } catch (error) {
+      await rollBackArm();
+      toast.error("Could not open conflict resolution", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (resolveLaunchEnvironmentIdRef.current === operationEnvironmentId) {
+        resolveLaunchEnvironmentIdRef.current = null;
+        setResolveLaunchEnvironmentId(null);
+      }
+    }
+  }, [
+    armRefreshAfterAgentCompletion,
+    disarmRefreshAfterAgentCompletion,
+    createTab,
+    selectedEnvironmentId,
+    selectedProjectId,
+    canCreateTab,
+    config.repositories,
+    defaultAgent,
+  ]);
 
   // Handler for cleaning up (deleting) an environment after PR is merged/closed
   const handleCleanup = useCallback(async () => {
@@ -1586,6 +1658,20 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 </ToolbarTooltipTrigger>
               )}
 
+              {!isPRFinished && hasMergeConflicts === null && (
+                <ToolbarTooltipTrigger tooltip="GitHub is still checking whether this PR can be merged">
+                  <Button
+                    variant={isGrid ? "ghost" : "outline"}
+                    size="sm"
+                    className="gap-2"
+                    disabled
+                  >
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className={cn(isGrid && "truncate text-xs")}>Checking mergeability…</span>
+                  </Button>
+                </ToolbarTooltipTrigger>
+              )}
+
               {!isPRFinished && hasMergeConflicts && (
                 <ContextMenu>
                   <ToolbarContextMenuTrigger
@@ -1602,22 +1688,31 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                       size="sm"
                       className="gap-2"
                       onClick={() => handleResolveConflicts()}
-                      disabled={!isRunning || !canCreateTab}
+                      disabled={!isRunning || !canCreateTab || resolveLaunchEnvironmentId !== null}
                     >
                       <AlertTriangle className="h-4 w-4" />
                       <span className={cn(isGrid && "truncate text-xs")}>Resolve</span>
                     </Button>
                   </ToolbarContextMenuTrigger>
                   <ContextMenuContent>
-                    <ContextMenuItem onClick={() => handleResolveConflicts("claude")}>
+                    <ContextMenuItem
+                      onClick={() => handleResolveConflicts("claude")}
+                      disabled={resolveLaunchEnvironmentId !== null}
+                    >
                       <ClaudeIcon className="mr-2 h-4 w-4" />
                       Resolve with Claude
                     </ContextMenuItem>
-                    <ContextMenuItem onClick={() => handleResolveConflicts("opencode")}>
+                    <ContextMenuItem
+                      onClick={() => handleResolveConflicts("opencode")}
+                      disabled={resolveLaunchEnvironmentId !== null}
+                    >
                       <OpenCodeIcon className="mr-2 h-4 w-4" />
                       Resolve with OpenCode
                     </ContextMenuItem>
-                    <ContextMenuItem onClick={() => handleResolveConflicts("codex")}>
+                    <ContextMenuItem
+                      onClick={() => handleResolveConflicts("codex")}
+                      disabled={resolveLaunchEnvironmentId !== null}
+                    >
                       <CodexIcon className="mr-2 h-4 w-4" />
                       Resolve with Codex
                     </ContextMenuItem>

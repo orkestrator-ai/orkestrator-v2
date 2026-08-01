@@ -135,7 +135,7 @@ async function withService(
       detection: {
         url: string;
         state: "open" | "merged" | "closed";
-        hasMergeConflicts: boolean;
+        hasMergeConflicts: boolean | null;
       } | null;
       failCommands: Set<string>;
       kanbanTasks: Map<string, {
@@ -188,7 +188,7 @@ async function withService(
     } as {
       url: string;
       state: "open" | "merged" | "closed";
-      hasMergeConflicts: boolean;
+      hasMergeConflicts: boolean | null;
     } | null,
     failCommands: new Set<string>(),
     kanbanTasks,
@@ -1095,6 +1095,31 @@ describe("BuildPipelineService", () => {
     });
   });
 
+  test("completes PR creation when GitHub mergeability is still indeterminate", async () => {
+    await withService(async (service, storage, _provider, invocations, controls) => {
+      controls.detection = {
+        url: "https://github.com/acme/repo/pull/43",
+        state: "open",
+        hasMergeConflicts: null,
+      };
+      const started = await service.start(startInput());
+      for (let pass = 0; pass < 6; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+
+      expect((await pipeline(storage, started.id)).phase).toBe("complete");
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        prUrl: "https://github.com/acme/repo/pull/43",
+        prState: "open",
+        hasMergeConflicts: null,
+      });
+      expect(invocations).toContainEqual({
+        command: "pr_monitor_watch",
+        args: { environmentId: "env-1", mode: "normal" },
+      });
+    });
+  });
+
   test("uses container PR detection for containerized build environments", async () => {
     await withService(async (service, storage, _provider, invocations) => {
       await storage.updateEnvironment("env-1", {
@@ -1651,6 +1676,16 @@ describe("BuildPipelineService", () => {
       }
       expect(await pipeline(storage, started.id)).toMatchObject({
         phase: "resolving-conflicts",
+      });
+      controls.detection = {
+        ...controls.detection,
+        hasMergeConflicts: null,
+      };
+      await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).phase).toBe("resolving-conflicts");
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        prUrl: "https://github.com/acme/repo/pull/9",
+        hasMergeConflicts: null,
       });
       controls.detection = {
         ...controls.detection,

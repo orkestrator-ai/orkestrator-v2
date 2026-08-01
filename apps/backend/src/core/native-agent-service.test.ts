@@ -101,6 +101,11 @@ function internals(service: NativeAgentService) {
     activityRetryAt: Map<string, number>;
     activityAttempts: Map<string, number>;
     absentBridgeUntil: Map<string, number>;
+    observedSessionActivity: Map<
+      string,
+      { providerSessionId: string; state: ProviderActivityState }
+    >;
+    pendingPrRefreshEnvironmentIds: Set<string>;
     launchTasks: Map<string, Promise<void>>;
     queueRetryAt: Map<string, number>;
     queueAttempts: Map<string, number>;
@@ -268,6 +273,516 @@ describe("NativeAgentService", () => {
           "native-agent": { state: "idle" },
         },
       });
+    });
+  });
+
+  test("reports one session completion while another same-provider tab stays working", async () => {
+    const sessionActivity = new Map<string, ProviderActivityState>([
+      ["provider-resolve", "working"],
+      ["provider-other", "working"],
+    ]);
+    const { provider } = createProviderStub("codex", {
+      activity: async (sessionId) => sessionActivity.get(sessionId) ?? "missing",
+    });
+    const invoked: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const invoke: Invoke = async <T>(command: string, args?: Record<string, unknown>) => {
+      invoked.push({ command, args });
+      expect(command).toBe("pr_monitor_agent_turn_completed");
+      expect(args).toEqual({ environmentId: "env-1" });
+      return undefined as T;
+    };
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-completion-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      provider: async () => provider,
+      invoke,
+    }, async ({ storage, service }) => {
+      for (const [logicalSessionKey, providerSessionId] of [
+        ["env-env-1:resolve", "provider-resolve"],
+        ["env-env-1:other", "provider-other"],
+      ] as const) {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey,
+          providerSessionId,
+        });
+      }
+
+      await service.reconcileAgentActivity();
+      expect(invoked).toEqual([]);
+
+      sessionActivity.set("provider-resolve", "idle");
+      await service.reconcileAgentActivity();
+
+      expect(invoked).toHaveLength(1);
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivityState: "working",
+      });
+    });
+  });
+
+  test("does not report a parked waiting turn as completed when it becomes idle", async () => {
+    let activityState: ProviderActivityState = "waiting";
+    const { provider } = createProviderStub("codex", {
+      activity: async () => activityState,
+    });
+    const invoke = mock(async () => undefined) as unknown as Invoke;
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-waiting-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      provider: async () => provider,
+      invoke,
+    }, async ({ storage, service }) => {
+      await storage.adoptNativeAgentSession({
+        key: nativeAgentSessionStorageKey("env-1", "codex", "resolve"),
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "resolve",
+        providerSessionId: "provider-resolve",
+      });
+
+      await service.reconcileAgentActivity();
+      expect(invoke).not.toHaveBeenCalled();
+
+      activityState = "idle";
+      await service.reconcileAgentActivity();
+      await service.reconcileAgentActivity();
+
+      expect(invoke).not.toHaveBeenCalled();
+    });
+  });
+
+  test("reports a fast accepted dispatch whose first activity snapshot is idle", async () => {
+    const { provider, send } = createProviderStub("codex", {
+      activity: async () => "idle",
+    });
+    const invoke = mock(async () => undefined) as unknown as Invoke;
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-fast-dispatch-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      provider: async () => provider,
+      invoke,
+    }, async ({ service }) => {
+      await service.dispatchPrompt({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "resolve",
+        prompt: "Resolve conflicts",
+        requestId: "resolve-1",
+      });
+      expect(send).toHaveBeenCalledTimes(1);
+
+      await service.reconcileAgentActivity();
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith(
+        "pr_monitor_agent_turn_completed",
+        { environmentId: "env-1" },
+      );
+    });
+  });
+
+  test("recovers an armed restart when the first provider snapshot is idle", async () => {
+    const { provider } = createProviderStub("codex", {
+      activity: async () => "idle",
+    });
+    const invoke = mock(async () => undefined) as unknown as Invoke;
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-restart-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      provider: async () => provider,
+      invoke,
+    }, async ({ storage, service }) => {
+      await storage.adoptNativeAgentSession({
+        key: nativeAgentSessionStorageKey("env-1", "codex", "resolve"),
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "resolve",
+        providerSessionId: "provider-resolve",
+      });
+
+      await service.reconcileAgentActivity();
+      await service.reconcileAgentActivity();
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("coalesces simultaneous session completions into one environment notification", async () => {
+    const activityBySession = new Map<string, ProviderActivityState>([
+      ["provider-1", "working"],
+      ["provider-2", "working"],
+    ]);
+    const { provider } = createProviderStub("codex", {
+      activity: async (sessionId) => activityBySession.get(sessionId) ?? "missing",
+    });
+    const invoke = mock(async () => undefined) as unknown as Invoke;
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-dedupe-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      provider: async () => provider,
+      invoke,
+    }, async ({ storage, service }) => {
+      for (const suffix of ["1", "2"] as const) {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "codex", `resolve-${suffix}`),
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey: `resolve-${suffix}`,
+          providerSessionId: `provider-${suffix}`,
+        });
+      }
+      await service.reconcileAgentActivity();
+
+      activityBySession.set("provider-1", "idle");
+      activityBySession.set("provider-2", "idle");
+      await service.reconcileAgentActivity();
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("bounds concurrent completion notification delivery", async () => {
+    const environmentIds = Array.from(
+      { length: 12 },
+      (_unused, index) => `env-${index + 1}`,
+    );
+    let activityState: ProviderActivityState = "working";
+    const { provider } = createProviderStub("codex", {
+      activity: async () => activityState,
+    });
+    const delivered: string[] = [];
+    let inFlight = 0;
+    let peakInFlight = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const invoke: Invoke = async <T>(
+      command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      expect(command).toBe("pr_monitor_agent_turn_completed");
+      const environmentId = args?.environmentId;
+      expect(typeof environmentId).toBe("string");
+      delivered.push(environmentId as string);
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      if (inFlight === 8) release();
+      await gate;
+      inFlight -= 1;
+      return undefined as T;
+    };
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-concurrency-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      provider: async () => provider,
+      invoke,
+    }, async ({ storage, service }) => {
+      for (const environmentId of environmentIds.slice(1)) {
+        await addEnvironment(storage, {
+          id: environmentId,
+          worktreePath: `/tmp/${environmentId}`,
+          prUrl: `https://github.com/acme/repo/pull/${environmentId}`,
+          prState: "open",
+          hasMergeConflicts: true,
+          prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+        });
+      }
+      for (const environmentId of environmentIds) {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey(environmentId, "codex", "resolve"),
+          environmentId,
+          agent: "codex",
+          logicalSessionKey: "resolve",
+          providerSessionId: `${environmentId}-provider`,
+        });
+      }
+      await service.reconcileAgentActivity();
+
+      activityState = "idle";
+      await service.reconcileAgentActivity();
+
+      expect(peakInFlight).toBe(8);
+      expect(delivered).toHaveLength(environmentIds.length);
+      expect(new Set(delivered)).toEqual(new Set(environmentIds));
+    });
+  });
+
+  test("stops starting queued completion notifications once shutdown begins", async () => {
+    const environmentIds = Array.from({ length: 10 }, (_unused, index) => `env-${index + 1}`);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let signalEightStarted!: () => void;
+    const eightStarted = new Promise<void>((resolve) => { signalEightStarted = resolve; });
+    const invoked: string[] = [];
+    const invoke: Invoke = async <T>(
+      _command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      invoked.push(args?.environmentId as string);
+      if (invoked.length === 8) signalEightStarted();
+      await gate;
+      return undefined as T;
+    };
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-shutdown-flush-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      invoke,
+    }, async ({ storage, service }) => {
+      for (const environmentId of environmentIds.slice(1)) {
+        await addEnvironment(storage, {
+          id: environmentId,
+          worktreePath: `/tmp/${environmentId}`,
+          prUrl: `https://github.com/acme/repo/pull/${environmentId}`,
+          prState: "open",
+          hasMergeConflicts: true,
+          prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+        });
+      }
+      for (const environmentId of environmentIds) {
+        internals(service).pendingPrRefreshEnvironmentIds.add(environmentId);
+      }
+
+      const scan = service.reconcileAgentActivity();
+      await eightStarted;
+      const shuttingDown = service.shutdown();
+      release();
+      await Promise.all([scan, shuttingDown]);
+
+      expect(invoked).toHaveLength(8);
+      expect(new Set(invoked).size).toBe(8);
+    });
+  });
+
+  test("retries a failed completion notification without repeating a success", async () => {
+    let activityState: ProviderActivityState = "working";
+    let invocationAttempt = 0;
+    const { provider } = createProviderStub("codex", {
+      activity: async () => activityState,
+    });
+    const invoke = mock(async () => {
+      invocationAttempt += 1;
+      if (invocationAttempt === 1) throw new Error("command registry unavailable");
+    }) as unknown as Invoke;
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-retry-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      provider: async () => provider,
+      invoke,
+    }, async ({ storage, service }) => {
+      await storage.adoptNativeAgentSession({
+        key: nativeAgentSessionStorageKey("env-1", "codex", "resolve"),
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "resolve",
+        providerSessionId: "provider-resolve",
+      });
+      await service.reconcileAgentActivity();
+
+      activityState = "idle";
+      const warnings = await captureWarnings(async () => {
+        await service.reconcileAgentActivity();
+      });
+      expect(warnings).toHaveLength(1);
+      expect(internals(service).pendingPrRefreshEnvironmentIds)
+        .toEqual(new Set(["env-1"]));
+
+      // Delivery does not depend on keeping the completed tab/session alive.
+      // A renderer may close it before the next background sweep retries.
+      await storage.invalidateNativeAgentSession(
+        nativeAgentSessionStorageKey("env-1", "codex", "resolve"),
+        "provider-resolve",
+      );
+      await service.reconcileAgentActivity();
+      await service.reconcileAgentActivity();
+
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(internals(service).pendingPrRefreshEnvironmentIds.size).toBe(0);
+
+      internals(service).pendingPrRefreshEnvironmentIds.add("env-1");
+      await storage.removeEnvironment("env-1");
+      await service.reconcileAgentActivity();
+      expect(internals(service).pendingPrRefreshEnvironmentIds.size).toBe(0);
+    });
+  });
+
+  test("prunes failed completion notifications when their durable arms disappear", async () => {
+    let activityState: ProviderActivityState = "working";
+    const { provider } = createProviderStub("codex", {
+      activity: async () => activityState,
+    });
+    const invoke = mock(async () => {
+      throw new Error("command registry unavailable");
+    }) as unknown as Invoke;
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-prune-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      provider: async () => provider,
+      invoke,
+    }, async ({ storage, service }) => {
+      await storage.adoptNativeAgentSession({
+        key: nativeAgentSessionStorageKey("env-1", "codex", "resolve"),
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "resolve",
+        providerSessionId: "provider-resolve",
+      });
+      await service.reconcileAgentActivity();
+      activityState = "idle";
+      await captureWarnings(() => service.reconcileAgentActivity());
+      await captureWarnings(() => service.reconcileAgentActivity());
+
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(internals(service).pendingPrRefreshEnvironmentIds).toEqual(new Set(["env-1"]));
+
+      await storage.updateEnvironment("env-1", {
+        prRecheckAfterAgentCompletionArmedAt: undefined,
+      });
+      await service.reconcileAgentActivity();
+
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(internals(service).pendingPrRefreshEnvironmentIds.size).toBe(0);
+    });
+  });
+
+  test("does not report idle snapshots without an armed completion intent", async () => {
+    let activityState: ProviderActivityState = "idle";
+    const { provider } = createProviderStub("codex", {
+      activity: async () => activityState,
+    });
+    const invoke = mock(async () => undefined) as unknown as Invoke;
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-unarmed-",
+      provider: async () => provider,
+      invoke,
+    }, async ({ storage, service }) => {
+      await storage.adoptNativeAgentSession({
+        key: nativeAgentSessionStorageKey("env-1", "codex", "tab-1"),
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-1",
+      });
+
+      await service.reconcileAgentActivity();
+      activityState = "working";
+      await service.reconcileAgentActivity();
+      activityState = "waiting";
+      await service.reconcileAgentActivity();
+      activityState = "idle";
+      await service.reconcileAgentActivity();
+
+      expect(invoke).not.toHaveBeenCalled();
+    });
+  });
+
+  test("prunes observation state for removed and replaced provider sessions", async () => {
+    let activityState: ProviderActivityState = "working";
+    const { provider } = createProviderStub("codex", {
+      activity: async () => activityState,
+    });
+
+    const invoke = mock(async () => undefined) as unknown as Invoke;
+    await withService({
+      prefix: "orkestrator-native-activity-observation-prune-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      provider: async () => provider,
+      invoke,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-old",
+      });
+      await service.reconcileAgentActivity();
+      expect(internals(service).observedSessionActivity.get(key)).toEqual({
+        providerSessionId: "provider-old",
+        state: "working",
+      });
+
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-new",
+        expectedProviderSessionId: "provider-old",
+      });
+      activityState = "idle";
+      await service.reconcileAgentActivity();
+      expect(internals(service).observedSessionActivity.get(key)).toEqual({
+        providerSessionId: "provider-new",
+        state: "idle",
+      });
+      expect(invoke).not.toHaveBeenCalled();
+
+      await storage.invalidateNativeAgentSession(key, "provider-new");
+      await service.reconcileAgentActivity();
+      expect(internals(service).observedSessionActivity.has(key)).toBe(false);
     });
   });
 

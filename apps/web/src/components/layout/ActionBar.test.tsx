@@ -81,6 +81,8 @@ const updateTaskMock = mock(async (_taskId: string, _updates: unknown) => {});
 const viewPRMock = mock(() => {});
 const setModeCreatePendingMock = mock(() => {});
 const setModeMergePendingMock = mock(() => {});
+const armRefreshAfterAgentCompletionMock = mock(async (): Promise<string | null> => "armed-at-1");
+const disarmRefreshAfterAgentCompletionMock = mock(async (_armedAt: string) => {});
 const updateProjectMock = mock(async () => {});
 const updateEnvironmentMock = mock(() => {});
 const recreateEnvironmentMock = mock(async () => {});
@@ -504,6 +506,8 @@ mock.module("@/hooks", () => ({
     viewPR: viewPRMock,
     setModeCreatePending: setModeCreatePendingMock,
     setModeMergePending: setModeMergePendingMock,
+    armRefreshAfterAgentCompletion: armRefreshAfterAgentCompletionMock,
+    disarmRefreshAfterAgentCompletion: disarmRefreshAfterAgentCompletionMock,
   }),
 }));
 
@@ -589,6 +593,10 @@ beforeEach(() => {
   viewPRMock.mockReset();
   setModeCreatePendingMock.mockReset();
   setModeMergePendingMock.mockReset();
+  armRefreshAfterAgentCompletionMock.mockReset();
+  armRefreshAfterAgentCompletionMock.mockImplementation(async () => "armed-at-1");
+  disarmRefreshAfterAgentCompletionMock.mockReset();
+  disarmRefreshAfterAgentCompletionMock.mockImplementation(async () => {});
   updateProjectMock.mockReset();
   updateEnvironmentMock.mockReset();
   recreateEnvironmentMock.mockReset();
@@ -1634,7 +1642,7 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("names PR, resolve, and push workflow tabs", () => {
+  test("names PR, resolve, and push workflow tabs", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -1659,10 +1667,13 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "codex",
-      expect.objectContaining({ displayTitle: "Resolve" }),
-    );
+    await waitFor(() => {
+      expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
+      expect(createTabMock).toHaveBeenLastCalledWith(
+        "codex",
+        expect.objectContaining({ displayTitle: "Resolve" }),
+      );
+    });
 
     currentEnvironment = {
       ...selectedEnvironment,
@@ -1680,7 +1691,211 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("starts PR monitoring and honors environment defaults and one-shot workflow overrides", () => {
+  test("arms before launching Resolve and suppresses duplicate launches while arming", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    const events: string[] = [];
+    let resolveArm!: (armedAt: string | null) => void;
+    armRefreshAfterAgentCompletionMock.mockImplementationOnce(() => {
+      events.push("arm");
+      return new Promise((resolve) => {
+        resolveArm = resolve;
+      });
+    });
+    createTabMock.mockImplementationOnce(() => {
+      events.push("create");
+      return true;
+    });
+    render(<ActionBar />);
+
+    const resolveButton = screen.getByRole("button", { name: "Resolve" });
+    fireEvent.click(resolveButton);
+    fireEvent.click(resolveButton);
+
+    expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect((resolveButton as HTMLButtonElement).disabled).toBe(true);
+
+    resolveArm("armed-at-deferred");
+
+    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
+    expect(events).toEqual(["arm", "create"]);
+    expect((resolveButton as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("disables every Resolve provider while a launch is being armed", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    let resolveArm!: (armedAt: string | null) => void;
+    armRefreshAfterAgentCompletionMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveArm = resolve;
+    }));
+    render(<ActionBar />);
+
+    const resolveButton = screen.getByRole("button", { name: "Resolve" });
+    fireEvent.click(resolveButton);
+    fireEvent.contextMenu(resolveButton);
+
+    for (const name of ["Resolve with Claude", "Resolve with OpenCode", "Resolve with Codex"]) {
+      const item = screen.getByRole("button", { name }) as HTMLButtonElement;
+      expect(item.disabled).toBe(true);
+      fireEvent.click(item);
+    }
+    expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
+    resolveArm("armed-after-menu-check");
+    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
+  });
+
+  test("reports an arm failure but still launches the requested Resolve agent", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    armRefreshAfterAgentCompletionMock.mockRejectedValueOnce(new Error("backend offline"));
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not schedule the PR refresh",
+      expect.objectContaining({ description: expect.stringContaining("still open") }),
+    );
+    expect(disarmRefreshAfterAgentCompletionMock).not.toHaveBeenCalled();
+  });
+
+  test("rolls back the exact refresh arm when Resolve tab creation is refused", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce("armed-at-refused");
+    createTabMock.mockReturnValueOnce(false);
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    await waitFor(() => {
+      expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith("armed-at-refused");
+    });
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open conflict resolution",
+      expect.objectContaining({ description: expect.stringContaining("maximum tab count") }),
+    );
+  });
+
+  test("does not roll back an earlier request when the current Resolve arm is refused", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce(null);
+    createTabMock.mockReturnValueOnce(false);
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open conflict resolution",
+      expect.any(Object),
+    ));
+    expect(disarmRefreshAfterAgentCompletionMock).not.toHaveBeenCalled();
+  });
+
+  test("rolls back the exact refresh arm when Resolve tab creation throws", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce("armed-at-thrown");
+    createTabMock.mockImplementationOnce(() => {
+      throw new Error("pane rejected the tab");
+    });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    await waitFor(() => {
+      expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith("armed-at-thrown");
+    });
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open conflict resolution",
+      { description: "pane rejected the tab" },
+    );
+  });
+
+  test("reports tab refusal and unlocks Resolve when arm rollback rejects", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce("armed-at-rollback-failure");
+    createTabMock.mockReturnValueOnce(false);
+    disarmRefreshAfterAgentCompletionMock.mockRejectedValueOnce(new Error("disarm rejected"));
+    render(<ActionBar />);
+
+    const resolveButton = screen.getByRole("button", { name: "Resolve" });
+    fireEvent.click(resolveButton);
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open conflict resolution",
+      expect.any(Object),
+    ));
+    expect(console.warn).toHaveBeenCalledWith(
+      "[ActionBar] Failed to roll back the PR refresh arm:",
+      expect.any(Error),
+    );
+    expect((resolveButton as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("cancels an armed Resolve launch when the selected environment changes", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    let resolveArm!: (armedAt: string | null) => void;
+    armRefreshAfterAgentCompletionMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveArm = resolve;
+    }));
+    const view = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+    currentSelectedEnvironmentId = "env-2";
+    currentOtherEnvironments = [{
+      ...selectedEnvironment,
+      id: "env-2",
+      name: "other-environment",
+      prState: "open",
+      hasMergeConflicts: true,
+    }];
+    view.rerender(<ActionBar />);
+    resolveArm("armed-before-selection-change");
+
+    await waitFor(() => {
+      expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith(
+        "armed-before-selection-change",
+      );
+    });
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open conflict resolution",
+      expect.objectContaining({ description: expect.stringContaining("selected environment changed") }),
+    );
+  });
+
+  test("starts PR monitoring and honors environment defaults and one-shot workflow overrides", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       defaultAgent: "opencode",
@@ -1715,10 +1930,13 @@ describe("ActionBar workflow tabs", () => {
     rerender(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     fireEvent.click(screen.getByRole("button", { name: "Resolve with Codex" }));
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "codex",
-      expect.objectContaining({ displayTitle: "Resolve" }),
-    );
+    await waitFor(() => {
+      expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
+      expect(createTabMock).toHaveBeenLastCalledWith(
+        "codex",
+        expect.objectContaining({ displayTitle: "Resolve" }),
+      );
+    });
 
     currentEnvironment = {
       ...currentEnvironment,
@@ -1748,7 +1966,7 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("routes every PR workflow context-menu provider", () => {
+  test("routes every PR workflow context-menu provider", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -1782,10 +2000,12 @@ describe("ActionBar workflow tabs", () => {
     ] as const) {
       fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
       fireEvent.click(screen.getByRole("button", { name: `Resolve with ${label}` }));
-      expect(createTabMock).toHaveBeenLastCalledWith(
-        agent,
-        expect.objectContaining({ displayTitle: "Resolve" }),
-      );
+      await waitFor(() => {
+        expect(createTabMock).toHaveBeenLastCalledWith(
+          agent,
+          expect.objectContaining({ displayTitle: "Resolve" }),
+        );
+      });
     }
 
     currentEnvironment = {
@@ -2247,6 +2467,20 @@ describe("ActionBar pull request actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "View PR" }));
 
     expect(viewPRMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("shows a disabled pending affordance while GitHub computes mergeability", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar />);
+
+    const checking = screen.getByRole("button", { name: "Checking mergeability…" }) as HTMLButtonElement;
+    expect(checking.disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Merge PR" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Resolve" })).toBeNull();
   });
 
   test("presents a closed pull request and cleanup explanation without merged-branch wording", () => {

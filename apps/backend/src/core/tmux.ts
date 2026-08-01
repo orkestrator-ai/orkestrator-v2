@@ -38,7 +38,14 @@ const POLL_INTERVAL_MS = 250;
 export const LIVENESS_CHECK_EVERY_TICKS = 8;
 // The hook process owns the shared five-minute timeout. Renderers receive the
 // resulting absolute timestamps and only display them.
-const HOOK_TIMEOUT_SECS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS / 1_000;
+if (
+  !Number.isSafeInteger(AGENT_INTERACTION_DEFAULT_TIMEOUT_MS)
+  || AGENT_INTERACTION_DEFAULT_TIMEOUT_MS <= 0
+  || AGENT_INTERACTION_DEFAULT_TIMEOUT_MS % 1_000 !== 0
+) {
+  throw new Error("Agent interaction timeout must be a positive whole number of seconds");
+}
+const HOOK_TIMEOUT_SECS = Math.trunc(AGENT_INTERACTION_DEFAULT_TIMEOUT_MS / 1_000);
 const COMMAND_IDLE_TIMEOUT_MS = 8_000;
 const COMMAND_NO_HOOK_SETTLE_MS = 2_000;
 const COMMAND_AFTER_IDLE_SETTLE_MS = 400;
@@ -857,6 +864,7 @@ type SessionHookPaths = {
   pendingDir: string;
   responseDir: string;
   timeoutDir: string;
+  timingDir: string;
 };
 
 type PendingHookEvent = {
@@ -881,6 +889,45 @@ function blockingHookTiming(id: string): { requestedAt: number; expiresAt: numbe
   };
 }
 
+function parseBlockingHookTiming(content: string | undefined): {
+  requestedAt: number;
+  expiresAt: number;
+} | null {
+  if (content === undefined) return null;
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    const requestedAt = parsed.requestedAt;
+    const expiresAt = parsed.expiresAt;
+    if (
+      typeof requestedAt !== "number"
+      || typeof expiresAt !== "number"
+      || !Number.isSafeInteger(requestedAt)
+      || !Number.isSafeInteger(expiresAt)
+      || requestedAt <= 0
+      || expiresAt - requestedAt !== AGENT_INTERACTION_DEFAULT_TIMEOUT_MS
+    ) {
+      return null;
+    }
+    return { requestedAt, expiresAt };
+  } catch {
+    return null;
+  }
+}
+
+async function readBlockingHookTiming(
+  backend: TmuxBackend,
+  paths: SessionHookPaths,
+  filename: string,
+  id: string,
+): Promise<{ requestedAt: number; expiresAt: number } | null> {
+  const authoritative = parseBlockingHookTiming(
+    await backend.readFile(`${paths.timingDir}/${filename}`),
+  );
+  // Hooks installed by an older backend do not have a timing sidecar. Keep
+  // their pending prompts displayable until the workspace hook is reinstalled.
+  return authoritative ?? blockingHookTiming(id);
+}
+
 function workspaceHookPaths(runtimeRoot: string, workspace: string): WorkspaceHookPaths {
   return {
     root: runtimeRoot,
@@ -898,6 +945,7 @@ function sessionHookPaths(workspace: WorkspaceHookPaths, sessionId: string): Ses
     pendingDir: `${sessionDir}/pending`,
     responseDir: `${sessionDir}/response`,
     timeoutDir: `${sessionDir}/timeout`,
+    timingDir: `${sessionDir}/timing`,
   };
 }
 
@@ -937,32 +985,64 @@ SESSION_DIR="$SESSIONS_DIR/$SESSION_ID"
 PENDING_DIR="$SESSION_DIR/pending"
 RESPONSE_DIR="$SESSION_DIR/response"
 TIMEOUT_DIR="$SESSION_DIR/timeout"
-mkdir -p "$PENDING_DIR" "$RESPONSE_DIR" "$TIMEOUT_DIR" 2>/dev/null || true
+TIMING_DIR="$SESSION_DIR/timing"
+mkdir -p "$PENDING_DIR" "$RESPONSE_DIR" "$TIMEOUT_DIR" "$TIMING_DIR" 2>/dev/null || true
 
 ID="$(date +%s)-$$-\${RANDOM}-\${RANDOM}"
 PENDING_FILE="$PENDING_DIR/\${EVENT_KIND}-\${ID}.json"
 RESPONSE_FILE="$RESPONSE_DIR/\${EVENT_KIND}-\${ID}.json"
 TIMEOUT_FILE="$TIMEOUT_DIR/\${EVENT_KIND}-\${ID}.json"
+TIMING_FILE="$TIMING_DIR/\${EVENT_KIND}-\${ID}.json"
 
-printf '%s' "$PAYLOAD" > "$PENDING_FILE"
+epoch_millis() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import time; print(time.time_ns() // 1000000)'
+  elif command -v node >/dev/null 2>&1; then
+    node -e 'process.stdout.write(String(Date.now()))'
+  else
+    printf '%s000\n' "$(date +%s)"
+  fi
+}
 
 case "$EVENT_KIND" in
   PreToolUse|PermissionRequest|Elicitation)
-    i=0
-    while [ $i -lt $((TIMEOUT_SECS * 4)) ]; do
+    REQUESTED_AT_MS="$(epoch_millis)"
+    EXPIRES_AT_MS=$((REQUESTED_AT_MS + TIMEOUT_SECS * 1000))
+    printf '{"requestedAt":%s,"expiresAt":%s}' "$REQUESTED_AT_MS" "$EXPIRES_AT_MS" > "$TIMING_FILE"
+    printf '%s' "$PAYLOAD" > "$PENDING_FILE"
+    # A single sleeper owns the deadline. Counting 1,200 quarter-second
+    # polling iterations would add the loop's process and filesystem overhead
+    # to the advertised five minutes, causing the published deadline and the
+    # actual acceptance window to drift apart under load.
+    sleep "$TIMEOUT_SECS" &
+    TIMEOUT_PID=$!
+    while kill -0 "$TIMEOUT_PID" 2>/dev/null; do
       if [ -f "$RESPONSE_FILE" ]; then
+        kill "$TIMEOUT_PID" 2>/dev/null || true
+        wait "$TIMEOUT_PID" 2>/dev/null || true
         cat "$RESPONSE_FILE"
-        rm -f "$RESPONSE_FILE" "$PENDING_FILE"
+        rm -f "$RESPONSE_FILE" "$PENDING_FILE" "$TIMING_FILE"
         exit 0
       fi
       sleep 0.25
-      i=$((i + 1))
     done
+    wait "$TIMEOUT_PID" 2>/dev/null || true
     printf '{"timed_out":true}' > "$TIMEOUT_FILE"
-    rm -f "$PENDING_FILE"
-    echo '{}'
+    rm -f "$PENDING_FILE" "$TIMING_FILE"
+    case "$EVENT_KIND" in
+      PreToolUse)
+        echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Approval timed out without a user response."}}'
+        ;;
+      PermissionRequest)
+        echo '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Permission request timed out without a user response."}}}'
+        ;;
+      Elicitation)
+        echo '{"hookSpecificOutput":{"hookEventName":"Elicitation","action":"cancel"}}'
+        ;;
+    esac
     ;;
   *)
+    printf '%s' "$PAYLOAD" > "$PENDING_FILE"
     echo '{}'
     ;;
 esac
@@ -1113,6 +1193,7 @@ async function ensureSessionDirs(backend: TmuxBackend, paths: SessionHookPaths):
   await backend.ensureDir(paths.pendingDir);
   await backend.ensureDir(paths.responseDir);
   await backend.ensureDir(paths.timeoutDir);
+  await backend.ensureDir(paths.timingDir);
 }
 
 /** `names` comes from the tick's {@link TmuxPollSnapshot}, not a fresh listing. */
@@ -1126,6 +1207,7 @@ async function drainTimeouts(
     if (!name.endsWith(".json")) continue;
     const parsed = parseEventFilename(name);
     await backend.removeFile(`${paths.timeoutDir}/${name}`).catch(() => undefined);
+    await backend.removeFile(`${paths.timingDir}/${name}`).catch(() => undefined);
     out.push(parsed);
   }
   return out;
@@ -1170,7 +1252,7 @@ async function drainPending(
       id,
       kind,
       payload,
-      ...(blocking ? blockingHookTiming(id) ?? {} : {}),
+      ...(blocking ? await readBlockingHookTiming(backend, paths, name, id) ?? {} : {}),
     });
   }
   return events;
@@ -1192,7 +1274,12 @@ async function listPendingBlocking(backend: TmuxBackend, paths: SessionHookPaths
     } catch {
       payload = content;
     }
-    events.push({ id, kind, payload, ...(blockingHookTiming(id) ?? {}) });
+    events.push({
+      id,
+      kind,
+      payload,
+      ...(await readBlockingHookTiming(backend, paths, name, id) ?? {}),
+    });
   }
   return events;
 }
@@ -1207,6 +1294,7 @@ async function replyToHook(
   const filename = responseFilename(kind, id);
   await backend.writeFile(`${paths.responseDir}/${filename}`, JSON.stringify(response ?? {}));
   await backend.removeFile(`${paths.pendingDir}/${filename}`).catch(() => undefined);
+  await backend.removeFile(`${paths.timingDir}/${filename}`).catch(() => undefined);
 }
 
 function preToolUseResponse(decision: string, reason?: string): unknown {

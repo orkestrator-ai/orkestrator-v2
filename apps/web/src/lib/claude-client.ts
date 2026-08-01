@@ -1496,7 +1496,7 @@ export async function answerQuestion(
     console.error("[claude-client] Failed to answer question:", error);
     try {
       const pending = await getPendingQuestions(client, sessionId, { throwOnError: true });
-      return pending.some((question) => question.id === questionId) ? "error" : "applied";
+      return pending.some((question) => question.id === questionId) ? "error" : "stale";
     } catch {
       return "unknown";
     }
@@ -1522,7 +1522,7 @@ export async function dismissQuestion(
     console.error("[claude-client] Failed to dismiss question:", error);
     try {
       const pending = await getPendingQuestions(client, sessionId, { throwOnError: true });
-      return pending.some((question) => question.id === questionId) ? "error" : "applied";
+      return pending.some((question) => question.id === questionId) ? "error" : "stale";
     } catch {
       return "unknown";
     }
@@ -1557,7 +1557,7 @@ export async function respondToPlanApproval(
     console.error("[claude-client] Failed to respond to plan approval:", error);
     try {
       const pending = await getPendingPlanApprovals(client, sessionId, { throwOnError: true });
-      return pending.some((approval) => approval.id === approvalId) ? "error" : "applied";
+      return pending.some((approval) => approval.id === approvalId) ? "error" : "stale";
     } catch {
       return "unknown";
     }

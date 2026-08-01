@@ -22,6 +22,20 @@ export { type OpencodeClient };
 
 const PREFERRED_VARIANT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+const INTERACTION_RECONCILIATION_TIMEOUT_MS = 5_000;
+
+/**
+ * Result of answering or dismissing an OpenCode blocking interaction.
+ *
+ * `gone` deliberately does not mean `applied`: an interaction can disappear
+ * because it expired, another window answered it, or the server restarted.
+ */
+export type OpenCodeInteractionResponseResult =
+  | "applied"
+  | "pending"
+  | "gone"
+  | "unknown";
+
 export interface OpenCodeModel {
   id: string;
   name: string;
@@ -2616,11 +2630,12 @@ export async function abortSession(client: OpencodeClient, sessionId: string): P
  */
 export async function getPendingQuestions(
   client: OpencodeClient,
-  options: { throwOnError?: boolean } = {},
+  options: { throwOnError?: boolean; signal?: AbortSignal } = {},
 ): Promise<QuestionRequest[]> {
   try {
     const response = await client.question.list(undefined, {
       throwOnError: options.throwOnError,
+      signal: options.signal,
     });
     if (!response.data) {
       if (options.throwOnError) {
@@ -2648,11 +2663,12 @@ export async function getPendingQuestions(
  */
 export async function getPendingPermissions(
   client: OpencodeClient,
-  options: { throwOnError?: boolean } = {},
+  options: { throwOnError?: boolean; signal?: AbortSignal } = {},
 ): Promise<PermissionRequest[]> {
   try {
     const response = await client.permission.list(undefined, {
       throwOnError: options.throwOnError,
+      signal: options.signal,
     });
     if (!response.data) {
       if (options.throwOnError) {
@@ -2675,6 +2691,33 @@ export async function getPendingPermissions(
   }
 }
 
+async function reconcileInteractionResponse(
+  requestId: string,
+  loadPending: (signal: AbortSignal) => Promise<Array<{ id: string }>>,
+): Promise<Exclude<OpenCodeInteractionResponseResult, "applied">> {
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      controller.abort();
+      reject(new Error("OpenCode interaction reconciliation timed out"));
+    }, INTERACTION_RECONCILIATION_TIMEOUT_MS);
+  });
+
+  try {
+    const pending = await Promise.race([
+      loadPending(controller.signal),
+      timeout,
+    ]);
+    return pending.some((request) => request.id === requestId) ? "pending" : "gone";
+  } catch (error) {
+    console.error("[opencode-client] Failed to reconcile interaction response:", error);
+    return "unknown";
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
 /**
  * Reply to a question request
  * @param client The SDK client
@@ -2685,7 +2728,7 @@ export async function replyToQuestion(
   client: OpencodeClient,
   requestId: string,
   answers: QuestionAnswer[]
-): Promise<boolean> {
+): Promise<OpenCodeInteractionResponseResult> {
   try {
     await client.question.reply(
       {
@@ -2694,11 +2737,13 @@ export async function replyToQuestion(
       },
       { throwOnError: true },
     );
-    return true;
+    return "applied";
   } catch (error) {
     console.error("[opencode-client] Failed to reply to question:", error);
-    const pending = await getPendingQuestions(client, { throwOnError: true });
-    return !pending.some((question) => question.id === requestId);
+    return reconcileInteractionResponse(
+      requestId,
+      (signal) => getPendingQuestions(client, { throwOnError: true, signal }),
+    );
   }
 }
 
@@ -2710,7 +2755,7 @@ export async function replyToPermission(
   requestId: string,
   reply: PermissionReply,
   message?: string
-): Promise<boolean> {
+): Promise<OpenCodeInteractionResponseResult> {
   try {
     await client.permission.reply(
       {
@@ -2720,11 +2765,13 @@ export async function replyToPermission(
       },
       { throwOnError: true },
     );
-    return true;
+    return "applied";
   } catch (error) {
     console.error("[opencode-client] Failed to reply to permission:", error);
-    const pending = await getPendingPermissions(client, { throwOnError: true });
-    return !pending.some((permission) => permission.id === requestId);
+    return reconcileInteractionResponse(
+      requestId,
+      (signal) => getPendingPermissions(client, { throwOnError: true, signal }),
+    );
   }
 }
 
@@ -2734,16 +2781,18 @@ export async function replyToPermission(
 export async function rejectQuestion(
   client: OpencodeClient,
   requestId: string
-): Promise<boolean> {
+): Promise<OpenCodeInteractionResponseResult> {
   try {
     await client.question.reject(
       { requestID: requestId },
       { throwOnError: true },
     );
-    return true;
+    return "applied";
   } catch (error) {
     console.error("[opencode-client] Failed to reject question:", error);
-    const pending = await getPendingQuestions(client, { throwOnError: true });
-    return !pending.some((question) => question.id === requestId);
+    return reconcileInteractionResponse(
+      requestId,
+      (signal) => getPendingQuestions(client, { throwOnError: true, signal }),
+    );
   }
 }

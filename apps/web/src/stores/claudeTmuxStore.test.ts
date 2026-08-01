@@ -1050,31 +1050,31 @@ describe("prompt draft clearing", () => {
   test("removePendingPlan clears the plan feedback draft", () => {
     const store = useClaudeTmuxStore.getState();
     store.addPendingPlan("e", payloadToPlan("evt-1", { tool_input: { plan: "p" } }));
-    drafts().setDraftValue(tmuxPlanDraftKey("evt-1"), "feedback", "typed");
+    drafts().setDraftValue(tmuxPlanDraftKey("e", "evt-1"), "feedback", "typed");
 
     store.removePendingPlan("e", "evt-1");
 
-    expect(drafts().drafts.has(tmuxPlanDraftKey("evt-1"))).toBe(false);
+    expect(drafts().drafts.has(tmuxPlanDraftKey("e", "evt-1"))).toBe(false);
   });
 
   test("removePendingElicitation clears the typed values draft", () => {
     const store = useClaudeTmuxStore.getState();
     store.addPendingElicitation("e", payloadToElicitation("evt-1", {}));
-    drafts().setDraftValue(tmuxElicitationDraftKey("evt-1"), "values", { a: "1" });
+    drafts().setDraftValue(tmuxElicitationDraftKey("e", "evt-1"), "values", { a: "1" });
 
     store.removePendingElicitation("e", "evt-1");
 
-    expect(drafts().drafts.has(tmuxElicitationDraftKey("evt-1"))).toBe(false);
+    expect(drafts().drafts.has(tmuxElicitationDraftKey("e", "evt-1"))).toBe(false);
   });
 
   test("removePendingQuestion clears the question answer draft", () => {
     const store = useClaudeTmuxStore.getState();
     store.addPendingQuestion("e", payloadToQuestion("evt-1", {}));
-    drafts().setDraftValue(tmuxQuestionDraftKey("evt-1"), "answers", [["A"]]);
+    drafts().setDraftValue(tmuxQuestionDraftKey("e", "evt-1"), "answers", [["A"]]);
 
     store.removePendingQuestion("e", "evt-1");
 
-    expect(drafts().drafts.has(tmuxQuestionDraftKey("evt-1"))).toBe(false);
+    expect(drafts().drafts.has(tmuxQuestionDraftKey("e", "evt-1"))).toBe(false);
   });
 
   test("scoped cleanup preserves another session that reused the same event id", () => {
@@ -1109,8 +1109,8 @@ describe("prompt draft clearing", () => {
     const keptPlan = payloadToPlan("evt-kept", { tool_input: { plan: "p" } });
     store.addPendingPlan("e", keptPlan);
     store.addPendingPlan("e", payloadToPlan("evt-gone", { tool_input: { plan: "q" } }));
-    drafts().setDraftValue(tmuxPlanDraftKey("evt-kept"), "feedback", "keep me");
-    drafts().setDraftValue(tmuxPlanDraftKey("evt-gone"), "feedback", "drop me");
+    drafts().setDraftValue(tmuxPlanDraftKey("e", "evt-kept"), "feedback", "keep me");
+    drafts().setDraftValue(tmuxPlanDraftKey("e", "evt-gone"), "feedback", "drop me");
 
     store.replacePendingHooks("e", {
       approvals: [],
@@ -1120,24 +1120,24 @@ describe("prompt draft clearing", () => {
       elicitations: [],
     });
 
-    expect(drafts().drafts.has(tmuxPlanDraftKey("evt-kept"))).toBe(true);
-    expect(drafts().drafts.has(tmuxPlanDraftKey("evt-gone"))).toBe(false);
+    expect(drafts().drafts.has(tmuxPlanDraftKey("e", "evt-kept"))).toBe(true);
+    expect(drafts().drafts.has(tmuxPlanDraftKey("e", "evt-gone"))).toBe(false);
   });
 
   test("resetTab sweeps drafts for every pending prompt on the tab", () => {
     const store = useClaudeTmuxStore.getState();
     store.addPendingPlan("e", payloadToPlan("evt-plan", { tool_input: { plan: "p" } }));
     store.addPendingElicitation("e", payloadToElicitation("evt-elic", {}));
-    drafts().setDraftValue(tmuxPlanDraftKey("evt-plan"), "feedback", "typed");
-    drafts().setDraftValue(tmuxElicitationDraftKey("evt-elic"), "values", { a: "1" });
+    drafts().setDraftValue(tmuxPlanDraftKey("e", "evt-plan"), "feedback", "typed");
+    drafts().setDraftValue(tmuxElicitationDraftKey("e", "evt-elic"), "values", { a: "1" });
     // A different tab's draft is untouched.
-    drafts().setDraftValue(tmuxPlanDraftKey("evt-other"), "feedback", "other tab");
+    drafts().setDraftValue(tmuxPlanDraftKey("other", "evt-other"), "feedback", "other tab");
 
     store.resetTab("e");
 
-    expect(drafts().drafts.has(tmuxPlanDraftKey("evt-plan"))).toBe(false);
-    expect(drafts().drafts.has(tmuxElicitationDraftKey("evt-elic"))).toBe(false);
-    expect(drafts().drafts.has(tmuxPlanDraftKey("evt-other"))).toBe(true);
+    expect(drafts().drafts.has(tmuxPlanDraftKey("e", "evt-plan"))).toBe(false);
+    expect(drafts().drafts.has(tmuxElicitationDraftKey("e", "evt-elic"))).toBe(false);
+    expect(drafts().drafts.has(tmuxPlanDraftKey("other", "evt-other"))).toBe(true);
   });
 });
 
@@ -1162,6 +1162,18 @@ describe("payloadToApproval", () => {
       expiresAt: 1_900_000_300_000,
       receivedAt: "2030-03-17T17:46:40.000Z",
     });
+    const withStrayRuntimeFields = payloadToApproval(
+      "e2",
+      {},
+      {
+        requestedAt: 1_900_000_000_000,
+        expiresAt: 1_900_000_300_000,
+        id: "must-not-leak",
+        kind: "PreToolUse",
+      } as { requestedAt: number; expiresAt: number },
+    );
+    expect(withStrayRuntimeFields).not.toHaveProperty("id");
+    expect(withStrayRuntimeFields).not.toHaveProperty("kind");
     expect(payloadToApproval("legacy", {}).requestedAt).toBeUndefined();
     expect(payloadToApproval("legacy", {}).expiresAt).toBeUndefined();
   });

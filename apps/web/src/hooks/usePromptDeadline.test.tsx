@@ -81,6 +81,36 @@ describe("usePromptDeadline", () => {
     }
   });
 
+  test("keeps one interval while the displayed countdown changes", () => {
+    const originalNow = Date.now;
+    let now = 1_000;
+    Date.now = () => now;
+    let tick: (() => void) | undefined;
+    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(
+      ((handler: TimerHandler) => {
+        tick = handler as () => void;
+        return 1 as never;
+      }) as unknown as typeof setInterval,
+    );
+    const clearIntervalSpy = spyOn(globalThis, "clearInterval");
+
+    try {
+      const { result } = renderHook(() => usePromptDeadline(66_000));
+      expect(result.current.remaining).toBe("1:05");
+
+      now = 2_000;
+      act(() => tick?.());
+
+      expect(result.current.remaining).toBe("1:04");
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(clearIntervalSpy).not.toHaveBeenCalled();
+    } finally {
+      Date.now = originalNow;
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
+  });
+
   test("clears its interval when the consumer unmounts", () => {
     const clearIntervalSpy = spyOn(globalThis, "clearInterval");
     const { unmount } = renderHook(() =>

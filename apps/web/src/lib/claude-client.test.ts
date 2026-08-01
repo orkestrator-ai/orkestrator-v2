@@ -1810,7 +1810,7 @@ describe("claude-client", () => {
         new Error("network error"),
         new Response(JSON.stringify({ questions: [] })),
       ]);
-      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("applied");
+      expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe("stale");
     });
 
     // 409 is the bridge saying the window closed; 404 is "no such session",
@@ -1862,7 +1862,7 @@ describe("claude-client", () => {
         new Error("network error"),
         new Response(JSON.stringify({ questions: [] })),
       ]);
-      expect(await dismissQuestion(client, "s-1", "q-1")).toBe("applied");
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe("stale");
     });
   });
 
@@ -1903,7 +1903,7 @@ describe("claude-client", () => {
         new Error("network error"),
         new Response(JSON.stringify({ approvals: [] })),
       ]);
-      expect(await respondToPlanApproval(client, "s-1", "a-1", false)).toBe("applied");
+      expect(await respondToPlanApproval(client, "s-1", "a-1", false)).toBe("stale");
     });
   });
 

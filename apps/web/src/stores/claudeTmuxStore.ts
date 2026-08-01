@@ -300,26 +300,10 @@ function patchTab(
 function tabPromptDraftKeys(tab: TmuxTabState | undefined, sessionKey: string): string[] {
   if (!tab) return [];
   return [
-    ...tab.pendingQuestions.flatMap((q) => [
-      tmuxQuestionDraftKey(sessionKey, q.eventId),
-      tmuxQuestionDraftKey(q.eventId),
-    ]),
-    ...tab.pendingPlans.flatMap((p) => [
-      tmuxPlanDraftKey(sessionKey, p.eventId),
-      tmuxPlanDraftKey(p.eventId),
-    ]),
-    ...tab.pendingElicitations.flatMap((e) => [
-      tmuxElicitationDraftKey(sessionKey, e.eventId),
-      tmuxElicitationDraftKey(e.eventId),
-    ]),
+    ...tab.pendingQuestions.map((q) => tmuxQuestionDraftKey(sessionKey, q.eventId)),
+    ...tab.pendingPlans.map((p) => tmuxPlanDraftKey(sessionKey, p.eventId)),
+    ...tab.pendingElicitations.map((e) => tmuxElicitationDraftKey(sessionKey, e.eventId)),
   ];
-}
-
-function clearTmuxPromptDraft(
-  scopedKey: string,
-  legacyKey: string,
-): void {
-  usePromptDraftStore.getState().clearDrafts([scopedKey, legacyKey]);
 }
 
 export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
@@ -418,9 +402,8 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     // The question is resolved (answered, rejected, or withdrawn), so its
     // in-progress answer draft goes with it.
     const stateKey = resolveStateKey(get().tabs, tabId);
-    clearTmuxPromptDraft(
+    usePromptDraftStore.getState().clearDraft(
       tmuxQuestionDraftKey(stateKey, eventId),
-      tmuxQuestionDraftKey(eventId),
     );
   },
 
@@ -442,9 +425,8 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     );
     // The plan request is resolved, so its feedback draft goes with it.
     const stateKey = resolveStateKey(get().tabs, tabId);
-    clearTmuxPromptDraft(
+    usePromptDraftStore.getState().clearDraft(
       tmuxPlanDraftKey(stateKey, eventId),
-      tmuxPlanDraftKey(eventId),
     );
   },
 
@@ -487,9 +469,8 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     );
     // The elicitation is resolved, so its typed field values go with it.
     const stateKey = resolveStateKey(get().tabs, tabId);
-    clearTmuxPromptDraft(
+    usePromptDraftStore.getState().clearDraft(
       tmuxElicitationDraftKey(stateKey, eventId),
-      tmuxElicitationDraftKey(eventId),
     );
   },
 
@@ -1063,6 +1044,18 @@ function stableHash(line: TranscriptLine): string {
   return `h${(h >>> 0).toString(36)}`;
 }
 
+function promptTimingFields(timing: {
+  requestedAt?: number;
+  expiresAt?: number;
+}): { requestedAt?: number; expiresAt?: number } {
+  return {
+    ...(timing.requestedAt !== undefined
+      ? { requestedAt: timing.requestedAt }
+      : {}),
+    ...(timing.expiresAt !== undefined ? { expiresAt: timing.expiresAt } : {}),
+  };
+}
+
 /** Build a `TmuxPendingApproval` from a hook payload. */
 export function payloadToApproval(
   eventId: string,
@@ -1084,7 +1077,7 @@ export function payloadToApproval(
     toolInput,
     payload,
     receivedAt: new Date(timing.requestedAt ?? Date.now()).toISOString(),
-    ...timing,
+    ...promptTimingFields(timing),
   };
 }
 
@@ -1104,7 +1097,7 @@ export function payloadToQuestion(
     toolInput,
     payload,
     receivedAt: new Date(timing.requestedAt ?? Date.now()).toISOString(),
-    ...timing,
+    ...promptTimingFields(timing),
   };
 }
 
@@ -1128,7 +1121,7 @@ export function payloadToPlan(
     toolInput,
     payload,
     receivedAt: new Date(timing.requestedAt ?? Date.now()).toISOString(),
-    ...timing,
+    ...promptTimingFields(timing),
   };
 }
 
@@ -1149,7 +1142,7 @@ export function payloadToPermission(
         : [],
     payload,
     receivedAt: new Date(timing.requestedAt ?? Date.now()).toISOString(),
-    ...timing,
+    ...promptTimingFields(timing),
   };
 }
 
@@ -1173,7 +1166,7 @@ export function payloadToElicitation(
         : null,
     payload,
     receivedAt: new Date(timing.requestedAt ?? Date.now()).toISOString(),
-    ...timing,
+    ...promptTimingFields(timing),
   };
 }
 

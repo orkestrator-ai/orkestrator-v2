@@ -523,7 +523,8 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       };
     }),
 
-  replaceSessionIdentity: (sessionKey, session) =>
+  replaceSessionIdentity: (sessionKey, session) => {
+    const sweptDraftKeys: string[] = [];
     set((state) => {
       const previousSessionId = state.sessions.get(sessionKey)?.sessionId;
       const sessions = new Map(state.sessions);
@@ -548,11 +549,17 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
         for (const [requestId, question] of pendingQuestions) {
           if (question.sessionId === previousSessionId) {
             pendingQuestions.delete(requestId);
+            sweptDraftKeys.push(
+              claudeQuestionDraftKey(question.sessionId, requestId),
+            );
           }
         }
         for (const [requestId, approval] of pendingPlanApprovals) {
           if (approval.sessionId === previousSessionId) {
             pendingPlanApprovals.delete(requestId);
+            sweptDraftKeys.push(
+              claudePlanApprovalDraftKey(approval.sessionId, requestId),
+            );
           }
         }
       }
@@ -573,7 +580,9 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
         pendingQuestions,
         pendingPlanApprovals,
       };
-    }),
+    });
+    usePromptDraftStore.getState().clearDrafts(sweptDraftKeys);
+  },
 
   clearEnvironment: (environmentId) => {
     // Abort before dropping the map entry — losing the reference without

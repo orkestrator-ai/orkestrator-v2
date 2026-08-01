@@ -730,7 +730,7 @@ export function ClaudeTmuxChatTab({
                     if (!cancelled) {
                       addPendingPermission(
                         storeKey,
-                        payloadToPermission(hook.id, hook.payload, hook),
+                        payloadToPermission(hook.id, hook.payload, hookTiming(hook)),
                       );
                       setError(String(e));
                     }
@@ -2564,23 +2564,34 @@ function pendingSnapshotFromHooks(hooks: TmuxPendingHook[]) {
   const elicitations: TmuxPendingElicitation[] = [];
 
   for (const hook of hooks) {
+    const timing = hookTiming(hook);
     if (hook.kind === "PreToolUse") {
       const toolName = hookToolName(hook.payload);
       if (toolName === "AskUserQuestion") {
-        questions.push(payloadToQuestion(hook.id, hook.payload, hook));
+        questions.push(payloadToQuestion(hook.id, hook.payload, timing));
       } else if (toolName === "ExitPlanMode") {
-        plans.push(payloadToPlan(hook.id, hook.payload, hook));
+        plans.push(payloadToPlan(hook.id, hook.payload, timing));
       } else {
-        approvals.push(payloadToApproval(hook.id, hook.payload, hook));
+        approvals.push(payloadToApproval(hook.id, hook.payload, timing));
       }
     } else if (hook.kind === "PermissionRequest") {
-      permissions.push(payloadToPermission(hook.id, hook.payload, hook));
+      permissions.push(payloadToPermission(hook.id, hook.payload, timing));
     } else if (hook.kind === "Elicitation") {
-      elicitations.push(payloadToElicitation(hook.id, hook.payload, hook));
+      elicitations.push(payloadToElicitation(hook.id, hook.payload, timing));
     }
   }
 
   return { approvals, questions, plans, permissions, elicitations };
+}
+
+function hookTiming(hook: TmuxPendingHook): {
+  requestedAt?: number;
+  expiresAt?: number;
+} {
+  return {
+    ...(hook.requestedAt !== undefined ? { requestedAt: hook.requestedAt } : {}),
+    ...(hook.expiresAt !== undefined ? { expiresAt: hook.expiresAt } : {}),
+  };
 }
 
 function shouldAutoAllowPermissionHook(hook: TmuxPendingHook): boolean {
@@ -2734,7 +2745,7 @@ function elicitationSchemaFields(schema: Record<string, unknown> | null): Array<
     const field = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
     const title = typeof field.title === "string" ? field.title : key;
     const format = typeof field.format === "string" ? field.format : "";
-    const sensitiveMarker = `${key} ${format}`;
+    const sensitiveMarker = `${key} ${title} ${format}`;
     return {
       key,
       label: title,

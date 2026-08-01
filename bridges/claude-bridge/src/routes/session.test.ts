@@ -1,6 +1,7 @@
-import { afterAll, describe, expect, test, mock, beforeEach } from "bun:test";
+import { afterAll, describe, expect, test, mock, beforeEach, spyOn } from "bun:test";
 import { Hono } from "hono";
 import { TaskRegistry } from "@orkestrator/protocol/task-list";
+import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 
 // Snapshot the real session-manager BEFORE installing the route's stub mock.
 // Bun's `mock.module(...)` is process-global, so without this restore step the
@@ -1270,6 +1271,42 @@ describe("session routes", () => {
       expect(callArgs[1]).toEqual({ "Pick a color": "blue" });
     });
 
+    test("does not write answer content to bridge logs", async () => {
+      const secretAnswer = "private-answer-that-must-not-be-logged";
+      mockGetPendingQuestions.mockImplementationOnce(() => [
+        {
+          id: "q-private",
+          sessionId: "s-1",
+          questions: [
+            {
+              question: "Private question",
+              header: "Private",
+              options: [],
+            },
+          ],
+        },
+      ]);
+      const debugSpy = spyOn(console, "debug").mockImplementation(() => undefined);
+
+      try {
+        const res = await jsonRequest(
+          "POST",
+          "/session/s-1/questions/q-private/answer",
+          { answers: [[secretAnswer]] },
+        );
+
+        expect(res.status).toBe(200);
+        expect(JSON.stringify(debugSpy.mock.calls)).not.toContain(secretAnswer);
+        expect(debugSpy).toHaveBeenCalledWith("[session] Prepared question answers", {
+          questionId: "q-private",
+          questionCount: 1,
+          answerCount: 1,
+        });
+      } finally {
+        debugSpy.mockRestore();
+      }
+    });
+
     test("serializes multi-select answers unambiguously when labels contain commas", async () => {
       mockGetPendingQuestions.mockImplementationOnce(() => [
         {
@@ -1448,13 +1485,32 @@ describe("session routes", () => {
         questions,
       }]);
       const answers = questions.map(() =>
-        Array.from({ length: 16 }, () => "x".repeat(1_100)));
+        // Large enough to exceed the semantic 256 KiB answer limit, but small
+        // enough to pass the request-body cap and exercise this validator.
+        Array.from({ length: 16 }, () => "x".repeat(1_021)));
       const res = await jsonRequest(
         "POST",
         "/session/s-1/questions/q-oversized/answer",
         { answers },
       );
       expect(res.status).toBe(400);
+      expect(mockAnswerQuestion).not.toHaveBeenCalled();
+    });
+
+    test("rejects an oversized request body before parsing JSON", async () => {
+      const oversizedInvalidJson = "{".repeat(
+        AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes + 2_048,
+      );
+
+      const res = await app.request("/session/s-1/questions/q-oversized-body/answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: oversizedInvalidJson,
+      });
+
+      expect(res.status).toBe(413);
+      expect(await jsonBody(res)).toEqual({ error: "Question answer request is too large" });
+      expect(mockGetPendingQuestions).not.toHaveBeenCalled();
       expect(mockAnswerQuestion).not.toHaveBeenCalled();
     });
 
@@ -1620,6 +1676,35 @@ describe("session routes", () => {
       expect(res.status).toBe(200);
       const data = await jsonBody(res);
       expect(data.status).toBe("rejected");
+    });
+
+    test("does not write plan feedback to bridge logs", async () => {
+      const privateFeedback = "private-plan-feedback-that-must-not-be-logged";
+      mockGetPendingPlanApprovals.mockImplementationOnce(() => [{
+        id: "a-private",
+        sessionId: "s-1",
+        toolUseId: "tool-private",
+      }]);
+      const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
+
+      try {
+        const res = await jsonRequest(
+          "POST",
+          "/session/s-1/plan-approvals/a-private/respond",
+          { approved: false, feedback: privateFeedback },
+        );
+
+        expect(res.status).toBe(200);
+        expect(JSON.stringify(logSpy.mock.calls)).not.toContain(privateFeedback);
+        expect(logSpy).toHaveBeenCalledWith("[session] Plan approval response received", {
+          sessionId: "s-1",
+          approvalId: "a-private",
+          approved: false,
+          hasFeedback: true,
+        });
+      } finally {
+        logSpy.mockRestore();
+      }
     });
 
     test("returns 400 when approved is not boolean", async () => {

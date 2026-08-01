@@ -466,6 +466,18 @@ describe("QuestionCard submit contract", () => {
       fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
       await waitFor(() => expect(errorSpy).toHaveBeenCalledTimes(1));
+      const alert = screen.getByRole("alert");
+      expect(alert.textContent).toContain(
+        "The response outcome is unknown. Reconnect or refresh Test to verify whether it was received.",
+      );
+      expect(alert.textContent).not.toMatch(/try again/i);
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Failed to send your answer",
+        {
+          description:
+            "The response outcome is unknown. Reconnect or refresh Test to verify whether it was received.",
+        },
+      );
       expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
       fireEvent.click(screen.getByRole("button", { name: "Submit" }));
       expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -512,6 +524,10 @@ describe("QuestionCard submit contract", () => {
 
     await waitFor(() => expect(screen.getByRole("alert").textContent)
       .toContain("The outcome could not be reconciled."));
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to send your answer",
+      { description: "The outcome could not be reconciled." },
+    );
     expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
     expect(onSubmit).toHaveBeenCalledWith([["Yes"]]);
   });

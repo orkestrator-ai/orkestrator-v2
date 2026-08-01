@@ -7586,6 +7586,7 @@ Enter to confirm · Esc to cancel
           username: { type: "string", title: "Username" },
           apiKey: { type: "string", title: "API key" },
           opaque: { type: "string", title: "Opaque secret", writeOnly: true },
+          titleOnly: { type: "string", title: "Access token" },
           passphrase: { type: "string", title: "Passphrase" },
         },
       },
@@ -7608,9 +7609,11 @@ Enter to confirm · Esc to cancel
 
     const apiKey = await screen.findByLabelText(/^API key/) as HTMLInputElement;
     const opaque = screen.getByLabelText(/^Opaque secret/) as HTMLInputElement;
+    const titleOnly = screen.getByLabelText(/^Access token/) as HTMLInputElement;
     const passphrase = screen.getByLabelText(/^Passphrase/) as HTMLInputElement;
     expect(apiKey.type).toBe("password");
     expect(opaque.type).toBe("password");
+    expect(titleOnly.type).toBe("password");
     expect(passphrase.type).toBe("password");
     await waitFor(() => {
       expect(usePromptDraftStore.getState().drafts.get(draftKey)).toEqual({

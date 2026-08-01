@@ -4704,7 +4704,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
             try {
               const answers = await Promise.race([answerPromise, timeoutPromise]);
-              console.log("[session-manager] Received answers for question:", questionId, answers);
+              console.log("[session-manager] Received question answers", {
+                questionId,
+                answerCount: Object.keys(answers).length,
+              });
 
               // Return the answers to the SDK
               return {
@@ -4804,7 +4807,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
             try {
               const response = await Promise.race([approvalPromise, timeoutPromise]);
-              console.log("[session-manager] Plan approval result:", approvalId, response);
+              console.log("[session-manager] Plan approval result", {
+                approvalId,
+                approved: response.approved,
+                hasFeedback:
+                  typeof response.feedback === "string" && response.feedback.length > 0,
+              });
 
               if (response.approved) {
                 // User approved - emit exit event and allow the tool.
@@ -6194,7 +6202,10 @@ export function answerQuestion(
     return false;
   }
 
-  console.log("[session-manager] Answering question:", requestId, "with answers:", answers);
+  console.log("[session-manager] Answering question", {
+    requestId,
+    answerCount: Object.keys(answers).length,
+  });
 
   const resolver = questionResolvers.get(requestId);
   if (resolver) {
@@ -6271,7 +6282,11 @@ export function respondToPlanApproval(
     return false;
   }
 
-  console.log("[session-manager] Responding to plan approval:", requestId, "approved:", approved, "feedback:", feedback);
+  console.log("[session-manager] Responding to plan approval", {
+    requestId,
+    approved,
+    hasFeedback: typeof feedback === "string" && feedback.length > 0,
+  });
 
   const resolver = planApprovalResolvers.get(requestId);
   if (resolver) {

@@ -119,13 +119,6 @@ describe("promptDraftStore", () => {
       expect(key).not.toContain("🙂");
     }
   });
-
-  test("keeps the single-identity compatibility form namespaced", () => {
-    expect(claudeQuestionDraftKey("request:/1"))
-      .toBe(`claude-question:${encodeURIComponent("request:/1")}`);
-    expect(tmuxPlanDraftKey("event:/1"))
-      .toBe(`tmux-plan:${encodeURIComponent("event:/1")}`);
-  });
 });
 
 describe("usePromptDraftField", () => {

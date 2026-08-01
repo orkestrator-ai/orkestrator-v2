@@ -18,6 +18,7 @@ import {
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type {
+  OpenCodeInteractionResponseResult,
   OpencodeClient,
   PermissionReply,
   PermissionRequest,
@@ -31,7 +32,7 @@ const replyMock = mock(
     _client: OpencodeClient,
     _requestId: string,
     _reply: PermissionReply,
-  ) => true,
+  ): Promise<OpenCodeInteractionResponseResult> => Promise.resolve("applied"),
 );
 
 mock.module("@/lib/opencode-client", () => ({
@@ -65,7 +66,7 @@ function makePermission(
 
 beforeEach(() => {
   replyMock.mockReset();
-  replyMock.mockResolvedValue(true);
+  replyMock.mockResolvedValue("applied");
   mockToastError.mockClear();
   useOpenCodeStore.setState({
     pendingPermissions: new Map(),
@@ -141,7 +142,7 @@ describe("OpenCodePermissionCard", () => {
     const originalError = console.error;
     console.error = mock(() => {});
     try {
-      replyMock.mockResolvedValue(false);
+      replyMock.mockResolvedValue("pending");
       const permission = makePermission();
       useOpenCodeStore.getState().addPendingPermission(permission);
       render(
@@ -170,9 +171,9 @@ describe("OpenCodePermissionCard", () => {
   });
 
   test("locks every decision and ignores a second click while submitting", async () => {
-    let resolveReply!: (value: boolean) => void;
+    let resolveReply!: (value: OpenCodeInteractionResponseResult) => void;
     replyMock.mockImplementation(
-      () => new Promise<boolean>((resolve) => {
+      () => new Promise<OpenCodeInteractionResponseResult>((resolve) => {
         resolveReply = resolve;
       }),
     );
@@ -194,15 +195,15 @@ describe("OpenCodePermissionCard", () => {
     expect(replyMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      resolveReply(true);
+      resolveReply("applied");
     });
   });
 
-  test("blocks retry after an unreconciled thrown reply error", async () => {
+  test("blocks retry after an unreconciled reply outcome", async () => {
     const originalError = console.error;
     console.error = mock(() => {});
     try {
-      replyMock.mockRejectedValue(new Error("transport exploded"));
+      replyMock.mockResolvedValue("unknown");
       const permission = makePermission();
       useOpenCodeStore.getState().addPendingPermission(permission);
       render(
@@ -221,7 +222,10 @@ describe("OpenCodePermissionCard", () => {
       ).toBe(true);
       expect(mockToastError).toHaveBeenCalledWith(
         "Failed to send permission decision",
-        { description: "transport exploded" },
+        {
+          description:
+            "The decision outcome is unknown. Reconnect or refresh OpenCode before trying again.",
+        },
       );
     } finally {
       console.error = originalError;
@@ -239,6 +243,24 @@ describe("OpenCodePermissionCard", () => {
       fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
     });
 
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test("removes a permission that is no longer pending without a success claim", async () => {
+    replyMock.mockResolvedValue("gone");
+    const permission = makePermission();
+    useOpenCodeStore.getState().addPendingPermission(permission);
+    render(
+      <OpenCodePermissionCard permission={permission} client={CLIENT} />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+    });
+
+    expect(
+      useOpenCodeStore.getState().getPendingPermission(permission.id),
+    ).toBeUndefined();
     expect(mockToastError).not.toHaveBeenCalled();
   });
 });

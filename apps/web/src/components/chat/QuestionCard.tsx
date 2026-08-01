@@ -587,15 +587,16 @@ export function QuestionCard({
             typeof submitted === "object" && submitted.retryable === false,
           );
           toast.error("Failed to send your answer", {
-            description: `${agentLabel} is still waiting for a response. Please try again.`,
+            description: message,
           });
         }
       } catch (error) {
         console.error(`[${agentLabel}QuestionCard] Failed to submit answer:`, error);
-        setInlineError(`${agentLabel} is still waiting for a response. Please try again.`);
+        const message = `The response outcome is unknown. Reconnect or refresh ${agentLabel} to verify whether it was received.`;
+        setInlineError(message);
         setRetryBlocked(true);
         toast.error("Failed to send your answer", {
-          description: `${agentLabel} is still waiting for a response. Please try again.`,
+          description: message,
         });
       } finally {
         setIsSubmitting(false);

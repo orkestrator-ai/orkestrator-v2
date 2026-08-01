@@ -1,5 +1,6 @@
 // Session management routes
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import {
   createOrRecoverSession,
   getSession,
@@ -40,6 +41,16 @@ import { isJsonSchema } from "@orkestrator/protocol/structured-output";
 
 const session = new Hono();
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+// Leave room for the small `{ "answers": ... }` JSON envelope while keeping
+// the body consumed by Hono bounded before `c.req.json()` allocates a parsed
+// object. The semantic answer payload is still capped separately below.
+const MAX_QUESTION_ANSWER_REQUEST_BYTES =
+  AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes + 1_024;
+
+const questionAnswerBodyLimit = bodyLimit({
+  maxSize: MAX_QUESTION_ANSWER_REQUEST_BYTES,
+  onError: (c) => c.json({ error: "Question answer request is too large" }, 413),
+});
 
 /**
  * Map a session-manager refusal onto a status code.
@@ -774,7 +785,7 @@ session.get("/:id/init", (c) => {
 });
 
 // Answer a question
-session.post("/:id/questions/:questionId/answer", async (c) => {
+session.post("/:id/questions/:questionId/answer", questionAnswerBodyLimit, async (c) => {
   const sessionId = c.req.param("id");
   const questionId = c.req.param("questionId");
 
@@ -821,7 +832,11 @@ session.post("/:id/questions/:questionId/answer", async (c) => {
       );
     });
 
-    console.log("[session] Converted answers from array to record:", answersRecord);
+    console.debug("[session] Prepared question answers", {
+      questionId,
+      questionCount: pendingQuestion.questions.length,
+      answerCount: answersArray.reduce((count, answers) => count + answers.length, 0),
+    });
 
     const answered = answerQuestion(questionId, answersRecord);
 
@@ -889,7 +904,7 @@ session.post("/:id/plan-approvals/:approvalId/respond", async (c) => {
       sessionId,
       approvalId,
       approved,
-      feedback,
+      hasFeedback: typeof feedback === "string" && feedback.length > 0,
     });
 
     const responded = respondToPlanApproval(approvalId, approved, feedback);

@@ -40,22 +40,38 @@ export function OpenCodeQuestionCard({
 
   const handleSubmit = useCallback(
     async (answers: string[][]) => {
-      const success = await replyToQuestion(client, question.id, answers);
-      if (success) {
+      const result = await replyToQuestion(client, question.id, answers);
+      if (result === "applied" || result === "gone") {
         removePendingQuestion(question.id);
+        return true;
       }
-      return success;
+      if (result === "unknown") {
+        return {
+          applied: false,
+          retryable: false,
+          message: "The response outcome is unknown. Reconnect or refresh OpenCode before trying again.",
+        };
+      }
+      return false;
     },
     [client, question.id, removePendingQuestion],
   );
 
   const handleDismiss = useCallback(async () => {
-    const success = await rejectQuestion(client, question.id);
-    if (success) {
+    const result = await rejectQuestion(client, question.id);
+    if (result === "applied" || result === "gone") {
       // The loading state is cleared by SSE events in OpenCodeChatTab.
       removePendingQuestion(question.id);
+      return true;
     }
-    return success;
+    if (result === "unknown") {
+      return {
+        applied: false,
+        retryable: false,
+        message: "The dismissal outcome is unknown. Reconnect or refresh OpenCode before trying again.",
+      };
+    }
+    return false;
   }, [client, question.id, removePendingQuestion]);
 
   return (

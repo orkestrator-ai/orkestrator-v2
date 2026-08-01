@@ -350,7 +350,10 @@ describe("CodexApprovalCard", () => {
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Decline" })).toBeNull();
     expect(screen.queryByText(/NaN/)).toBeNull();
-    expect(screen.getByText("This request expired and was declined.")).toBeTruthy();
+    expect(screen.getByText(
+      "This request has an invalid deadline and cannot be answered safely.",
+    )).toBeTruthy();
+    expect(screen.queryByText("This request expired and was declined.")).toBeNull();
   });
 
   test("a different button cannot be used while a decision is in flight", async () => {

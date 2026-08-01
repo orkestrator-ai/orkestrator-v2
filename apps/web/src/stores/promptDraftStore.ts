@@ -11,9 +11,9 @@ import { create } from "zustand";
  * authoritative pending-request state (bridge snapshot via the agent stores).
  * A draft kept in component state therefore silently vanished mid-answer. The
  * drafts live here instead — same pattern as `messagePartExpansionStore` —
- * keyed by the stable request id, and the store that owns the pending request
- * clears them when the request resolves (submitted, rejected, or withdrawn),
- * so a stale draft can never reappear on a future request that reuses an id.
+ * keyed by stable session and request identities, and the store that owns the
+ * pending request clears them when the request resolves (submitted, rejected,
+ * or withdrawn), so a stale draft can never reappear on a reused request id.
  *
  * Renderer-only state: none of this needs to survive an app restart.
  */
@@ -82,29 +82,25 @@ export const usePromptDraftStore = create<PromptDraftState>((set) => ({
  */
 function scopedDraftKey(
   provider: string,
-  sessionOrRequestId: string,
-  requestId?: string,
+  sessionId: string,
+  requestId: string,
 ): string {
-  // The optional form keeps old renderer-only callers readable during rollout;
-  // authoritative cards always pass both session and request identity.
-  return requestId === undefined
-    ? `${provider}:${encodeURIComponent(sessionOrRequestId)}`
-    : `${provider}:${encodeURIComponent(sessionOrRequestId)}:${encodeURIComponent(requestId)}`;
+  return `${provider}:${encodeURIComponent(sessionId)}:${encodeURIComponent(requestId)}`;
 }
 
-export const claudeQuestionDraftKey = (sessionId: string, requestId?: string) =>
+export const claudeQuestionDraftKey = (sessionId: string, requestId: string) =>
   scopedDraftKey("claude-question", sessionId, requestId);
-export const claudePlanApprovalDraftKey = (sessionId: string, requestId?: string) =>
+export const claudePlanApprovalDraftKey = (sessionId: string, requestId: string) =>
   scopedDraftKey("claude-plan-approval", sessionId, requestId);
-export const openCodeQuestionDraftKey = (sessionId: string, requestId?: string) =>
+export const openCodeQuestionDraftKey = (sessionId: string, requestId: string) =>
   scopedDraftKey("opencode-question", sessionId, requestId);
-export const codexInteractionDraftKey = (sessionKey: string, interactionId?: string) =>
+export const codexInteractionDraftKey = (sessionKey: string, interactionId: string) =>
   scopedDraftKey("codex-interaction", sessionKey, interactionId);
-export const tmuxQuestionDraftKey = (sessionKey: string, eventId?: string) =>
+export const tmuxQuestionDraftKey = (sessionKey: string, eventId: string) =>
   scopedDraftKey("tmux-question", sessionKey, eventId);
-export const tmuxPlanDraftKey = (sessionKey: string, eventId?: string) =>
+export const tmuxPlanDraftKey = (sessionKey: string, eventId: string) =>
   scopedDraftKey("tmux-plan", sessionKey, eventId);
-export const tmuxElicitationDraftKey = (sessionKey: string, eventId?: string) =>
+export const tmuxElicitationDraftKey = (sessionKey: string, eventId: string) =>
   scopedDraftKey("tmux-elicitation", sessionKey, eventId);
 
 /**

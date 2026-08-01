@@ -271,6 +271,21 @@ describe("claudeStore cleanup and queue helpers", () => {
       id: "old-approval",
       sessionId: "session-old",
     });
+    usePromptDraftStore.getState().setDraftValue(
+      claudeQuestionDraftKey("session-old", "old-question"),
+      "answers",
+      [["unfinished"]],
+    );
+    usePromptDraftStore.getState().setDraftValue(
+      claudePlanApprovalDraftKey("session-old", "old-approval"),
+      "feedback",
+      "unfinished",
+    );
+    usePromptDraftStore.getState().setDraftValue(
+      claudeQuestionDraftKey("session-other", "other-question"),
+      "answers",
+      [["keep"]],
+    );
 
     store.replaceSessionIdentity(SESSION_KEY, {
       sessionId: "session-new",
@@ -293,6 +308,21 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(state.pendingQuestions.has("old-question")).toBe(false);
     expect(state.pendingPlanApprovals.has("old-approval")).toBe(false);
     expect(state.selectedModel.get(SESSION_KEY)).toBe("claude-sonnet");
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        claudeQuestionDraftKey("session-old", "old-question"),
+      ),
+    ).toBe(false);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        claudePlanApprovalDraftKey("session-old", "old-approval"),
+      ),
+    ).toBe(false);
+    expect(
+      usePromptDraftStore.getState().drafts.has(
+        claudeQuestionDraftKey("session-other", "other-question"),
+      ),
+    ).toBe(true);
   });
 
   test("replaceSessionIdentity advances the loading revision so an in-flight reconcile is discarded", () => {

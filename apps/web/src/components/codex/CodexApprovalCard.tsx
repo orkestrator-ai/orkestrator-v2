@@ -115,6 +115,7 @@ export function CodexApprovalCard({
       role="group"
       aria-label={approvalTitle(approval)}
       arrivalAnnouncement={`${approvalTitle(approval)}. A decision is required.`}
+      state={expired ? "invalid" : "pending"}
     >
       <div className="flex items-start gap-2">
         <ApprovalIcon approval={approval} />
@@ -192,12 +193,7 @@ export function CodexApprovalCard({
             </p>
           )}
 
-          {expired ? (
-            <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
-              <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
-              This request expired and was declined.
-            </p>
-          ) : (
+          {!expired && (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <Button
                 size="sm"

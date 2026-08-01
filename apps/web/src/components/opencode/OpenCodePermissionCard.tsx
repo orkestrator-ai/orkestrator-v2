@@ -22,10 +22,8 @@ const REPLY_FAILURE_TITLE = "Failed to send permission decision";
  * error object to quote, and the turn stays blocked until a decision lands.
  */
 const RETRY_HINT = "OpenCode is still waiting for a decision. Please try again.";
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+const UNKNOWN_OUTCOME_HINT =
+  "The decision outcome is unknown. Reconnect or refresh OpenCode before trying again.";
 
 export function OpenCodePermissionCard({
   permission,
@@ -45,25 +43,19 @@ export function OpenCodePermissionCard({
       setIsSubmitting(true);
       setInlineError(null);
       setRetryBlocked(false);
-      try {
-        const success = await replyToPermission(client, permission.id, reply);
-        if (success) {
-          removePendingPermission(permission.id);
-        } else {
-          // The card stays retryable, but the turn is fully blocked on this
-          // answer: without a toast the user has no signal it never landed.
-          console.error("[OpenCodePermissionCard] Permission reply was not delivered");
-          setInlineError(RETRY_HINT);
-          toast.error(REPLY_FAILURE_TITLE, { description: RETRY_HINT });
-        }
-      } catch (error) {
-        console.error("[OpenCodePermissionCard] Failed to submit permission reply:", error);
-        setInlineError(describeError(error));
-        setRetryBlocked(true);
-        toast.error(REPLY_FAILURE_TITLE, { description: describeError(error) });
-      } finally {
-        setIsSubmitting(false);
+      const result = await replyToPermission(client, permission.id, reply);
+      if (result === "applied" || result === "gone") {
+        removePendingPermission(permission.id);
+      } else {
+        // Pending stays retryable. An unreconciled outcome fails closed until
+        // the authoritative state can be rehydrated.
+        console.error("[OpenCodePermissionCard] Permission reply was not delivered");
+        const message = result === "unknown" ? UNKNOWN_OUTCOME_HINT : RETRY_HINT;
+        setInlineError(message);
+        setRetryBlocked(result === "unknown");
+        toast.error(REPLY_FAILURE_TITLE, { description: message });
       }
+      setIsSubmitting(false);
     },
     [client, permission.id, removePendingPermission, isSubmitting],
   );

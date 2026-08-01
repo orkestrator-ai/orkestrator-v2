@@ -24,7 +24,6 @@ import {
   OPTIMISTIC_MESSAGE_PREFIX,
   TURN_STOPPED_BY_USER,
   createOptimisticNativeMessage,
-  isClientOnlyNativeMessage,
 } from "@/lib/chat/client-only-messages";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
@@ -806,7 +805,9 @@ export function CodexChatTab({
 
       if (
         handoff.pendingHistory
-        && /^\/\S+[^\r\n]*$/.test(text.trim())
+        && slashCommands.some(
+          (command) => command.name === text.trim().split(/\s+/)[0],
+        )
       ) {
         throw new Error(
           "Slash commands cannot be the first message after a handoff. Send a regular message first, then run the slash command.",
@@ -1037,6 +1038,7 @@ export function CodexChatTab({
       addMessage,
       environmentId,
       handoff.pendingHistory,
+      slashCommands,
       refreshMessages,
       removeMessage,
       session?.sessionId,
@@ -2494,31 +2496,7 @@ export function CodexChatTab({
             if (event.type === "message.updated") {
               const message = event.data?.message as CodexMessage | undefined;
               if (message?.id) {
-                if (message.role === "user") {
-                  // A user echo is authoritative acknowledgement of an
-                  // optimistic send. Rebuild the authoritative slice and pass
-                  // it through setMessages so content/attachment fingerprinting
-                  // can retire the matching optimistic bubble immediately.
-                  const currentMessages = useCodexStore
-                    .getState()
-                    .sessions.get(sessionKey)?.messages ?? [];
-                  const authoritativeMessages = currentMessages.filter(
-                    (candidate) => !isClientOnlyNativeMessage(candidate),
-                  );
-                  const existingIndex = authoritativeMessages.findIndex(
-                    (candidate) => candidate.id === message.id,
-                  );
-                  setMessages(
-                    sessionKey,
-                    existingIndex < 0
-                      ? [...authoritativeMessages, message]
-                      : authoritativeMessages.map((candidate, index) =>
-                        index === existingIndex ? message : candidate
-                      ),
-                  );
-                } else {
-                  upsertMessage(sessionKey, message);
-                }
+                upsertMessage(sessionKey, message);
               } else {
                 await refreshMessages(client, session.sessionId);
               }

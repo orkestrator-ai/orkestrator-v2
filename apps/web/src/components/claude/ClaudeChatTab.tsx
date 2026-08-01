@@ -123,6 +123,24 @@ const UNMATCHED_EVENT_WARNING_EXEMPT = new Set([
   "system.message",
 ]);
 const EMPTY_BACKGROUND_TASKS = {};
+const EMPTY_CLAUDE_SLASH_COMMANDS: string[] = [];
+const DEFAULT_CLAUDE_SLASH_COMMAND_NAMES = new Set([
+  "/clear",
+  "/compact",
+  "/context",
+  "/cost",
+  "/doctor",
+  "/goal",
+  "/help",
+  "/init",
+  "/logout",
+  "/memory",
+  "/model",
+  "/permissions",
+  "/review",
+  "/status",
+  "/vim",
+]);
 
 type SessionPendingPrompts = {
   questions: Map<string, ClaudeQuestionRequest>;
@@ -404,6 +422,14 @@ export function ClaudeChatTab({
   );
   const session = useClaudeStore(
     useCallback((state) => state.sessions.get(sessionKey), [sessionKey]),
+  );
+  const discoveredSlashCommands = useClaudeStore(
+    useCallback(
+      (state) =>
+        state.sessionInitData.get(environmentId)?.slashCommands
+        ?? EMPTY_CLAUDE_SLASH_COMMANDS,
+      [environmentId],
+    ),
   );
   const promptSuggestion = useClaudeStore(
     useCallback(
@@ -2212,6 +2238,22 @@ export function ClaudeChatTab({
     async (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean, requestId?: string) => {
       if (!client || !session) return "rejected" as const;
 
+      const commandName = text.trim().split(/\s+/)[0]?.toLowerCase();
+      const recognizedSlashCommand =
+        typeof commandName === "string"
+        && commandName.length > 0
+        && (
+          DEFAULT_CLAUDE_SLASH_COMMAND_NAMES.has(commandName)
+          || discoveredSlashCommands.some(
+            (command) => command.split(" - ")[0]!.trim().toLowerCase() === commandName,
+          )
+        );
+      if (handoff.pendingHistory && recognizedSlashCommand) {
+        throw new Error(
+          `Send a normal message to import the transferred history before running ${commandName}.`,
+        );
+      }
+
       const selectedModel = getSelectedModel(sessionKey);
       const promptText = prependAgentHandoffHistory(handoff.pendingHistory, text);
 
@@ -2324,6 +2366,7 @@ export function ClaudeChatTab({
       removeMessage,
       setSessionLoading,
       handoff.pendingHistory,
+      discoveredSlashCommands,
     ]
   );
 
@@ -2849,8 +2892,8 @@ export function ClaudeChatTab({
             if (outcome === "rejected") {
               // Direct compose submissions must reject their promise so the
               // shared submit controller retains the draft and attachments for
-              // a retry. Queue dispatchers consume the raw outcome from
-              // handleSendRef and keep their existing claim semantics.
+              // a retry. Internal callers use handleSendRef directly and keep
+              // the raw dispatch outcome.
               throw new Error("Claude rejected the prompt. Please try again.");
             }
           }}

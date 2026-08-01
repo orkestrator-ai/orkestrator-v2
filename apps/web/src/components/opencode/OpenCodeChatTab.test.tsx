@@ -1176,6 +1176,39 @@ describe("OpenCodeChatTab", () => {
     expect(mockSendPrompt.mock.calls[1]?.[2]).toBe(composeText);
   });
 
+  test("includes handoff history with an attachment-only first send", async () => {
+    const handoffId = "opencode-attachment-only-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    mockGetAgentHandoff.mockResolvedValue(
+      agentHandoffRecord(handoffId, bootstrapPrompt),
+    );
+    composeText = "";
+    composeAttachments = [{
+      id: "attachment-only",
+      type: "image",
+      path: "/workspace/only.png",
+      previewUrl: "data:image/png;base64,only",
+      name: "only.png",
+    }];
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("opencode-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("opencode-send"));
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
+    expect(mockSendPrompt.mock.calls[0]?.[3]?.attachments).toHaveLength(1);
+  });
+
   test("keeps handoff history pending after a rejected send and retries with it", async () => {
     const handoffId = "opencode-rejected-handoff";
     const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
@@ -1238,7 +1271,11 @@ describe("OpenCodeChatTab", () => {
     fireEvent.click(screen.getByTestId("opencode-send"));
     await waitFor(() => {
       expect(lastComposeSendError).toEqual(new Error("transport unavailable"));
-      expect(useOpenCodeStore.getState().getSession(SESSION_KEY)?.isLoading).toBe(false);
+      const session = useOpenCodeStore.getState().getSession(SESSION_KEY);
+      expect(session?.isLoading).toBe(false);
+      expect(session?.messages.some(
+        (message) => message.id.startsWith("optimistic-") || message.id.startsWith("error-"),
+      )).toBe(false);
     });
 
     fireEvent.click(screen.getByTestId("opencode-send"));
@@ -1321,6 +1358,37 @@ describe("OpenCodeChatTab", () => {
     fireEvent.click(screen.getByTestId("opencode-send"));
     await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
     expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
+    expect(mockSendPrompt.mock.calls[0]?.[3]?.command).toBeUndefined();
+  });
+
+  test("treats an unknown slash token as a normal first handoff message", async () => {
+    const handoffId = "opencode-unknown-command-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    mockGetAgentHandoff.mockResolvedValue(
+      agentHandoffRecord(handoffId, bootstrapPrompt),
+    );
+    useOpenCodeStore.getState().setSlashCommands(ENVIRONMENT_ID, [{
+      name: "/review",
+      description: "Review the branch",
+    }]);
+    composeText = "/workspace/file.ts needs a fix";
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        agentHandoffId={handoffId}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("opencode-send").hasAttribute("disabled")).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId("opencode-send"));
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toContain(`"id": "${handoffId}"`);
+    expect(mockSendPrompt.mock.calls[0]?.[2]).toEndWith(composeText);
     expect(mockSendPrompt.mock.calls[0]?.[3]?.command).toBeUndefined();
   });
 
@@ -3783,6 +3851,29 @@ describe("OpenCodeChatTab", () => {
       expect(session?.messages.some((message) => message.content === composeText)).toBe(false);
       expect(session?.messages.some((message) => message.content === "Prompt rejected")).toBe(true);
       expect(session?.isLoading).toBe(false);
+    });
+  });
+
+  test("uses the fallback error when sendPrompt rejects without detail", async () => {
+    composeText = "This failed without provider detail";
+    mockSendPrompt.mockImplementation(async () => ({ success: false }));
+    resetStores("review-table");
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("opencode-send"));
+
+    await waitFor(() => {
+      const session = useOpenCodeStore.getState().getSession(SESSION_KEY);
+      expect(session?.messages.some(
+        (message) => message.content === "Failed to send prompt",
+      )).toBe(true);
+      expect(lastComposeSendError).toEqual(new Error("Failed to send prompt"));
     });
   });
 

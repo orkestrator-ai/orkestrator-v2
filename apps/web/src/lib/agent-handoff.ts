@@ -2,6 +2,7 @@ import type {
   NativeMessage,
   NativeMessagePart,
 } from "@/lib/chat/native-message-types";
+import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
 import * as backend from "@/lib/backend";
 
 export const AGENT_HANDOFF_VERSION = 1;
@@ -168,9 +169,7 @@ function isNativeMessagePart(value: unknown): value is NativeMessagePart {
     return isNativeMessagePart(value.task)
       && value.task.type === "tool-invocation"
       && Array.isArray(value.childTools)
-      && value.childTools.every(
-        (part) => isNativeMessagePart(part) && part.type === "tool-invocation",
-      );
+      && value.childTools.every(isNativeMessagePart);
   }
   return value.subagentActions === undefined
     || (
@@ -193,14 +192,25 @@ function isNativeMessage(value: unknown): value is NativeMessage {
   return value.parts.every(isNativeMessagePart);
 }
 
-function hasValidNativeMessages(value: unknown[]): value is NativeMessage[] {
+function normalizeNativeMessages(
+  value: unknown[],
+  fallbackCreatedAt: string,
+): NativeMessage[] | null {
   try {
-    return value.every(isNativeMessage);
+    const normalized = value.map((message) => {
+      if (!isRecord(message)) return message;
+      return typeof message.createdAt === "string" && !isValidTimestamp(message.createdAt)
+        ? { ...message, createdAt: fallbackCreatedAt }
+        : message;
+    });
+    return normalized.every(isNativeMessage)
+      ? normalized as NativeMessage[]
+      : null;
   } catch {
     // A malformed persisted object can contain a cycle in `parts` or
-    // `subagentActions`. Validation is a trust boundary and must return false,
+    // `subagentActions`. Validation is a trust boundary and must return null,
     // not overflow the stack and reject the caller's load promise.
-    return false;
+    return null;
   }
 }
 
@@ -219,12 +229,16 @@ export function parseAgentHandoffSnapshot(value: unknown): AgentHandoffSnapshot 
     || (value.sourceModel !== undefined && typeof value.sourceModel !== "string")
     || (value.sourceAgent !== undefined && typeof value.sourceAgent !== "string")
     || !Array.isArray(value.messages)
-    || !hasValidNativeMessages(value.messages)
     || typeof value.bootstrapPrompt !== "string"
     || !isRecord(value.stats)
   ) {
     return null;
   }
+  const normalizedMessages = normalizeNativeMessages(
+    value.messages,
+    value.createdAt as string,
+  );
+  if (!normalizedMessages) return null;
   const stats = value.stats;
   if (
     !Number.isInteger(stats.messageCount)
@@ -260,7 +274,7 @@ export function parseAgentHandoffSnapshot(value: unknown): AgentHandoffSnapshot 
       sourceTitle: value.sourceTitle as string | undefined,
       sourceModel: value.sourceModel as string | undefined,
       sourceAgent: value.sourceAgent as string | undefined,
-      messages: value.messages as NativeMessage[],
+      messages: normalizedMessages,
       now: value.createdAt as string,
     });
   } catch {
@@ -350,7 +364,7 @@ function parseTranscriptRecord(
     || (value.role !== "user" && value.role !== "assistant" && value.role !== "system")
     || typeof value.body !== "string"
     || typeof value.sourceId !== "string"
-    || !isValidTimestamp(value.createdAt)
+    || typeof value.createdAt !== "string"
   ) {
     return null;
   }
@@ -359,7 +373,9 @@ function parseTranscriptRecord(
     role: value.role,
     content: value.body,
     parts: [{ type: "text", content: value.body }],
-    createdAt: value.createdAt || fallbackCreatedAt,
+    createdAt: isValidTimestamp(value.createdAt)
+      ? value.createdAt
+      : fallbackCreatedAt,
   };
 }
 
@@ -596,22 +612,30 @@ function stripCarrierFromMessage(
 /**
  * Removes the bootstrap carrier from the destination transcript.
  *
- * Stripping is bound to the *first* provider message, not to the handoff id
- * alone. The id is serialized into the prompt the destination model reads, so
- * an id-only rule lets a prompt-injected model wrap its own output in a forged
- * carrier and have that span deleted from both the visible transcript and the
- * next transfer. Only message 0 can legitimately hold the carrier: the bootstrap
- * prompt is dispatched exactly once, and only into an empty transcript.
+ * Stripping is bound to the first provider-backed message, while allowing local
+ * error/system rows to precede an optimistic retry. The id is serialized into
+ * the prompt the destination model reads, so scanning beyond the first
+ * authoritative row would let a prompt-injected model forge a later carrier and
+ * have it deleted from both the visible transcript and the next transfer.
  */
 function stripAgentHandoffBootstrap(
   handoffIds: ReadonlySet<string>,
   providerMessages: NativeMessage[],
 ): NativeMessage[] {
-  const first = providerMessages[0];
-  if (!first || handoffIds.size === 0) return providerMessages;
-  const stripped = stripCarrierFromMessage(first, handoffIds);
-  if (!stripped.matched) return providerMessages;
-  return [...stripped.residual, ...providerMessages.slice(1)];
+  if (providerMessages.length === 0 || handoffIds.size === 0) return providerMessages;
+  for (let index = 0; index < providerMessages.length; index += 1) {
+    const message = providerMessages[index]!;
+    const stripped = stripCarrierFromMessage(message, handoffIds);
+    if (stripped.matched) {
+      return [
+        ...providerMessages.slice(0, index),
+        ...stripped.residual,
+        ...providerMessages.slice(index + 1),
+      ];
+    }
+    if (!isClientOnlyNativeMessage(message)) return providerMessages;
+  }
+  return providerMessages;
 }
 
 function childParts(part: NativeMessagePart): NativeMessagePart[] {
@@ -795,6 +819,7 @@ function formatOmissionNotice(omitted: number): string {
  */
 function boundSnapshotMessages(
   messages: NativeMessage[],
+  fallbackCreatedAt: string,
 ): { messages: NativeMessage[]; dropped: number } {
   if (messages.length === 0) return { messages, dropped: 0 };
   // Account for the surrounding array and one comma between retained records,
@@ -806,8 +831,8 @@ function boundSnapshotMessages(
     let serialized: string;
     let persistable: NativeMessage;
     try {
-      const seen = new WeakSet<object>();
-      serialized = JSON.stringify(messages[index], (_key, value: unknown) => {
+      const ancestors: object[] = [];
+      serialized = JSON.stringify(messages[index], function (_key, value: unknown) {
         if (
           typeof value === "bigint"
           || typeof value === "function"
@@ -816,12 +841,25 @@ function boundSnapshotMessages(
           return "[unserializable]";
         }
         if (typeof value === "object" && value !== null) {
-          if (seen.has(value)) return "[unserializable]";
-          seen.add(value);
+          while (
+            ancestors.length > 0
+            && ancestors.at(-1) !== this
+          ) {
+            ancestors.pop();
+          }
+          if (ancestors.includes(value)) return "[unserializable]";
+          ancestors.push(value);
         }
         return value;
       });
       persistable = JSON.parse(serialized) as NativeMessage;
+      if (
+        typeof persistable.createdAt === "string"
+        && !isValidTimestamp(persistable.createdAt)
+      ) {
+        persistable.createdAt = fallbackCreatedAt;
+        serialized = JSON.stringify(persistable);
+      }
       if (!isNativeMessage(persistable)) throw new Error("invalid serialized message");
     } catch {
       // Malformed recursive message structure cannot be represented by the
@@ -841,14 +879,18 @@ function boundSnapshotMessages(
     used += (retainedNewestFirst.length > 0 ? 1 : 0) + serialized.length;
     retainedNewestFirst.push(persistable);
   }
-  return { messages: retainedNewestFirst.reverse(), dropped };
+  const retained = retainedNewestFirst.reverse();
+  if (messages.length > 0 && retained.length === 0) {
+    throw new Error("This conversation has no transferable history");
+  }
+  return { messages: retained, dropped };
 }
 
 export function createAgentHandoffSnapshot(
   options: CreateAgentHandoffOptions,
 ): AgentHandoffSnapshot {
   const createdAt = options.now ?? new Date().toISOString();
-  const bounded = boundSnapshotMessages(options.messages);
+  const bounded = boundSnapshotMessages(options.messages, createdAt);
   const retainedMessages = bounded.messages;
   const sourceLabel = AGENT_PROVIDER_LABELS[options.sourceProvider];
   const destinationLabel = AGENT_PROVIDER_LABELS[options.destinationProvider];
@@ -938,7 +980,6 @@ export function prependAgentHandoffHistory(
 ): string {
   if (
     !bootstrapPrompt?.trim()
-    || !userPrompt.trim()
     || userPrompt.startsWith(bootstrapPrompt)
   ) {
     return userPrompt;
@@ -962,9 +1003,10 @@ export function isAgentHandoffBootstrapMessage(
  *
  * Used to bracket an authoritative read when a provider exposes no revision
  * counter. Every enumerable value contributes to the digest, including nested
- * parts and same-length streaming replacements. Values are fed into two
- * independent 32-bit hashes as they are visited, avoiding a second transcript-
- * sized serialized string on the renderer's main thread.
+ * parts. Short strings are hashed completely; large strings contribute their
+ * length plus head, tail, and evenly spaced samples. That preserves practical
+ * same-length replacement detection without synchronously walking tens of
+ * megabytes of transcript text on the renderer's main thread.
  */
 export function agentHandoffTranscriptDigest(messages: NativeMessage[]): string {
   let hashA = 0x811c9dc5;
@@ -976,14 +1018,33 @@ export function agentHandoffTranscriptDigest(messages: NativeMessage[]): string 
   const update = (value: string) => {
     // Length framing prevents a different split of adjacent strings from
     // producing the same byte stream (for example, ["ab", "c"] vs ["a", "bc"]).
+    const hashCode = (code: number) => {
+      hashA = Math.imul(hashA ^ code, 0x01000193) >>> 0;
+      hashB = Math.imul(hashB ^ code, 0x85ebca6b) >>> 0;
+      hashB = ((hashB << 13) | (hashB >>> 19)) >>> 0;
+    };
     const framed = `${value.length}:`;
-    for (const segment of [framed, value]) {
-      for (let index = 0; index < segment.length; index += 1) {
-        const code = segment.charCodeAt(index);
-        hashA = Math.imul(hashA ^ code, 0x01000193) >>> 0;
-        hashB = Math.imul(hashB ^ code, 0x85ebca6b) >>> 0;
-        hashB = ((hashB << 13) | (hashB >>> 19)) >>> 0;
+    for (let index = 0; index < framed.length; index += 1) {
+      hashCode(framed.charCodeAt(index));
+    }
+    const completeHashLimit = 4_096;
+    if (value.length <= completeHashLimit) {
+      for (let index = 0; index < value.length; index += 1) {
+        hashCode(value.charCodeAt(index));
       }
+      return;
+    }
+    const edgeCharacters = 256;
+    const strideSamples = 512;
+    for (let index = 0; index < edgeCharacters; index += 1) {
+      hashCode(value.charCodeAt(index));
+    }
+    for (let sample = 1; sample <= strideSamples; sample += 1) {
+      const index = Math.floor((sample * (value.length - 1)) / (strideSamples + 1));
+      hashCode(value.charCodeAt(index));
+    }
+    for (let index = value.length - edgeCharacters; index < value.length; index += 1) {
+      hashCode(value.charCodeAt(index));
     }
   };
 

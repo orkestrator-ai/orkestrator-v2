@@ -187,6 +187,33 @@ describe("useNativeComposeSubmit", () => {
     }
   });
 
+  test("handles a non-Error rejection without inventing error detail", async () => {
+    const onSend = mock(async () => {
+      throw "transport closed";
+    });
+    const setup = makeOptions({ onSend });
+    const originalConsoleError = console.error;
+    console.error = mock(() => {}) as unknown as typeof console.error;
+
+    try {
+      const { result } = renderHook(() =>
+        useNativeComposeSubmit<Attachment>(setup.options),
+      );
+      await act(async () => {
+        await result.current.submit();
+      });
+
+      expect(setup.draft.getDraftText()).toBe(" hello ");
+      expect(setup.draft.getDraftMentions()).toEqual([MENTION]);
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send prompt", {
+        description: undefined,
+      });
+      expect(result.current.isSending).toBe(false);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
   test("preserves text typed during send but removes submitted attachments", async () => {
     const attachment = { id: "attachment-1", name: "image.png" };
     let resolveSend!: () => void;

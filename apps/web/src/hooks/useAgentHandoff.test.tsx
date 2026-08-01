@@ -215,6 +215,39 @@ describe("useAgentHandoff", () => {
     ]);
   });
 
+  test("hides a retry carrier that follows a client-only error row", async () => {
+    const snapshot = handoff("handoff-retry-after-error");
+    const transported = prependAgentHandoffHistory(
+      snapshot.bootstrapPrompt,
+      "Continue after the error",
+    );
+    mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
+
+    const { result } = renderHook(() =>
+      useAgentHandoff(
+        snapshot.id,
+        "codex",
+        "env-1",
+        [
+          message("error-first-send", "assistant", "First send failed"),
+          message("optimistic-retry", "user", transported),
+        ],
+      )
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    expect(result.current.pendingHistory).toBeUndefined();
+    expect(result.current.displayMessages.map(({ content }) => content)).toEqual([
+      "Continue the work",
+      expect.stringContaining("Continued in"),
+      "First send failed",
+      "Continue after the error",
+    ]);
+    expect(result.current.displayMessages.some(
+      ({ content }) => content.includes("<orkestrator-handoff"),
+    )).toBe(false);
+  });
+
   test("reports a missing handoff and leaves the destination usable", async () => {
     const { result } = renderHook(() =>
       useAgentHandoff("handoff-missing", "codex", "env-1", [])

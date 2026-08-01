@@ -429,6 +429,20 @@ function createData(overrides: Partial<ClaudeNativeData> = {}): ClaudeNativeData
   };
 }
 
+function PaneBackedClaudeChatTab() {
+  const paneEnvironment = usePaneLayoutStore(
+    (state) => state.environments.get(ENVIRONMENT_ID),
+  );
+  if (!paneEnvironment || paneEnvironment.root.kind !== "leaf") {
+    throw new Error("Expected pane leaf");
+  }
+  const tab = paneEnvironment.root.tabs.find((candidate) => candidate.id === TAB_ID);
+  if (!tab?.claudeNativeData) {
+    throw new Error("Expected Claude pane tab");
+  }
+  return <ClaudeChatTab tabId={TAB_ID} data={tab.claudeNativeData} isActive />;
+}
+
 function agentHandoffRecord(id: string, bootstrapPrompt: string) {
   const createdAt = "2026-07-27T12:00:00.000Z";
   return {
@@ -3411,8 +3425,123 @@ describe("ClaudeChatTab", () => {
     expect(restoredTab?.claudeNativeData?.sessionId).toBe(restoredSessionId);
   });
 
-  test("replaces a restored session that the bridge confirms has expired", async () => {
+  test("adopts a late backend projection over a cached temporary session", async () => {
+    const projectedSessionId = "backend-startup-claude";
+    const projectedMessage: ClaudeMessageType = {
+      id: "backend-startup-message",
+      role: "user",
+      content: "Backend-dispatched startup prompt",
+      parts: [{ type: "text", content: "Backend-dispatched startup prompt" }],
+      timestamp: "2026-07-31T12:00:00.000Z",
+    };
+    const projectedQuestion: ClaudeQuestionRequest = {
+      id: "backend-startup-question",
+      sessionId: projectedSessionId,
+      questions: [],
+    };
+    mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+      sessionId === projectedSessionId ? [projectedMessage] : []
+    );
+    mockGetSession.mockImplementation(async (_client, sessionId) =>
+      sessionId === projectedSessionId
+        ? { status: "running" }
+        : { status: "idle" }
+    );
+    mockGetPendingQuestions.mockResolvedValue([projectedQuestion]);
+
+    seedPaneLayout();
+    render(<PaneBackedClaudeChatTab />);
+    await waitFor(() => expect(mockCheckHealth).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      usePaneLayoutStore.getState().updateTabNativeSessionId(
+        TAB_ID,
+        projectedSessionId,
+        ENVIRONMENT_ID,
+      );
+    });
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: projectedSessionId,
+        messages: [projectedMessage],
+        isLoading: true,
+      });
+      expect(useClaudeStore.getState().pendingQuestions.get(projectedQuestion.id))
+        .toMatchObject(projectedQuestion);
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("does not let an obsolete cold adoption overwrite a newer projection", async () => {
+    const firstProjection = "first-backend-claude";
+    const secondProjection = "second-backend-claude";
+    const adoption = deferred<Awaited<ReturnType<typeof mockAdoptNativeAgentSession>>>();
+    const secondMessage: ClaudeMessageType = {
+      id: "second-projection-message",
+      role: "assistant",
+      content: "Keep the newest backend projection",
+      parts: [{ type: "text", content: "Keep the newest backend projection" }],
+      timestamp: "2026-07-31T12:30:00.000Z",
+    };
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+    }));
+    seedPaneLayout(firstProjection);
+    mockAdoptNativeAgentSession.mockImplementationOnce(() => adoption.promise);
+    mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+      sessionId === secondProjection ? [secondMessage] : []
+    );
+    mockGetSession.mockResolvedValue({ status: "running" });
+
+    const view = render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: firstProjection })}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ providerSessionId: firstProjection }),
+    ));
+
+    view.rerender(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: secondProjection })}
+        isActive
+      />,
+    );
+    await act(async () => {
+      adoption.resolve({
+        id: "adopted-first",
+        environmentId: ENVIRONMENT_ID,
+        agent: "claude",
+        logicalSessionKey: SESSION_KEY,
+        providerSessionId: firstProjection,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        dispatchedRequestIds: [],
+      });
+      await adoption.promise;
+    });
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: secondProjection,
+        messages: [secondMessage],
+        isLoading: true,
+      });
+      expect(
+        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId,
+      ).toBe(secondProjection);
+    });
+  });
+
+  test("atomically replaces a warm restored session that the bridge confirms has expired", async () => {
     const expiredSessionId = "expired-claude-session";
+    const replacement = deferred<MockCreatedSession>();
     useClaudeStore.setState({
       sessions: new Map(),
       contextUsage: new Map([
@@ -3434,17 +3563,21 @@ describe("ClaudeChatTab", () => {
       if (sessionId === expiredSessionId) throw new MockSessionNotFoundError();
       return [];
     });
+    mockCreateSession.mockImplementationOnce(() => replacement.promise);
 
-    render(
-      <ClaudeChatTab
-        tabId={TAB_ID}
-        data={createData({ sessionId: expiredSessionId })}
-        isActive
-      />,
-    );
+    render(<PaneBackedClaudeChatTab />);
+
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+    expect(
+      usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId,
+    ).toBe(expiredSessionId);
+
+    await act(async () => {
+      replacement.resolve({ sessionId: "session-1" });
+      await replacement.promise;
+    });
 
     await waitFor(() => {
-      expect(mockCreateSession).toHaveBeenCalled();
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId)
         .toBe("session-1");
       expect(
@@ -3530,7 +3663,7 @@ describe("ClaudeChatTab", () => {
     }
   });
 
-  test("cold-restores a persisted session with its transcript", async () => {
+  test("cold-adopts a projected session over a conflicting cached identity", async () => {
     const restoredSessionId = "cold-restored-claude";
     const restoredMessage: ClaudeMessageType = {
       id: "restored-message",
@@ -3542,11 +3675,24 @@ describe("ClaudeChatTab", () => {
     useClaudeStore.setState((state) => ({
       ...state,
       clients: new Map(),
-      sessions: new Map(),
+      sessions: new Map([
+        [
+          SESSION_KEY,
+          {
+            sessionId: "temporary-renderer-session",
+            messages: [],
+            isLoading: false,
+          },
+        ],
+      ]),
     }));
     seedPaneLayout(restoredSessionId);
     mockGetSessionMessages.mockResolvedValue([restoredMessage]);
-    mockGetSession.mockResolvedValue({ status: "idle" });
+    mockGetSession.mockResolvedValue({ status: "running" });
+    mockGetPendingPlanApprovals.mockResolvedValue([{
+      id: "cold-startup-approval",
+      sessionId: restoredSessionId,
+    }]);
 
     render(
       <ClaudeChatTab
@@ -3560,10 +3706,15 @@ describe("ClaudeChatTab", () => {
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
         sessionId: restoredSessionId,
         messages: [restoredMessage],
-        isLoading: false,
+        isLoading: true,
       });
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("cold-startup-approval"))
+        .toBe(true);
     });
     expect(mockGetSessionMessages).toHaveBeenCalledWith(expect.anything(), restoredSessionId);
+    expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith(expect.objectContaining({
+      providerSessionId: restoredSessionId,
+    }));
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 

@@ -329,7 +329,7 @@ describe("NativeAgentService", () => {
     });
   });
 
-  test("reports waiting to idle as a completion and ignores repeated idle snapshots", async () => {
+  test("does not report a parked waiting turn as completed when it becomes idle", async () => {
     let activityState: ProviderActivityState = "waiting";
     const { provider } = createProviderStub("codex", {
       activity: async () => activityState,
@@ -362,11 +362,7 @@ describe("NativeAgentService", () => {
       await service.reconcileAgentActivity();
       await service.reconcileAgentActivity();
 
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith(
-        "pr_monitor_agent_turn_completed",
-        { environmentId: "env-1" },
-      );
+      expect(invoke).not.toHaveBeenCalled();
     });
   });
 
@@ -549,6 +545,58 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("stops starting queued completion notifications once shutdown begins", async () => {
+    const environmentIds = Array.from({ length: 10 }, (_unused, index) => `env-${index + 1}`);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let signalEightStarted!: () => void;
+    const eightStarted = new Promise<void>((resolve) => { signalEightStarted = resolve; });
+    const invoked: string[] = [];
+    const invoke: Invoke = async <T>(
+      _command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      invoked.push(args?.environmentId as string);
+      if (invoked.length === 8) signalEightStarted();
+      await gate;
+      return undefined as T;
+    };
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-shutdown-flush-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      invoke,
+    }, async ({ storage, service }) => {
+      for (const environmentId of environmentIds.slice(1)) {
+        await addEnvironment(storage, {
+          id: environmentId,
+          worktreePath: `/tmp/${environmentId}`,
+          prUrl: `https://github.com/acme/repo/pull/${environmentId}`,
+          prState: "open",
+          hasMergeConflicts: true,
+          prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+        });
+      }
+      for (const environmentId of environmentIds) {
+        internals(service).pendingPrRefreshEnvironmentIds.add(environmentId);
+      }
+
+      const scan = service.reconcileAgentActivity();
+      await eightStarted;
+      const shuttingDown = service.shutdown();
+      release();
+      await Promise.all([scan, shuttingDown]);
+
+      expect(invoked).toHaveLength(8);
+      expect(new Set(invoked).size).toBe(8);
+    });
+  });
+
   test("retries a failed completion notification without repeating a success", async () => {
     let activityState: ProviderActivityState = "working";
     let invocationAttempt = 0;
@@ -599,6 +647,56 @@ describe("NativeAgentService", () => {
 
       expect(invoke).toHaveBeenCalledTimes(2);
       expect(internals(service).pendingPrRefreshEnvironmentIds.size).toBe(0);
+
+      internals(service).pendingPrRefreshEnvironmentIds.add("env-1");
+      await storage.removeEnvironment("env-1");
+      await service.reconcileAgentActivity();
+      expect(internals(service).pendingPrRefreshEnvironmentIds.size).toBe(0);
+    });
+  });
+
+  test("prunes failed completion notifications when their durable arms disappear", async () => {
+    let activityState: ProviderActivityState = "working";
+    const { provider } = createProviderStub("codex", {
+      activity: async () => activityState,
+    });
+    const invoke = mock(async () => {
+      throw new Error("command registry unavailable");
+    }) as unknown as Invoke;
+
+    await withService({
+      prefix: "orkestrator-native-pr-refresh-prune-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
+      provider: async () => provider,
+      invoke,
+    }, async ({ storage, service }) => {
+      await storage.adoptNativeAgentSession({
+        key: nativeAgentSessionStorageKey("env-1", "codex", "resolve"),
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "resolve",
+        providerSessionId: "provider-resolve",
+      });
+      await service.reconcileAgentActivity();
+      activityState = "idle";
+      await captureWarnings(() => service.reconcileAgentActivity());
+      await captureWarnings(() => service.reconcileAgentActivity());
+
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(internals(service).pendingPrRefreshEnvironmentIds).toEqual(new Set(["env-1"]));
+
+      await storage.updateEnvironment("env-1", {
+        prRecheckAfterAgentCompletionArmedAt: undefined,
+      });
+      await service.reconcileAgentActivity();
+
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(internals(service).pendingPrRefreshEnvironmentIds.size).toBe(0);
     });
   });
 
@@ -640,9 +738,17 @@ describe("NativeAgentService", () => {
       activity: async () => activityState,
     });
 
+    const invoke = mock(async () => undefined) as unknown as Invoke;
     await withService({
       prefix: "orkestrator-native-activity-observation-prune-",
+      environment: {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "2026-08-01T12:00:00.000Z",
+      },
       provider: async () => provider,
+      invoke,
     }, async ({ storage, service }) => {
       const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
       await storage.adoptNativeAgentSession({
@@ -672,6 +778,7 @@ describe("NativeAgentService", () => {
         providerSessionId: "provider-new",
         state: "idle",
       });
+      expect(invoke).not.toHaveBeenCalled();
 
       await storage.invalidateNativeAgentSession(key, "provider-new");
       await service.reconcileAgentActivity();

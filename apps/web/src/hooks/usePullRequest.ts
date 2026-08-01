@@ -59,6 +59,7 @@ export function usePullRequest({
 
   // View the PR in the default browser
   const viewPR = useCallback(async () => {
+    setError(null);
     let url = prUrl;
     if (!url) {
       // Fallback: try to get the PR URL from the backend

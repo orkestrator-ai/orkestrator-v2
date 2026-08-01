@@ -1658,6 +1658,20 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 </ToolbarTooltipTrigger>
               )}
 
+              {!isPRFinished && hasMergeConflicts === null && (
+                <ToolbarTooltipTrigger tooltip="GitHub is still checking whether this PR can be merged">
+                  <Button
+                    variant={isGrid ? "ghost" : "outline"}
+                    size="sm"
+                    className="gap-2"
+                    disabled
+                  >
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className={cn(isGrid && "truncate text-xs")}>Checking mergeability…</span>
+                  </Button>
+                </ToolbarTooltipTrigger>
+              )}
+
               {!isPRFinished && hasMergeConflicts && (
                 <ContextMenu>
                   <ToolbarContextMenuTrigger

@@ -67,6 +67,7 @@ const {
   setEnvironmentUnread,
   setEnvironmentPendingAgentLaunch,
   setEnvironmentInitialPrompt,
+  setEnvironmentPr,
   cacheOpenCodeModelCatalog,
   cacheAgentModelCatalog,
   claimFeaturePlanBuild,
@@ -91,6 +92,24 @@ describe("backend setup wrappers", () => {
 
     expect(invokeMock.mock.calls).toEqual([
       ["set_environment_setup_complete", { environmentId: "env-1", complete: true }],
+    ]);
+  });
+
+  test("passes explicit tri-state PR metadata to the backend", async () => {
+    await setEnvironmentPr(
+      "env-1",
+      "https://github.com/acme/repo/pull/7",
+      "open",
+      null,
+    );
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_environment_pr", {
+        environmentId: "env-1",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: null,
+      }],
     ]);
   });
 

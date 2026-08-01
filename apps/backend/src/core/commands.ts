@@ -227,6 +227,14 @@ const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalActivityArmed = new Set<string>();
 const terminalActivityGenerations = new Map<string, number>();
 const terminalActivityCompletions = new Map<string, number>();
+type TerminalActivityCompletionState = {
+  id: string;
+  generation: number;
+  cancelled: boolean;
+  retryTimers: Set<ReturnType<typeof setTimeout>>;
+};
+const terminalActivityCompletionStates = new Map<number, TerminalActivityCompletionState>();
+let nextTerminalActivityGeneration = 0;
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 /** Per-process bearer tokens for renderer → local Codex bridge requests. */
 const localCodexBridgeTokens = new Map<string, string>();
@@ -3193,6 +3201,41 @@ function finishTrackedTerminalCompletion(id: string, generation: number): void {
   if (terminalActivityCompletions.get(id) === generation) {
     terminalActivityCompletions.delete(id);
   }
+  const state = terminalActivityCompletionStates.get(generation);
+  if (state?.id === id) {
+    for (const timer of state.retryTimers) clearTimeout(timer);
+    terminalActivityCompletionStates.delete(generation);
+  }
+}
+
+function isTrackedTerminalCompletionActive(id: string, generation: number): boolean {
+  const state = terminalActivityCompletionStates.get(generation);
+  return state?.id === id && !state.cancelled;
+}
+
+function scheduleTrackedTerminalCompletionRetry(
+  id: string,
+  generation: number,
+  callback: () => void,
+  delay: number,
+): void {
+  const state = terminalActivityCompletionStates.get(generation);
+  if (!state || state.id !== id || state.cancelled) return;
+  const timer = setTimeout(() => {
+    state.retryTimers.delete(timer);
+    if (!state.cancelled) callback();
+  }, delay);
+  timer.unref?.();
+  state.retryTimers.add(timer);
+}
+
+function cancelTrackedTerminalCompletions(id: string): void {
+  for (const [generation, state] of terminalActivityCompletionStates) {
+    if (state.id !== id) continue;
+    state.cancelled = true;
+    for (const timer of state.retryTimers) clearTimeout(timer);
+    terminalActivityCompletionStates.delete(generation);
+  }
 }
 
 function notifyTrackedTerminalCompletion(
@@ -3202,6 +3245,7 @@ function notifyTrackedTerminalCompletion(
   context: CommandContext,
   attempt = 0,
 ): void {
+  if (!isTrackedTerminalCompletionActive(id, generation)) return;
   const notify = context.notifyAgentTurnCompleted;
   if (!notify) {
     finishTrackedTerminalCompletion(id, generation);
@@ -3212,7 +3256,9 @@ function notifyTrackedTerminalCompletion(
     (error) => {
       const delay = TERMINAL_COMPLETION_NOTIFY_RETRY_DELAYS_MS[attempt];
       if (delay !== undefined) {
-        const timer = setTimeout(
+        scheduleTrackedTerminalCompletionRetry(
+          id,
+          generation,
           () => notifyTrackedTerminalCompletion(
             id,
             environmentId,
@@ -3222,12 +3268,9 @@ function notifyTrackedTerminalCompletion(
           ),
           delay,
         );
-        timer.unref?.();
         return;
       }
-      if (terminalActivityCompletions.get(id) === generation) {
-        terminalActivityCompletions.delete(id);
-      }
+      finishTrackedTerminalCompletion(id, generation);
       console.error("Failed to notify terminal agent completion", {
         environmentId,
         error: error instanceof Error ? error.message : String(error),
@@ -3244,8 +3287,10 @@ function persistTrackedTerminalCompletion(
   context: CommandContext,
   attempt = 0,
 ): void {
+  if (!isTrackedTerminalCompletionActive(id, generation)) return;
   void context.storage.recordEnvironmentCompletion(environmentId, occurredAt)
     .then((environment) => {
+      if (!isTrackedTerminalCompletionActive(id, generation)) return;
       context.emit("environment-activity-recorded", {
         environment_id: environment.id,
         occurred_at: environment.lastActivityAt ?? occurredAt,
@@ -3256,7 +3301,9 @@ function persistTrackedTerminalCompletion(
     .catch((error) => {
       const delay = TERMINAL_ACTIVITY_PERSIST_RETRY_DELAYS_MS[attempt];
       if (delay !== undefined) {
-        const timer = setTimeout(
+        scheduleTrackedTerminalCompletionRetry(
+          id,
+          generation,
           () => persistTrackedTerminalCompletion(
             id,
             environmentId,
@@ -3267,12 +3314,9 @@ function persistTrackedTerminalCompletion(
           ),
           delay,
         );
-        timer.unref?.();
         return;
       }
-      if (terminalActivityCompletions.get(id) === generation) {
-        terminalActivityCompletions.delete(id);
-      }
+      finishTrackedTerminalCompletion(id, generation);
       console.error("Failed to record terminal environment activity", {
         environmentId,
         error: error instanceof Error ? error.message : String(error),
@@ -3296,6 +3340,12 @@ function persistTerminalActivity(
     const generation = terminalActivityGenerations.get(id) ?? 0;
     if (terminalActivityCompletions.get(id) === generation) return;
     terminalActivityCompletions.set(id, generation);
+    terminalActivityCompletionStates.set(generation, {
+      id,
+      generation,
+      cancelled: false,
+      retryTimers: new Set(),
+    });
     persistTrackedTerminalCompletion(
       id,
       environmentId,
@@ -3325,7 +3375,8 @@ function persistTerminalActivity(
 
 function recordTerminalInputActivity(id: string, data: string, context: CommandContext): void {
   if (!/[\r\n]/.test(data) || !getTrackedTerminalEnvironmentId(id)) return;
-  terminalActivityGenerations.set(id, (terminalActivityGenerations.get(id) ?? 0) + 1);
+  nextTerminalActivityGeneration += 1;
+  terminalActivityGenerations.set(id, nextTerminalActivityGeneration);
   terminalActivityArmed.add(id);
   persistTerminalActivity(id, context, "prompt");
 }
@@ -3359,11 +3410,10 @@ function cleanupTerminalSession(
   const activityTimer = terminalActivityTimers.get(id);
   if (activityTimer) clearTimeout(activityTimer);
   terminalActivityTimers.delete(id);
-  if (options.explicit || !terminalActivityCompletions.has(id)) {
-    terminalActivityArmed.delete(id);
-    terminalActivityGenerations.delete(id);
-    terminalActivityCompletions.delete(id);
-  }
+  terminalActivityArmed.delete(id);
+  terminalActivityGenerations.delete(id);
+  terminalActivityCompletions.delete(id);
+  if (options.explicit) cancelTrackedTerminalCompletions(id);
   terminalProcesses.delete(id);
   const stableKey = terminalStableKeysBySessionId.get(id);
   const retainStableState = !options.explicit
@@ -10095,8 +10145,7 @@ export function createCommandRegistry(
   register("arm_pr_refresh_after_agent_completion", async (args, context) => {
     assertOnlyKeys(args, ["environmentId"], "arguments");
     const id = asString(args.environmentId, "environmentId");
-    const environment = await context.storage.armPrRecheckAfterAgentCompletion(id);
-    const armedAt = environment.prRecheckAfterAgentCompletionArmedAt ?? null;
+    const { armedAt } = await context.storage.armPrRecheckAfterAgentCompletion(id);
     if (armedAt) {
       // The durable token must still reach the caller if monitor hydration is
       // temporarily unavailable, otherwise a failed tab launch cannot roll it

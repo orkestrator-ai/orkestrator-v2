@@ -8709,6 +8709,32 @@ printf '[]\\n'
     });
   });
 
+  test.each([
+    ["UNKNOWN mergeability", '"mergeable":"UNKNOWN"', null],
+    ["missing mergeability", "", null],
+    ["non-string mergeability", '"mergeable":42', null],
+    ["lowercase mergeability", '"mergeable":"conflicting"', true],
+  ] as const)("preserves %s from local PR list detection", async (_label, mergeableField, expected) => {
+    const worktreePath = await createTempDir("ork-electron-pr-mergeability-");
+    const environment = createEnvironment({ worktreePath, branch: "feature/mergeability" });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const comma = mergeableField ? `,${mergeableField}` : "";
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\n' '[{"url":"https://github.com/acme/repo/pull/3","state":"OPEN"${comma},"updatedAt":"2026-01-03T00:00:00Z"}]'
+`, async () => {
+      await expect(commands.get("detect_pr_local")?.(
+        { environmentId: environment.id, branch: environment.branch },
+        context,
+      )).resolves.toEqual({
+        url: "https://github.com/acme/repo/pull/3",
+        state: "open",
+        hasMergeConflicts: expected,
+      });
+    });
+  });
+
   test("surfaces gh failures during local PR detection", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-fail-");
     const environment = createEnvironment({ worktreePath, branch: "feature/fail" });
@@ -13568,6 +13594,189 @@ exit 0
     expect(recordCompletion).toHaveBeenCalledTimes(2);
     expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(2);
     await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("deduplicates settled output per prompt generation and admits the next prompt", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-agent-generations-");
+    const environment = createEnvironment({ id: "env-local-agent-generations", worktreePath });
+    const { context } = createContext(environment);
+    let releaseFirst!: () => void;
+    const firstNotification = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const notifyAgentTurnCompleted = mock(() =>
+      notifyAgentTurnCompleted.mock.calls.length === 1
+        ? firstNotification
+        : Promise.resolve()
+    );
+    context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
+    const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
+    const commands = createCommandRegistry();
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: true,
+      },
+      context,
+    )).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+
+    await commands.get("local_terminal_write")?.({ sessionId, data: "first\r" }, context);
+    ptyProcesses[0]?.emitData("first done\r\n");
+    await waitForCondition(() => notifyAgentTurnCompleted.mock.calls.length === 1, "first generation notification");
+    ptyProcesses[0]?.emitData("late output from first generation");
+    await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+    expect(recordCompletion).toHaveBeenCalledTimes(1);
+
+    await commands.get("local_terminal_write")?.({ sessionId, data: "second\r" }, context);
+    ptyProcesses[0]?.emitData("second done\r\n");
+    await waitForCondition(() => notifyAgentTurnCompleted.mock.calls.length === 2, "second generation notification");
+
+    expect(recordCompletion).toHaveBeenCalledTimes(2);
+    releaseFirst();
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test.each([
+    ["persistence", true],
+    ["notification", false],
+  ] as const)("consumes a tracked terminal edge after %s retry exhaustion", async (_label, failPersistence) => {
+    const worktreePath = await createTempDir("ork-electron-local-agent-exhaustion-");
+    const environment = createEnvironment({
+      id: `env-local-agent-${failPersistence ? "persist" : "notify"}-exhaustion`,
+      worktreePath,
+    });
+    const { context, emitted } = createContext(environment);
+    const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
+    const notifyAgentTurnCompleted = mock(async () => undefined);
+    if (failPersistence) {
+      recordCompletion.mockImplementation(async () => {
+        throw new Error("storage permanently unavailable");
+      });
+    } else {
+      notifyAgentTurnCompleted.mockImplementation(async () => {
+        throw new Error("notification permanently unavailable");
+      });
+    }
+    context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const commands = createCommandRegistry();
+    try {
+      const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+        {
+          environmentId: environment.id,
+          cols: 80,
+          rows: 24,
+          trackEnvironmentActivity: true,
+        },
+        context,
+      )).sessionId;
+      await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+      await commands.get("local_terminal_write")?.({ sessionId, data: "codex\r" }, context);
+      ptyProcesses[0]?.emitExit({ exitCode: 0 });
+
+      await waitForCondition(
+        () => (failPersistence ? recordCompletion : notifyAgentTurnCompleted).mock.calls.length === 4,
+        `${_label} retries to exhaust`,
+      );
+      const recordsAfterExhaustion = recordCompletion.mock.calls.length;
+      const notificationsAfterExhaustion = notifyAgentTurnCompleted.mock.calls.length;
+      ptyProcesses[0]?.emitData("stray output after exhausted completion");
+      await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+
+      expect(recordCompletion).toHaveBeenCalledTimes(recordsAfterExhaustion);
+      expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(notificationsAfterExhaustion);
+      expect(emitted.filter(({ event, payload }) =>
+        event === "environment-activity-recorded"
+        && (payload as { activity_kind?: string }).activity_kind === "completed"
+      )).toHaveLength(failPersistence ? 0 : 1);
+      expect(consoleError).toHaveBeenCalledWith(
+        failPersistence
+          ? "Failed to record terminal environment activity"
+          : "Failed to notify terminal agent completion",
+        expect.objectContaining({ environmentId: environment.id }),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("does not carry a completed turn onto a replacement PTY with the same stable key", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-agent-reconnect-");
+    const environment = createEnvironment({ id: "env-local-agent-reconnect", worktreePath });
+    const { context, emitted } = createContext(environment);
+    let releaseNotification!: () => void;
+    const notificationGate = new Promise<void>((resolve) => {
+      releaseNotification = resolve;
+    });
+    const notifyAgentTurnCompleted = mock(() => notificationGate);
+    context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
+    const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
+    const commands = createCommandRegistry();
+    const args = {
+      environmentId: environment.id,
+      terminalKey: "agent-tab",
+      cols: 80,
+      rows: 24,
+      trackEnvironmentActivity: true,
+    };
+
+    const first = terminalSessionResult(await commands.get("create_local_terminal_session")?.(args, context));
+    await commands.get("start_local_terminal_session")?.({ sessionId: first.sessionId }, context);
+    await commands.get("local_terminal_write")?.({ sessionId: first.sessionId, data: "codex\r" }, context);
+    ptyProcesses[0]?.emitExit({ exitCode: 0 });
+    await waitForCondition(() => notifyAgentTurnCompleted.mock.calls.length === 1, "first terminal completion");
+
+    const replacement = terminalSessionResult(await commands.get("create_local_terminal_session")?.(args, context));
+    expect(replacement).toEqual({ sessionId: first.sessionId, created: false });
+    await commands.get("start_local_terminal_session")?.({ sessionId: replacement.sessionId }, context);
+    ptyProcesses[1]?.emitData("$ ");
+    await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+
+    expect(recordCompletion).toHaveBeenCalledTimes(1);
+    expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(1);
+    expect(emitted.filter(({ event, payload }) =>
+      event === "environment-activity-recorded"
+      && (payload as { activity_kind?: string }).activity_kind === "completed"
+    )).toHaveLength(1);
+    releaseNotification();
+    await commands.get("close_local_terminal_session")?.({ sessionId: replacement.sessionId }, context);
+  }, ASYNC_TEST_BUDGET_MS);
+
+  test("cancels a tracked terminal completion retry when its environment is deleted", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-agent-delete-");
+    const environment = createEnvironment({ id: "env-local-agent-delete", worktreePath });
+    const { context, emitted } = createContext(environment);
+    const recordCompletion = context.storage.recordEnvironmentCompletion as ReturnType<typeof mock>;
+    recordCompletion.mockRejectedValueOnce(new Error("storage temporarily unavailable"));
+    const notifyAgentTurnCompleted = mock(async () => undefined);
+    context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
+    const commands = createCommandRegistry();
+
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        terminalKey: "agent-tab",
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: true,
+      },
+      context,
+    )).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    await commands.get("local_terminal_write")?.({ sessionId, data: "codex\r" }, context);
+    ptyProcesses[0]?.emitData("done\r\n");
+    await waitForCondition(() => recordCompletion.mock.calls.length === 1, "first failed completion write");
+
+    await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
+    await Bun.sleep(900);
+
+    expect(recordCompletion).toHaveBeenCalledTimes(1);
+    expect(notifyAgentTurnCompleted).not.toHaveBeenCalled();
+    expect(emitted.some(({ event, payload }) =>
+      event === "environment-activity-recorded"
+      && (payload as { activity_kind?: string }).activity_kind === "completed"
+    )).toBe(false);
   }, ASYNC_TEST_BUDGET_MS);
 
   test("debounces repeated output and ignores writes without a submitted prompt", async () => {

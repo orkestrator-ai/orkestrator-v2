@@ -77,7 +77,7 @@ import {
 export interface PrDetectionResult {
   url: string;
   state: PrState;
-  hasMergeConflicts: boolean;
+  hasMergeConflicts: boolean | null;
 }
 
 // Typed command wrapper for the Electron backend.
@@ -714,7 +714,7 @@ export async function setEnvironmentPr(
   environmentId: string,
   prUrl: string,
   prState: PrState,
-  hasMergeConflicts?: boolean | null
+  hasMergeConflicts: boolean | null
 ): Promise<Environment> {
   return invoke<Environment>("set_environment_pr", { environmentId, prUrl, prState, hasMergeConflicts });
 }

@@ -642,8 +642,7 @@ export class NativeAgentService {
     return state === "idle"
       && (
         previous === "working"
-        || previous === "waiting"
-        || (previous === undefined && countUnknownIdleAsCompletion)
+        || (observed === undefined && countUnknownIdleAsCompletion)
       );
   }
 

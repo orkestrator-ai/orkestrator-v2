@@ -220,6 +220,23 @@ describe("usePullRequest", () => {
     expect(result.current.error).toBe("No PR URL available");
   });
 
+  test("viewPR handles a rejected fallback URL lookup", async () => {
+    mockGetEnvironmentPrUrl.mockRejectedValueOnce(new Error("backend unavailable"));
+    useEnvironmentStore.setState({
+      environments: [createMockEnvironment({ id: "env-1", prUrl: null })],
+      isLoading: false,
+      error: null,
+    });
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await act(async () => {
+      await result.current.viewPR();
+    });
+
+    expect(result.current.error).toBe("No PR URL available");
+    expect(mockOpenInBrowser).not.toHaveBeenCalled();
+  });
+
   test("viewPR sets error on browser open failure", async () => {
     mockOpenInBrowser.mockImplementation(() => Promise.reject(new Error("Failed to open browser")));
 
@@ -243,6 +260,27 @@ describe("usePullRequest", () => {
     });
 
     expect(result.current.error).toBe("Failed to open browser");
+  });
+
+  test("viewPR clears a stale error after a later successful open", async () => {
+    mockOpenInBrowser
+      .mockRejectedValueOnce(new Error("browser unavailable"))
+      .mockResolvedValueOnce(undefined);
+    useEnvironmentStore.setState({
+      environments: [createMockEnvironment({
+        id: "env-1",
+        prUrl: "https://github.com/test/repo/pull/123",
+      })],
+      isLoading: false,
+      error: null,
+    });
+    const { result } = renderHook(() => usePullRequest({ environmentId: "env-1" }));
+
+    await act(async () => result.current.viewPR());
+    expect(result.current.error).toBe("browser unavailable");
+    await act(async () => result.current.viewPR());
+
+    expect(result.current.error).toBeNull();
   });
 
   test("resetPR clears the PR URL", async () => {

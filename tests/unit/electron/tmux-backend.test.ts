@@ -3054,6 +3054,21 @@ describe("ClaudeStatePollManager", () => {
     harness.manager.shutdown("container-poll");
   });
 
+  test("notifies backend reconciliation for an armed working-to-idle recovery", async () => {
+    const harness = createPollHarness({ states: ["working", "idle"] });
+    harness.environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
+    const notifyAgentTurnCompleted = mock(async () => undefined);
+    harness.context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
+
+    harness.manager.start("container-poll", harness.context);
+    await waitFor(() => harness.emitted.length === 1);
+    harness.scheduled[0]!();
+    await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 1);
+
+    expect(notifyAgentTurnCompleted).toHaveBeenCalledWith("env-poll");
+    harness.manager.shutdown("container-poll");
+  });
+
   test("recovers an initially waiting or idle armed turn without notifying for an unarmed poll", async () => {
     for (const initialState of ["waiting", "idle"] as const) {
       const armed = createPollHarness({ states: [initialState] });
@@ -4780,6 +4795,98 @@ describe("live session read paths", () => {
       await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 2);
 
       gate.resolve();
+      await invoke(handlers, "claude_tmux_stop", args, context);
+    });
+  }, 20_000);
+
+  test("does not reopen a newer turn when an older completion notification rejects", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
+      let rejectFirst!: (error: Error) => void;
+      const first = new Promise<void>((_resolve, reject) => { rejectFirst = reject; });
+      let resolveSecond!: () => void;
+      const second = new Promise<void>((resolve) => { resolveSecond = resolve; });
+      const notifyAgentTurnCompleted = mock(() =>
+        notifyAgentTurnCompleted.mock.calls.length === 1 ? first : second
+      );
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        notifyAgentTurnCompleted,
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = { tabId: "tab-generation-rejection", environmentId: environment.id };
+      const status = await invoke(handlers, "claude_tmux_start", args, context) as {
+        session_id: string;
+      };
+      const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+      const writeAndObserve = async (kind: "UserPromptSubmit" | "Stop", id: string) => {
+        await fs.writeFile(path.join(pendingDir, `${kind}-${id}.json`), "{}");
+        await waitFor(() => emitted.some((entry) =>
+          (entry.payload as { event_id?: string }).event_id === id
+        ));
+      };
+
+      await writeAndObserve("UserPromptSubmit", "generation-1-start");
+      await writeAndObserve("Stop", "generation-1-stop");
+      await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 1);
+      await writeAndObserve("UserPromptSubmit", "generation-2-start");
+      await writeAndObserve("Stop", "generation-2-stop");
+      await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 2);
+      rejectFirst(new Error("late failure from generation one"));
+      await delay(25);
+      await writeAndObserve("Stop", "generation-2-duplicate");
+      await delay(25);
+
+      expect(notifyAgentTurnCompleted).toHaveBeenCalledTimes(2);
+      resolveSecond();
+      await invoke(handlers, "claude_tmux_stop", args, context);
+    });
+  }, 20_000);
+
+  test("retries a failed durable-arm read and treats a missing environment as terminal", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
+      let observeCompletionReads = false;
+      let completionReads = 0;
+      const getEnvironment = mock(async () => {
+        if (!observeCompletionReads) return environment;
+        completionReads += 1;
+        if (completionReads === 1) throw new Error("storage unavailable");
+        if (completionReads === 2) return undefined;
+        return environment;
+      });
+      const notifyAgentTurnCompleted = mock(async () => undefined);
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: { getEnvironment },
+        notifyAgentTurnCompleted,
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = { tabId: "tab-arm-read-retry", environmentId: environment.id };
+      const status = await invoke(handlers, "claude_tmux_start", args, context) as {
+        session_id: string;
+      };
+      observeCompletionReads = true;
+      const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+      for (const id of ["failed-read", "missing-read", "successful-read"]) {
+        await fs.writeFile(path.join(pendingDir, `Stop-${id}.json`), "{}");
+        await waitFor(() => emitted.some((entry) =>
+          (entry.payload as { event_id?: string }).event_id === id
+        ));
+        await delay(25);
+      }
+
+      expect(completionReads).toBe(2);
+      expect(notifyAgentTurnCompleted).not.toHaveBeenCalled();
       await invoke(handlers, "claude_tmux_stop", args, context);
     });
   }, 20_000);

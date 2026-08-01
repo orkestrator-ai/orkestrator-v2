@@ -2535,7 +2535,9 @@ export class StorageService {
    * click from re-arming an intent after a concurrent monitor check already
    * proved the PR mergeable.
    */
-  async armPrRecheckAfterAgentCompletion(environmentId: string): Promise<Environment> {
+  async armPrRecheckAfterAgentCompletion(
+    environmentId: string,
+  ): Promise<{ environment: Environment; armedAt: string | null }> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
       const environment = environments.find((candidate) => candidate.id === environmentId);
@@ -2544,7 +2546,7 @@ export class StorageService {
         !environment.prUrl
         || environment.prState !== "open"
         || environment.hasMergeConflicts !== true
-      ) return environment;
+      ) return { environment, armedAt: null };
 
       const now = Date.now();
       const previous = environment.prRecheckAfterAgentCompletionArmedAt
@@ -2555,7 +2557,10 @@ export class StorageService {
       ).toISOString();
       await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);
-      return environment;
+      return {
+        environment,
+        armedAt: environment.prRecheckAfterAgentCompletionArmedAt,
+      };
     });
   }
 

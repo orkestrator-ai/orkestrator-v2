@@ -1726,6 +1726,32 @@ describe("ActionBar workflow tabs", () => {
     expect((resolveButton as HTMLButtonElement).disabled).toBe(false);
   });
 
+  test("disables every Resolve provider while a launch is being armed", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    let resolveArm!: (armedAt: string | null) => void;
+    armRefreshAfterAgentCompletionMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveArm = resolve;
+    }));
+    render(<ActionBar />);
+
+    const resolveButton = screen.getByRole("button", { name: "Resolve" });
+    fireEvent.click(resolveButton);
+    fireEvent.contextMenu(resolveButton);
+
+    for (const name of ["Resolve with Claude", "Resolve with OpenCode", "Resolve with Codex"]) {
+      const item = screen.getByRole("button", { name }) as HTMLButtonElement;
+      expect(item.disabled).toBe(true);
+      fireEvent.click(item);
+    }
+    expect(armRefreshAfterAgentCompletionMock).toHaveBeenCalledTimes(1);
+    resolveArm("armed-after-menu-check");
+    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
+  });
+
   test("reports an arm failure but still launches the requested Resolve agent", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
@@ -1764,6 +1790,25 @@ describe("ActionBar workflow tabs", () => {
       "Could not open conflict resolution",
       expect.objectContaining({ description: expect.stringContaining("maximum tab count") }),
     );
+  });
+
+  test("does not roll back an earlier request when the current Resolve arm is refused", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    armRefreshAfterAgentCompletionMock.mockResolvedValueOnce(null);
+    createTabMock.mockReturnValueOnce(false);
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open conflict resolution",
+      expect.any(Object),
+    ));
+    expect(disarmRefreshAfterAgentCompletionMock).not.toHaveBeenCalled();
   });
 
   test("rolls back the exact refresh arm when Resolve tab creation throws", async () => {
@@ -2422,6 +2467,20 @@ describe("ActionBar pull request actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "View PR" }));
 
     expect(viewPRMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("shows a disabled pending affordance while GitHub computes mergeability", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar />);
+
+    const checking = screen.getByRole("button", { name: "Checking mergeability…" }) as HTMLButtonElement;
+    expect(checking.disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Merge PR" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Resolve" })).toBeNull();
   });
 
   test("presents a closed pull request and cleanup explanation without merged-branch wording", () => {

@@ -1567,9 +1567,10 @@ describe("pr monitor commands", () => {
         expect((await storage.getEnvironment("e1"))
           ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
 
-        await invoke("arm_pr_refresh_after_agent_completion", {
+        const refusedArm = await invoke("arm_pr_refresh_after_agent_completion", {
           environmentId: "e1",
         });
+        expect(refusedArm).toBeNull();
         expect((await storage.getEnvironment("e1"))
           ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
 
@@ -1632,12 +1633,13 @@ describe("pr monitor commands", () => {
           environmentId: "e1",
         }) as string;
 
-        for (const args of [
-          { environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "open" },
-          { environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "draft", hasMergeConflicts: false },
-          { environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "open", hasMergeConflicts: "no" },
-        ]) {
-          await expect(invoke("set_environment_pr", args)).rejects.toThrow();
+        for (const [args, message] of [
+          [{ environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "open" }, "Expected hasMergeConflicts to be a boolean or null"],
+          [{ environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "draft", hasMergeConflicts: false }, "Expected prState to be open, merged, or closed"],
+          [{ environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "open", hasMergeConflicts: "no" }, "Expected hasMergeConflicts to be a boolean or null"],
+          [{ environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "open", hasMergeConflicts: false, extra: true }, "Unexpected arguments field: extra"],
+        ] as const) {
+          await expect(invoke("set_environment_pr", args)).rejects.toThrow(message);
           expect((await storage.getEnvironment("e1"))
             ?.prRecheckAfterAgentCompletionArmedAt).toBe(armedAt);
         }
@@ -1704,6 +1706,19 @@ describe("pr monitor commands", () => {
         await expect(invoke("disarm_pr_refresh_after_agent_completion", {
           environmentId: "e1",
         })).rejects.toThrow("Expected armedAt to be a string");
+        await expect(invoke("disarm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+          armedAt: 123,
+        })).rejects.toThrow("Expected armedAt to be a string");
+        await expect(invoke("disarm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+          armedAt: second,
+          extra: true,
+        })).rejects.toThrow("Unexpected arguments field: extra");
+        await expect(invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+          extra: true,
+        })).rejects.toThrow("Unexpected arguments field: extra");
         expect((await storage.getEnvironment("e1"))
           ?.prRecheckAfterAgentCompletionArmedAt).toBe(second);
 
@@ -1713,6 +1728,30 @@ describe("pr monitor commands", () => {
         });
         expect((await storage.getEnvironment("e1"))
           ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+      } finally {
+        shutdownPrMonitorTracking();
+      }
+    });
+  });
+
+  test("a refused arm never returns a token owned by an earlier Resolve request", async () => {
+    await withCommands(async (invoke, storage) => {
+      try {
+        await storage.updateEnvironment("e1", {
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: true,
+        });
+        const first = await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        }) as string;
+        await storage.updateEnvironment("e1", { hasMergeConflicts: null });
+
+        expect(await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        })).toBeNull();
+        expect((await storage.getEnvironment("e1"))
+          ?.prRecheckAfterAgentCompletionArmedAt).toBe(first);
       } finally {
         shutdownPrMonitorTracking();
       }

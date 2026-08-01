@@ -103,8 +103,8 @@ describe("PR completion refresh intent", () => {
       ] as const).entries()) {
         const environment = { ...createEnvironment("project-1"), id: `env-${index}`, ...metadata };
         await storage.addEnvironment(environment);
-        expect((await storage.armPrRecheckAfterAgentCompletion(environment.id))
-          .prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+        expect((await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt)
+          .toBeNull();
       }
     });
   });
@@ -119,16 +119,14 @@ describe("PR completion refresh intent", () => {
         hasMergeConflicts: true,
       };
       await storage.addEnvironment(environment);
-      const first = (await storage.armPrRecheckAfterAgentCompletion(environment.id))
-        .prRecheckAfterAgentCompletionArmedAt!;
+      const first = (await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
 
       const restarted = new StorageService(dataDir);
       await restarted.init();
       expect((await restarted.getEnvironment(environment.id))
         ?.prRecheckAfterAgentCompletionArmedAt).toBe(first);
 
-      const second = (await restarted.armPrRecheckAfterAgentCompletion(environment.id))
-        .prRecheckAfterAgentCompletionArmedAt!;
+      const second = (await restarted.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
       expect(second).not.toBe(first);
       expect((await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, first))
         .prRecheckAfterAgentCompletionArmedAt).toBe(second);
@@ -136,6 +134,71 @@ describe("PR completion refresh intent", () => {
         .prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
       await expect(restarted.disarmPrRecheckAfterAgentCompletion("missing", second))
         .rejects.toThrow("Environment not found: missing");
+    });
+  });
+
+  test("returns no token when a later arm is refused without exposing the existing token", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = {
+        ...createEnvironment("project-1"),
+        id: "env-pr-refused-rearm",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open" as const,
+        hasMergeConflicts: true,
+      };
+      await storage.addEnvironment(environment);
+      const first = await storage.armPrRecheckAfterAgentCompletion(environment.id);
+      await storage.updateEnvironment(environment.id, { hasMergeConflicts: null });
+
+      const refused = await storage.armPrRecheckAfterAgentCompletion(environment.id);
+
+      expect(first.armedAt).toEqual(expect.any(String));
+      expect(refused.armedAt).toBeNull();
+      expect(refused.environment.prRecheckAfterAgentCompletionArmedAt).toBe(first.armedAt!);
+    });
+  });
+
+  test("generates strictly increasing arm tokens in the same millisecond and after clock rollback", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = {
+        ...createEnvironment("project-1"),
+        id: "env-pr-monotonic-arm",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open" as const,
+        hasMergeConflicts: true,
+      };
+      await storage.addEnvironment(environment);
+      const now = spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      try {
+        const first = (await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
+        const second = (await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
+        now.mockReturnValue(1_700_000_000_000);
+        const third = (await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
+
+        expect(Date.parse(second)).toBe(Date.parse(first) + 1);
+        expect(Date.parse(third)).toBe(Date.parse(second) + 1);
+      } finally {
+        now.mockRestore();
+      }
+    });
+  });
+
+  test("replaces an unparseable stored arm token", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = {
+        ...createEnvironment("project-1"),
+        id: "env-pr-invalid-arm",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open" as const,
+        hasMergeConflicts: true,
+        prRecheckAfterAgentCompletionArmedAt: "not-a-date",
+      };
+      await storage.addEnvironment(environment);
+
+      const armedAt = (await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt;
+
+      expect(armedAt).toEqual(expect.any(String));
+      expect(Number.isFinite(Date.parse(armedAt!))).toBe(true);
     });
   });
 

@@ -56,6 +56,7 @@ import {
 import {
   extractContextUsage,
 } from "@/lib/context-usage";
+import { parseBackendTurnStartedAt } from "@/lib/session-timer";
 import {
   startClaudeServer,
   getClaudeServerStatus,
@@ -774,7 +775,11 @@ export function ClaudeChatTab({
 
     applyServerSessionMetadata(sessionKey, serverSession);
     setMessages(sessionKey, messages);
-    setSessionLoading(sessionKey, serverSession.status === "running");
+    setSessionLoading(
+      sessionKey,
+      serverSession.status === "running",
+      serverSession.turnStartedAt,
+    );
     setSessionError(
       sessionKey,
       serverSession.status === "error"
@@ -1120,7 +1125,11 @@ export function ClaudeChatTab({
               (useClaudeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0)
                 === loadingRevisionBeforeSnapshot
             ) {
-              setSessionLoading(sessionKey, serverSession.status === "running");
+              setSessionLoading(
+                sessionKey,
+                serverSession.status === "running",
+                serverSession.turnStartedAt,
+              );
             }
 
             await pendingPromptsSync;
@@ -1571,6 +1580,12 @@ export function ClaudeChatTab({
                 timestamp: new Date().toISOString(),
               };
               addMessage(sessionKey, errorMessage);
+            } else if (
+              typeof success === "object"
+              && success.ok
+              && success.turnStartedAt !== undefined
+            ) {
+              setSessionLoading(sessionKey, true, success.turnStartedAt);
             }
           } else {
             // No initial prompt - just set up the session normally
@@ -1755,7 +1770,11 @@ export function ClaudeChatTab({
 
           setMessages(sessionTabId, messages);
           applyServerSessionMetadata(sessionTabId, serverSession);
-          setSessionLoading(sessionTabId, serverSession.status === "running");
+          setSessionLoading(
+            sessionTabId,
+            serverSession.status === "running",
+            serverSession.turnStartedAt,
+          );
           setSessionError(
             sessionTabId,
             serverSession.status === "error"
@@ -1922,7 +1941,11 @@ export function ClaudeChatTab({
                * Terminal transitions still use session.idle/session.error.
                */
               if (sessionUpdate?.status === "running") {
-                setSessionLoading(sessionTabId, true);
+                setSessionLoading(
+                  sessionTabId,
+                  true,
+                  parseBackendTurnStartedAt(sessionUpdate.turnStartedAt),
+                );
               }
               const exactUsage = parseClaudeContextUsage(sessionUpdate?.contextUsage);
               if (exactUsage) {
@@ -2287,6 +2310,13 @@ export function ClaudeChatTab({
         setSessionLoading(sessionKey, false);
         return "rejected" as const;
       }
+      if (
+        typeof success === "object"
+        && success.ok
+        && success.turnStartedAt !== undefined
+      ) {
+        setSessionLoading(sessionKey, true, success.turnStartedAt);
+      }
       // A lost response deliberately keeps the session locked while status is
       // reconciled, but it does not prove the bridge accepted a queued prompt.
       // Preserve the durable queue claim until that ambiguity is resolved.
@@ -2534,6 +2564,12 @@ export function ClaudeChatTab({
             sessionId,
             messages,
             isLoading: serverSession.status === "running",
+            loadingStartedAt:
+              serverSession.status === "running"
+                ? serverSession.turnStartedAt
+                : undefined,
+            lastCompletedElapsedSeconds:
+              serverSession.status === "running" ? null : undefined,
             error:
               serverSession.status === "error"
                 ? serverSession.error?.trim() || "Claude session failed"

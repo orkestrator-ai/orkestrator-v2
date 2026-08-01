@@ -36,6 +36,54 @@ describe("status mapping", () => {
   });
 });
 
+describe("turn clock", () => {
+  test("starting stamps the backend clock and active phases preserve it", () => {
+    let now = Date.parse("2026-08-01T12:00:00.000Z");
+    const registry = new ThreadRegistry({ now: () => now });
+    createSession(registry, "s1");
+    const context = registry.attach("s1", "thread-1", { engineHandle: "thread-1" });
+
+    registry.setPhase(context, "starting");
+    expect(context.turnStartedAt).toBe("2026-08-01T12:00:00.000Z");
+
+    now += 60_000;
+    for (const phase of ["running", "cancelling", "recovering"] as const) {
+      registry.setPhase(context, phase);
+      expect(context.turnStartedAt).toBe("2026-08-01T12:00:00.000Z");
+    }
+  });
+
+  test("recovery adopts the backend timestamp from a reconstructed accumulator", () => {
+    const registry = makeRegistry();
+    createSession(registry, "s1");
+    const context = registry.attach("s1", "thread-1", { engineHandle: "thread-1" });
+    context.activeTurn = new TurnAccumulator({
+      threadId: context.threadId,
+      turnId: "turn-1",
+      engineGeneration: 2,
+      assistantMessageId: "message-1",
+      startedAt: "2026-08-01T11:58:30.000Z",
+    });
+
+    registry.setPhase(context, "recovering");
+
+    expect(context.turnStartedAt).toBe("2026-08-01T11:58:30.000Z");
+  });
+
+  test.each(["idle", "failed"] as const)("%s clears the completed turn clock", (phase) => {
+    const registry = new ThreadRegistry({
+      now: () => Date.parse("2026-08-01T12:00:00.000Z"),
+    });
+    createSession(registry, "s1");
+    const context = registry.attach("s1", "thread-1", { engineHandle: "thread-1" });
+    registry.setPhase(context, "starting");
+
+    registry.setPhase(context, phase, phase === "failed" ? "turn failed" : undefined);
+
+    expect(context.turnStartedAt).toBeUndefined();
+  });
+});
+
 describe("lazy thread creation", () => {
   test("a new session has no thread until it is attached", () => {
     const registry = makeRegistry();

@@ -4,6 +4,37 @@ export interface TimedSessionState {
   lastCompletedElapsedSeconds?: number | null;
 }
 
+/** Parse a backend-owned turn timestamp without falling back to renderer time. */
+export function parseBackendTurnStartedAt(value: unknown): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : undefined;
+}
+
+/**
+ * Providers that expose a transcript but no turn clock can use the latest
+ * backend-created user message as the authoritative beginning of a busy turn.
+ */
+export function findLatestBackendUserTurnStartedAt<
+  T extends { role: string; createdAt?: string },
+>(
+  messages: readonly T[],
+  isBackendMessage: (message: T) => boolean = () => true,
+): number | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "user") continue;
+    // The latest user message is still optimistic, so the backend has not yet
+    // supplied a clock for this turn. Never fall through to the previous turn.
+    if (!isBackendMessage(message)) return undefined;
+    // This is the current backend turn even when its clock is absent or
+    // malformed. Falling through would silently attach the previous turn's
+    // valid clock to the current one.
+    return parseBackendTurnStartedAt(message.createdAt);
+  }
+  return undefined;
+}
+
 export function reconcileTimedSession<T extends TimedSessionState>(
   previous: T | undefined,
   session: T,
@@ -38,16 +69,23 @@ export function updateTimedSessionLoading<T extends TimedSessionState>(
   session: T,
   isLoading: boolean,
   now = Date.now(),
+  authoritativeStartedAt?: number,
 ): T {
   if (isLoading) {
-    if (session.isLoading && session.loadingStartedAt !== undefined) {
+    const loadingStartedAt =
+      authoritativeStartedAt ?? session.loadingStartedAt ?? now;
+    if (
+      session.isLoading
+      && session.loadingStartedAt === loadingStartedAt
+      && session.lastCompletedElapsedSeconds === null
+    ) {
       return session;
     }
 
     return {
       ...session,
       isLoading: true,
-      loadingStartedAt: session.loadingStartedAt ?? now,
+      loadingStartedAt,
       lastCompletedElapsedSeconds: null,
     };
   }

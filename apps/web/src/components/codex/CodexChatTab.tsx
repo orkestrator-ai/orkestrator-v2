@@ -51,6 +51,7 @@ import {
   isCodexSessionPhase,
   lookupSessionStatus,
   parseApproval,
+  parseCodexTurnStartedAt,
   parseContextUsage,
   parseInteraction,
   preferNewerCodexRevisions,
@@ -963,6 +964,9 @@ export function CodexChatTab({
           return "accepted";
         }
         return "unknown";
+      }
+      if (sent.turnStartedAt !== undefined) {
+        setSessionLoading(sessionKey, true, sent.turnStartedAt);
       }
       /**
        * Any accepted dispatch spends the stored key.
@@ -2259,7 +2263,7 @@ export function CodexChatTab({
       return "applied";
     }
 
-    setSessionLoading(sessionKey, true);
+    setSessionLoading(sessionKey, true, status.turnStartedAt);
     finishBackendStartupTracking();
     if (options?.forceRefreshMessages) {
       await refreshMessages(client, session.sessionId, {
@@ -2510,6 +2514,9 @@ export function CodexChatTab({
                 setContextUsage(sessionKey, usageFromEvent);
               }
               const phase = event.data?.phase;
+              const turnStartedAt = parseCodexTurnStartedAt(
+                event.data?.turnStartedAt,
+              );
               if (isCodexSessionPhase(phase)) {
                 const terminal = phase === "idle" || phase === "failed";
                 if (!terminal || !backendStartupIsStillPreDispatch()) {
@@ -2525,11 +2532,11 @@ export function CodexChatTab({
                  * `session.error` remain authoritative for unlocking.
                  */
                 if (!terminal || dispatchInFlightRef.current === 0) {
-                  setSessionLoading(sessionKey, !terminal);
+                  setSessionLoading(sessionKey, !terminal, turnStartedAt);
                 }
               } else {
                 finishBackendStartupTracking();
-                setSessionLoading(sessionKey, true);
+                setSessionLoading(sessionKey, true, turnStartedAt);
               }
               continue;
             }

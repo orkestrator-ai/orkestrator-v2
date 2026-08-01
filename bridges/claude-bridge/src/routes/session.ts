@@ -231,6 +231,7 @@ session.get("/:id", async (c) => {
     id: sessionData.id,
     title: sessionData.title,
     status: sessionData.status,
+    turnStartedAt: sessionData.turnStartedAt,
     createdAt: sessionData.createdAt.toISOString(),
     lastActivity: sessionData.lastActivity.toISOString(),
     error: sessionData.error,
@@ -465,7 +466,12 @@ session.post("/:id/prompt", async (c) => {
     if (requestId) {
       const dispatchState = getPromptDispatchState(id, requestId);
       if (dispatchState === "processing") {
-        return c.json({ status: "processing", requestId, duplicate: true }, 202);
+        return c.json({
+          status: "processing",
+          requestId,
+          duplicate: true,
+          turnStartedAt: sessionData.turnStartedAt,
+        }, 202);
       }
       if (dispatchState === "already-processed") {
         return c.json({ status: "already-processed", requestId, duplicate: true });
@@ -514,7 +520,11 @@ session.post("/:id/prompt", async (c) => {
         });
       }
       console.debug("[session] Prompt accepted", { sessionId: id });
-      return c.json({ status: "processing", requestId }, 202);
+      return c.json({
+        status: "processing",
+        requestId,
+        turnStartedAt: sessionData.turnStartedAt,
+      }, 202);
     }
     if (sessionData.status === "running") {
       return c.json({ error: "Session is already processing a prompt" }, 409);
@@ -552,7 +562,11 @@ session.post("/:id/prompt", async (c) => {
     });
 
     console.debug("[session] Prompt accepted", { sessionId: id });
-    return c.json({ status: "processing", requestId }, 202);
+    return c.json({
+      status: "processing",
+      requestId,
+      turnStartedAt: sessionData.turnStartedAt,
+    }, 202);
   } catch (error) {
     console.error("[session] Error sending prompt:", error);
     return c.json(

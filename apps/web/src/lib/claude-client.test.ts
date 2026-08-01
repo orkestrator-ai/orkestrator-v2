@@ -241,6 +241,28 @@ describe("claude-client", () => {
       });
     });
 
+    test("parses the backend turn clock for a running session", async () => {
+      mockFetchJson({
+        id: "s-1",
+        status: "running",
+        turnStartedAt: "2026-07-31T20:00:00.000Z",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+      });
+
+      const result = await lookupSession(client, "s-1");
+      expect(result).toEqual({
+        kind: "found",
+        session: {
+          id: "s-1",
+          status: "running",
+          turnStartedAt: Date.parse("2026-07-31T20:00:00.000Z"),
+          createdAt: "2026-01-01",
+          lastActivity: "2026-01-01",
+        },
+      });
+    });
+
     test("returns null on 404", async () => {
       mockFetchStatus(404);
       expect(await getSession(client, "s-missing")).toBeNull();
@@ -296,6 +318,7 @@ describe("claude-client", () => {
         ],
         [{ promptSuggestion: { text: "not a string" } }, "promptSuggestion"],
         [{ planMode: "yes" }, "planMode"],
+        [{ turnStartedAt: "yesterday-ish" }, "turnStartedAt"],
         [{ backgroundTasks: "none" }, "backgroundTasks"],
       ] as const) {
         mockFetchJson({ ...base, ...malformed });
@@ -946,13 +969,17 @@ describe("claude-client", () => {
     });
 
     test("returns the accepted request identity on 202", async () => {
-      mockFetchJson({ status: "processing" }, 202);
+      mockFetchJson({
+        status: "processing",
+        turnStartedAt: "2026-07-31T20:00:00.000Z",
+      }, 202);
       const result = await sendPrompt(client, "s-1", "Hello");
       expect(result).toMatchObject({
         ok: true,
         outcome: "accepted",
         status: "processing",
         requestId: expect.any(String),
+        turnStartedAt: Date.parse("2026-07-31T20:00:00.000Z"),
       });
     });
 

@@ -195,6 +195,20 @@ export function createCodexBackgroundSynchronizer(
       let status = lookup.session;
       if (status.status === "running") {
         terminalTargets.delete(id);
+        if (status.turnStartedAt !== undefined) {
+          // Keep inactive tabs synchronized even when no mounted SSE consumer
+          // was present to observe the turn-start frame.
+          state.setSessionLoading(
+            target.sessionKey,
+            true,
+            status.turnStartedAt,
+          );
+          // The pending-input requests run alongside this status lookup and use
+          // the same target as their generation guard. Advance that guard with
+          // the authoritative correction so their valid snapshots are not
+          // mistaken for results from an older turn.
+          target.loadingStartedAt = status.turnStartedAt;
+        }
         // The foreground SSE stream owns within-turn phase and usage updates.
         // Applying an HTTP running snapshot here could roll those values back
         // if a newer live frame landed while the request was in flight.

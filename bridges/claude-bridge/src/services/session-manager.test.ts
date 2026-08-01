@@ -1098,6 +1098,8 @@ describe("session lifecycle", () => {
         firstDispatch,
         { beforePersistence: () => persistenceGate },
       );
+      expect(session.status).toBe("running");
+      expect(typeof session.turnStartedAt).toBe("string");
       const duplicate = claimPromptDispatch(
         session.id,
         "initial-prompt:env-1:tab-join",
@@ -1164,6 +1166,7 @@ describe("session lifecycle", () => {
       expect(duplicateResult.status).toBe("rejected");
       expect(firstDispatch).not.toHaveBeenCalled();
       expect(duplicateDispatch).not.toHaveBeenCalled();
+      expect(session.turnStartedAt).toBeUndefined();
       expect(session.status).toBe("idle");
       expect(session.dispatchedRequestIds?.has(
         "initial-prompt:env-1:tab-join-failure",
@@ -1256,6 +1259,7 @@ describe("session lifecycle", () => {
       ).rejects.toBeTruthy();
 
       expect(getSession(session.id)?.status).toBe("idle");
+      expect(getSession(session.id)?.turnStartedAt).toBeUndefined();
       expect(getSession(session.id)?.dispatchedRequestIds?.has(
         "initial-prompt:env-1:tab-failure",
       )).toBe(false);
@@ -1272,6 +1276,7 @@ describe("session lifecycle", () => {
       const session = createSession("launch");
       track(session.id);
       session.status = "error";
+      session.turnStartedAt = "2026-01-01T00:00:00.000Z";
       const sdkSessionId = session.id.slice("session-".length);
 
       await expect(
@@ -1285,6 +1290,7 @@ describe("session lifecycle", () => {
       ).rejects.toThrow("dispatch refused");
 
       expect(session.status).toBe("error");
+      expect(session.turnStartedAt).toBe("2026-01-01T00:00:00.000Z");
       expect(session.dispatchedRequestIds?.has(
         "initial-prompt:env-1:tab-start",
       )).toBe(false);
@@ -1332,6 +1338,8 @@ describe("session lifecycle", () => {
         code: "attachment_read_failed",
       });
       expect(mockQuery).not.toHaveBeenCalled();
+      expect(session.status).toBe("idle");
+      expect(session.turnStartedAt).toBeUndefined();
       expect(session.dispatchedRequestIds?.has(requestId)).toBe(false);
       expect(await readSessionPreferences(sdkSessionId)).toEqual({});
       expect(getPromptDispatchState(session.id, requestId)).toBe("new");
@@ -1426,6 +1434,7 @@ describe("session lifecycle", () => {
       await expect(claim).rejects.toBeTruthy();
       expect(mockQuery).not.toHaveBeenCalled();
       expect(session.status).toBe("idle");
+      expect(session.turnStartedAt).toBeUndefined();
       expect(session.abortController).toBeUndefined();
       expect(session.persistedMessagesLoaded).toBeUndefined();
       expect(session.dispatchedRequestIds?.has(requestId)).toBe(false);
@@ -1451,6 +1460,14 @@ describe("sendPrompt", () => {
       const promptPromise = sendPrompt(session.id, "Hello Claude");
       const call = await nextQueryCall();
       expect(call.options.includePartialMessages).toBe(true);
+      const turnStartedAt = getSession(session.id)?.turnStartedAt;
+      expect(typeof turnStartedAt).toBe("string");
+      expect(Date.parse(turnStartedAt!)).toBeLessThanOrEqual(Date.now());
+      expect(events).toContainEqual({
+        type: "session.updated",
+        sessionId: session.id,
+        data: { status: "running", turnStartedAt },
+      });
 
       // System init - sdkSessionId should be captured
       call.push({
@@ -1480,6 +1497,7 @@ describe("sendPrompt", () => {
 
       const stored = getSession(session.id)!;
       expect(stored.status).toBe("idle");
+      expect(stored.turnStartedAt).toBeUndefined();
       expect(stored.sdkSessionId).toBe("sdk-session-xyz");
       expect(stored.messages).toHaveLength(2);
       expect(stored.messages[0]?.role).toBe("user");
@@ -2423,6 +2441,7 @@ describe("sendPrompt", () => {
 
       const stored = getSession(session.id)!;
       expect(stored.status).toBe("error");
+      expect(stored.turnStartedAt).toBeUndefined();
       expect(stored.error).toBe("SDK exploded");
 
       const errorEvent = events.find((e) => e.type === "session.error" && e.sessionId === session.id);
@@ -2888,6 +2907,7 @@ describe("sendPrompt", () => {
       await promptPromise;
       expect(call.options.abortController?.signal.aborted).toBe(true);
       expect(getSession(session.id)?.status).toBe("idle");
+      expect(getSession(session.id)?.turnStartedAt).toBeUndefined();
 
       const idleEvents = events.filter((e) => e.type === "session.idle");
       expect(idleEvents.length).toBeGreaterThan(0);
@@ -4859,6 +4879,8 @@ describe("plan approval flow", () => {
 
     const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
     const call = await nextQueryCall();
+    const originalTurnStartedAt = session.turnStartedAt;
+    expect(typeof originalTurnStartedAt).toBe("string");
 
     const canUseToolPromise = call.options.canUseTool!("ExitPlanMode", { plan: "do stuff" });
 
@@ -4901,6 +4923,7 @@ describe("plan approval flow", () => {
     call.finish();
 
     const repromptCall = await nextQueryCall();
+    expect(session.turnStartedAt).toBe(originalTurnStartedAt);
     repromptCall.push({ type: "system", subtype: "init", session_id: "sdk-reprompt", mcp_servers: [] });
     repromptCall.push({ type: "result", subtype: "success" });
     repromptCall.finish();
@@ -4908,6 +4931,7 @@ describe("plan approval flow", () => {
     await promptPromise;
 
     expect(getSession(session.id)?.status).toBe("idle");
+    expect(getSession(session.id)?.turnStartedAt).toBeUndefined();
   });
 
   test("rejecting a plan without feedback denies it and requests a generic revision", async () => {
@@ -7856,6 +7880,7 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
 
   test("restores the stopped session when durable deletion fails", async () => {
     const state = await materializePersistedSession();
+    state.turnStartedAt = "2026-01-01T00:00:00.000Z";
     state.queryControl = {
       close: async () => {
         throw new Error("close failed");
@@ -7868,7 +7893,16 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
     await expect(deleteSessionDurably(state.id)).rejects.toThrow("disk busy");
     expect(getSession(state.id)).toBe(state);
     expect(state).toMatchObject({ deleting: false, status: "idle" });
+    expect(state.turnStartedAt).toBeUndefined();
     expect(state.queryControl).toBeUndefined();
+
+    const prompt = sendPrompt(state.id, "try again");
+    const call = await nextQueryCall();
+    expect(typeof state.turnStartedAt).toBe("string");
+    expect(state.turnStartedAt).not.toBe("2026-01-01T00:00:00.000Z");
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
   });
 
   test("keeps a deleted rollout absent when preference cleanup fails and lets retry finish cleanup", async () => {

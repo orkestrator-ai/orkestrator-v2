@@ -156,6 +156,7 @@ const mockGetSessionStatus = mock<
     phase?: CodexSessionPhase;
     title?: string;
     error?: string;
+    turnStartedAt?: number;
   } | null>
 >(async () => ({ status: "idle" }));
 const mockLookupSessionStatus = mock<
@@ -389,6 +390,7 @@ mock.module("@/lib/codex-client", () => ({
     && ["starting", "running", "cancelling", "recovering", "idle", "failed"].includes(value),
   lookupSessionStatus: mockLookupSessionStatus,
   parseApproval: realCodexClientSnapshot.parseApproval,
+  parseCodexTurnStartedAt: realCodexClientSnapshot.parseCodexTurnStartedAt,
   // The interaction and usage paths run their SSE payloads through the real
   // validators for the same reason `parseApproval` does: a permissive stub
   // would let the suite accept a frame the app itself would refuse.
@@ -4634,6 +4636,47 @@ describe("CodexChatTab", () => {
     expect(mockRenameEnvironmentFromPrompt).not.toHaveBeenCalled();
   });
 
+  test("replaces the provisional timer with the accepted prompt timestamp", async () => {
+    const turnStartedAt = Date.parse("2026-08-01T11:00:00.000Z");
+    composeText = "Preserve the backend turn clock";
+    seedEnvironment("timer-fix");
+    mockSendPrompt.mockResolvedValue({
+      status: "processing",
+      requestId: "accepted-prompt",
+      turnStartedAt,
+      duplicate: false,
+    });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockLookupSessionStatus).toHaveBeenCalled();
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+    });
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "found",
+      session: {
+        status: "running",
+        phase: "running",
+        turnStartedAt,
+      },
+    });
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.isLoading).toBe(true);
+      expect(session?.loadingStartedAt).toBe(turnStartedAt);
+    });
+  });
+
   test("renames compact Electron timestamp environments on the first prompt", async () => {
     composeText = "Add pagination to the review table";
     seedEnvironment("202604151234567");
@@ -7759,6 +7802,48 @@ describe("CodexChatTab", () => {
   });
 
   describe("session.updated phases", () => {
+    test("rehydrates the bridge turn timestamp when a tab remounts mid-turn", async () => {
+      mockGetSessionStatus.mockResolvedValue({
+        status: "running",
+        phase: "running",
+        turnStartedAt: 2_000,
+      });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true, 9_000);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => {
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.loadingStartedAt)
+          .toBe(2_000);
+      });
+    });
+
+    test("adopts the bridge turn timestamp from a live status frame", async () => {
+      mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield {
+          type: "session.updated",
+          sessionId: SESSION_ID,
+          data: {
+            phase: "running",
+            turnStartedAt: "2026-08-01T12:34:56.000Z",
+          },
+        };
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true, 9_000);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => {
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.loadingStartedAt)
+          .toBe(Date.parse("2026-08-01T12:34:56.000Z"));
+      });
+    });
+
     test("a terminal phase clears the phase and re-enables the composer", async () => {
       mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
       mockSubscribeToEvents.mockImplementation(() => (async function* () {

@@ -19,6 +19,7 @@ import {
 } from "@/lib/chat/client-only-messages";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
+import { findLatestBackendUserTurnStartedAt } from "@/lib/session-timer";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { shouldReconnectEventSubscription } from "@/stores/createNativeChatStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -174,6 +175,32 @@ const EMPTY_MODEL_PREFERENCES = EMPTY_OPENCODE_MODEL_PREFERENCES;
 
 const EMPTY_SLASH_COMMANDS: OpenCodeSlashCommand[] = [];
 const EMPTY_MODELS: OpenCodeModel[] = [];
+
+function getOpenCodeTurnStartedAt(
+  messages: readonly OpenCodeMessage[],
+): number | undefined {
+  return findLatestBackendUserTurnStartedAt(
+    messages,
+    (message) => !message.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX),
+  );
+}
+
+function getLatestOpenCodeBackendUserMessageId(
+  messages: readonly OpenCodeMessage[],
+): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "user") continue;
+    return message.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX)
+      ? undefined
+      : message.id;
+  }
+  return undefined;
+}
+
+function isOpenCodeTurnActive(status: string | null): boolean {
+  return status === "busy" || status === "retry";
+}
 
 
 function resolveModelSelection(input: {
@@ -854,7 +881,11 @@ export function OpenCodeChatTab({
 
     setMessages(sessionKey, messages);
     if (status) {
-      setSessionLoading(sessionKey, status !== "idle");
+      setSessionLoading(
+        sessionKey,
+        isOpenCodeTurnActive(status),
+        isOpenCodeTurnActive(status) ? getOpenCodeTurnStartedAt(messages) : undefined,
+      );
     }
     await syncPendingRequests(activeClient, sessionId, {
       throwOnError: true,
@@ -1116,7 +1147,13 @@ export function OpenCodeChatTab({
                 useOpenCodeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0
               ) === loadingRevisionBeforeSnapshot
             ) {
-              setSessionLoading(sessionKey, status !== "idle");
+              setSessionLoading(
+                sessionKey,
+                isOpenCodeTurnActive(status),
+                isOpenCodeTurnActive(status)
+                  ? getOpenCodeTurnStartedAt(messages)
+                  : undefined,
+              );
             }
           }).catch((error) => {
             console.warn("[OpenCodeChatTab] Fast reconnect rehydration failed:", error);
@@ -1145,7 +1182,10 @@ export function OpenCodeChatTab({
                 logicalSessionKey: sessionKey,
                 providerSessionId: data.sessionId,
               });
-              const messages = await getSessionMessages(existingClient, data.sessionId);
+              const [messages, status] = await Promise.all([
+                getSessionMessages(existingClient, data.sessionId),
+                getSessionStatus(existingClient, data.sessionId, { throwOnError: true }),
+              ]);
               if (!mounted) return;
               tabSessionIdRef.current = data.sessionId;
               updateTabNativeSessionId(tabId, data.sessionId, environmentId);
@@ -1153,7 +1193,11 @@ export function OpenCodeChatTab({
               setSession(sessionKey, {
                 sessionId: data.sessionId,
                 messages,
-                isLoading: false,
+                isLoading: isOpenCodeTurnActive(status),
+                loadingStartedAt:
+                  isOpenCodeTurnActive(status)
+                    ? getOpenCodeTurnStartedAt(messages)
+                    : undefined,
               });
               setConnectionState("connected");
               if (!hasActiveEventSubscription(environmentId)) {
@@ -1402,21 +1446,34 @@ export function OpenCodeChatTab({
           // A restored pane on a new client has no in-memory session yet, so it
           // must hydrate the transcript rather than installing an empty shell.
           try {
-            const messages = await getSessionMessages(
-              sdkClient,
-              existingSessionId,
-            );
+            const [messages, status] = await Promise.all([
+              getSessionMessages(sdkClient, existingSessionId),
+              getSessionStatus(sdkClient, existingSessionId, {
+                throwOnError: true,
+              }),
+            ]);
             if (!mounted) return;
 
             if (existingSessionFromStore) {
               // setMessages preserves client-side error messages (ERROR_MESSAGE_PREFIX)
               // from the existing session state when replacing server messages.
               setMessages(sessionKey, messages);
+              setSessionLoading(
+                sessionKey,
+                isOpenCodeTurnActive(status),
+                isOpenCodeTurnActive(status)
+                  ? getOpenCodeTurnStartedAt(messages)
+                  : undefined,
+              );
             } else {
               setSession(sessionKey, {
                 sessionId: existingSessionId,
                 messages,
-                isLoading: false,
+                isLoading: isOpenCodeTurnActive(status),
+                loadingStartedAt:
+                  isOpenCodeTurnActive(status)
+                    ? getOpenCodeTurnStartedAt(messages)
+                    : undefined,
               });
             }
           } catch (err) {
@@ -1616,6 +1673,16 @@ export function OpenCodeChatTab({
       const lastReloadTimeBySession = new Map<string, number>();
       const pendingReloads = new Map<string, NodeJS.Timeout>();
       const reloadGenerationByKey = new Map<string, number>();
+      /*
+       * A live busy edge does not identify the turn it starts. Keep only a
+       * newly observed backend user message as a possible clock source; the
+       * existing transcript may end with the previous completed turn when a
+       * queued prompt is dispatched while its tab is unmounted.
+       */
+      const pendingBackendTurnClockBySession = new Map<
+        string,
+        { messageId: string; startedAt: number | undefined }
+      >();
 
       const beginReloadGeneration = (reloadKey: string) => {
         const generation = (reloadGenerationByKey.get(reloadKey) ?? 0) + 1;
@@ -1750,15 +1817,20 @@ export function OpenCodeChatTab({
                 .getState()
                 .sessions.get(sessionKey);
               if (currentSession?.sessionId !== sessionId) return;
-              setMessages(
-                sessionKey,
-                includeSubagents
-                  ? messages
-                  : carryOverOpenCodeSubagentHydration(
-                      currentSession.messages,
-                      messages,
-                    ),
-              );
+              const reconciledMessages = includeSubagents
+                ? messages
+                : carryOverOpenCodeSubagentHydration(
+                    currentSession.messages,
+                    messages,
+                  );
+              setMessages(sessionKey, reconciledMessages);
+              if (currentSession.isLoading) {
+                setSessionLoading(
+                  sessionKey,
+                  true,
+                  getOpenCodeTurnStartedAt(reconciledMessages),
+                );
+              }
             } catch (error) {
               console.warn(
                 "[OpenCodeChatTab] Failed to refresh session transcript:",
@@ -1841,6 +1913,24 @@ export function OpenCodeChatTab({
           const merged = mergeOpenCodeMessageInfo(existingMessage, rawInfo);
           if (!merged) return false;
           upsertMessage(sessionTabId, merged);
+          if (
+            merged.role === "user"
+            && !merged.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX)
+          ) {
+            const reconciledMessages = [
+              ...(sessionState?.messages.filter((message) => message.id !== merged.id) ?? []),
+              merged,
+            ];
+            const startedAt = getOpenCodeTurnStartedAt(reconciledMessages);
+            if (sessionState?.isLoading) {
+              setSessionLoading(sessionTabId, true, startedAt);
+            } else if (!existingMessage) {
+              pendingBackendTurnClockBySession.set(sessionTabId, {
+                messageId: merged.id,
+                startedAt,
+              });
+            }
+          }
           return true;
         };
 
@@ -1981,13 +2071,30 @@ export function OpenCodeChatTab({
                 || props?.status?.type === "retry"
               )
             ) {
-              setSessionLoading(sessionTabId, true);
+              const pendingClock = pendingBackendTurnClockBySession.get(sessionTabId);
+              const currentMessages = useOpenCodeStore
+                .getState()
+                .sessions.get(sessionTabId)?.messages ?? sessionState.messages;
+              const authoritativeStartedAt =
+                pendingClock
+                && getLatestOpenCodeBackendUserMessageId(currentMessages)
+                  === pendingClock.messageId
+                  ? pendingClock.startedAt
+                  : undefined;
+              pendingBackendTurnClockBySession.delete(sessionTabId);
+              setSessionLoading(
+                sessionTabId,
+                true,
+                authoritativeStartedAt,
+              );
             } else if (isFinalEvent) {
+              pendingBackendTurnClockBySession.delete(sessionTabId);
               setSessionLoading(sessionTabId, false);
             }
 
             // Handle errors
             if (eventType === "session.error") {
+              pendingBackendTurnClockBySession.delete(sessionTabId);
               console.error("[OpenCodeChatTab] Session error:", props?.error);
               setSessionLoading(sessionTabId, false);
               const errorMsg = formatOpenCodeError(props?.error);
@@ -2510,7 +2617,10 @@ export function OpenCodeChatTab({
       if (!client) return;
 
       try {
-        const messages = await getSessionMessages(client, sessionId);
+        const [messages, status] = await Promise.all([
+          getSessionMessages(client, sessionId),
+          getSessionStatus(client, sessionId, { throwOnError: true }),
+        ]);
         await adoptNativeAgentSession({
           environmentId,
           agent: "opencode",
@@ -2536,7 +2646,15 @@ export function OpenCodeChatTab({
         const resumedUsage = summarizeOpenCodeUsage(messages, models);
         useOpenCodeStore.setState((state) => {
           const sessions = new Map(state.sessions);
-          sessions.set(sessionKey, { sessionId, messages, isLoading: false });
+          const isLoading = isOpenCodeTurnActive(status);
+          sessions.set(sessionKey, {
+            sessionId,
+            messages,
+            isLoading,
+            loadingStartedAt:
+              isLoading ? getOpenCodeTurnStartedAt(messages) : undefined,
+            lastCompletedElapsedSeconds: isLoading ? null : undefined,
+          });
           const contextUsage = new Map(state.contextUsage);
           if (resumedUsage) contextUsage.set(sessionKey, resumedUsage);
           else contextUsage.delete(sessionKey);

@@ -487,6 +487,8 @@ export interface PromptAcceptedResult {
   requestId: string;
   threadId?: string | null;
   turnId?: string;
+  /** Backend-authoritative wall-clock time for the active turn. */
+  turnStartedAt?: string;
   duplicate?: boolean;
 }
 
@@ -2253,7 +2255,13 @@ export class AppServerRuntime {
         this.options.emit({
           type: "session.updated",
           sessionId,
-          data: { status, phase },
+          data: {
+            status,
+            phase,
+            ...(context.turnStartedAt
+              ? { turnStartedAt: context.turnStartedAt }
+              : {}),
+          },
         });
       }
     };
@@ -2758,6 +2766,7 @@ export class AppServerRuntime {
         engineGeneration: this.options.engine.info().generation,
         assistantMessageId: assistantMessage.id,
         expectsStructuredOutput: false,
+        startedAt: context.turnStartedAt,
       });
       accumulator.markRunning();
       assistantMessage.turnId = review.turnId;
@@ -2913,6 +2922,7 @@ export class AppServerRuntime {
     error?: string;
     threadId?: string | null;
     turnId?: string;
+    turnStartedAt?: string;
     requestId?: string;
     structuredOutputRequestId?: string;
     structuredOutput?: StructuredOutputResult;
@@ -2940,6 +2950,7 @@ export class AppServerRuntime {
       error: context?.error,
       threadId: session.threadId,
       turnId: context?.activeTurn?.turnId,
+      turnStartedAt: context?.turnStartedAt,
       requestId: context?.activeTurn?.requestId,
       structuredOutputRequestId: session.structuredOutputRequestId,
       structuredOutput: session.structuredOutput,
@@ -3231,6 +3242,13 @@ export class AppServerRuntime {
             requestId,
             threadId: decision.record?.threadId ?? null,
             turnId: decision.record?.turnId,
+            ...(decision.record?.threadId
+              && this.registry.getThread(decision.record.threadId)?.turnStartedAt
+              ? {
+                  turnStartedAt:
+                    this.registry.getThread(decision.record.threadId)!.turnStartedAt,
+                }
+              : {}),
             duplicate: true,
           },
         };
@@ -3262,6 +3280,12 @@ export class AppServerRuntime {
               requestId,
               threadId: decision.record.threadId,
               turnId: outcome.turnId,
+              ...(this.registry.getThread(decision.record.threadId)?.turnStartedAt
+                ? {
+                    turnStartedAt:
+                      this.registry.getThread(decision.record.threadId)!.turnStartedAt,
+                  }
+                : {}),
               duplicate: true,
             },
           };
@@ -3419,6 +3443,7 @@ export class AppServerRuntime {
         engineGeneration: turn.engineGeneration,
         assistantMessageId: assistantMessage.id,
         expectsStructuredOutput: input.outputSchema !== undefined,
+        startedAt: context.turnStartedAt,
       });
       accumulator.markRunning();
       context.activeTurn = accumulator;
@@ -3449,6 +3474,7 @@ export class AppServerRuntime {
           requestId,
           threadId: context.threadId,
           turnId: turn.turnId,
+          turnStartedAt: context.turnStartedAt,
         },
       };
     } catch (error) {
@@ -3493,6 +3519,9 @@ export class AppServerRuntime {
             threadId: context.threadId,
             ...(ambiguousResolution === "attached" && context.activeTurn
               ? { turnId: context.activeTurn.turnId }
+              : {}),
+            ...(context.turnStartedAt
+              ? { turnStartedAt: context.turnStartedAt }
               : {}),
             duplicate: true,
           },
@@ -3559,12 +3588,19 @@ export class AppServerRuntime {
         requestId,
         engineGeneration: this.options.engine.info().generation,
         assistantMessageId,
+        startedAt:
+          context.turnStartedAt
+          ?? context.messages.find((message) => message.id === assistantMessageId)?.createdAt
+          ?? new Date(this.now()).toISOString(),
         expectsStructuredOutput: [...context.bridgeSessionIds].some((sessionId) =>
           this.registry.getSession(sessionId)?.structuredOutputRequestId === requestId
         ),
       });
       accumulator.markRunning();
       context.activeTurn = accumulator;
+      // `recovering` was set before the accumulator existed. Re-apply it so the
+      // registry can adopt the recovered backend/rollout timestamp immediately.
+      this.registry.setPhase(context, "recovering");
       const state = this.stateFor(context.threadId);
       state.render = beginTurnRenderState(state.render);
       state.assistantMessageId = assistantMessageId;

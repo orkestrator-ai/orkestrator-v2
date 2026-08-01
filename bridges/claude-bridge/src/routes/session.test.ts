@@ -318,10 +318,22 @@ describe("session routes", () => {
   // --- GET /session/:id ---
   describe("GET /session/:id", () => {
     test("returns session details", async () => {
+      const turnStartedAt = "2026-01-01T00:00:05.000Z";
+      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
+        ? {
+            id,
+            title: "Test",
+            status: "running" as const,
+            turnStartedAt,
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+          }
+        : undefined);
       const res = await app.request("/session/s-1");
       expect(res.status).toBe(200);
       const data = await jsonBody(res);
       expect(data.id).toBe("s-1");
+      expect(data.turnStartedAt).toBe(turnStartedAt);
       expect(Object.hasOwn(data, "planMode")).toBe(false);
     });
 
@@ -588,21 +600,49 @@ describe("session routes", () => {
     });
 
     test("returns 202 with valid prompt", async () => {
+      const turnStartedAt = "2026-01-01T00:00:05.000Z";
+      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
+        ? {
+            id,
+            title: "Test",
+            status: "idle" as const,
+            turnStartedAt,
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+          }
+        : undefined);
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Hello Claude",
       });
       expect(res.status).toBe(202);
       const data = await jsonBody(res);
       expect(data.status).toBe("processing");
+      expect(data.turnStartedAt).toBe(turnStartedAt);
     });
 
     test("durably claims a stable request id before dispatch", async () => {
+      const turnStartedAt = "2026-01-01T00:00:06.000Z";
+      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
+        ? {
+            id,
+            title: "Test",
+            status: "idle" as const,
+            turnStartedAt,
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+          }
+        : undefined);
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Launch once",
         requestId: "initial-prompt:env-1:tab-1",
       });
 
       expect(res.status).toBe(202);
+      expect(await jsonBody(res)).toEqual({
+        status: "processing",
+        requestId: "initial-prompt:env-1:tab-1",
+        turnStartedAt,
+      });
       expect(mockClaimPromptDispatch).toHaveBeenCalledWith(
         "s-1",
         "initial-prompt:env-1:tab-1",
@@ -679,6 +719,19 @@ describe("session routes", () => {
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
+    test("returns 404 when the session disappears during a durable request-id claim", async () => {
+      mockClaimPromptDispatch.mockResolvedValueOnce("not-found");
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Launch once",
+        requestId: "initial-prompt:env-1:gone",
+      });
+
+      expect(res.status).toBe(404);
+      expect(await jsonBody(res)).toEqual({ error: "Session not found" });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
     test("does not acknowledge a claimed prompt whose SDK startup barrier rejects", async () => {
       mockSendPrompt.mockRejectedValueOnce(new Error("attachment unreadable"));
 
@@ -711,6 +764,17 @@ describe("session routes", () => {
     });
 
     test("forwards a structured schema and stable request id", async () => {
+      const turnStartedAt = "2026-01-01T00:00:07.000Z";
+      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
+        ? {
+            id,
+            title: "Test",
+            status: "idle" as const,
+            turnStartedAt,
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+          }
+        : undefined);
       const outputSchema = { type: "object", properties: { summary: { type: "string" } } };
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Review",
@@ -722,6 +786,7 @@ describe("session routes", () => {
       expect(await jsonBody(res)).toMatchObject({
         status: "processing",
         requestId: "structured-1",
+        turnStartedAt,
       });
       expect(mockSendPrompt).toHaveBeenCalledWith(
         "s-1",
@@ -782,6 +847,17 @@ describe("session routes", () => {
      * `outputSchema`, which left every ordinary prompt unprotected.
      */
     test("deduplicates an unstructured prompt carrying a repeated request id", async () => {
+      const turnStartedAt = "2026-01-01T00:00:08.000Z";
+      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
+        ? {
+            id,
+            title: "Test",
+            status: "running" as const,
+            turnStartedAt,
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+          }
+        : undefined);
       mockGetPromptDispatchState.mockReturnValueOnce("processing");
       const duplicate = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "rm the temp dir",
@@ -793,6 +869,7 @@ describe("session routes", () => {
         status: "processing",
         requestId: "plain-1",
         duplicate: true,
+        turnStartedAt,
       });
       expect(mockGetPromptDispatchState).toHaveBeenCalledWith("s-1", "plain-1");
       expect(mockSendPrompt).not.toHaveBeenCalled();
@@ -870,6 +947,29 @@ describe("session routes", () => {
       expect(res.status).toBe(202);
       await Promise.resolve();
       expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    test("returns 409 for a requestless prompt while a turn is already running", async () => {
+      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
+        ? {
+            id,
+            title: "Test",
+            status: "running" as const,
+            turnStartedAt: "2026-01-01T00:00:08.000Z",
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+          }
+        : undefined);
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Another turn",
+      });
+
+      expect(res.status).toBe(409);
+      expect(await jsonBody(res)).toEqual({
+        error: "Session is already processing a prompt",
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
     test("returns 404 for unknown session", async () => {
@@ -2161,6 +2261,26 @@ describe("persisted session routes", () => {
       expect(res.status).toBe(202);
       expect(await jsonBody(res)).toEqual({ status: "processing" });
       expect(mockSendPrompt).toHaveBeenCalledWith("s-1", "/compact");
+    });
+
+    test("contains a background compaction rejection after accepting the request", async () => {
+      const logged = mock(() => {});
+      const originalError = console.error;
+      console.error = logged;
+      try {
+        mockSendPrompt.mockRejectedValueOnce(new Error("provider disconnected"));
+
+        const res = await jsonRequest("POST", "/session/s-1/compact");
+        expect(res.status).toBe(202);
+        expect(await jsonBody(res)).toEqual({ status: "processing" });
+        await Promise.resolve();
+        expect(logged).toHaveBeenCalledWith(
+          "[session] Claude compaction failed:",
+          expect.objectContaining({ message: "provider disconnected" }),
+        );
+      } finally {
+        console.error = originalError;
+      }
     });
 
     test("returns 404 for an unknown session", async () => {

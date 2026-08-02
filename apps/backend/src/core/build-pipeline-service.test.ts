@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type {
   BuildPipeline,
   PipelineSessionPhase,
@@ -9,6 +10,7 @@ import type {
 import {
   VERIFICATION_VERDICT_SCHEMA,
 } from "@orkestrator/protocol/build-pipeline";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type {
   JsonSchema,
@@ -20,8 +22,11 @@ import {
 } from "./build-pipeline-service.js";
 import type {
   BuildPipelineProvider,
+  ProviderCreateSessionOptions,
+  ProviderSessionRegistration,
   ProviderStatus,
 } from "./build-pipeline-provider.js";
+import { ProviderUnavailableError } from "./build-pipeline-provider.js";
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -75,9 +80,30 @@ class FakeProvider implements BuildPipelineProvider {
     requestId: string;
     schema?: JsonSchema;
   }> = [];
+  readonly created: Array<{
+    phase: PipelineSessionPhase;
+    label: string;
+    options?: ProviderCreateSessionOptions;
+  }> = [];
+  readonly registered: Array<{
+    sessionId: string;
+    interaction?: ProviderSessionRegistration;
+  }> = [];
   private counter = 0;
 
-  async createSession(phase: PipelineSessionPhase): Promise<string> {
+  registerSession(
+    sessionId: string,
+    interaction?: ProviderSessionRegistration,
+  ): void {
+    this.registered.push({ sessionId, interaction });
+  }
+
+  async createSession(
+    phase: PipelineSessionPhase,
+    label: string,
+    options?: ProviderCreateSessionOptions,
+  ): Promise<string> {
+    this.created.push({ phase, label, options });
     const id = `${phase}-${++this.counter}`;
     this.phases.set(id, phase);
     return id;
@@ -1513,6 +1539,460 @@ describe("BuildPipelineService", () => {
       });
     });
   }
+
+  test("forwards unattended interaction metadata and keeps pending blocked work parked", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      expect(provider.created).toContainEqual({
+        phase: "build",
+        label: "Build Session",
+        options: expect.objectContaining({
+          interaction: {
+            origin: "build-pipeline",
+            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+            phase: "build",
+          },
+        }),
+      });
+      expect(provider.registered).toContainEqual({
+        sessionId: "build-1",
+        interaction: {
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: "build",
+        },
+      });
+      provider.status = async () => "blocked";
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const blocked = await pipeline(storage, started.id);
+      expect(blocked.phase).toBe("building");
+      expect(blocked.sessions[blocked.currentSessionIndex]).toMatchObject({
+        status: "running",
+        origin: "build-pipeline",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+
+      const restoredService = new BuildPipelineService(
+        storage,
+        async <T>(): Promise<T> => {
+          throw new Error("A parked session must not invoke backend commands");
+        },
+        { autoAdvance: false, provider: async () => provider },
+      );
+      try {
+        await restoredService.advanceNow(started.id);
+        expect((await pipeline(storage, started.id)).phase).toBe("building");
+      } finally {
+        await restoredService.shutdown();
+      }
+    });
+  });
+
+  test("persists an unattended OpenCode question failure before provider rejection", async () => {
+    await withService(async (service, storage) => {
+      const started = await service.start(startInput({ agentType: "opencode" }));
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const running = await pipeline(storage, started.id);
+      const session = running.sessions[running.currentSessionIndex]!;
+      const internals = service as unknown as {
+        persistUnattendedQuestionFailure(pipelineId: string, event: {
+          environmentId: string;
+          provider: "opencode";
+          sessionId: string;
+          interactionId: string;
+          kind: "question";
+          registration: {
+            origin: "build-pipeline";
+            interactionPolicy: typeof UNATTENDED_AGENT_INTERACTION_POLICY;
+            phase: string;
+          };
+          state: "detected";
+        }): Promise<void>;
+      };
+      await internals.persistUnattendedQuestionFailure(started.id, {
+        environmentId: "env-1",
+        provider: "opencode",
+        sessionId: session.sdkSessionId,
+        interactionId: "question-1",
+        kind: "question",
+        registration: {
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: "build",
+        },
+        state: "detected",
+      });
+      const failed = await pipeline(storage, started.id);
+      expect(failed).toMatchObject({
+        phase: "failed",
+        error: expect.stringContaining("requested user input"),
+        failureContext: {
+          kind: "interactive-request",
+          sessionId: session.sdkSessionId,
+        },
+      });
+
+      const restored = new BuildPipelineService(
+        storage,
+        async <T>(): Promise<T> => {
+          throw new Error("A terminal pipeline must not restart provider work");
+        },
+        { autoAdvance: false },
+      );
+      try {
+        await restored.init();
+        expect((await pipeline(storage, started.id)).phase).toBe("failed");
+      } finally {
+        await restored.shutdown();
+      }
+    });
+  });
+
+  test("keeps a paused pipeline question pending", async () => {
+    await withService(async (service, storage) => {
+      const started = await service.start(startInput({ agentType: "opencode" }));
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const record = await storage.getBuildPipeline(started.id);
+      const paused = record!.snapshot as BuildPipeline;
+      const session = paused.sessions[paused.currentSessionIndex]!;
+      paused.phase = "paused";
+      await storage.saveBuildPipeline(
+        paused.id,
+        paused.projectId,
+        paused.environmentId,
+        1,
+        paused,
+        record!.revision,
+      );
+      const internal = service as unknown as {
+        persistUnattendedQuestionFailure(
+          pipelineId: string,
+          event: Record<string, unknown>,
+        ): Promise<void>;
+        locks: Map<string, Promise<void>>;
+      };
+      const event = {
+        environmentId: "env-1",
+        provider: "opencode",
+        sessionId: session.sdkSessionId,
+        interactionId: "question-1",
+        kind: "question",
+        registration: {
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        },
+        state: "detected",
+      };
+      await expect(internal.persistUnattendedQuestionFailure(started.id, event))
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect((await pipeline(storage, started.id)).phase).toBe("paused");
+
+      const pausedRecord = await storage.getBuildPipeline(started.id);
+      const resumed = structuredClone(pausedRecord!.snapshot) as BuildPipeline;
+      resumed.phase = "building";
+      await storage.saveBuildPipeline(
+        resumed.id,
+        resumed.projectId,
+        resumed.environmentId,
+        1,
+        resumed,
+        pausedRecord!.revision,
+      );
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      internal.locks.set(started.id, gate);
+      const pending = internal.persistUnattendedQuestionFailure(started.id, event);
+      await Bun.sleep(1);
+      const raceRecord = await storage.getBuildPipeline(started.id);
+      const racePaused = structuredClone(raceRecord!.snapshot) as BuildPipeline;
+      racePaused.phase = "paused";
+      await storage.saveBuildPipeline(
+        racePaused.id,
+        racePaused.projectId,
+        racePaused.environmentId,
+        1,
+        racePaused,
+        raceRecord!.revision,
+      );
+      release();
+      await expect(pending).rejects.toBeInstanceOf(ProviderUnavailableError);
+    });
+  });
+
+  test("propagates question-owner storage failures", async () => {
+    await withService(async (service, storage) => {
+      const originalGet = storage.getBuildPipeline.bind(storage);
+      storage.getBuildPipeline = async () => {
+        throw new Error("storage unavailable");
+      };
+      try {
+        const internal = service as unknown as {
+          persistUnattendedQuestionFailure(
+            pipelineId: string,
+            event: Record<string, unknown>,
+          ): Promise<void>;
+        };
+        await expect(internal.persistUnattendedQuestionFailure("pipeline-1", {
+          environmentId: "env-1",
+          provider: "opencode",
+          sessionId: "session-1",
+        })).rejects.toThrow("storage unavailable");
+      } finally {
+        storage.getBuildPipeline = originalGet;
+      }
+    });
+  });
+
+  test("production OpenCode observation wiring durably fails before rejection and clears orphans", async () => {
+    await withService(async (service, storage) => {
+      const started = await service.start(startInput({ agentType: "opencode" }));
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const restored = await pipeline(storage, started.id);
+      const session = restored.sessions[restored.currentSessionIndex]!;
+
+      const queued: unknown[] = [];
+      const waiters: Array<(result: IteratorResult<unknown>) => void> = [];
+      let streamClosed = false;
+      const closeStream = () => {
+        streamClosed = true;
+        for (const waiter of waiters.splice(0)) {
+          waiter({ done: true, value: undefined });
+        }
+      };
+      const pushEvent = (event: unknown) => {
+        const waiter = waiters.shift();
+        if (waiter) waiter({ done: false, value: event });
+        else queued.push(event);
+      };
+      const stream = {
+        [Symbol.asyncIterator]() {
+          return {
+            next: async (): Promise<IteratorResult<unknown>> => {
+              const next = queued.shift();
+              if (next !== undefined) return { done: false, value: next };
+              if (streamClosed) return { done: true, value: undefined };
+              return new Promise((resolve) => waiters.push(resolve));
+            },
+          };
+        },
+      };
+      const rejected: string[] = [];
+      const permissionReplies: string[] = [];
+      const phaseAtRejection: string[] = [];
+      const observations: unknown[] = [];
+      let pendingQuestions: Array<Record<string, unknown>> = [];
+      let subscriptions = 0;
+      const client = {
+        event: {
+          async subscribe(_parameters: unknown, options: { signal?: AbortSignal }) {
+            subscriptions += 1;
+            options.signal?.addEventListener("abort", closeStream, { once: true });
+            return { stream };
+          },
+        },
+        permission: {
+          async list() {
+            return { data: [] };
+          },
+          async reply(parameters: { requestID: string }) {
+            permissionReplies.push(parameters.requestID);
+            return { data: true };
+          },
+        },
+        question: {
+          async list() {
+            return { data: pendingQuestions };
+          },
+          async reject(parameters: { requestID: string }) {
+            const currentPhase = (await pipeline(storage, started.id)).phase;
+            pendingQuestions = pendingQuestions.filter(
+              ({ id }) => id !== parameters.requestID,
+            );
+            phaseAtRejection.push(currentPhase);
+            rejected.push(parameters.requestID);
+            return { data: true };
+          },
+        },
+        session: {},
+      } as unknown as OpencodeClient;
+      const production = new BuildPipelineService(
+        storage,
+        async <T>(command: string): Promise<T> => {
+          if (command === "start_local_opencode_server_cmd") {
+            return { port: 43210, authToken: "test-token" } as T;
+          }
+          throw new Error(`Unexpected command: ${command}`);
+        },
+        {
+          autoAdvance: false,
+          providerDependencies: { openCodeClient: client, monitorRetryMs: 1 },
+          onInteractionObservation: (event) => {
+            observations.push(event);
+            throw new Error("diagnostics unavailable");
+          },
+        },
+      );
+      try {
+        const provider = await (production as unknown as {
+          provider: (
+            pipeline: BuildPipeline,
+            agent: "opencode",
+          ) => Promise<BuildPipelineProvider>;
+        }).provider(restored, "opencode");
+        for (let attempt = 0; subscriptions === 0 && attempt < 100; attempt += 1) {
+          await Bun.sleep(1);
+        }
+        expect(subscriptions).toBe(1);
+
+        pushEvent({
+          type: "permission.asked",
+          properties: { id: "permission-1", sessionID: session.sdkSessionId },
+        });
+        for (let attempt = 0; permissionReplies.length === 0 && attempt < 100; attempt += 1) {
+          await Bun.sleep(1);
+        }
+        expect(permissionReplies).toEqual(["permission-1"]);
+        expect((await pipeline(storage, started.id)).phase).toBe("building");
+
+        pendingQuestions.push({
+          id: "question-1",
+          sessionID: session.sdkSessionId,
+        });
+        pushEvent({
+          type: "question.asked",
+          properties: { id: "question-1", sessionID: session.sdkSessionId },
+        });
+        for (let attempt = 0; rejected.length === 0 && attempt < 100; attempt += 1) {
+          await Bun.sleep(1);
+        }
+        expect(rejected).toEqual(["question-1"]);
+        expect(phaseAtRejection).toEqual(["failed"]);
+        expect(await pipeline(storage, started.id)).toMatchObject({
+          phase: "failed",
+          failureContext: {
+            kind: "interactive-request",
+            sessionId: session.sdkSessionId,
+          },
+        });
+        expect(observations).toContainEqual(expect.objectContaining({
+          environmentId: "env-1",
+          provider: "opencode",
+          kind: "question",
+          state: "detected",
+        }));
+
+        provider.registerSession?.("orphan-session", {
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: "build",
+        });
+        pendingQuestions.push({
+          id: "orphan-question",
+          sessionID: "orphan-session",
+        });
+        pushEvent({
+          type: "question.asked",
+          properties: { id: "orphan-question", sessionID: "orphan-session" },
+        });
+        for (let attempt = 0; rejected.length < 2 && attempt < 100; attempt += 1) {
+          await Bun.sleep(1);
+        }
+        expect(rejected).toEqual(["question-1", "orphan-question"]);
+      } finally {
+        await production.shutdown();
+      }
+    });
+  });
+
+  test("re-registers restored sessions with cached and injected providers", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const restored = await pipeline(storage, started.id);
+      const resolveProvider = service as unknown as {
+        provider: (
+          pipeline: BuildPipeline,
+          agent: "claude",
+        ) => Promise<BuildPipelineProvider>;
+        providers: Map<string, BuildPipelineProvider>;
+        options: {
+          provider?: () => Promise<BuildPipelineProvider>;
+        };
+      };
+
+      provider.registered.length = 0;
+      expect(await resolveProvider.provider(restored, "claude")).toBe(provider);
+      expect(provider.registered).toEqual([{
+        sessionId: "build-1",
+        interaction: {
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: "build",
+        },
+      }]);
+
+      const injected = new FakeProvider();
+      resolveProvider.providers.clear();
+      resolveProvider.options.provider = async () => injected;
+      expect(await resolveProvider.provider(restored, "claude")).toBe(injected);
+      expect(injected.registered).toEqual([{
+        sessionId: "build-1",
+        interaction: {
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: "build",
+        },
+      }]);
+    });
+  });
+
+  test("registers restored interaction metadata on a production bridge provider", async () => {
+    await withService(async (service, storage) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const restored = await pipeline(storage, started.id);
+      const production = new BuildPipelineService(
+        storage,
+        async <T>(command: string): Promise<T> => {
+          if (command === "start_local_claude_server_cmd") {
+            return { port: 43210, authToken: "test-token" } as T;
+          }
+          throw new Error(`Unexpected command: ${command}`);
+        },
+        { autoAdvance: false },
+      );
+      try {
+        const provider = await (production as unknown as {
+          provider: (
+            pipeline: BuildPipeline,
+            agent: "claude",
+          ) => Promise<BuildPipelineProvider>;
+        }).provider(restored, "claude");
+        const registration = (provider as unknown as {
+          interactionTracker: {
+            registration: (sessionId: string) => ProviderSessionRegistration;
+          };
+        }).interactionTracker.registration("build-1");
+        expect(registration).toEqual({
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: "build",
+        });
+      } finally {
+        await production.shutdown();
+      }
+    });
+  });
 
   test("rejects malformed structured review output instead of advancing", async () => {
     await withService(async (service, storage, provider) => {

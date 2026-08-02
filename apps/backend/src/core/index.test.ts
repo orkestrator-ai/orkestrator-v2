@@ -8,6 +8,7 @@ import { OrkestratorBackend } from "./index.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { StorageService } from "./storage.js";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 
 function fakeAgentTools(overrides: {
   start?: () => Promise<void>;
@@ -27,6 +28,128 @@ function fakeAgentTools(overrides: {
     revokeEnvironment: mock(() => undefined),
   };
 }
+
+test("wires observe-only monitoring and its adoption kill switch from the environment", async () => {
+  const observeKey = "ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY";
+  const killSwitchKey = "ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH";
+  const previousObserve = process.env[observeKey];
+  const previousKillSwitch = process.env[killSwitchKey];
+  const backends: OrkestratorBackend[] = [];
+  const options = {
+    dataDir: path.join(os.tmpdir(), "ork-backend-interaction-env"),
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    agentTools: fakeAgentTools(),
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  };
+  const monitorOptions = (backend: OrkestratorBackend) => {
+    const nativeAgents = (backend as unknown as {
+      nativeAgents: {
+        options: {
+          interactionMonitorMode?: "disabled" | "observe-only";
+          interactionMonitorAdoptionEnabled?: boolean;
+        };
+        interactionMonitorAdoptionEnabled: boolean;
+      };
+    }).nativeAgents;
+    return {
+      ...nativeAgents.options,
+      effectiveAdoption: nativeAgents.interactionMonitorAdoptionEnabled,
+    };
+  };
+
+  try {
+    delete process.env[observeKey];
+    delete process.env[killSwitchKey];
+    const disabled = new OrkestratorBackend(options);
+    backends.push(disabled);
+    expect(monitorOptions(disabled)).toMatchObject({
+      interactionMonitorMode: "disabled",
+      interactionMonitorAdoptionEnabled: true,
+      effectiveAdoption: true,
+    });
+
+    process.env[observeKey] = "1";
+    process.env[killSwitchKey] = "1";
+    const observeOnly = new OrkestratorBackend({
+      ...options,
+      agentTools: fakeAgentTools(),
+    });
+    backends.push(observeOnly);
+    expect(monitorOptions(observeOnly)).toMatchObject({
+      interactionMonitorMode: "observe-only",
+      interactionMonitorAdoptionEnabled: false,
+      effectiveAdoption: false,
+    });
+    const internals = observeOnly as unknown as {
+      buildPipelines: {
+        options: {
+          onInteractionObservation(event: {
+            environmentId: string;
+            provider: "opencode";
+            sessionId: string;
+            interactionId: string;
+            kind: "permission";
+            registration: {
+              origin: "build-pipeline";
+              interactionPolicy: typeof UNATTENDED_AGENT_INTERACTION_POLICY;
+              phase: string;
+            };
+            state: "detected" | "withdrawn";
+            providerState?: "running";
+          }): Promise<void>;
+        };
+      };
+      nativeAgents: {
+        getInteractionObservations(): Array<Record<string, unknown>>;
+      };
+    };
+    const event = {
+      environmentId: "env-1",
+      provider: "opencode" as const,
+      sessionId: "session-1",
+      interactionId: "permission-1",
+      kind: "permission" as const,
+      registration: {
+        origin: "build-pipeline" as const,
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        phase: "build",
+      },
+    };
+    await internals.buildPipelines.options.onInteractionObservation({
+      ...event,
+      state: "detected",
+    });
+    await internals.buildPipelines.options.onInteractionObservation({
+      ...event,
+      state: "withdrawn",
+      providerState: "running",
+    });
+    expect(internals.nativeAgents.getInteractionObservations()).toEqual([
+      expect.objectContaining({
+        provider: "opencode",
+        kind: "permission",
+        workflowSurface: "build-pipeline",
+        phase: "pipeline",
+        count: 1,
+        eventualOutcome: "withdrawn",
+      }),
+    ]);
+  } finally {
+    if (previousObserve === undefined) delete process.env[observeKey];
+    else process.env[observeKey] = previousObserve;
+    if (previousKillSwitch === undefined) delete process.env[killSwitchKey];
+    else process.env[killSwitchKey] = previousKillSwitch;
+    await Promise.all(backends.map((backend) =>
+      backend.shutdown().catch(() => undefined)
+    ));
+  }
+});
 
 describe("agent-tools lifecycle", () => {
   test("starts before reapers and stops during shutdown", async () => {

@@ -19,6 +19,10 @@ import {
   type PipelineSessionPhase,
 } from "./build-pipeline.js";
 import type { StructuredReviewReport } from "./structured-review.js";
+import {
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+} from "./agent-interactions.js";
 
 function snapshot(): BuildPipeline {
   return {
@@ -63,6 +67,52 @@ describe("build pipeline protocol", () => {
         sessionId: "session-1",
       },
     })).toBe(true);
+  });
+
+  test("validates persisted build-pipeline interaction authority", () => {
+    const session = {
+      phase: "build" as const,
+      iteration: 0,
+      sessionKey: "build-0",
+      sdkSessionId: "session-1",
+      status: "running" as const,
+      startedAt: "2026-07-29T00:00:00.000Z",
+      label: "Build",
+    };
+    const withSession = (override: Record<string, unknown>) => ({
+      ...snapshot(),
+      sessions: [{ ...session, ...override }],
+      currentSessionIndex: 0,
+    });
+
+    // Snapshots written before interaction authority was persisted remain
+    // readable, while new snapshots must carry the complete unattended pair.
+    expect(isBuildPipeline(withSession({}))).toBe(true);
+    expect(isBuildPipeline(withSession({
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+    }))).toBe(true);
+    expect(isBuildPipeline(withSession({
+      origin: "build-pipeline",
+    }))).toBe(false);
+    expect(isBuildPipeline(withSession({
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+    }))).toBe(false);
+    expect(isBuildPipeline(withSession({
+      origin: "build-pipeline",
+      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+    }))).toBe(false);
+    expect(isBuildPipeline(withSession({
+      origin: "interactive-native",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+    }))).toBe(false);
+    expect(isBuildPipeline(withSession({
+      origin: "build-pipeline",
+      interactionPolicy: {
+        ...UNATTENDED_AGENT_INTERACTION_POLICY,
+        authorization: "await-user",
+      },
+    }))).toBe(false);
   });
 
   test("rejects a client-authored or malformed snapshot", () => {

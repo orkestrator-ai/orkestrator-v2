@@ -29,6 +29,7 @@ import {
   parseStructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { AppConfig, Environment, PersistedBuildPipeline } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
@@ -37,6 +38,8 @@ import {
   ProviderUnavailableError,
   type BridgeConnection,
   type BuildPipelineProvider,
+  type ProviderDependencies,
+  type ProviderInteractionObservationEvent,
   type ProviderExecutionMode,
 } from "./build-pipeline-provider.js";
 import { stagePromptImages } from "./prompt-attachments.js";
@@ -345,6 +348,7 @@ const DEFAULT_STRUCTURED_RESULT_DEADLINE_MS = 2 * 60_000;
  * persist immediately; only a pure transcript delta is throttled.
  */
 const DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS = 5_000;
+const MAX_INTERACTION_PIPELINE_OWNERS = 4_096;
 
 /**
  * Change detector for a transcript snapshot.
@@ -377,6 +381,7 @@ export class BuildPipelineService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly locks = new Map<string, Promise<void>>();
   private readonly providers = new Map<string, BuildPipelineProvider>();
+  private readonly interactionPipelineOwners = new Map<string, string>();
   /**
    * The harness whose provider each pipeline last resolved.
    *
@@ -404,6 +409,17 @@ export class BuildPipelineService {
       reconnectDeadlineMs?: number;
       structuredResultDeadlineMs?: number;
       transcriptPersistIntervalMs?: number;
+      onInteractionObservation?: (
+        event: ProviderInteractionObservationEvent & {
+          environmentId: string;
+          provider: BuildPipelineAgent;
+        },
+      ) => void | Promise<void>;
+      /** Narrow production-provider seam used by deterministic backend tests. */
+      providerDependencies?: Pick<
+        ProviderDependencies,
+        "openCodeClient" | "monitorRetryMs"
+      >;
     } = {},
   ) {}
 
@@ -485,6 +501,7 @@ export class BuildPipelineService {
       await disposable.dispose?.();
     }));
     this.providers.clear();
+    this.interactionPipelineOwners.clear();
     this.provisioningPrompts.clear();
     this.lastProviderAgent.clear();
   }
@@ -837,6 +854,9 @@ export class BuildPipelineService {
     }
     await this.storage.deleteBuildPipeline(pipelineId);
     this.lastProviderAgent.delete(pipelineId);
+    for (const [key, ownerId] of this.interactionPipelineOwners) {
+      if (ownerId === pipelineId) this.interactionPipelineOwners.delete(key);
+    }
     if (!record || !isBuildPipeline(record.snapshot)) return;
     const removed = record.snapshot;
     // Providers are keyed by environment and agent, so a sibling pipeline in
@@ -1032,6 +1052,12 @@ export class BuildPipelineService {
     }
     if (status === "error") {
       throw new Error(`The ${session.label.toLowerCase()} failed`);
+    }
+    if (status === "blocked") {
+      // Observe-only Milestone 3 must not advance or fail a phase. The parked
+      // request remains provider-owned until Milestone 4 applies its policy.
+      session.status = "running";
+      return;
     }
     if (
       pipeline.pendingPromptAttempt
@@ -1253,13 +1279,30 @@ export class BuildPipelineService {
       model,
       effort,
       mode,
+      interaction: {
+        origin: "build-pipeline",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        phase: sessionPhase,
+      },
     });
-    provider.registerSession?.(sessionId);
+    provider.registerSession?.(sessionId, {
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      phase: sessionPhase,
+    });
+    this.rememberInteractionPipelineOwner(
+      pipeline.environmentId,
+      agent,
+      sessionId,
+      pipeline.id,
+    );
     const { prompt, schema, images } = await this.promptFor(pipeline, sessionPhase);
     const requestId = randomUUID();
     const session: PipelineSession = {
       phase: sessionPhase,
       agent,
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       iteration: pipeline.iteration,
       sessionKey: `${pipeline.id}:${sessionPhase}:${pipeline.iteration}:${randomUUID()}`,
       sdkSessionId: sessionId,
@@ -1833,17 +1876,35 @@ export class BuildPipelineService {
     const ownSessions = pipeline.sessions.filter(
       (session) => sessionAgent(pipeline, session) === agent,
     );
+    for (const session of ownSessions) {
+      this.rememberInteractionPipelineOwner(
+        pipeline.environmentId,
+        agent,
+        session.sdkSessionId,
+        pipeline.id,
+      );
+    }
     const cached = this.providers.get(providerKey);
     if (cached) {
       for (const session of ownSessions) {
-        cached.registerSession?.(session.sdkSessionId);
+        cached.registerSession?.(session.sdkSessionId, {
+          origin: session.origin ?? "build-pipeline",
+          interactionPolicy: session.interactionPolicy
+            ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: session.phase,
+        });
       }
       return cached;
     }
     if (this.options.provider) {
       const provider = await this.options.provider(pipeline, agent);
       for (const session of ownSessions) {
-        provider.registerSession?.(session.sdkSessionId);
+        provider.registerSession?.(session.sdkSessionId, {
+          origin: session.origin ?? "build-pipeline",
+          interactionPolicy: session.interactionPolicy
+            ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: session.phase,
+        });
       }
       this.providers.set(providerKey, provider);
       return provider;
@@ -1860,17 +1921,80 @@ export class BuildPipelineService {
       // precedence; these fill in whatever the step left unset.
       ...connectionDefaultsFor(agent, config, repository),
     }, {
+      ...this.options.providerDependencies,
       // Task-snapshot images arrive as base64. Both bridges require a workspace
       // path, so they have to be written into the environment before they can be
       // attached to a prompt.
       stageImages: (images) =>
         stagePromptImages(this.invoke, environment, images),
+      onInteractionObservation: async (event) => {
+        const enriched = {
+          ...event,
+          environmentId: pipeline.environmentId,
+          provider: agent,
+        };
+        try {
+          await this.options.onInteractionObservation?.(enriched);
+        } catch {
+          // Passive diagnostics never control workflow behavior.
+        }
+        if (
+          event.state === "detected"
+          && event.kind === "question"
+          && event.registration.interactionPolicy.mode === "unattended"
+        ) {
+          const ownerId = this.interactionPipelineOwners.get(
+            this.interactionPipelineOwnerKey(
+              enriched.environmentId,
+              enriched.provider,
+              enriched.sessionId,
+            ),
+          );
+          if (ownerId) {
+            await this.persistUnattendedQuestionFailure(ownerId, enriched);
+          }
+        }
+      },
     });
     for (const session of ownSessions) {
-      provider.registerSession?.(session.sdkSessionId);
+      provider.registerSession?.(session.sdkSessionId, {
+        origin: session.origin ?? "build-pipeline",
+        interactionPolicy: session.interactionPolicy
+          ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+        phase: session.phase,
+      });
     }
     this.providers.set(providerKey, provider);
     return provider;
+  }
+
+  private interactionPipelineOwnerKey(
+    environmentId: string,
+    provider: BuildPipelineAgent,
+    sessionId: string,
+  ): string {
+    return JSON.stringify([environmentId, provider, sessionId]);
+  }
+
+  private rememberInteractionPipelineOwner(
+    environmentId: string,
+    provider: BuildPipelineAgent,
+    sessionId: string,
+    pipelineId: string,
+  ): void {
+    const ownerKey = this.interactionPipelineOwnerKey(
+      environmentId,
+      provider,
+      sessionId,
+    );
+    if (
+      !this.interactionPipelineOwners.has(ownerKey)
+      && this.interactionPipelineOwners.size >= MAX_INTERACTION_PIPELINE_OWNERS
+    ) {
+      const oldest = this.interactionPipelineOwners.keys().next().value;
+      if (oldest !== undefined) this.interactionPipelineOwners.delete(oldest);
+    }
+    this.interactionPipelineOwners.set(ownerKey, pipelineId);
   }
 
   private async bridgeConnection(
@@ -1928,6 +2052,59 @@ export class BuildPipelineService {
     this.lastProviderAgent.delete(pipeline.id);
     await this.save(pipeline, record.revision);
     await this.reconcileTerminalState(pipeline);
+  }
+
+  private async persistUnattendedQuestionFailure(
+    pipelineId: string,
+    event: ProviderInteractionObservationEvent & {
+      environmentId: string;
+      provider: BuildPipelineAgent;
+    },
+  ): Promise<void> {
+    const record = await this.storage.getBuildPipeline(pipelineId);
+    // A shared environment provider can retain an older registered session
+    // after its pipeline has already terminated or been removed. There is no
+    // live workflow left to advance, so that orphan request is safe to reject.
+    // Actual storage failures still throw from the targeted read above.
+    if (!record || !isBuildPipeline(record.snapshot)) return;
+    const recordedSession = sessionForCurrentPhase(record.snapshot);
+    if (
+      record.snapshot.environmentId !== event.environmentId
+      || recordedSession?.sdkSessionId !== event.sessionId
+      || sessionAgent(record.snapshot, recordedSession) !== event.provider
+    ) return;
+    if (record.snapshot.phase === "paused") {
+      throw new ProviderUnavailableError("A paused pipeline requested user input");
+    }
+    if (!isActiveBuildPhase(record.snapshot.phase)) return;
+    const failed = await this.mutate(record.id, (pipeline) => {
+      if (pipeline.phase === "paused") {
+        throw new ProviderUnavailableError("A paused pipeline requested user input");
+      }
+      if (!isActiveBuildPhase(pipeline.phase)) return;
+      const session = sessionForCurrentPhase(pipeline);
+      if (
+        session?.sdkSessionId !== event.sessionId
+        || sessionAgent(pipeline, session) !== event.provider
+      ) return;
+      pipeline.error = `The ${session.label.toLowerCase()} requested user input`;
+      pipeline.failureContext = {
+        phase: pipeline.phase as ResumableBuildPhase,
+        kind: "interactive-request",
+        sessionId: session.sdkSessionId,
+      };
+      pipeline.phase = "failed";
+      delete pipeline.pendingPromptAttempt;
+      this.provisioningPrompts.delete(pipeline.id);
+      this.lastProviderAgent.delete(pipeline.id);
+    });
+    // The provider only needs the terminal failure to be durable before it can
+    // reject the upstream question. Completion comments and board updates are
+    // unrelated external I/O, so let the normal locked supervisor perform them
+    // without stalling OpenCode's shared event loop.
+    if (this.needsTerminalReconciliation(failed)) {
+      void this.runLocked(failed.id);
+    }
   }
 
   private async recordReconnect(

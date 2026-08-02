@@ -20,6 +20,7 @@ import {
 } from "./commands.js";
 import { StorageService } from "./storage.js";
 import { ClaudeStatePollManager } from "./tmux.js";
+import { NativeAgentService } from "./native-agent-service.js";
 
 /**
  * Registry-level coverage for the commands that back the backend-owned state
@@ -38,6 +39,7 @@ async function withCommands<T>(
     environment?: Record<string, unknown>;
     buildPipelines?: CommandContext["buildPipelines"];
     nativeAgents?: CommandContext["nativeAgents"];
+    nativeAgentsFactory?: (storage: StorageService) => CommandContext["nativeAgents"];
   } = {},
 ): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-state-sync-"));
@@ -60,7 +62,7 @@ async function withCommands<T>(
     emit: () => undefined,
     storage,
     buildPipelines: options.buildPipelines,
-    nativeAgents: options.nativeAgents,
+    nativeAgents: options.nativeAgents ?? options.nativeAgentsFactory?.(storage),
   } as unknown as CommandContext;
 
   const invoke = async (command: string, args: Record<string, unknown>) => {
@@ -494,6 +496,58 @@ describe("agent handoff commands", () => {
 });
 
 describe("native agent and looped-review controller commands", () => {
+  test("uses the real native service for interaction monitor commands", async () => {
+    let service: NativeAgentService | undefined;
+    await withCommands(async (invoke) => {
+      try {
+        await expect(invoke("get_agent_interaction_observations", {}))
+          .resolves.toEqual([]);
+        await expect(invoke("reconcile_agent_interactions", {}))
+          .resolves.toEqual([]);
+        await expect(invoke("set_agent_interaction_monitor_adoption", {
+          enabled: false,
+        })).resolves.toEqual({ enabled: false });
+      } finally {
+        await service?.shutdown();
+      }
+    }, {
+      nativeAgentsFactory: (storage) => {
+        service = new NativeAgentService(storage, async () => {
+          throw new Error("disabled monitor must not invoke commands");
+        });
+        return service;
+      },
+    });
+  });
+
+  test("reports unavailable interaction monitoring and propagates reconciliation failures", async () => {
+    await withCommands(async (invoke) => {
+      await expect(invoke("get_agent_interaction_observations", {}))
+        .rejects.toThrow("Native agent service is unavailable");
+      await expect(invoke("reconcile_agent_interactions", {}))
+        .rejects.toThrow("Native agent service is unavailable");
+      await expect(invoke("set_agent_interaction_monitor_adoption", {
+        enabled: true,
+      })).rejects.toThrow("Native agent service is unavailable");
+    });
+
+    const reconcileAgentInteractions = mock(async () => {
+      throw new Error("interaction scan failed");
+    });
+    const getInteractionObservations = mock(() => []);
+    await withCommands(async (invoke) => {
+      await expect(invoke("reconcile_agent_interactions", {}))
+        .rejects.toThrow("interaction scan failed");
+      expect(reconcileAgentInteractions).toHaveBeenCalledTimes(1);
+      expect(getInteractionObservations).not.toHaveBeenCalled();
+    }, {
+      nativeAgents: {
+        reconcileAgentInteractions,
+        getInteractionObservations,
+      } as unknown as NonNullable<CommandContext["nativeAgents"]>,
+    });
+  });
+
   test("maps native session and dispatch arguments to the backend authority", async () => {
     const ensureSession = mock(async (input: unknown) => ({
       operation: "ensure",
@@ -507,10 +561,26 @@ describe("native agent and looped-review controller commands", () => {
       operation: "adopt",
       input,
     }));
+    const observations = [{
+      provider: "codex",
+      kind: "question",
+      workflowSurface: "looped-review",
+      phase: "discovery",
+      firstDetectedAt: 1,
+      lastDetectedAt: 1,
+      count: 1,
+      providerState: "blocked",
+    }];
+    const getInteractionObservations = mock(() => observations);
+    const reconcileAgentInteractions = mock(async () => undefined);
+    const setInteractionMonitorAdoptionEnabled = mock((_enabled: boolean) => undefined);
     const nativeAgents = {
       ensureSession,
       adoptSession,
       dispatchPrompt,
+      getInteractionObservations,
+      reconcileAgentInteractions,
+      setInteractionMonitorAdoptionEnabled,
     } as unknown as NonNullable<CommandContext["nativeAgents"]>;
 
     await withCommands(async (invoke) => {
@@ -660,6 +730,19 @@ describe("native agent and looped-review controller commands", () => {
       expect(ensureSession).toHaveBeenCalledTimes(1);
       expect(dispatchPrompt).toHaveBeenCalledTimes(1);
       expect(adoptSession).toHaveBeenCalledTimes(1);
+
+      await expect(invoke("get_agent_interaction_observations", {}))
+        .resolves.toEqual(observations);
+      await expect(invoke("reconcile_agent_interactions", {}))
+        .resolves.toEqual(observations);
+      expect(reconcileAgentInteractions).toHaveBeenCalledTimes(1);
+      await expect(invoke("set_agent_interaction_monitor_adoption", {
+        enabled: false,
+      })).resolves.toEqual({ enabled: false });
+      expect(setInteractionMonitorAdoptionEnabled).toHaveBeenCalledWith(false);
+      await expect(invoke("set_agent_interaction_monitor_adoption", {
+        enabled: "false",
+      })).rejects.toThrow("enabled to be a boolean");
     }, { nativeAgents });
   });
 

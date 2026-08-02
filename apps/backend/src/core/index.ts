@@ -87,15 +87,10 @@ export class OrkestratorBackend {
       await handler({ environmentId }, context);
     };
     this.context = context;
-    this.buildPipelines = new BuildPipelineService(
-      storage,
-      async <T>(command: string, args: Record<string, unknown> = {}) => {
-        const handler = this.commands.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
-        return await handler(args, context) as T;
-      },
-    );
-    context.buildPipelines = this.buildPipelines;
+    const interactionMonitorMode =
+      process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
+        ? "observe-only" as const
+        : "disabled" as const;
     this.nativeAgents = new NativeAgentService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -103,8 +98,27 @@ export class OrkestratorBackend {
         if (!handler) throw new Error(`Unknown backend command: ${command}`);
         return await handler(args, context) as T;
       },
+      {
+        interactionMonitorMode,
+        interactionMonitorAdoptionEnabled:
+          process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
+      },
     );
     context.nativeAgents = this.nativeAgents;
+    this.buildPipelines = new BuildPipelineService(
+      storage,
+      async <T>(command: string, args: Record<string, unknown> = {}) => {
+        const handler = this.commands.get(command);
+        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        return await handler(args, context) as T;
+      },
+      {
+        onInteractionObservation: (event) => {
+          this.nativeAgents.recordProviderInteractionObservation(event);
+        },
+      },
+    );
+    context.buildPipelines = this.buildPipelines;
     this.reapPidServers =
       options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =

@@ -745,6 +745,159 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("preserves retry backoff while one-slot leases rotate", async () => {
+    let now = 1_000;
+    const calls = new Map<string, number>();
+    await withService({
+      prefix: "orkestrator-native-interaction-rotating-backoff-",
+      provider: async () => createProviderStub("codex", {
+        interactions: {
+          listPendingInteractions: async (sessionId) => {
+            calls.set(sessionId, (calls.get(sessionId) ?? 0) + 1);
+            throw new Error("unavailable");
+          },
+          resolveInteraction: async () => {
+            throw new Error("must not resolve");
+          },
+        },
+      }).provider,
+      now: () => now,
+      interactionMonitorMode: "observe-only",
+      interactionMonitorMaxSessionsPerEnvironment: 1,
+      interactionMonitorRetryBaseMs: 10,
+      interactionMonitorMaxRetries: 4,
+    }, async ({ storage, service }) => {
+      for (const suffix of ["a", "b"] as const) {
+        const logicalSessionKey = `looped-review:workflow:${suffix}:Review`;
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey,
+          providerSessionId: `provider-${suffix}`,
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        });
+      }
+      await captureWarnings(() => service.reconcileAgentInteractions());
+      await captureWarnings(() => service.reconcileAgentInteractions());
+      expect([...internals(service).interactionAttempts.values()]).toEqual([1, 1]);
+      await service.reconcileAgentInteractions();
+      expect(calls.get("provider-a")).toBe(1);
+      now += 10;
+      await captureWarnings(() => service.reconcileAgentInteractions());
+      await captureWarnings(() => service.reconcileAgentInteractions());
+      expect([...internals(service).interactionAttempts.values()]).toEqual([2, 2]);
+    });
+  });
+
+  test("rotates multiple native-only monitor slots", async () => {
+    const visited = new Set<string>();
+    const { provider } = createProviderStub("codex", {
+      interactions: {
+        listPendingInteractions: async (sessionId) => {
+          visited.add(sessionId);
+          return { version: AGENT_INTERACTION_CONTRACT_VERSION, revision: 1, requests: [] };
+        },
+        resolveInteraction: async () => {
+          throw new Error("must not resolve");
+        },
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-interaction-native-only-rotation-",
+      provider: async () => provider,
+      interactionMonitorMode: "observe-only",
+      interactionMonitorMaxSessionsPerEnvironment: 2,
+    }, async ({ storage, service }) => {
+      for (const suffix of ["a", "b", "c"] as const) {
+        const logicalSessionKey = `looped-review:workflow:${suffix}:Review`;
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey,
+          providerSessionId: `provider-${suffix}`,
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        });
+      }
+      await service.reconcileAgentInteractions();
+      await service.reconcileAgentInteractions();
+      expect(visited.size).toBe(3);
+    });
+  });
+
+  test("rotates the reserved slot across active pipelines", async () => {
+    const visited = new Set<string>();
+    const { provider } = createProviderStub("codex", {
+      interactions: {
+        listPendingInteractions: async (sessionId) => {
+          visited.add(sessionId);
+          return { version: AGENT_INTERACTION_CONTRACT_VERSION, revision: 1, requests: [] };
+        },
+        resolveInteraction: async () => {
+          throw new Error("must not resolve");
+        },
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-interaction-pipeline-rotation-",
+      provider: async () => provider,
+      interactionMonitorMode: "observe-only",
+      interactionMonitorMaxSessionsPerEnvironment: 2,
+    }, async ({ storage, service }) => {
+      for (const suffix of ["a", "b"] as const) {
+        const candidate = activePipeline(`pipeline-${suffix}`, `pipeline-provider-${suffix}`);
+        await storage.saveBuildPipeline(
+          candidate.id,
+          candidate.projectId,
+          candidate.environmentId,
+          1,
+          candidate,
+        );
+      }
+      await service.reconcileAgentInteractions();
+      await service.reconcileAgentInteractions();
+      expect(visited.has("pipeline-provider-a")).toBe(true);
+      expect(visited.has("pipeline-provider-b")).toBe(true);
+    });
+  });
+
+  test("interaction scans honor the absent-bridge cooldown", async () => {
+    let now = 1_000;
+    let peeks = 0;
+    await withService({
+      prefix: "orkestrator-native-interaction-absent-cooldown-",
+      now: () => now,
+      interactionMonitorMode: "observe-only",
+      invoke: async <T>(command: string): Promise<T> => {
+        if (command === "peek_local_agent_bridge") {
+          peeks += 1;
+          return null as T;
+        }
+        throw new Error(`Unexpected command: ${command}`);
+      },
+    }, async ({ storage, service }) => {
+      const logicalSessionKey = "looped-review:workflow:absent:Review";
+      await storage.adoptNativeAgentSession({
+        key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey,
+        providerSessionId: "provider-session",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      await service.reconcileAgentInteractions();
+      await service.reconcileAgentInteractions();
+      expect(peeks).toBe(1);
+      now += 15_000;
+      await service.reconcileAgentInteractions();
+      expect(peeks).toBe(2);
+    });
+  });
+
   test("releases inactive environment state and re-adopts after it becomes ready", async () => {
     let now = 10_000;
     let revision = 1;
@@ -1192,6 +1345,128 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("bounds direct reports together with polling tracks and normalizes edge cases", async () => {
+    await withService({
+      prefix: "orkestrator-native-provider-reported-bounds-",
+      interactionMonitorMode: "observe-only",
+    }, async ({ service }) => {
+      const base = {
+        environmentId: "env-1",
+        provider: "opencode" as const,
+        sessionId: "provider-session",
+        kind: "permission" as const,
+        registration: {
+          origin: "looped-review" as const,
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: "x".repeat(300),
+        },
+      };
+      service.recordProviderInteractionObservation({
+        ...base,
+        interactionId: "unknown",
+        state: "withdrawn",
+      });
+      const question = {
+        ...base,
+        kind: "question" as const,
+        interactionId: "question-default",
+        registration: {
+          origin: "interactive-native" as const,
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        },
+      };
+      service.recordProviderInteractionObservation({ ...question, state: "detected" });
+      service.recordProviderInteractionObservation({ ...question, state: "withdrawn" });
+      expect(service.getInteractionObservations().find(({ kind }) => kind === "question"))
+        .toMatchObject({ phase: "native-session", providerState: "running" });
+      for (let index = 0; index < 512; index += 1) {
+        service.recordProviderInteractionObservation({
+          ...base,
+          interactionId: `permission-${index}`,
+          state: "detected",
+        });
+      }
+      expect(internals(service).providerReportedInteractions.size).toBe(512);
+      expect(service.getInteractionObservations().find(({ kind }) =>
+        kind === "permission"
+      )!.phase).toHaveLength(256);
+      const internal = service as unknown as {
+        recordInteractionDetection(
+          session: Record<string, unknown>,
+          interactionId: string,
+          kind: "question",
+          expiresAt: undefined,
+          scan: number,
+        ): void;
+      };
+      internal.recordInteractionDetection({
+        key: "session-key",
+        agent: "opencode",
+        origin: "looped-review",
+        logicalSessionKey: "looped-review:workflow:phase:Review",
+      }, "polled-question", "question", undefined, 1);
+      expect(internals(service).trackedInteractions.size).toBe(0);
+      service.recordProviderInteractionObservation({
+        ...base,
+        interactionId: "permission-0",
+        state: "withdrawn",
+      });
+      expect(service.getInteractionObservations().find(({ kind }) =>
+        kind === "permission"
+      )).toMatchObject({ providerState: "blocked" });
+    });
+  });
+
+  test("recreates evicted direct reports and ignores disabled or stopped services", async () => {
+    await withService({
+      prefix: "orkestrator-native-provider-reported-recreate-",
+      interactionMonitorMode: "observe-only",
+    }, async ({ service }) => {
+      const detect = (index: number) => service.recordProviderInteractionObservation({
+        environmentId: "env-1",
+        provider: "opencode",
+        sessionId: `provider-${index}`,
+        interactionId: `question-${index}`,
+        kind: "question",
+        registration: {
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: `phase-${index}`,
+        },
+        state: "detected",
+      });
+      for (let index = 0; index < 65; index += 1) detect(index);
+      expect(service.getInteractionObservations().some(({ phase }) => phase === "phase-0"))
+        .toBe(false);
+      detect(0);
+      expect(service.getInteractionObservations()).toContainEqual(
+        expect.objectContaining({ phase: "phase-0", count: 1 }),
+      );
+      await service.shutdown();
+      detect(100);
+      expect(service.getInteractionObservations().some(({ phase }) => phase === "phase-100"))
+        .toBe(false);
+    });
+
+    await withService({
+      prefix: "orkestrator-native-provider-reported-disabled-",
+    }, async ({ service }) => {
+      service.recordProviderInteractionObservation({
+        environmentId: "env-1",
+        provider: "opencode",
+        sessionId: "provider",
+        interactionId: "question",
+        kind: "question",
+        registration: {
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        },
+        state: "detected",
+      });
+      expect(service.getInteractionObservations()).toEqual([]);
+    });
+  });
+
   test("retains a direct observation until a terminal pipeline rejection is reported", async () => {
     let now = 10_000;
     await withService({
@@ -1248,6 +1523,47 @@ describe("NativeAgentService", () => {
       });
       expect(service.getInteractionObservations()[0]).toMatchObject({
         providerState: "error",
+        eventualOutcome: "withdrawn",
+      });
+    });
+  });
+
+  test("expires a stranded provider report while its session remains live", async () => {
+    let now = 10_000;
+    const { provider } = createProviderStub("opencode");
+    await withService({
+      prefix: "orkestrator-native-provider-reported-live-expiry-",
+      interactionMonitorMode: "observe-only",
+      now: () => now,
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const logicalSessionKey = "looped-review:workflow:live:Review";
+      await storage.adoptNativeAgentSession({
+        key: nativeAgentSessionStorageKey("env-1", "opencode", logicalSessionKey),
+        environmentId: "env-1",
+        agent: "opencode",
+        logicalSessionKey,
+        providerSessionId: "provider-session",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      service.recordProviderInteractionObservation({
+        environmentId: "env-1",
+        provider: "opencode",
+        sessionId: "provider-session",
+        interactionId: "permission-1",
+        kind: "permission",
+        registration: {
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        },
+        state: "detected",
+      });
+      now += 60_000;
+      await service.reconcileAgentInteractions();
+      expect(internals(service).providerReportedInteractions.size).toBe(0);
+      expect(service.getInteractionObservations()[0]).toMatchObject({
+        providerState: "missing",
         eventualOutcome: "withdrawn",
       });
     });
@@ -1393,6 +1709,79 @@ describe("NativeAgentService", () => {
       const afterShutdown = listPendingInteractions.mock.calls.length;
       await new Promise((resolve) => setTimeout(resolve, 130));
       expect(listPendingInteractions).toHaveBeenCalledTimes(afterShutdown);
+    });
+  });
+
+  test("coalesces interaction scans and retries initialization after failure", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { provider } = createProviderStub("codex", {
+      interactions: {
+        listPendingInteractions: async () => {
+          await gate;
+          return { version: AGENT_INTERACTION_CONTRACT_VERSION, revision: 1, requests: [] };
+        },
+        resolveInteraction: async () => {
+          throw new Error("must not resolve");
+        },
+      },
+    });
+    await withService({
+      prefix: "orkestrator-native-interaction-coalesce-",
+      provider: async () => provider,
+      interactionMonitorMode: "observe-only",
+    }, async ({ service }) => {
+      await service.ensureSession({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "looped-review:workflow:coalesced:Review",
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+      const first = service.reconcileAgentInteractions();
+      expect(service.reconcileAgentInteractions()).toBe(first);
+      release();
+      await first;
+    });
+
+    await withService({
+      prefix: "orkestrator-native-init-retry-",
+    }, async ({ service }) => {
+      const internal = service as unknown as {
+        initialize(): Promise<void>;
+        initialization: Promise<void> | null;
+      };
+      let attempts = 0;
+      internal.initialize = async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("initialization failed");
+      };
+      await expect(service.init()).rejects.toThrow("initialization failed");
+      expect(internal.initialization).toBeNull();
+      await expect(service.init()).resolves.toBeUndefined();
+      await service.shutdown();
+      await expect(service.init()).rejects.toThrow("shut down");
+    });
+  });
+
+  test("runs launch and queue work from the background timer", async () => {
+    await withService({
+      prefix: "orkestrator-native-launch-timer-body-",
+    }, async ({ service }) => {
+      const internal = service as unknown as {
+        reconcilePendingLaunches(): Promise<void>;
+        drainPromptQueues(): Promise<void>;
+      };
+      const launches = mock(async () => undefined);
+      const drains = mock(async () => undefined);
+      internal.reconcilePendingLaunches = launches;
+      internal.drainPromptQueues = drains;
+      await service.init();
+      await Bun.sleep(2_100);
+      expect(launches.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(drains.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
   });
 

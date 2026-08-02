@@ -26,6 +26,7 @@ import type {
   ProviderSessionRegistration,
   ProviderStatus,
 } from "./build-pipeline-provider.js";
+import { ProviderUnavailableError } from "./build-pipeline-provider.js";
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -1598,7 +1599,7 @@ describe("BuildPipelineService", () => {
       const running = await pipeline(storage, started.id);
       const session = running.sessions[running.currentSessionIndex]!;
       const internals = service as unknown as {
-        persistUnattendedQuestionFailure(event: {
+        persistUnattendedQuestionFailure(pipelineId: string, event: {
           environmentId: string;
           provider: "opencode";
           sessionId: string;
@@ -1612,7 +1613,7 @@ describe("BuildPipelineService", () => {
           state: "detected";
         }): Promise<void>;
       };
-      await internals.persistUnattendedQuestionFailure({
+      await internals.persistUnattendedQuestionFailure(started.id, {
         environmentId: "env-1",
         provider: "opencode",
         sessionId: session.sdkSessionId,
@@ -1647,6 +1648,104 @@ describe("BuildPipelineService", () => {
         expect((await pipeline(storage, started.id)).phase).toBe("failed");
       } finally {
         await restored.shutdown();
+      }
+    });
+  });
+
+  test("keeps a paused pipeline question pending", async () => {
+    await withService(async (service, storage) => {
+      const started = await service.start(startInput({ agentType: "opencode" }));
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const record = await storage.getBuildPipeline(started.id);
+      const paused = record!.snapshot as BuildPipeline;
+      const session = paused.sessions[paused.currentSessionIndex]!;
+      paused.phase = "paused";
+      await storage.saveBuildPipeline(
+        paused.id,
+        paused.projectId,
+        paused.environmentId,
+        1,
+        paused,
+        record!.revision,
+      );
+      const internal = service as unknown as {
+        persistUnattendedQuestionFailure(
+          pipelineId: string,
+          event: Record<string, unknown>,
+        ): Promise<void>;
+        locks: Map<string, Promise<void>>;
+      };
+      const event = {
+        environmentId: "env-1",
+        provider: "opencode",
+        sessionId: session.sdkSessionId,
+        interactionId: "question-1",
+        kind: "question",
+        registration: {
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        },
+        state: "detected",
+      };
+      await expect(internal.persistUnattendedQuestionFailure(started.id, event))
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect((await pipeline(storage, started.id)).phase).toBe("paused");
+
+      const pausedRecord = await storage.getBuildPipeline(started.id);
+      const resumed = structuredClone(pausedRecord!.snapshot) as BuildPipeline;
+      resumed.phase = "building";
+      await storage.saveBuildPipeline(
+        resumed.id,
+        resumed.projectId,
+        resumed.environmentId,
+        1,
+        resumed,
+        pausedRecord!.revision,
+      );
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      internal.locks.set(started.id, gate);
+      const pending = internal.persistUnattendedQuestionFailure(started.id, event);
+      await Bun.sleep(1);
+      const raceRecord = await storage.getBuildPipeline(started.id);
+      const racePaused = structuredClone(raceRecord!.snapshot) as BuildPipeline;
+      racePaused.phase = "paused";
+      await storage.saveBuildPipeline(
+        racePaused.id,
+        racePaused.projectId,
+        racePaused.environmentId,
+        1,
+        racePaused,
+        raceRecord!.revision,
+      );
+      release();
+      await expect(pending).rejects.toBeInstanceOf(ProviderUnavailableError);
+    });
+  });
+
+  test("propagates question-owner storage failures", async () => {
+    await withService(async (service, storage) => {
+      const originalGet = storage.getBuildPipeline.bind(storage);
+      storage.getBuildPipeline = async () => {
+        throw new Error("storage unavailable");
+      };
+      try {
+        const internal = service as unknown as {
+          persistUnattendedQuestionFailure(
+            pipelineId: string,
+            event: Record<string, unknown>,
+          ): Promise<void>;
+        };
+        await expect(internal.persistUnattendedQuestionFailure("pipeline-1", {
+          environmentId: "env-1",
+          provider: "opencode",
+          sessionId: "session-1",
+        })).rejects.toThrow("storage unavailable");
+      } finally {
+        storage.getBuildPipeline = originalGet;
       }
     });
   });
@@ -1686,7 +1785,9 @@ describe("BuildPipelineService", () => {
         },
       };
       const rejected: string[] = [];
+      const permissionReplies: string[] = [];
       const phaseAtRejection: string[] = [];
+      const observations: unknown[] = [];
       let pendingQuestions: Array<Record<string, unknown>> = [];
       let subscriptions = 0;
       const client = {
@@ -1701,7 +1802,8 @@ describe("BuildPipelineService", () => {
           async list() {
             return { data: [] };
           },
-          async reply() {
+          async reply(parameters: { requestID: string }) {
+            permissionReplies.push(parameters.requestID);
             return { data: true };
           },
         },
@@ -1732,6 +1834,10 @@ describe("BuildPipelineService", () => {
         {
           autoAdvance: false,
           providerDependencies: { openCodeClient: client, monitorRetryMs: 1 },
+          onInteractionObservation: (event) => {
+            observations.push(event);
+            throw new Error("diagnostics unavailable");
+          },
         },
       );
       try {
@@ -1745,6 +1851,16 @@ describe("BuildPipelineService", () => {
           await Bun.sleep(1);
         }
         expect(subscriptions).toBe(1);
+
+        pushEvent({
+          type: "permission.asked",
+          properties: { id: "permission-1", sessionID: session.sdkSessionId },
+        });
+        for (let attempt = 0; permissionReplies.length === 0 && attempt < 100; attempt += 1) {
+          await Bun.sleep(1);
+        }
+        expect(permissionReplies).toEqual(["permission-1"]);
+        expect((await pipeline(storage, started.id)).phase).toBe("building");
 
         pendingQuestions.push({
           id: "question-1",
@@ -1766,6 +1882,12 @@ describe("BuildPipelineService", () => {
             sessionId: session.sdkSessionId,
           },
         });
+        expect(observations).toContainEqual(expect.objectContaining({
+          environmentId: "env-1",
+          provider: "opencode",
+          kind: "question",
+          state: "detected",
+        }));
 
         provider.registerSession?.("orphan-session", {
           origin: "build-pipeline",

@@ -20,6 +20,7 @@ import {
 } from "./commands.js";
 import { StorageService } from "./storage.js";
 import { ClaudeStatePollManager } from "./tmux.js";
+import { NativeAgentService } from "./native-agent-service.js";
 
 /**
  * Registry-level coverage for the commands that back the backend-owned state
@@ -38,6 +39,7 @@ async function withCommands<T>(
     environment?: Record<string, unknown>;
     buildPipelines?: CommandContext["buildPipelines"];
     nativeAgents?: CommandContext["nativeAgents"];
+    nativeAgentsFactory?: (storage: StorageService) => CommandContext["nativeAgents"];
   } = {},
 ): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-state-sync-"));
@@ -60,7 +62,7 @@ async function withCommands<T>(
     emit: () => undefined,
     storage,
     buildPipelines: options.buildPipelines,
-    nativeAgents: options.nativeAgents,
+    nativeAgents: options.nativeAgents ?? options.nativeAgentsFactory?.(storage),
   } as unknown as CommandContext;
 
   const invoke = async (command: string, args: Record<string, unknown>) => {
@@ -494,6 +496,30 @@ describe("agent handoff commands", () => {
 });
 
 describe("native agent and looped-review controller commands", () => {
+  test("uses the real native service for interaction monitor commands", async () => {
+    let service: NativeAgentService | undefined;
+    await withCommands(async (invoke) => {
+      try {
+        await expect(invoke("get_agent_interaction_observations", {}))
+          .resolves.toEqual([]);
+        await expect(invoke("reconcile_agent_interactions", {}))
+          .resolves.toEqual([]);
+        await expect(invoke("set_agent_interaction_monitor_adoption", {
+          enabled: false,
+        })).resolves.toEqual({ enabled: false });
+      } finally {
+        await service?.shutdown();
+      }
+    }, {
+      nativeAgentsFactory: (storage) => {
+        service = new NativeAgentService(storage, async () => {
+          throw new Error("disabled monitor must not invoke commands");
+        });
+        return service;
+      },
+    });
+  });
+
   test("reports unavailable interaction monitoring and propagates reconciliation failures", async () => {
     await withCommands(async (invoke) => {
       await expect(invoke("get_agent_interaction_observations", {}))

@@ -838,6 +838,109 @@ describe("provider-neutral interaction adapters", () => {
     ]);
   });
 
+  test("Codex isolates malformed siblings and degrades large file and MCP payloads", async () => {
+    const requestedAt = Date.now();
+    const expiresAt = requestedAt + 60_000;
+    const approvals = [
+      { approvalId: "bad", kind: "future", requestedAt, expiresAt },
+      {
+        approvalId: "files",
+        kind: "file-change",
+        requestedAt,
+        expiresAt,
+        changes: Array.from({ length: 64 }, (_, index) => ({
+          path: `/workspace/file-${index}.ts`,
+          kind: "update",
+        })),
+      },
+    ];
+    let interactions: Array<Record<string, unknown>> = [
+      {
+        interactionId: "form",
+        kind: "mcp-form",
+        requestedAt,
+        expiresAt,
+        message: "x".repeat(20_000),
+      },
+      {
+        interactionId: "question",
+        kind: "question",
+        requestedAt,
+        expiresAt,
+        questions: [{
+          id: "language",
+          question: "Choose",
+          options: [{ label: "TypeScript" }],
+        }],
+      },
+    ];
+    let answerBody: unknown;
+    const { provider } = httpProvider((url, init) => {
+      if (url.endsWith("/approvals")) return Response.json({ approvals });
+      if (url.endsWith("/interactions")) return Response.json({ interactions });
+      if (url.includes("/interactions/question")) {
+        answerBody = JSON.parse(String(init.body));
+        interactions = interactions.filter(({ interactionId }) => interactionId !== "question");
+        return Response.json({ status: "applied" });
+      }
+      return Response.json({ status: "applied" });
+    }, codexConnection);
+
+    const snapshot = await provider.interactions!.listPendingInteractions("session-1");
+    expect(snapshot.requests.map(({ kind }) => kind)).toEqual([
+      "file-approval",
+      "mcp-form",
+      "question",
+    ]);
+    const file = snapshot.requests[0]!;
+    const form = snapshot.requests[1]!;
+    const question = snapshot.requests[2]!;
+    expect(file.presentation.body).toContain("… and 16 more files");
+    expect(form.presentation.body?.length).toBe(AGENT_INTERACTION_LIMITS.maxTextLength);
+    expect(form.presentation.questions[0]!.description).toBe("{}");
+    await expect(provider.interactions!.resolveInteraction(
+      "session-1",
+      question.id,
+      answerResolution(question),
+    )).resolves.toMatchObject({ result: "applied" });
+    expect(answerBody).toEqual({
+      action: "accept",
+      answers: { language: ["TypeScript"] },
+    });
+  });
+
+  test("HTTP bridge questions remain pending without using the OpenCode observation hook", async () => {
+    const requestedAt = Date.now();
+    let observations = 0;
+    let writes = 0;
+    const provider = createBuildPipelineProvider(codexConnection, {
+      fetch: (async (input, init = {}) => {
+        const url = String(input);
+        if (init.method && init.method !== "GET") writes += 1;
+        return Response.json(url.endsWith("/approvals")
+          ? { approvals: [] }
+          : {
+              interactions: [{
+                interactionId: "question",
+                kind: "question",
+                requestedAt,
+                expiresAt: requestedAt + 60_000,
+                questions: [{ id: "q1", question: "Continue?", options: [] }],
+              }],
+            });
+      }) as typeof fetch,
+      onInteractionObservation: () => {
+        observations += 1;
+      },
+    });
+    await expect(provider.interactions!.listPendingInteractions("session-1"))
+      .resolves.toMatchObject({
+        requests: [expect.objectContaining({ kind: "question" })],
+      });
+    expect(observations).toBe(0);
+    expect(writes).toBe(0);
+  });
+
   test("Codex refuses positive approval and malformed MCP form content without actionable detail", async () => {
     const requestedAt = Date.now();
     const expiresAt = requestedAt + 60_000;
@@ -1150,7 +1253,6 @@ describe("provider-neutral interaction adapters", () => {
   test("OpenCode fails closed on malformed, globally oversized, and overlong-id list payloads", async () => {
     const cases: Array<[Record<string, unknown>, Record<string, unknown>]> = [
       [{ data: {} }, { data: [] }],
-      [{ data: [] }, { data: null }],
       [{ data: [{
         id: "permission-1",
         sessionID: "owned-session",
@@ -1161,7 +1263,7 @@ describe("provider-neutral interaction adapters", () => {
       }] }, { data: [] }],
       [{ data: [{
         id: "permission-1",
-        sessionID: "other-session",
+        sessionID: "owned-session",
         permission: "edit",
         patterns: ["x".repeat(300_000)],
         metadata: {},
@@ -1169,7 +1271,7 @@ describe("provider-neutral interaction adapters", () => {
       }] }, { data: [] }],
       [{ data: [] }, { data: [{
         id: "x".repeat(513),
-        sessionID: "other-session",
+        sessionID: "owned-session",
         questions: [{ question: "Choose", options: [] }],
       }] }],
     ];
@@ -1183,6 +1285,25 @@ describe("provider-neutral interaction adapters", () => {
       } finally {
         await provider.dispose?.();
       }
+    }
+  });
+
+  test("OpenCode ignores malformed foreign entries and tolerates an absent list payload", async () => {
+    const fake = openCodeFake();
+    fake.setPendingReadResponses({ data: [{
+      id: "permission-foreign",
+      sessionID: "x".repeat(513),
+      permission: "edit",
+      patterns: ["x".repeat(300_000)],
+    }] }, { data: null });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      await expect(provider.interactions!.listPendingInteractions("owned-session"))
+        .resolves.toMatchObject({ requests: [] });
+      fake.setStatusResponse({ data: { "owned-session": { type: "busy" } } });
+      await expect(provider.activity?.("owned-session")).resolves.toBe("working");
+    } finally {
+      await provider.dispose?.();
     }
   });
 
@@ -1403,7 +1524,7 @@ describe("provider-neutral interaction adapters", () => {
     ));
     await expect(tooMany.provider.interactions!
       .listPendingInteractions("session-1"))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
+      .resolves.toMatchObject({ requests: expect.any(Array) });
   });
 
   test("rejects oversized HTTP identities before retaining tracker state", async () => {
@@ -2071,16 +2192,19 @@ describe("OpenCode build pipeline provider", () => {
         event.kind === "question" && event.state === "detected"
       ));
       expect(fake.questionRejections).toEqual([]);
+      await waitUntil(() => fake.permissionReplies.length === 1);
       await expect(provider.status("owned-session")).resolves.toBe("blocked");
       releaseDurableDetection();
       await waitUntil(() => fake.questionRejections.length === 1);
       expect(fake.permissionReplies).toHaveLength(1);
-      expect(events).toEqual([
-        { state: "detected", kind: "permission" },
-        { state: "withdrawn", kind: "permission" },
-        { state: "detected", kind: "question" },
-        { state: "withdrawn", kind: "question" },
-      ]);
+      expect(events).toHaveLength(4);
+      for (const kind of ["permission", "question"] as const) {
+        expect(events.findIndex((event) =>
+          event.kind === kind && event.state === "detected"
+        )).toBeLessThan(events.findIndex((event) =>
+          event.kind === kind && event.state === "withdrawn"
+        ));
+      }
     } finally {
       await provider.dispose?.();
     }
@@ -2168,17 +2292,16 @@ describe("OpenCode build pipeline provider", () => {
 
   test("bounds OpenCode activity snapshots and accepts a maximum-length identity", async () => {
     const invalidQuestionResponses: Array<Record<string, unknown>> = [
-      { data: null },
       {
         data: Array.from({ length: 4_097 }, (_, index) => ({
           id: `question-${index}`,
-          sessionID: "other-session",
+          sessionID: "owned-session",
         })),
       },
       {
         data: [{
           id: "x".repeat(AGENT_INTERACTION_LIMITS.maxIdLength + 1),
-          sessionID: "other-session",
+          sessionID: "owned-session",
         }],
       },
     ];

@@ -255,6 +255,7 @@ export class NativeAgentService {
     {
       observationKey: string;
       providerSessionKey: string;
+      detectedAt: number;
       missingSince?: number;
     }
   >();
@@ -591,6 +592,7 @@ export class NativeAgentService {
     this.providerReportedInteractions.set(trackedKey, {
       observationKey,
       providerSessionKey,
+      detectedAt: this.now(),
     });
     this.emitInteractionObservation(observation);
   }
@@ -704,7 +706,10 @@ export class NativeAgentService {
       }
       this.trackedInteractions.delete(trackedKey);
     }
-    if (this.trackedInteractions.size >= INTERACTION_MONITOR_MAX_TRACKED_REQUESTS) {
+    if (
+      this.trackedInteractions.size + this.providerReportedInteractions.size
+        >= INTERACTION_MONITOR_MAX_TRACKED_REQUESTS
+    ) {
       return;
     }
     const key = this.observationKey(session, kind);
@@ -835,7 +840,27 @@ export class NativeAgentService {
     const liveProviderSessions = new Set(eligibleSessions.map((session) =>
       JSON.stringify([session.environmentId, session.agent, session.providerSessionId])
     ));
+    const providerReportSweepAt = this.now();
     for (const [trackedKey, tracked] of this.providerReportedInteractions) {
+      if (
+        providerReportSweepAt - tracked.detectedAt
+          >= PROVIDER_REPORTED_INTERACTION_GRACE_MS
+      ) {
+        this.providerReportedInteractions.delete(trackedKey);
+        const observation = this.interactionObservations.get(tracked.observationKey);
+        if (!observation) continue;
+        const remainsBlocked = [...this.trackedInteractions.values()].some(
+          (entry) => entry.observationKey === tracked.observationKey,
+        ) || [...this.providerReportedInteractions.values()].some(
+          (entry) => entry.observationKey === tracked.observationKey,
+        );
+        if (!remainsBlocked) {
+          observation.providerState = "missing";
+          observation.eventualOutcome = "withdrawn";
+          observation.eventualAt = providerReportSweepAt;
+        }
+        continue;
+      }
       if (liveProviderSessions.has(tracked.providerSessionKey)) {
         delete tracked.missingSince;
         continue;
@@ -846,9 +871,11 @@ export class NativeAgentService {
       // so retain this bounded direct record briefly for that terminal event.
       // Without the grace period, a concurrent scan stamps `missing` and makes
       // the provider's authoritative `withdrawn/error` event a no-op.
-      const now = this.now();
-      tracked.missingSince ??= now;
-      if (now - tracked.missingSince < PROVIDER_REPORTED_INTERACTION_GRACE_MS) continue;
+      tracked.missingSince ??= providerReportSweepAt;
+      if (
+        providerReportSweepAt - tracked.missingSince
+          < PROVIDER_REPORTED_INTERACTION_GRACE_MS
+      ) continue;
       this.providerReportedInteractions.delete(trackedKey);
       const observation = this.interactionObservations.get(tracked.observationKey);
       if (!observation) continue;
@@ -982,8 +1009,6 @@ export class NativeAgentService {
         if (selectedKeys.has(key)) continue;
         this.monitoredInteractionSessionKeys.delete(key);
         this.observedInteractionRevisions.delete(key);
-        this.interactionRetryAt.delete(key);
-        this.interactionAttempts.delete(key);
       }
     }
     for (const session of globallySelected) {
@@ -1953,6 +1978,9 @@ export class NativeAgentService {
   ): Promise<BuildPipelineProvider | undefined> {
     this.assertAcceptingWork();
     const cacheKey = `${input.environmentId}\0${input.agent}`;
+    if ((this.absentBridgeUntil.get(cacheKey) ?? 0) > this.now()) {
+      return undefined;
+    }
     const environment = await this.assertEnvironmentLive(input.environmentId);
     const cached = this.providers.get(cacheKey);
     if (cached) return cached;
@@ -1968,7 +1996,13 @@ export class NativeAgentService {
       input.agent,
       environment,
     );
-    if (!connection) return undefined;
+    if (!connection) {
+      this.absentBridgeUntil.set(
+        cacheKey,
+        this.now() + ABSENT_BRIDGE_RECHECK_MS,
+      );
+      return undefined;
+    }
     await this.assertEnvironmentLive(input.environmentId);
     this.assertAcceptingWork();
     const provider = createBuildPipelineProvider(connection, {
@@ -1976,7 +2010,7 @@ export class NativeAgentService {
       stageImages: (images) =>
         this.stageImages(input.environmentId, images),
     });
-    this.providers.set(cacheKey, provider);
+    this.cacheProvider(cacheKey, provider);
     return provider;
   }
 

@@ -271,6 +271,8 @@ const DEFAULT_SESSION_REGISTRATION: ProviderSessionRegistration = Object.freeze(
 const MAX_TRACKED_INTERACTION_SESSIONS = 1_024;
 const MAX_TRACKED_PROVIDER_INTERACTIONS = 4_096;
 const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";
+const MAX_RENDERED_FILE_CHANGES = 48;
+const MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH = 256;
 
 function setBoundedMapEntry<K, V>(
   map: Map<K, V>,
@@ -315,9 +317,24 @@ function boundedText(
   return text;
 }
 
+function truncatedText(
+  value: unknown,
+  fallback: string,
+  maximumLength: number = AGENT_INTERACTION_LIMITS.maxTextLength,
+): string {
+  const text = nonEmptyString(value) ?? fallback;
+  if (text.length <= maximumLength) return text;
+  return `${text.slice(0, Math.max(0, maximumLength - 1))}…`;
+}
+
 function boundedJoinedText(lines: readonly string[]): string | undefined {
   if (lines.length === 0) return undefined;
   return boundedText(lines.join("\n"), "Interaction details");
+}
+
+function truncatedJoinedText(lines: readonly string[]): string | undefined {
+  if (lines.length === 0) return undefined;
+  return truncatedText(lines.join("\n"), "Interaction details");
 }
 
 function boundedStringArray(value: unknown, label: string): string[] {
@@ -344,29 +361,36 @@ function serializedByteLength(value: unknown): number {
   }
 }
 
-function assertBoundedOpenCodeCollection(value: unknown, operation: string): unknown[] {
+function boundedOwnedOpenCodeCollection(
+  value: unknown,
+  ownedSessionIds: ReadonlySet<string>,
+  operation: string,
+): unknown[] {
+  if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) {
     throw new ProviderUnavailableError(`${operation} is malformed`);
   }
-  if (value.length > MAX_TRACKED_PROVIDER_INTERACTIONS) {
-    throw new ProviderUnavailableError(`${operation} returned too many interactions`);
-  }
+  const owned: unknown[] = [];
   for (const entry of value) {
     const request = asRecord(entry);
-    const id = nonEmptyString(request?.id);
     const sessionId = nonEmptyString(request?.sessionID)
       ?? nonEmptyString(request?.sessionId);
+    if (!sessionId || !ownedSessionIds.has(sessionId)) continue;
+    const id = nonEmptyString(request?.id);
     if (
       !request
       || !id
-      || !sessionId
       || id.length > AGENT_INTERACTION_LIMITS.maxIdLength
       || sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength
     ) {
       throw new ProviderUnavailableError(`${operation} contains a malformed identity`);
     }
+    if (owned.length >= MAX_TRACKED_PROVIDER_INTERACTIONS) {
+      throw new ProviderUnavailableError(`${operation} returned too many interactions`);
+    }
+    owned.push(entry);
   }
-  return value;
+  return owned;
 }
 
 function opaqueOptionId(questionIndex: number, optionIndex: number): string {
@@ -946,7 +970,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       return {
         id: `q${questionIndex}`,
         prompt: boundedText(prompt, prompt),
-        description: nonEmptyString(question.header) ?? undefined,
+        description: question.header === undefined
+          ? undefined
+          : truncatedText(question.header, "Question"),
         required: true,
         multiple: question.multiSelect === true,
         secret: false,
@@ -971,7 +997,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
             id: opaqueOptionId(questionIndex, optionIndex),
             label: boundedText(label, label),
             providerValue,
-            description: nonEmptyString(option?.description) ?? undefined,
+            description: option?.description === undefined
+              ? undefined
+              : truncatedText(option.description, "Option"),
           };
         }),
       };
@@ -1050,8 +1078,10 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     const reason = nonEmptyString(request.reason);
     const grantRoot = nonEmptyString(request.grantRoot);
     const networkHost = nonEmptyString(request.networkHost);
-    const changes = Array.isArray(request.changes)
-      ? request.changes.map((rawChange) => {
+    const rawChanges = Array.isArray(request.changes) ? request.changes : [];
+    const changes = rawChanges
+      .slice(0, MAX_RENDERED_FILE_CHANGES)
+      .map((rawChange) => {
           const change = asRecord(rawChange);
           const path = nonEmptyString(change?.path);
           if (!change || !path) {
@@ -1060,12 +1090,13 @@ class HttpBridgeProvider implements BuildPipelineProvider {
             );
           }
           const changeKind = nonEmptyString(change.kind) ?? "update";
-          return `${boundedText(changeKind, "Change kind")}: ${boundedText(path, "File")}`;
-        })
-      : [];
-    if (changes.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion) {
-      throw new ProviderUnavailableError("Codex returned too many file changes");
-    }
+          return truncatedText(
+            `${changeKind}: ${path}`,
+            "File change",
+            MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH,
+          );
+        });
+    const hiddenChangeCount = rawChanges.length - changes.length;
     const permissions = asRecord(request.permissions);
     const requestedPermissions = permissions
       ? [
@@ -1076,14 +1107,17 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     const inferredActionable = kind === "command-approval"
       ? command !== null
       : kind === "file-approval"
-        ? changes.length > 0
+        ? rawChanges.length > 0
         : requestedPermissions.length > 0;
     const actionable = inferredActionable && request.actionable !== false;
-    const body = boundedJoinedText([
+    const body = truncatedJoinedText([
       ...(reason ? [`Reason: ${boundedText(reason, "Reason")}`] : []),
       ...(command ? [`Command: ${boundedText(command, "Command")}`] : []),
       ...(cwd ? [`Working directory: ${boundedText(cwd, "Working directory")}`] : []),
       ...changes.map((change) => `Change: ${change}`),
+      ...(hiddenChangeCount > 0
+        ? [`… and ${hiddenChangeCount} more files`]
+        : []),
       ...(requestedPermissions.length > 0
         ? [`Permissions: ${requestedPermissions.join(", ")}`]
         : []),
@@ -1141,9 +1175,11 @@ class HttpBridgeProvider implements BuildPipelineProvider {
         title: kind === "question"
           ? "Codex needs input"
           : kind === "mcp-form" ? "MCP server needs input" : "MCP authorization",
-        body: nonEmptyString(request.message) ?? undefined,
+        body: request.message === undefined
+          ? undefined
+          : truncatedText(request.message, "MCP request"),
         questions,
-        url: url ?? undefined,
+        url: url === null ? undefined : boundedText(url, "MCP URL"),
         confirmLabel: "Continue",
         declineLabel: "Decline",
       },
@@ -1154,10 +1190,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
   }
 
   private mapCodexMcpForm(schemaValue: unknown): AgentInteractionQuestion {
-    const schema = asRecord(schemaValue);
-    if (!schema) {
-      throw new ProviderUnavailableError("Codex returned a malformed MCP form schema");
-    }
+    const schema = asRecord(schemaValue) ?? {};
     const serializedSchema = JSON.stringify(schema);
     if (
       !serializedSchema
@@ -1194,6 +1227,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       if (
         !providerQuestionId
         || !prompt
+        || providerQuestionId.length > AGENT_INTERACTION_LIMITS.maxIdLength
         || !Array.isArray(options)
         || options.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
       ) {
@@ -1202,7 +1236,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
       return {
         id: providerQuestionId,
         prompt: boundedText(prompt, prompt),
-        description: nonEmptyString(question?.header) ?? undefined,
+        description: question?.header === undefined
+          ? undefined
+          : truncatedText(question.header, "Question"),
         required: true,
         multiple: true,
         secret: question?.isSecret === true,
@@ -1223,7 +1259,9 @@ class HttpBridgeProvider implements BuildPipelineProvider {
               label,
               AGENT_INTERACTION_LIMITS.maxProviderValueLength,
             ),
-            description: nonEmptyString(option?.description) ?? undefined,
+            description: option?.description === undefined
+              ? undefined
+              : truncatedText(option.description, "Option"),
           };
         }),
       };
@@ -1259,19 +1297,48 @@ class HttpBridgeProvider implements BuildPipelineProvider {
     if (!Array.isArray(firstRequests) || !Array.isArray(secondRequests)) {
       throw new ProviderUnavailableError(`${this.agent} returned a malformed interaction snapshot`);
     }
-    if (firstRequests.length + secondRequests.length
-      > AGENT_INTERACTION_LIMITS.maxPendingRequests) {
-      throw new ProviderUnavailableError(`${this.agent} returned too many interactions`);
+    const requests: AgentInteractionRequest[] = [];
+    let droppedRequests = 0;
+    const mapRequest = (
+      raw: unknown,
+      mapper: (request: unknown) => AgentInteractionRequest,
+    ): void => {
+      if (requests.length >= AGENT_INTERACTION_LIMITS.maxPendingRequests) {
+        droppedRequests += 1;
+        return;
+      }
+      try {
+        requests.push(mapper(raw));
+      } catch (error) {
+        if (!(error instanceof ProviderUnavailableError)) throw error;
+        droppedRequests += 1;
+      }
+    };
+    if (this.agent === "claude") {
+      for (const request of firstRequests) {
+        mapRequest(request, (raw) => this.mapClaudeQuestion(sessionId, raw));
+      }
+      for (const request of secondRequests) {
+        mapRequest(request, (raw) => this.mapClaudeApproval(sessionId, raw));
+      }
+    } else {
+      for (const request of firstRequests) {
+        mapRequest(request, (raw) => this.mapCodexApproval(sessionId, raw));
+      }
+      for (const request of secondRequests) {
+        mapRequest(request, (raw) => this.mapCodexInteraction(sessionId, raw));
+      }
     }
-    const requests = this.agent === "claude"
-      ? [
-          ...firstRequests.map((request) => this.mapClaudeQuestion(sessionId, request)),
-          ...secondRequests.map((request) => this.mapClaudeApproval(sessionId, request)),
-        ]
-      : [
-          ...firstRequests.map((request) => this.mapCodexApproval(sessionId, request)),
-          ...secondRequests.map((request) => this.mapCodexInteraction(sessionId, request)),
-        ];
+    if (droppedRequests > 0) {
+      console.warn(
+        `[build-pipeline] Dropped ${droppedRequests} unmappable ${this.agent} interaction request(s)`,
+      );
+      if (requests.length === 0) {
+        throw new ProviderUnavailableError(
+          `${this.agent} returned no mappable interaction requests`,
+        );
+      }
+    }
     const snapshot = this.interactionTracker.snapshot(sessionId, requests);
     const currentIds = new Set(snapshot.requests.map((request) => request.id));
     for (const [interactionId, identity] of this.providerInteractionIds) {
@@ -1525,6 +1592,8 @@ class OpenCodeProvider implements BuildPipelineProvider {
   private readonly monitorController = new AbortController();
   private readonly monitorRetryMs: number;
   private readonly answeringRequestIds = new Set<string>();
+  private readonly requestTasks = new Set<Promise<void>>();
+  private activeStreamController: AbortController | null = null;
   private reconciliation: Promise<void> | null = null;
   private monitorPromise: Promise<void>;
   private disposed = false;
@@ -1584,16 +1653,26 @@ class OpenCodeProvider implements BuildPipelineProvider {
     while (!this.disposed) {
       try {
         await this.reconcilePendingRequests();
+        const streamController = new AbortController();
+        this.activeStreamController = streamController;
         const response = await this.client.event.subscribe(
           { directory: this.connection.directory },
-          { signal: this.monitorController.signal },
+          {
+            signal: AbortSignal.any([
+              this.monitorController.signal,
+              streamController.signal,
+            ]),
+          },
         );
         if (!response || !("stream" in response)) {
           throw new Error("OpenCode returned no event stream");
         }
         for await (const raw of response.stream as AsyncIterable<unknown>) {
           if (this.disposed) return;
-          await this.handleRequest(raw);
+          this.dispatchRequest(raw);
+        }
+        if (this.activeStreamController === streamController) {
+          this.activeStreamController = null;
         }
       } catch (error) {
         if (this.disposed || this.monitorController.signal.aborted) return;
@@ -1601,6 +1680,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
           "[build-pipeline] OpenCode request monitor reconnecting:",
           error instanceof Error ? error.name : "unknown error",
         );
+        this.activeStreamController?.abort();
       }
       try {
         await waitForRetry(this.monitorRetryMs, this.monitorController.signal);
@@ -1608,6 +1688,29 @@ class OpenCodeProvider implements BuildPipelineProvider {
         return;
       }
     }
+  }
+
+  private dispatchRequest(raw: unknown): void {
+    if (this.requestTasks.size >= MAX_TRACKED_PROVIDER_INTERACTIONS) {
+      // Force snapshot reconciliation instead of silently dropping an
+      // authoritative request event when the bounded worker set is full.
+      console.warn("[build-pipeline] OpenCode request worker limit reached");
+      this.activeStreamController?.abort();
+      return;
+    }
+    const task = this.handleRequest(raw)
+      .catch((error) => {
+        if (this.disposed || this.monitorController.signal.aborted) return;
+        console.warn(
+          "[build-pipeline] OpenCode request handling failed:",
+          error instanceof Error ? error.name : "unknown error",
+        );
+        this.activeStreamController?.abort();
+      })
+      .finally(() => {
+        this.requestTasks.delete(task);
+      });
+    this.requestTasks.add(task);
   }
 
   private async handleRequest(raw: unknown): Promise<void> {
@@ -1731,12 +1834,14 @@ class OpenCodeProvider implements BuildPipelineProvider {
     ]);
     assertSdkResponse(permissions, "OpenCode pending permission read");
     assertSdkResponse(questions, "OpenCode pending question read");
-    const pendingPermissions = assertBoundedOpenCodeCollection(
+    const pendingPermissions = boundedOwnedOpenCodeCollection(
       permissions.data,
+      this.ownedSessions,
       "OpenCode pending permission read",
     );
-    const pendingQuestions = assertBoundedOpenCodeCollection(
+    const pendingQuestions = boundedOwnedOpenCodeCollection(
       questions.data,
+      this.ownedSessions,
       "OpenCode pending question read",
     );
     if (
@@ -1922,12 +2027,14 @@ class OpenCodeProvider implements BuildPipelineProvider {
       ]);
       assertSdkResponse(questions, "OpenCode pending question read");
       assertSdkResponse(permissions, "OpenCode pending permission read");
-      const pendingQuestions = assertBoundedOpenCodeCollection(
+      const pendingQuestions = boundedOwnedOpenCodeCollection(
         questions.data,
+        runningSessionIds,
         "OpenCode pending question read",
       );
-      const pendingPermissions = assertBoundedOpenCodeCollection(
+      const pendingPermissions = boundedOwnedOpenCodeCollection(
         permissions.data,
+        runningSessionIds,
         "OpenCode pending permission read",
       );
       if (
@@ -2120,28 +2227,23 @@ class OpenCodeProvider implements BuildPipelineProvider {
       ]);
       assertSdkResponse(questionsResponse, "OpenCode pending question read");
       assertSdkResponse(permissionsResponse, "OpenCode pending permission read");
-      const globalQuestions = assertBoundedOpenCodeCollection(
+      const ownedSessionIds = new Set([sessionId]);
+      const questions = boundedOwnedOpenCodeCollection(
         questionsResponse.data,
+        ownedSessionIds,
         "OpenCode pending question read",
       );
-      const globalPermissions = assertBoundedOpenCodeCollection(
+      const permissions = boundedOwnedOpenCodeCollection(
         permissionsResponse.data,
+        ownedSessionIds,
         "OpenCode pending permission read",
       );
       if (
-        serializedByteLength([globalQuestions, globalPermissions])
+        serializedByteLength([questions, permissions])
           > AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
       ) {
         throw new ProviderUnavailableError("OpenCode interaction snapshot is oversized");
       }
-      const questions = globalQuestions.filter((entry) => {
-        const request = asRecord(entry)!;
-        return (request.sessionID ?? request.sessionId) === sessionId;
-      });
-      const permissions = globalPermissions.filter((entry) => {
-        const request = asRecord(entry)!;
-        return (request.sessionID ?? request.sessionId) === sessionId;
-      });
       if (questions.length + permissions.length
         > AGENT_INTERACTION_LIMITS.maxPendingRequests) {
         throw new ProviderUnavailableError("OpenCode returned too many interactions");
@@ -2344,11 +2446,14 @@ class OpenCodeProvider implements BuildPipelineProvider {
     if (this.disposed) return;
     this.disposed = true;
     this.monitorController.abort();
+    this.activeStreamController?.abort();
     await this.monitorPromise;
+    await Promise.allSettled([...this.requestTasks]);
     this.ownedSessions.clear();
     this.blockedSessions.clear();
     this.failedQuestionSessions.clear();
     this.answeringRequestIds.clear();
+    this.requestTasks.clear();
   }
 
   private requestOptions(): { signal: AbortSignal } {

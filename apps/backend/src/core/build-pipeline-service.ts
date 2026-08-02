@@ -348,6 +348,7 @@ const DEFAULT_STRUCTURED_RESULT_DEADLINE_MS = 2 * 60_000;
  * persist immediately; only a pure transcript delta is throttled.
  */
 const DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS = 5_000;
+const MAX_INTERACTION_PIPELINE_OWNERS = 4_096;
 
 /**
  * Change detector for a transcript snapshot.
@@ -380,6 +381,7 @@ export class BuildPipelineService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly locks = new Map<string, Promise<void>>();
   private readonly providers = new Map<string, BuildPipelineProvider>();
+  private readonly interactionPipelineOwners = new Map<string, string>();
   /**
    * The harness whose provider each pipeline last resolved.
    *
@@ -499,6 +501,7 @@ export class BuildPipelineService {
       await disposable.dispose?.();
     }));
     this.providers.clear();
+    this.interactionPipelineOwners.clear();
     this.provisioningPrompts.clear();
     this.lastProviderAgent.clear();
   }
@@ -851,6 +854,9 @@ export class BuildPipelineService {
     }
     await this.storage.deleteBuildPipeline(pipelineId);
     this.lastProviderAgent.delete(pipelineId);
+    for (const [key, ownerId] of this.interactionPipelineOwners) {
+      if (ownerId === pipelineId) this.interactionPipelineOwners.delete(key);
+    }
     if (!record || !isBuildPipeline(record.snapshot)) return;
     const removed = record.snapshot;
     // Providers are keyed by environment and agent, so a sibling pipeline in
@@ -1284,6 +1290,12 @@ export class BuildPipelineService {
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       phase: sessionPhase,
     });
+    this.rememberInteractionPipelineOwner(
+      pipeline.environmentId,
+      agent,
+      sessionId,
+      pipeline.id,
+    );
     const { prompt, schema, images } = await this.promptFor(pipeline, sessionPhase);
     const requestId = randomUUID();
     const session: PipelineSession = {
@@ -1864,6 +1876,14 @@ export class BuildPipelineService {
     const ownSessions = pipeline.sessions.filter(
       (session) => sessionAgent(pipeline, session) === agent,
     );
+    for (const session of ownSessions) {
+      this.rememberInteractionPipelineOwner(
+        pipeline.environmentId,
+        agent,
+        session.sdkSessionId,
+        pipeline.id,
+      );
+    }
     const cached = this.providers.get(providerKey);
     if (cached) {
       for (const session of ownSessions) {
@@ -1923,7 +1943,16 @@ export class BuildPipelineService {
           && event.kind === "question"
           && event.registration.interactionPolicy.mode === "unattended"
         ) {
-          await this.persistUnattendedQuestionFailure(enriched);
+          const ownerId = this.interactionPipelineOwners.get(
+            this.interactionPipelineOwnerKey(
+              enriched.environmentId,
+              enriched.provider,
+              enriched.sessionId,
+            ),
+          );
+          if (ownerId) {
+            await this.persistUnattendedQuestionFailure(ownerId, enriched);
+          }
         }
       },
     });
@@ -1937,6 +1966,35 @@ export class BuildPipelineService {
     }
     this.providers.set(providerKey, provider);
     return provider;
+  }
+
+  private interactionPipelineOwnerKey(
+    environmentId: string,
+    provider: BuildPipelineAgent,
+    sessionId: string,
+  ): string {
+    return JSON.stringify([environmentId, provider, sessionId]);
+  }
+
+  private rememberInteractionPipelineOwner(
+    environmentId: string,
+    provider: BuildPipelineAgent,
+    sessionId: string,
+    pipelineId: string,
+  ): void {
+    const ownerKey = this.interactionPipelineOwnerKey(
+      environmentId,
+      provider,
+      sessionId,
+    );
+    if (
+      !this.interactionPipelineOwners.has(ownerKey)
+      && this.interactionPipelineOwners.size >= MAX_INTERACTION_PIPELINE_OWNERS
+    ) {
+      const oldest = this.interactionPipelineOwners.keys().next().value;
+      if (oldest !== undefined) this.interactionPipelineOwners.delete(oldest);
+    }
+    this.interactionPipelineOwners.set(ownerKey, pipelineId);
   }
 
   private async bridgeConnection(
@@ -1997,26 +2055,32 @@ export class BuildPipelineService {
   }
 
   private async persistUnattendedQuestionFailure(
+    pipelineId: string,
     event: ProviderInteractionObservationEvent & {
       environmentId: string;
       provider: BuildPipelineAgent;
     },
   ): Promise<void> {
-    const records = await this.storage.listAllBuildPipelines();
-    const record = records.find((candidate) => {
-      if (!isBuildPipeline(candidate.snapshot)) return false;
-      const session = sessionForCurrentPhase(candidate.snapshot);
-      return candidate.snapshot.environmentId === event.environmentId
-        && session?.sdkSessionId === event.sessionId
-        && sessionAgent(candidate.snapshot, session) === event.provider;
-    });
+    const record = await this.storage.getBuildPipeline(pipelineId);
     // A shared environment provider can retain an older registered session
     // after its pipeline has already terminated or been removed. There is no
     // live workflow left to advance, so that orphan request is safe to reject.
-    // Actual storage failures still throw from listAllBuildPipelines above.
+    // Actual storage failures still throw from the targeted read above.
     if (!record || !isBuildPipeline(record.snapshot)) return;
+    const recordedSession = sessionForCurrentPhase(record.snapshot);
+    if (
+      record.snapshot.environmentId !== event.environmentId
+      || recordedSession?.sdkSessionId !== event.sessionId
+      || sessionAgent(record.snapshot, recordedSession) !== event.provider
+    ) return;
+    if (record.snapshot.phase === "paused") {
+      throw new ProviderUnavailableError("A paused pipeline requested user input");
+    }
     if (!isActiveBuildPhase(record.snapshot.phase)) return;
     const failed = await this.mutate(record.id, (pipeline) => {
+      if (pipeline.phase === "paused") {
+        throw new ProviderUnavailableError("A paused pipeline requested user input");
+      }
       if (!isActiveBuildPhase(pipeline.phase)) return;
       const session = sessionForCurrentPhase(pipeline);
       if (

@@ -182,8 +182,8 @@ Record:
   upstream request; if that save fails, the request remains pending. Bounded
   monitor leases rotate fairly at both the per-environment and global caps.
 - Focused validation: protocol interaction/build-pipeline tests passed (72),
-  provider adapter tests passed (150), native-agent service tests passed (147),
-  build-pipeline/command/index focused tests passed (114), and the bridge suites
+  provider adapter tests passed (153), native-agent service tests passed (156),
+  build-pipeline/command/index focused tests passed (117), and the bridge suites
   passed (2,096 passed, 11 live tests skipped). Backend and protocol typechecks
   passed. Enforcement remains disabled until Milestone 4; the existing
   unattended OpenCode fail-closed behavior is preserved and now durable.

@@ -38,6 +38,8 @@ import {
   ProviderUnavailableError,
   type BridgeConnection,
   type BuildPipelineProvider,
+  type ProviderDependencies,
+  type ProviderInteractionObservationEvent,
   type ProviderExecutionMode,
 } from "./build-pipeline-provider.js";
 import { stagePromptImages } from "./prompt-attachments.js";
@@ -405,6 +407,17 @@ export class BuildPipelineService {
       reconnectDeadlineMs?: number;
       structuredResultDeadlineMs?: number;
       transcriptPersistIntervalMs?: number;
+      onInteractionObservation?: (
+        event: ProviderInteractionObservationEvent & {
+          environmentId: string;
+          provider: BuildPipelineAgent;
+        },
+      ) => void | Promise<void>;
+      /** Narrow production-provider seam used by deterministic backend tests. */
+      providerDependencies?: Pick<
+        ProviderDependencies,
+        "openCodeClient" | "monitorRetryMs"
+      >;
     } = {},
   ) {}
 
@@ -1888,11 +1901,31 @@ export class BuildPipelineService {
       // precedence; these fill in whatever the step left unset.
       ...connectionDefaultsFor(agent, config, repository),
     }, {
+      ...this.options.providerDependencies,
       // Task-snapshot images arrive as base64. Both bridges require a workspace
       // path, so they have to be written into the environment before they can be
       // attached to a prompt.
       stageImages: (images) =>
         stagePromptImages(this.invoke, environment, images),
+      onInteractionObservation: async (event) => {
+        const enriched = {
+          ...event,
+          environmentId: pipeline.environmentId,
+          provider: agent,
+        };
+        try {
+          await this.options.onInteractionObservation?.(enriched);
+        } catch {
+          // Passive diagnostics never control workflow behavior.
+        }
+        if (
+          event.state === "detected"
+          && event.kind === "question"
+          && event.registration.interactionPolicy.mode === "unattended"
+        ) {
+          await this.persistUnattendedQuestionFailure(enriched);
+        }
+      },
     });
     for (const session of ownSessions) {
       provider.registerSession?.(session.sdkSessionId, {
@@ -1961,6 +1994,53 @@ export class BuildPipelineService {
     this.lastProviderAgent.delete(pipeline.id);
     await this.save(pipeline, record.revision);
     await this.reconcileTerminalState(pipeline);
+  }
+
+  private async persistUnattendedQuestionFailure(
+    event: ProviderInteractionObservationEvent & {
+      environmentId: string;
+      provider: BuildPipelineAgent;
+    },
+  ): Promise<void> {
+    const records = await this.storage.listAllBuildPipelines();
+    const record = records.find((candidate) => {
+      if (!isBuildPipeline(candidate.snapshot)) return false;
+      const session = sessionForCurrentPhase(candidate.snapshot);
+      return candidate.snapshot.environmentId === event.environmentId
+        && session?.sdkSessionId === event.sessionId
+        && sessionAgent(candidate.snapshot, session) === event.provider;
+    });
+    // A shared environment provider can retain an older registered session
+    // after its pipeline has already terminated or been removed. There is no
+    // live workflow left to advance, so that orphan request is safe to reject.
+    // Actual storage failures still throw from listAllBuildPipelines above.
+    if (!record || !isBuildPipeline(record.snapshot)) return;
+    if (!isActiveBuildPhase(record.snapshot.phase)) return;
+    const failed = await this.mutate(record.id, (pipeline) => {
+      if (!isActiveBuildPhase(pipeline.phase)) return;
+      const session = sessionForCurrentPhase(pipeline);
+      if (
+        session?.sdkSessionId !== event.sessionId
+        || sessionAgent(pipeline, session) !== event.provider
+      ) return;
+      pipeline.error = `The ${session.label.toLowerCase()} requested user input`;
+      pipeline.failureContext = {
+        phase: pipeline.phase as ResumableBuildPhase,
+        kind: "interactive-request",
+        sessionId: session.sdkSessionId,
+      };
+      pipeline.phase = "failed";
+      delete pipeline.pendingPromptAttempt;
+      this.provisioningPrompts.delete(pipeline.id);
+      this.lastProviderAgent.delete(pipeline.id);
+    });
+    // The provider only needs the terminal failure to be durable before it can
+    // reject the upstream question. Completion comments and board updates are
+    // unrelated external I/O, so let the normal locked supervisor perform them
+    // without stalling OpenCode's shared event loop.
+    if (this.needsTerminalReconciliation(failed)) {
+      void this.runLocked(failed.id);
+    }
   }
 
   private async recordReconnect(

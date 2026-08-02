@@ -494,6 +494,34 @@ describe("agent handoff commands", () => {
 });
 
 describe("native agent and looped-review controller commands", () => {
+  test("reports unavailable interaction monitoring and propagates reconciliation failures", async () => {
+    await withCommands(async (invoke) => {
+      await expect(invoke("get_agent_interaction_observations", {}))
+        .rejects.toThrow("Native agent service is unavailable");
+      await expect(invoke("reconcile_agent_interactions", {}))
+        .rejects.toThrow("Native agent service is unavailable");
+      await expect(invoke("set_agent_interaction_monitor_adoption", {
+        enabled: true,
+      })).rejects.toThrow("Native agent service is unavailable");
+    });
+
+    const reconcileAgentInteractions = mock(async () => {
+      throw new Error("interaction scan failed");
+    });
+    const getInteractionObservations = mock(() => []);
+    await withCommands(async (invoke) => {
+      await expect(invoke("reconcile_agent_interactions", {}))
+        .rejects.toThrow("interaction scan failed");
+      expect(reconcileAgentInteractions).toHaveBeenCalledTimes(1);
+      expect(getInteractionObservations).not.toHaveBeenCalled();
+    }, {
+      nativeAgents: {
+        reconcileAgentInteractions,
+        getInteractionObservations,
+      } as unknown as NonNullable<CommandContext["nativeAgents"]>,
+    });
+  });
+
   test("maps native session and dispatch arguments to the backend authority", async () => {
     const ensureSession = mock(async (input: unknown) => ({
       operation: "ensure",

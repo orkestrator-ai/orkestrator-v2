@@ -149,7 +149,7 @@ Record:
   | --- | --- | --- | --- |
   | Claude | `AskUserQuestion` to `question`, retaining ordered option values | `ExitPlanMode` to `plan-approval` | Questions map back to the bridge's ordered `string[][]`; plan answers map to the exact boolean route. Ordinary tools remain governed by Claude's pinned `bypassPermissions` behavior. |
   | OpenCode | pending questions to `question` | pending permissions to `permission` | Answers preserve SDK label values; decline uses `question.reject`; permission answer/deny uses `once`/`reject`. No deadline is invented because OpenCode publishes none. |
-  | Codex | user input and MCP requests to `question`, `mcp-form`, or `mcp-url` | command, file, and permission requests map to their distinct approval kinds | Question values and approval decisions map to their exact routes. The common answer contract cannot safely encode arbitrary MCP form content, so MCP answer attempts are rejected while decline/cancel remain supported. The bridge retains generation/thread/item identity and rejects dead-generation responses. |
+  | Codex | user input and MCP requests to `question`, `mcp-form`, or `mcp-url` | command, file, and permission requests map to their distinct approval kinds | Question values and approval decisions map to their exact routes. MCP forms accept one bounded JSON-object answer and MCP URL elicitations accept or decline through the bridge's exact route. The bridge retains generation/thread/item identity and rejects dead-generation responses. |
 
 - Bounds and retry policy: 64 pending requests per snapshot and 256 KiB per
   snapshot/response use the protocol limits; response bodies are stopped before
@@ -175,9 +175,15 @@ Record:
   reloaded unattended origin/policy and rediscovered the pending request from
   the provider snapshot. Privacy tests forced request content into both a
   snapshot and an exception and proved neither evidence nor logs retained it.
-- Focused validation: protocol interaction/build-pipeline tests passed (71),
-  provider adapter tests passed (127), native-agent service tests passed (129),
-  build-pipeline focused tests passed, command/index tests passed (69), and the
-  bridge suites passed (2,096 passed, 11 live tests skipped). Backend and
-  protocol typechecks passed. Enforcement remains unchanged and disabled until
-  Milestone 4.
+- OpenCode's legacy unattended auto-response path emits a synchronous,
+  content-free detection before replying, closing the gap in which a question
+  or permission could disappear before the polling observer saw it. A question
+  failure is saved to the pipeline before OpenCode is asked to reject the
+  upstream request; if that save fails, the request remains pending. Bounded
+  monitor leases rotate fairly at both the per-environment and global caps.
+- Focused validation: protocol interaction/build-pipeline tests passed (72),
+  provider adapter tests passed (150), native-agent service tests passed (147),
+  build-pipeline/command/index focused tests passed (114), and the bridge suites
+  passed (2,096 passed, 11 live tests skipped). Backend and protocol typechecks
+  passed. Enforcement remains disabled until Milestone 4; the existing
+  unattended OpenCode fail-closed behavior is preserved and now durable.

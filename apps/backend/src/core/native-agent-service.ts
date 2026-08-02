@@ -30,6 +30,7 @@ import {
   ProviderUnavailableError,
   type BridgeConnection,
   type BuildPipelineProvider,
+  type ProviderInteractionObservationEvent,
   type ProviderExecutionMode,
 } from "./build-pipeline-provider.js";
 import {
@@ -38,6 +39,8 @@ import {
   stagePromptImages,
   type PromptAttachment,
 } from "./prompt-attachments.js";
+
+const PROVIDER_REPORTED_INTERACTION_GRACE_MS = 60_000;
 
 type CommandInvoker = <T>(
   command: string,
@@ -240,12 +243,28 @@ export class NativeAgentService {
   private readonly interactionObservations = new Map<string, AgentInteractionObservation>();
   private readonly trackedInteractions = new Map<
     string,
-    { observationKey: string; expiresAt?: number; scan: number }
+    {
+      observationKey: string;
+      sessionKey: string;
+      expiresAt?: number;
+      scan: number;
+    }
+  >();
+  private readonly providerReportedInteractions = new Map<
+    string,
+    {
+      observationKey: string;
+      providerSessionKey: string;
+      missingSince?: number;
+    }
   >();
   private readonly interactionRetryAt = new Map<string, number>();
   private readonly interactionAttempts = new Map<string, number>();
   private readonly monitoredInteractionSessionKeys = new Set<string>();
   private readonly observedInteractionRevisions = new Map<string, number>();
+  /** Round-robin offsets keep bounded scans from permanently favouring old sessions. */
+  private readonly interactionSelectionCursors = new Map<string, number>();
+  private interactionGlobalSelectionCursor = 0;
   private activityScan: Promise<void> | null = null;
   private interactionScan: Promise<void> | null = null;
   private interactionScanNumber = 0;
@@ -253,6 +272,7 @@ export class NativeAgentService {
   private interactionMonitorAdoptionEnabled = true;
   private launchTimer: ReturnType<typeof setInterval> | null = null;
   private interactionTimer: ReturnType<typeof setInterval> | null = null;
+  private initialization: Promise<void> | null = null;
   private stopped = false;
 
   constructor(
@@ -268,8 +288,18 @@ export class NativeAgentService {
     return this.options.now?.() ?? Date.now();
   }
 
-  async init(): Promise<void> {
-    if (this.stopped) throw new Error("Native agent service is shut down");
+  init(): Promise<void> {
+    if (this.stopped) return Promise.reject(new Error("Native agent service is shut down"));
+    if (this.initialization) return this.initialization;
+    const operation = this.initialize().catch((error) => {
+      if (this.initialization === operation) this.initialization = null;
+      throw error;
+    });
+    this.initialization = operation;
+    return operation;
+  }
+
+  private async initialize(): Promise<void> {
     await Promise.allSettled([
       this.trackScan(this.reconcilePendingLaunches()),
       this.trackScan(this.drainPromptQueues()),
@@ -482,6 +512,89 @@ export class NativeAgentService {
     return [...this.interactionObservations.values()].map((entry) => ({ ...entry }));
   }
 
+  /** Close the polling race for a provider that applies an immediate legacy response. */
+  recordProviderInteractionObservation(
+    event: ProviderInteractionObservationEvent & {
+      environmentId: string;
+      provider: BuildPipelineAgent;
+    },
+  ): void {
+    if (this.stopped || this.options.interactionMonitorMode !== "observe-only") return;
+    const phase = event.registration.origin === "build-pipeline"
+      ? "pipeline"
+      : event.registration.phase?.slice(0, 256) ?? "native-session";
+    const observationKey = [
+      event.provider,
+      event.kind,
+      event.registration.origin,
+      phase,
+    ].join("\0");
+    const providerSessionKey = JSON.stringify([
+      event.environmentId,
+      event.provider,
+      event.sessionId,
+    ]);
+    const trackedKey = JSON.stringify([
+      event.environmentId,
+      event.provider,
+      event.sessionId,
+      event.interactionId,
+    ]);
+
+    if (event.state === "withdrawn") {
+      const tracked = this.providerReportedInteractions.get(trackedKey);
+      if (!tracked) return;
+      this.providerReportedInteractions.delete(trackedKey);
+      const observation = this.interactionObservations.get(tracked.observationKey);
+      if (!observation) return;
+      const remainsBlocked = [...this.trackedInteractions.values()].some(
+        (entry) => entry.observationKey === tracked.observationKey,
+      ) || [...this.providerReportedInteractions.values()].some(
+        (entry) => entry.observationKey === tracked.observationKey,
+      );
+      if (!remainsBlocked) {
+        observation.providerState = event.providerState ?? "running";
+        observation.eventualOutcome = "withdrawn";
+        observation.eventualAt = this.now();
+      }
+      return;
+    }
+
+    const existing = this.providerReportedInteractions.get(trackedKey);
+    if (existing) {
+      const observation = this.interactionObservations.get(existing.observationKey);
+      if (observation) {
+        observation.lastDetectedAt = this.now();
+        observation.providerState = "blocked";
+        delete observation.eventualOutcome;
+        delete observation.eventualAt;
+        return;
+      }
+      this.providerReportedInteractions.delete(trackedKey);
+    }
+    if (
+      this.trackedInteractions.size + this.providerReportedInteractions.size
+        >= INTERACTION_MONITOR_MAX_TRACKED_REQUESTS
+    ) return;
+    const observation = this.ensureInteractionObservation(
+      observationKey,
+      event.provider,
+      event.kind,
+      event.registration.origin,
+      phase,
+    );
+    observation.count += 1;
+    observation.lastDetectedAt = this.now();
+    observation.providerState = "blocked";
+    delete observation.eventualOutcome;
+    delete observation.eventualAt;
+    this.providerReportedInteractions.set(trackedKey, {
+      observationKey,
+      providerSessionKey,
+    });
+    this.emitInteractionObservation(observation);
+  }
+
   /**
    * Reconcile provider-owned pending requests without applying policy.
    *
@@ -519,6 +632,56 @@ export class NativeAgentService {
     return [session.agent, kind, session.origin, this.interactionPhase(session)].join("\0");
   }
 
+  private evictInteractionObservation(key: string): void {
+    this.interactionObservations.delete(key);
+    for (const [trackedKey, tracked] of this.trackedInteractions) {
+      if (tracked.observationKey === key) this.trackedInteractions.delete(trackedKey);
+    }
+    for (const [trackedKey, tracked] of this.providerReportedInteractions) {
+      if (tracked.observationKey === key) this.providerReportedInteractions.delete(trackedKey);
+    }
+  }
+
+  private ensureInteractionObservation(
+    key: string,
+    provider: BuildPipelineAgent,
+    kind: AgentInteractionKind,
+    workflowSurface: AgentInteractionOrigin,
+    phase: string,
+  ): AgentInteractionObservation {
+    const existing = this.interactionObservations.get(key);
+    if (existing) return existing;
+    if (this.interactionObservations.size >= INTERACTION_MONITOR_MAX_OBSERVATIONS) {
+      const oldest = [...this.interactionObservations.entries()].sort(
+        ([, left], [, right]) => left.lastDetectedAt - right.lastDetectedAt,
+      )[0]?.[0];
+      if (oldest) this.evictInteractionObservation(oldest);
+    }
+    const now = this.now();
+    const observation: AgentInteractionObservation = {
+      provider,
+      kind,
+      workflowSurface,
+      phase,
+      firstDetectedAt: now,
+      lastDetectedAt: now,
+      count: 0,
+      providerState: "blocked",
+    };
+    this.interactionObservations.set(key, observation);
+    return observation;
+  }
+
+  private emitInteractionObservation(observation: AgentInteractionObservation): void {
+    // A diagnostic consumer must never delay or fail provider reconciliation.
+    try {
+      void Promise.resolve(this.options.onInteractionObservation?.({ ...observation }))
+        .catch(() => undefined);
+    } catch {
+      // Synchronous telemetry failures are isolated too.
+    }
+  }
+
   private recordInteractionDetection(
     session: PersistedNativeAgentSession,
     interactionId: string,
@@ -535,34 +698,24 @@ export class NativeAgentService {
       if (observation) {
         observation.lastDetectedAt = this.now();
         observation.providerState = "blocked";
+        delete observation.eventualOutcome;
+        delete observation.eventualAt;
+        return;
       }
-      return;
+      this.trackedInteractions.delete(trackedKey);
     }
     if (this.trackedInteractions.size >= INTERACTION_MONITOR_MAX_TRACKED_REQUESTS) {
       return;
     }
     const key = this.observationKey(session, kind);
     const now = this.now();
-    let observation = this.interactionObservations.get(key);
-    if (!observation) {
-      if (this.interactionObservations.size >= INTERACTION_MONITOR_MAX_OBSERVATIONS) {
-        const oldest = [...this.interactionObservations.entries()].sort(
-          ([, left], [, right]) => left.lastDetectedAt - right.lastDetectedAt,
-        )[0]?.[0];
-        if (oldest) this.interactionObservations.delete(oldest);
-      }
-      observation = {
-        provider: session.agent,
-        kind,
-        workflowSurface: session.origin,
-        phase: this.interactionPhase(session),
-        firstDetectedAt: now,
-        lastDetectedAt: now,
-        count: 0,
-        providerState: "blocked",
-      };
-      this.interactionObservations.set(key, observation);
-    }
+    const observation = this.ensureInteractionObservation(
+      key,
+      session.agent,
+      kind,
+      session.origin,
+      this.interactionPhase(session),
+    );
     observation.count += 1;
     observation.lastDetectedAt = now;
     observation.providerState = "blocked";
@@ -570,17 +723,11 @@ export class NativeAgentService {
     delete observation.eventualAt;
     this.trackedInteractions.set(trackedKey, {
       observationKey: key,
+      sessionKey: session.key,
       expiresAt,
       scan,
     });
-    // Never await a telemetry consumer from provider polling. In particular,
-    // nothing here can feed back into Codex app-server's stdout reader.
-    try {
-      void Promise.resolve(this.options.onInteractionObservation?.({ ...observation }))
-        .catch(() => undefined);
-    } catch {
-      // A diagnostic hook cannot fail or delay provider reconciliation.
-    }
+    this.emitInteractionObservation(observation);
   }
 
   private settleMissingInteractions(
@@ -589,18 +736,59 @@ export class NativeAgentService {
     providerState: AgentInteractionObservation["providerState"],
   ): void {
     const prefix = `${session.key}\0`;
+    const removed = new Map<string, { expiresAt?: number }>();
     for (const [trackedKey, tracked] of this.trackedInteractions) {
       if (!trackedKey.startsWith(prefix) || tracked.scan === scan) continue;
-      const observation = this.interactionObservations.get(tracked.observationKey);
-      if (observation) {
-        const now = this.now();
-        observation.providerState = providerState;
-        observation.eventualOutcome = tracked.expiresAt !== undefined
-          && tracked.expiresAt <= now ? "expired" : "withdrawn";
-        observation.eventualAt = now;
-      }
+      removed.set(tracked.observationKey, { expiresAt: tracked.expiresAt });
       this.trackedInteractions.delete(trackedKey);
     }
+    this.finalizeRemovedInteractions(removed, providerState);
+  }
+
+  private finalizeRemovedInteractions(
+    removed: ReadonlyMap<string, { expiresAt?: number }>,
+    providerState: AgentInteractionObservation["providerState"],
+  ): void {
+    if (removed.size === 0) return;
+    const stillBlocked = new Set(
+      [
+        ...this.trackedInteractions.values(),
+        ...this.providerReportedInteractions.values(),
+      ].map((tracked) => tracked.observationKey),
+    );
+    const now = this.now();
+    for (const [observationKey, tracked] of removed) {
+      const observation = this.interactionObservations.get(observationKey);
+      if (!observation) continue;
+      if (stillBlocked.has(observationKey)) {
+        observation.providerState = "blocked";
+        delete observation.eventualOutcome;
+        delete observation.eventualAt;
+        continue;
+      }
+      observation.providerState = providerState;
+      observation.eventualOutcome = tracked.expiresAt !== undefined
+        && tracked.expiresAt <= now ? "expired" : "withdrawn";
+      observation.eventualAt = now;
+    }
+  }
+
+  private releaseMonitoredInteractionSession(
+    key: string,
+    providerState: AgentInteractionObservation["providerState"] = "missing",
+  ): void {
+    this.monitoredInteractionSessionKeys.delete(key);
+    this.observedInteractionRevisions.delete(key);
+    this.interactionRetryAt.delete(key);
+    this.interactionAttempts.delete(key);
+    const prefix = `${key}\0`;
+    const removed = new Map<string, { expiresAt?: number }>();
+    for (const [trackedKey, tracked] of this.trackedInteractions) {
+      if (!trackedKey.startsWith(prefix)) continue;
+      removed.set(tracked.observationKey, { expiresAt: tracked.expiresAt });
+      this.trackedInteractions.delete(trackedKey);
+    }
+    this.finalizeRemovedInteractions(removed, providerState);
   }
 
   private async reconcileAgentInteractionsOnce(): Promise<void> {
@@ -640,21 +828,67 @@ export class NativeAgentService {
       });
     }
     const allSessions = [...nativeSessions, ...pipelineSessions];
-    const liveKeys = new Set(allSessions.map((session) => session.key));
-    for (const key of this.monitoredInteractionSessionKeys) {
-      if (liveKeys.has(key)) continue;
-      this.monitoredInteractionSessionKeys.delete(key);
-      this.observedInteractionRevisions.delete(key);
-      const prefix = `${key}\0`;
-      for (const trackedKey of this.trackedInteractions.keys()) {
-        if (trackedKey.startsWith(prefix)) this.trackedInteractions.delete(trackedKey);
+    const eligibleSessions = allSessions.filter((session) =>
+      session.interactionPolicy.mode === "unattended"
+      && environmentIds.has(session.environmentId)
+    );
+    const liveProviderSessions = new Set(eligibleSessions.map((session) =>
+      JSON.stringify([session.environmentId, session.agent, session.providerSessionId])
+    ));
+    for (const [trackedKey, tracked] of this.providerReportedInteractions) {
+      if (liveProviderSessions.has(tracked.providerSessionKey)) {
+        delete tracked.missingSince;
+        continue;
+      }
+      // A provider can report detection, wait for the owner to durably fail an
+      // unattended workflow, and only then withdraw the upstream request. The
+      // durable failure removes the session from the active-pipeline snapshot,
+      // so retain this bounded direct record briefly for that terminal event.
+      // Without the grace period, a concurrent scan stamps `missing` and makes
+      // the provider's authoritative `withdrawn/error` event a no-op.
+      const now = this.now();
+      tracked.missingSince ??= now;
+      if (now - tracked.missingSince < PROVIDER_REPORTED_INTERACTION_GRACE_MS) continue;
+      this.providerReportedInteractions.delete(trackedKey);
+      const observation = this.interactionObservations.get(tracked.observationKey);
+      if (!observation) continue;
+      const remainsBlocked = [...this.trackedInteractions.values()].some(
+        (entry) => entry.observationKey === tracked.observationKey,
+      ) || [...this.providerReportedInteractions.values()].some(
+        (entry) => entry.observationKey === tracked.observationKey,
+      );
+      if (!remainsBlocked) {
+        observation.providerState = "missing";
+        observation.eventualOutcome = "withdrawn";
+        observation.eventualAt = this.now();
       }
     }
+    const eligibleEnvironmentIds = new Set(
+      eligibleSessions.map((session) => session.environmentId),
+    );
+    const liveKeys = new Set(eligibleSessions.map((session) => session.key));
+    const removedInactiveTracks = new Map<string, { expiresAt?: number }>();
+    for (const [trackedKey, tracked] of this.trackedInteractions) {
+      if (liveKeys.has(tracked.sessionKey)) continue;
+      this.trackedInteractions.delete(trackedKey);
+      removedInactiveTracks.set(tracked.observationKey, {
+        expiresAt: tracked.expiresAt,
+      });
+    }
+    this.finalizeRemovedInteractions(removedInactiveTracks, "missing");
+    for (const key of this.monitoredInteractionSessionKeys) {
+      if (liveKeys.has(key)) continue;
+      this.releaseMonitoredInteractionSession(key);
+    }
     for (const key of this.interactionRetryAt.keys()) {
-      const environmentId = key.split("\0", 1)[0];
-      if (environmentId && environmentIds.has(environmentId)) continue;
+      if (liveKeys.has(key)) continue;
       this.interactionRetryAt.delete(key);
       this.interactionAttempts.delete(key);
+    }
+    for (const key of this.interactionSelectionCursors.keys()) {
+      const environmentId = key.split("\0", 1)[0];
+      if (environmentId && eligibleEnvironmentIds.has(environmentId)) continue;
+      this.interactionSelectionCursors.delete(key);
     }
     const maxPerEnvironment = Math.max(
       1,
@@ -662,23 +896,104 @@ export class NativeAgentService {
         ?? INTERACTION_MONITOR_DEFAULT_PER_ENVIRONMENT,
     );
     const byEnvironment = new Map<string, PersistedNativeAgentSession[]>();
-    for (const session of allSessions) {
+    const candidatesByEnvironment = new Map<string, PersistedNativeAgentSession[]>();
+    for (const session of eligibleSessions) {
       if (
-        session.interactionPolicy.mode !== "unattended"
-        || !environmentIds.has(session.environmentId)
+        !this.interactionMonitorAdoptionEnabled
+        && !this.monitoredInteractionSessionKeys.has(session.key)
       ) continue;
-      const sessions = byEnvironment.get(session.environmentId) ?? [];
-      if (sessions.length >= maxPerEnvironment) continue;
+      const candidates = candidatesByEnvironment.get(session.environmentId) ?? [];
+      candidates.push(session);
+      candidatesByEnvironment.set(session.environmentId, candidates);
+    }
+    const locallySelected: PersistedNativeAgentSession[] = [];
+    for (const [environmentId, candidates] of candidatesByEnvironment) {
+      const selected: PersistedNativeAgentSession[] = [];
+      const pipelineCandidates = candidates.filter((session) =>
+        session.key.startsWith("build-pipeline:")
+      );
+      // With more than one slot, an active pipeline receives one reserved slot.
+      // A one-slot configuration rotates across both classes so native work is
+      // not permanently hidden by a long-running pipeline.
+      if (maxPerEnvironment === 1) {
+        const singleSlotCandidates = [
+          ...pipelineCandidates,
+          ...candidates.filter((session) => !session.key.startsWith("build-pipeline:")),
+        ];
+        const cursor = this.interactionSelectionCursors.get(environmentId) ?? 0;
+        if (singleSlotCandidates.length > 0) {
+          selected.push(singleSlotCandidates[cursor % singleSlotCandidates.length]!);
+        }
+        this.interactionSelectionCursors.set(
+          environmentId,
+          singleSlotCandidates.length > 0
+            ? (cursor + 1) % singleSlotCandidates.length
+            : 0,
+        );
+      } else if (pipelineCandidates.length > 0) {
+        const cursorKey = `${environmentId}\0pipeline`;
+        const cursor = this.interactionSelectionCursors.get(cursorKey) ?? 0;
+        selected.push(pipelineCandidates[cursor % pipelineCandidates.length]!);
+        this.interactionSelectionCursors.set(
+          cursorKey,
+          (cursor + 1) % pipelineCandidates.length,
+        );
+      }
+      if (maxPerEnvironment > 1) {
+        const remaining = candidates.filter((candidate) =>
+          !selected.some((session) => session.key === candidate.key)
+        );
+        const cursor = this.interactionSelectionCursors.get(environmentId) ?? 0;
+        for (
+          let offset = 0;
+          offset < remaining.length && selected.length < maxPerEnvironment;
+          offset += 1
+        ) {
+          selected.push(remaining[(cursor + offset) % remaining.length]!);
+        }
+        if (remaining.length > 0) {
+          const reserved = pipelineCandidates.length > 0 ? 1 : 0;
+          this.interactionSelectionCursors.set(
+            environmentId,
+            (cursor + Math.max(1, maxPerEnvironment - reserved)) % remaining.length,
+          );
+        }
+      }
+      locallySelected.push(...selected);
+    }
+
+    let globallySelected = locallySelected;
+    if (locallySelected.length > INTERACTION_MONITOR_MAX_ADOPTED_SESSIONS) {
+      const cursor = this.interactionGlobalSelectionCursor % locallySelected.length;
+      globallySelected = Array.from(
+        { length: INTERACTION_MONITOR_MAX_ADOPTED_SESSIONS },
+        (_, offset) => locallySelected[(cursor + offset) % locallySelected.length]!,
+      );
+      this.interactionGlobalSelectionCursor =
+        (cursor + INTERACTION_MONITOR_MAX_ADOPTED_SESSIONS) % locallySelected.length;
+    } else {
+      this.interactionGlobalSelectionCursor = 0;
+    }
+    const selectedKeys = new Set(globallySelected.map((session) => session.key));
+    if (this.interactionMonitorAdoptionEnabled) {
+      // Enabled-mode adoption is a bounded lease. Retain request evidence while
+      // rotating the lease; a later authoritative snapshot settles it.
+      for (const key of this.monitoredInteractionSessionKeys) {
+        if (selectedKeys.has(key)) continue;
+        this.monitoredInteractionSessionKeys.delete(key);
+        this.observedInteractionRevisions.delete(key);
+        this.interactionRetryAt.delete(key);
+        this.interactionAttempts.delete(key);
+      }
+    }
+    for (const session of globallySelected) {
       if (!this.monitoredInteractionSessionKeys.has(session.key)) {
-        if (
-          !this.interactionMonitorAdoptionEnabled
-          || this.monitoredInteractionSessionKeys.size
-            >= INTERACTION_MONITOR_MAX_ADOPTED_SESSIONS
-        ) continue;
+        if (!this.interactionMonitorAdoptionEnabled) continue;
         this.monitoredInteractionSessionKeys.add(session.key);
       }
-      sessions.push(session);
-      byEnvironment.set(session.environmentId, sessions);
+      const group = byEnvironment.get(session.environmentId) ?? [];
+      group.push(session);
+      byEnvironment.set(session.environmentId, group);
     }
 
     const scan = ++this.interactionScanNumber;
@@ -691,12 +1006,23 @@ export class NativeAgentService {
         // One environment is processed serially, explicitly bounding its
         // concurrent monitor work at one while global workers handle others.
         for (const session of sessions) {
-          const retryKey = `${session.environmentId}\0${session.agent}`;
+          const retryKey = session.key;
           if ((this.interactionRetryAt.get(retryKey) ?? 0) > this.now()) continue;
           let provider: BuildPipelineProvider | undefined;
           try {
             provider = await this.observeProvider(session);
-            if (!provider?.interactions) continue;
+            if (!provider) {
+              this.settleMissingInteractions(session, scan, "missing");
+              this.interactionAttempts.delete(retryKey);
+              this.interactionRetryAt.delete(retryKey);
+              continue;
+            }
+            if (!provider.interactions) {
+              this.settleMissingInteractions(session, scan, "error");
+              this.interactionAttempts.delete(retryKey);
+              this.interactionRetryAt.delete(retryKey);
+              continue;
+            }
             provider.registerSession?.(session.providerSessionId, {
               origin: session.origin,
               interactionPolicy: session.interactionPolicy,
@@ -731,15 +1057,25 @@ export class NativeAgentService {
             let providerState: AgentInteractionObservation["providerState"] =
               snapshot.requests.length > 0 ? "blocked" : "idle";
             if (snapshot.requests.length === 0) {
-              providerState = await provider.status(session.providerSessionId);
+              try {
+                providerState = await provider.status(session.providerSessionId);
+              } catch (error) {
+                // The empty authoritative snapshot already proves withdrawal;
+                // a failed auxiliary status read must not preserve stale cards.
+                this.settleMissingInteractions(session, scan, "error");
+                throw error;
+              }
             }
             this.settleMissingInteractions(session, scan, providerState);
             this.interactionAttempts.delete(retryKey);
             this.interactionRetryAt.delete(retryKey);
           } catch (error) {
             const attempts = Math.min(
-              this.options.interactionMonitorMaxRetries
-                ?? INTERACTION_MONITOR_DEFAULT_MAX_RETRIES,
+              Math.max(
+                1,
+                this.options.interactionMonitorMaxRetries
+                  ?? INTERACTION_MONITOR_DEFAULT_MAX_RETRIES,
+              ),
               (this.interactionAttempts.get(retryKey) ?? 0) + 1,
             );
             this.interactionAttempts.set(retryKey, attempts);

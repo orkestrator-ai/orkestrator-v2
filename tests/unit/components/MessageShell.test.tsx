@@ -16,6 +16,10 @@ function getUserBubble(container: HTMLElement, content: string): HTMLElement {
     .find((element) => element.textContent?.includes(content)) as HTMLElement;
 }
 
+function getClassTokens(element: Element | null | undefined): string[] {
+  return element?.getAttribute("class")?.split(/\s+/).filter(Boolean) ?? [];
+}
+
 describe("MessageShell", () => {
   test("renders children and header by default", () => {
     const { container } = render(
@@ -48,6 +52,23 @@ describe("MessageShell", () => {
     expect(container.textContent).toContain("Claude");
     expect(container.textContent).toContain("12:00 PM");
     expect(container.textContent).toContain("Content only");
+  });
+
+  test("omits the screen-reader author label for a user message when showHeader is false", () => {
+    render(
+      <MessageShell
+        isUser={true}
+        authorLabel="You"
+        timestampLabel="1:00 PM"
+        showHeader={false}
+      >
+        <p>Headerless user content</p>
+      </MessageShell>,
+    );
+
+    expect(screen.queryByText("You")).toBeNull();
+    expect(screen.getByText("Headerless user content")).toBeTruthy();
+    expect(screen.getByText("1:00 PM")).toBeTruthy();
   });
 
   test("applies right-aligned bubble styling for user messages", () => {
@@ -480,7 +501,55 @@ describe("MessageShell", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
-  test("places user metadata and actions in a hidden row below the bubble", () => {
+  test.each([
+    ["synchronous", () => {
+      throw new Error("synchronous long-press failure");
+    }],
+    ["asynchronous", async () => {
+      throw new Error("asynchronous long-press failure");
+    }],
+  ])("reports %s long-press callback failure without leaking a rejection", async (_, callback) => {
+    const originalConsoleError = console.error;
+    const consoleError = mock(() => {});
+    const onUserLongPress = mock(callback);
+    console.error = consoleError;
+
+    try {
+      render(
+        <MessageShell
+          isUser={true}
+          authorLabel="You"
+          timestampLabel="1:00 PM"
+          onUserLongPress={onUserLongPress}
+        >
+          <p>Failing long press</p>
+        </MessageShell>,
+      );
+
+      const message = screen.getByText("Failing long press");
+      fireEvent.pointerDown(message, {
+        pointerType: "touch",
+        pointerId: 15,
+        isPrimary: true,
+      });
+      await waitForLongPress();
+      fireEvent.pointerUp(message, {
+        pointerType: "touch",
+        pointerId: 15,
+        isPrimary: true,
+      });
+      await Promise.resolve();
+
+      expect(onUserLongPress).toHaveBeenCalledTimes(1);
+      expect(consoleError).toHaveBeenCalledWith(
+        "[MessageShell] User long-press action failed",
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("keeps user metadata and actions visible for touch and hover-revealed on desktop", () => {
     const { container } = render(
       <MessageShell
         isUser={true}
@@ -496,11 +565,14 @@ describe("MessageShell", () => {
       .find((element) => element.textContent?.includes("User message")) as HTMLElement;
     expect(bubble.textContent).not.toContain("1:00 PM");
 
-    const hiddenRow = container.querySelector(".group-hover\\:opacity-100") as HTMLElement;
-    expect(hiddenRow).not.toBeNull();
-    expect(hiddenRow.className).toContain("opacity-0");
-    expect(hiddenRow.textContent).toContain("1:00 PM");
-    expect(screen.getByRole("button", { name: "Copy" })).toBeTruthy();
+    const copy = screen.getByRole("button", { name: "Copy" });
+    const actionRow = copy.parentElement?.parentElement;
+    const classTokens = getClassTokens(actionRow);
+    expect(classTokens).toContain("opacity-100");
+    expect(classTokens).toContain("md:hover-fine:opacity-0");
+    expect(classTokens).toContain("md:hover-fine:group-hover:opacity-100");
+    expect(classTokens).toContain("md:hover-fine:focus-within:opacity-100");
+    expect(actionRow?.textContent).toContain("1:00 PM");
   });
 
   test("composes the timestamp and duration in user and assistant metadata", () => {

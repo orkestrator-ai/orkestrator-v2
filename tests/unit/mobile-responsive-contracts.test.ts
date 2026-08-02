@@ -50,6 +50,19 @@ describe("mobile responsive layout contracts", () => {
     expect(css).toContain("min-height: 2.75rem");
   });
 
+  test("message actions only opt into hidden hover controls for precise pointers", () => {
+    const css = read("apps/web/src/index.css");
+    const messageShell = read("apps/web/src/components/chat/MessageShell.tsx");
+
+    expect(css).toContain("@custom-variant hover-fine");
+    expect(css).toContain("@media (hover: hover) and (pointer: fine)");
+    expect(messageShell).toContain("opacity-100");
+    expect(messageShell).toContain("md:hover-fine:opacity-0");
+    expect(messageShell).toContain("md:hover-fine:group-hover:opacity-100");
+    expect(messageShell).toContain("md:hover-fine:focus-within:opacity-100");
+    expect(messageShell).not.toContain('md:opacity-0 md:group-hover:opacity-100');
+  });
+
   test("touch compose input uses real font geometry instead of transform scaling", () => {
     const css = read("apps/web/src/index.css");
     const iosComposeRule = css.match(

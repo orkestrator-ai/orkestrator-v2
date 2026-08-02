@@ -10,6 +10,18 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * Viewport width alone is not an input-capability signal: an iPad can be wider
+ * than the desktop breakpoint while still having no hoverable pointer. Keep
+ * touch actions visible and only opt into hover-revealed controls when both a
+ * hover-capable, precise pointer and the desktop breakpoint are present.
+ */
+@custom-variant hover-fine {
+  @media (hover: hover) and (pointer: fine) {
+    @slot;
+  }
+}
+
 /* FiraCode Nerd Font for terminal */
 @font-face {
   font-family: "FiraCode Nerd Font";

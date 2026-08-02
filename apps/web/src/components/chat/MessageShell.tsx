@@ -101,7 +101,16 @@ export function MessageShell({
     cancelLongPress();
     if (shouldCopy) {
       suppressNextClickRef.current = true;
-      void onUserLongPress?.();
+      try {
+        const result = onUserLongPress?.();
+        if (result) {
+          void result.catch(() => {
+            console.error("[MessageShell] User long-press action failed");
+          });
+        }
+      } catch {
+        console.error("[MessageShell] User long-press action failed");
+      }
     }
   }, [cancelLongPress, onUserLongPress]);
 
@@ -174,7 +183,7 @@ export function MessageShell({
                   </div>
                 ) : <span />}
                 {actions ? (
-                  <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100">
+                  <div className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity duration-150 md:hover-fine:opacity-0 md:hover-fine:group-hover:opacity-100 md:hover-fine:focus-within:opacity-100">
                     {actions}
                   </div>
                 ) : null}
@@ -186,7 +195,7 @@ export function MessageShell({
             <div
               className={cn(
                 "mt-1 flex min-h-6 items-center justify-end gap-2 text-[10px] leading-none text-muted-foreground/55",
-                "opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100",
+                "opacity-100 transition-opacity duration-150 md:hover-fine:opacity-0 md:hover-fine:group-hover:opacity-100 md:hover-fine:focus-within:opacity-100",
               )}
             >
               {metadata ? <span>{metadata}</span> : null}

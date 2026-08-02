@@ -30,6 +30,10 @@ function makeMessage(
   };
 }
 
+function getClassTokens(element: Element | null | undefined): string[] {
+  return element?.getAttribute("class")?.split(/\s+/).filter(Boolean) ?? [];
+}
+
 type NativeTaskGroupPart = Extract<NativeMessagePart, { type: "task-group" }>;
 type NativeSubagentPart = Extract<NativeMessagePart, { type: "subagent" }>;
 
@@ -1402,6 +1406,42 @@ describe("NativeMessage task list rendering", () => {
     const second = screen.getByRole("button", {
       name: /second container reviewer/i,
     });
+    fireEvent.click(first);
+
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+    expect(second.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("isolates matching message and agent ids between explicit transcript scopes", () => {
+    render(
+      <>
+        <NativeMessage
+          message={makeMessage(
+            [makeStandaloneSubagentPart({
+              content: "First scoped reviewer",
+              subagentId: "shared-scoped-agent",
+              subagentName: "First scoped reviewer",
+            })],
+            { id: "shared-scoped-message" },
+          )}
+          agentExpansionScope="transcript-a"
+        />
+        <NativeMessage
+          message={makeMessage(
+            [makeStandaloneSubagentPart({
+              content: "Second scoped reviewer",
+              subagentId: "shared-scoped-agent",
+              subagentName: "Second scoped reviewer",
+            })],
+            { id: "shared-scoped-message" },
+          )}
+          agentExpansionScope="transcript-b"
+        />
+      </>,
+    );
+
+    const first = screen.getByRole("button", { name: /first scoped reviewer/i });
+    const second = screen.getByRole("button", { name: /second scoped reviewer/i });
     fireEvent.click(first);
 
     expect(first.getAttribute("aria-expanded")).toBe("true");
@@ -3274,6 +3314,43 @@ describe("NativeMessage actions slot", () => {
 
     expect(screen.getByRole("button", { name: "Custom action" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy text" })).toBeTruthy();
+  });
+
+  test("keeps assistant actions visible on mobile and hover-revealed on desktop", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Done" }])}
+        actions={<button type="button">Custom action</button>}
+      />,
+    );
+
+    const actionRow = screen.getByRole("button", { name: "Custom action" }).parentElement;
+    const classTokens = getClassTokens(actionRow);
+    expect(classTokens).toContain("opacity-100");
+    expect(classTokens).toContain("md:hover-fine:opacity-0");
+    expect(classTokens).toContain("md:hover-fine:group-hover:opacity-100");
+    expect(classTokens).toContain("md:hover-fine:focus-within:opacity-100");
+  });
+
+  test("keeps user actions visible on mobile and hover-revealed on desktop", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Ship it" }], {
+          id: "user-1",
+          role: "user",
+          content: "Ship it",
+        })}
+        actions={<button type="button">Fork from here</button>}
+      />,
+    );
+
+    const actionRow = screen.getByRole("button", { name: "Fork from here" })
+      .parentElement?.parentElement;
+    const classTokens = getClassTokens(actionRow);
+    expect(classTokens).toContain("opacity-100");
+    expect(classTokens).toContain("md:hover-fine:opacity-0");
+    expect(classTokens).toContain("md:hover-fine:group-hover:opacity-100");
+    expect(classTokens).toContain("md:hover-fine:focus-within:opacity-100");
   });
 
   test("renders actions even when there is nothing to copy", () => {

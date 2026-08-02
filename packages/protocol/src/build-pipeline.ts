@@ -3,11 +3,12 @@ import {
   type StructuredReviewReport,
 } from "./structured-review.js";
 import {
+  AGENT_INTERACTION_KINDS,
   AGENT_INTERACTION_LIMITS,
-  agentInteractionPolicyAction,
+  AGENT_INTERACTION_PROVIDERS,
   isAgentInteractionPolicy,
   isAgentInteractionWorkflowSummary,
-  UNATTENDED_AGENT_INTERACTION_POLICY,
+  isWithinTextLowerBound,
   type AgentInteractionKind,
   type AgentInteractionProvider,
   type AgentInteractionWorkflowSummary,
@@ -515,9 +516,56 @@ function isRenderableEpoch(value: unknown): value is number {
   return isNonNegativeInteger(value) && value <= MAX_RENDERABLE_EPOCH_MS;
 }
 
+/** Reused rather than reallocated: this runs on every snapshot validation. */
+const INTERACTION_PAYLOAD_ENCODER = new TextEncoder();
+
+/**
+ * Derived from the protocol vocabularies rather than restated.
+ *
+ * A literal copy silently rejects any provider or kind added upstream, and a
+ * rejected entry fails the whole pipeline snapshot — which the supervisor then
+ * skips and the renderer treats as a deletion.
+ */
+const INTERACTION_PROVIDERS: ReadonlySet<AgentInteractionProvider> = new Set(
+  AGENT_INTERACTION_PROVIDERS,
+);
+const INTERACTION_KINDS: ReadonlySet<AgentInteractionKind> = new Set(
+  AGENT_INTERACTION_KINDS,
+);
+
+/**
+ * UTF-16 code units are never more numerous than UTF-8 bytes, so summing the
+ * bounded text fields gives a lower bound on the serialized size.
+ *
+ * The per-field maximums alone permit a structurally valid transcript of
+ * roughly 530 MB (64 entries x 16 questions x 32 options x 16 KB of text).
+ * Serializing that just to discover it overflows a 256 KB budget allocates
+ * ~1.6 GB, and the text arrives from a provider. This can never reject a value
+ * that would have passed: anything within the byte limit is within the lower
+ * bound too.
+ */
+function interactionPresentationTextLength(
+  value: Record<string, unknown>,
+): number {
+  let total = (value.title as string | undefined)?.length ?? 0;
+  total += (value.body as string | undefined)?.length ?? 0;
+  const questions = value.questions;
+  if (!Array.isArray(questions)) return total;
+  for (const question of questions) {
+    if (!isRecord(question)) continue;
+    total += (question.prompt as string | undefined)?.length ?? 0;
+    const options = question.options;
+    if (!Array.isArray(options)) continue;
+    for (const option of options) {
+      if (typeof option === "string") total += option.length;
+    }
+  }
+  return total;
+}
+
 function isWithinInteractionPayloadLimit(value: unknown): boolean {
   try {
-    return new TextEncoder().encode(JSON.stringify(value)).byteLength
+    return INTERACTION_PAYLOAD_ENCODER.encode(JSON.stringify(value)).byteLength
       <= AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes;
   } catch {
     return false;
@@ -610,6 +658,15 @@ function isPipelineSession(value: unknown): value is PipelineSession {
       || (Array.isArray(value.interactionTranscript)
         && value.interactionTranscript.length <= AGENT_INTERACTION_LIMITS.maxWorkflowSummaries
         && value.interactionTranscript.every(isPipelineInteractionTranscriptEntry)
+        // Cheap lower bound first: the per-field maximums permit a structurally
+        // valid transcript far larger than the byte budget, and serializing one
+        // to find that out is the amplification this guard exists to prevent.
+        && isWithinTextLowerBound(value.interactionTranscript.reduce(
+          (total: number, entry: unknown) => total + (isRecord(entry)
+            ? interactionPresentationTextLength(entry)
+            : 0),
+          0,
+        ))
         && isWithinInteractionPayloadLimit(value.interactionTranscript)));
 }
 
@@ -631,13 +688,8 @@ function isPipelineInteractionPresentation(value: Record<string, unknown>): bool
   return typeof value.interactionId === "string"
     && value.interactionId.length > 0
     && value.interactionId.length <= AGENT_INTERACTION_LIMITS.maxIdLength
-    && typeof value.provider === "string"
-    && ["claude", "codex", "opencode"].includes(value.provider)
-    && typeof value.kind === "string"
-    && [
-      "question", "plan-approval", "command-approval", "file-approval",
-      "permission", "mcp-form", "mcp-url", "elicitation", "terminal-selection",
-    ].includes(value.kind)
+    && INTERACTION_PROVIDERS.has(value.provider as AgentInteractionProvider)
+    && INTERACTION_KINDS.has(value.kind as AgentInteractionKind)
     && SESSION_PHASES.has(value.phase as PipelineSessionPhase)
     && isRenderableEpoch(value.requestedAt)
     && typeof value.title === "string"
@@ -663,10 +715,12 @@ function isPipelineInteractionTranscriptEntry(
     && isNonBlankString(value.id)
     && value.id.length <= AGENT_INTERACTION_LIMITS.maxIdLength
     && isPipelineInteractionPresentation({ ...value, interactionId: value.id })
-    && agentInteractionPolicyAction(
-      UNATTENDED_AGENT_INTERACTION_POLICY,
-      value.kind,
-    ) === "decline-and-continue"
+    // Deliberately *not* cross-checked against the live unattended policy. This
+    // is an immutable record of something that already happened; reclassifying
+    // a kind (say, making `mcp-url` an authorization) would otherwise make every
+    // snapshot that recorded it unparseable, which the supervisor reads as a
+    // pipeline to skip and the renderer as a pipeline to delete. The recorded
+    // `outcome` below is what pins the entry's meaning.
     && isRenderableEpoch(value.resolvedAt)
     && (value.resolvedAt as number) >= (value.requestedAt as number)
     && value.outcome === "auto-declined-headless";
@@ -689,10 +743,11 @@ function isPendingPipelineInteractionResolution(
     && value.sessionId.length <= AGENT_INTERACTION_LIMITS.maxIdLength
     && isRenderableEpoch(value.claimedAt)
     && (value.claimedAt as number) >= (value.requestedAt as number)
-    && value.action === agentInteractionPolicyAction(
-      UNATTENDED_AGENT_INTERACTION_POLICY,
-      value.kind,
-    )
+    // Same reasoning as the transcript entry: an in-flight envelope written
+    // before a policy change must still parse after the upgrade, or the
+    // pipeline it belongs to disappears instead of finishing its interaction.
+    && (value.action === "decline-and-continue" || value.action === "deny-and-fail")
+    && isWithinTextLowerBound(interactionPresentationTextLength(value))
     && isWithinInteractionPayloadLimit(value);
 }
 

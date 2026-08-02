@@ -306,7 +306,12 @@ export function BuildChatTab({
   // can make different from the pipeline's build agent.
   const displayedAgent = selectedSession?.agent ?? pipeline.agentType;
   const agentLabel = AGENT_LABELS[displayedAgent] ?? displayedAgent;
-  const stalledSession = pipeline.stallWarning
+  // The banner asserts the stage "is still running", so it belongs to an active
+  // pipeline only. The backend clears the warning on every terminal and paused
+  // transition; gating here as well keeps a snapshot written by an older build
+  // from making that claim about a stopped one.
+  const showStallWarning = active && Boolean(pipeline.stallWarning);
+  const stalledSession = showStallWarning
     ? pipeline.sessions.find(
         (session) => session.sdkSessionId === pipeline.stallWarning?.sessionId,
       )
@@ -442,7 +447,7 @@ export function BuildChatTab({
           {pipeline.error}
         </div>
       )}
-      {pipeline.stallWarning && (
+      {showStallWarning && (
         <div className="border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 text-xs text-amber-200/90">
           {stalledSession?.label ?? "The active stage"} is still running, but its transcript has not changed for an extended period. It was not stopped automatically.
         </div>

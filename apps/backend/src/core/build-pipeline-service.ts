@@ -426,7 +426,12 @@ function interactionPresentation(
     provider: request.provider,
     kind: request.kind,
     phase: session.phase,
-    requestedAt: request.createdAt,
+    // A provider's `createdAt` is not durable: OpenCode and the bridges fall
+    // back to `Date.now()` on a first-seen miss, so a restart re-dates a live
+    // request to *after* the claim that recovery is rebuilding from. The
+    // persisted envelope must satisfy `claimedAt >= requestedAt`, so anchor the
+    // request to the claim whenever the provider reports a later time.
+    requestedAt: Math.min(request.createdAt, claimedAt),
     claimedAt,
     action,
     title: visible
@@ -450,8 +455,12 @@ function appendInteractionSummary(
   summary: AgentInteractionWorkflowSummary | undefined,
   pending: PendingPipelineInteractionResolution,
   outcome: AgentInteractionOutcome,
-  resolvedAt: number,
+  rawResolvedAt: number,
 ): AgentInteractionWorkflowSummary {
+  // The summary validator enforces `lastResolvedAt >= firstSeenAt`. A clock that
+  // stepped backwards between the request and its resolution must degrade to an
+  // equal timestamp, never to an unparseable snapshot.
+  const resolvedAt = Math.max(rawResolvedAt, pending.requestedAt);
   const next: AgentInteractionWorkflowSummary = summary
     ? structuredClone(summary)
     : { version: AGENT_INTERACTION_SUMMARY_VERSION, entries: [] };
@@ -840,6 +849,10 @@ export class BuildPipelineService {
       if (!previous) return;
       pipeline.pausedFromPhase = previous;
       pipeline.phase = "paused";
+      // The warning says the stage "is still running"; a paused build has
+      // stopped, and `advance` returns early for non-active phases so nothing
+      // else would ever clear it.
+      delete pipeline.stallWarning;
       const session = sessionForCurrentPhase(pipeline);
       if (session?.status === "running") {
         try {
@@ -999,6 +1012,16 @@ export class BuildPipelineService {
         rejection = new Error("This build has no interactive request failure to retry");
         return;
       }
+      // `advance` consumes the retry flag after the provisioning phases have
+      // already returned, so a phase that owns no stage session would leave the
+      // flag set and start the stage twice. Reject it here instead, where the
+      // pipeline is still untouched.
+      if (!sessionPhaseFor(candidate.failureContext.phase)) {
+        rejection = new Error(
+          `Cannot retry pipeline phase ${candidate.failureContext.phase}`,
+        );
+        return;
+      }
       candidate.phase = candidate.failureContext.phase;
       candidate.interactionRetryRequested = true;
       delete candidate.error;
@@ -1033,6 +1056,7 @@ export class BuildPipelineService {
       delete pipeline.activePromptContext;
       delete pipeline.pendingUserMessages;
       delete pipeline.reviewRetryRequested;
+      delete pipeline.stallWarning;
     });
     // `provider()` records attribution for reconnect handling while a pipeline
     // is active. Cancellation is a terminal transition, so retaining the id
@@ -1950,6 +1974,7 @@ export class BuildPipelineService {
   private async complete(pipeline: BuildPipeline): Promise<void> {
     pipeline.phase = "complete";
     delete pipeline.error;
+    delete pipeline.stallWarning;
     this.provisioningPrompts.delete(pipeline.id);
     this.lastProviderAgent.delete(pipeline.id);
     await this.save(pipeline, pipeline.backendRevision);
@@ -2324,7 +2349,7 @@ export class BuildPipelineService {
   private async acquireInteractionProcessingLease(
     pending: PendingPipelineInteractionResolution,
   ): Promise<string | null> {
-    const now = Date.now();
+    const wallClock = Date.now();
     const proposedToken = randomUUID();
     let acquiredToken: string | null = null;
     await this.storage.updateAgentInteractionResolutionJournal((journal) => ({
@@ -2338,7 +2363,12 @@ export class BuildPipelineService {
           acquiredToken = current.token;
           return entry;
         }
-        if (current && current.expiresAt > now) return entry;
+        if (current && current.expiresAt > wallClock) return entry;
+        // The claim may have been written by another backend process whose
+        // clock runs ahead — which is exactly the case this lease exists for.
+        // The lease validator requires `acquiredAt >= claim.claimedAt`, so
+        // anchor to the claim rather than rejecting the whole journal update.
+        const now = Math.max(wallClock, entry.claim.claimedAt);
         acquiredToken = proposedToken;
         return {
           ...entry,
@@ -2513,7 +2543,9 @@ export class BuildPipelineService {
           kind: pending.kind,
           phase: pending.phase,
           requestedAt: pending.requestedAt,
-          resolvedAt,
+          // The transcript validator enforces `resolvedAt >= requestedAt`; a
+          // backwards clock step must not make the snapshot unparseable.
+          resolvedAt: Math.max(resolvedAt, pending.requestedAt),
           outcome: "auto-declined-headless",
           title: pending.title,
           ...(pending.body ? { body: pending.body } : {}),
@@ -2602,21 +2634,19 @@ export class BuildPipelineService {
     this.applyInteractionOutcome(pipeline, pending, outcome, resolvedAt);
     const inputSucceeded = pending.action === "decline-and-continue"
       && outcome === "auto-declined";
-    if (inputSucceeded) {
-      await this.saveInteractionOutcome(pipeline, pending, outcome, resolvedAt);
-      await this.markInteractionWorkflowRecorded(pending, Date.now());
-      logInteractionOutcome(
-        pending,
-        outcome,
-        resolvedAt,
-        pipeline.autoDeclineCount ?? 0,
-      );
-      return;
-    }
-
     await this.saveInteractionOutcome(pipeline, pending, outcome, resolvedAt);
-    await this.markInteractionWorkflowRecorded(pending, Date.now());
-    logInteractionOutcome(pending, outcome, resolvedAt, 1);
+    // The workflow outcome is durable from here. Advancing the journal is a
+    // bookkeeping step that `finishDurablyRecordedInteractionJournalEntries`
+    // repairs on the next start, so a transient journal write failure must not
+    // convert a correctly resolved interaction into a failed build.
+    await this.markInteractionWorkflowRecorded(pending, Date.now())
+      .catch(() => undefined);
+    logInteractionOutcome(
+      pending,
+      outcome,
+      resolvedAt,
+      inputSucceeded ? pipeline.autoDeclineCount ?? 0 : 1,
+    );
   }
 
   /**
@@ -2713,7 +2743,32 @@ export class BuildPipelineService {
     journalEntry ??= (await this.storage.getAgentInteractionResolutionJournal())
       .entries.find((entry) => entry.id === pending!.journalId);
     if (!journalEntry) {
-      throw new ProviderUnavailableError("The interaction resolution claim was lost");
+      // Journal retention drops entries outright once it saturates, so a
+      // missing claim is expected rather than a transport problem. Throwing
+      // `ProviderUnavailableError` here would route to `recordReconnect`, which
+      // disposes the provider on every tick and eventually fails the build with
+      // a bridge-unreachable message that has nothing to do with the cause.
+      if (this.interactionOutcomeIsDurable(pipeline, pending)) {
+        delete pipeline.pendingInteractionResolution;
+        await this.saveInteractionOutcome(
+          pipeline,
+          pending,
+          pending.action === "decline-and-continue" ? "auto-declined" : "denied",
+          Date.now(),
+        );
+        return true;
+      }
+      // The claim is gone without evidence that the provider was ever
+      // answered, so fail closed and visibly rather than leaving the agent
+      // invisibly parked on a request nobody will resolve.
+      await this.recordInteractionOutcome(
+        pipeline,
+        session,
+        pending,
+        "failed",
+        Date.now(),
+      );
+      return true;
     }
     if (journalEntry.state === "workflow-recorded") {
       if (!this.interactionOutcomeIsDurable(pipeline, pending)) {
@@ -2876,6 +2931,7 @@ export class BuildPipelineService {
     };
     pipeline.phase = "failed";
     delete pipeline.pendingPromptAttempt;
+    delete pipeline.stallWarning;
     this.provisioningPrompts.delete(pipeline.id);
     this.lastProviderAgent.delete(pipeline.id);
     await this.save(pipeline, record.revision);
@@ -2977,6 +3033,18 @@ export class BuildPipelineService {
   ): Promise<PersistedBuildPipeline> {
     pipeline.controller = "backend";
     pipeline.backendRevision = expectedRevision + 1;
+    // Storage validates only serializability and size, and `requireRecord`
+    // rejects a snapshot that fails `isBuildPipeline` — so committing an
+    // invariant violation would hide the pipeline from every later read,
+    // including the supervisor tick, permanently. Fail the pass instead: the
+    // last durable revision stays readable and the next tick can retry.
+    const structurallyValid: boolean = isBuildPipeline(pipeline);
+    if (!structurallyValid) {
+      pipeline.backendRevision = expectedRevision;
+      throw new Error(
+        `Refusing to persist an invalid build pipeline snapshot: ${pipeline.id}`,
+      );
+    }
     const saved = await this.storage.saveBuildPipeline(
       pipeline.id,
       pipeline.projectId,

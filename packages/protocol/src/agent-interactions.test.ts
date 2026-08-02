@@ -9,6 +9,9 @@ import {
   AGENT_INTERACTION_JOURNAL_VERSION,
   AGENT_INTERACTION_KINDS,
   AGENT_INTERACTION_LIMITS,
+  AGENT_INTERACTION_MAX_PROCESSING_LEASE_MS,
+  AGENT_INTERACTION_ORIGINS,
+  AGENT_INTERACTION_OUTCOMES,
   AGENT_INTERACTION_PROVIDERS,
   AGENT_INTERACTION_STATES,
   AGENT_INTERACTION_SUMMARY_VERSION,
@@ -138,6 +141,16 @@ describe("agent interaction request contract", () => {
         }
       }
     }
+  });
+
+  test("validates every supported origin", () => {
+    for (const origin of AGENT_INTERACTION_ORIGINS) {
+      expect(isAgentInteractionRequest({ ...request(), origin })).toBe(true);
+    }
+    expect(isAgentInteractionRequest({
+      ...request(),
+      origin: "looped-review-v2",
+    })).toBe(false);
   });
 
   test("keeps duplicate labels and comma-containing provider values valid", () => {
@@ -655,6 +668,75 @@ describe("resolution journal and summaries", () => {
     }
   });
 
+  test("accepts a lease exactly at the maximum window and rejects a longer one", () => {
+    // The ceiling is what stops a single far-future deadline pinning its entry
+    // past claim retention forever, so the boundary itself has to be exact.
+    const atBound = {
+      ownerId: "backend-process-1",
+      token: "lease-token-1",
+      acquiredAt: CREATED_AT,
+      expiresAt: CREATED_AT + AGENT_INTERACTION_MAX_PROCESSING_LEASE_MS,
+    };
+    expect(isAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [claimedAt(CREATED_AT, atBound)],
+    })).toBe(true);
+    expect(isAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [claimedAt(CREATED_AT, {
+        ...atBound,
+        expiresAt: atBound.expiresAt + 1,
+      })],
+    })).toBe(false);
+    // The window is what is bounded, not the absolute deadline: a lease taken
+    // long after the claim is legal as long as it still expires within one.
+    expect(isAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [claimedAt(CREATED_AT, {
+        ...atBound,
+        acquiredAt: CREATED_AT + AGENT_INTERACTION_CLAIM_RETENTION_MS,
+        expiresAt: CREATED_AT + AGENT_INTERACTION_CLAIM_RETENTION_MS + 1,
+      })],
+    })).toBe(true);
+  });
+
+  test("rejects unknown keys on a journal entry and on its claim", () => {
+    // Each nested guard enforces its own key set; the entry-level check is what
+    // stops a field riding along in the journal that nothing ever reads.
+    expect(isAgentInteractionResolutionJournal({
+      ...journal,
+      entries: [{ ...journal.entries[0]!, unexpected: true }],
+    })).toBe(false);
+    expect(isAgentInteractionResolutionJournal({
+      ...journal,
+      entries: [{
+        ...journal.entries[0]!,
+        claim: { ...journal.entries[0]!.claim, unexpected: true },
+      }],
+    })).toBe(false);
+  });
+
+  test("validates every supported outcome on journal entries and summaries", () => {
+    for (const outcome of AGENT_INTERACTION_OUTCOMES) {
+      expect(isAgentInteractionResolutionJournal({
+        ...journal,
+        entries: [{ ...journal.entries[0]!, outcome }],
+      })).toBe(true);
+      expect(isAgentInteractionWorkflowSummary({
+        ...summary,
+        entries: [{ ...summary.entries[0]!, outcome }],
+      })).toBe(true);
+    }
+    expect(isAgentInteractionResolutionJournal({
+      ...journal,
+      entries: [{ ...journal.entries[0]!, outcome: "auto-answered" }],
+    })).toBe(false);
+    expect(isAgentInteractionWorkflowSummary({
+      ...summary,
+      entries: [{ ...summary.entries[0]!, outcome: "auto-answered" }],
+    })).toBe(false);
+  });
+
   test("rejects processing leases after a claim reaches a resolved state", () => {
     const processing = {
       ownerId: "backend-process-1",
@@ -744,10 +826,13 @@ describe("resolution journal and summaries", () => {
 
   test("cleanup preserves an old claim while its processing lease is active", () => {
     const now = CREATED_AT + AGENT_INTERACTION_CLAIM_RETENTION_MS + 1;
+    // A resolver that takes over a day-old claim leases it *now*, not back when
+    // the claim was first written: the lease window is bounded by
+    // AGENT_INTERACTION_MAX_PROCESSING_LEASE_MS.
     const active = claimedAt(CREATED_AT, {
       ownerId: "active-owner",
       token: "active-token",
-      acquiredAt: CREATED_AT + 1,
+      acquiredAt: now - 1_000,
       expiresAt: now + 60_000,
     });
     const cleaned = pruneAgentInteractionResolutionJournal({
@@ -762,7 +847,7 @@ describe("resolution journal and summaries", () => {
     const abandoned = claimedAt(CREATED_AT, {
       ownerId: "abandoned-owner",
       token: "abandoned-token",
-      acquiredAt: CREATED_AT + 1,
+      acquiredAt: now - 60_000,
       expiresAt: now,
     });
     const cleaned = pruneAgentInteractionResolutionJournal({
@@ -783,6 +868,88 @@ describe("resolution journal and summaries", () => {
       version: AGENT_INTERACTION_JOURNAL_VERSION,
       entries: [...cleaned.entries, abandoned],
     })).toBe(false);
+  });
+
+  test("cleanup reclaims a claim a skewed lease deadline would otherwise pin forever", () => {
+    const now = CREATED_AT
+      + AGENT_INTERACTION_CLAIM_RETENTION_MS
+      + AGENT_INTERACTION_MAX_PROCESSING_LEASE_MS
+      + 1;
+    // A clock that jumped forward during acquisition stamps a deadline far past
+    // `now`, so the lease never expires and the entry is never normalized away.
+    // Only clamping the lease's contribution to one window past the claim keeps
+    // retention reachable; counting `expiresAt` outright would keep this entry
+    // — and enough like it to saturate the journal — alive indefinitely.
+    const skewed = claimedAt(CREATED_AT, {
+      ownerId: "skewed-owner",
+      token: "skewed-token",
+      acquiredAt: now + AGENT_INTERACTION_CLAIM_RETENTION_MS,
+      expiresAt: now
+        + AGENT_INTERACTION_CLAIM_RETENTION_MS
+        + AGENT_INTERACTION_MAX_PROCESSING_LEASE_MS,
+    });
+    // The lease window itself is legal, so validation alone cannot catch this.
+    expect(isAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [skewed],
+    })).toBe(true);
+
+    const cleaned = pruneAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [skewed],
+    }, now);
+    expect(cleaned.entries).toEqual([{
+      ...skewed,
+      processing: undefined,
+      state: "workflow-recorded",
+      outcome: "stale",
+      providerResolvedAt: CREATED_AT,
+      workflowRecordedAt: now,
+    }]);
+  });
+
+  test("cleanup keeps the leased claim when a saturated journal must drop one", () => {
+    const now = CREATED_AT + 1_000;
+    // Every claim is live and one more than the entry bound allows, so the
+    // retention window decides nothing and the retention *sort* decides
+    // everything. The two competitors are the same age; only the lease differs.
+    const filler = Array.from(
+      { length: AGENT_INTERACTION_LIMITS.maxJournalEntries - 1 },
+      (_, index) => ({
+        ...claimedAt(now),
+        id: `claim-${index}`,
+        interactionId: `interaction-${index}`,
+      }),
+    );
+    const leased = {
+      ...claimedAt(now - 10, {
+        ownerId: "leased-owner",
+        token: "leased-token",
+        acquiredAt: now - 10,
+        expiresAt: now + 60_000,
+      }),
+      id: "claim-leased",
+      interactionId: "interaction-leased",
+    };
+    const unleased = {
+      ...claimedAt(now - 10),
+      id: "claim-unleased",
+      interactionId: "interaction-unleased",
+    };
+
+    const cleaned = pruneAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      // `unleased` is listed first so array order works against the lease: a
+      // stable sort would otherwise keep it on a tie and hide the regression.
+      entries: [...filler, unleased, leased],
+    }, now);
+    expect(cleaned.entries).toHaveLength(AGENT_INTERACTION_LIMITS.maxJournalEntries);
+    // The active lease sorts the entry ahead of even the newest bare claims, so
+    // cleanup cannot destroy a token fence while a provider call is in flight.
+    expect(cleaned.entries[0]).toEqual(leased);
+    expect(cleaned.entries.some((entry) => entry.id === "claim-unleased"))
+      .toBe(false);
+    expect(isAgentInteractionResolutionJournal(cleaned)).toBe(true);
   });
 
   test("cleanup finishes a half-resolved claim without inventing an outcome", () => {

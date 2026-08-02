@@ -405,6 +405,17 @@ function requestCreatedAt(expiresAt: number | undefined, now: number): number {
 
 class InteractionSnapshotTracker {
   private readonly registrations = new Map<string, ProviderSessionRegistration>();
+  /**
+   * Sessions whose registration came from a caller rather than from the
+   * implicit default.
+   *
+   * {@link snapshot} registers an unknown session so it can be tracked at all,
+   * and that placeholder says `interactive-native`. Without this distinction,
+   * first-write-wins would let one early read permanently pin an unattended
+   * build-pipeline session to the interactive policy — it would simply stop
+   * auto-resolving, with nothing to show for it.
+   */
+  private readonly explicitRegistrations = new Set<string>();
   private readonly fingerprints = new Map<string, string>();
   private readonly revisions = new Map<string, number>();
   private readonly firstSeenAt = new Map<string, number>();
@@ -418,6 +429,7 @@ class InteractionSnapshotTracker {
       const oldest = this.registrations.keys().next().value as string | undefined;
       if (oldest !== undefined) {
         this.registrations.delete(oldest);
+        this.explicitRegistrations.delete(oldest);
         this.fingerprints.delete(oldest);
         this.revisions.delete(oldest);
         for (const [interactionId, ownerSessionId] of this.interactionSessions) {
@@ -427,12 +439,39 @@ class InteractionSnapshotTracker {
         }
       }
     }
+    const existing = this.registrations.get(sessionId);
+    if (existing === undefined) {
+      this.registrations.set(sessionId, interaction ?? DEFAULT_SESSION_REGISTRATION);
+      if (interaction) this.explicitRegistrations.add(sessionId);
+      return;
+    }
+    if (!interaction) return;
+    // The placeholder written by an early read is not a decision, so the first
+    // real registration replaces it outright.
+    if (!this.explicitRegistrations.has(sessionId)) {
+      this.registrations.set(sessionId, interaction);
+      this.explicitRegistrations.add(sessionId);
+      return;
+    }
     // Policy is fixed before the first request. Re-registering a restored or
     // cached provider may reassert the same metadata, but must never switch a
     // live session between interactive and unattended while a request exists.
-    if (!this.registrations.has(sessionId)) {
-      this.registrations.set(sessionId, interaction ?? DEFAULT_SESSION_REGISTRATION);
-    }
+    if (
+      interaction.origin !== existing.origin
+      || interaction.interactionPolicy.mode !== existing.interactionPolicy.mode
+    ) return;
+    // Same identity, so fill in metadata the first caller did not have —
+    // callers differ in what they know (the activity sweep has no `phase`, the
+    // reconciler does) and whichever ran first should not cost the others their
+    // fields. Values already recorded are never overwritten: the fence in
+    // particular identifies the generation that owns any live request.
+    this.registrations.set(sessionId, {
+      ...existing,
+      phase: existing.phase ?? interaction.phase,
+      workflowId: existing.workflowId ?? interaction.workflowId,
+      provider: existing.provider ?? interaction.provider,
+      fence: existing.fence ?? interaction.fence,
+    });
   }
 
   registration(sessionId: string): ProviderSessionRegistration {

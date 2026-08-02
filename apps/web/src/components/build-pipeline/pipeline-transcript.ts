@@ -311,9 +311,40 @@ const MAX_EPOCH_MS = 8.64e15;
 
 function isRenderableEpoch(value: unknown): boolean {
   if (typeof value === "number") {
-    return Number.isFinite(value) && Math.abs(value) <= MAX_EPOCH_MS;
+    return isRenderableEpochNumber(value);
   }
   return asString(value) !== undefined;
+}
+
+/**
+ * Numeric-only variant for a call site that feeds `new Date(...).toISOString()`
+ * directly. {@link isRenderableEpoch} accepts any non-empty string because its
+ * own call site only uses the answer to keep or drop a value; passing a string
+ * through to `toISOString` would throw `RangeError` from inside a render.
+ */
+function isRenderableEpochNumber(value: unknown): value is number {
+  return typeof value === "number"
+    && Number.isFinite(value)
+    && Math.abs(value) <= MAX_EPOCH_MS;
+}
+
+/**
+ * Per-field caps for the auto-decline record.
+ *
+ * The backend bounds what it writes, but the protocol permits up to 16 KB per
+ * field for a snapshot written by an older build, and this renders as a single
+ * centred italic block with no expand affordance.
+ */
+const MAX_INTERACTION_LINE_LENGTH = 512;
+const MAX_INTERACTION_BODY_LENGTH = 1_024;
+const MAX_INTERACTION_OPTION_LENGTH = 128;
+const MAX_INTERACTION_QUESTIONS = 4;
+const MAX_INTERACTION_OPTIONS = 8;
+
+function clip(value: string, maximum: number): string {
+  return value.length <= maximum
+    ? value
+    : `${value.slice(0, Math.max(0, maximum - 1))}…`;
 }
 
 /** The entry with `info.time.created` removed, so the normalizer skips it. */
@@ -442,22 +473,32 @@ export function toPipelineTranscript(
     if (hasRenderableContent(message)) transcript.push(message);
   });
 
-  for (const interaction of interactions) {
-    const questionText = interaction.questions.map((question) => {
-      const options = question.options.length > 0
-        ? `\nOffered options: ${question.options.join(", ")}`
-        : "";
-      return `${question.prompt}${options}`;
-    }).join("\n\n");
-    const details = [interaction.body, questionText].filter(Boolean).join("\n\n");
+  if (interactions.length === 0) return transcript;
+
+  const interactionMessages = interactions.map((interaction) => {
+    const questionText = interaction.questions
+      .slice(0, MAX_INTERACTION_QUESTIONS)
+      .map((question) => {
+        const options = question.options.length > 0
+          ? `\nOffered options: ${question.options
+            .slice(0, MAX_INTERACTION_OPTIONS)
+            .map((option) => clip(option, MAX_INTERACTION_OPTION_LENGTH))
+            .join(", ")}`
+          : "";
+        return `${clip(question.prompt, MAX_INTERACTION_LINE_LENGTH)}${options}`;
+      }).join("\n\n");
+    const details = [
+      interaction.body ? clip(interaction.body, MAX_INTERACTION_BODY_LENGTH) : "",
+      questionText,
+    ].filter(Boolean).join("\n\n");
     const content = [
       `Auto-declined unattended ${interaction.provider} ${interaction.kind} during ${interaction.phase}`,
       `Outcome: ${interaction.outcome}`,
-      interaction.title,
+      clip(interaction.title, MAX_INTERACTION_LINE_LENGTH),
       details,
       "No answer was fabricated. The agent was instructed to make and state the safest likely assumption, then continue.",
     ].filter(Boolean).join("\n\n");
-    transcript.push({
+    return {
       id: `pipeline-interaction:${interaction.id}`,
       role: "system",
       content,
@@ -466,11 +507,47 @@ export function toPipelineTranscript(
       // by hand. Keep one out-of-range epoch from replacing the whole tab with
       // a render error; the session start is already the stable fallback used
       // for provider messages with invalid timestamps.
-      createdAt: isRenderableEpoch(interaction.resolvedAt)
+      createdAt: isRenderableEpochNumber(interaction.resolvedAt)
         ? new Date(interaction.resolvedAt).toISOString()
         : fallbackCreatedAt,
+    } satisfies NativeMessage;
+  });
+
+  // Merged by time rather than appended: a decline that happened 30 seconds into
+  // a stage belongs beside the work it interrupted, not below the stage's last
+  // message with an earlier timestamp than everything above it.
+  return mergeByCreatedAt(transcript, interactionMessages);
+}
+
+/**
+ * Stable merge of two already-ordered transcripts.
+ *
+ * A provider message whose timestamp is missing or unparseable inherits the
+ * position of the one before it, so nothing is reordered on the strength of a
+ * timestamp that could not be read. `Array.prototype.sort` is stable, and the
+ * interactions are concatenated second, so a tie places the decline after the
+ * message it followed.
+ */
+function mergeByCreatedAt(
+  providerMessages: readonly NativeMessage[],
+  interactionMessages: readonly NativeMessage[],
+): NativeMessage[] {
+  let carried = Number.NEGATIVE_INFINITY;
+  const keyed = providerMessages.map((message) => {
+    const raw = (message as { createdAt?: unknown }).createdAt
+      ?? (message as { timestamp?: unknown }).timestamp;
+    const parsed = typeof raw === "string" ? Date.parse(raw) : Number.NaN;
+    if (Number.isFinite(parsed)) carried = parsed;
+    return { message, key: carried };
+  });
+  for (const message of interactionMessages) {
+    const parsed = Date.parse(message.createdAt ?? "");
+    keyed.push({
+      message,
+      key: Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY,
     });
   }
-
-  return transcript;
+  return keyed
+    .sort((left, right) => left.key - right.key)
+    .map((entry) => entry.message);
 }

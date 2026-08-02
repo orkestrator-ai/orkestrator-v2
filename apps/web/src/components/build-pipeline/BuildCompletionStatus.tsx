@@ -15,6 +15,9 @@ interface BuildCompletionStatusProps {
   pipeline: BuildPipeline;
 }
 
+/** The two independently recoverable failures this banner can surface. */
+type RetryKind = "interaction" | "completion";
+
 /**
  * How the backend describes the terminal hand-off it failed to complete.
  *
@@ -54,8 +57,10 @@ export function BuildCompletionStatus({
   pipeline,
 }: BuildCompletionStatusProps) {
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
-  const [retryPending, setRetryPending] = useState(false);
-  const retryInFlight = useRef(false);
+  // Keyed by kind: both banners can be visible at once, and a retry of one is
+  // no reason to take away the other recovery control.
+  const [retryPending, setRetryPending] = useState<RetryKind | null>(null);
+  const retryInFlight = useRef<RetryKind | null>(null);
 
   const source = pipeline.source;
   const interactionFailure = pipeline.phase === "failed"
@@ -68,10 +73,10 @@ export function BuildCompletionStatus({
     return null;
   }
   const copy = source ? FAILURE_COPY[source.type] : undefined;
-  const retry = async (kind: "interaction" | "completion"): Promise<void> => {
-    if (retryInFlight.current) return;
-    retryInFlight.current = true;
-    setRetryPending(true);
+  const retry = async (kind: RetryKind): Promise<void> => {
+    if (retryInFlight.current === kind) return;
+    retryInFlight.current = kind;
+    setRetryPending(kind);
     try {
       replacePipeline(kind === "interaction"
         ? await retryBuildPipelineInteractionFailure(pipeline.id)
@@ -81,28 +86,28 @@ export function BuildCompletionStatus({
         description: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      retryInFlight.current = false;
-      setRetryPending(false);
+      retryInFlight.current = null;
+      setRetryPending((current) => (current === kind ? null : current));
     }
   };
 
-  const retryButton = (
-    kind: "interaction" | "completion",
-    ariaLabel: string,
-  ) => (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="h-7 gap-1.5 text-xs"
-      aria-label={ariaLabel}
-      disabled={retryPending}
-      onClick={() => void retry(kind)}
-    >
-      <RefreshCw className={`h-3.5 w-3.5${retryPending ? " animate-spin" : ""}`} />
-      {retryPending ? "Retrying…" : "Retry"}
-    </Button>
-  );
+  const retryButton = (kind: RetryKind, ariaLabel: string) => {
+    const pending = retryPending === kind;
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-7 gap-1.5 text-xs"
+        aria-label={ariaLabel}
+        disabled={pending}
+        onClick={() => void retry(kind)}
+      >
+        <RefreshCw className={`h-3.5 w-3.5${pending ? " animate-spin" : ""}`} />
+        {pending ? "Retrying…" : "Retry"}
+      </Button>
+    );
+  };
 
   return (
     <>

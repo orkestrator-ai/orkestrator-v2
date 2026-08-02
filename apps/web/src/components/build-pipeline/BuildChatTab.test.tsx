@@ -771,6 +771,80 @@ describe("BuildChatTab presentation", () => {
     expect(warning.textContent).not.toContain("Build Session is still running");
   });
 
+  test("keeps the stall warning off a pipeline that is no longer running", () => {
+    const stalled = {
+      sessionId: "verify-session",
+      detectedAt: "2026-07-29T00:12:00.000Z",
+    };
+
+    // The banner asserts the stage "is still running". The backend clears the
+    // warning on every terminal and paused transition, so a snapshot that still
+    // carries one was written by an older build and must not make that claim.
+    renderTab({ ...reviewed, phase: "paused", stallWarning: stalled, backendRevision: 54 });
+    expect(screen.queryByText(/transcript has not changed/)).toBeNull();
+
+    cleanup();
+    renderTab({
+      ...reviewed,
+      phase: "failed",
+      error: "Verification crashed",
+      stallWarning: stalled,
+      backendRevision: 55,
+    });
+    expect(screen.queryByText(/transcript has not changed/)).toBeNull();
+    expect(screen.getByText("Verification crashed")).toBeTruthy();
+  });
+
+  test("names the active stage when the warned session is not in the snapshot", () => {
+    renderTab({
+      ...reviewed,
+      phase: "verifying",
+      // A retry can replace the session list under a warning the backend has
+      // not cleared yet; the banner is still true, so it must still render.
+      stallWarning: {
+        sessionId: "a-session-no-stage-claims",
+        detectedAt: "2026-07-29T00:12:00.000Z",
+      },
+      backendRevision: 56,
+    });
+
+    const warning = screen.getByText(/transcript has not changed/);
+    expect(warning.textContent).toContain("The active stage is still running");
+  });
+
+  test("keeps the error and the review retry for a non-interactive failure", () => {
+    renderTab({
+      ...reviewed,
+      phase: "failed",
+      error: "The prompt was never dispatched",
+      failureContext: { phase: "building", kind: "prompt-dispatch", sessionId: "build-session" },
+      backendRevision: 57,
+    });
+
+    // Only an interactive-request failure moves the message and the control
+    // into the recovery banner; every other failure keeps both here.
+    expect(screen.getAllByText("The prompt was never dispatched")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /Retry Review/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry failed build phase" }))
+      .toBeNull();
+  });
+
+  test("badges no stage that declined nothing", () => {
+    renderTab({
+      ...pipeline,
+      autoDeclineCount: 0,
+      sessions: [
+        { ...pipeline.sessions[0]!, autoDeclineCount: 0 },
+        // Written before the counter existed, so it carries none at all.
+        pipeline.sessions[1]!,
+      ],
+      backendRevision: 58,
+    });
+
+    expect(screen.queryByText(/input request/)).toBeNull();
+    expect(screen.queryByText(/auto-declined/)).toBeNull();
+  });
+
   test("shows singular and plural auto-decline badges and passes each stage history", async () => {
     const interaction = (id: string, title: string) => ({
       id,

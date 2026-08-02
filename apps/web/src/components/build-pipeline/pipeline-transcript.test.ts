@@ -875,7 +875,7 @@ describe("toPipelineTranscript", () => {
     ]);
   });
 
-  test("appends a muted, bounded auto-decline history entry without an answer", () => {
+  test("renders a muted, bounded auto-decline history entry without an answer", () => {
     const transcript = toPipelineTranscript(
       [{ id: "provider-message", role: "assistant", content: "Continuing safely" }],
       "codex",
@@ -897,7 +897,9 @@ describe("toPipelineTranscript", () => {
       }],
     );
 
-    const history = transcript.at(-1)!;
+    const history = transcript.find(
+      (message) => message.id === "pipeline-interaction:interaction-1",
+    )!;
     expect(history.id).toBe("pipeline-interaction:interaction-1");
     expect(history.role).toBe("system");
     expect(history.content).toContain("codex question during build");
@@ -948,6 +950,282 @@ describe("toPipelineTranscript", () => {
   test("leaves an empty provider transcript empty when there is no interaction history", () => {
     expect(toPipelineTranscript([], "codex", FALLBACK, [])).toEqual([]);
     expect(toPipelineTranscript(undefined, "codex", FALLBACK)).toEqual([]);
+  });
+
+  test("timestamps an interaction from its own resolution time", () => {
+    const resolvedAt = Date.parse("2026-07-29T00:04:00.000Z");
+    const [history] = toPipelineTranscript(
+      [],
+      "codex",
+      FALLBACK,
+      [{
+        id: "in-range",
+        provider: "codex",
+        kind: "question",
+        phase: "build",
+        requestedAt: resolvedAt - 1_000,
+        resolvedAt,
+        outcome: "auto-declined-headless",
+        title: "Choose safely",
+        questions: [],
+      }],
+    );
+
+    // The in-range branch of the numeric guard: the entry is placed at the
+    // moment it was resolved, which is what the time merge below sorts on.
+    expect(history!.createdAt).toBe(new Date(resolvedAt).toISOString());
+  });
+
+  test("omits the options line for a question that offered none", () => {
+    const [history] = toPipelineTranscript(
+      [],
+      "codex",
+      FALLBACK,
+      [{
+        id: "free-text",
+        provider: "codex",
+        kind: "question",
+        phase: "build",
+        requestedAt: 1,
+        resolvedAt: 2,
+        outcome: "auto-declined-headless",
+        title: "Describe the approach",
+        questions: [{ prompt: "How should the agent proceed?", options: [] }],
+      }],
+    );
+
+    expect(history!.content).toContain("How should the agent proceed?");
+    expect(history!.content).not.toContain("Offered options:");
+  });
+
+  test("places an interaction's body above the questions it introduces", () => {
+    const [history] = toPipelineTranscript(
+      [],
+      "codex",
+      FALLBACK,
+      [{
+        id: "with-body",
+        provider: "codex",
+        kind: "question",
+        phase: "build",
+        requestedAt: 1,
+        resolvedAt: 2,
+        outcome: "auto-declined-headless",
+        title: "Choose an implementation",
+        body: "A decision was requested.",
+        questions: [{ prompt: "Which approach?", options: ["Conservative"] }],
+      }],
+    );
+
+    // The body is the provider's framing of the questions, so it reads as
+    // nonsense underneath them.
+    expect(history!.content).toContain(
+      "A decision was requested.\n\nWhich approach?\nOffered options: Conservative",
+    );
+  });
+
+  test("joins every question of one interaction into the same entry", () => {
+    const [history] = toPipelineTranscript(
+      [],
+      "codex",
+      FALLBACK,
+      [{
+        id: "multi-question",
+        provider: "codex",
+        kind: "mcp-form",
+        phase: "build",
+        requestedAt: 1,
+        resolvedAt: 2,
+        outcome: "auto-declined-headless",
+        title: "Fill in the form",
+        questions: [
+          { prompt: "Which branch?", options: [] },
+          { prompt: "Which reviewer?", options: [] },
+          { prompt: "Which milestone?", options: [] },
+        ],
+      }],
+    );
+
+    expect(history!.content).toContain(
+      "Which branch?\n\nWhich reviewer?\n\nWhich milestone?",
+    );
+  });
+
+  test("renders an interaction as one text part carrying the whole entry", () => {
+    const [history] = toPipelineTranscript(
+      [],
+      "codex",
+      FALLBACK,
+      [{
+        id: "single-part",
+        provider: "codex",
+        kind: "question",
+        phase: "build",
+        requestedAt: 1,
+        resolvedAt: 2,
+        outcome: "auto-declined-headless",
+        title: "Choose safely",
+        body: "A decision was requested.",
+        questions: [{ prompt: "Which approach?", options: ["Conservative"] }],
+      }],
+    );
+
+    // `hasRenderableContent` and the row renderer both read `parts`; a part that
+    // disagreed with `content` would show a different entry from the one the
+    // search index and the copy affordance work from.
+    expect(history!.parts).toEqual([
+      { type: "text", content: history!.content },
+    ]);
+  });
+
+  test("places an interaction beside the work it interrupted", () => {
+    const transcript = toPipelineTranscript(
+      [
+        {
+          id: "before",
+          role: "assistant",
+          content: "Started the build",
+          createdAt: "2026-07-29T00:01:00.000Z",
+        },
+        {
+          id: "after",
+          role: "assistant",
+          content: "Continued safely",
+          createdAt: "2026-07-29T00:03:00.000Z",
+        },
+      ],
+      "codex",
+      FALLBACK,
+      [{
+        id: "mid-stage",
+        provider: "codex",
+        kind: "question",
+        phase: "build",
+        requestedAt: Date.parse("2026-07-29T00:01:30.000Z"),
+        resolvedAt: Date.parse("2026-07-29T00:02:00.000Z"),
+        outcome: "auto-declined-headless",
+        title: "Choose an implementation",
+        questions: [],
+      }],
+    );
+
+    // Appended instead, the decline would sit below a message stamped a minute
+    // after it, reading as though the stage had finished before it happened.
+    expect(transcript.map((message) => message.id)).toEqual([
+      "before",
+      "pipeline-interaction:mid-stage",
+      "after",
+    ]);
+  });
+
+  test("keeps a message with an unreadable timestamp where it was written", () => {
+    const transcript = toPipelineTranscript(
+      [
+        {
+          id: "first",
+          role: "assistant",
+          content: "first",
+          createdAt: "2026-07-29T00:05:00.000Z",
+        },
+        { id: "second", role: "assistant", content: "second", createdAt: "not-a-time" },
+        {
+          id: "third",
+          role: "assistant",
+          content: "third",
+          createdAt: "2026-07-29T00:06:00.000Z",
+        },
+      ],
+      "codex",
+      FALLBACK,
+      [{
+        id: "last",
+        provider: "codex",
+        kind: "question",
+        phase: "build",
+        requestedAt: 1,
+        resolvedAt: Date.parse("2026-07-29T00:07:00.000Z"),
+        outcome: "auto-declined-headless",
+        title: "Choose safely",
+        questions: [],
+      }],
+    );
+
+    // Sorting the unreadable one on a parsed NaN would send it to one end of
+    // the stage; it inherits the position of the message before it instead.
+    expect(transcript.map((message) => message.id)).toEqual([
+      "first",
+      "second",
+      "third",
+      "pipeline-interaction:last",
+    ]);
+  });
+
+  test("clips each interaction field to its own budget", () => {
+    const [history] = toPipelineTranscript(
+      [],
+      "codex",
+      FALLBACK,
+      [{
+        id: "oversized",
+        provider: "codex",
+        kind: "question",
+        phase: "build",
+        requestedAt: 1,
+        resolvedAt: 2,
+        outcome: "auto-declined-headless",
+        title: "T".repeat(600),
+        body: "B".repeat(2_000),
+        questions: [{ prompt: "P".repeat(600), options: ["O".repeat(200)] }],
+      }],
+    );
+
+    // The protocol permits 16 KB a field, and this renders as one centred
+    // italic block with no expand affordance, so the caps are the only guard.
+    expect(history!.content).toContain(`${"T".repeat(511)}…`);
+    expect(history!.content).not.toContain("T".repeat(512));
+    expect(history!.content).toContain(`${"B".repeat(1_023)}…`);
+    expect(history!.content).not.toContain("B".repeat(1_024));
+    expect(history!.content).toContain(`${"P".repeat(511)}…`);
+    expect(history!.content).toContain(`Offered options: ${"O".repeat(127)}…`);
+  });
+
+  test("drops the questions and options past the counts it will render", () => {
+    const [history] = toPipelineTranscript(
+      [],
+      "codex",
+      FALLBACK,
+      [{
+        id: "too-many",
+        provider: "codex",
+        kind: "mcp-form",
+        phase: "build",
+        requestedAt: 1,
+        resolvedAt: 2,
+        outcome: "auto-declined-headless",
+        title: "Fill in the form",
+        questions: [
+          {
+            prompt: "Question 1",
+            options: ["Option A", "Option B", "Option C", "Option D", "Option E",
+              "Option F", "Option G", "Option H", "Option I", "Option J"],
+          },
+          { prompt: "Question 2", options: [] },
+          { prompt: "Question 3", options: [] },
+          { prompt: "Question 4", options: [] },
+          { prompt: "Question 5", options: [] },
+          { prompt: "Question 6", options: [] },
+        ],
+      }],
+    );
+
+    expect(history!.content).toContain("Question 4");
+    expect(history!.content).not.toContain("Question 5");
+    expect(history!.content).not.toContain("Question 6");
+    expect(history!.content).toContain(
+      "Offered options: Option A, Option B, Option C, Option D, Option E, Option F, Option G, Option H",
+    );
+    expect(history!.content).not.toContain("Option I");
+    expect(history!.content).not.toContain("Option J");
   });
 
   test("uses the stable fallback for an interaction timestamp outside the time clip", () => {

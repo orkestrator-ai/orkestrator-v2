@@ -228,6 +228,178 @@ describe("BuildCompletionStatus", () => {
     expect(screen.getByText(/1 unattended input request was auto-declined/)).toBeTruthy();
   });
 
+  test("shows the interaction retry's own pending state while it runs", async () => {
+    const pipeline = buildPipelineFixture({
+      id: "interaction-retry-pending",
+      phase: "failed",
+      error: "Unexpected authorization",
+      failureContext: {
+        phase: "building",
+        kind: "interactive-request",
+        sessionId: "build-1",
+        requestId: "permission-1",
+      },
+    });
+    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    type RetryResult = Awaited<ReturnType<typeof retryInteractionFailureMock>>;
+    let resolveRetry!: (value: RetryResult) => void;
+    retryInteractionFailureMock.mockImplementationOnce(() =>
+      new Promise((resolve) => {
+        resolveRetry = resolve;
+      }));
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+    const button = screen.getByRole("button", {
+      name: "Retry failed build phase",
+    }) as HTMLButtonElement;
+
+    fireEvent.click(button);
+
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText("Retrying…")).toBeTruthy();
+    expect(button.querySelector(".animate-spin")).toBeTruthy();
+
+    resolveRetry({
+      ...pipeline,
+      phase: "building",
+      failureContext: undefined,
+      error: undefined,
+      backendRevision: 2,
+    });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    expect(button.querySelector(".animate-spin")).toBeNull();
+  });
+
+  test("leaves the completion retry usable while the interaction retry runs", async () => {
+    const pipeline = buildPipelineFixture({
+      id: "independent-retries",
+      phase: "failed",
+      error: "Unexpected authorization",
+      failureContext: {
+        phase: "building",
+        kind: "interactive-request",
+        sessionId: "build-1",
+        requestId: "permission-1",
+      },
+      source: {
+        type: "github",
+        repositoryOwner: "acme",
+        repositoryName: "widget",
+        issueNumber: 42,
+        issueUrl: "https://github.com/acme/widget/issues/42",
+        status: "closed",
+      },
+      completionCommentStatus: "failed",
+      completionCommentError: "GitHub unavailable",
+    });
+    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    type RetryResult = Awaited<ReturnType<typeof retryInteractionFailureMock>>;
+    let resolveRetry!: (value: RetryResult) => void;
+    retryInteractionFailureMock.mockImplementationOnce(() =>
+      new Promise((resolve) => {
+        resolveRetry = resolve;
+      }));
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+    const interaction = screen.getByRole("button", {
+      name: "Retry failed build phase",
+    }) as HTMLButtonElement;
+    const completion = screen.getByRole("button", {
+      name: "Retry GitHub completion comment",
+    }) as HTMLButtonElement;
+
+    fireEvent.click(interaction);
+
+    // The two failures recover independently, so a retry of one is no reason to
+    // take away the only control the other has.
+    expect(interaction.disabled).toBe(true);
+    expect(completion.disabled).toBe(false);
+    expect(completion.textContent).not.toContain("Retrying…");
+    expect(completion.querySelector(".animate-spin")).toBeNull();
+
+    fireEvent.click(completion);
+    await waitFor(() =>
+      expect(retryCompletionCommentMock).toHaveBeenCalledWith(pipeline.id));
+
+    resolveRetry({
+      ...pipeline,
+      phase: "building",
+      failureContext: undefined,
+      error: undefined,
+      backendRevision: 2,
+    });
+    await waitFor(() => expect(interaction.disabled).toBe(false));
+  });
+
+  test("does not claim an interaction failure for another kind of failure", () => {
+    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
+      id: "prompt-dispatch-failure",
+      phase: "failed",
+      error: "The prompt was never dispatched",
+      failureContext: { phase: "building", kind: "prompt-dispatch", sessionId: "build-1" },
+      source: { type: "kanban", taskId: "task-1" },
+      completionCommentStatus: "failed",
+      completionCommentError: "The board rejected the move",
+    }));
+    const pipeline = useBuildPipelineStore.getState()
+      .pipelines.get("prompt-dispatch-failure")!;
+
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+
+    // Only an interactive-request failure has a safe retry here; offering one
+    // for a dispatch failure would replay a prompt that may already have run.
+    expect(screen.queryByRole("button", { name: "Retry failed build phase" }))
+      .toBeNull();
+    expect(screen.queryByText("The prompt was never dispatched")).toBeNull();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+  });
+
+  test("does not claim an interaction failure for a pipeline still running", () => {
+    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
+      id: "running-with-context",
+      phase: "building",
+      error: "Unexpected authorization",
+      // A failure context survives the retry that cleared the phase, so the
+      // banner is gated on the terminal phase and not on the context alone.
+      failureContext: {
+        phase: "building",
+        kind: "interactive-request",
+        sessionId: "build-1",
+        requestId: "permission-1",
+      },
+      source: { type: "kanban", taskId: "task-1" },
+      completionCommentStatus: "failed",
+      completionCommentError: "The board rejected the move",
+    }));
+    const pipeline = useBuildPipelineStore.getState()
+      .pipelines.get("running-with-context")!;
+
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+
+    expect(screen.queryByRole("button", { name: "Retry failed build phase" }))
+      .toBeNull();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByText(/Updating the task board failed/)).toBeTruthy();
+  });
+
+  test("summarises auto-declines for a build that has no source at all", () => {
+    // The completion banner's copy lookup is non-null-asserted, so a sourceless
+    // pipeline reaching this component must not take the tab down with it.
+    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
+      id: "sourceless-auto-declines",
+      phase: "complete",
+      completionCommentStatus: "failed",
+      autoDeclineCount: 2,
+    }));
+    const pipeline = useBuildPipelineStore.getState()
+      .pipelines.get("sourceless-auto-declines")!;
+
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+
+    expect(screen.getByText(/2 unattended input requests were auto-declined/))
+      .toBeTruthy();
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   test("retries a failed GitHub completion comment from the build UI", async () => {
     const pipelineId = seedFailedPipeline({
       type: "github",
@@ -401,5 +573,23 @@ describe("BuildCompletionStatus", () => {
 
     fireEvent.click(button);
     await waitFor(() => expect(retryCompletionCommentMock).toHaveBeenCalledTimes(2));
+  });
+
+  test("reports a rejected completion retry with the shared failure toast", async () => {
+    const pipelineId = seedFailedPipeline({ type: "kanban", taskId: "task-1" });
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+    retryCompletionCommentMock.mockRejectedValueOnce("board offline");
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Retry the task board update" }),
+    );
+
+    // Both kinds report through the one toast; a non-Error rejection is
+    // stringified rather than announced as "[object Object]".
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Failed to retry build", {
+        description: "board offline",
+      }));
   });
 });

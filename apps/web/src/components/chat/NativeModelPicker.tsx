@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
-import { Check, ChevronDown, RefreshCw, Zap } from "lucide-react";
+import { ChevronDown, RefreshCw, Zap } from "lucide-react";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuPortal,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -39,7 +42,7 @@ interface NativeModelPickerProps {
   selectedReasoningId?: string;
   selectedReasoningLabel?: string;
   onReasoningChange?: (reasoningId: string) => void;
-  fastModeEnabled?: boolean;
+  fastModeEnabled?: boolean | null;
   fastModeAvailable?: boolean;
   onFastModeChange?: (enabled: boolean) => void;
   disabled?: boolean;
@@ -48,14 +51,6 @@ interface NativeModelPickerProps {
 }
 
 const MODEL_ROW_HEIGHT_CLASS = "h-14";
-
-function SelectionMark({ selected }: { selected: boolean }) {
-  return (
-    <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
-      {selected ? <Check className="h-4 w-4 text-primary" /> : null}
-    </span>
-  );
-}
 
 function ModelItems({
   models,
@@ -72,15 +67,17 @@ function ModelItems({
   }
 
   return (
-    <>
+    <DropdownMenuRadioGroup
+      value={selectedModelId ?? ""}
+      onValueChange={onModelChange}
+    >
       {models.map((model) => (
-        <DropdownMenuItem
+        <DropdownMenuRadioItem
           key={model.id}
+          value={model.id}
           disabled={disabled}
-          onClick={() => onModelChange(model.id)}
-          className={cn(MODEL_ROW_HEIGHT_CLASS, "items-start gap-2 py-2")}
+          className={cn(MODEL_ROW_HEIGHT_CLASS, "items-start py-2")}
         >
-          <SelectionMark selected={model.id === selectedModelId} />
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="flex min-w-0 items-center gap-1.5">
               <span className="min-w-0 truncate text-sm font-medium">{model.label}</span>
@@ -96,9 +93,9 @@ function ModelItems({
               </span>
             ) : null}
           </span>
-        </DropdownMenuItem>
+        </DropdownMenuRadioItem>
       ))}
-    </>
+    </DropdownMenuRadioGroup>
   );
 }
 
@@ -116,15 +113,17 @@ function ReasoningItems({
   }
 
   return (
-    <>
+    <DropdownMenuRadioGroup
+      value={selectedReasoningId ?? ""}
+      onValueChange={(reasoningId) => onReasoningChange?.(reasoningId)}
+    >
       {reasoningOptions.map((option) => (
-        <DropdownMenuItem
+        <DropdownMenuRadioItem
           key={option.id}
+          value={option.id}
           disabled={disabled || !onReasoningChange}
-          onClick={() => onReasoningChange?.(option.id)}
-          className="items-start gap-2 py-2"
+          className="items-start py-2"
         >
-          <SelectionMark selected={option.id === selectedReasoningId} />
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="truncate text-sm font-medium">
               {option.label}
@@ -136,9 +135,9 @@ function ReasoningItems({
               </span>
             ) : null}
           </span>
-        </DropdownMenuItem>
+        </DropdownMenuRadioItem>
       ))}
-    </>
+    </DropdownMenuRadioGroup>
   );
 }
 
@@ -154,26 +153,23 @@ function SpeedItems({
   const canChange = fastModeAvailable && Boolean(onFastModeChange) && !disabled;
 
   return (
-    <>
-      <DropdownMenuItem
-        disabled={Boolean(disabled) || (fastModeAvailable && !onFastModeChange)}
-        onClick={() => onFastModeChange?.(false)}
-        className="gap-2"
+    <DropdownMenuRadioGroup
+      value={fastModeEnabled === null ? "" : fastModeEnabled ? "fast" : "normal"}
+      onValueChange={(value) => onFastModeChange?.(value === "fast")}
+    >
+      <DropdownMenuRadioItem
+        value="normal"
+        disabled={Boolean(disabled) || !onFastModeChange}
       >
-        <SelectionMark selected={!fastModeEnabled} />
         <span className="flex min-w-0 flex-col">
           <span>Normal</span>
           <span className="text-xs text-muted-foreground">Standard speed and credit rate</span>
         </span>
-      </DropdownMenuItem>
-      <DropdownMenuItem
+      </DropdownMenuRadioItem>
+      <DropdownMenuRadioItem
+        value="fast"
         disabled={!canChange}
-        onClick={() => onFastModeChange?.(true)}
-        className="gap-2"
-        aria-checked={fastModeEnabled}
-        role="menuitemcheckbox"
       >
-        <SelectionMark selected={fastModeEnabled} />
         <span className="flex min-w-0 flex-col">
           <span className="flex items-center gap-1">
             Fast <Zap className={cn("h-3 w-3 text-amber-500", fastModeEnabled && "fill-current")} />
@@ -182,8 +178,8 @@ function SpeedItems({
             {fastModeAvailable ? "Lower latency, higher credit rate" : "Not available for this model"}
           </span>
         </span>
-      </DropdownMenuItem>
-    </>
+      </DropdownMenuRadioItem>
+    </DropdownMenuRadioGroup>
   );
 }
 
@@ -200,7 +196,7 @@ export function NativeModelPicker({
   fastModeAvailable = false,
   onFastModeChange,
   disabled = false,
-  title = "Choose model, reasoning, and speed",
+  title,
   onRefreshModels,
 }: NativeModelPickerProps) {
   const [search, setSearch] = useState("");
@@ -217,10 +213,16 @@ export function NativeModelPicker({
         .includes(normalizedSearch),
     );
   }, [models, normalizedSearch]);
+  const fastModeUnknown = fastModeEnabled === null;
   const displayLabel = selectedReasoningLabel
-    ? `${selectedModelLabel} (${selectedReasoningLabel}${fastModeEnabled ? " ⚡" : ""})`
-    : `${selectedModelLabel}${fastModeEnabled ? " (⚡)" : ""}`;
+    ? `${selectedModelLabel} (${selectedReasoningLabel}${fastModeEnabled ? " ⚡" : ""}${fastModeUnknown ? "; speed unknown" : ""})`
+    : `${selectedModelLabel}${fastModeEnabled ? " (⚡)" : fastModeUnknown ? " (speed unknown)" : ""}`;
   const moreModelCount = Math.max(0, visibleModels.length - 5);
+  const showSpeedControls = Boolean(onFastModeChange);
+  const effectiveTitle = title
+    ?? (showSpeedControls
+      ? "Choose model, reasoning, and speed"
+      : "Choose model and reasoning");
 
   return (
     <DropdownMenu
@@ -232,7 +234,7 @@ export function NativeModelPicker({
         <button
           type="button"
           disabled={disabled}
-          title={title}
+          title={effectiveTitle}
           className="flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 md:max-w-[320px] md:flex-none"
           aria-label={displayLabel}
         >
@@ -244,6 +246,7 @@ export function NativeModelPicker({
                 <span>&nbsp;(</span>
                 <span>{selectedReasoningLabel}</span>
                 {fastModeEnabled ? <span>&nbsp;⚡</span> : null}
+                {fastModeUnknown ? <span>&nbsp;? speed</span> : null}
                 <span>)</span>
               </span>
             ) : fastModeEnabled ? (
@@ -255,7 +258,7 @@ export function NativeModelPicker({
       <DropdownMenuContent
         align="start"
         collisionPadding={{ top: 8, right: 8, bottom: 8, left: 8 }}
-        className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] overflow-hidden md:w-[min(46rem,calc(100vw-2rem))] md:max-w-[calc(100vw-2rem)]"
+        className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] md:w-[min(46rem,calc(100vw-2rem))] md:max-w-[calc(100vw-2rem)]"
         data-native-model-picker
       >
         <div className="flex items-center gap-1 p-1 pb-2">
@@ -326,7 +329,7 @@ export function NativeModelPicker({
               <DropdownMenuPortal>
                 <DropdownMenuSubContent
                   collisionPadding={{ top: 8, right: 8, bottom: 8, left: 8 }}
-                  className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)]"
+                  className="max-h-(--radix-dropdown-menu-content-available-height) w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] overflow-x-hidden overflow-y-auto"
                 >
                   <ReasoningItems
                     reasoningOptions={reasoningOptions}
@@ -338,27 +341,33 @@ export function NativeModelPicker({
               </DropdownMenuPortal>
             </DropdownMenuSub>
 
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              disabled={disabled || !fastModeAvailable || !onFastModeChange}
-              onClick={() => onFastModeChange?.(!fastModeEnabled)}
-              role="menuitemcheckbox"
-              aria-checked={fastModeEnabled}
-              className="gap-2"
-            >
-              <SelectionMark selected={fastModeEnabled} />
-              <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                <span className="flex items-center gap-1">
-                  Fast <Zap className="h-3 w-3 text-amber-500" />
-                </span>
-                {!fastModeAvailable ? (
-                  <span className="truncate text-xs text-muted-foreground">Unavailable</span>
-                ) : null}
-              </span>
-            </DropdownMenuItem>
+            {showSpeedControls ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem
+                  disabled={disabled || !fastModeAvailable}
+                  checked={fastModeEnabled === true}
+                  onCheckedChange={(checked) => onFastModeChange?.(checked === true)}
+                >
+                  <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                    <span className="flex items-center gap-1">
+                      Fast <Zap className="h-3 w-3 text-amber-500" />
+                    </span>
+                    {!fastModeAvailable ? (
+                      <span className="truncate text-xs text-muted-foreground">Unavailable</span>
+                    ) : fastModeEnabled === null ? (
+                      <span className="truncate text-xs text-muted-foreground">Unknown</span>
+                    ) : null}
+                  </span>
+                </DropdownMenuCheckboxItem>
+              </>
+            ) : null}
           </div>
         ) : (
-          <div className="grid grid-cols-3 divide-x divide-zinc-700/60">
+          <div className={cn(
+            "grid divide-x divide-zinc-700/60",
+            showSpeedControls ? "grid-cols-3" : "grid-cols-2",
+          )}>
             <div className="min-w-0 pr-1" role="group" aria-label="Models">
               <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Model
@@ -389,17 +398,19 @@ export function NativeModelPicker({
                 onReasoningChange={onReasoningChange}
               />
             </div>
-            <div className="min-w-0 pl-1" role="group" aria-label="Speed mode">
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Mode
-              </DropdownMenuLabel>
-              <SpeedItems
-                fastModeEnabled={fastModeEnabled}
-                fastModeAvailable={fastModeAvailable}
-                disabled={disabled}
-                onFastModeChange={onFastModeChange}
-              />
-            </div>
+            {showSpeedControls ? (
+              <div className="min-w-0 pl-1" role="group" aria-label="Speed mode">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Mode
+                </DropdownMenuLabel>
+                <SpeedItems
+                  fastModeEnabled={fastModeEnabled}
+                  fastModeAvailable={fastModeAvailable}
+                  disabled={disabled}
+                  onFastModeChange={onFastModeChange}
+                />
+              </div>
+            ) : null}
           </div>
         )}
       </DropdownMenuContent>

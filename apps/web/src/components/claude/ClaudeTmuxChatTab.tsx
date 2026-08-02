@@ -429,7 +429,7 @@ export function ClaudeTmuxChatTab({
   const [modelSwitching, setModelSwitching] = useState(false);
   const [effortSwitching, setEffortSwitching] = useState(false);
   const [fastModeSwitching, setFastModeSwitching] = useState(false);
-  const [fastModeEnabled, setFastModeEnabled] = useState(false);
+  const [fastModeEnabled, setFastModeEnabled] = useState<boolean | null>(false);
   const [modeSwitching, setModeSwitching] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
@@ -437,6 +437,7 @@ export function ClaudeTmuxChatTab({
   const [backendHydrated, setBackendHydrated] = useState(false);
   const startedRef = useRef(false);
   const permissionModeEventVersionRef = useRef(0);
+  const fastModeMutationVersionRef = useRef(0);
   const isProcessingQueueRef = useRef(false);
   /**
    * Head this tab has stopped retrying, and for how many consecutive failures.
@@ -578,6 +579,12 @@ export function ClaudeTmuxChatTab({
     effortOptions.length > 0 && !effortOptions.includes(selectedEffort)
       ? fallbackEffort(effortOptions)
       : selectedEffort;
+  const settingsSwitching =
+    modelSwitching || effortSwitching || fastModeSwitching || modeSwitching;
+  const applyFastMode = useCallback((enabled: boolean | null) => {
+    fastModeMutationVersionRef.current += 1;
+    setFastModeEnabled(enabled);
+  }, []);
 
   useLayoutEffect(() => {
     migrateLegacyClaudeTmuxState(tabId, stateKey, environmentId);
@@ -673,6 +680,7 @@ export function ClaudeTmuxChatTab({
       try {
         for (let attempt = 0; attempt < 3; attempt += 1) {
           const permissionModeVersion = permissionModeEventVersionRef.current;
+          const fastModeMutationVersion = fastModeMutationVersionRef.current;
           const tabStateBeforeAttempt =
             useClaudeTmuxStore.getState().tabs.get(storeKey);
           const status = await getStatus(tabId, environmentId);
@@ -695,7 +703,8 @@ export function ClaudeTmuxChatTab({
           const liveStateChanged =
             useClaudeTmuxStore.getState().tabs.get(storeKey) !==
               tabStateBeforeAttempt ||
-            permissionModeEventVersionRef.current !== permissionModeVersion;
+            permissionModeEventVersionRef.current !== permissionModeVersion ||
+            fastModeMutationVersionRef.current !== fastModeMutationVersion;
           if (liveStateChanged) {
             if (refreshRequestId > 0) {
               throw new Error("Claude tmux session changed while refreshing; try again");
@@ -713,7 +722,7 @@ export function ClaudeTmuxChatTab({
             });
             setTabBusy(storeKey, status.busy);
             setPlanMode(status.permission_mode === "plan");
-            setFastModeEnabled(status.fast_mode === true);
+            setFastModeEnabled(status.fast_mode);
 
             if (status.session_id) {
               replaceTranscript(storeKey, lines);
@@ -844,12 +853,13 @@ export function ClaudeTmuxChatTab({
 
       switch (ev.kind) {
         case "started":
+          startedRef.current = true;
           setRunning(storeKey, true, {
             environmentId: ev.environment_id,
             sessionId: ev.session_id,
             resumed: ev.resumed,
           });
-          setFastModeEnabled(ev.fast_mode === true);
+          applyFastMode(ev.fast_mode);
           return;
         case "initial-prompt-sent":
           if (ev.environment_id === environmentId) {
@@ -864,13 +874,14 @@ export function ClaudeTmuxChatTab({
           setPlanMode(ev.permission_mode === "plan");
           return;
         case "fast-mode-changed":
-          setFastModeEnabled(ev.fast_mode);
+          applyFastMode(ev.fast_mode);
           return;
         case "stopped":
+          startedRef.current = false;
           permissionModeEventVersionRef.current += 1;
           setRunning(storeKey, false, { sessionId: null });
           setPlanMode(false);
-          setFastModeEnabled(false);
+          applyFastMode(false);
           // No claude process means no in-flight turn.
           setTabBusy(storeKey, false);
           return;
@@ -968,6 +979,7 @@ export function ClaudeTmuxChatTab({
     setTabBusy,
     clearTabInitialPrompt,
     environmentId,
+    applyFastMode,
   ]);
 
   // Common "start the tmux session" path used by both auto-start (initial
@@ -980,7 +992,8 @@ export function ClaudeTmuxChatTab({
         initialPrompt,
         model: selectedModel,
         effort: effortOptions.length > 0 ? effectiveEffort : undefined,
-        fastMode: selectedModelObj.supportsFastMode === true && fastModeEnabled,
+        fastMode:
+          selectedModelObj.supportsFastMode === true && fastModeEnabled === true,
         resumeSessionId,
         replaceExisting,
       })
@@ -1056,8 +1069,7 @@ export function ClaudeTmuxChatTab({
       (!text && attachments.length === 0) ||
       sending ||
       isThinking ||
-      modelSwitching ||
-      effortSwitching
+      settingsSwitching
     ) {
       return false;
     }
@@ -1246,8 +1258,7 @@ export function ClaudeTmuxChatTab({
       !running ||
       sending ||
       isThinking ||
-      modelSwitching ||
-      effortSwitching
+      settingsSwitching
     ) {
       return;
     }
@@ -1326,8 +1337,7 @@ export function ClaudeTmuxChatTab({
     backendHydrated,
     clearPausedQueueHead,
     isThinking,
-    modelSwitching,
-    effortSwitching,
+    settingsSwitching,
     pauseQueueHead,
     running,
     sending,
@@ -1396,7 +1406,7 @@ export function ClaudeTmuxChatTab({
   };
 
   const handleInterrupt = async () => {
-    if (!running || modeSwitching) return;
+    if (!running || settingsSwitching) return;
     setError(null);
     try {
       await interruptSession(tabId, environmentId);
@@ -1579,13 +1589,13 @@ export function ClaudeTmuxChatTab({
   );
 
   const handleSelectModel = async (modelId: string) => {
-    if (modelId === selectedModel || modelSwitching || effortSwitching || fastModeSwitching) return;
+    if (modelId === selectedModel || settingsSwitching) return;
     const nextSupportsFastMode = getTmuxModel(modelId, availableModels).supportsFastMode === true;
 
     if (!hasStarted || !running) {
       setSelectedModel(modelId);
       clampEffortToModel(modelId);
-      if (!nextSupportsFastMode) setFastModeEnabled(false);
+      if (!nextSupportsFastMode) applyFastMode(false);
       void persistSelectedModel(modelId);
       return;
     }
@@ -1595,9 +1605,9 @@ export function ClaudeTmuxChatTab({
     setModelSwitching(true);
     setError(null);
     try {
-      if (fastModeEnabled && !nextSupportsFastMode) {
+      if (fastModeEnabled === true && !nextSupportsFastMode) {
         await switchFastMode(tabId, false, environmentId);
-        setFastModeEnabled(false);
+        applyFastMode(false);
       }
       await switchModel(tabId, modelId, environmentId);
       setSelectedModel(modelId);
@@ -1611,7 +1621,7 @@ export function ClaudeTmuxChatTab({
   };
 
   const handleSelectEffort = async (effort: ClaudeEffortLevel) => {
-    if (effort === effectiveEffort || effortSwitching || modelSwitching || fastModeSwitching) return;
+    if (effort === effectiveEffort || settingsSwitching) return;
 
     if (!hasStarted || !running) {
       setEffortLevel(storeKey, effort);
@@ -1636,15 +1646,13 @@ export function ClaudeTmuxChatTab({
     if (
       enabled === fastModeEnabled ||
       selectedModelObj.supportsFastMode !== true ||
-      modelSwitching ||
-      effortSwitching ||
-      fastModeSwitching
+      settingsSwitching
     ) {
       return;
     }
 
     if (!hasStarted || !running) {
-      setFastModeEnabled(enabled);
+      applyFastMode(enabled);
       return;
     }
 
@@ -1654,7 +1662,7 @@ export function ClaudeTmuxChatTab({
     setError(null);
     try {
       await switchFastMode(tabId, enabled, environmentId);
-      setFastModeEnabled(enabled);
+      applyFastMode(enabled);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -1670,6 +1678,7 @@ export function ClaudeTmuxChatTab({
       isThinking ||
       modelSwitching ||
       effortSwitching ||
+      fastModeSwitching ||
       modeSwitching
     ) {
       return;
@@ -1736,12 +1745,12 @@ export function ClaudeTmuxChatTab({
               interactiveMode
                 ? "text-foreground bg-muted/40 hover:bg-muted/60"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
-              (!running || modeSwitching) && "opacity-50 cursor-not-allowed",
+              (!running || settingsSwitching) && "opacity-50 cursor-not-allowed",
             )}
             onClick={() => {
-              if (running && !modeSwitching) setInteractiveMode((v) => !v);
+              if (running && !settingsSwitching) setInteractiveMode((v) => !v);
             }}
-            disabled={!running || modeSwitching}
+            disabled={!running || settingsSwitching}
             title={
               interactiveMode
                 ? "Switch back to the native tmux transcript view"
@@ -1769,7 +1778,7 @@ export function ClaudeTmuxChatTab({
             type="button"
             className="text-muted-foreground hover:text-foreground"
             onClick={handleInterrupt}
-            disabled={!running || modeSwitching}
+            disabled={!running || settingsSwitching}
             title="Interrupt the current Claude turn without closing tmux"
           >
             Interrupt
@@ -2009,7 +2018,7 @@ export function ClaudeTmuxChatTab({
               worktreePath={worktreePath}
               disabled={!running}
               busy={isThinking}
-              submitting={sending || modelSwitching || effortSwitching || fastModeSwitching || modeSwitching}
+              submitting={sending || settingsSwitching}
               autoFocus={isActive}
               onSubmit={handleSubmit}
               onQueue={handleQueue}
@@ -2041,20 +2050,12 @@ export function ClaudeTmuxChatTab({
                 (hasStarted && !running) ||
                 sending ||
                 isThinking ||
-                modelSwitching ||
-                effortSwitching ||
-                fastModeSwitching ||
-                modeSwitching
+                settingsSwitching
               }
               modelSwitching={modelSwitching}
               effortSwitching={effortSwitching}
               planLocked={
-                !running ||
-                sending ||
-                isThinking ||
-                modelSwitching ||
-                effortSwitching ||
-                modeSwitching
+                !running || sending || isThinking || settingsSwitching
               }
               layout={centerCompose ? "centered" : "bottom"}
             />
@@ -2915,7 +2916,7 @@ interface TmuxComposeBarProps {
   selectedEffort: ClaudeEffortLevel;
   effortOptions: ClaudeEffortLevel[];
   onSelectEffort: (level: ClaudeEffortLevel) => void;
-  fastModeEnabled: boolean;
+  fastModeEnabled: boolean | null;
   fastModeAvailable: boolean;
   onSelectFastMode: (enabled: boolean) => void;
   planMode: boolean;

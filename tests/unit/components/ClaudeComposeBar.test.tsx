@@ -1528,7 +1528,7 @@ describe("ClaudeComposeBar", () => {
       renderComposeBar();
 
       fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
-      const fastButton = screen.getByRole("menuitemcheckbox", { name: /Fast/ });
+      const fastButton = screen.getByRole("menuitemradio", { name: /^Fast Lower latency/ });
       expect(fastButton).toBeTruthy();
 
       fireEvent.click(fastButton!);
@@ -1538,7 +1538,7 @@ describe("ClaudeComposeBar", () => {
       expect(screen.getByLabelText(/Sonnet \(High ⚡\)/)).toBeTruthy();
 
       fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
-      fireEvent.click(screen.getByRole("menuitem", { name: /Normal/ }));
+      fireEvent.click(screen.getByRole("menuitemradio", { name: /^Normal Standard speed/ }));
       await waitFor(() => {
         expect(useClaudeStore.getState().isFastMode(SESSION_KEY)).toBe(false);
       });

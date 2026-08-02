@@ -17,7 +17,7 @@ export type TmuxEvent =
       environment_id: string;
       session_id: string;
       resumed: boolean;
-      fast_mode: boolean;
+      fast_mode: boolean | null;
     }
   | {
       kind: "initial-prompt-sent";
@@ -158,7 +158,7 @@ export interface TmuxStatus {
   resumed: boolean;
   busy: boolean;
   permission_mode: string;
-  fast_mode: boolean;
+  fast_mode: boolean | null;
 }
 
 /** Metadata about a previously-recorded session the user could resume. */

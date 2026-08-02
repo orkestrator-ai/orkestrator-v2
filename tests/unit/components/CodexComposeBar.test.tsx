@@ -1606,7 +1606,7 @@ describe("CodexComposeBar", () => {
     const { onFastModeChange } = renderComposeBar({ fastModeEnabled: false });
 
     fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
-    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Fast/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^Fast Lower latency/ }));
 
     expect(onFastModeChange).toHaveBeenCalledWith(true);
   });
@@ -1614,10 +1614,10 @@ describe("CodexComposeBar", () => {
   test("turns fast mode off when it is already enabled", () => {
     const { onFastModeChange } = renderComposeBar({ fastModeEnabled: true });
     fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
-    const fastButton = screen.getByRole("menuitemcheckbox", { name: /Fast/ });
+    const fastButton = screen.getByRole("menuitemradio", { name: /^Fast Lower latency/ });
 
     expect(fastButton.getAttribute("aria-checked")).toBe("true");
-    fireEvent.click(screen.getByRole("menuitem", { name: /Normal/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^Normal Standard speed/ }));
 
     expect(onFastModeChange).toHaveBeenCalledWith(false);
   });

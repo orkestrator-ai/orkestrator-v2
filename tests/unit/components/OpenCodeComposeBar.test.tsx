@@ -1938,7 +1938,7 @@ describe("OpenCodeComposeBar", () => {
     useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "gpt-5");
     renderComposeBar();
 
-    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+    fireEvent.pointerDown(screen.getByTitle("Choose model and reasoning"));
     fireEvent.click(await screen.findByText("High"));
 
     await waitFor(() => {
@@ -1951,8 +1951,8 @@ describe("OpenCodeComposeBar", () => {
     useOpenCodeStore.getState().setSelectedVariant(SESSION_KEY, "high");
     renderComposeBar();
 
-    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
-    fireEvent.click(await screen.findByRole("menuitem", { name: /Default/ }));
+    fireEvent.pointerDown(screen.getByTitle("Choose model and reasoning"));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Default/ }));
 
     await waitFor(() => {
       expect(useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY)).toBeUndefined();
@@ -1975,6 +1975,19 @@ describe("OpenCodeComposeBar", () => {
       expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe("gpt-next");
     });
     expect(useOpenCodeStore.getState().getSelectedVariant(SESSION_KEY)).toBe("high");
+  });
+
+  test("formats OpenCode variant identifiers as readable reasoning labels", async () => {
+    const variants = ["xhigh", "deep-reasoning", "tool_heavy"];
+    useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "gpt-5");
+    renderComposeBar({
+      models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", variants }],
+    });
+
+    fireEvent.pointerDown(screen.getByTitle("Choose model and reasoning"));
+    expect(await screen.findByText("Extra high")).toBeTruthy();
+    expect(screen.getByText("Deep reasoning")).toBeTruthy();
+    expect(screen.getByText("Tool heavy")).toBeTruthy();
   });
 
   test("clears a variant that the next variant-capable model does not support", async () => {
@@ -2099,7 +2112,7 @@ describe("OpenCodeComposeBar", () => {
     renderComposeBar({ favoriteModelIds: ["claude-sonnet", "gpt-5"] });
     fireEvent.pointerDown(screen.getByRole("button", { name: /Select model/i }));
     expect(screen.getAllByText("Favorite")).toHaveLength(2);
-    expect(screen.getByText("Claude Sonnet").closest("[role=menuitem]")).toBeTruthy();
+    expect(screen.getByText("Claude Sonnet").closest("[role=menuitemradio]")).toBeTruthy();
   });
 
   test("ignores unknown and duplicate favorite model IDs", () => {

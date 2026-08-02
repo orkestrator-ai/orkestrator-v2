@@ -15,6 +15,8 @@ import {
   claudeStateReadCommand,
   cleanupEnvironmentTmux,
   containerExecArgs,
+  fastModeFromPane,
+  fastModeRejectionFromPane,
   InteractiveTmuxTerminalManager,
   INTERACTIVE_SNAPSHOT_MAX_MS,
   INTERACTIVE_SNAPSHOT_MIN_MS,
@@ -54,6 +56,19 @@ import type { CommandContext } from "../../../apps/backend/src/core/commands";
 const tempDirs: string[] = [];
 /** mkdtemp prefix for the fake tmux runtime; also the guard for its cleanup path. */
 const RUNTIME_TEMP_PREFIX = "ork-tmux-runtime-";
+
+test("fast-mode pane parsing uses the newest acknowledgement and strips ANSI", () => {
+  expect(fastModeFromPane("Fast mode ON\n\u001b[31mFast mode OFF\u001b[0m")).toBe(false);
+  expect(fastModeFromPane("Fast mode ON")).toBe(true);
+  expect(fastModeFromPane("ordinary transcript text")).toBeUndefined();
+});
+
+test("fast-mode pane parsing surfaces visible command rejections", () => {
+  expect(fastModeRejectionFromPane("Fast mode is unavailable for this model"))
+    .toBe("Fast mode is unavailable for this model");
+  expect(fastModeRejectionFromPane("Unknown command: /fast")).toBe("Unknown command: /fast");
+  expect(fastModeRejectionFromPane("Fast mode ON")).toBeUndefined();
+});
 
 test("Claude tmux agent MCP config uses Claude's mcpServers document shape", () => {
   expect(JSON.parse(agentMcpConfigJson({
@@ -257,11 +272,11 @@ case "$command" in
       exit 2
     fi
     if [ -n "\${FAKE_TMUX_MISSING_ON_KILL:-}" ] && [ "$session_name" = "$FAKE_TMUX_MISSING_ON_KILL" ]; then
-      rm -f "$FAKE_TMUX_ALIVE/$session_name" "$FAKE_TMUX_ALIVE/$session_name.mode"
+      rm -f "$FAKE_TMUX_ALIVE/$session_name" "$FAKE_TMUX_ALIVE/$session_name.mode" "$FAKE_TMUX_ALIVE/$session_name.fast-option" "$FAKE_TMUX_ALIVE/$session_name.fast-pane"
       printf '%s\n' "can't find session: $session_name" >&2
       exit 1
     fi
-    [ -n "$session_name" ] && rm -f "$FAKE_TMUX_ALIVE/$session_name" "$FAKE_TMUX_ALIVE/$session_name.mode"
+    [ -n "$session_name" ] && rm -f "$FAKE_TMUX_ALIVE/$session_name" "$FAKE_TMUX_ALIVE/$session_name.mode" "$FAKE_TMUX_ALIVE/$session_name.fast-option" "$FAKE_TMUX_ALIVE/$session_name.fast-pane"
     exit 0
     ;;
   list-sessions)
@@ -270,7 +285,7 @@ case "$command" in
       [ -f "$candidate" ] || continue
       name="$(basename "$candidate")"
       case "$name" in
-        *.mode|*.input|*.fail-capture|*.fail-send) continue ;;
+        *.mode|*.input|*.fail-capture|*.fail-send|*.fast-option|*.fast-pane|*.reject-fast|*.ignore-fast|*.fail-fast-option) continue ;;
       esac
       printf '%s\n' "$name"
       found=1
@@ -284,7 +299,9 @@ case "$command" in
       printf '%s\n' 'capture failed' >&2
       exit 1
     fi
-    if [ -n "$session_name" ] && [ -f "$FAKE_TMUX_ALIVE/$session_name.mode" ]; then
+    if [ -n "$session_name" ] && [ -f "$FAKE_TMUX_ALIVE/$session_name.fast-pane" ]; then
+      cat "$FAKE_TMUX_ALIVE/$session_name.fast-pane"
+    elif [ -n "$session_name" ] && [ -f "$FAKE_TMUX_ALIVE/$session_name.mode" ]; then
       mode="$(cat "$FAKE_TMUX_ALIVE/$session_name.mode")"
       case "$mode" in
         plan) printf 'plan mode on' ;;
@@ -303,6 +320,22 @@ case "$command" in
       printf 'fake snapshot'
     fi
     exit 0
+    ;;
+  set-option)
+    if [ -n "$session_name" ] && [ -f "$FAKE_TMUX_ALIVE/$session_name.fail-fast-option" ]; then
+      printf '%s\n' 'set option failed' >&2
+      exit 1
+    fi
+    option_value="\${all_args##* }"
+    printf '%s' "$option_value" > "$FAKE_TMUX_ALIVE/$session_name.fast-option"
+    exit 0
+    ;;
+  show-options)
+    if [ -n "$session_name" ] && [ -f "$FAKE_TMUX_ALIVE/$session_name.fast-option" ]; then
+      cat "$FAKE_TMUX_ALIVE/$session_name.fast-option"
+      exit 0
+    fi
+    exit 1
     ;;
   load-buffer)
     cat > "$FAKE_TMUX_ALIVE/buffer-$buffer_name"
@@ -332,12 +365,23 @@ case "$command" in
         ;;
       *Enter*)
         input_file="$FAKE_TMUX_ALIVE/$session_name.input"
-        if [ "$(cat "$input_file" 2>/dev/null)" = '/plan' ]; then
+        input="$(cat "$input_file" 2>/dev/null)"
+        if [ "$input" = '/plan' ]; then
           if [ -f "$FAKE_TMUX_ALIVE/$session_name.delay-plan" ]; then
             sleep 0.25
           fi
           if [ ! -f "$FAKE_TMUX_ALIVE/$session_name.ignore-plan" ]; then
             printf 'plan' > "$FAKE_TMUX_ALIVE/$session_name.mode"
+          fi
+        elif [ "$input" = '/fast on' ] || [ "$input" = '/fast off' ]; then
+          if [ -f "$FAKE_TMUX_ALIVE/$session_name.reject-fast" ]; then
+            printf 'Fast mode is unavailable for this model' > "$FAKE_TMUX_ALIVE/$session_name.fast-pane"
+          elif [ ! -f "$FAKE_TMUX_ALIVE/$session_name.ignore-fast" ]; then
+            if [ "$input" = '/fast on' ]; then
+              printf 'Fast mode ON' > "$FAKE_TMUX_ALIVE/$session_name.fast-pane"
+            else
+              printf 'Fast mode OFF' > "$FAKE_TMUX_ALIVE/$session_name.fast-pane"
+            fi
           fi
         fi
         rm -f "$input_file"
@@ -1978,9 +2022,10 @@ exit 0
     const handlers = createHandlers();
 
     await withFakeTmuxRuntime(async ({ environment, alive }) => {
+      const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
         storage: { getEnvironment: async () => environment },
-        emit: () => undefined,
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
         appRoot: "",
         resourceRoot: "",
       };
@@ -2000,10 +2045,205 @@ exit 0
       await expect(
         invoke(handlers, "claude_tmux_status", { tabId, environmentId: environment.id }, context),
       ).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
+      await expect(fs.readFile(path.join(alive, `${session}.fast-option`), "utf8"))
+        .resolves.toBe("1");
+      expect(emitted).toContainEqual(expect.objectContaining({
+        payload: expect.objectContaining({ kind: "fast-mode-changed", fast_mode: true }),
+      }));
+
+      await invoke(handlers, "claude_tmux_switch_fast_mode", {
+        tabId,
+        environmentId: environment.id,
+        fastMode: false,
+      }, context);
+      await expect(
+        invoke(handlers, "claude_tmux_status", { tabId, environmentId: environment.id }, context),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: false }));
+      await expect(fs.readFile(path.join(alive, `${session}.fast-option`), "utf8"))
+        .resolves.toBe("0");
+      const beforeNoOp = await fs.readFile(path.join(alive, `${session}.fast-option`), "utf8");
+      const eventCountBeforeNoOp = emitted.length;
+      await invoke(handlers, "claude_tmux_switch_fast_mode", {
+        tabId,
+        environmentId: environment.id,
+        fastMode: false,
+      }, context);
+      expect(await fs.readFile(path.join(alive, `${session}.fast-option`), "utf8"))
+        .toBe(beforeNoOp);
+      expect(emitted).toHaveLength(eventCountBeforeNoOp);
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
   }, 20_000);
+
+  test("rehydrates fast mode from tmux metadata without trusting the new start request", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, alive }) => {
+      const tabId = "tab-fast-reattach";
+      const session = tmuxSessionName(environment.id, tabId);
+      await fs.mkdir(alive, { recursive: true });
+      await fs.writeFile(path.join(alive, session), "");
+      await fs.writeFile(path.join(alive, `${session}.mode`), "bypassPermissions");
+      await fs.writeFile(path.join(alive, `${session}.fast-option`), "1");
+
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      await expect(invoke(handlers, "claude_tmux_start", {
+        tabId,
+        environmentId: environment.id,
+        fastMode: false,
+      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  });
+
+  test("reports unknown fast mode when a reattached tmux session has no recoverable metadata", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, alive }) => {
+      const tabId = "tab-fast-unknown";
+      const session = tmuxSessionName(environment.id, tabId);
+      await fs.mkdir(alive, { recursive: true });
+      await fs.writeFile(path.join(alive, session), "");
+      await fs.writeFile(path.join(alive, `${session}.mode`), "bypassPermissions");
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      await expect(invoke(handlers, "claude_tmux_start", {
+        tabId,
+        environmentId: environment.id,
+        fastMode: true,
+      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: null }));
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  });
+
+  test("does not commit fast mode when Claude rejects the slash command", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, alive }) => {
+      const tabId = "tab-fast-rejected";
+      const session = tmuxSessionName(environment.id, tabId);
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      await fs.writeFile(path.join(alive, `${session}.reject-fast`), "");
+
+      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
+        tabId,
+        environmentId: environment.id,
+        fastMode: true,
+      }, context)).rejects.toThrow("Fast mode is unavailable for this model");
+      await expect(invoke(
+        handlers,
+        "claude_tmux_status",
+        { tabId, environmentId: environment.id },
+        context,
+      )).resolves.toEqual(expect.objectContaining({ fast_mode: false }));
+      expect(emitted.filter(({ payload }) =>
+        (payload as { kind?: string }).kind === "fast-mode-changed"
+      )).toHaveLength(0);
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  });
+
+  test("validates fast-mode requests and times out without inventing confirmation", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, alive, log }) => {
+      const tabId = "tab-fast-timeout";
+      const session = tmuxSessionName(environment.id, tabId);
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      const beforeMalformed = await fs.readFile(log, "utf8");
+      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
+        tabId,
+        environmentId: environment.id,
+        fastMode: "yes",
+      }, context)).rejects.toThrow("Expected fastMode to be a boolean");
+      expect(await fs.readFile(log, "utf8")).toBe(beforeMalformed);
+
+      await fs.writeFile(path.join(alive, `${session}.mode`), "selection");
+      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
+        tabId,
+        environmentId: environment.id,
+        fastMode: true,
+      }, context)).rejects.toThrow("Finish the active Claude prompt");
+      await fs.writeFile(path.join(alive, `${session}.mode`), "bypassPermissions");
+
+      await fs.writeFile(path.join(alive, `${session}.ignore-fast`), "");
+      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
+        tabId,
+        environmentId: environment.id,
+        fastMode: true,
+      }, context)).rejects.toThrow("Claude did not confirm fast mode on");
+      await expect(invoke(
+        handlers,
+        "claude_tmux_status",
+        { tabId, environmentId: environment.id },
+        context,
+      )).resolves.toEqual(expect.objectContaining({ fast_mode: false }));
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  }, 10_000);
+
+  test("keeps the confirmed mode and emits it when only tmux metadata persistence fails", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, alive }) => {
+      const tabId = "tab-fast-persist-failure";
+      const session = tmuxSessionName(environment.id, tabId);
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      await fs.writeFile(path.join(alive, `${session}.fail-fast-option`), "");
+
+      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
+        tabId,
+        environmentId: environment.id,
+        fastMode: true,
+      }, context)).rejects.toThrow("Fast mode changed but its restart metadata could not be saved");
+      await expect(invoke(
+        handlers,
+        "claude_tmux_status",
+        { tabId, environmentId: environment.id },
+        context,
+      )).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
+      expect(emitted).toContainEqual(expect.objectContaining({
+        payload: expect.objectContaining({ kind: "fast-mode-changed", fast_mode: true }),
+      }));
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  });
 
   test("starts with installed hooks, reads transcripts, replies to hooks, and maps interactive input", async () => {
     const handlers = createHandlers();
@@ -2546,6 +2786,9 @@ exit 0
       }, 3_000);
 
       try {
+        expect(await fs.readFile(log, "utf8")).toContain(
+          " --settings '{\"fastMode\":false}'",
+        );
         const beforeSwitch = await fs.readFile(log, "utf8");
         await expect(invoke(
           handlers,
@@ -2553,6 +2796,13 @@ exit 0
           { tabId: "tab-initial", environmentId: environment.id, planMode: true },
           context,
         )).rejects.toThrow("Cannot switch Claude mode while a turn is running");
+        expect(await fs.readFile(log, "utf8")).toBe(beforeSwitch);
+        await expect(invoke(
+          handlers,
+          "claude_tmux_switch_fast_mode",
+          { tabId: "tab-initial", environmentId: environment.id, fastMode: true },
+          context,
+        )).rejects.toThrow("Cannot switch Claude fast mode while a turn is running");
         expect(await fs.readFile(log, "utf8")).toBe(beforeSwitch);
 
         await invoke(

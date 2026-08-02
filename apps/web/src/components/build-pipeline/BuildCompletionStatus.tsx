@@ -1,16 +1,22 @@
 import { AlertCircle, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   useBuildPipelineStore,
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
-import { retryBuildPipelineCompletionComment } from "@/lib/backend";
+import {
+  retryBuildPipelineCompletionComment,
+  retryBuildPipelineInteractionFailure,
+} from "@/lib/backend";
 
 interface BuildCompletionStatusProps {
   pipeline: BuildPipeline;
 }
+
+/** The two independently recoverable failures this banner can surface. */
+type RetryKind = "interaction" | "completion";
 
 /**
  * How the backend describes the terminal hand-off it failed to complete.
@@ -51,50 +57,90 @@ export function BuildCompletionStatus({
   pipeline,
 }: BuildCompletionStatusProps) {
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
-  const [retryPending, setRetryPending] = useState(false);
+  // Keyed by kind: both banners can be visible at once, and a retry of one is
+  // no reason to take away the other recovery control.
+  const [retryPending, setRetryPending] = useState<RetryKind | null>(null);
+  const retryInFlight = useRef<RetryKind | null>(null);
 
   const source = pipeline.source;
-  if (!source || pipeline.completionCommentStatus !== "failed") {
+  const interactionFailure = pipeline.phase === "failed"
+    && pipeline.failureContext?.kind === "interactive-request";
+  const completionFailure = Boolean(
+    source && pipeline.completionCommentStatus === "failed",
+  );
+  const autoDeclines = pipeline.autoDeclineCount ?? 0;
+  if (!interactionFailure && !completionFailure && autoDeclines === 0) {
     return null;
   }
-  const copy = FAILURE_COPY[source.type];
+  const copy = source ? FAILURE_COPY[source.type] : undefined;
+  const retry = async (kind: RetryKind): Promise<void> => {
+    if (retryInFlight.current === kind) return;
+    retryInFlight.current = kind;
+    setRetryPending(kind);
+    try {
+      replacePipeline(kind === "interaction"
+        ? await retryBuildPipelineInteractionFailure(pipeline.id)
+        : await retryBuildPipelineCompletionComment(pipeline.id));
+    } catch (error) {
+      toast.error("Failed to retry build", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      retryInFlight.current = null;
+      setRetryPending((current) => (current === kind ? null : current));
+    }
+  };
 
-  return (
-    <div
-      className="flex flex-wrap items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2"
-      role="alert"
-    >
-      <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
-      <span className="min-w-0 flex-1 text-xs text-destructive">
-        {copy.label}: {pipeline.completionCommentError ?? copy.fallback}
-      </span>
+  const retryButton = (kind: RetryKind, ariaLabel: string) => {
+    const pending = retryPending === kind;
+    return (
       <Button
         type="button"
         variant="outline"
         size="sm"
         className="h-7 gap-1.5 text-xs"
-        aria-label={copy.retryLabel}
-        disabled={retryPending}
-        onClick={async () => {
-          if (retryPending) return;
-          setRetryPending(true);
-          try {
-            replacePipeline(
-              await retryBuildPipelineCompletionComment(pipeline.id),
-            );
-          } catch (error) {
-            toast.error(`Failed to retry: ${copy.label.toLowerCase()}`, {
-              description:
-                error instanceof Error ? error.message : String(error),
-            });
-          } finally {
-            setRetryPending(false);
-          }
-        }}
+        aria-label={ariaLabel}
+        disabled={pending}
+        onClick={() => void retry(kind)}
       >
-        <RefreshCw className={`h-3.5 w-3.5${retryPending ? " animate-spin" : ""}`} />
-        {retryPending ? "Retrying…" : "Retry"}
+        <RefreshCw className={`h-3.5 w-3.5${pending ? " animate-spin" : ""}`} />
+        {pending ? "Retrying…" : "Retry"}
       </Button>
-    </div>
+    );
+  };
+
+  return (
+    <>
+      {autoDeclines > 0 && (
+        <div className="border-b border-border/40 bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+          {autoDeclines} unattended input request{autoDeclines === 1 ? " was" : "s were"} auto-declined. Review the muted transcript entries for details.
+        </div>
+      )}
+      {interactionFailure && (
+        <div
+          className="flex flex-wrap items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2"
+          role="alert"
+        >
+          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+          <span className="min-w-0 flex-1 text-xs text-destructive">
+            {pipeline.error
+              ?? "An unattended interaction could not be resolved safely, so the active phase stopped."}
+          </span>
+          {retryButton("interaction", "Retry failed build phase")}
+        </div>
+      )}
+      {completionFailure && (
+        <div
+          className="flex flex-wrap items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2"
+          role="alert"
+        >
+          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+          <span className="min-w-0 flex-1 text-xs text-destructive">
+            {copy!.label}: {pipeline.completionCommentError ?? copy!.fallback}
+          </span>
+          {retryButton("completion", copy!.retryLabel)}
+        </div>
+      )}
+    </>
   );
 }

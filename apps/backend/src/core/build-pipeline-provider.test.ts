@@ -4,6 +4,7 @@ import type { TaskSnapshotImage } from "@orkestrator/protocol/build-pipeline";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   AGENT_INTERACTION_LIMITS,
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
   UNATTENDED_AGENT_INTERACTION_POLICY,
   type AgentInteractionRequest,
   type AgentInteractionResolution,
@@ -608,6 +609,16 @@ describe("provider-neutral interaction adapters", () => {
     expect(first.requests[0]!.presentation.questions[0]!.options.map((option) => option.id))
       .toEqual(["q0:o0", "q0:o1", "q0:o2"]);
 
+    // A cached/adopted provider may be registered again, but a live request
+    // keeps the policy it was presented under instead of switching owners.
+    provider.registerSession?.("session-1", {
+      origin: "interactive-native",
+      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      phase: "chat",
+    });
+    expect((await provider.interactions!.listPendingInteractions("session-1"))
+      .requests[0]!.origin).toBe("build-pipeline");
+
     const question = first.requests[0]!;
     await expect(provider.interactions!.resolveInteraction(
       "other-session",
@@ -634,6 +645,116 @@ describe("provider-neutral interaction adapters", () => {
       approval.id,
       declineResolution(approval),
     )).resolves.toMatchObject({ result: "stale" });
+  });
+
+  test("lets the first real registration replace an implicit placeholder", async () => {
+    const expiresAt = Date.now() + 60_000;
+    const { provider } = httpProvider((url) => Response.json(
+      url.endsWith("/questions")
+        ? {
+            questions: [{
+              id: "question-1",
+              expiresAt,
+              questions: [{ question: "Choose", options: [] }],
+            }],
+          }
+        : { approvals: [] },
+    ));
+
+    // Reading a snapshot for an unknown session registers it implicitly with
+    // DEFAULT_SESSION_REGISTRATION. That placeholder is not a decision, so it
+    // must not out-rank the authoritative registration that follows — first
+    // -write-wins protects a real policy from being flipped, not a default from
+    // being filled in. Locking here would silently leave an unattended build
+    // session on the interactive policy, where it stops auto-resolving.
+    const implicit = await provider.interactions!.listPendingInteractions("session-1");
+    expect(implicit.requests[0]!.origin).toBe("interactive-native");
+
+    provider.registerSession?.("session-1", {
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      phase: "build",
+      workflowId: "workflow-1",
+      provider: "claude",
+      fence: "pipeline:build:1",
+    });
+
+    const afterRegistration = await provider.interactions!
+      .listPendingInteractions("session-1");
+    expect(afterRegistration.requests[0]!.origin).toBe("build-pipeline");
+    const internal = provider as unknown as {
+      interactionTracker: {
+        registration(sessionId: string): ProviderSessionRegistration;
+      };
+    };
+    expect(internal.interactionTracker.registration("session-1")).toEqual({
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      phase: "build",
+      workflowId: "workflow-1",
+      provider: "claude",
+      fence: "pipeline:build:1",
+    });
+
+    // A second registration still cannot flip the live session back.
+    provider.registerSession?.("session-1", {
+      origin: "interactive-native",
+      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+    });
+    expect(internal.interactionTracker.registration("session-1")).toMatchObject({
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+    });
+  });
+
+  test("fills in registration metadata a first caller did not know", async () => {
+    const { provider } = httpProvider(() => Response.json({
+      questions: [],
+      approvals: [],
+    }));
+    const internal = provider as unknown as {
+      interactionTracker: {
+        registration(sessionId: string): ProviderSessionRegistration;
+      };
+    };
+
+    // The activity sweep registers without a phase; the interaction reconciler
+    // registers with one. Whichever lands first must not cost the other its
+    // fields, so long as origin and policy agree.
+    provider.registerSession?.("session-1", {
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      workflowId: "workflow-1",
+    });
+    provider.registerSession?.("session-1", {
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      phase: "build",
+      provider: "claude",
+      fence: "pipeline:build:1",
+    });
+
+    expect(internal.interactionTracker.registration("session-1")).toEqual({
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      workflowId: "workflow-1",
+      phase: "build",
+      provider: "claude",
+      fence: "pipeline:build:1",
+    });
+
+    // A recorded fence is never replaced: it identifies the generation that
+    // owns any request already in flight.
+    provider.registerSession?.("session-1", {
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      workflowId: "workflow-2",
+      fence: "pipeline:build:2",
+    });
+    expect(internal.interactionTracker.registration("session-1")).toMatchObject({
+      workflowId: "workflow-1",
+      fence: "pipeline:build:1",
+    });
   });
 
   test("Codex recovers from snapshots, rejects stale generations, and resolves once", async () => {
@@ -1527,6 +1648,52 @@ describe("provider-neutral interaction adapters", () => {
       .resolves.toMatchObject({ requests: expect.any(Array) });
   });
 
+  test("accepts a new policy only after a tracked session is evicted", async () => {
+    const { provider } = httpProvider(() => Response.json({ questions: [], approvals: [] }));
+    const internal = provider as unknown as {
+      interactionTracker: {
+        registrations: Map<string, ProviderSessionRegistration>;
+        registration(sessionId: string): ProviderSessionRegistration;
+      };
+    };
+    const unattended: ProviderSessionRegistration = {
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      phase: "build",
+      workflowId: "workflow-1",
+      provider: "claude",
+      fence: "pipeline:build:1",
+    };
+    provider.registerSession?.("session-0", unattended);
+    // The whole registration round-trips, not just origin/policy: unattended
+    // adoption is decided from the workflow ownership fence.
+    expect(internal.interactionTracker.registration("session-0")).toEqual(unattended);
+
+    // One insert past MAX_TRACKED_INTERACTION_SESSIONS drops the oldest entry,
+    // which is the session registered first.
+    for (let index = 1; index <= 1_024; index += 1) {
+      provider.registerSession?.(`filler-${index}`, {
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+    }
+    expect(internal.interactionTracker.registrations.size).toBe(1_024);
+    expect(internal.interactionTracker.registrations.has("session-0")).toBe(false);
+
+    // First-write-wins protects a *live* entry. Once evicted there is no policy
+    // left to preserve, so the next registration is accepted outright.
+    const interactive: ProviderSessionRegistration = {
+      origin: "interactive-native",
+      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      phase: "chat",
+      workflowId: "workflow-2",
+      provider: "claude",
+      fence: 2,
+    };
+    provider.registerSession?.("session-0", interactive);
+    expect(internal.interactionTracker.registration("session-0")).toEqual(interactive);
+  });
+
   test("rejects oversized HTTP identities before retaining tracker state", async () => {
     const oversizedId = "x".repeat(AGENT_INTERACTION_LIMITS.maxIdLength + 1);
     const { provider } = httpProvider((url) => Response.json(
@@ -1971,6 +2138,9 @@ function openCodeProvider(fake: OpenCodeFake, monitorRetryMs = 1) {
     {
       openCodeClient: fake.client,
       monitorRetryMs,
+      // Exercises the isolated compatibility responder. Production providers
+      // default this off and build pipelines use the common journaled resolver.
+      autoAnswerRequests: true,
     },
   );
 }
@@ -2163,6 +2333,7 @@ describe("OpenCode build pipeline provider", () => {
     }, {
       openCodeClient: fake.client,
       monitorRetryMs: 1,
+      autoAnswerRequests: true,
       onInteractionObservation: async (event) => {
         events.push({ state: event.state, kind: event.kind });
         if (event.kind === "permission") throw new Error("diagnostics unavailable");
@@ -2210,6 +2381,154 @@ describe("OpenCode build pipeline provider", () => {
     }
   });
 
+  test("reports a withdrawn OpenCode auto-response as an error provider state", async () => {
+    const fake = openCodeFake();
+    const events: Array<{
+      kind: string;
+      state: string;
+      providerState?: string;
+    }> = [];
+    const provider = createBuildPipelineProvider({
+      agent: "opencode",
+      baseUrl: "http://opencode.test",
+      authToken: "test-token",
+      directory: "/workspace",
+    }, {
+      openCodeClient: fake.client,
+      monitorRetryMs: 1,
+      autoAnswerRequests: true,
+      onInteractionObservation: (event) => {
+        events.push({
+          kind: event.kind,
+          state: event.state,
+          providerState: event.providerState,
+        });
+      },
+    });
+    try {
+      await provider.createSession("build", "Build task");
+      await waitUntil(() => fake.subscriptions.length === 1);
+      fake.subscriptions[0]!.push({
+        type: "permission.asked",
+        properties: { id: "permission-1", sessionID: "owned-session" },
+      });
+      await waitUntil(() => fake.permissionReplies.length === 1);
+      fake.subscriptions[0]!.push({
+        type: "question.asked",
+        properties: { id: "question-1", sessionID: "owned-session" },
+      });
+      await waitUntil(() => fake.questionRejections.length === 1);
+      await waitUntil(() => events.length === 4);
+
+      // `native-agent-service` projects this field straight onto the session
+      // (`event.providerState ?? "running"`). A provider-owned rejection is
+      // terminal, so `running` would leave the card spinning on a request the
+      // provider has already refused and nobody else will answer.
+      expect(events).toEqual([
+        { kind: "permission", state: "detected", providerState: undefined },
+        { kind: "permission", state: "withdrawn", providerState: "error" },
+        { kind: "question", state: "detected", providerState: undefined },
+        { kind: "question", state: "withdrawn", providerState: "error" },
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("carries the full workflow registration on every OpenCode observation", async () => {
+    const fake = openCodeFake();
+    const registration: ProviderSessionRegistration = {
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      phase: "build",
+      workflowId: "pipeline-1",
+      provider: "opencode",
+      fence: "pipeline-1:build:3:abc",
+    };
+    const observed: ProviderSessionRegistration[] = [];
+    const provider = createBuildPipelineProvider({
+      agent: "opencode",
+      baseUrl: "http://opencode.test",
+      authToken: "test-token",
+      directory: "/workspace",
+    }, {
+      openCodeClient: fake.client,
+      monitorRetryMs: 1,
+      autoAnswerRequests: true,
+      onInteractionObservation: (event) => {
+        observed.push(event.registration);
+      },
+    });
+    try {
+      await provider.createSession("build", "Build task", {
+        interaction: registration,
+      });
+      await waitUntil(() => fake.subscriptions.length === 1);
+      fake.subscriptions[0]!.push({
+        type: "permission.asked",
+        properties: { id: "permission-1", sessionID: "owned-session" },
+      });
+      await waitUntil(() => observed.length === 2);
+
+      // The observer decides adoption from the workflow ownership fence, so the
+      // fence and its owning workflow have to survive the round trip alongside
+      // the origin/policy pair.
+      expect(observed).toEqual([registration, registration]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("keeps the original workflow fence when an OpenCode session is registered again", async () => {
+    const fake = openCodeFake();
+    const original: ProviderSessionRegistration = {
+      origin: "build-pipeline",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      phase: "build",
+      workflowId: "pipeline-1",
+      provider: "opencode",
+      fence: "pipeline-1:build:3:abc",
+    };
+    const observed: ProviderSessionRegistration[] = [];
+    const provider = createBuildPipelineProvider({
+      agent: "opencode",
+      baseUrl: "http://opencode.test",
+      authToken: "test-token",
+      directory: "/workspace",
+    }, {
+      openCodeClient: fake.client,
+      monitorRetryMs: 1,
+      autoAnswerRequests: true,
+      onInteractionObservation: (event) => {
+        observed.push(event.registration);
+      },
+    });
+    try {
+      await waitUntil(() => fake.subscriptions.length === 1);
+      provider.registerSession?.("restored-session", original);
+      // A cached or restored provider re-asserts its metadata on every pass. It
+      // must not move a live session onto a newer generation, and above all not
+      // switch it from unattended to interactive.
+      provider.registerSession?.("restored-session", {
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        phase: "chat",
+        workflowId: "pipeline-2",
+        provider: "opencode",
+        fence: "pipeline-2:build:4:def",
+      });
+      fake.subscriptions[0]!.push({
+        type: "permission.asked",
+        properties: { id: "permission-1", sessionID: "restored-session" },
+      });
+      await waitUntil(() => observed.length >= 1);
+
+      expect(observed[0]).toEqual(original);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("leaves an OpenCode question pending when durable detection fails", async () => {
     const fake = openCodeFake();
     const provider = createBuildPipelineProvider({
@@ -2220,6 +2539,7 @@ describe("OpenCode build pipeline provider", () => {
     }, {
       openCodeClient: fake.client,
       monitorRetryMs: 1,
+      autoAnswerRequests: true,
       onInteractionObservation: (event) => {
         if (event.kind === "question" && event.state === "detected") {
           throw new Error("durable failure write failed");
@@ -2387,7 +2707,7 @@ describe("OpenCode build pipeline provider", () => {
     }
   });
 
-  test("answers only owned-session events and grants permissions once", async () => {
+  test("answers only owned-session events and denies unexpected permissions", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
     try {
@@ -2415,7 +2735,7 @@ describe("OpenCode build pipeline provider", () => {
       expect(fake.permissionReplies).toEqual([{
         requestID: "owned-p",
         directory: "/workspace",
-        reply: "once",
+        reply: "reject",
       }]);
       expect(fake.questionRejections).toEqual([{
         requestID: "owned-q",
@@ -2621,7 +2941,7 @@ describe("OpenCode build pipeline provider", () => {
     }
   });
 
-  test("does not monitor or answer requests for an interactive OpenCode provider", async () => {
+  test("does not monitor or answer requests when OpenCode auto-answering is omitted", async () => {
     const fake = openCodeFake();
     fake.setPending(
       [{ id: "permission-1", sessionID: "owned-session" }],
@@ -2636,7 +2956,6 @@ describe("OpenCode build pipeline provider", () => {
       },
       {
         openCodeClient: fake.client,
-        autoAnswerRequests: false,
       },
     );
 

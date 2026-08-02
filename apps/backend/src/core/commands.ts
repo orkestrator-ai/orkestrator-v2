@@ -9095,6 +9095,12 @@ export function createCommandRegistry(
       asNonBlankString(pipelineId, "pipelineId"),
     );
   });
+  register("retry_build_pipeline_interaction_failure", ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.retryInteractionFailure(
+      asNonBlankString(pipelineId, "pipelineId"),
+    );
+  });
   register("retry_build_pipeline_completion_comment", ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.retryCompletionComment(

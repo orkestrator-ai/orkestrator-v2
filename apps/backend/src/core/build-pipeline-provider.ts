@@ -40,6 +40,10 @@ export interface ProviderSessionRegistration {
   interactionPolicy: AgentInteractionPolicy;
   /** Content-free workflow phase used by passive observations. */
   phase?: string;
+  /** Stable workflow ownership and generation fence for unattended adoption. */
+  workflowId?: string;
+  provider?: BuildPipelineAgent;
+  fence?: string | number;
 }
 
 /** Content-free lifecycle signal emitted before a provider-owned auto-response. */
@@ -243,12 +247,8 @@ export type ProviderDependencies = {
     images: readonly TaskSnapshotImage[],
   ) => Promise<PromptAttachment[]>;
   /**
-   * Answer OpenCode permission and question requests on the user's behalf.
-   *
-   * Only correct for pipeline-owned sessions, which have no human watching.
-   * Interactive sessions must leave this off so the request reaches the tab:
-   * approving on the user's behalf would run a command they never saw, and
-   * rejecting a question cancels the card that exists to answer it.
+   * Legacy test-only OpenCode event responder. Disabled unless explicitly
+   * requested; production workflows use the persisted common resolver.
    */
   autoAnswerRequests?: boolean;
   /**
@@ -405,6 +405,17 @@ function requestCreatedAt(expiresAt: number | undefined, now: number): number {
 
 class InteractionSnapshotTracker {
   private readonly registrations = new Map<string, ProviderSessionRegistration>();
+  /**
+   * Sessions whose registration came from a caller rather than from the
+   * implicit default.
+   *
+   * {@link snapshot} registers an unknown session so it can be tracked at all,
+   * and that placeholder says `interactive-native`. Without this distinction,
+   * first-write-wins would let one early read permanently pin an unattended
+   * build-pipeline session to the interactive policy — it would simply stop
+   * auto-resolving, with nothing to show for it.
+   */
+  private readonly explicitRegistrations = new Set<string>();
   private readonly fingerprints = new Map<string, string>();
   private readonly revisions = new Map<string, number>();
   private readonly firstSeenAt = new Map<string, number>();
@@ -418,6 +429,7 @@ class InteractionSnapshotTracker {
       const oldest = this.registrations.keys().next().value as string | undefined;
       if (oldest !== undefined) {
         this.registrations.delete(oldest);
+        this.explicitRegistrations.delete(oldest);
         this.fingerprints.delete(oldest);
         this.revisions.delete(oldest);
         for (const [interactionId, ownerSessionId] of this.interactionSessions) {
@@ -427,7 +439,39 @@ class InteractionSnapshotTracker {
         }
       }
     }
-    this.registrations.set(sessionId, interaction ?? DEFAULT_SESSION_REGISTRATION);
+    const existing = this.registrations.get(sessionId);
+    if (existing === undefined) {
+      this.registrations.set(sessionId, interaction ?? DEFAULT_SESSION_REGISTRATION);
+      if (interaction) this.explicitRegistrations.add(sessionId);
+      return;
+    }
+    if (!interaction) return;
+    // The placeholder written by an early read is not a decision, so the first
+    // real registration replaces it outright.
+    if (!this.explicitRegistrations.has(sessionId)) {
+      this.registrations.set(sessionId, interaction);
+      this.explicitRegistrations.add(sessionId);
+      return;
+    }
+    // Policy is fixed before the first request. Re-registering a restored or
+    // cached provider may reassert the same metadata, but must never switch a
+    // live session between interactive and unattended while a request exists.
+    if (
+      interaction.origin !== existing.origin
+      || interaction.interactionPolicy.mode !== existing.interactionPolicy.mode
+    ) return;
+    // Same identity, so fill in metadata the first caller did not have —
+    // callers differ in what they know (the activity sweep has no `phase`, the
+    // reconciler does) and whichever ran first should not cost the others their
+    // fields. Values already recorded are never overwritten: the fence in
+    // particular identifies the generation that owns any live request.
+    this.registrations.set(sessionId, {
+      ...existing,
+      phase: existing.phase ?? interaction.phase,
+      workflowId: existing.workflowId ?? interaction.workflowId,
+      provider: existing.provider ?? interaction.provider,
+      fence: existing.fence ?? interaction.fence,
+    });
   }
 
   registration(sessionId: string): ProviderSessionRegistration {
@@ -1620,7 +1664,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
       1,
       dependencies.monitorRetryMs ?? DEFAULT_MONITOR_RETRY_MS,
     );
-    this.autoAnswerRequests = dependencies.autoAnswerRequests !== false;
+    this.autoAnswerRequests = dependencies.autoAnswerRequests === true;
     this.onInteractionObservation = dependencies.onInteractionObservation;
     // An interactive provider has nothing to monitor: every request belongs to a
     // tab that will answer it. Subscribing anyway would open a permanent event
@@ -1776,10 +1820,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
         const response = await this.client.permission.reply({
           requestID: requestId,
           directory: this.connection.directory,
-          reply: "once",
+          reply: "reject",
         }, this.requestOptions());
         assertSdkResponse(response, "OpenCode permission response");
-        await observe("withdrawn", "running").catch(() => undefined);
+        await observe("withdrawn", "error").catch(() => undefined);
       } else if (event.type === "question.asked") {
         // The owner persists the fail-closed terminal outcome before the
         // upstream question is removed. If persistence fails, leave the

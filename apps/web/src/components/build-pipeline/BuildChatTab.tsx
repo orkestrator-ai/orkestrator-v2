@@ -215,9 +215,15 @@ export function BuildChatTab({
             selectedSession?.messages,
             agentType,
             selectedSession?.startedAt ?? new Date().toISOString(),
+            selectedSession?.interactionTranscript,
           )
         : [],
-    [agentType, selectedSession?.messages, selectedSession?.startedAt],
+    [
+      agentType,
+      selectedSession?.messages,
+      selectedSession?.startedAt,
+      selectedSession?.interactionTranscript,
+    ],
   );
 
   const runControl = async (
@@ -287,7 +293,10 @@ export function BuildChatTab({
 
   const phaseLabel = PHASE_LABELS[pipeline.phase] ?? pipeline.phase;
   const active = !["paused", "complete", "failed"].includes(pipeline.phase);
+  const interactionFailure = pipeline.phase === "failed"
+    && pipeline.failureContext?.kind === "interactive-request";
   const canRetryReview = pipeline.phase !== "complete"
+    && !interactionFailure
     && pipeline.sessions.length > 0
     && Boolean(pipeline.environmentId);
   const canSendMessage = pipeline.phase !== "complete"
@@ -297,6 +306,16 @@ export function BuildChatTab({
   // can make different from the pipeline's build agent.
   const displayedAgent = selectedSession?.agent ?? pipeline.agentType;
   const agentLabel = AGENT_LABELS[displayedAgent] ?? displayedAgent;
+  // The banner asserts the stage "is still running", so it belongs to an active
+  // pipeline only. The backend clears the warning on every terminal and paused
+  // transition; gating here as well keeps a snapshot written by an older build
+  // from making that claim about a stopped one.
+  const showStallWarning = active && Boolean(pipeline.stallWarning);
+  const stalledSession = showStallWarning
+    ? pipeline.sessions.find(
+        (session) => session.sdkSessionId === pipeline.stallWarning?.sessionId,
+      )
+    : undefined;
   const reportSession = reviewReportSession(pipeline);
   const showReviewReport = Boolean(
     pipeline.structuredReview
@@ -423,9 +442,14 @@ export function BuildChatTab({
         </div>
       </div>
 
-      {pipeline.error && (
+      {pipeline.error && !interactionFailure && (
         <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           {pipeline.error}
+        </div>
+      )}
+      {showStallWarning && (
+        <div className="border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 text-xs text-amber-200/90">
+          {stalledSession?.label ?? "The active stage"} is still running, but its transcript has not changed for an extended period. It was not stopped automatically.
         </div>
       )}
       <BuildCompletionStatus pipeline={pipeline} />
@@ -498,6 +522,11 @@ export function BuildChatTab({
                     <span className="block text-[11px] text-muted-foreground">
                       Iteration {session.iteration + 1}
                     </span>
+                    {(session.autoDeclineCount ?? 0) > 0 && (
+                      <span className="mt-1 block text-[10px] text-muted-foreground">
+                        {session.autoDeclineCount} input request{session.autoDeclineCount === 1 ? "" : "s"} auto-declined
+                      </span>
+                    )}
                     {ownsReport && pipeline.structuredReview && (
                       <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200/90">
                         <ClipboardCheck className="h-2.5 w-2.5" />

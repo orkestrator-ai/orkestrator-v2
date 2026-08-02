@@ -1892,7 +1892,11 @@ export const NativeMessage = memo(function NativeMessage({
         <div className="max-w-3xl mx-auto min-w-0">
           <div
             data-agent-chat-search-content="true"
-            className="text-xs text-muted-foreground italic text-center py-1 break-words"
+            // Most system messages are one-line markers, for which
+            // `whitespace-pre-line` changes nothing. Multi-paragraph ones — the
+            // build pipeline's auto-decline record — would otherwise collapse
+            // into a single centred run of text.
+            className="text-xs text-muted-foreground italic text-center py-1 break-words whitespace-pre-line"
           >
             {message.content}
           </div>

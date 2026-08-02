@@ -8,6 +8,7 @@ import {
 import { BrowserTab } from "../../apps/web/src/components/browser/BrowserTab";
 import { CodexComposeBar } from "../../apps/web/src/components/codex/CodexComposeBar";
 import { AgentThinkingIndicator } from "../../apps/web/src/components/chat/AgentThinkingIndicator";
+import { MessageShell } from "../../apps/web/src/components/chat/MessageShell";
 import { MentionableInput } from "../../apps/web/src/components/chat/MentionableInput";
 import {
   COMPOSE_MAX_INPUT_HEIGHT,
@@ -192,6 +193,26 @@ function GlobalStylesFixture() {
       <div data-testid="chat-status-row" className="chat-status-row">
         <span data-testid="chat-status-content">Completed</span>
       </div>
+      <section data-testid="assistant-message-shell">
+        <MessageShell
+          isUser={false}
+          authorLabel="Assistant"
+          timestampLabel="1:00 PM"
+          actions={<button data-testid="assistant-message-action" type="button">Copy</button>}
+        >
+          <p>Assistant message</p>
+        </MessageShell>
+      </section>
+      <section data-testid="user-message-shell">
+        <MessageShell
+          isUser={true}
+          authorLabel="You"
+          timestampLabel="1:01 PM"
+          actions={<button data-testid="user-message-action" type="button">Fork</button>}
+        >
+          <p>User message</p>
+        </MessageShell>
+      </section>
       <div data-testid="sidebar-glass" className="sidebar-glass">Sidebar</div>
       <div data-testid="panel-surface" className="panel-surface">Panel</div>
       <div data-testid="drag-region" data-backend-drag-region>Drag region</div>

@@ -53,6 +53,10 @@ function ConfigureTerminalContext({
   return null;
 }
 
+function getClassTokens(element: Element | null | undefined): string[] {
+  return element?.getAttribute("class")?.split(/\s+/).filter(Boolean) ?? [];
+}
+
 describe("NativeMessage", () => {
   afterEach(() => {
     cleanup();
@@ -238,11 +242,16 @@ describe("NativeMessage", () => {
     expect(bubble.textContent).not.toContain("12:00");
     expect(bubble.className).toContain("[&_.prose_p]:my-0");
 
-    const hiddenRow = container.querySelector(".group-hover\\:opacity-100") as HTMLElement;
-    expect(hiddenRow).not.toBeNull();
-    expect(hiddenRow.textContent).toContain("12:00");
+    const copy = screen.getByRole("button", { name: "Copy text" });
+    const actionRow = copy.parentElement?.parentElement?.parentElement;
+    const classTokens = getClassTokens(actionRow);
+    expect(classTokens).toContain("opacity-100");
+    expect(classTokens).toContain("md:hover-fine:opacity-0");
+    expect(classTokens).toContain("md:hover-fine:group-hover:opacity-100");
+    expect(classTokens).toContain("md:hover-fine:focus-within:opacity-100");
+    expect(actionRow?.textContent).toContain("12:00");
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
+    fireEvent.click(copy);
 
     await waitFor(() => {
       expect(mockWriteText).toHaveBeenCalledWith("Copy this user prompt");

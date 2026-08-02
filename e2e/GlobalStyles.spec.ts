@@ -97,6 +97,54 @@ test.describe("touch compose input geometry", () => {
   });
 });
 
+test("message actions use viewport and input capability instead of width alone", async ({
+  baseURL,
+  browser,
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "one test creates both capability contexts");
+  await page.goto("/styles");
+
+  const assistantActionRow = page.getByTestId("assistant-message-action").locator("..");
+  const userActionRow = page.getByTestId("user-message-action").locator("..").locator("..");
+  expect(await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches))
+    .toBe(true);
+  await expect(assistantActionRow).toHaveCSS("opacity", "0");
+  await expect(userActionRow).toHaveCSS("opacity", "0");
+
+  await page.getByTestId("assistant-message-shell").locator(".group").hover();
+  await expect(assistantActionRow).toHaveCSS("opacity", "1");
+  await page.getByTestId("user-message-action").focus();
+  await expect(userActionRow).toHaveCSS("opacity", "1");
+
+  await page.setViewportSize({ width: 767, height: 900 });
+  await page.reload();
+  await expect(page.getByTestId("assistant-message-action").locator(".."))
+    .toHaveCSS("opacity", "1");
+  await expect(page.getByTestId("user-message-action").locator("..").locator(".."))
+    .toHaveCSS("opacity", "1");
+
+  const touchContext = await browser.newContext({
+    baseURL,
+    hasTouch: true,
+    viewport: { width: 1024, height: 900 },
+  });
+  try {
+    const touchPage = await touchContext.newPage();
+    await touchPage.goto("/styles");
+    expect(await touchPage.evaluate(() => ({
+      coarse: matchMedia("(pointer: coarse)").matches,
+      noHover: matchMedia("(hover: none)").matches,
+    }))).toEqual({ coarse: true, noHover: true });
+    await expect(touchPage.getByTestId("assistant-message-action").locator(".."))
+      .toHaveCSS("opacity", "1");
+    await expect(touchPage.getByTestId("user-message-action").locator("..").locator(".."))
+      .toHaveCSS("opacity", "1");
+  } finally {
+    await touchContext.close();
+  }
+});
+
 test("global dark surfaces, fonts, terminal, and scrollbar rules compile into browser styles", async ({
   page,
 }, testInfo) => {

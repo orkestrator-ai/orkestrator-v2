@@ -2309,10 +2309,11 @@ export function CodexChatTab({
     setSessionLoading(sessionKey, true, status.turnStartedAt);
     finishBackendStartupTracking();
     if (options?.forceRefreshMessages) {
-      await refreshMessages(client, session.sessionId, {
+      const refreshed = await refreshMessages(client, session.sessionId, {
         throwOnError: options.throwOnError,
         shouldApply,
       });
+      if (!shouldApply() || !refreshed) return "stale";
     }
     return "applied";
   }, [
@@ -2379,32 +2380,6 @@ export function CodexChatTab({
     session?.sessionId,
   ]);
 
-  const previousIsActiveRef = useRef(isActive);
-  useEffect(() => {
-    const becameActive = isActive && !previousIsActiveRef.current;
-    previousIsActiveRef.current = isActive;
-    if (
-      !becameActive
-      || connectionState !== "connected"
-      || !client
-      || !session?.sessionId
-    ) {
-      return;
-    }
-
-    // Hidden tabs intentionally do not keep an idle SSE connection. Reconcile
-    // on activation before treating subsequent frames as incremental updates;
-    // this covers a turn that started (or even completed) on another client
-    // while this tab was not observing the stream.
-    void reconcileSessionState({ forceRefreshMessages: true });
-  }, [
-    client,
-    connectionState,
-    isActive,
-    reconcileSessionState,
-    session?.sessionId,
-  ]);
-
   // SSE event subscription. The visible tab stays subscribed even while idle,
   // so a prompt dispatched by mobile or another renderer can deliver its
   // running edge and transcript updates immediately. Hidden tabs still track
@@ -2431,6 +2406,10 @@ export function CodexChatTab({
     }
 
     const abortController = new AbortController();
+    let needsAuthoritativeHydration = !hasPendingInitialPrompt(
+      launchPrompt,
+      initialPromptSent,
+    );
     const shouldTrackSession = () =>
       isActive
       || trackingBackendStartupTurnRef.current
@@ -2463,8 +2442,14 @@ export function CodexChatTab({
          * the very first attempt; after that the bridge replays, or tells us it
          * cannot and we fall back to a full reconcile.
          */
-        const cursor = eventCursorRef.current;
+        // A new observation epoch anchors at the bridge's current revision and
+        // fills the earlier gap from an authoritative snapshot. Reconnects after
+        // that snapshot resume from the cursor as usual.
+        const cursor = needsAuthoritativeHydration
+          ? null
+          : eventCursorRef.current;
         let receivedAnyFrame = false;
+        let retryHydration = false;
 
         try {
           for await (const event of subscribeToEvents(
@@ -2485,6 +2470,26 @@ export function CodexChatTab({
             // would make the next reconnect ask for frames we already have.
             if (typeof event.revision === "number") {
               eventCursorRef.current = event.revision;
+            }
+
+            if (event.type === "connected" && needsAuthoritativeHydration) {
+              // The bridge subscribes before it emits `connected`. Awaiting the
+              // snapshot here therefore gives one linear order: pre-subscription
+              // work comes from HTTP, and later SSE frames queue until it lands.
+              const result = await reconcileSessionState({
+                forceRefreshMessages: true,
+              });
+              if (result === "applied" || result === "missing") {
+                needsAuthoritativeHydration = false;
+                if (!shouldTrackSession()) break;
+              } else {
+                // Close this fresh stream and retry after the bounded reconnect
+                // delay. Marking hydration complete here would strand the exact
+                // transcript gap this connection was opened to repair.
+                retryHydration = true;
+                break;
+              }
+              continue;
             }
 
             if (event.type === "session.reconcile-required") {
@@ -2605,9 +2610,15 @@ export function CodexChatTab({
                 if (!terminal || dispatchInFlightRef.current === 0) {
                   setSessionLoading(sessionKey, !terminal, turnStartedAt);
                 }
-              } else {
+                if (!terminal) {
+                  setSessionError(sessionKey, undefined);
+                }
+              } else if (event.data?.status === "running") {
+                // Older bridge versions may omit `phase`, but metadata-only
+                // updates (usage, credits, compaction) are not turn starts.
                 finishBackendStartupTracking();
                 setSessionLoading(sessionKey, true, turnStartedAt);
+                setSessionError(sessionKey, undefined);
               }
               continue;
             }
@@ -2705,6 +2716,11 @@ export function CodexChatTab({
           break;
         }
 
+        if (retryHydration) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
+        }
+
         /**
          * Only resync when the replay could not have covered us.
          *
@@ -2736,7 +2752,9 @@ export function CodexChatTab({
     client,
     connectionState,
     finishBackendStartupTracking,
+    initialPromptSent,
     isActive,
+    launchPrompt,
     refreshMessages,
     reconcileSessionState,
     removePendingApproval,

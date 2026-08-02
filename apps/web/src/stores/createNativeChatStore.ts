@@ -125,6 +125,14 @@ export interface NativeChatStoreOptions<TMessage> {
    * Codex and OpenCode pass `mergeNativeMessagesPreservingClientOnly`.
    */
   mergeMessages?: MergeMessages<TMessage>;
+  /**
+   * Optional ordering guard for live full-message updates.
+   *
+   * A snapshot may land before frames that were already buffered by the event
+   * transport. Agent stores with per-message revisions can reject those older
+   * frames here instead of briefly rolling the authoritative snapshot back.
+   */
+  shouldReplaceMessage?: (existing: TMessage, incoming: TMessage) => boolean;
 }
 
 /**
@@ -236,6 +244,16 @@ export function createNativeChatStoreSlice<
         const session = state.sessions.get(sessionKey);
         if (!session) return state;
         const existingIndex = session.messages.findIndex((m) => m.id === message.id);
+        const existing = existingIndex === -1
+          ? undefined
+          : session.messages[existingIndex];
+        if (
+          existing !== undefined
+          && options.shouldReplaceMessage
+          && !options.shouldReplaceMessage(existing, message)
+        ) {
+          return state;
+        }
         const messages =
           existingIndex === -1
             ? [...session.messages, message]
@@ -306,6 +324,7 @@ export function createNativeChatStoreSlice<
       set((state) => {
         const session = state.sessions.get(sessionKey);
         if (!session) return state;
+        if (session.error === error) return state;
         const next = new Map(state.sessions);
         next.set(sessionKey, { ...session, error });
         return { sessions: next };

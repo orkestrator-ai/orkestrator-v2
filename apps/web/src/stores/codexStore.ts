@@ -248,6 +248,17 @@ function isSameContextUsage(
   return deepEqualJson(a, b);
 }
 
+function shouldReplaceCodexMessage(
+  existing: CodexMessage,
+  incoming: CodexMessage,
+): boolean {
+  return !(
+    Number.isInteger(existing.revision)
+    && Number.isInteger(incoming.revision)
+    && (incoming.revision as number) < (existing.revision as number)
+  );
+}
+
 /**
  * Every map keyed by sessionKey, shared by the environment and tab sweeps so
  * the two cannot drift. A new session-keyed map goes here or it leaks.
@@ -285,7 +296,10 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
     CodexMessage,
     CodexAttachment,
     CodexQueuedMessage
-  >({ mergeMessages: mergeNativeMessagesPreservingClientOnly })(set, get, api),
+  >({
+    mergeMessages: mergeNativeMessagesPreservingClientOnly,
+    shouldReplaceMessage: shouldReplaceCodexMessage,
+  })(set, get, api),
 
   patchMessage: (sessionKey, patch) => {
     if (!patch?.messageId) return "needs-reconcile";

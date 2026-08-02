@@ -185,6 +185,38 @@ describe("codexStore message helpers", () => {
     })).toBe("needs-reconcile");
   });
 
+  test("does not let an older full-message frame roll back a newer revision", () => {
+    const newer = {
+      id: "assistant-revisioned",
+      role: "assistant" as const,
+      content: "new snapshot",
+      parts: [{ type: "text" as const, content: "new snapshot" }],
+      createdAt: "2026-04-15T00:00:02.000Z",
+      revision: 4,
+    };
+    useCodexStore.getState().setMessages(SESSION_KEY, [newer]);
+    const sessionBefore = useCodexStore.getState().sessions.get(SESSION_KEY);
+
+    useCodexStore.getState().upsertMessage(SESSION_KEY, {
+      ...newer,
+      content: "older buffered frame",
+      parts: [{ type: "text", content: "older buffered frame" }],
+      revision: 3,
+    });
+
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toBe(sessionBefore);
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([newer]);
+  });
+
+  test("does not replace a session object when its error is unchanged", () => {
+    useCodexStore.getState().setSessionError(SESSION_KEY, "boom");
+    const sessionBefore = useCodexStore.getState().sessions.get(SESSION_KEY);
+
+    useCodexStore.getState().setSessionError(SESSION_KEY, "boom");
+
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toBe(sessionBefore);
+  });
+
   test("setMessages preserves optimistic prompts until Codex echoes the matching attachment", () => {
     const store = useCodexStore.getState();
     const optimistic = createOptimisticNativeMessage("optimistic-2", "Check the screenshot", [

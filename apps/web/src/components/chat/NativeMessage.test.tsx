@@ -3276,6 +3276,41 @@ describe("NativeMessage actions slot", () => {
     expect(screen.getByRole("button", { name: "Copy text" })).toBeTruthy();
   });
 
+  test("keeps assistant actions visible on mobile and hover-revealed on desktop", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Done" }])}
+        actions={<button type="button">Custom action</button>}
+      />,
+    );
+
+    const actionRow = screen.getByRole("button", { name: "Custom action" }).parentElement;
+    expect(actionRow?.className).toContain("opacity-100");
+    expect(actionRow?.className).toContain("md:opacity-0");
+    expect(actionRow?.className).toContain("md:group-hover:opacity-100");
+    expect(actionRow?.className).toContain("md:focus-within:opacity-100");
+  });
+
+  test("keeps user actions visible on mobile and hover-revealed on desktop", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Ship it" }], {
+          id: "user-1",
+          role: "user",
+          content: "Ship it",
+        })}
+        actions={<button type="button">Fork from here</button>}
+      />,
+    );
+
+    const actionRow = screen.getByRole("button", { name: "Fork from here" })
+      .parentElement?.parentElement;
+    expect(actionRow?.className).toContain("opacity-100");
+    expect(actionRow?.className).toContain("md:opacity-0");
+    expect(actionRow?.className).toContain("md:group-hover:opacity-100");
+    expect(actionRow?.className).toContain("md:focus-within:opacity-100");
+  });
+
   test("renders actions even when there is nothing to copy", () => {
     /*
      * With no copy content the action row used to be `undefined`, so

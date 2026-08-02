@@ -174,7 +174,7 @@ export function MessageShell({
                   </div>
                 ) : <span />}
                 {actions ? (
-                  <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100">
+                  <div className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity duration-150 md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
                     {actions}
                   </div>
                 ) : null}
@@ -186,7 +186,7 @@ export function MessageShell({
             <div
               className={cn(
                 "mt-1 flex min-h-6 items-center justify-end gap-2 text-[10px] leading-none text-muted-foreground/55",
-                "opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100",
+                "opacity-100 transition-opacity duration-150 md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100",
               )}
             >
               {metadata ? <span>{metadata}</span> : null}

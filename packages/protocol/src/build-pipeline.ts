@@ -2,7 +2,14 @@ import {
   isStructuredReviewReport,
   type StructuredReviewReport,
 } from "./structured-review.js";
-import { isAgentInteractionPolicy } from "./agent-interactions.js";
+import {
+  AGENT_INTERACTION_LIMITS,
+  isAgentInteractionPolicy,
+  isAgentInteractionWorkflowSummary,
+  type AgentInteractionKind,
+  type AgentInteractionProvider,
+  type AgentInteractionWorkflowSummary,
+} from "./agent-interactions.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
 
@@ -242,6 +249,52 @@ export interface PipelineSession {
    * A turn that ends without ever producing one would otherwise poll forever.
    */
   structuredWaitStartedAt?: string;
+  /** Durable, content-free interaction totals for this stage attempt. */
+  interactionSummary?: AgentInteractionWorkflowSummary;
+  /** Convenience projection used by stage badges and completion summaries. */
+  autoDeclineCount?: number;
+  /** Reviewer-visible history owned by the workflow, not by provider cards. */
+  interactionTranscript?: PipelineInteractionTranscriptEntry[];
+}
+
+export interface PipelineInteractionTranscriptQuestion {
+  prompt: string;
+  options: string[];
+}
+
+export interface PipelineInteractionTranscriptEntry {
+  /** Stable provider interaction identity; also makes recording idempotent. */
+  id: string;
+  provider: AgentInteractionProvider;
+  kind: AgentInteractionKind;
+  phase: PipelineSessionPhase;
+  requestedAt: number;
+  resolvedAt: number;
+  outcome: "auto-declined-headless";
+  title: string;
+  body?: string;
+  questions: PipelineInteractionTranscriptQuestion[];
+}
+
+/**
+ * Crash-recovery envelope written after the journal claim and before touching
+ * the provider. It intentionally contains presentation labels only: exact
+ * provider values, answers, commands, paths and form values never enter it.
+ */
+export interface PendingPipelineInteractionResolution {
+  journalId: string;
+  sessionKey: string;
+  sessionId: string;
+  interactionId: string;
+  provider: AgentInteractionProvider;
+  kind: AgentInteractionKind;
+  phase: PipelineSessionPhase;
+  requestedAt: number;
+  claimedAt: number;
+  action: "decline-and-continue" | "deny-and-fail";
+  title: string;
+  body?: string;
+  questions: PipelineInteractionTranscriptQuestion[];
 }
 
 /** A message the user sent into a running pipeline, awaiting dispatch. */
@@ -347,6 +400,15 @@ export interface BuildPipeline {
   reconnectAttempt?: PipelineReconnectAttempt;
   pendingPromptAttempt?: PipelinePromptAttempt;
   activePromptContext?: PipelineFailureContext;
+  /** One exact-once interaction currently crossing the provider boundary. */
+  pendingInteractionResolution?: PendingPipelineInteractionResolution;
+  /** Content-free totals across every stage attempt in this pipeline/ticket. */
+  interactionSummary?: AgentInteractionWorkflowSummary;
+  autoDeclineCount?: number;
+  /** Warning only: the backend never aborts a long turn for transcript silence. */
+  stallWarning?: { sessionId: string; detectedAt: string };
+  /** Explicit safe retry for an interaction-triggered terminal failure. */
+  interactionRetryRequested?: boolean;
   /**
    * User messages queued for the current session, dispatched one at a time by
    * the supervisor once the agent goes idle. Queued rather than sent directly
@@ -517,7 +579,91 @@ function isPipelineSession(value: unknown): value is PipelineSession {
       || isIsoDate(value.messagesPersistedAt))
     && isOptionalNonBlankString(value.structuredRequestId)
     && (value.structuredWaitStartedAt === undefined
-      || isIsoDate(value.structuredWaitStartedAt));
+      || isIsoDate(value.structuredWaitStartedAt))
+    && (value.interactionSummary === undefined
+      || isAgentInteractionWorkflowSummary(value.interactionSummary))
+    && (value.autoDeclineCount === undefined
+      || isNonNegativeInteger(value.autoDeclineCount))
+    && (value.interactionTranscript === undefined
+      || (Array.isArray(value.interactionTranscript)
+        && value.interactionTranscript.length <= AGENT_INTERACTION_LIMITS.maxWorkflowSummaries
+        && value.interactionTranscript.every(isPipelineInteractionTranscriptEntry)));
+}
+
+function isPipelineInteractionQuestion(value: unknown): boolean {
+  return isRecord(value)
+    && Object.keys(value).every((key) => key === "prompt" || key === "options")
+    && typeof value.prompt === "string"
+    && value.prompt.length > 0
+    && value.prompt.length <= AGENT_INTERACTION_LIMITS.maxTextLength
+    && Array.isArray(value.options)
+    && value.options.length <= AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
+    && value.options.every((option) =>
+      typeof option === "string"
+      && option.length > 0
+      && option.length <= AGENT_INTERACTION_LIMITS.maxTextLength);
+}
+
+function isPipelineInteractionPresentation(value: Record<string, unknown>): boolean {
+  return typeof value.interactionId === "string"
+    && value.interactionId.length > 0
+    && value.interactionId.length <= AGENT_INTERACTION_LIMITS.maxIdLength
+    && typeof value.provider === "string"
+    && ["claude", "codex", "opencode"].includes(value.provider)
+    && typeof value.kind === "string"
+    && [
+      "question", "plan-approval", "command-approval", "file-approval",
+      "permission", "mcp-form", "mcp-url", "elicitation", "terminal-selection",
+    ].includes(value.kind)
+    && SESSION_PHASES.has(value.phase as PipelineSessionPhase)
+    && Number.isSafeInteger(value.requestedAt)
+    && (value.requestedAt as number) >= 0
+    && typeof value.title === "string"
+    && value.title.length > 0
+    && value.title.length <= AGENT_INTERACTION_LIMITS.maxTextLength
+    && (value.body === undefined
+      || (typeof value.body === "string"
+        && value.body.length > 0
+        && value.body.length <= AGENT_INTERACTION_LIMITS.maxTextLength))
+    && Array.isArray(value.questions)
+    && value.questions.length <= AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest
+    && value.questions.every(isPipelineInteractionQuestion);
+}
+
+function isPipelineInteractionTranscriptEntry(
+  value: unknown,
+): value is PipelineInteractionTranscriptEntry {
+  return isRecord(value)
+    && Object.keys(value).every((key) => [
+      "id", "provider", "kind", "phase", "requestedAt", "resolvedAt",
+      "outcome", "title", "body", "questions",
+    ].includes(key))
+    && isNonBlankString(value.id)
+    && value.id.length <= AGENT_INTERACTION_LIMITS.maxIdLength
+    && isPipelineInteractionPresentation({ ...value, interactionId: value.id })
+    && Number.isSafeInteger(value.resolvedAt)
+    && (value.resolvedAt as number) >= (value.requestedAt as number)
+    && value.outcome === "auto-declined-headless";
+}
+
+function isPendingPipelineInteractionResolution(
+  value: unknown,
+): value is PendingPipelineInteractionResolution {
+  return isRecord(value)
+    && Object.keys(value).every((key) => [
+      "journalId", "sessionKey", "interactionId", "provider", "kind", "phase",
+      "sessionId", "requestedAt", "claimedAt", "action", "title", "body", "questions",
+    ].includes(key))
+    && isPipelineInteractionPresentation(value)
+    && isNonBlankString(value.journalId)
+    && value.journalId.length <= AGENT_INTERACTION_LIMITS.maxIdLength
+    && isNonBlankString(value.sessionKey)
+    && value.sessionKey.length <= AGENT_INTERACTION_LIMITS.maxIdLength
+    && isNonBlankString(value.sessionId)
+    && value.sessionId.length <= AGENT_INTERACTION_LIMITS.maxIdLength
+    && Number.isSafeInteger(value.claimedAt)
+    && (value.claimedAt as number) >= 0
+    && (value.action === "decline-and-continue" || value.action === "deny-and-fail");
 }
 
 function isUserMessage(value: unknown): value is PipelineUserMessage {
@@ -633,6 +779,18 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
       && !isPromptAttempt(value.pendingPromptAttempt))
     || (value.activePromptContext !== undefined
       && !isFailureContext(value.activePromptContext))
+    || (value.pendingInteractionResolution !== undefined
+      && !isPendingPipelineInteractionResolution(value.pendingInteractionResolution))
+    || (value.interactionSummary !== undefined
+      && !isAgentInteractionWorkflowSummary(value.interactionSummary))
+    || (value.autoDeclineCount !== undefined
+      && !isNonNegativeInteger(value.autoDeclineCount))
+    || (value.stallWarning !== undefined
+      && (!isRecord(value.stallWarning)
+        || !isNonBlankString(value.stallWarning.sessionId)
+        || !isIsoDate(value.stallWarning.detectedAt)))
+    || (value.interactionRetryRequested !== undefined
+      && typeof value.interactionRetryRequested !== "boolean")
     || (value.pendingUserMessages !== undefined
       && (
         !Array.isArray(value.pendingUserMessages)

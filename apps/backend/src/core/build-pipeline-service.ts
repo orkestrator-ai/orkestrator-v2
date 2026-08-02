@@ -6,6 +6,8 @@ import type {
   BuildPipelineSource,
   BuildStepConfigs,
   PipelineSession,
+  PendingPipelineInteractionResolution,
+  PipelineInteractionTranscriptEntry,
   PipelineSessionPhase,
   ResumableBuildPhase,
   StartBuildPipelineInput,
@@ -29,7 +31,18 @@ import {
   parseStructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
-import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import {
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  AGENT_INTERACTION_JOURNAL_VERSION,
+  AGENT_INTERACTION_LIMITS,
+  AGENT_INTERACTION_SUMMARY_VERSION,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+  agentInteractionPolicyAction,
+  type AgentInteractionOutcome,
+  type AgentInteractionRequest,
+  type AgentInteractionResolutionJournalEntry,
+  type AgentInteractionWorkflowSummary,
+} from "@orkestrator/protocol/agent-interactions";
 import type { AppConfig, Environment, PersistedBuildPipeline } from "./models.js";
 import type { StorageService } from "./storage.js";
 import {
@@ -348,7 +361,15 @@ const DEFAULT_STRUCTURED_RESULT_DEADLINE_MS = 2 * 60_000;
  * persist immediately; only a pure transcript delta is throttled.
  */
 const DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS = 5_000;
-const MAX_INTERACTION_PIPELINE_OWNERS = 4_096;
+const DEFAULT_STALL_WARNING_MS = 2 * 5 * 60_000;
+const UNATTENDED_POLICY_INSTRUCTION =
+  "This is a non-interactive build session: no user can answer a provider input request. "
+  + "If input is unavailable or declined, choose the safest likely assumption yourself, "
+  + "state that assumption, and continue. Never treat the absence of a person as authorization.";
+
+function withUnattendedPolicy(prompt: string): string {
+  return `${prompt}\n\n${UNATTENDED_POLICY_INSTRUCTION}`;
+}
 
 /**
  * Change detector for a transcript snapshot.
@@ -377,11 +398,114 @@ function elapsedSince(timestamp: string | undefined): number | null {
   return Number.isFinite(parsed) ? Date.now() - parsed : null;
 }
 
+function interactionPresentation(
+  request: AgentInteractionRequest,
+  session: PipelineSession,
+  journalId: string,
+  claimedAt: number,
+  action: PendingPipelineInteractionResolution["action"],
+): PendingPipelineInteractionResolution {
+  const visible = action === "decline-and-continue";
+  const truncate = (value: string, maximum: number): string =>
+    value.length <= maximum
+      ? value
+      : `${value.slice(0, Math.max(0, maximum - 1))}…`;
+  return {
+    journalId,
+    sessionKey: session.sessionKey,
+    sessionId: session.sdkSessionId,
+    interactionId: request.id,
+    provider: request.provider,
+    kind: request.kind,
+    phase: session.phase,
+    requestedAt: request.createdAt,
+    claimedAt,
+    action,
+    title: visible
+      ? truncate(request.presentation.title, 512)
+      : `Unexpected ${request.provider} ${request.kind} authorization`,
+    ...(visible && request.presentation.body
+      ? { body: truncate(request.presentation.body, 1_024) }
+      : {}),
+    questions: visible ? request.presentation.questions.slice(0, 4).map((question) => ({
+      prompt: truncate(question.prompt, 512),
+      // Labels are sufficient for review. Provider values may carry secrets or
+      // executable content and never belong in workflow-owned persistence.
+      options: question.options.slice(0, 8).map((option) =>
+        truncate(option.label, 128)
+      ),
+    })) : [],
+  };
+}
+
+function appendInteractionSummary(
+  summary: AgentInteractionWorkflowSummary | undefined,
+  pending: PendingPipelineInteractionResolution,
+  outcome: AgentInteractionOutcome,
+  resolvedAt: number,
+): AgentInteractionWorkflowSummary {
+  const next: AgentInteractionWorkflowSummary = summary
+    ? structuredClone(summary)
+    : { version: AGENT_INTERACTION_SUMMARY_VERSION, entries: [] };
+  const existing = next.entries.find((entry) =>
+    entry.provider === pending.provider
+    && entry.kind === pending.kind
+    && entry.phase === pending.phase
+    && entry.sessionId === pending.sessionId
+    && entry.outcome === outcome
+  );
+  if (existing) {
+    existing.count += 1;
+    existing.firstSeenAt = Math.min(existing.firstSeenAt, pending.requestedAt);
+    existing.lastResolvedAt = Math.max(existing.lastResolvedAt ?? 0, resolvedAt);
+    return next;
+  }
+  if (next.entries.length >= AGENT_INTERACTION_LIMITS.maxWorkflowSummaries) {
+    // Summary capacity is metadata-only and must not make resolution fail. Fold
+    // into the oldest same-outcome entry when possible; transcript records stay
+    // independently bounded and exact.
+    const folded = next.entries.find((entry) => entry.outcome === outcome);
+    if (folded) {
+      folded.count += 1;
+      folded.lastResolvedAt = Math.max(folded.lastResolvedAt ?? 0, resolvedAt);
+    }
+    return next;
+  }
+  next.entries.push({
+    provider: pending.provider,
+    kind: pending.kind,
+    phase: pending.phase,
+    sessionId: pending.sessionId,
+    firstSeenAt: pending.requestedAt,
+    lastResolvedAt: resolvedAt,
+    outcome,
+    count: 1,
+  });
+  return next;
+}
+
+function logInteractionOutcome(
+  pending: PendingPipelineInteractionResolution,
+  outcome: AgentInteractionOutcome,
+  resolvedAt: number,
+  count: number,
+): void {
+  // Deliberately metadata-only. Never add title/body/options, provider values,
+  // URLs, commands, paths, answers, session IDs or workflow IDs here.
+  console.info("[build-pipeline] interaction resolved", {
+    provider: pending.provider,
+    kind: pending.kind,
+    phase: pending.phase,
+    outcome,
+    latencyMs: Math.max(0, resolvedAt - pending.requestedAt),
+    count,
+  });
+}
+
 export class BuildPipelineService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly locks = new Map<string, Promise<void>>();
   private readonly providers = new Map<string, BuildPipelineProvider>();
-  private readonly interactionPipelineOwners = new Map<string, string>();
   /**
    * The harness whose provider each pipeline last resolved.
    *
@@ -473,6 +597,7 @@ export class BuildPipelineService {
         terminalReconciliations.push(this.runLocked(pipeline.id));
       }
     }
+    await this.finishDurablyRecordedInteractionJournalEntries();
     if (this.options.autoAdvance !== false) {
       this.timer ??= setInterval(() => {
         void this.requestTick();
@@ -481,6 +606,45 @@ export class BuildPipelineService {
       void this.requestTick();
     }
     await Promise.all(terminalReconciliations);
+  }
+
+  /**
+   * Close the narrow crash window after the workflow snapshot committed but
+   * before its journal entry advanced to `workflow-recorded`.
+   */
+  private async finishDurablyRecordedInteractionJournalEntries(): Promise<void> {
+    const records = await this.storage.listAllBuildPipelines();
+    const pipelines = new Map(
+      records
+        .filter((record) => isBuildPipeline(record.snapshot))
+        .map((record) => [record.id, record.snapshot as BuildPipeline]),
+    );
+    await this.storage.updateAgentInteractionResolutionJournal((journal) => ({
+      ...journal,
+      entries: journal.entries.map((entry) => {
+        if (
+          entry.state !== "provider-resolved"
+          || entry.claim.workflowType !== "build-pipeline"
+          || entry.providerResolvedAt === undefined
+        ) return entry;
+        const pipeline = pipelines.get(entry.claim.workflowId);
+        if (!pipeline) return entry;
+        const transcriptRecorded = pipeline.sessions.some((session) =>
+          session.interactionTranscript?.some((item) =>
+            item.id === entry.interactionId
+          )
+        );
+        const failureRecorded = pipeline.phase === "failed"
+          && pipeline.failureContext?.kind === "interactive-request"
+          && pipeline.failureContext.requestId === entry.interactionId;
+        if (!transcriptRecorded && !failureRecorded) return entry;
+        return {
+          ...entry,
+          state: "workflow-recorded" as const,
+          workflowRecordedAt: Math.max(Date.now(), entry.providerResolvedAt),
+        };
+      }),
+    }));
   }
 
   async shutdown(): Promise<void> {
@@ -501,7 +665,6 @@ export class BuildPipelineService {
       await disposable.dispose?.();
     }));
     this.providers.clear();
-    this.interactionPipelineOwners.clear();
     this.provisioningPrompts.clear();
     this.lastProviderAgent.clear();
   }
@@ -694,7 +857,8 @@ export class BuildPipelineService {
       delete candidate.pausedFromPhase;
       delete candidate.error;
       const session = sessionForCurrentPhase(candidate);
-      const prompt = resumePromptFor(phase);
+      const resumePrompt = resumePromptFor(phase);
+      const prompt = resumePrompt ? withUnattendedPolicy(resumePrompt) : null;
       if (
         prompt
         && session?.status === "idle"
@@ -812,6 +976,29 @@ export class BuildPipelineService {
     return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }
 
+  async retryInteractionFailure(pipelineId: string): Promise<BuildPipeline> {
+    let rejection: Error | undefined;
+    await this.mutate(pipelineId, (candidate) => {
+      if (
+        candidate.phase !== "failed"
+        || candidate.failureContext?.kind !== "interactive-request"
+      ) {
+        rejection = new Error("This build has no interactive request failure to retry");
+        return;
+      }
+      candidate.phase = candidate.failureContext.phase;
+      candidate.interactionRetryRequested = true;
+      delete candidate.error;
+      delete candidate.failureContext;
+      delete candidate.pendingInteractionResolution;
+      delete candidate.completionCommentStatus;
+      delete candidate.completionCommentError;
+    });
+    if (rejection) throw rejection;
+    await this.runLocked(pipelineId);
+    return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
+  }
+
   async cancel(pipelineId: string): Promise<BuildPipeline> {
     let abortError: unknown;
     const pipeline = await this.mutate(pipelineId, async (pipeline) => {
@@ -854,9 +1041,6 @@ export class BuildPipelineService {
     }
     await this.storage.deleteBuildPipeline(pipelineId);
     this.lastProviderAgent.delete(pipelineId);
-    for (const [key, ownerId] of this.interactionPipelineOwners) {
-      if (ownerId === pipelineId) this.interactionPipelineOwners.delete(key);
-    }
     if (!record || !isBuildPipeline(record.snapshot)) return;
     const removed = record.snapshot;
     // Providers are keyed by environment and agent, so a sibling pipeline in
@@ -1020,6 +1204,15 @@ export class BuildPipelineService {
       return;
     }
 
+    if (pipeline.interactionRetryRequested) {
+      const phase = pipeline.phase as ResumableBuildPhase;
+      const sessionPhase = sessionPhaseFor(phase);
+      if (!sessionPhase) throw new Error(`Cannot retry pipeline phase ${phase}`);
+      delete pipeline.interactionRetryRequested;
+      await this.startStage(pipeline, sessionPhase, phase);
+      return;
+    }
+
     const session = sessionForCurrentPhase(pipeline);
     if (!session) {
       await this.restartMissingStage(pipeline);
@@ -1027,6 +1220,9 @@ export class BuildPipelineService {
     }
     const currentAgent = sessionAgent(pipeline, session);
     const provider = await this.provider(pipeline, currentAgent);
+    if (await this.enforcePendingInteraction(pipeline, provider, session)) {
+      return;
+    }
     const status = await provider.status(session.sdkSessionId);
     // Only the harness that was recorded as unreachable can clear its own
     // reconnect attempt. A stage transition resolves the *next* step's provider
@@ -1077,10 +1273,27 @@ export class BuildPipelineService {
       const transcriptChanged = await this.refreshTranscript(session, provider);
       const statusChanged = session.status !== "running";
       session.status = "running";
+      const previousWarning = pipeline.stallWarning;
+      if (transcriptChanged) {
+        delete pipeline.stallWarning;
+      } else if (
+        elapsedSince(session.messagesPersistedAt ?? session.startedAt)! >= DEFAULT_STALL_WARNING_MS
+        && pipeline.stallWarning?.sessionId !== session.sdkSessionId
+      ) {
+        pipeline.stallWarning = {
+          sessionId: session.sdkSessionId,
+          detectedAt: new Date().toISOString(),
+        };
+      }
+      const warningChanged = previousWarning !== pipeline.stallWarning;
       // A status change is a state transition and always persists. A pure
       // transcript delta is throttled: it arrives on every tick of a streaming
       // turn, and each save rewrites the entire build-pipelines file.
-      if (statusChanged || (transcriptChanged && this.shouldPersistTranscript(session))) {
+      if (
+        statusChanged
+        || warningChanged
+        || (transcriptChanged && this.shouldPersistTranscript(session))
+      ) {
         session.messagesPersistedAt = new Date().toISOString();
         await this.save(pipeline, record.revision);
       }
@@ -1089,6 +1302,7 @@ export class BuildPipelineService {
 
     const wasRunning = session.status === "running";
     session.status = "idle";
+    delete pipeline.stallWarning;
     const transcriptChanged = await this.refreshTranscript(session, provider);
     delete pipeline.pendingPromptAttempt;
     delete pipeline.activePromptContext;
@@ -1273,6 +1487,7 @@ export class BuildPipelineService {
     // stage runs under is one decision in one place and does not move when a
     // step pins a different harness.
     const mode = executionModeForSessionPhase(sessionPhase, agent);
+    const sessionKey = `${pipeline.id}:${sessionPhase}:${pipeline.iteration}:${randomUUID()}`;
     // Codex binds model and effort at session creation, Claude and OpenCode at
     // prompt dispatch, so a per-step selection has to be supplied at both.
     const sessionId = await provider.createSession(sessionPhase, label, {
@@ -1283,20 +1498,22 @@ export class BuildPipelineService {
         origin: "build-pipeline",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         phase: sessionPhase,
+        workflowId: pipeline.id,
+        provider: agent,
+        fence: sessionKey,
       },
     });
     provider.registerSession?.(sessionId, {
       origin: "build-pipeline",
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       phase: sessionPhase,
+      workflowId: pipeline.id,
+      provider: agent,
+      fence: sessionKey,
     });
-    this.rememberInteractionPipelineOwner(
-      pipeline.environmentId,
-      agent,
-      sessionId,
-      pipeline.id,
-    );
-    const { prompt, schema, images } = await this.promptFor(pipeline, sessionPhase);
+    const stagePrompt = await this.promptFor(pipeline, sessionPhase);
+    const prompt = withUnattendedPolicy(stagePrompt.prompt);
+    const { schema, images } = stagePrompt;
     const requestId = randomUUID();
     const session: PipelineSession = {
       phase: sessionPhase,
@@ -1304,7 +1521,7 @@ export class BuildPipelineService {
       origin: "build-pipeline",
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       iteration: pipeline.iteration,
-      sessionKey: `${pipeline.id}:${sessionPhase}:${pipeline.iteration}:${randomUUID()}`,
+      sessionKey,
       sdkSessionId: sessionId,
       status: "running",
       startedAt: new Date().toISOString(),
@@ -1876,14 +2093,6 @@ export class BuildPipelineService {
     const ownSessions = pipeline.sessions.filter(
       (session) => sessionAgent(pipeline, session) === agent,
     );
-    for (const session of ownSessions) {
-      this.rememberInteractionPipelineOwner(
-        pipeline.environmentId,
-        agent,
-        session.sdkSessionId,
-        pipeline.id,
-      );
-    }
     const cached = this.providers.get(providerKey);
     if (cached) {
       for (const session of ownSessions) {
@@ -1892,6 +2101,9 @@ export class BuildPipelineService {
           interactionPolicy: session.interactionPolicy
             ?? UNATTENDED_AGENT_INTERACTION_POLICY,
           phase: session.phase,
+          workflowId: pipeline.id,
+          provider: agent,
+          fence: session.sessionKey,
         });
       }
       return cached;
@@ -1904,6 +2116,9 @@ export class BuildPipelineService {
           interactionPolicy: session.interactionPolicy
             ?? UNATTENDED_AGENT_INTERACTION_POLICY,
           phase: session.phase,
+          workflowId: pipeline.id,
+          provider: agent,
+          fence: session.sessionKey,
         });
       }
       this.providers.set(providerKey, provider);
@@ -1922,6 +2137,11 @@ export class BuildPipelineService {
       ...connectionDefaultsFor(agent, config, repository),
     }, {
       ...this.options.providerDependencies,
+      // Milestone 4 resolves every provider through the same journaled backend
+      // path. The OpenCode event-loop compatibility path used to grant an
+      // unexpected permission once and fail questions before the common
+      // monitor could see them; leaving it enabled would violate both rules.
+      autoAnswerRequests: false,
       // Task-snapshot images arrive as base64. Both bridges require a workspace
       // path, so they have to be written into the environment before they can be
       // attached to a prompt.
@@ -1938,22 +2158,6 @@ export class BuildPipelineService {
         } catch {
           // Passive diagnostics never control workflow behavior.
         }
-        if (
-          event.state === "detected"
-          && event.kind === "question"
-          && event.registration.interactionPolicy.mode === "unattended"
-        ) {
-          const ownerId = this.interactionPipelineOwners.get(
-            this.interactionPipelineOwnerKey(
-              enriched.environmentId,
-              enriched.provider,
-              enriched.sessionId,
-            ),
-          );
-          if (ownerId) {
-            await this.persistUnattendedQuestionFailure(ownerId, enriched);
-          }
-        }
       },
     });
     for (const session of ownSessions) {
@@ -1961,40 +2165,404 @@ export class BuildPipelineService {
         origin: session.origin ?? "build-pipeline",
         interactionPolicy: session.interactionPolicy
           ?? UNATTENDED_AGENT_INTERACTION_POLICY,
-        phase: session.phase,
+          phase: session.phase,
+          workflowId: pipeline.id,
+          provider: agent,
+          fence: session.sessionKey,
       });
     }
     this.providers.set(providerKey, provider);
     return provider;
   }
 
-  private interactionPipelineOwnerKey(
-    environmentId: string,
-    provider: BuildPipelineAgent,
+  private interactionJournalEntry(
+    entries: readonly AgentInteractionResolutionJournalEntry[],
     sessionId: string,
-  ): string {
-    return JSON.stringify([environmentId, provider, sessionId]);
+    interactionId: string,
+  ): AgentInteractionResolutionJournalEntry | undefined {
+    return entries.find((entry) =>
+      entry.sessionId === sessionId && entry.interactionId === interactionId
+    );
   }
 
-  private rememberInteractionPipelineOwner(
-    environmentId: string,
-    provider: BuildPipelineAgent,
-    sessionId: string,
-    pipelineId: string,
-  ): void {
-    const ownerKey = this.interactionPipelineOwnerKey(
-      environmentId,
-      provider,
-      sessionId,
-    );
+  private async claimInteraction(
+    pipeline: BuildPipeline,
+    session: PipelineSession,
+    request: AgentInteractionRequest,
+  ): Promise<AgentInteractionResolutionJournalEntry> {
+    let selected: AgentInteractionResolutionJournalEntry | undefined;
+    const claimedAt = Date.now();
+    await this.storage.updateAgentInteractionResolutionJournal((journal) => {
+      const existing = this.interactionJournalEntry(
+        journal.entries,
+        session.sdkSessionId,
+        request.id,
+      );
+      if (existing) {
+        selected = existing;
+        return journal;
+      }
+      const entry: AgentInteractionResolutionJournalEntry = {
+        id: randomUUID(),
+        interactionId: request.id,
+        provider: request.provider,
+        kind: request.kind,
+        sessionId: session.sdkSessionId,
+        state: "claimed",
+        claim: {
+          workflowType: "build-pipeline",
+          workflowId: pipeline.id,
+          phase: pipeline.phase,
+          // The stage session key is the pipeline generation. Transcript-only
+          // revision writes may advance while the same provider request lives;
+          // fencing on a mutable storage revision would orphan a valid claim.
+          fence: session.sessionKey,
+          claimedAt,
+        },
+      };
+      selected = entry;
+      return {
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [...journal.entries, entry],
+      };
+    });
+    const entry = selected!;
     if (
-      !this.interactionPipelineOwners.has(ownerKey)
-      && this.interactionPipelineOwners.size >= MAX_INTERACTION_PIPELINE_OWNERS
+      entry.claim.workflowType !== "build-pipeline"
+      || entry.claim.workflowId !== pipeline.id
+      || entry.claim.fence !== session.sessionKey
     ) {
-      const oldest = this.interactionPipelineOwners.keys().next().value;
-      if (oldest !== undefined) this.interactionPipelineOwners.delete(oldest);
+      throw new ProviderUnavailableError(
+        "A pending interaction belongs to a different workflow generation",
+      );
     }
-    this.interactionPipelineOwners.set(ownerKey, pipelineId);
+    return entry;
+  }
+
+  private async markInteractionProviderResolved(
+    pending: PendingPipelineInteractionResolution,
+    outcome: AgentInteractionOutcome,
+    resolvedAt: number,
+  ): Promise<void> {
+    await this.storage.updateAgentInteractionResolutionJournal((journal) => ({
+      ...journal,
+      entries: journal.entries.map((entry) => {
+        if (entry.id !== pending.journalId || entry.state !== "claimed") return entry;
+        return {
+          ...entry,
+          state: "provider-resolved" as const,
+          outcome,
+          providerResolvedAt: Math.max(resolvedAt, entry.claim.claimedAt),
+        };
+      }),
+    }));
+  }
+
+  private async markInteractionWorkflowRecorded(
+    pending: PendingPipelineInteractionResolution,
+    recordedAt: number,
+  ): Promise<void> {
+    await this.storage.updateAgentInteractionResolutionJournal((journal) => ({
+      ...journal,
+      entries: journal.entries.map((entry) => {
+        if (entry.id !== pending.journalId || entry.state === "workflow-recorded") {
+          return entry;
+        }
+        // A workflow record is legal only after the provider boundary became
+        // terminal. If a malformed/out-of-order record reaches here, keep its
+        // claim for reconciliation rather than fabricating resolution.
+        if (entry.state !== "provider-resolved" || entry.providerResolvedAt === undefined) {
+          return entry;
+        }
+        return {
+          ...entry,
+          state: "workflow-recorded" as const,
+          workflowRecordedAt: Math.max(recordedAt, entry.providerResolvedAt),
+        };
+      }),
+    }));
+  }
+
+  private recoveredPendingInteraction(
+    entry: AgentInteractionResolutionJournalEntry,
+    session: PipelineSession,
+  ): PendingPipelineInteractionResolution {
+    const action = agentInteractionPolicyAction(
+      session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+      entry.kind,
+    );
+    return {
+      journalId: entry.id,
+      sessionKey: session.sessionKey,
+      sessionId: session.sdkSessionId,
+      interactionId: entry.interactionId,
+      provider: entry.provider,
+      kind: entry.kind,
+      phase: session.phase,
+      requestedAt: entry.claim.claimedAt,
+      claimedAt: entry.claim.claimedAt,
+      action: action === "decline-and-continue"
+        ? "decline-and-continue"
+        : "deny-and-fail",
+      title: "Provider interaction recovered after restart",
+      body: "The provider no longer exposes the original bounded presentation.",
+      questions: [],
+    };
+  }
+
+  private async recordInteractionOutcome(
+    pipeline: BuildPipeline,
+    session: PipelineSession,
+    pending: PendingPipelineInteractionResolution,
+    outcome: AgentInteractionOutcome,
+    resolvedAt: number,
+  ): Promise<void> {
+    const inputSucceeded = pending.action === "decline-and-continue"
+      && outcome === "auto-declined";
+    if (inputSucceeded) {
+      const transcript = session.interactionTranscript ?? [];
+      if (!transcript.some((entry) => entry.id === pending.interactionId)) {
+        const entry: PipelineInteractionTranscriptEntry = {
+          id: pending.interactionId,
+          provider: pending.provider,
+          kind: pending.kind,
+          phase: pending.phase,
+          requestedAt: pending.requestedAt,
+          resolvedAt,
+          outcome: "auto-declined-headless",
+          title: pending.title,
+          ...(pending.body ? { body: pending.body } : {}),
+          questions: pending.questions,
+        };
+        session.interactionTranscript = [
+          ...transcript,
+          entry,
+        ].slice(-AGENT_INTERACTION_LIMITS.maxWorkflowSummaries);
+        session.autoDeclineCount = (session.autoDeclineCount ?? 0) + 1;
+        pipeline.autoDeclineCount = (pipeline.autoDeclineCount ?? 0) + 1;
+        session.interactionSummary = appendInteractionSummary(
+          session.interactionSummary,
+          pending,
+          outcome,
+          resolvedAt,
+        );
+        pipeline.interactionSummary = appendInteractionSummary(
+          pipeline.interactionSummary,
+          pending,
+          outcome,
+          resolvedAt,
+        );
+      }
+      delete pipeline.pendingInteractionResolution;
+      delete pipeline.stallWarning;
+      await this.save(pipeline, pipeline.backendRevision);
+      await this.markInteractionWorkflowRecorded(pending, Date.now());
+      logInteractionOutcome(
+        pending,
+        outcome,
+        resolvedAt,
+        pipeline.autoDeclineCount ?? 0,
+      );
+      return;
+    }
+
+    // Authorization and unknown requests fail even after a successful denial.
+    // Provider-response failures use the same visible path: the workflow must
+    // never remain parked just because a safe decline could not be confirmed.
+    const authorization = pending.action === "deny-and-fail" && outcome === "denied";
+    pipeline.error = authorization
+      ? `The ${session.label.toLowerCase()} requested unexpected authorization`
+      : `The ${session.label.toLowerCase()} interaction could not be resolved safely`;
+    pipeline.failureContext = {
+      phase: pipeline.phase as ResumableBuildPhase,
+      kind: "interactive-request",
+      sessionId: session.sdkSessionId,
+      requestId: pending.interactionId,
+    };
+    session.status = "error";
+    pipeline.phase = "failed";
+    delete pipeline.pendingPromptAttempt;
+    delete pipeline.pendingInteractionResolution;
+    delete pipeline.stallWarning;
+    this.provisioningPrompts.delete(pipeline.id);
+    this.lastProviderAgent.delete(pipeline.id);
+    session.interactionSummary = appendInteractionSummary(
+      session.interactionSummary,
+      pending,
+      outcome,
+      resolvedAt,
+    );
+    pipeline.interactionSummary = appendInteractionSummary(
+      pipeline.interactionSummary,
+      pending,
+      outcome,
+      resolvedAt,
+    );
+    await this.save(pipeline, pipeline.backendRevision);
+    await this.markInteractionWorkflowRecorded(pending, Date.now());
+    logInteractionOutcome(pending, outcome, resolvedAt, 1);
+  }
+
+  /**
+   * Apply one unattended interaction per supervisor pass.
+   *
+   * Serialising provider work through the pipeline lock keeps a request off the
+   * stdout/event loop and lets concurrent monitors converge on the journal
+   * claim. Returning after one request also bounds each pass; the next tick
+   * handles the next member of an authoritative snapshot.
+   */
+  private async enforcePendingInteraction(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<boolean> {
+    if (!provider.interactions) return false;
+    const snapshot = await provider.interactions.listPendingInteractions(
+      session.sdkSessionId,
+    );
+    const journal = await this.storage.getAgentInteractionResolutionJournal();
+    let pending = pipeline.pendingInteractionResolution;
+    let journalEntry = pending
+      ? journal.entries.find((entry) => entry.id === pending!.journalId)
+      : undefined;
+
+    if (pending && pending.sessionKey !== session.sessionKey) {
+      throw new ProviderUnavailableError(
+        "A pending interaction belongs to an inactive pipeline generation",
+      );
+    }
+
+    if (!pending) {
+      journalEntry = journal.entries.find((entry) =>
+        entry.claim.workflowType === "build-pipeline"
+        && entry.claim.workflowId === pipeline.id
+        && entry.claim.fence === session.sessionKey
+        && entry.state !== "workflow-recorded"
+      );
+      if (journalEntry) {
+        const request = snapshot.requests.find((item) =>
+          item.id === journalEntry!.interactionId
+        );
+        const policyAction = agentInteractionPolicyAction(
+          session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+          journalEntry.kind,
+        );
+        pending = request
+          ? interactionPresentation(
+              request,
+              session,
+              journalEntry.id,
+              journalEntry.claim.claimedAt,
+              policyAction === "decline-and-continue"
+                ? "decline-and-continue"
+                : "deny-and-fail",
+            )
+          : this.recoveredPendingInteraction(journalEntry, session);
+        pipeline.pendingInteractionResolution = pending;
+        await this.save(pipeline, pipeline.backendRevision);
+      }
+    }
+
+    if (!pending) {
+      const request = snapshot.requests[0];
+      if (!request) return false;
+      const policyAction = agentInteractionPolicyAction(
+        session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+        request.kind,
+      );
+      if (policyAction === "await-user") return false;
+      journalEntry = await this.claimInteraction(pipeline, session, request);
+      if (journalEntry.state === "workflow-recorded") {
+        throw new ProviderUnavailableError(
+          "A terminal interaction unexpectedly reappeared at the provider",
+        );
+      }
+      pending = interactionPresentation(
+        request,
+        session,
+        journalEntry.id,
+        journalEntry.claim.claimedAt,
+        policyAction === "decline-and-continue"
+          ? "decline-and-continue"
+          : "deny-and-fail",
+      );
+      pipeline.pendingInteractionResolution = pending;
+      await this.save(pipeline, pipeline.backendRevision);
+    }
+
+    journalEntry ??= (await this.storage.getAgentInteractionResolutionJournal())
+      .entries.find((entry) => entry.id === pending!.journalId);
+    if (!journalEntry) {
+      throw new ProviderUnavailableError("The interaction resolution claim was lost");
+    }
+    if (journalEntry.state === "workflow-recorded") {
+      delete pipeline.pendingInteractionResolution;
+      await this.save(pipeline, pipeline.backendRevision);
+      return true;
+    }
+    if (journalEntry.state === "provider-resolved") {
+      await this.recordInteractionOutcome(
+        pipeline,
+        session,
+        pending,
+        journalEntry.outcome!,
+        journalEntry.providerResolvedAt!,
+      );
+      return true;
+    }
+
+    const requestStillLive = snapshot.requests.some((request) =>
+      request.id === pending!.interactionId
+    );
+    let outcome: AgentInteractionOutcome;
+    const resolvedAt = Date.now();
+    if (!requestStillLive) {
+      // The crash boundary may be immediately after the provider accepted the
+      // response. A full authoritative snapshot proving absence is sufficient
+      // reconciliation; never re-dispatch an ambiguous response.
+      outcome = pending.action === "decline-and-continue"
+        ? "auto-declined"
+        : "denied";
+    } else {
+      const applied = await provider.interactions.resolveInteraction(
+        session.sdkSessionId,
+        pending.interactionId,
+        {
+          version: AGENT_INTERACTION_CONTRACT_VERSION,
+          interactionId: pending.interactionId,
+          sessionId: session.sdkSessionId,
+          action: pending.action === "decline-and-continue" ? "decline" : "deny",
+          resolvedAt,
+        },
+      );
+      let terminal = applied.result === "applied" || applied.result === "stale";
+      if (applied.result === "already-resolved") {
+        const reconciled = await provider.interactions.listPendingInteractions(
+          session.sdkSessionId,
+        );
+        terminal = !reconciled.requests.some((request) =>
+          request.id === pending!.interactionId
+        );
+      }
+      outcome = terminal
+        ? pending.action === "decline-and-continue" ? "auto-declined" : "denied"
+        : "failed";
+    }
+    await this.markInteractionProviderResolved(pending, outcome, resolvedAt);
+    await this.recordInteractionOutcome(
+      pipeline,
+      session,
+      pending,
+      outcome,
+      resolvedAt,
+    );
+    if (outcome !== "auto-declined") {
+      // The terminal workflow failure is already durable. Stopping the turn is
+      // best-effort cleanup; a failed abort cannot erase or downgrade the
+      // fail-closed outcome the user will rehydrate.
+      await provider.abort(session.sdkSessionId).catch(() => undefined);
+    }
+    return true;
   }
 
   private async bridgeConnection(
@@ -2052,59 +2620,6 @@ export class BuildPipelineService {
     this.lastProviderAgent.delete(pipeline.id);
     await this.save(pipeline, record.revision);
     await this.reconcileTerminalState(pipeline);
-  }
-
-  private async persistUnattendedQuestionFailure(
-    pipelineId: string,
-    event: ProviderInteractionObservationEvent & {
-      environmentId: string;
-      provider: BuildPipelineAgent;
-    },
-  ): Promise<void> {
-    const record = await this.storage.getBuildPipeline(pipelineId);
-    // A shared environment provider can retain an older registered session
-    // after its pipeline has already terminated or been removed. There is no
-    // live workflow left to advance, so that orphan request is safe to reject.
-    // Actual storage failures still throw from the targeted read above.
-    if (!record || !isBuildPipeline(record.snapshot)) return;
-    const recordedSession = sessionForCurrentPhase(record.snapshot);
-    if (
-      record.snapshot.environmentId !== event.environmentId
-      || recordedSession?.sdkSessionId !== event.sessionId
-      || sessionAgent(record.snapshot, recordedSession) !== event.provider
-    ) return;
-    if (record.snapshot.phase === "paused") {
-      throw new ProviderUnavailableError("A paused pipeline requested user input");
-    }
-    if (!isActiveBuildPhase(record.snapshot.phase)) return;
-    const failed = await this.mutate(record.id, (pipeline) => {
-      if (pipeline.phase === "paused") {
-        throw new ProviderUnavailableError("A paused pipeline requested user input");
-      }
-      if (!isActiveBuildPhase(pipeline.phase)) return;
-      const session = sessionForCurrentPhase(pipeline);
-      if (
-        session?.sdkSessionId !== event.sessionId
-        || sessionAgent(pipeline, session) !== event.provider
-      ) return;
-      pipeline.error = `The ${session.label.toLowerCase()} requested user input`;
-      pipeline.failureContext = {
-        phase: pipeline.phase as ResumableBuildPhase,
-        kind: "interactive-request",
-        sessionId: session.sdkSessionId,
-      };
-      pipeline.phase = "failed";
-      delete pipeline.pendingPromptAttempt;
-      this.provisioningPrompts.delete(pipeline.id);
-      this.lastProviderAgent.delete(pipeline.id);
-    });
-    // The provider only needs the terminal failure to be durable before it can
-    // reject the upstream question. Completion comments and board updates are
-    // unrelated external I/O, so let the normal locked supervisor perform them
-    // without stalling OpenCode's shared event loop.
-    if (this.needsTerminalReconciliation(failed)) {
-      void this.runLocked(failed.id);
-    }
   }
 
   private async recordReconnect(

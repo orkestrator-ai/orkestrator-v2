@@ -1053,6 +1053,10 @@ describe("build pipeline commands", () => {
       operation: "retry-review",
       id,
     }));
+    const retryInteractionFailure = mock(async (id: string) => ({
+      operation: "retry-interaction",
+      id,
+    }));
     const supervisor = {
       start,
       pause,
@@ -1062,6 +1066,7 @@ describe("build pipeline commands", () => {
       remove,
       sendMessage,
       retryReview,
+      retryInteractionFailure,
     } as unknown as NonNullable<CommandContext["buildPipelines"]>;
 
     await withCommands(async (invoke, storage) => {
@@ -1087,6 +1092,9 @@ describe("build pipeline commands", () => {
       await expect(invoke("retry_build_pipeline_review", {
         pipelineId: "pipeline-1",
       })).resolves.toEqual({ operation: "retry-review", id: "pipeline-1" });
+      await expect(invoke("retry_build_pipeline_interaction_failure", {
+        pipelineId: "pipeline-1",
+      })).resolves.toEqual({ operation: "retry-interaction", id: "pipeline-1" });
 
       await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
         id: "pipeline-1",
@@ -1104,6 +1112,7 @@ describe("build pipeline commands", () => {
       expect(sendMessage)
         .toHaveBeenCalledWith("pipeline-1", "also update the README");
       expect(retryReview).toHaveBeenCalledWith("pipeline-1");
+      expect(retryInteractionFailure).toHaveBeenCalledWith("pipeline-1");
     }, { buildPipelines: supervisor });
   });
 
@@ -1132,6 +1141,9 @@ describe("build pipeline commands", () => {
         .rejects.toThrow("string");
       await expect(invoke("retry_build_pipeline_completion_comment", {
         pipelineId: "",
+      })).rejects.toThrow("non-blank string");
+      await expect(invoke("retry_build_pipeline_interaction_failure", {
+        pipelineId: " ",
       })).rejects.toThrow("non-blank string");
       await expect(invoke("delete_build_pipeline", { pipelineId: " " }))
         .rejects.toThrow("non-blank string");
@@ -1194,6 +1206,9 @@ describe("build pipeline commands", () => {
           text: "hello",
         }],
         ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
+        ["retry_build_pipeline_interaction_failure", {
+          pipelineId: "pipeline-1",
+        }],
         ["import_legacy_build_pipelines", {
           projectId: "proj-1",
           snapshots: [],

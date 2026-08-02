@@ -4,6 +4,7 @@ import type { TaskSnapshotImage } from "@orkestrator/protocol/build-pipeline";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   AGENT_INTERACTION_LIMITS,
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
   UNATTENDED_AGENT_INTERACTION_POLICY,
   type AgentInteractionRequest,
   type AgentInteractionResolution,
@@ -607,6 +608,16 @@ describe("provider-neutral interaction adapters", () => {
     expect(first.requests[0]!.origin).toBe("build-pipeline");
     expect(first.requests[0]!.presentation.questions[0]!.options.map((option) => option.id))
       .toEqual(["q0:o0", "q0:o1", "q0:o2"]);
+
+    // A cached/adopted provider may be registered again, but a live request
+    // keeps the policy it was presented under instead of switching owners.
+    provider.registerSession?.("session-1", {
+      origin: "interactive-native",
+      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      phase: "chat",
+    });
+    expect((await provider.interactions!.listPendingInteractions("session-1"))
+      .requests[0]!.origin).toBe("build-pipeline");
 
     const question = first.requests[0]!;
     await expect(provider.interactions!.resolveInteraction(
@@ -1971,6 +1982,9 @@ function openCodeProvider(fake: OpenCodeFake, monitorRetryMs = 1) {
     {
       openCodeClient: fake.client,
       monitorRetryMs,
+      // Exercises the isolated compatibility responder. Production providers
+      // default this off and build pipelines use the common journaled resolver.
+      autoAnswerRequests: true,
     },
   );
 }
@@ -2163,6 +2177,7 @@ describe("OpenCode build pipeline provider", () => {
     }, {
       openCodeClient: fake.client,
       monitorRetryMs: 1,
+      autoAnswerRequests: true,
       onInteractionObservation: async (event) => {
         events.push({ state: event.state, kind: event.kind });
         if (event.kind === "permission") throw new Error("diagnostics unavailable");
@@ -2220,6 +2235,7 @@ describe("OpenCode build pipeline provider", () => {
     }, {
       openCodeClient: fake.client,
       monitorRetryMs: 1,
+      autoAnswerRequests: true,
       onInteractionObservation: (event) => {
         if (event.kind === "question" && event.state === "detected") {
           throw new Error("durable failure write failed");
@@ -2387,7 +2403,7 @@ describe("OpenCode build pipeline provider", () => {
     }
   });
 
-  test("answers only owned-session events and grants permissions once", async () => {
+  test("answers only owned-session events and denies unexpected permissions", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
     try {
@@ -2415,7 +2431,7 @@ describe("OpenCode build pipeline provider", () => {
       expect(fake.permissionReplies).toEqual([{
         requestID: "owned-p",
         directory: "/workspace",
-        reply: "once",
+        reply: "reject",
       }]);
       expect(fake.questionRejections).toEqual([{
         requestID: "owned-q",

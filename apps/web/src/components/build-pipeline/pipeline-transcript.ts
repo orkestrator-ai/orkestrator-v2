@@ -10,7 +10,10 @@
  * dropped, not rendered as raw JSON.
  */
 
-import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
+import type {
+  BuildPipelineAgent,
+  PipelineInteractionTranscriptEntry,
+} from "@orkestrator/protocol/build-pipeline";
 import {
   parseTaskSnapshotStatus,
   type TaskListSnapshot,
@@ -387,6 +390,7 @@ export function toPipelineTranscript(
   messages: unknown[] | undefined,
   agentType: BuildPipelineAgent,
   fallbackCreatedAt: string,
+  interactions: readonly PipelineInteractionTranscriptEntry[] = [],
 ): NativeMessage[] {
   const transcript: NativeMessage[] = [];
 
@@ -437,6 +441,30 @@ export function toPipelineTranscript(
     };
     if (hasRenderableContent(message)) transcript.push(message);
   });
+
+  for (const interaction of interactions) {
+    const questionText = interaction.questions.map((question) => {
+      const options = question.options.length > 0
+        ? `\nOffered options: ${question.options.join(", ")}`
+        : "";
+      return `${question.prompt}${options}`;
+    }).join("\n\n");
+    const details = [interaction.body, questionText].filter(Boolean).join("\n\n");
+    const content = [
+      `Auto-declined unattended ${interaction.provider} ${interaction.kind} during ${interaction.phase}`,
+      `Outcome: ${interaction.outcome}`,
+      interaction.title,
+      details,
+      "No answer was fabricated. The agent was instructed to make and state the safest likely assumption, then continue.",
+    ].filter(Boolean).join("\n\n");
+    transcript.push({
+      id: `pipeline-interaction:${interaction.id}`,
+      role: "system",
+      content,
+      parts: [{ type: "text", content }],
+      createdAt: new Date(interaction.resolvedAt).toISOString(),
+    });
+  }
 
   return transcript;
 }

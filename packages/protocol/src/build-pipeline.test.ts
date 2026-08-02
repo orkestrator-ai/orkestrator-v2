@@ -20,6 +20,7 @@ import {
 } from "./build-pipeline.js";
 import type { StructuredReviewReport } from "./structured-review.js";
 import {
+  AGENT_INTERACTION_SUMMARY_VERSION,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
   UNATTENDED_AGENT_INTERACTION_POLICY,
 } from "./agent-interactions.js";
@@ -233,6 +234,34 @@ describe("build pipeline protocol", () => {
         messages: [],
         messageRevision: 2,
         structuredRequestId: "structured-1",
+        origin: "build-pipeline" as const,
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        interactionSummary: {
+          version: AGENT_INTERACTION_SUMMARY_VERSION,
+          entries: [{
+            provider: "codex" as const,
+            kind: "question" as const,
+            phase: "review",
+            sessionId: "session-1",
+            firstSeenAt: 1,
+            lastResolvedAt: 2,
+            outcome: "auto-declined" as const,
+            count: 1,
+          }],
+        },
+        autoDeclineCount: 1,
+        interactionTranscript: [{
+          id: "question-1",
+          provider: "codex" as const,
+          kind: "question" as const,
+          phase: "review" as const,
+          requestedAt: 1,
+          resolvedAt: 2,
+          outcome: "auto-declined-headless" as const,
+          title: "Choose safely",
+          body: "A choice was requested.",
+          questions: [{ prompt: "Which option?", options: ["Safe"] }],
+        }],
       }],
       currentSessionIndex: 0,
       verificationResult: "fail" as const,
@@ -269,6 +298,39 @@ describe("build pipeline protocol", () => {
         phase: "reviewing" as const,
         kind: "prompt-dispatch" as const,
       },
+      pendingInteractionResolution: {
+        journalId: "journal-1",
+        sessionKey: "review-1",
+        sessionId: "session-1",
+        interactionId: "question-1",
+        provider: "codex" as const,
+        kind: "question" as const,
+        phase: "review" as const,
+        requestedAt: 1,
+        claimedAt: 1,
+        action: "decline-and-continue" as const,
+        title: "Choose safely",
+        questions: [{ prompt: "Which option?", options: ["Safe"] }],
+      },
+      interactionSummary: {
+        version: AGENT_INTERACTION_SUMMARY_VERSION,
+        entries: [{
+          provider: "codex" as const,
+          kind: "question" as const,
+          phase: "review",
+          sessionId: "session-1",
+          firstSeenAt: 1,
+          lastResolvedAt: 2,
+          outcome: "auto-declined" as const,
+          count: 1,
+        }],
+      },
+      autoDeclineCount: 1,
+      stallWarning: {
+        sessionId: "session-1",
+        detectedAt: "2026-07-29T00:03:30.000Z",
+      },
+      interactionRetryRequested: true,
       source: {
         type: "github" as const,
         repositoryOwner: "owner",
@@ -295,6 +357,14 @@ describe("build pipeline protocol", () => {
       { failureContext: { phase: "building", kind: "unknown" } },
       { reconnectAttempt: { ...valid.reconnectAttempt, startedAt: "invalid" } },
       { pendingPromptAttempt: { ...valid.pendingPromptAttempt, requestId: "" } },
+      { pendingInteractionResolution: {
+        ...valid.pendingInteractionResolution,
+        action: "approve",
+      } },
+      { interactionSummary: { version: 99, entries: [] } },
+      { autoDeclineCount: -1 },
+      { stallWarning: { sessionId: "session-1", detectedAt: "invalid" } },
+      { interactionRetryRequested: "yes" },
       { source: { ...valid.source, issueNumber: 0 } },
       { featurePlanId: "" },
       { sourceLinkedAt: "invalid" },
@@ -302,6 +372,11 @@ describe("build pipeline protocol", () => {
       { completionCommentPostedAt: "invalid" },
       { sessions: [{ ...valid.sessions[0], messageRevision: -1 }] },
       { sessions: [{ ...valid.sessions[0], startedAt: "invalid" }] },
+      { sessions: [{ ...valid.sessions[0], autoDeclineCount: -1 }] },
+      { sessions: [{ ...valid.sessions[0], interactionTranscript: [{
+        ...valid.sessions[0].interactionTranscript[0],
+        outcome: "answered",
+      }] }] },
     ];
     for (const override of invalidOverrides) {
       expect(isBuildPipeline({ ...valid, ...override })).toBe(false);

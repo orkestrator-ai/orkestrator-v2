@@ -10,7 +10,12 @@ import type {
 import {
   VERIFICATION_VERDICT_SCHEMA,
 } from "@orkestrator/protocol/build-pipeline";
-import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import {
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  AGENT_INTERACTION_JOURNAL_VERSION,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+  type AgentInteractionRequest,
+} from "@orkestrator/protocol/agent-interactions";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type {
   JsonSchema,
@@ -26,7 +31,6 @@ import type {
   ProviderSessionRegistration,
   ProviderStatus,
 } from "./build-pipeline-provider.js";
-import { ProviderUnavailableError } from "./build-pipeline-provider.js";
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -1549,21 +1553,27 @@ describe("BuildPipelineService", () => {
         phase: "build",
         label: "Build Session",
         options: expect.objectContaining({
-          interaction: {
+          interaction: expect.objectContaining({
             origin: "build-pipeline",
             interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
             phase: "build",
-          },
+            workflowId: started.id,
+            provider: "claude",
+            fence: expect.any(String),
+          }),
         }),
       });
-      expect(provider.registered).toContainEqual({
+      expect(provider.registered).toContainEqual(expect.objectContaining({
         sessionId: "build-1",
-        interaction: {
+        interaction: expect.objectContaining({
           origin: "build-pipeline",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           phase: "build",
-        },
-      });
+          workflowId: started.id,
+          provider: "claude",
+          fence: expect.any(String),
+        }),
+      }));
       provider.status = async () => "blocked";
       await service.advanceNow(started.id);
       await service.advanceNow(started.id);
@@ -1591,166 +1601,48 @@ describe("BuildPipelineService", () => {
     });
   });
 
-  test("persists an unattended OpenCode question failure before provider rejection", async () => {
-    await withService(async (service, storage) => {
-      const started = await service.start(startInput({ agentType: "opencode" }));
-      await service.advanceNow(started.id);
-      await service.advanceNow(started.id);
-      const running = await pipeline(storage, started.id);
-      const session = running.sessions[running.currentSessionIndex]!;
-      const internals = service as unknown as {
-        persistUnattendedQuestionFailure(pipelineId: string, event: {
-          environmentId: string;
-          provider: "opencode";
-          sessionId: string;
-          interactionId: string;
-          kind: "question";
-          registration: {
-            origin: "build-pipeline";
-            interactionPolicy: typeof UNATTENDED_AGENT_INTERACTION_POLICY;
-            phase: string;
-          };
-          state: "detected";
-        }): Promise<void>;
-      };
-      await internals.persistUnattendedQuestionFailure(started.id, {
-        environmentId: "env-1",
-        provider: "opencode",
-        sessionId: session.sdkSessionId,
-        interactionId: "question-1",
-        kind: "question",
-        registration: {
-          origin: "build-pipeline",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-          phase: "build",
-        },
-        state: "detected",
-      });
-      const failed = await pipeline(storage, started.id);
-      expect(failed).toMatchObject({
-        phase: "failed",
-        error: expect.stringContaining("requested user input"),
-        failureContext: {
-          kind: "interactive-request",
-          sessionId: session.sdkSessionId,
-        },
-      });
-
-      const restored = new BuildPipelineService(
-        storage,
-        async <T>(): Promise<T> => {
-          throw new Error("A terminal pipeline must not restart provider work");
-        },
-        { autoAdvance: false },
-      );
-      try {
-        await restored.init();
-        expect((await pipeline(storage, started.id)).phase).toBe("failed");
-      } finally {
-        await restored.shutdown();
-      }
-    });
-  });
-
-  test("keeps a paused pipeline question pending", async () => {
-    await withService(async (service, storage) => {
-      const started = await service.start(startInput({ agentType: "opencode" }));
+  test("warns on transcript silence without aborting and clears the warning on growth", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
       await service.advanceNow(started.id);
       await service.advanceNow(started.id);
       const record = await storage.getBuildPipeline(started.id);
-      const paused = record!.snapshot as BuildPipeline;
-      const session = paused.sessions[paused.currentSessionIndex]!;
-      paused.phase = "paused";
+      if (!record) throw new Error("Pipeline disappeared");
+      const snapshot = record.snapshot as BuildPipeline;
+      const session = snapshot.sessions[snapshot.currentSessionIndex]!;
+      const messages = await provider.messages(session.sdkSessionId);
+      session.messages = messages;
+      session.messagesFingerprint = `${messages.length}:${JSON.stringify(messages.at(-1))}`;
+      session.messagesPersistedAt = new Date(Date.now() - 11 * 60_000).toISOString();
       await storage.saveBuildPipeline(
-        paused.id,
-        paused.projectId,
-        paused.environmentId,
-        1,
-        paused,
-        record!.revision,
+        snapshot.id,
+        snapshot.projectId,
+        snapshot.environmentId,
+        record.version,
+        snapshot,
+        record.revision,
       );
-      const internal = service as unknown as {
-        persistUnattendedQuestionFailure(
-          pipelineId: string,
-          event: Record<string, unknown>,
-        ): Promise<void>;
-        locks: Map<string, Promise<void>>;
-      };
-      const event = {
-        environmentId: "env-1",
-        provider: "opencode",
-        sessionId: session.sdkSessionId,
-        interactionId: "question-1",
-        kind: "question",
-        registration: {
-          origin: "build-pipeline",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        },
-        state: "detected",
-      };
-      await expect(internal.persistUnattendedQuestionFailure(started.id, event))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
-      expect((await pipeline(storage, started.id)).phase).toBe("paused");
+      provider.status = async () => "running";
 
-      const pausedRecord = await storage.getBuildPipeline(started.id);
-      const resumed = structuredClone(pausedRecord!.snapshot) as BuildPipeline;
-      resumed.phase = "building";
-      await storage.saveBuildPipeline(
-        resumed.id,
-        resumed.projectId,
-        resumed.environmentId,
-        1,
-        resumed,
-        pausedRecord!.revision,
-      );
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
+      await service.advanceNow(started.id);
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "building",
+        stallWarning: { sessionId: session.sdkSessionId },
       });
-      internal.locks.set(started.id, gate);
-      const pending = internal.persistUnattendedQuestionFailure(started.id, event);
-      await Bun.sleep(1);
-      const raceRecord = await storage.getBuildPipeline(started.id);
-      const racePaused = structuredClone(raceRecord!.snapshot) as BuildPipeline;
-      racePaused.phase = "paused";
-      await storage.saveBuildPipeline(
-        racePaused.id,
-        racePaused.projectId,
-        racePaused.environmentId,
-        1,
-        racePaused,
-        raceRecord!.revision,
-      );
-      release();
-      await expect(pending).rejects.toBeInstanceOf(ProviderUnavailableError);
+
+      provider.messages = async () => [{
+        id: "new-progress",
+        role: "assistant",
+        parts: [{ type: "text", content: "Progress resumed" }],
+      }];
+      await service.advanceNow(started.id);
+      const resumed = await pipeline(storage, started.id);
+      expect(resumed.phase).toBe("building");
+      expect(resumed.stallWarning).toBeUndefined();
     });
   });
 
-  test("propagates question-owner storage failures", async () => {
-    await withService(async (service, storage) => {
-      const originalGet = storage.getBuildPipeline.bind(storage);
-      storage.getBuildPipeline = async () => {
-        throw new Error("storage unavailable");
-      };
-      try {
-        const internal = service as unknown as {
-          persistUnattendedQuestionFailure(
-            pipelineId: string,
-            event: Record<string, unknown>,
-          ): Promise<void>;
-        };
-        await expect(internal.persistUnattendedQuestionFailure("pipeline-1", {
-          environmentId: "env-1",
-          provider: "opencode",
-          sessionId: "session-1",
-        })).rejects.toThrow("storage unavailable");
-      } finally {
-        storage.getBuildPipeline = originalGet;
-      }
-    });
-  });
-
-  test("production OpenCode observation wiring durably fails before rejection and clears orphans", async () => {
+  test("production OpenCode uses journaled decline/deny enforcement without a grant-once stream", async () => {
     await withService(async (service, storage) => {
       const started = await service.start(startInput({ agentType: "opencode" }));
       await service.advanceNow(started.id);
@@ -1758,52 +1650,35 @@ describe("BuildPipelineService", () => {
       const restored = await pipeline(storage, started.id);
       const session = restored.sessions[restored.currentSessionIndex]!;
 
-      const queued: unknown[] = [];
-      const waiters: Array<(result: IteratorResult<unknown>) => void> = [];
-      let streamClosed = false;
-      const closeStream = () => {
-        streamClosed = true;
-        for (const waiter of waiters.splice(0)) {
-          waiter({ done: true, value: undefined });
-        }
-      };
-      const pushEvent = (event: unknown) => {
-        const waiter = waiters.shift();
-        if (waiter) waiter({ done: false, value: event });
-        else queued.push(event);
-      };
-      const stream = {
-        [Symbol.asyncIterator]() {
-          return {
-            next: async (): Promise<IteratorResult<unknown>> => {
-              const next = queued.shift();
-              if (next !== undefined) return { done: false, value: next };
-              if (streamClosed) return { done: true, value: undefined };
-              return new Promise((resolve) => waiters.push(resolve));
-            },
-          };
-        },
-      };
       const rejected: string[] = [];
-      const permissionReplies: string[] = [];
+      const permissionReplies: Array<{ requestID: string; reply: string }> = [];
       const phaseAtRejection: string[] = [];
-      const observations: unknown[] = [];
-      let pendingQuestions: Array<Record<string, unknown>> = [];
+      let pendingQuestions: Array<Record<string, unknown>> = [{
+        id: "question-1",
+        sessionID: session.sdkSessionId,
+        questions: [{
+          question: "Choose a safe implementation",
+          options: [{ label: "Conservative", description: "Smallest change" }],
+        }],
+      }];
+      let pendingPermissions: Array<Record<string, unknown>> = [];
       let subscriptions = 0;
       const client = {
         event: {
-          async subscribe(_parameters: unknown, options: { signal?: AbortSignal }) {
+          async subscribe() {
             subscriptions += 1;
-            options.signal?.addEventListener("abort", closeStream, { once: true });
-            return { stream };
+            throw new Error("The common backend resolver must not subscribe");
           },
         },
         permission: {
           async list() {
-            return { data: [] };
+            return { data: pendingPermissions };
           },
-          async reply(parameters: { requestID: string }) {
-            permissionReplies.push(parameters.requestID);
+          async reply(parameters: { requestID: string; reply: string }) {
+            permissionReplies.push(parameters);
+            pendingPermissions = pendingPermissions.filter(
+              ({ id }) => id !== parameters.requestID,
+            );
             return { data: true };
           },
         },
@@ -1821,7 +1696,11 @@ describe("BuildPipelineService", () => {
             return { data: true };
           },
         },
-        session: {},
+        session: {
+          async status() {
+            return { data: { [session.sdkSessionId]: { type: "busy" } } };
+          },
+        },
       } as unknown as OpencodeClient;
       const production = new BuildPipelineService(
         storage,
@@ -1834,47 +1713,44 @@ describe("BuildPipelineService", () => {
         {
           autoAdvance: false,
           providerDependencies: { openCodeClient: client, monitorRetryMs: 1 },
-          onInteractionObservation: (event) => {
-            observations.push(event);
-            throw new Error("diagnostics unavailable");
-          },
         },
       );
       try {
-        const provider = await (production as unknown as {
-          provider: (
-            pipeline: BuildPipeline,
-            agent: "opencode",
-          ) => Promise<BuildPipelineProvider>;
-        }).provider(restored, "opencode");
-        for (let attempt = 0; subscriptions === 0 && attempt < 100; attempt += 1) {
-          await Bun.sleep(1);
-        }
-        expect(subscriptions).toBe(1);
-
-        pushEvent({
-          type: "permission.asked",
-          properties: { id: "permission-1", sessionID: session.sdkSessionId },
-        });
-        for (let attempt = 0; permissionReplies.length === 0 && attempt < 100; attempt += 1) {
-          await Bun.sleep(1);
-        }
-        expect(permissionReplies).toEqual(["permission-1"]);
-        expect((await pipeline(storage, started.id)).phase).toBe("building");
-
-        pendingQuestions.push({
-          id: "question-1",
-          sessionID: session.sdkSessionId,
-        });
-        pushEvent({
-          type: "question.asked",
-          properties: { id: "question-1", sessionID: session.sdkSessionId },
-        });
-        for (let attempt = 0; rejected.length === 0 && attempt < 100; attempt += 1) {
-          await Bun.sleep(1);
-        }
+        await production.advanceNow(started.id);
+        expect(subscriptions).toBe(0);
         expect(rejected).toEqual(["question-1"]);
-        expect(phaseAtRejection).toEqual(["failed"]);
+        expect(phaseAtRejection).toEqual(["building"]);
+        expect(await pipeline(storage, started.id)).toMatchObject({
+          phase: "building",
+          autoDeclineCount: 1,
+          sessions: [expect.objectContaining({
+            autoDeclineCount: 1,
+            interactionTranscript: [expect.objectContaining({
+              id: `opencode:question:${encodeURIComponent(session.sdkSessionId)}:question-1`,
+              outcome: "auto-declined-headless",
+            })],
+          })],
+        });
+        const firstJournal = await storage.getAgentInteractionResolutionJournal();
+        expect(firstJournal.entries).toContainEqual(expect.objectContaining({
+          state: "workflow-recorded",
+          outcome: "auto-declined",
+        }));
+
+        pendingPermissions = [{
+          id: "permission-1",
+          sessionID: session.sdkSessionId,
+          permission: "edit",
+          patterns: ["**"],
+          title: "Edit files",
+          metadata: {},
+          time: { created: Date.now() },
+        }];
+        await production.advanceNow(started.id);
+        expect(permissionReplies).toEqual([expect.objectContaining({
+          requestID: "permission-1",
+          reply: "reject",
+        })]);
         expect(await pipeline(storage, started.id)).toMatchObject({
           phase: "failed",
           failureContext: {
@@ -1882,32 +1758,299 @@ describe("BuildPipelineService", () => {
             sessionId: session.sdkSessionId,
           },
         });
-        expect(observations).toContainEqual(expect.objectContaining({
-          environmentId: "env-1",
-          provider: "opencode",
-          kind: "question",
-          state: "detected",
-        }));
-
-        provider.registerSession?.("orphan-session", {
-          origin: "build-pipeline",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-          phase: "build",
-        });
-        pendingQuestions.push({
-          id: "orphan-question",
-          sessionID: "orphan-session",
-        });
-        pushEvent({
-          type: "question.asked",
-          properties: { id: "orphan-question", sessionID: "orphan-session" },
-        });
-        for (let attempt = 0; rejected.length < 2 && attempt < 100; attempt += 1) {
-          await Bun.sleep(1);
-        }
-        expect(rejected).toEqual(["question-1", "orphan-question"]);
       } finally {
         await production.shutdown();
+      }
+    });
+  });
+
+  test("declines three Claude questions exactly once and never consumes a queued message as an answer", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const running = await pipeline(storage, started.id);
+      const session = running.sessions[running.currentSessionIndex]!;
+      const now = Date.now();
+      let requests: AgentInteractionRequest[] = Array.from(
+        { length: 3 },
+        (_, index) => ({
+          version: AGENT_INTERACTION_CONTRACT_VERSION,
+          id: `question-${index + 1}`,
+          provider: "claude" as const,
+          kind: "question" as const,
+          origin: "build-pipeline" as const,
+          sessionId: session.sdkSessionId,
+          state: "pending" as const,
+          revision: 1,
+          presentation: {
+            title: `Question ${index + 1}`,
+            questions: [{
+              id: "choice",
+              prompt: "Choose safely",
+              required: true,
+              multiple: false,
+              secret: false,
+              allowFreeText: false,
+              options: [{
+                id: "safe",
+                label: "Safe",
+                providerValue: "safe",
+              }],
+            }],
+          },
+          createdAt: now + index,
+          updatedAt: now + index,
+        }),
+      );
+      const resolutions: Array<{ id: string; action: string }> = [];
+      (provider as unknown as BuildPipelineProvider & {
+        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+      }).interactions = {
+        async listPendingInteractions() {
+          return {
+            version: AGENT_INTERACTION_CONTRACT_VERSION,
+            revision: 1,
+            requests,
+          };
+        },
+        async resolveInteraction(sessionId, interactionId, resolution) {
+          resolutions.push({ id: interactionId, action: resolution.action });
+          requests = requests.filter((request) => request.id !== interactionId);
+          return { result: "applied", sessionId, interactionId, revision: 2 };
+        },
+      };
+
+      await service.sendMessage(started.id, "This is a normal follow-up");
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+
+      const resolved = await pipeline(storage, started.id);
+      expect(resolutions).toEqual([
+        { id: "question-1", action: "decline" },
+        { id: "question-2", action: "decline" },
+        { id: "question-3", action: "decline" },
+      ]);
+      expect(resolved).toMatchObject({
+        phase: "building",
+        autoDeclineCount: 3,
+        pendingUserMessages: [{ text: "This is a normal follow-up" }],
+      });
+      expect(resolved.sessions[resolved.currentSessionIndex]).toMatchObject({
+        autoDeclineCount: 3,
+        interactionTranscript: [
+          expect.objectContaining({ id: "question-1" }),
+          expect.objectContaining({ id: "question-2" }),
+          expect.objectContaining({ id: "question-3" }),
+        ],
+      });
+      const journal = await storage.getAgentInteractionResolutionJournal();
+      expect(journal.entries.filter((entry) => entry.claim.workflowId === started.id))
+        .toHaveLength(3);
+      expect(journal.entries.every((entry) => entry.state === "workflow-recorded"))
+        .toBe(true);
+
+      requests = [{
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        id: "permission-1",
+        provider: "claude",
+        kind: "permission",
+        origin: "build-pipeline",
+        sessionId: session.sdkSessionId,
+        state: "pending",
+        revision: 2,
+        presentation: {
+          title: "Authorize an unexpected privilege",
+          questions: [],
+        },
+        createdAt: now + 10,
+        updatedAt: now + 10,
+      }];
+      await service.advanceNow(started.id);
+      expect(resolutions.at(-1)).toEqual({ id: "permission-1", action: "deny" });
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        failureContext: {
+          kind: "interactive-request",
+          requestId: "permission-1",
+        },
+      });
+
+      const retried = await service.retryInteractionFailure(started.id);
+      expect(retried.phase).toBe("building");
+      expect(retried.sessions).toHaveLength(2);
+      expect(retried.sessions[1]).toMatchObject({
+        phase: "build",
+        status: "running",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      });
+    });
+  });
+
+  test("recovers each interaction journal crash boundary without a duplicate provider response", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const running = await pipeline(storage, started.id);
+      const session = running.sessions[running.currentSessionIndex]!;
+      const claimedAt = Date.now();
+      let requests: AgentInteractionRequest[] = [{
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        id: "claimed-question",
+        provider: "claude",
+        kind: "question",
+        origin: "build-pipeline",
+        sessionId: session.sdkSessionId,
+        state: "pending",
+        revision: 1,
+        presentation: {
+          title: "Question found after restart",
+          questions: [],
+        },
+        createdAt: claimedAt,
+        updatedAt: claimedAt,
+      }];
+      const responses: string[] = [];
+      (provider as unknown as BuildPipelineProvider & {
+        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+      }).interactions = {
+        async listPendingInteractions() {
+          return {
+            version: AGENT_INTERACTION_CONTRACT_VERSION,
+            revision: 1,
+            requests,
+          };
+        },
+        async resolveInteraction(sessionId, interactionId) {
+          responses.push(interactionId);
+          requests = requests.filter((request) => request.id !== interactionId);
+          return { result: "applied", sessionId, interactionId, revision: 2 };
+        },
+      };
+
+      await storage.updateAgentInteractionResolutionJournal(() => ({
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [{
+          id: "journal-claimed",
+          interactionId: "claimed-question",
+          provider: "claude",
+          kind: "question",
+          sessionId: session.sdkSessionId,
+          state: "claimed",
+          claim: {
+            workflowType: "build-pipeline",
+            workflowId: started.id,
+            phase: "building",
+            fence: session.sessionKey,
+            claimedAt,
+          },
+        }],
+      }));
+      await service.advanceNow(started.id);
+      expect(responses).toEqual(["claimed-question"]);
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "building",
+        autoDeclineCount: 1,
+      });
+
+      // Provider-resolved input recovery writes the workflow record without
+      // sending anything upstream a second time.
+      const inputResolvedAt = Date.now();
+      await storage.updateAgentInteractionResolutionJournal((journal) => ({
+        ...journal,
+        entries: [...journal.entries, {
+          id: "journal-provider-resolved-input",
+          interactionId: "resolved-question",
+          provider: "claude",
+          kind: "question",
+          sessionId: session.sdkSessionId,
+          state: "provider-resolved",
+          claim: {
+            workflowType: "build-pipeline",
+            workflowId: started.id,
+            phase: "building",
+            fence: session.sessionKey,
+            claimedAt: inputResolvedAt - 1,
+          },
+          outcome: "auto-declined",
+          providerResolvedAt: inputResolvedAt,
+        }],
+      }));
+      await service.advanceNow(started.id);
+      expect(responses).toEqual(["claimed-question"]);
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "building",
+        autoDeclineCount: 2,
+      });
+
+      // The same boundary for authorization records a terminal failure, again
+      // without redispatching an already accepted provider response.
+      const authorizationResolvedAt = Date.now();
+      await storage.updateAgentInteractionResolutionJournal((journal) => ({
+        ...journal,
+        entries: [...journal.entries, {
+          id: "journal-provider-resolved-auth",
+          interactionId: "resolved-permission",
+          provider: "claude",
+          kind: "permission",
+          sessionId: session.sdkSessionId,
+          state: "provider-resolved",
+          claim: {
+            workflowType: "build-pipeline",
+            workflowId: started.id,
+            phase: "building",
+            fence: session.sessionKey,
+            claimedAt: authorizationResolvedAt - 1,
+          },
+          outcome: "denied",
+          providerResolvedAt: authorizationResolvedAt,
+        }],
+      }));
+      await service.advanceNow(started.id);
+      expect(responses).toEqual(["claimed-question"]);
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        failureContext: {
+          kind: "interactive-request",
+          requestId: "resolved-permission",
+        },
+      });
+
+      // Simulate the last crash window: workflow state is durable, while the
+      // journal update that follows it was lost. init() must finish only that
+      // journal transition and must not contact the provider.
+      await storage.updateAgentInteractionResolutionJournal((journal) => ({
+        ...journal,
+        entries: journal.entries.map((entry) =>
+          entry.id === "journal-provider-resolved-auth"
+            ? {
+                ...entry,
+                state: "provider-resolved" as const,
+                workflowRecordedAt: undefined,
+              }
+            : entry),
+      }));
+      const restored = new BuildPipelineService(
+        storage,
+        async <T>(): Promise<T> => {
+          throw new Error("Crash-boundary journal recovery must stay local");
+        },
+        { autoAdvance: false, provider: async () => provider },
+      );
+      try {
+        await restored.init();
+        const journal = await storage.getAgentInteractionResolutionJournal();
+        expect(journal.entries.find((entry) =>
+          entry.id === "journal-provider-resolved-auth"
+        )).toMatchObject({
+          state: "workflow-recorded",
+          outcome: "denied",
+        });
+        expect(responses).toEqual(["claimed-question"]);
+      } finally {
+        await restored.shutdown();
       }
     });
   });
@@ -1931,27 +2074,33 @@ describe("BuildPipelineService", () => {
 
       provider.registered.length = 0;
       expect(await resolveProvider.provider(restored, "claude")).toBe(provider);
-      expect(provider.registered).toEqual([{
+      expect(provider.registered).toEqual([expect.objectContaining({
         sessionId: "build-1",
-        interaction: {
+        interaction: expect.objectContaining({
           origin: "build-pipeline",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           phase: "build",
-        },
-      }]);
+          workflowId: started.id,
+          provider: "claude",
+          fence: expect.any(String),
+        }),
+      })]);
 
       const injected = new FakeProvider();
       resolveProvider.providers.clear();
       resolveProvider.options.provider = async () => injected;
       expect(await resolveProvider.provider(restored, "claude")).toBe(injected);
-      expect(injected.registered).toEqual([{
+      expect(injected.registered).toEqual([expect.objectContaining({
         sessionId: "build-1",
-        interaction: {
+        interaction: expect.objectContaining({
           origin: "build-pipeline",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           phase: "build",
-        },
-      }]);
+          workflowId: started.id,
+          provider: "claude",
+          fence: expect.any(String),
+        }),
+      })]);
     });
   });
 
@@ -1983,11 +2132,14 @@ describe("BuildPipelineService", () => {
             registration: (sessionId: string) => ProviderSessionRegistration;
           };
         }).interactionTracker.registration("build-1");
-        expect(registration).toEqual({
+        expect(registration).toEqual(expect.objectContaining({
           origin: "build-pipeline",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
           phase: "build",
-        });
+          workflowId: started.id,
+          provider: "claude",
+          fence: expect.any(String),
+        }));
       } finally {
         await production.shutdown();
       }

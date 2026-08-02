@@ -6,7 +6,10 @@ import {
   useBuildPipelineStore,
   type BuildPipeline,
 } from "@/stores/buildPipelineStore";
-import { retryBuildPipelineCompletionComment } from "@/lib/backend";
+import {
+  retryBuildPipelineCompletionComment,
+  retryBuildPipelineInteractionFailure,
+} from "@/lib/backend";
 
 interface BuildCompletionStatusProps {
   pipeline: BuildPipeline;
@@ -54,47 +57,67 @@ export function BuildCompletionStatus({
   const [retryPending, setRetryPending] = useState(false);
 
   const source = pipeline.source;
-  if (!source || pipeline.completionCommentStatus !== "failed") {
+  const interactionFailure = pipeline.phase === "failed"
+    && pipeline.failureContext?.kind === "interactive-request";
+  const completionFailure = Boolean(
+    source && pipeline.completionCommentStatus === "failed",
+  );
+  const autoDeclines = pipeline.autoDeclineCount ?? 0;
+  if (!interactionFailure && !completionFailure && autoDeclines === 0) {
     return null;
   }
-  const copy = FAILURE_COPY[source.type];
+  const copy = source ? FAILURE_COPY[source.type] : undefined;
 
   return (
-    <div
-      className="flex flex-wrap items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2"
-      role="alert"
-    >
-      <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
-      <span className="min-w-0 flex-1 text-xs text-destructive">
-        {copy.label}: {pipeline.completionCommentError ?? copy.fallback}
-      </span>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="h-7 gap-1.5 text-xs"
-        aria-label={copy.retryLabel}
-        disabled={retryPending}
-        onClick={async () => {
-          if (retryPending) return;
-          setRetryPending(true);
-          try {
-            replacePipeline(
-              await retryBuildPipelineCompletionComment(pipeline.id),
-            );
-          } catch (error) {
-            toast.error(`Failed to retry: ${copy.label.toLowerCase()}`, {
-              description:
-                error instanceof Error ? error.message : String(error),
-            });
-          } finally {
-            setRetryPending(false);
-          }
-        }}
-      >
-        <RefreshCw className={`h-3.5 w-3.5${retryPending ? " animate-spin" : ""}`} />
-        {retryPending ? "Retrying…" : "Retry"}
-      </Button>
-    </div>
+    <>
+      {autoDeclines > 0 && (
+        <div className="border-b border-border/40 bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+          {autoDeclines} unattended input request{autoDeclines === 1 ? " was" : "s were"} auto-declined. Review the muted transcript entries for details.
+        </div>
+      )}
+      {(interactionFailure || completionFailure) && (
+        <div
+          className="flex flex-wrap items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2"
+          role="alert"
+        >
+          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+          <span className="min-w-0 flex-1 text-xs text-destructive">
+            {interactionFailure
+              ? pipeline.error
+                ?? "An unattended interaction could not be resolved safely, so the active phase stopped."
+              : `${copy!.label}: ${pipeline.completionCommentError ?? copy!.fallback}`}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 text-xs"
+            aria-label={interactionFailure
+              ? "Retry failed build phase"
+              : copy!.retryLabel}
+            disabled={retryPending}
+            onClick={async () => {
+              if (retryPending) return;
+              setRetryPending(true);
+              try {
+                replacePipeline(interactionFailure
+                  ? await retryBuildPipelineInteractionFailure(pipeline.id)
+                  : await retryBuildPipelineCompletionComment(pipeline.id));
+              } catch (error) {
+                toast.error("Failed to retry build", {
+                  description:
+                    error instanceof Error ? error.message : String(error),
+                });
+              } finally {
+                setRetryPending(false);
+              }
+            }}
+          >
+            <RefreshCw className={`h-3.5 w-3.5${retryPending ? " animate-spin" : ""}`} />
+            {retryPending ? "Retrying…" : "Retry"}
+          </Button>
+        </div>
+      )}
+    </>
   );
 }

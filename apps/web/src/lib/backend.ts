@@ -2090,6 +2090,14 @@ export async function retryBuildPipelineReview(
   });
 }
 
+export async function retryBuildPipelineInteractionFailure(
+  pipelineId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("retry_build_pipeline_interaction_failure", {
+    pipelineId,
+  });
+}
+
 export async function retryBuildPipelineCompletionComment(
   pipelineId: string,
 ): Promise<BackendBuildPipeline> {

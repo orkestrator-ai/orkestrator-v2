@@ -40,6 +40,10 @@ export interface ProviderSessionRegistration {
   interactionPolicy: AgentInteractionPolicy;
   /** Content-free workflow phase used by passive observations. */
   phase?: string;
+  /** Stable workflow ownership and generation fence for unattended adoption. */
+  workflowId?: string;
+  provider?: BuildPipelineAgent;
+  fence?: string | number;
 }
 
 /** Content-free lifecycle signal emitted before a provider-owned auto-response. */
@@ -243,12 +247,8 @@ export type ProviderDependencies = {
     images: readonly TaskSnapshotImage[],
   ) => Promise<PromptAttachment[]>;
   /**
-   * Answer OpenCode permission and question requests on the user's behalf.
-   *
-   * Only correct for pipeline-owned sessions, which have no human watching.
-   * Interactive sessions must leave this off so the request reaches the tab:
-   * approving on the user's behalf would run a command they never saw, and
-   * rejecting a question cancels the card that exists to answer it.
+   * Legacy test-only OpenCode event responder. Disabled unless explicitly
+   * requested; production workflows use the persisted common resolver.
    */
   autoAnswerRequests?: boolean;
   /**
@@ -427,7 +427,12 @@ class InteractionSnapshotTracker {
         }
       }
     }
-    this.registrations.set(sessionId, interaction ?? DEFAULT_SESSION_REGISTRATION);
+    // Policy is fixed before the first request. Re-registering a restored or
+    // cached provider may reassert the same metadata, but must never switch a
+    // live session between interactive and unattended while a request exists.
+    if (!this.registrations.has(sessionId)) {
+      this.registrations.set(sessionId, interaction ?? DEFAULT_SESSION_REGISTRATION);
+    }
   }
 
   registration(sessionId: string): ProviderSessionRegistration {
@@ -1620,7 +1625,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
       1,
       dependencies.monitorRetryMs ?? DEFAULT_MONITOR_RETRY_MS,
     );
-    this.autoAnswerRequests = dependencies.autoAnswerRequests !== false;
+    this.autoAnswerRequests = dependencies.autoAnswerRequests === true;
     this.onInteractionObservation = dependencies.onInteractionObservation;
     // An interactive provider has nothing to monitor: every request belongs to a
     // tab that will answer it. Subscribing anyway would open a permanent event
@@ -1776,10 +1781,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
         const response = await this.client.permission.reply({
           requestID: requestId,
           directory: this.connection.directory,
-          reply: "once",
+          reply: "reject",
         }, this.requestOptions());
         assertSdkResponse(response, "OpenCode permission response");
-        await observe("withdrawn", "running").catch(() => undefined);
+        await observe("withdrawn", "error").catch(() => undefined);
       } else if (event.type === "question.asked") {
         // The owner persists the fail-closed terminal outcome before the
         // upstream question is removed. If persistence fails, leave the

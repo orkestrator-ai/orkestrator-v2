@@ -874,4 +874,35 @@ describe("toPipelineTranscript", () => {
       "third",
     ]);
   });
+
+  test("appends a muted, bounded auto-decline history entry without an answer", () => {
+    const transcript = toPipelineTranscript(
+      [{ id: "provider-message", role: "assistant", content: "Continuing safely" }],
+      "codex",
+      FALLBACK,
+      [{
+        id: "interaction-1",
+        provider: "codex",
+        kind: "question",
+        phase: "build",
+        requestedAt: 1,
+        resolvedAt: 2,
+        outcome: "auto-declined-headless",
+        title: "Choose an implementation",
+        body: "A decision was requested.",
+        questions: [{
+          prompt: "Which approach?",
+          options: ["Conservative", "Expansive"],
+        }],
+      }],
+    );
+
+    const history = transcript.at(-1)!;
+    expect(history.id).toBe("pipeline-interaction:interaction-1");
+    expect(history.role).toBe("system");
+    expect(history.content).toContain("codex question during build");
+    expect(history.content).toContain("Outcome: auto-declined-headless");
+    expect(history.content).toContain("No answer was fabricated");
+    expect(history.content).toContain("Conservative, Expansive");
+  });
 });

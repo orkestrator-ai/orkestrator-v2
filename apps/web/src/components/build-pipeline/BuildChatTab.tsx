@@ -215,9 +215,15 @@ export function BuildChatTab({
             selectedSession?.messages,
             agentType,
             selectedSession?.startedAt ?? new Date().toISOString(),
+            selectedSession?.interactionTranscript,
           )
         : [],
-    [agentType, selectedSession?.messages, selectedSession?.startedAt],
+    [
+      agentType,
+      selectedSession?.messages,
+      selectedSession?.startedAt,
+      selectedSession?.interactionTranscript,
+    ],
   );
 
   const runControl = async (
@@ -428,6 +434,11 @@ export function BuildChatTab({
           {pipeline.error}
         </div>
       )}
+      {pipeline.stallWarning && (
+        <div className="border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 text-xs text-amber-200/90">
+          This stage is still running, but its transcript has not changed for an extended period. It was not stopped automatically.
+        </div>
+      )}
       <BuildCompletionStatus pipeline={pipeline} />
 
       {reviewReportHint && (
@@ -498,6 +509,11 @@ export function BuildChatTab({
                     <span className="block text-[11px] text-muted-foreground">
                       Iteration {session.iteration + 1}
                     </span>
+                    {(session.autoDeclineCount ?? 0) > 0 && (
+                      <span className="mt-1 block text-[10px] text-muted-foreground">
+                        {session.autoDeclineCount} input request{session.autoDeclineCount === 1 ? "" : "s"} auto-declined
+                      </span>
+                    )}
                     {ownsReport && pipeline.structuredReview && (
                       <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200/90">
                         <ClipboardCheck className="h-2.5 w-2.5" />

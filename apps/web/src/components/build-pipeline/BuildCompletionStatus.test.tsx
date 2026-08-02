@@ -31,9 +31,20 @@ const retryCompletionCommentMock = mock(async (pipelineId: string) => {
     backendRevision: current.backendRevision + 1,
   };
 });
+const retryInteractionFailureMock = mock(async (pipelineId: string) => {
+  const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+  return {
+    ...current,
+    phase: "building" as const,
+    failureContext: undefined,
+    error: undefined,
+    backendRevision: current.backendRevision + 1,
+  };
+});
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   retryBuildPipelineCompletionComment: retryCompletionCommentMock,
+  retryBuildPipelineInteractionFailure: retryInteractionFailureMock,
 }));
 const { BuildCompletionStatus } = await import("./BuildCompletionStatus");
 
@@ -62,6 +73,7 @@ function seedFailedPipeline(
 describe("BuildCompletionStatus", () => {
   beforeEach(() => {
     retryCompletionCommentMock.mockReset();
+    retryInteractionFailureMock.mockClear();
     retryCompletionCommentMock.mockImplementation(async (pipelineId: string) => {
       const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
       return {
@@ -75,6 +87,42 @@ describe("BuildCompletionStatus", () => {
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
+  });
+
+  test("surfaces an authorization denial and retries the failed phase", async () => {
+    const pipeline = buildPipelineFixture({
+      id: "authorization-failure",
+      phase: "failed",
+      error: "Unexpected authorization",
+      failureContext: {
+        phase: "building",
+        kind: "interactive-request",
+        sessionId: "build-1",
+        requestId: "permission-1",
+      },
+    });
+    useBuildPipelineStore.getState().replacePipeline(pipeline);
+
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+    expect(screen.getByText("Unexpected authorization")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry failed build phase" }));
+
+    await waitFor(() => {
+      expect(retryInteractionFailureMock).toHaveBeenCalledWith(pipeline.id);
+      expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase)
+        .toBe("building");
+    });
+  });
+
+  test("shows the durable auto-decline count as a muted completion summary", () => {
+    const pipeline = buildPipelineFixture({
+      id: "auto-declines",
+      phase: "complete",
+      autoDeclineCount: 3,
+    });
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+    expect(screen.getByText(/3 unattended input requests were auto-declined/))
+      .toBeTruthy();
   });
 
   test("retries a failed GitHub completion comment from the build UI", async () => {

@@ -17,6 +17,7 @@ export type TmuxEvent =
       environment_id: string;
       session_id: string;
       resumed: boolean;
+      fast_mode: boolean | null;
     }
   | {
       kind: "initial-prompt-sent";
@@ -30,6 +31,13 @@ export type TmuxEvent =
       environment_id: string;
       session_id: string;
       permission_mode: string;
+    }
+  | {
+      kind: "fast-mode-changed";
+      tab_id: string;
+      environment_id: string;
+      session_id: string;
+      fast_mode: boolean;
     }
   | {
       kind: "transcript-line";
@@ -150,6 +158,7 @@ export interface TmuxStatus {
   resumed: boolean;
   busy: boolean;
   permission_mode: string;
+  fast_mode: boolean | null;
 }
 
 /** Metadata about a previously-recorded session the user could resume. */
@@ -170,6 +179,7 @@ export async function startSession(
     initialPrompt?: string;
     model?: string;
     effort?: string;
+    fastMode?: boolean;
     resumeSessionId?: string;
     replaceExisting?: boolean;
   },
@@ -180,6 +190,7 @@ export async function startSession(
     initialPrompt: options?.initialPrompt,
     model: options?.model,
     effort: options?.effort,
+    fastMode: options?.fastMode,
     resumeSessionId: options?.resumeSessionId,
     replaceExisting: options?.replaceExisting,
   });
@@ -235,6 +246,14 @@ export async function switchEffort(
   environmentId: string,
 ): Promise<void> {
   await invoke("claude_tmux_switch_effort", { tabId, environmentId, effort });
+}
+
+export async function switchFastMode(
+  tabId: string,
+  fastMode: boolean,
+  environmentId: string,
+): Promise<void> {
+  await invoke("claude_tmux_switch_fast_mode", { tabId, environmentId, fastMode });
 }
 
 export async function switchPlanMode(

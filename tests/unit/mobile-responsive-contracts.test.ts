@@ -10,16 +10,18 @@ describe("mobile responsive layout contracts", () => {
     ["apps/web/src/components/browser/BrowserTab.tsx", "@container/browser", "basis-full", "@md/browser:flex-nowrap", "overflow-hidden"],
     ["apps/web/src/components/chat/FileMentionMenu.tsx", "w-full min-w-0", "sm:w-96"],
     ["apps/web/src/components/chat/NativeComposeDock.tsx", "px-2", "sm:px-4"],
-    ["apps/web/src/components/chat/VirtualizedMessageList.tsx", "min-w-0"],
-    ["apps/web/src/components/claude/ClaudeComposeBar.tsx", "overflow-x-auto", "sm:min-w-[340px]"],
-    ["apps/web/src/components/claude/ClaudeTmuxChatTab.tsx", "overflow-x-auto", "sm:w-[min(calc(100%_-_2rem),56rem)]"],
-    ["apps/web/src/components/codex/CodexComposeBar.tsx", "overflow-x-auto", "w-[calc(100vw-1rem)]"],
     [
-      "apps/web/src/components/opencode/OpenCodeComposeBar.tsx",
-      "overflow-x-auto",
+      "apps/web/src/components/chat/NativeModelPicker.tsx",
       "w-[calc(100vw-1rem)]",
       "collisionPadding={{ top: 52, right: 8, bottom: 8, left: 8 }}",
+      "max-h-(--radix-dropdown-menu-content-available-height)",
+      "overflow-y-auto",
     ],
+    ["apps/web/src/components/chat/VirtualizedMessageList.tsx", "min-w-0"],
+    ["apps/web/src/components/claude/ClaudeComposeBar.tsx", "overflow-x-auto"],
+    ["apps/web/src/components/claude/ClaudeTmuxChatTab.tsx", "overflow-x-auto", "sm:w-[min(calc(100%_-_2rem),56rem)]"],
+    ["apps/web/src/components/codex/CodexComposeBar.tsx", "overflow-x-auto"],
+    ["apps/web/src/components/opencode/OpenCodeComposeBar.tsx", "overflow-x-auto"],
     ["apps/web/src/components/docker/DockerStatsDialog.tsx", "grid-cols-1 gap-3 sm:grid-cols-3"],
     [
       "apps/web/src/components/environments/CreateEnvironmentDialog.tsx",
@@ -48,6 +50,18 @@ describe("mobile responsive layout contracts", () => {
     expect(css).toContain("font-size: 16px");
     expect(css).toContain("max-width: calc(100vw - 1rem)");
     expect(css).toContain("min-height: 2.75rem");
+  });
+
+  test("native compose bars keep context usage visible at mobile widths", () => {
+    for (const file of [
+      "apps/web/src/components/claude/ClaudeComposeBar.tsx",
+      "apps/web/src/components/codex/CodexComposeBar.tsx",
+      "apps/web/src/components/opencode/OpenCodeComposeBar.tsx",
+    ]) {
+      const source = read(file);
+      expect(source).toContain("<ContextUsageWheel usage={contextUsage}");
+      expect(source).not.toContain("!isMobile && <ContextUsageWheel");
+    }
   });
 
   test("message actions only opt into hidden hover controls for precise pointers", () => {

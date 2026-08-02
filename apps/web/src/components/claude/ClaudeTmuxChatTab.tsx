@@ -26,6 +26,7 @@ import { useMediaQuery, useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
+import { NativeModelPicker } from "@/components/chat/NativeModelPicker";
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
@@ -75,6 +76,7 @@ import {
   startSession,
   submit as submitToTmux,
   switchEffort,
+  switchFastMode,
   switchModel,
   switchPlanMode,
   subscribe,
@@ -426,13 +428,17 @@ export function ClaudeTmuxChatTab({
   );
   const [modelSwitching, setModelSwitching] = useState(false);
   const [effortSwitching, setEffortSwitching] = useState(false);
+  const [fastModeSwitching, setFastModeSwitching] = useState(false);
+  const [fastModeEnabled, setFastModeEnabled] = useState<boolean | null>(false);
   const [modeSwitching, setModeSwitching] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [promptControlBusy, setPromptControlBusy] = useState(false);
   const [backendHydrated, setBackendHydrated] = useState(false);
   const startedRef = useRef(false);
+  const autoStartAttemptedRef = useRef(false);
   const permissionModeEventVersionRef = useRef(0);
+  const fastModeMutationVersionRef = useRef(0);
   const isProcessingQueueRef = useRef(false);
   /**
    * Head this tab has stopped retrying, and for how many consecutive failures.
@@ -486,7 +492,7 @@ export function ClaudeTmuxChatTab({
   );
   const resumedSession = tabState?.resumed ?? false;
   const hasStarted = startedRef.current || running;
-  const showStartScreen = !hasStarted && !hasInitialPrompt;
+  const showStartScreen = !hasStarted && (!hasInitialPrompt || autoStartAttemptedRef.current);
   const hasPendingHookCards =
     pendingApprovals.length +
       pendingQuestions.length +
@@ -574,6 +580,12 @@ export function ClaudeTmuxChatTab({
     effortOptions.length > 0 && !effortOptions.includes(selectedEffort)
       ? fallbackEffort(effortOptions)
       : selectedEffort;
+  const settingsSwitching =
+    modelSwitching || effortSwitching || fastModeSwitching || modeSwitching;
+  const applyFastMode = useCallback((enabled: boolean | null) => {
+    fastModeMutationVersionRef.current += 1;
+    setFastModeEnabled(enabled);
+  }, []);
 
   useLayoutEffect(() => {
     migrateLegacyClaudeTmuxState(tabId, stateKey, environmentId);
@@ -669,6 +681,7 @@ export function ClaudeTmuxChatTab({
       try {
         for (let attempt = 0; attempt < 3; attempt += 1) {
           const permissionModeVersion = permissionModeEventVersionRef.current;
+          const fastModeMutationVersion = fastModeMutationVersionRef.current;
           const tabStateBeforeAttempt =
             useClaudeTmuxStore.getState().tabs.get(storeKey);
           const status = await getStatus(tabId, environmentId);
@@ -691,7 +704,8 @@ export function ClaudeTmuxChatTab({
           const liveStateChanged =
             useClaudeTmuxStore.getState().tabs.get(storeKey) !==
               tabStateBeforeAttempt ||
-            permissionModeEventVersionRef.current !== permissionModeVersion;
+            permissionModeEventVersionRef.current !== permissionModeVersion ||
+            fastModeMutationVersionRef.current !== fastModeMutationVersion;
           if (liveStateChanged) {
             if (refreshRequestId > 0) {
               throw new Error("Claude tmux session changed while refreshing; try again");
@@ -702,6 +716,7 @@ export function ClaudeTmuxChatTab({
 
           if (status && status.environment_id === environmentId) {
             startedRef.current = Boolean(status.running);
+            if (status.running) autoStartAttemptedRef.current = true;
             setRunning(storeKey, status.running, {
               environmentId: status.environment_id,
               sessionId: status.session_id,
@@ -709,6 +724,7 @@ export function ClaudeTmuxChatTab({
             });
             setTabBusy(storeKey, status.busy);
             setPlanMode(status.permission_mode === "plan");
+            setFastModeEnabled(status.fast_mode);
 
             if (status.session_id) {
               replaceTranscript(storeKey, lines);
@@ -839,11 +855,14 @@ export function ClaudeTmuxChatTab({
 
       switch (ev.kind) {
         case "started":
+          startedRef.current = true;
+          autoStartAttemptedRef.current = true;
           setRunning(storeKey, true, {
             environmentId: ev.environment_id,
             sessionId: ev.session_id,
             resumed: ev.resumed,
           });
+          applyFastMode(ev.fast_mode);
           return;
         case "initial-prompt-sent":
           if (ev.environment_id === environmentId) {
@@ -857,7 +876,11 @@ export function ClaudeTmuxChatTab({
           permissionModeEventVersionRef.current += 1;
           setPlanMode(ev.permission_mode === "plan");
           return;
+        case "fast-mode-changed":
+          applyFastMode(ev.fast_mode);
+          return;
         case "stopped":
+          startedRef.current = false;
           permissionModeEventVersionRef.current += 1;
           setRunning(storeKey, false, { sessionId: null });
           setPlanMode(false);
@@ -958,6 +981,7 @@ export function ClaudeTmuxChatTab({
     setTabBusy,
     clearTabInitialPrompt,
     environmentId,
+    applyFastMode,
   ]);
 
   // Common "start the tmux session" path used by both auto-start (initial
@@ -970,6 +994,8 @@ export function ClaudeTmuxChatTab({
         initialPrompt,
         model: selectedModel,
         effort: effortOptions.length > 0 ? effectiveEffort : undefined,
+        fastMode:
+          selectedModelObj.supportsFastMode === true && fastModeEnabled === true,
         resumeSessionId,
         replaceExisting,
       })
@@ -986,6 +1012,8 @@ export function ClaudeTmuxChatTab({
       selectedModel,
       effortOptions,
       effectiveEffort,
+      selectedModelObj.supportsFastMode,
+      fastModeEnabled,
     ],
   );
 
@@ -995,8 +1023,10 @@ export function ClaudeTmuxChatTab({
   useEffect(() => {
     if (!backendHydrated) return;
     if (!hasInitialPrompt) return;
+    if (autoStartAttemptedRef.current) return;
     if (startedRef.current) return;
     if (running) return;
+    autoStartAttemptedRef.current = true;
     launchSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendHydrated, hasInitialPrompt, tabId, running]);
@@ -1043,8 +1073,7 @@ export function ClaudeTmuxChatTab({
       (!text && attachments.length === 0) ||
       sending ||
       isThinking ||
-      modelSwitching ||
-      effortSwitching
+      settingsSwitching
     ) {
       return false;
     }
@@ -1233,8 +1262,7 @@ export function ClaudeTmuxChatTab({
       !running ||
       sending ||
       isThinking ||
-      modelSwitching ||
-      effortSwitching
+      settingsSwitching
     ) {
       return;
     }
@@ -1313,8 +1341,7 @@ export function ClaudeTmuxChatTab({
     backendHydrated,
     clearPausedQueueHead,
     isThinking,
-    modelSwitching,
-    effortSwitching,
+    settingsSwitching,
     pauseQueueHead,
     running,
     sending,
@@ -1383,7 +1410,7 @@ export function ClaudeTmuxChatTab({
   };
 
   const handleInterrupt = async () => {
-    if (!running || modeSwitching) return;
+    if (!running || settingsSwitching) return;
     setError(null);
     try {
       await interruptSession(tabId, environmentId);
@@ -1566,11 +1593,13 @@ export function ClaudeTmuxChatTab({
   );
 
   const handleSelectModel = async (modelId: string) => {
-    if (modelId === selectedModel || modelSwitching || effortSwitching) return;
+    if (modelId === selectedModel || settingsSwitching) return;
+    const nextSupportsFastMode = getTmuxModel(modelId, availableModels).supportsFastMode === true;
 
     if (!hasStarted || !running) {
       setSelectedModel(modelId);
       clampEffortToModel(modelId);
+      if (!nextSupportsFastMode) applyFastMode(false);
       void persistSelectedModel(modelId);
       return;
     }
@@ -1580,6 +1609,10 @@ export function ClaudeTmuxChatTab({
     setModelSwitching(true);
     setError(null);
     try {
+      if (fastModeEnabled === true && !nextSupportsFastMode) {
+        await switchFastMode(tabId, false, environmentId);
+        applyFastMode(false);
+      }
       await switchModel(tabId, modelId, environmentId);
       setSelectedModel(modelId);
       clampEffortToModel(modelId);
@@ -1592,7 +1625,7 @@ export function ClaudeTmuxChatTab({
   };
 
   const handleSelectEffort = async (effort: ClaudeEffortLevel) => {
-    if (effort === effectiveEffort || effortSwitching || modelSwitching) return;
+    if (effort === effectiveEffort || settingsSwitching) return;
 
     if (!hasStarted || !running) {
       setEffortLevel(storeKey, effort);
@@ -1613,6 +1646,34 @@ export function ClaudeTmuxChatTab({
     }
   };
 
+  const handleSelectFastMode = async (enabled: boolean) => {
+    if (
+      enabled === fastModeEnabled ||
+      selectedModelObj.supportsFastMode !== true ||
+      settingsSwitching
+    ) {
+      return;
+    }
+
+    if (!hasStarted || !running) {
+      applyFastMode(enabled);
+      return;
+    }
+
+    if (sending || isThinking) return;
+
+    setFastModeSwitching(true);
+    setError(null);
+    try {
+      await switchFastMode(tabId, enabled, environmentId);
+      applyFastMode(enabled);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setFastModeSwitching(false);
+    }
+  };
+
   const handleSelectPlanMode = async (enabled: boolean) => {
     if (
       enabled === planMode ||
@@ -1621,6 +1682,7 @@ export function ClaudeTmuxChatTab({
       isThinking ||
       modelSwitching ||
       effortSwitching ||
+      fastModeSwitching ||
       modeSwitching
     ) {
       return;
@@ -1687,12 +1749,12 @@ export function ClaudeTmuxChatTab({
               interactiveMode
                 ? "text-foreground bg-muted/40 hover:bg-muted/60"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
-              (!running || modeSwitching) && "opacity-50 cursor-not-allowed",
+              (!running || settingsSwitching) && "opacity-50 cursor-not-allowed",
             )}
             onClick={() => {
-              if (running && !modeSwitching) setInteractiveMode((v) => !v);
+              if (running && !settingsSwitching) setInteractiveMode((v) => !v);
             }}
-            disabled={!running || modeSwitching}
+            disabled={!running || settingsSwitching}
             title={
               interactiveMode
                 ? "Switch back to the native tmux transcript view"
@@ -1720,7 +1782,7 @@ export function ClaudeTmuxChatTab({
             type="button"
             className="text-muted-foreground hover:text-foreground"
             onClick={handleInterrupt}
-            disabled={!running || modeSwitching}
+            disabled={!running || settingsSwitching}
             title="Interrupt the current Claude turn without closing tmux"
           >
             Interrupt
@@ -1960,7 +2022,7 @@ export function ClaudeTmuxChatTab({
               worktreePath={worktreePath}
               disabled={!running}
               busy={isThinking}
-              submitting={sending || modelSwitching || effortSwitching || modeSwitching}
+              submitting={sending || settingsSwitching}
               autoFocus={isActive}
               onSubmit={handleSubmit}
               onQueue={handleQueue}
@@ -1979,6 +2041,11 @@ export function ClaudeTmuxChatTab({
               onSelectEffort={(level) => {
                 void handleSelectEffort(level);
               }}
+              fastModeEnabled={fastModeEnabled}
+              fastModeAvailable={selectedModelObj.supportsFastMode === true}
+              onSelectFastMode={(enabled) => {
+                void handleSelectFastMode(enabled);
+              }}
               planMode={planMode}
               onTogglePlanMode={(enabled) => {
                 void handleSelectPlanMode(enabled);
@@ -1987,19 +2054,12 @@ export function ClaudeTmuxChatTab({
                 (hasStarted && !running) ||
                 sending ||
                 isThinking ||
-                modelSwitching ||
-                effortSwitching ||
-                modeSwitching
+                settingsSwitching
               }
               modelSwitching={modelSwitching}
               effortSwitching={effortSwitching}
               planLocked={
-                !running ||
-                sending ||
-                isThinking ||
-                modelSwitching ||
-                effortSwitching ||
-                modeSwitching
+                !running || sending || isThinking || settingsSwitching
               }
               layout={centerCompose ? "centered" : "bottom"}
             />
@@ -2860,6 +2920,9 @@ interface TmuxComposeBarProps {
   selectedEffort: ClaudeEffortLevel;
   effortOptions: ClaudeEffortLevel[];
   onSelectEffort: (level: ClaudeEffortLevel) => void;
+  fastModeEnabled: boolean | null;
+  fastModeAvailable: boolean;
+  onSelectFastMode: (enabled: boolean) => void;
   planMode: boolean;
   onTogglePlanMode: (v: boolean) => void;
   modelDisabled: boolean;
@@ -2890,6 +2953,9 @@ function TmuxComposeBar({
   selectedEffort,
   effortOptions,
   onSelectEffort,
+  fastModeEnabled,
+  fastModeAvailable,
+  onSelectFastMode,
   planMode,
   onTogglePlanMode,
   modelDisabled,
@@ -3350,7 +3416,7 @@ function TmuxComposeBar({
         />
       </div>
 
-      <div className="flex items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden">
+      <div className="flex min-w-0 items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button
           type="button"
           disabled
@@ -3360,57 +3426,42 @@ function TmuxComposeBar({
           <Plus className="w-4 h-4" />
         </button>
 
-        {/* Model picker — selectable before launch even while compose is
-            disabled, and after launch it sends Claude Code's /model command
-            into the running tmux pane. */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              disabled={modelDisabled}
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-60"
-              title={
-                modelSwitching
-                  ? "Switching Claude model"
-                  : modelDisabled
-                    ? "Wait for Claude to finish before changing the model"
-                    : disabled
-                      ? "Select the model for the next tmux launch"
-                      : "Switch the model for this tmux session"
-              }
-            >
-              <ChevronDown className="w-3 h-3" />
-              <span className="max-w-[200px] truncate">{modelObj.name}</span>
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="max-h-[400px] overflow-y-auto min-w-[240px]">
-            {models.map((m) => {
-              const selected = m.id === selectedModel;
-              return (
-                <DropdownMenuItem
-                  key={m.id}
-                  onClick={() => {
-                    onSelectModel(m.id);
-                  }}
-                  className="flex items-start gap-2 py-2"
-                >
-                  <div className="w-4 h-4 flex-shrink-0 mt-0.5">
-                    {selected && <Check className="w-4 h-4 text-primary" />}
-                  </div>
-                  <div className="flex flex-col gap-0.5 min-w-0">
-                    <span className="text-sm font-medium truncate">
-                      {m.name}
-                    </span>
-                    {m.description && (
-                      <span className="text-xs text-muted-foreground line-clamp-2">
-                        {m.description}
-                      </span>
-                    )}
-                  </div>
-                </DropdownMenuItem>
-              );
-            })}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* The combined picker is selectable before launch and sends the same
+            model/effort commands to the running tmux pane after launch. */}
+        <NativeModelPicker
+          models={models.map((model) => ({
+            id: model.id,
+            label: model.name,
+            description: model.description,
+          }))}
+          selectedModelId={selectedModel}
+          selectedModelLabel={modelObj.name}
+          onModelChange={onSelectModel}
+          reasoningOptions={effortOptions.map((level) => ({
+            id: level,
+            label: EFFORT_LABELS[level],
+            description: EFFORT_DESCRIPTIONS[level],
+            annotation: level === DEFAULT_EFFORT ? "default" : undefined,
+          }))}
+          selectedReasoningId={selectedEffort}
+          selectedReasoningLabel={effortOptions.length > 0 ? EFFORT_LABELS[selectedEffort] : undefined}
+          onReasoningChange={(level) => onSelectEffort(level as ClaudeEffortLevel)}
+          fastModeEnabled={fastModeEnabled}
+          fastModeAvailable={fastModeAvailable}
+          onFastModeChange={onSelectFastMode}
+          disabled={modelDisabled}
+          title={
+            modelSwitching
+              ? "Switching Claude model"
+              : effortSwitching
+                ? "Switching effort level"
+                : modelDisabled
+                  ? "Wait for Claude to finish before changing model settings"
+                  : disabled
+                    ? "Select model settings for the next tmux launch"
+                    : "Switch model settings for this tmux session"
+          }
+        />
 
         {/* Plan / Build mode */}
         <DropdownMenu>
@@ -3443,56 +3494,6 @@ function TmuxComposeBar({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-
-        {/* Reasoning effort — pre-launch it sets the `--effort` launch flag,
-            after launch it sends Claude Code's /effort command into the
-            running tmux pane. Hidden for models without effort support. */}
-        {effortOptions.length > 0 && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                disabled={modelDisabled}
-                className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-60"
-                title={
-                  effortSwitching
-                    ? "Switching effort level"
-                    : modelDisabled
-                      ? "Wait for Claude to finish before changing the effort level"
-                      : disabled
-                        ? "Select the reasoning effort for the next tmux launch"
-                        : "Switch the reasoning effort for this tmux session"
-                }
-              >
-                <ChevronDown className="w-3 h-3" />
-                <span>{EFFORT_LABELS[selectedEffort]}</span>
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="min-w-[280px]">
-              {effortOptions.map((level) => (
-                <DropdownMenuItem
-                  key={level}
-                  onClick={() => onSelectEffort(level)}
-                  className="flex items-start gap-2 py-2"
-                >
-                  <div className="w-4 h-4 shrink-0 mt-0.5">
-                    {selectedEffort === level && (
-                      <Check className="w-4 h-4 text-primary" />
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-0.5 min-w-0">
-                    <span className="text-sm font-medium">
-                      {EFFORT_LABELS[level]}
-                      {level === DEFAULT_EFFORT ? " (default)" : ""}
-                    </span>
-                    <span className="text-xs text-muted-foreground line-clamp-2">
-                      {EFFORT_DESCRIPTIONS[level]}
-                    </span>
-                  </div>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
 
         <div className="flex-1" />
 

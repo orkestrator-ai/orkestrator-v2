@@ -1510,15 +1510,20 @@ describe("ClaudeComposeBar", () => {
   });
 
   describe("fast mode toggle", () => {
-    test("hides the Fast button when the selected model does not support fast mode", () => {
+    test("disables speed choices when the selected model does not support fast mode", () => {
       // Opus is the default (first) model and has supportsFastMode: false.
       renderComposeBar();
-      expect(screen.queryByText("Fast")).toBeNull();
+      fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+      expect(screen.getByRole("menuitemradio", { name: /^Fast/ }).hasAttribute("data-disabled"))
+        .toBe(true);
+      expect(screen.getByRole("menuitemradio", { name: /^Normal/ }).hasAttribute("data-disabled"))
+        .toBe(true);
     });
 
     test("renders the Fast button when the selected model supports fast mode", () => {
       useClaudeStore.getState().setSelectedModel(SESSION_KEY, "sonnet");
       renderComposeBar();
+      fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
       expect(screen.getByText("Fast")).toBeTruthy();
     });
 
@@ -1526,16 +1531,18 @@ describe("ClaudeComposeBar", () => {
       useClaudeStore.getState().setSelectedModel(SESSION_KEY, "sonnet");
       renderComposeBar();
 
-      const fastButton = screen.getByText("Fast").closest("button");
+      fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+      const fastButton = screen.getByRole("menuitemradio", { name: /^Fast Lower latency/ });
       expect(fastButton).toBeTruthy();
 
       fireEvent.click(fastButton!);
       await waitFor(() => {
         expect(useClaudeStore.getState().isFastMode(SESSION_KEY)).toBe(true);
       });
-      expect(fastButton!.getAttribute("aria-pressed")).toBe("true");
+      expect(screen.getByLabelText(/Sonnet \(High ⚡\)/)).toBeTruthy();
 
-      fireEvent.click(fastButton!);
+      fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+      fireEvent.click(screen.getByRole("menuitemradio", { name: /^Normal Standard speed/ }));
       await waitFor(() => {
         expect(useClaudeStore.getState().isFastMode(SESSION_KEY)).toBe(false);
       });
@@ -1547,9 +1554,7 @@ describe("ClaudeComposeBar", () => {
       useClaudeStore.getState().setFastMode(SESSION_KEY, true);
       renderComposeBar();
 
-      await waitFor(() => {
-        expect(screen.getByText("Fast")).toBeTruthy();
-      });
+      expect(screen.getByLabelText(/Sonnet \(High ⚡\)/)).toBeTruthy();
 
       // Switch to the non-supporting model; the component's normalization
       // effect must clear stored fast mode to keep UI and state in sync.
@@ -1558,7 +1563,7 @@ describe("ClaudeComposeBar", () => {
       await waitFor(() => {
         expect(useClaudeStore.getState().isFastMode(SESSION_KEY)).toBe(false);
       });
-      expect(screen.queryByText("Fast")).toBeNull();
+      expect(screen.queryByLabelText(/⚡/)).toBeNull();
     });
 
     test("defensively resets fast mode on mount when the selected model doesn't support it", async () => {

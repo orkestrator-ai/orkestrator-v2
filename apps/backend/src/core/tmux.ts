@@ -51,6 +51,9 @@ const COMMAND_NO_HOOK_SETTLE_MS = 2_000;
 const COMMAND_AFTER_IDLE_SETTLE_MS = 400;
 const PERMISSION_MODE_SWITCH_TIMEOUT_MS = 1_500;
 const PERMISSION_MODE_POLL_MS = 100;
+const FAST_MODE_SWITCH_TIMEOUT_MS = 2_500;
+const FAST_MODE_POLL_MS = 100;
+const FAST_MODE_TMUX_OPTION = "@orkestrator_fast_mode";
 const BACKUP_SENTINEL_NO_ORIGINAL = "__orkestrator_no_original__";
 const CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN = ".claude/settings.local.json";
 /**
@@ -1593,6 +1596,7 @@ type TmuxStatus = {
   resumed: boolean;
   busy: boolean;
   permission_mode: string;
+  fast_mode: boolean | null;
 };
 
 function permissionModeFromTranscriptLine(line: unknown): string | undefined {
@@ -1726,6 +1730,7 @@ class TmuxSession {
   private stopCompletionObserved = false;
   private completionGeneration = 0;
   private permissionMode = "bypassPermissions";
+  private fastMode: boolean | null = null;
   private paneCache: { text: string; hash: string; capturedAt: number } | undefined;
   private paneCaptureInFlight: Promise<{ text: string; hash: string; capturedAt: number }> | undefined;
   private readonly inputMutex = new AsyncMutex();
@@ -1763,6 +1768,7 @@ class TmuxSession {
       resumed: this.resumed,
       busy: this.busy,
       permission_mode: this.permissionMode,
+      fast_mode: this.fastMode,
     };
   }
 
@@ -1831,6 +1837,7 @@ class TmuxSession {
     initialPrompt: string | undefined,
     model: string | undefined,
     effort: string | undefined,
+    fastMode: boolean | undefined,
   ): Promise<void> {
     await ensureSessionDirs(this.backend, this.sessionHookPaths);
 
@@ -1854,6 +1861,11 @@ class TmuxSession {
 
     const alive = await this.tmuxAlive();
     const launchedNew = !alive;
+    const requestedFastMode = fastMode ?? false;
+    const launchFastMode = requestedFastMode && helpText.includes("--settings");
+    if (launchedNew && requestedFastMode && !launchFastMode) {
+      console.warn("[tmux] claude CLI does not support --settings; launching without fast mode");
+    }
     if (launchedNew) {
       let agentMcpConfigPath: string | undefined;
       try {
@@ -1881,6 +1893,7 @@ class TmuxSession {
           helpText,
           model,
           effort,
+          launchFastMode,
           thinkingDisplay,
           agentMcpConfigPath,
         );
@@ -1911,6 +1924,32 @@ class TmuxSession {
         }
         throw error;
       }
+      await this.inputMutex.runExclusive(async () => {
+        this.fastMode = launchFastMode;
+        await this.persistFastModeOptionWithRetry(launchFastMode).catch((error) => {
+          console.warn("[tmux] failed to persist launch fast mode", error);
+        });
+      });
+    } else {
+      await this.inputMutex.runExclusive(async () => {
+        const persisted = await this.readFastModeOption();
+        if (persisted !== null) {
+          this.fastMode = persisted;
+          return;
+        }
+        const snapshot = await this.capturePane().catch(() => "");
+        const recovered = fastModeFromPane(snapshot);
+        if (recovered !== undefined) this.fastMode = recovered;
+        // If this process launched the session but the original metadata write
+        // failed, its in-memory value is still authoritative enough to repair
+        // the missing tmux option on a later attach. A fresh backend process
+        // starts at null and therefore never invents a value here.
+        if (this.fastMode !== null) {
+          await this.persistFastModeOptionWithRetry(this.fastMode).catch((error) => {
+            console.warn("[tmux] failed to repair reattached fast mode metadata", error);
+          });
+        }
+      });
     }
 
     this.spawnPollLoop(context);
@@ -1920,6 +1959,7 @@ class TmuxSession {
       environment_id: this.environmentId,
       session_id: this.sessionId,
       resumed: this.resumed,
+      fast_mode: this.fastMode,
     });
 
     // A second client attaching to this stable tab must not submit the
@@ -1960,6 +2000,7 @@ class TmuxSession {
     helpText: string,
     model: string | undefined,
     effort: string | undefined,
+    fastMode: boolean,
     supportsThinkingDisplay: boolean,
     agentMcpConfigPath?: string,
   ): string {
@@ -1971,6 +2012,9 @@ class TmuxSession {
       } else {
         console.warn("[tmux] claude CLI does not support --effort; launching without it");
       }
+    }
+    if (fastMode) {
+      command += ` --settings ${shellArg(JSON.stringify({ fastMode: true }))}`;
     }
     // Opus 4.7 and newer default adaptive thinking display to "omitted", which
     // writes thinking blocks to the transcript with an empty `thinking` string
@@ -2249,6 +2293,114 @@ class TmuxSession {
     });
   }
 
+  async switchFastMode(fastMode: boolean, context: CommandContext): Promise<void> {
+    await this.inputMutex.runExclusive(async () => {
+      if (this.busy) throw new Error("Cannot switch Claude fast mode while a turn is running");
+      const before = await this.capturePane();
+      if (paneHasClaudeExited(before)) {
+        throw new Error("Claude exited before fast mode could be changed");
+      }
+      if (paneHasSelectionPrompt(before)) {
+        throw new Error("Finish the active Claude prompt before changing fast mode");
+      }
+      const recovered = fastModeFromPane(before);
+      if (recovered !== undefined) {
+        const recoveredChanged = this.fastMode !== recovered;
+        this.fastMode = recovered;
+        if (recoveredChanged) this.emitFastModeChanged(recovered, context);
+        await this.persistFastModeOption(recovered);
+        if (recovered === fastMode) return;
+      }
+      const command = `/fast ${fastMode ? "on" : "off"}`;
+      await this.submitUnlocked(command);
+      await this.waitForPaneFastMode(fastMode, before, command);
+      this.fastMode = fastMode;
+      this.emitFastModeChanged(fastMode, context);
+      try {
+        await this.persistFastModeOption(fastMode);
+      } catch (error) {
+        throw new Error(`Fast mode changed but its restart metadata could not be saved: ${String(error)}`);
+      }
+    });
+  }
+
+  private emitFastModeChanged(fastMode: boolean, context: CommandContext): void {
+    context.emit(CLAUDE_TMUX_EVENT, {
+      kind: "fast-mode-changed",
+      tab_id: this.tabId,
+      environment_id: this.environmentId,
+      session_id: this.sessionId,
+      fast_mode: fastMode,
+    });
+  }
+
+  private async readFastModeOption(): Promise<boolean | null> {
+    const result = await this.backend.exec([
+      this.tmuxCommand,
+      "show-options",
+      "-qv",
+      "-t",
+      this.tmuxSession,
+      FAST_MODE_TMUX_OPTION,
+    ]);
+    if (result.status !== 0) return null;
+    const value = result.stdout.trim();
+    if (value === "1") return true;
+    if (value === "0") return false;
+    return null;
+  }
+
+  private async persistFastModeOption(fastMode: boolean): Promise<void> {
+    const result = await this.backend.exec([
+      this.tmuxCommand,
+      "set-option",
+      "-t",
+      this.tmuxSession,
+      FAST_MODE_TMUX_OPTION,
+      fastMode ? "1" : "0",
+    ]);
+    if (result.status !== 0) {
+      throw new Error(result.stderr || "tmux fast-mode metadata write failed");
+    }
+  }
+
+  private async persistFastModeOptionWithRetry(fastMode: boolean): Promise<void> {
+    try {
+      await this.persistFastModeOption(fastMode);
+    } catch {
+      await delay(FAST_MODE_POLL_MS);
+      await this.persistFastModeOption(fastMode);
+    }
+  }
+
+  private async waitForPaneFastMode(
+    target: boolean,
+    initialSnapshot: string,
+    command: string,
+  ): Promise<void> {
+    const deadline = Date.now() + FAST_MODE_SWITCH_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const snapshot = await this.capturePane();
+      if (snapshot === initialSnapshot) {
+        await delay(FAST_MODE_POLL_MS);
+        continue;
+      }
+      if (paneHasClaudeExited(snapshot)) {
+        throw new Error("Claude exited before fast mode could be changed");
+      }
+      if (paneHasSelectionPrompt(snapshot)) {
+        throw new Error("Finish the active Claude prompt before changing fast mode");
+      }
+      const response = paneOutputAfterCommand(initialSnapshot, snapshot, command);
+      const rejection = fastModeRejectionFromPane(response);
+      if (rejection) throw new Error(rejection);
+      const observed = fastModeFromPane(response);
+      if (observed === target) return;
+      await delay(FAST_MODE_POLL_MS);
+    }
+    throw new Error(`Claude did not confirm fast mode ${target ? "on" : "off"}`);
+  }
+
   async switchPlanMode(planMode: boolean, context: CommandContext): Promise<string> {
     return await this.inputMutex.runExclusive(async () => {
       if (this.busy) throw new Error("Cannot switch Claude mode while a turn is running");
@@ -2433,6 +2585,59 @@ class TmuxSession {
 
 function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "");
+}
+
+/** Limit acknowledgement parsing to rows produced after this command. */
+function paneOutputAfterCommand(
+  initialSnapshot: string,
+  snapshot: string,
+  command: string,
+): string {
+  const before = stripAnsi(initialSnapshot);
+  const current = stripAnsi(snapshot);
+  const commandIndex = current.lastIndexOf(command);
+  const beforeCommandCount = before.split(command).length - 1;
+  const currentCommandCount = current.split(command).length - 1;
+  if (commandIndex >= 0 && currentCommandCount > beforeCommandCount) {
+    return current.slice(commandIndex + command.length);
+  }
+
+  const beforeLines = before.split("\n");
+  const currentLines = current.split("\n");
+  const maxOverlap = Math.min(beforeLines.length, currentLines.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    let matches = true;
+    for (let index = 0; index < overlap; index += 1) {
+      if (beforeLines[beforeLines.length - overlap + index] !== currentLines[index]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return currentLines.slice(overlap).join("\n");
+  }
+  return current;
+}
+
+/** Return the newest explicit fast-mode acknowledgement visible in the pane. */
+export function fastModeFromPane(snapshot: string): boolean | undefined {
+  const lines = stripAnsi(snapshot).split("\n").reverse();
+  for (const line of lines) {
+    const match = line.match(/\bFast mode\s+(ON|OFF)\b/i);
+    if (match) return match[1]!.toUpperCase() === "ON";
+  }
+  return undefined;
+}
+
+/** Return an actionable error for a visible `/fast` rejection. */
+export function fastModeRejectionFromPane(snapshot: string): string | undefined {
+  const plain = stripAnsi(snapshot);
+  const rejection = plain.split("\n").reverse().find((line) =>
+    /fast mode(?: is)?.*(?:not available|unavailable|not supported)/i.test(line)
+    || /fast mode requires (?:an? )?(?:eligible|supported|paid|subscription|plan|account|model|Claude Code)/i.test(line)
+    || /unknown (?:command|argument).*\/fast/i.test(line)
+    || /\/fast.*requires Claude Code/i.test(line)
+  );
+  return rejection?.trim() || undefined;
 }
 
 function paneHasSelectionPrompt(snapshot: string): boolean {
@@ -3373,6 +3578,7 @@ export function registerTmuxBackendCommands(
     initialPrompt,
     model,
     effort,
+    fastMode,
     resumeSessionId,
     replaceExisting,
   }, context) => {
@@ -3398,6 +3604,7 @@ export function registerTmuxBackendCommands(
         asOptionalString(initialPrompt),
         asOptionalString(model),
         asOptionalString(effort),
+        typeof fastMode === "boolean" ? fastMode : undefined,
       );
       return session.status(await session.tmuxAlive().catch(() => false));
     });
@@ -3454,6 +3661,12 @@ export function registerTmuxBackendCommands(
   );
   register("claude_tmux_switch_effort", ({ tabId, effort, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchEffort(asString(effort, "effort")),
+  );
+  register("claude_tmux_switch_fast_mode", ({ tabId, fastMode, environmentId }, context) =>
+    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchFastMode(
+      asBoolean(fastMode, "fastMode"),
+      context,
+    ),
   );
   register("claude_tmux_switch_plan_mode", ({ tabId, planMode, environmentId }, context) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchPlanMode(

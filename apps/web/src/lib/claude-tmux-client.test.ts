@@ -65,6 +65,7 @@ import {
   submit,
   switchModel,
   switchEffort,
+  switchFastMode,
   switchPlanMode,
   writeInteractiveTerminal,
 } from "./claude-tmux-client";
@@ -75,6 +76,7 @@ describe("claude-tmux-client invoke wrappers", () => {
       initialPrompt: "hi",
       model: "sonnet",
       effort: "high",
+      fastMode: true,
       resumeSessionId: "sess-resume",
       replaceExisting: true,
     });
@@ -86,6 +88,7 @@ describe("claude-tmux-client invoke wrappers", () => {
       initialPrompt: "hi",
       model: "sonnet",
       effort: "high",
+      fastMode: true,
       resumeSessionId: "sess-resume",
       replaceExisting: true,
     });
@@ -99,6 +102,7 @@ describe("claude-tmux-client invoke wrappers", () => {
       initialPrompt: undefined,
       model: undefined,
       effort: undefined,
+      fastMode: undefined,
       resumeSessionId: undefined,
       replaceExisting: undefined,
     });
@@ -192,6 +196,26 @@ describe("claude-tmux-client invoke wrappers", () => {
       tabId: "tab-1",
       environmentId: "env-1",
       effort: "xhigh",
+    });
+  });
+
+  test("switchFastMode forwards the explicit state and environmentId", async () => {
+    await switchFastMode("tab-1", true, "env-1");
+    expect(calls[0]!.cmd).toBe("claude_tmux_switch_fast_mode");
+    expect(calls[0]!.args).toEqual({
+      tabId: "tab-1",
+      environmentId: "env-1",
+      fastMode: true,
+    });
+
+    await switchFastMode("tab-1", false, "env-1");
+    expect(calls[1]).toEqual({
+      cmd: "claude_tmux_switch_fast_mode",
+      args: {
+        tabId: "tab-1",
+        environmentId: "env-1",
+        fastMode: false,
+      },
     });
   });
 
@@ -308,5 +332,29 @@ describe("claude-tmux-client invoke wrappers", () => {
     expect(received).toEqual([event]);
     cleanup();
     expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  test("subscribe preserves authoritative started and fast-mode event payloads", async () => {
+    const received: unknown[] = [];
+    await subscribe((payload) => received.push(payload));
+    const listener = listenMock.mock.calls[0]![1] as (nativeEvent: { payload: unknown }) => void;
+    const started = {
+      kind: "started" as const,
+      tab_id: "tab-1",
+      environment_id: "env-1",
+      session_id: "session-1",
+      resumed: false,
+      fast_mode: null,
+    };
+    const changed = {
+      kind: "fast-mode-changed" as const,
+      tab_id: "tab-1",
+      environment_id: "env-1",
+      session_id: "session-1",
+      fast_mode: false,
+    };
+    listener({ payload: started });
+    listener({ payload: changed });
+    expect(received).toEqual([started, changed]);
   });
 });

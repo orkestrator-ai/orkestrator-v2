@@ -495,7 +495,7 @@ describe("CodexComposeBar", () => {
     ["ultra", "Ultra"],
   ] as const)("selects the %s reasoning effort from the model menu", async (effort, label) => {
     const { onReasoningEffortChange } = renderComposeBar();
-    fireEvent.pointerDown(screen.getByTitle("Choose reasoning effort"));
+    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
     fireEvent.click(await screen.findByText(label));
 
     expect(onReasoningEffortChange).toHaveBeenCalledWith(effort);
@@ -524,7 +524,7 @@ describe("CodexComposeBar", () => {
     });
 
     expect(screen.getByText("Quick")).toBeTruthy();
-    fireEvent.pointerDown(screen.getByTitle("Choose reasoning effort"));
+    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
     expect(await screen.findByText("Short analysis")).toBeTruthy();
     expect(screen.getByText("Deep analysis")).toBeTruthy();
     fireEvent.click(screen.getByText("Thorough"));
@@ -545,7 +545,7 @@ describe("CodexComposeBar", () => {
     });
 
     expect(screen.getByText("Medium")).toBeTruthy();
-    fireEvent.pointerDown(screen.getByTitle("Choose reasoning effort"));
+    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
     expect(await screen.findByText("Balances speed and reasoning depth for everyday tasks")).toBeTruthy();
     expect(screen.getByText("Greater reasoning depth for complex problems")).toBeTruthy();
   });
@@ -572,7 +572,7 @@ describe("CodexComposeBar", () => {
     fireEvent.click(await screen.findByText("Plan"));
     expect(onModeChange).toHaveBeenCalledWith("plan");
 
-    fireEvent.pointerDown(screen.getByTitle("Choose model"));
+    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
     fireEvent.click(await screen.findByText("gpt-5.4"));
     expect(onModelChange).toHaveBeenCalledWith("gpt-5.4");
   });
@@ -648,28 +648,54 @@ describe("CodexComposeBar", () => {
     expect(screen.queryByRole("button", { name: "Address all" })).toBeNull();
   });
 
-  test("input and Fast control are disabled when disabled prop is true", () => {
+  test("input and combined model control are disabled when disabled prop is true", () => {
     renderComposeBar({ disabled: true });
     const input = screen.getByTestId("mentionable-input");
     expect(input.hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText("Fast").closest("button")?.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByTitle("Choose model, reasoning, and speed").hasAttribute("disabled")).toBe(true);
   });
 
-  test("model/mode/reasoning/fast controls are disabled when settingsLocked is true", () => {
-    renderComposeBar({ settingsLocked: true });
+  test("mode and every model setting are disabled when settingsLocked is true", async () => {
+    const controls = renderComposeBar();
+    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+    await screen.findByRole("menuitemradio", { name: /gpt-5\.4/ });
+
+    controls.rerender(
+      <CodexComposeBar
+        environmentId={ENV_ID}
+        sessionKey={SESSION_KEY}
+        models={defaultModels}
+        selectedMode="build"
+        selectedModel="gpt-5.3-codex"
+        selectedReasoningEffort="high"
+        fastModeEnabled={false}
+        settingsLocked
+        onSend={controls.onSend}
+        onStop={controls.onStop}
+        onQueue={controls.onQueue}
+        onModeChange={controls.onModeChange}
+        onModelChange={controls.onModelChange}
+        onReasoningEffortChange={controls.onReasoningEffortChange}
+        onFastModeChange={controls.onFastModeChange}
+      />,
+    );
+
     const modeTrigger = screen.getByTitle(
       "Wait for Codex to finish before changing the mode",
     );
     const modelTrigger = screen.getByTitle(
-      "Wait for Codex to finish before changing the model",
-    );
-    const reasoningTrigger = screen.getByTitle(
-      "Wait for Codex to finish before changing reasoning",
+      "Wait for Codex to finish before changing model settings",
     );
     expect(modeTrigger.hasAttribute("disabled")).toBe(true);
     expect(modelTrigger.hasAttribute("disabled")).toBe(true);
-    expect(reasoningTrigger.hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText("Fast").closest("button")?.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /gpt-5\.4/ }).hasAttribute("data-disabled"))
+      .toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /^High/ }).hasAttribute("data-disabled"))
+      .toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /^Normal/ }).hasAttribute("data-disabled"))
+      .toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /^Fast/ }).hasAttribute("data-disabled"))
+      .toBe(true);
   });
 
   test("renders draft text from the store", () => {
@@ -1610,18 +1636,19 @@ describe("CodexComposeBar", () => {
   test("forwards fast-mode changes", () => {
     const { onFastModeChange } = renderComposeBar({ fastModeEnabled: false });
 
-    fireEvent.click(screen.getByText("Fast").closest("button")!);
+    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^Fast Lower latency/ }));
 
     expect(onFastModeChange).toHaveBeenCalledWith(true);
   });
 
   test("turns fast mode off when it is already enabled", () => {
     const { onFastModeChange } = renderComposeBar({ fastModeEnabled: true });
-    const fastButton = screen.getByText("Fast").closest("button")!;
+    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+    const fastButton = screen.getByRole("menuitemradio", { name: /^Fast Lower latency/ });
 
-    expect(fastButton.getAttribute("aria-pressed")).toBe("true");
-    expect(fastButton.getAttribute("title")).toContain("Fast mode on");
-    fireEvent.click(fastButton);
+    expect(fastButton.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^Normal Standard speed/ }));
 
     expect(onFastModeChange).toHaveBeenCalledWith(false);
   });

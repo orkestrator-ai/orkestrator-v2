@@ -558,7 +558,7 @@ export function CodexComposeBar({
           data-native-compose-controls="secondary"
           className="flex shrink-0 items-center gap-1"
         >
-        {!isMobile && <ContextUsageWheel usage={contextUsage} className="ml-1" />}
+        <ContextUsageWheel usage={contextUsage} className="ml-1" />
 
         {/* A parked queue stops draining until a human retries, so the failure
             has to be legible without opening the dialog. */}

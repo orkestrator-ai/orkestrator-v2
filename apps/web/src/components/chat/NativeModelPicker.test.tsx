@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { NativeModelPicker } from "./NativeModelPicker";
 
 function setMobileViewport(mobile: boolean) {
@@ -141,7 +142,7 @@ describe("NativeModelPicker", () => {
       .toBe("false");
   });
 
-  test("disables unavailable reasoning choices and explains an empty ladder", () => {
+  test("disables unavailable reasoning choices and omits an empty ladder", () => {
     setMobileViewport(false);
     renderPicker({ onReasoningChange: undefined });
     fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
@@ -150,8 +151,10 @@ describe("NativeModelPicker", () => {
     cleanup();
 
     renderPicker({ reasoningOptions: [], selectedReasoningId: undefined });
-    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
-    expect(screen.getByText("No reasoning options")).toBeTruthy();
+    fireEvent.pointerDown(screen.getByTitle("Choose model and speed"));
+    expect(screen.queryByRole("group", { name: "Reasoning" })).toBeNull();
+    expect(screen.queryByText("No reasoning options")).toBeNull();
+    expect(document.querySelector("[data-native-model-picker] .grid-cols-2")).toBeTruthy();
   });
 
   test("omits speed controls when the integration cannot change speed", () => {
@@ -247,6 +250,93 @@ describe("NativeModelPicker", () => {
 
     renderPicker({ fastModeAvailable: false, fastModeEnabled: false });
     fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+    expect(screen.getByRole("menuitemradio", { name: /Fast/ }).hasAttribute("data-disabled"))
+      .toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /Normal/ }).hasAttribute("data-disabled"))
+      .toBe(true);
+  });
+
+  test("renders reasoning annotations", () => {
+    setMobileViewport(false);
+    renderPicker({
+      reasoningOptions: [
+        { id: "low", label: "Low", annotation: "current" },
+        { id: "high", label: "High", annotation: "default" },
+      ],
+    });
+    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+    expect(screen.getByText("Low (current)")).toBeTruthy();
+    expect(screen.getByText("High (default)")).toBeTruthy();
+  });
+
+  test("keeps search keystrokes in the input and clears the query after close", () => {
+    setMobileViewport(false);
+    renderPicker();
+    const trigger = screen.getByTitle("Choose model, reasoning, and speed");
+    fireEvent.pointerDown(trigger);
+    const search = screen.getByPlaceholderText("Search models...");
+    fireEvent.change(search, { target: { value: "model 7" } });
+    fireEvent.keyDown(search, { key: "m" });
+    expect(screen.getByText("1 model found")).toBeTruthy();
+
+    fireEvent.keyDown(search, { key: "Escape" });
+    fireEvent.pointerDown(trigger);
+    expect((screen.getByPlaceholderText("Search models...") as HTMLInputElement).value).toBe("");
+  });
+
+  test("covers mobile empty, unknown, and unavailable states", () => {
+    setMobileViewport(true);
+    renderPicker({
+      models: [],
+      reasoningOptions: [],
+      selectedReasoningId: undefined,
+      selectedReasoningLabel: undefined,
+      fastModeEnabled: null,
+      fastModeAvailable: false,
+    });
+    const trigger = screen.getByTitle("Choose model and speed");
+    fireEvent.pointerDown(trigger);
+    expect(screen.getByText("No models available")).toBeTruthy();
+    expect(screen.queryByText("Reasoning")).toBeNull();
+    const fast = screen.getByRole("menuitemcheckbox", { name: /Fast.*Unavailable/ });
+    expect(fast.hasAttribute("data-disabled")).toBe(true);
+    expect(fast.getAttribute("aria-checked")).toBe("false");
+  });
+
+  test("disables every open choice when settings become locked", () => {
+    setMobileViewport(false);
+    function LockablePicker() {
+      const [locked, setLocked] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setLocked(true)}>Lock settings</button>
+          <NativeModelPicker
+            models={models}
+            selectedModelId="model-1"
+            selectedModelLabel="Model 1"
+            onModelChange={() => {}}
+            reasoningOptions={[{ id: "high", label: "High" }]}
+            selectedReasoningId="high"
+            selectedReasoningLabel="High"
+            onReasoningChange={() => {}}
+            fastModeEnabled={false}
+            fastModeAvailable
+            onFastModeChange={() => {}}
+            disabled={locked}
+          />
+        </>
+      );
+    }
+    render(<LockablePicker />);
+    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+    fireEvent.click(screen.getByText("Lock settings"));
+
+    expect(screen.getByRole("menuitemradio", { name: /Model 2/ }).hasAttribute("data-disabled"))
+      .toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /High/ }).hasAttribute("data-disabled"))
+      .toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /Normal/ }).hasAttribute("data-disabled"))
+      .toBe(true);
     expect(screen.getByRole("menuitemradio", { name: /Fast/ }).hasAttribute("data-disabled"))
       .toBe(true);
   });

@@ -655,8 +655,31 @@ describe("CodexComposeBar", () => {
     expect(screen.getByTitle("Choose model, reasoning, and speed").hasAttribute("disabled")).toBe(true);
   });
 
-  test("mode and combined model controls are disabled when settingsLocked is true", () => {
-    renderComposeBar({ settingsLocked: true });
+  test("mode and every model setting are disabled when settingsLocked is true", async () => {
+    const controls = renderComposeBar();
+    fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+    await screen.findByRole("menuitemradio", { name: /gpt-5\.4/ });
+
+    controls.rerender(
+      <CodexComposeBar
+        environmentId={ENV_ID}
+        sessionKey={SESSION_KEY}
+        models={defaultModels}
+        selectedMode="build"
+        selectedModel="gpt-5.3-codex"
+        selectedReasoningEffort="high"
+        fastModeEnabled={false}
+        settingsLocked
+        onSend={controls.onSend}
+        onStop={controls.onStop}
+        onQueue={controls.onQueue}
+        onModeChange={controls.onModeChange}
+        onModelChange={controls.onModelChange}
+        onReasoningEffortChange={controls.onReasoningEffortChange}
+        onFastModeChange={controls.onFastModeChange}
+      />,
+    );
+
     const modeTrigger = screen.getByTitle(
       "Wait for Codex to finish before changing the mode",
     );
@@ -665,6 +688,14 @@ describe("CodexComposeBar", () => {
     );
     expect(modeTrigger.hasAttribute("disabled")).toBe(true);
     expect(modelTrigger.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /gpt-5\.4/ }).hasAttribute("data-disabled"))
+      .toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /^High/ }).hasAttribute("data-disabled"))
+      .toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /^Normal/ }).hasAttribute("data-disabled"))
+      .toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /^Fast/ }).hasAttribute("data-disabled"))
+      .toBe(true);
   });
 
   test("renders draft text from the store", () => {

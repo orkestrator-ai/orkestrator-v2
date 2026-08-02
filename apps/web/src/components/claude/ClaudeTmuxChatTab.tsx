@@ -436,6 +436,7 @@ export function ClaudeTmuxChatTab({
   const [promptControlBusy, setPromptControlBusy] = useState(false);
   const [backendHydrated, setBackendHydrated] = useState(false);
   const startedRef = useRef(false);
+  const autoStartAttemptedRef = useRef(false);
   const permissionModeEventVersionRef = useRef(0);
   const fastModeMutationVersionRef = useRef(0);
   const isProcessingQueueRef = useRef(false);
@@ -491,7 +492,7 @@ export function ClaudeTmuxChatTab({
   );
   const resumedSession = tabState?.resumed ?? false;
   const hasStarted = startedRef.current || running;
-  const showStartScreen = !hasStarted && !hasInitialPrompt;
+  const showStartScreen = !hasStarted && (!hasInitialPrompt || autoStartAttemptedRef.current);
   const hasPendingHookCards =
     pendingApprovals.length +
       pendingQuestions.length +
@@ -715,6 +716,7 @@ export function ClaudeTmuxChatTab({
 
           if (status && status.environment_id === environmentId) {
             startedRef.current = Boolean(status.running);
+            if (status.running) autoStartAttemptedRef.current = true;
             setRunning(storeKey, status.running, {
               environmentId: status.environment_id,
               sessionId: status.session_id,
@@ -854,6 +856,7 @@ export function ClaudeTmuxChatTab({
       switch (ev.kind) {
         case "started":
           startedRef.current = true;
+          autoStartAttemptedRef.current = true;
           setRunning(storeKey, true, {
             environmentId: ev.environment_id,
             sessionId: ev.session_id,
@@ -881,7 +884,6 @@ export function ClaudeTmuxChatTab({
           permissionModeEventVersionRef.current += 1;
           setRunning(storeKey, false, { sessionId: null });
           setPlanMode(false);
-          applyFastMode(false);
           // No claude process means no in-flight turn.
           setTabBusy(storeKey, false);
           return;
@@ -1021,8 +1023,10 @@ export function ClaudeTmuxChatTab({
   useEffect(() => {
     if (!backendHydrated) return;
     if (!hasInitialPrompt) return;
+    if (autoStartAttemptedRef.current) return;
     if (startedRef.current) return;
     if (running) return;
+    autoStartAttemptedRef.current = true;
     launchSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendHydrated, hasInitialPrompt, tabId, running]);

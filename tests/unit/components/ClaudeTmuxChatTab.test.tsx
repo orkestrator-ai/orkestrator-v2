@@ -944,6 +944,38 @@ describe("ClaudeTmuxChatTab", () => {
     expect(useClaudeTmuxStore.getState().getTab("tab-1").busy).toBe(false);
   });
 
+  test("does not auto-relaunch when a session stops before its initial prompt is sent", async () => {
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        initialPrompt="Run the audit"
+      />,
+    );
+
+    await waitFor(() => expect(startSessionMock).toHaveBeenCalledTimes(1));
+    act(() => {
+      subscribedHandler?.({
+        kind: "started",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        resumed: false,
+        fast_mode: false,
+      });
+      subscribedHandler?.({
+        kind: "stopped",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+      });
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(startSessionMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Start fresh" })).toBeTruthy();
+  });
+
   test("surfaces session start failures and allows a fresh retry", async () => {
     seedPane();
     startSessionMock.mockImplementationOnce(async () => {
@@ -1038,8 +1070,15 @@ describe("ClaudeTmuxChatTab", () => {
     expect(screen.queryByText("Error: capture unavailable")).toBeNull();
   });
 
-  test("applies started and stopped backend lifecycle events", async () => {
+  test("applies lifecycle events and preserves fast mode for a fresh restart", async () => {
     seedPane();
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, claudeModel: "default" },
+      },
+    }));
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
 
     render(
@@ -1083,7 +1122,16 @@ describe("ClaudeTmuxChatTab", () => {
       sessionId: null,
       busy: false,
     });
-    expect(screen.queryByRole("button", { name: /⚡/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /⚡/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith(
+        "tab-1",
+        "env-1",
+        expect.objectContaining({ fastMode: true, replaceExisting: true }),
+      );
+    });
   });
 
   test("shows elapsed thinking status only while the session is busy and running", async () => {
@@ -1926,6 +1974,15 @@ Running 1 Explore agent...
       expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
     });
 
+    expect(startSessionMock).not.toHaveBeenCalled();
+    act(() => {
+      subscribedHandler?.({
+        kind: "stopped",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+      });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
     expect(startSessionMock).not.toHaveBeenCalled();
   });
 
@@ -4124,6 +4181,79 @@ Running 1 Explore agent...
     expect(screen.getByRole("button", { name: /Default.*\(High ⚡\)/ })).toBeTruthy();
   });
 
+  test("switches a running tmux session back to Normal", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, claudeModel: "default" },
+      },
+    }));
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(subscribedHandler).not.toBeNull());
+    act(() => {
+      subscribedHandler?.({
+        kind: "fast-mode-changed",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        fast_mode: true,
+      });
+    });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*⚡/ }));
+    fireEvent.click(await screen.findByRole("menuitemradio", {
+      name: /^Normal Standard speed/,
+    }));
+    await waitFor(() => {
+      expect(switchFastModeMock).toHaveBeenCalledWith("tab-1", false, "env-1");
+    });
+    expect(screen.getByRole("button", { name: /Default.*\(High\)/ })).toBeTruthy();
+  });
+
+  test("renders an unknown speed from the authoritative hydration snapshot", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, claudeModel: "default" },
+      },
+    }));
+    getStatusMock.mockImplementation(async () => ({
+      tab_id: "tab-1",
+      environment_id: "env-1",
+      session_id: "session-existing",
+      tmux_session: "orkestrator-env1-tab1",
+      running: true,
+      transcript_path: "/tmp/session-existing.jsonl",
+      resumed: false,
+      busy: false,
+      permission_mode: "bypassPermissions",
+      fast_mode: null,
+    }));
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /speed unknown/ })).toBeTruthy();
+  });
+
   test("passes a pre-launch fast-mode selection to the new tmux session", async () => {
     seedPane();
     useConfigStore.setState((state) => ({
@@ -4159,6 +4289,71 @@ Running 1 Explore agent...
         expect.objectContaining({ model: "default", fastMode: true }),
       );
     });
+    expect(switchFastModeMock).not.toHaveBeenCalled();
+  });
+
+  test("clears a pre-launch fast selection before starting an unsupported model", async () => {
+    seedPane();
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, claudeModel: "default" },
+      },
+    }));
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*\(High\)/ }));
+    fireEvent.click(await screen.findByRole("menuitemradio", {
+      name: /^Fast Lower latency/,
+    }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*⚡/ }));
+    fireEvent.click(await screen.findByText("Haiku"));
+    fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
+
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith(
+        "tab-1",
+        "env-1",
+        expect.objectContaining({ model: "haiku", fastMode: false }),
+      );
+    });
+    expect(switchFastModeMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps model and speed controls locked while Claude is thinking", () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, claudeModel: "default" },
+      },
+    }));
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    useClaudeTmuxStore.getState().setRunning(stateKey, true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    useClaudeTmuxStore.getState().setBusy(stateKey, true);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    const picker = screen.getByRole("button", { name: /Default.*\(High\)/ });
+    expect(picker.hasAttribute("disabled")).toBe(true);
+    fireEvent.pointerDown(picker);
     expect(switchFastModeMock).not.toHaveBeenCalled();
   });
 

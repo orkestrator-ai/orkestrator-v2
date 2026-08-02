@@ -1510,10 +1510,14 @@ describe("ClaudeComposeBar", () => {
   });
 
   describe("fast mode toggle", () => {
-    test("hides the Fast button when the selected model does not support fast mode", () => {
+    test("disables speed choices when the selected model does not support fast mode", () => {
       // Opus is the default (first) model and has supportsFastMode: false.
       renderComposeBar();
-      expect(screen.queryByText("Fast")).toBeNull();
+      fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
+      expect(screen.getByRole("menuitemradio", { name: /^Fast/ }).hasAttribute("data-disabled"))
+        .toBe(true);
+      expect(screen.getByRole("menuitemradio", { name: /^Normal/ }).hasAttribute("data-disabled"))
+        .toBe(true);
     });
 
     test("renders the Fast button when the selected model supports fast mode", () => {

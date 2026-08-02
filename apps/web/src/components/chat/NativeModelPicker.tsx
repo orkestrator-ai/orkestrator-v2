@@ -159,7 +159,7 @@ function SpeedItems({
     >
       <DropdownMenuRadioItem
         value="normal"
-        disabled={Boolean(disabled) || !onFastModeChange}
+        disabled={!canChange}
       >
         <span className="flex min-w-0 flex-col">
           <span>Normal</span>
@@ -214,15 +214,21 @@ export function NativeModelPicker({
     );
   }, [models, normalizedSearch]);
   const fastModeUnknown = fastModeEnabled === null;
+  const showReasoningControls = reasoningOptions.length > 0;
   const displayLabel = selectedReasoningLabel
     ? `${selectedModelLabel} (${selectedReasoningLabel}${fastModeEnabled ? " ⚡" : ""}${fastModeUnknown ? "; speed unknown" : ""})`
     : `${selectedModelLabel}${fastModeEnabled ? " (⚡)" : fastModeUnknown ? " (speed unknown)" : ""}`;
   const moreModelCount = Math.max(0, visibleModels.length - 5);
   const showSpeedControls = Boolean(onFastModeChange);
-  const effectiveTitle = title
-    ?? (showSpeedControls
-      ? "Choose model, reasoning, and speed"
-      : "Choose model and reasoning");
+  const choiceLabels = [
+    "model",
+    showReasoningControls ? "reasoning" : null,
+    showSpeedControls ? "speed" : null,
+  ].filter((label): label is string => label !== null);
+  const choiceLabel = choiceLabels.length === 1
+    ? choiceLabels[0]
+    : `${choiceLabels.slice(0, -1).join(", ")}${choiceLabels.length > 2 ? "," : ""} and ${choiceLabels.at(-1)}`;
+  const effectiveTitle = title ?? `Choose ${choiceLabel}`;
 
   return (
     <DropdownMenu
@@ -257,7 +263,7 @@ export function NativeModelPicker({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        collisionPadding={{ top: 8, right: 8, bottom: 8, left: 8 }}
+        collisionPadding={{ top: 52, right: 8, bottom: 8, left: 8 }}
         className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] md:w-[min(46rem,calc(100vw-2rem))] md:max-w-[calc(100vw-2rem)]"
         data-native-model-picker
       >
@@ -316,30 +322,34 @@ export function NativeModelPicker({
               </div>
             ) : null}
 
-            <DropdownMenuSeparator />
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger disabled={disabled || reasoningOptions.length === 0}>
-                <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                  <span>Reasoning</span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {selectedReasoningLabel ?? "Unavailable"}
-                  </span>
-                </span>
-              </DropdownMenuSubTrigger>
-              <DropdownMenuPortal>
-                <DropdownMenuSubContent
-                  collisionPadding={{ top: 8, right: 8, bottom: 8, left: 8 }}
-                  className="max-h-(--radix-dropdown-menu-content-available-height) w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] overflow-x-hidden overflow-y-auto"
-                >
-                  <ReasoningItems
-                    reasoningOptions={reasoningOptions}
-                    selectedReasoningId={selectedReasoningId}
-                    disabled={disabled}
-                    onReasoningChange={onReasoningChange}
-                  />
-                </DropdownMenuSubContent>
-              </DropdownMenuPortal>
-            </DropdownMenuSub>
+            {showReasoningControls ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger disabled={disabled}>
+                    <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                      <span>Reasoning</span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {selectedReasoningLabel}
+                      </span>
+                    </span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuPortal>
+                    <DropdownMenuSubContent
+                      collisionPadding={{ top: 52, right: 8, bottom: 8, left: 8 }}
+                      className="max-h-(--radix-dropdown-menu-content-available-height) w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] overflow-x-hidden overflow-y-auto"
+                    >
+                      <ReasoningItems
+                        reasoningOptions={reasoningOptions}
+                        selectedReasoningId={selectedReasoningId}
+                        disabled={disabled}
+                        onReasoningChange={onReasoningChange}
+                      />
+                    </DropdownMenuSubContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuSub>
+              </>
+            ) : null}
 
             {showSpeedControls ? (
               <>
@@ -366,7 +376,11 @@ export function NativeModelPicker({
         ) : (
           <div className={cn(
             "grid divide-x divide-zinc-700/60",
-            showSpeedControls ? "grid-cols-3" : "grid-cols-2",
+            showReasoningControls && showSpeedControls
+              ? "grid-cols-3"
+              : showReasoningControls || showSpeedControls
+                ? "grid-cols-2"
+                : "grid-cols-1",
           )}>
             <div className="min-w-0 pr-1" role="group" aria-label="Models">
               <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -387,17 +401,19 @@ export function NativeModelPicker({
                 </div>
               ) : null}
             </div>
-            <div className="min-w-0 px-1" role="group" aria-label="Reasoning">
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Reasoning
-              </DropdownMenuLabel>
-              <ReasoningItems
-                reasoningOptions={reasoningOptions}
-                selectedReasoningId={selectedReasoningId}
-                disabled={disabled}
-                onReasoningChange={onReasoningChange}
-              />
-            </div>
+            {showReasoningControls ? (
+              <div className="min-w-0 px-1" role="group" aria-label="Reasoning">
+                <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Reasoning
+                </DropdownMenuLabel>
+                <ReasoningItems
+                  reasoningOptions={reasoningOptions}
+                  selectedReasoningId={selectedReasoningId}
+                  disabled={disabled}
+                  onReasoningChange={onReasoningChange}
+                />
+              </div>
+            ) : null}
             {showSpeedControls ? (
               <div className="min-w-0 pl-1" role="group" aria-label="Speed mode">
                 <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">

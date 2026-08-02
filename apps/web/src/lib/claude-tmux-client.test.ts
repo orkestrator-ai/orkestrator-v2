@@ -207,6 +207,16 @@ describe("claude-tmux-client invoke wrappers", () => {
       environmentId: "env-1",
       fastMode: true,
     });
+
+    await switchFastMode("tab-1", false, "env-1");
+    expect(calls[1]).toEqual({
+      cmd: "claude_tmux_switch_fast_mode",
+      args: {
+        tabId: "tab-1",
+        environmentId: "env-1",
+        fastMode: false,
+      },
+    });
   });
 
   test("sendText forwards text and environmentId without auto-Enter", async () => {
@@ -322,5 +332,29 @@ describe("claude-tmux-client invoke wrappers", () => {
     expect(received).toEqual([event]);
     cleanup();
     expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  test("subscribe preserves authoritative started and fast-mode event payloads", async () => {
+    const received: unknown[] = [];
+    await subscribe((payload) => received.push(payload));
+    const listener = listenMock.mock.calls[0]![1] as (nativeEvent: { payload: unknown }) => void;
+    const started = {
+      kind: "started" as const,
+      tab_id: "tab-1",
+      environment_id: "env-1",
+      session_id: "session-1",
+      resumed: false,
+      fast_mode: null,
+    };
+    const changed = {
+      kind: "fast-mode-changed" as const,
+      tab_id: "tab-1",
+      environment_id: "env-1",
+      session_id: "session-1",
+      fast_mode: false,
+    };
+    listener({ payload: started });
+    listener({ payload: changed });
+    expect(received).toEqual([started, changed]);
   });
 });

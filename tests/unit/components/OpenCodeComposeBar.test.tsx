@@ -723,14 +723,19 @@ describe("OpenCodeComposeBar", () => {
   test("renders variant dropdown only when selected model has variants", () => {
     useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "gpt-5");
     renderComposeBar();
-    // "Default" is the variant-dropdown label when no variant is selected
-    expect(screen.getByText("Default")).toBeTruthy();
+    fireEvent.pointerDown(screen.getByTitle("Choose model and reasoning"));
+    expect(screen.getAllByText("Default").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole("group", { name: "Reasoning" })).toBeTruthy();
   });
 
-  test("shows Default reasoning when the selected model has no variants", () => {
+  test("omits Default reasoning when the selected model has no variants", () => {
     useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, "claude-sonnet");
     renderComposeBar();
-    expect(screen.getByText("Default")).toBeTruthy();
+    const trigger = screen.getByTitle("Choose model");
+    expect(trigger.getAttribute("aria-label")).toBe("Claude Sonnet");
+    fireEvent.pointerDown(trigger);
+    expect(screen.queryByText("Default")).toBeNull();
+    expect(screen.queryByRole("group", { name: "Reasoning" })).toBeNull();
   });
 
   test("send button is disabled when input is empty and no attachments", () => {
@@ -810,6 +815,7 @@ describe("OpenCodeComposeBar", () => {
     renderComposeBar({ disabled: true });
     const input = screen.getByTestId("mentionable-input");
     expect(input.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByTitle("Choose model").hasAttribute("disabled")).toBe(true);
   });
 
   test("renders draft text from the store", () => {

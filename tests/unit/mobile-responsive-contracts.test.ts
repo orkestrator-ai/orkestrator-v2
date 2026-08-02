@@ -13,6 +13,7 @@ describe("mobile responsive layout contracts", () => {
     [
       "apps/web/src/components/chat/NativeModelPicker.tsx",
       "w-[calc(100vw-1rem)]",
+      "collisionPadding={{ top: 52, right: 8, bottom: 8, left: 8 }}",
       "max-h-(--radix-dropdown-menu-content-available-height)",
       "overflow-y-auto",
     ],
@@ -49,6 +50,18 @@ describe("mobile responsive layout contracts", () => {
     expect(css).toContain("font-size: 16px");
     expect(css).toContain("max-width: calc(100vw - 1rem)");
     expect(css).toContain("min-height: 2.75rem");
+  });
+
+  test("native compose bars keep context usage visible at mobile widths", () => {
+    for (const file of [
+      "apps/web/src/components/claude/ClaudeComposeBar.tsx",
+      "apps/web/src/components/codex/CodexComposeBar.tsx",
+      "apps/web/src/components/opencode/OpenCodeComposeBar.tsx",
+    ]) {
+      const source = read(file);
+      expect(source).toContain("<ContextUsageWheel usage={contextUsage}");
+      expect(source).not.toContain("!isMobile && <ContextUsageWheel");
+    }
   });
 
   test("message actions only opt into hidden hover controls for precise pointers", () => {

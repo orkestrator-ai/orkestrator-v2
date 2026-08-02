@@ -680,18 +680,26 @@ export function OpenCodeComposeBar({
             selectedModelId={selectedModel}
             selectedModelLabel={selectedModelName}
             onModelChange={handleModelChange}
-            reasoningOptions={[
-              { id: DEFAULT_VARIANT_ID, label: "Default" },
-              ...availableVariants.map((variant) => ({
-                id: variant,
-                label: formatVariantLabel(variant),
-              })),
-            ]}
-            selectedReasoningId={selectedVariant ?? DEFAULT_VARIANT_ID}
-            selectedReasoningLabel={selectedVariantName}
-            onReasoningChange={(variant) => {
-              handleVariantChange(variant === DEFAULT_VARIANT_ID ? undefined : variant);
-            }}
+            reasoningOptions={availableVariants.length > 0
+              ? [
+                  { id: DEFAULT_VARIANT_ID, label: "Default" },
+                  ...availableVariants.map((variant) => ({
+                    id: variant,
+                    label: formatVariantLabel(variant),
+                  })),
+                ]
+              : []}
+            selectedReasoningId={availableVariants.length > 0
+              ? selectedVariant ?? DEFAULT_VARIANT_ID
+              : undefined}
+            selectedReasoningLabel={availableVariants.length > 0
+              ? selectedVariantName
+              : undefined}
+            onReasoningChange={availableVariants.length > 0
+              ? (variant) => {
+                  handleVariantChange(variant === DEFAULT_VARIANT_ID ? undefined : variant);
+                }
+              : undefined}
             fastModeAvailable={false}
             disabled={disabled}
             onRefreshModels={onRefreshModels}
@@ -703,7 +711,7 @@ export function OpenCodeComposeBar({
             data-native-compose-controls="secondary"
             className="flex shrink-0 items-center gap-1"
           >
-          {!isMobile && <ContextUsageWheel usage={contextUsage} className="ml-1" />}
+          <ContextUsageWheel usage={contextUsage} className="ml-1" />
 
           {/* Queue indicator. A parked queue stops draining until a human
               retries, so the failure has to be legible without opening the

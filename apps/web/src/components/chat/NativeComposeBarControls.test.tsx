@@ -254,7 +254,7 @@ describe("native compose bar controls", () => {
     expect(screen.queryByLabelText(/Context window/)).toBeNull();
   });
 
-  test("does not render context usage wheels on mobile", () => {
+  test("keeps context usage wheels visible on mobile", () => {
     setMobileViewport(true);
     const usage = {
       usedTokens: 50_000,
@@ -276,7 +276,7 @@ describe("native compose bar controls", () => {
     const { container: openCode } = renderOpenCodeComposeBar();
 
     for (const container of [claude, codex, openCode]) {
-      expect(container.querySelector('[aria-label^="Context window"]')).toBeNull();
+      expect(container.querySelector('[aria-label^="Context window"]')).not.toBeNull();
     }
   });
 

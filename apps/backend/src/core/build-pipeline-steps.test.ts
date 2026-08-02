@@ -400,6 +400,18 @@ async function withBridgeService(
     if (pathname === "/permission" || pathname === "/question") {
       return Response.json([]);
     }
+    if (pathname.endsWith("/questions")) {
+      return Response.json({ questions: [] });
+    }
+    if (pathname.endsWith("/plan-approvals")) {
+      return Response.json({ approvals: [] });
+    }
+    if (pathname.endsWith("/approvals")) {
+      return Response.json({ approvals: [] });
+    }
+    if (pathname.endsWith("/interactions")) {
+      return Response.json({ interactions: [] });
+    }
     if (pathname === "/event") {
       const signal = input instanceof Request ? input.signal : init.signal;
       return new Response(new ReadableStream({

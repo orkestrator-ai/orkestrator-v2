@@ -362,6 +362,7 @@ const DEFAULT_STRUCTURED_RESULT_DEADLINE_MS = 2 * 60_000;
  */
 const DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS = 5_000;
 const DEFAULT_STALL_WARNING_MS = 2 * 5 * 60_000;
+const DEFAULT_INTERACTION_PROCESSING_LEASE_MS = 2 * 60_000;
 const UNATTENDED_POLICY_INSTRUCTION =
   "This is a non-interactive build session: no user can answer a provider input request. "
   + "If input is unavailable or declined, choose the safest likely assumption yourself, "
@@ -396,6 +397,13 @@ function elapsedSince(timestamp: string | undefined): number | null {
   if (!timestamp) return null;
   const parsed = Date.parse(timestamp);
   return Number.isFinite(parsed) ? Date.now() - parsed : null;
+}
+
+function elapsedSinceLatest(...timestamps: Array<string | undefined>): number | null {
+  const parsed = timestamps
+    .map((timestamp) => timestamp ? Date.parse(timestamp) : Number.NaN)
+    .filter(Number.isFinite);
+  return parsed.length > 0 ? Date.now() - Math.max(...parsed) : null;
 }
 
 function interactionPresentation(
@@ -517,6 +525,8 @@ export class BuildPipelineService {
    */
   private readonly lastProviderAgent = new Map<string, BuildPipelineAgent>();
   private readonly provisioningPrompts = new Map<string, string | undefined>();
+  /** Fences provider responses across backend processes sharing one journal. */
+  private readonly interactionOwnerId = randomUUID();
   private tickPromise: Promise<void> | null = null;
   private tickRequested = false;
   private stopped = false;
@@ -865,6 +875,7 @@ export class BuildPipelineService {
         && session.phase === sessionPhaseFor(phase)
       ) {
         const requestId = randomUUID();
+        const startedAt = new Date().toISOString();
         const structuredReview = phase === "reviewing" || phase === "verifying";
         candidate.pendingPromptAttempt = {
           id: randomUUID(),
@@ -874,8 +885,10 @@ export class BuildPipelineService {
           prompt,
           useTaskImages: false,
           structuredReview,
-          startedAt: new Date().toISOString(),
+          startedAt,
         };
+        session.turnStartedAt = startedAt;
+        delete candidate.stallWarning;
         candidate.activePromptContext = {
           phase,
           kind: "prompt-dispatch",
@@ -1209,7 +1222,18 @@ export class BuildPipelineService {
       const sessionPhase = sessionPhaseFor(phase);
       if (!sessionPhase) throw new Error(`Cannot retry pipeline phase ${phase}`);
       delete pipeline.interactionRetryRequested;
-      await this.startStage(pipeline, sessionPhase, phase);
+      if (phase === "addressing") {
+        if (!pipeline.structuredReview) {
+          throw new Error("Cannot retry addressing without the structured review");
+        }
+        await this.startStage(pipeline, sessionPhase, phase, {
+          prompt: addressPrompt(pipeline.structuredReview),
+          images: [],
+          mode: "build",
+        });
+      } else {
+        await this.startStage(pipeline, sessionPhase, phase);
+      }
       return;
     }
 
@@ -1277,7 +1301,11 @@ export class BuildPipelineService {
       if (transcriptChanged) {
         delete pipeline.stallWarning;
       } else if (
-        elapsedSince(session.messagesPersistedAt ?? session.startedAt)! >= DEFAULT_STALL_WARNING_MS
+        elapsedSinceLatest(
+          session.turnStartedAt,
+          session.messagesPersistedAt,
+          session.startedAt,
+        )! >= DEFAULT_STALL_WARNING_MS
         && pipeline.stallWarning?.sessionId !== session.sdkSessionId
       ) {
         pipeline.stallWarning = {
@@ -1410,6 +1438,7 @@ export class BuildPipelineService {
       delete pipeline.pendingUserMessages;
     }
     const requestId = randomUUID();
+    const startedAt = new Date().toISOString();
     pipeline.pendingPromptAttempt = {
       id: next.id,
       sessionId: session.sdkSessionId,
@@ -1417,8 +1446,10 @@ export class BuildPipelineService {
       phase,
       prompt: next.text,
       useTaskImages: false,
-      startedAt: new Date().toISOString(),
+      startedAt,
     };
+    session.turnStartedAt = startedAt;
+    delete pipeline.stallWarning;
     await this.save(pipeline, pipeline.backendRevision);
     await this.dispatchPending(pipeline, provider);
   }
@@ -1473,6 +1504,11 @@ export class BuildPipelineService {
     pipeline: BuildPipeline,
     sessionPhase: PipelineSessionPhase,
     phase: ResumableBuildPhase,
+    override?: {
+      prompt: string;
+      images: BuildPipeline["taskSnapshot"]["images"];
+      mode?: ProviderExecutionMode;
+    },
   ): Promise<void> {
     if (sessionPhase === "build") {
       await this.updateKanbanLifecycle(pipeline, {
@@ -1486,7 +1522,9 @@ export class BuildPipelineService {
     // Stated rather than left to each provider's own default, so the sandbox a
     // stage runs under is one decision in one place and does not move when a
     // step pins a different harness.
-    const mode = executionModeForSessionPhase(sessionPhase, agent);
+    const mode = override?.mode
+      ?? executionModeOverrideForPhase(phase)
+      ?? executionModeForSessionPhase(sessionPhase, agent);
     const sessionKey = `${pipeline.id}:${sessionPhase}:${pipeline.iteration}:${randomUUID()}`;
     // Codex binds model and effort at session creation, Claude and OpenCode at
     // prompt dispatch, so a per-step selection has to be supplied at both.
@@ -1511,10 +1549,13 @@ export class BuildPipelineService {
       provider: agent,
       fence: sessionKey,
     });
-    const stagePrompt = await this.promptFor(pipeline, sessionPhase);
+    const stagePrompt = override
+      ? { prompt: override.prompt, images: override.images }
+      : await this.promptFor(pipeline, sessionPhase);
     const prompt = withUnattendedPolicy(stagePrompt.prompt);
     const { schema, images } = stagePrompt;
     const requestId = randomUUID();
+    const promptStartedAt = new Date().toISOString();
     const session: PipelineSession = {
       phase: sessionPhase,
       agent,
@@ -1525,6 +1566,7 @@ export class BuildPipelineService {
       sdkSessionId: sessionId,
       status: "running",
       startedAt: new Date().toISOString(),
+      turnStartedAt: promptStartedAt,
       label,
       messages: [],
       messageRevision: 0,
@@ -1544,7 +1586,7 @@ export class BuildPipelineService {
       prompt,
       useTaskImages: images.length > 0,
       structuredReview: schema !== undefined,
-      startedAt: new Date().toISOString(),
+      startedAt: promptStartedAt,
     };
     pipeline.activePromptContext = {
       phase,
@@ -1555,7 +1597,7 @@ export class BuildPipelineService {
       requestId,
       structuredReview: schema !== undefined,
     };
-    if (sessionPhase === "review") {
+    if (phase === "reviewing") {
       pipeline.structuredReviewRequestId = requestId;
       delete pipeline.structuredReview;
     }
@@ -1703,6 +1745,7 @@ export class BuildPipelineService {
       pipeline.phase = "addressing";
       const prompt = addressPrompt(report);
       const request = randomUUID();
+      const startedAt = new Date().toISOString();
       pipeline.pendingPromptAttempt = {
         id: randomUUID(),
         sessionId: session.sdkSessionId,
@@ -1710,8 +1753,10 @@ export class BuildPipelineService {
         phase: "addressing",
         prompt,
         useTaskImages: false,
-        startedAt: new Date().toISOString(),
+        startedAt,
       };
+      session.turnStartedAt = startedAt;
+      delete pipeline.stallWarning;
       await this.save(pipeline, pipeline.backendRevision);
       // Routed through dispatchPending so a lost response keeps the durable
       // attempt and retries under the same request id, exactly as every other
@@ -2243,19 +2288,70 @@ export class BuildPipelineService {
     pending: PendingPipelineInteractionResolution,
     outcome: AgentInteractionOutcome,
     resolvedAt: number,
-  ): Promise<void> {
+    processingToken: string,
+  ): Promise<boolean> {
+    let recorded = false;
     await this.storage.updateAgentInteractionResolutionJournal((journal) => ({
       ...journal,
       entries: journal.entries.map((entry) => {
-        if (entry.id !== pending.journalId || entry.state !== "claimed") return entry;
+        if (
+          entry.id !== pending.journalId
+          || entry.state !== "claimed"
+          || entry.processing?.ownerId !== this.interactionOwnerId
+          || entry.processing.token !== processingToken
+        ) return entry;
+        recorded = true;
+        const { processing: _processing, ...resolved } = entry;
         return {
-          ...entry,
+          ...resolved,
           state: "provider-resolved" as const,
           outcome,
           providerResolvedAt: Math.max(resolvedAt, entry.claim.claimedAt),
         };
       }),
     }));
+    return recorded;
+  }
+
+  /**
+   * Exclusively fences the external provider response across backend processes.
+   *
+   * The workflow claim deliberately survives process death. Its short lease is
+   * a separate concern: another backend may steal only after the previous
+   * responder has had longer than the bounded provider request sequence to
+   * finish, then reconciles the authoritative snapshot before doing any I/O.
+   */
+  private async acquireInteractionProcessingLease(
+    pending: PendingPipelineInteractionResolution,
+  ): Promise<string | null> {
+    const now = Date.now();
+    const proposedToken = randomUUID();
+    let acquiredToken: string | null = null;
+    await this.storage.updateAgentInteractionResolutionJournal((journal) => ({
+      ...journal,
+      entries: journal.entries.map((entry) => {
+        if (entry.id !== pending.journalId || entry.state !== "claimed") {
+          return entry;
+        }
+        const current = entry.processing;
+        if (current?.ownerId === this.interactionOwnerId) {
+          acquiredToken = current.token;
+          return entry;
+        }
+        if (current && current.expiresAt > now) return entry;
+        acquiredToken = proposedToken;
+        return {
+          ...entry,
+          processing: {
+            ownerId: this.interactionOwnerId,
+            token: proposedToken,
+            acquiredAt: now,
+            expiresAt: now + DEFAULT_INTERACTION_PROCESSING_LEASE_MS,
+          },
+        };
+      }),
+    }));
+    return acquiredToken;
   }
 
   private async markInteractionWorkflowRecorded(
@@ -2310,13 +2406,102 @@ export class BuildPipelineService {
     };
   }
 
-  private async recordInteractionOutcome(
+  private interactionOutcomeIsDurable(
     pipeline: BuildPipeline,
-    session: PipelineSession,
+    pending: PendingPipelineInteractionResolution,
+  ): boolean {
+    return pipeline.sessions.some((candidate) =>
+      candidate.interactionTranscript?.some((entry) =>
+        entry.id === pending.interactionId
+      )
+    ) || (
+      pipeline.phase === "failed"
+      && pipeline.failureContext?.kind === "interactive-request"
+      && pipeline.failureContext.requestId === pending.interactionId
+    );
+  }
+
+  private async saveInteractionOutcome(
+    pipeline: BuildPipeline,
     pending: PendingPipelineInteractionResolution,
     outcome: AgentInteractionOutcome,
     resolvedAt: number,
   ): Promise<void> {
+    let candidate = pipeline;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        await this.save(candidate, candidate.backendRevision);
+        return;
+      } catch (error) {
+        if (errorMessage(error) !== "Build pipeline revision conflict") throw error;
+        const record = await this.requireRecord(pipeline.id);
+        const latest = record.snapshot as BuildPipeline;
+        latest.backendRevision = record.revision;
+        if (this.interactionOutcomeIsDurable(latest, pending)) {
+          if (latest.pendingInteractionResolution?.journalId !== pending.journalId) {
+            return;
+          }
+          delete latest.pendingInteractionResolution;
+          delete latest.stallWarning;
+          candidate = latest;
+          continue;
+        }
+        if (latest.pendingInteractionResolution?.journalId !== pending.journalId) {
+          throw new ProviderUnavailableError(
+            "The interaction outcome could not be merged into the current pipeline generation",
+          );
+        }
+        this.applyInteractionOutcome(latest, pending, outcome, resolvedAt);
+        candidate = latest;
+      }
+    }
+    throw new ProviderUnavailableError(
+      "The interaction outcome could not be persisted after concurrent updates",
+    );
+  }
+
+  /**
+   * Persists the workflow side of a new journal claim without turning an
+   * expected cross-process CAS loss into a terminal pipeline failure.
+   *
+   * The winning process has written the same journal-backed pending envelope;
+   * the loser must stop this pass and rehydrate that authoritative snapshot on
+   * its next tick instead of continuing with its stale pipeline revision.
+   */
+  private async savePendingInteractionResolution(
+    pipeline: BuildPipeline,
+    pending: PendingPipelineInteractionResolution,
+  ): Promise<boolean> {
+    try {
+      await this.save(pipeline, pipeline.backendRevision);
+      return true;
+    } catch (error) {
+      if (errorMessage(error) !== "Build pipeline revision conflict") throw error;
+      const latest = (await this.requireRecord(pipeline.id)).snapshot as BuildPipeline;
+      if (
+        latest.pendingInteractionResolution?.journalId !== pending.journalId
+        && !this.interactionOutcomeIsDurable(latest, pending)
+      ) {
+        throw error;
+      }
+      return false;
+    }
+  }
+
+  private applyInteractionOutcome(
+    pipeline: BuildPipeline,
+    pending: PendingPipelineInteractionResolution,
+    outcome: AgentInteractionOutcome,
+    resolvedAt: number,
+  ): void {
+    const session = pipeline.sessions.find((candidate) =>
+      candidate.sessionKey === pending.sessionKey
+    );
+    if (!session) {
+      throw new ProviderUnavailableError(
+        "The interaction belongs to an unavailable pipeline session",
+      );
+    }
     const inputSucceeded = pending.action === "decline-and-continue"
       && outcome === "auto-declined";
     if (inputSucceeded) {
@@ -2355,14 +2540,20 @@ export class BuildPipelineService {
       }
       delete pipeline.pendingInteractionResolution;
       delete pipeline.stallWarning;
-      await this.save(pipeline, pipeline.backendRevision);
-      await this.markInteractionWorkflowRecorded(pending, Date.now());
-      logInteractionOutcome(
-        pending,
-        outcome,
-        resolvedAt,
-        pipeline.autoDeclineCount ?? 0,
-      );
+      return;
+    }
+
+    const failurePhase = resumablePhase(pipeline.phase)
+      ?? (pipeline.phase === "paused" ? pipeline.pausedFromPhase : null);
+    if (!failurePhase) {
+      // A distinct terminal action (most importantly an explicit user cancel)
+      // wins over a provider result that was concurrently in flight. The
+      // provider outcome is already fenced in the journal; clearing only this
+      // recovery envelope lets that journal transition finish without
+      // replacing the user's terminal reason or writing a non-resumable phase
+      // into failureContext.
+      delete pipeline.pendingInteractionResolution;
+      delete pipeline.stallWarning;
       return;
     }
 
@@ -2374,7 +2565,7 @@ export class BuildPipelineService {
       ? `The ${session.label.toLowerCase()} requested unexpected authorization`
       : `The ${session.label.toLowerCase()} interaction could not be resolved safely`;
     pipeline.failureContext = {
-      phase: pipeline.phase as ResumableBuildPhase,
+      phase: failurePhase,
       kind: "interactive-request",
       sessionId: session.sdkSessionId,
       requestId: pending.interactionId,
@@ -2384,6 +2575,7 @@ export class BuildPipelineService {
     delete pipeline.pendingPromptAttempt;
     delete pipeline.pendingInteractionResolution;
     delete pipeline.stallWarning;
+    delete pipeline.pausedFromPhase;
     this.provisioningPrompts.delete(pipeline.id);
     this.lastProviderAgent.delete(pipeline.id);
     session.interactionSummary = appendInteractionSummary(
@@ -2398,7 +2590,31 @@ export class BuildPipelineService {
       outcome,
       resolvedAt,
     );
-    await this.save(pipeline, pipeline.backendRevision);
+  }
+
+  private async recordInteractionOutcome(
+    pipeline: BuildPipeline,
+    _session: PipelineSession,
+    pending: PendingPipelineInteractionResolution,
+    outcome: AgentInteractionOutcome,
+    resolvedAt: number,
+  ): Promise<void> {
+    this.applyInteractionOutcome(pipeline, pending, outcome, resolvedAt);
+    const inputSucceeded = pending.action === "decline-and-continue"
+      && outcome === "auto-declined";
+    if (inputSucceeded) {
+      await this.saveInteractionOutcome(pipeline, pending, outcome, resolvedAt);
+      await this.markInteractionWorkflowRecorded(pending, Date.now());
+      logInteractionOutcome(
+        pending,
+        outcome,
+        resolvedAt,
+        pipeline.autoDeclineCount ?? 0,
+      );
+      return;
+    }
+
+    await this.saveInteractionOutcome(pipeline, pending, outcome, resolvedAt);
     await this.markInteractionWorkflowRecorded(pending, Date.now());
     logInteractionOutcome(pending, outcome, resolvedAt, 1);
   }
@@ -2459,7 +2675,9 @@ export class BuildPipelineService {
             )
           : this.recoveredPendingInteraction(journalEntry, session);
         pipeline.pendingInteractionResolution = pending;
-        await this.save(pipeline, pipeline.backendRevision);
+        if (!await this.savePendingInteractionResolution(pipeline, pending)) {
+          return true;
+        }
       }
     }
 
@@ -2487,7 +2705,9 @@ export class BuildPipelineService {
           : "deny-and-fail",
       );
       pipeline.pendingInteractionResolution = pending;
-      await this.save(pipeline, pipeline.backendRevision);
+      if (!await this.savePendingInteractionResolution(pipeline, pending)) {
+        return true;
+      }
     }
 
     journalEntry ??= (await this.storage.getAgentInteractionResolutionJournal())
@@ -2496,8 +2716,27 @@ export class BuildPipelineService {
       throw new ProviderUnavailableError("The interaction resolution claim was lost");
     }
     if (journalEntry.state === "workflow-recorded") {
+      if (!this.interactionOutcomeIsDurable(pipeline, pending)) {
+        // Journal pruning reclaims an over-age or over-capacity live claim as a
+        // terminal stale record. That is not evidence that the provider was
+        // answered, so surface a safe workflow failure instead of clearing the
+        // pending envelope and letting the agent remain invisibly parked.
+        await this.recordInteractionOutcome(
+          pipeline,
+          session,
+          pending,
+          "failed",
+          Math.max(Date.now(), journalEntry.workflowRecordedAt ?? 0),
+        );
+        return true;
+      }
       delete pipeline.pendingInteractionResolution;
-      await this.save(pipeline, pipeline.backendRevision);
+      await this.saveInteractionOutcome(
+        pipeline,
+        pending,
+        journalEntry.outcome!,
+        journalEntry.providerResolvedAt!,
+      );
       return true;
     }
     if (journalEntry.state === "provider-resolved") {
@@ -2511,7 +2750,19 @@ export class BuildPipelineService {
       return true;
     }
 
-    const requestStillLive = snapshot.requests.some((request) =>
+    const processingToken = await this.acquireInteractionProcessingLease(pending);
+    // Another backend process owns the bounded provider-response window. Leave
+    // the durable request parked; a later pass either observes its terminal
+    // journal transition or steals the lease after expiry and reconciles first.
+    if (!processingToken) return true;
+
+    // Acquisition may have waited behind another backend. Re-read after the
+    // lease fence so absence/reappearance is decided from current provider
+    // state, not from the snapshot used to build the presentation.
+    const resolutionSnapshot = await provider.interactions.listPendingInteractions(
+      session.sdkSessionId,
+    );
+    const requestStillLive = resolutionSnapshot.requests.some((request) =>
       request.id === pending!.interactionId
     );
     let outcome: AgentInteractionOutcome;
@@ -2535,8 +2786,8 @@ export class BuildPipelineService {
           resolvedAt,
         },
       );
-      let terminal = applied.result === "applied" || applied.result === "stale";
-      if (applied.result === "already-resolved") {
+      let terminal = applied.result === "applied";
+      if (applied.result === "already-resolved" || applied.result === "stale") {
         const reconciled = await provider.interactions.listPendingInteractions(
           session.sdkSessionId,
         );
@@ -2548,7 +2799,16 @@ export class BuildPipelineService {
         ? pending.action === "decline-and-continue" ? "auto-declined" : "denied"
         : "failed";
     }
-    await this.markInteractionProviderResolved(pending, outcome, resolvedAt);
+    const recorded = await this.markInteractionProviderResolved(
+      pending,
+      outcome,
+      resolvedAt,
+      processingToken,
+    );
+    // A lease can be stolen only after its bounded expiry. If that happened
+    // while this provider call was in flight, the current owner is responsible
+    // for reconciling and recording the result; never write through its fence.
+    if (!recorded) return true;
     await this.recordInteractionOutcome(
       pipeline,
       session,

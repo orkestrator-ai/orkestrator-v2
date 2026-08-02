@@ -462,7 +462,13 @@ export function toPipelineTranscript(
       role: "system",
       content,
       parts: [{ type: "text", content }],
-      createdAt: new Date(interaction.resolvedAt).toISOString(),
+      // Persisted snapshots may have been written by an older build or edited
+      // by hand. Keep one out-of-range epoch from replacing the whole tab with
+      // a render error; the session start is already the stable fallback used
+      // for provider messages with invalid timestamps.
+      createdAt: isRenderableEpoch(interaction.resolvedAt)
+        ? new Date(interaction.resolvedAt).toISOString()
+        : fallbackCreatedAt,
     });
   }
 

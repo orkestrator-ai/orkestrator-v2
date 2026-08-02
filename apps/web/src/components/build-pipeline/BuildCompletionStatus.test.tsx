@@ -20,6 +20,7 @@ import {
 } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import * as realBackend from "@/lib/backend";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 const realBackendSnapshot = { ...realBackend };
 const retryCompletionCommentMock = mock(async (pipelineId: string) => {
@@ -73,13 +74,24 @@ function seedFailedPipeline(
 describe("BuildCompletionStatus", () => {
   beforeEach(() => {
     retryCompletionCommentMock.mockReset();
-    retryInteractionFailureMock.mockClear();
+    retryInteractionFailureMock.mockReset();
+    mockToastError.mockClear();
     retryCompletionCommentMock.mockImplementation(async (pipelineId: string) => {
       const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
       return {
         ...current,
         completionCommentStatus: undefined,
         completionCommentError: undefined,
+        backendRevision: current.backendRevision + 1,
+      };
+    });
+    retryInteractionFailureMock.mockImplementation(async (pipelineId: string) => {
+      const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+      return {
+        ...current,
+        phase: "building" as const,
+        failureContext: undefined,
+        error: undefined,
         backendRevision: current.backendRevision + 1,
       };
     });
@@ -123,6 +135,97 @@ describe("BuildCompletionStatus", () => {
     render(<BuildCompletionStatus pipeline={pipeline} />);
     expect(screen.getByText(/3 unattended input requests were auto-declined/))
       .toBeTruthy();
+  });
+
+  test("falls back when an interaction failure has no persisted error", () => {
+    const pipeline = buildPipelineFixture({
+      id: "interaction-without-error",
+      phase: "failed",
+      failureContext: {
+        phase: "building",
+        kind: "interactive-request",
+        sessionId: "build-1",
+        requestId: "question-1",
+      },
+    });
+
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+
+    expect(screen.getByText(/could not be resolved safely/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry failed build phase" }))
+      .toBeTruthy();
+  });
+
+  test("keeps an interaction retry single-flight and recovers after rejection", async () => {
+    const pipeline = buildPipelineFixture({
+      id: "interaction-retry-failure",
+      phase: "failed",
+      error: "Unexpected authorization",
+      failureContext: {
+        phase: "building",
+        kind: "interactive-request",
+        sessionId: "build-1",
+        requestId: "permission-1",
+      },
+    });
+    useBuildPipelineStore.getState().replacePipeline(pipeline);
+    let rejectRetry!: (reason: Error) => void;
+    retryInteractionFailureMock.mockImplementationOnce(() =>
+      new Promise((_resolve, reject) => {
+        rejectRetry = reject;
+      }));
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+    const button = screen.getByRole("button", {
+      name: "Retry failed build phase",
+    }) as HTMLButtonElement;
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(retryInteractionFailureMock).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(true);
+
+    rejectRetry(new Error("retry unavailable"));
+    await waitFor(() => expect(button.disabled).toBe(false));
+    expect(mockToastError).toHaveBeenCalledWith("Failed to retry build", {
+      description: "retry unavailable",
+    });
+
+    fireEvent.click(button);
+    await waitFor(() => expect(retryInteractionFailureMock).toHaveBeenCalledTimes(2));
+  });
+
+  test("keeps interaction, completion, and auto-decline states independently actionable", () => {
+    const pipeline = buildPipelineFixture({
+      id: "combined-recovery",
+      phase: "failed",
+      error: "Unexpected authorization",
+      failureContext: {
+        phase: "building",
+        kind: "interactive-request",
+        sessionId: "build-1",
+        requestId: "permission-1",
+      },
+      source: {
+        type: "github",
+        repositoryOwner: "acme",
+        repositoryName: "widget",
+        issueNumber: 42,
+        issueUrl: "https://github.com/acme/widget/issues/42",
+        status: "closed",
+      },
+      completionCommentStatus: "failed",
+      completionCommentError: "GitHub unavailable",
+      autoDeclineCount: 1,
+    });
+
+    render(<BuildCompletionStatus pipeline={pipeline} />);
+
+    expect(screen.getAllByRole("alert")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Retry failed build phase" })).toBeTruthy();
+    expect(screen.getByRole("button", {
+      name: "Retry GitHub completion comment",
+    })).toBeTruthy();
+    expect(screen.getByText(/1 unattended input request was auto-declined/)).toBeTruthy();
   });
 
   test("retries a failed GitHub completion comment from the build UI", async () => {

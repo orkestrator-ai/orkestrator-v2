@@ -34,6 +34,7 @@ import {
   type AgentInteractionRequest,
   type AgentInteractionResolution,
   type AgentInteractionResolutionJournal,
+  type AgentInteractionResolutionProcessingLease,
   type AgentInteractionState,
   type AgentInteractionWorkflowSummary,
 } from "./agent-interactions.js";
@@ -561,6 +562,21 @@ describe("resolution journal and summaries", () => {
     )).toBe(true);
   });
 
+  test("round-trips a claimed entry with an exclusive processing lease", () => {
+    const claimed = claimedAt(CREATED_AT, {
+      ownerId: "backend-process-1",
+      token: "lease-token-1",
+      acquiredAt: CREATED_AT + 1,
+      expiresAt: CREATED_AT + 60_000,
+    });
+    const roundTripped = JSON.parse(JSON.stringify({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [claimed],
+    }));
+    expect(isAgentInteractionResolutionJournal(roundTripped)).toBe(true);
+    expect(roundTripped.entries[0].processing).toEqual(claimed.processing);
+  });
+
   test("requires ordered exact-once journal states and unique interaction claims", () => {
     expect(isAgentInteractionResolutionJournal({
       ...journal,
@@ -591,6 +607,76 @@ describe("resolution journal and summaries", () => {
     })).toBe(false);
   });
 
+  test("accepts only bounded, ordered processing leases on claimed entries", () => {
+    const valid = {
+      ownerId: "backend-process-1",
+      token: "lease-token-1",
+      acquiredAt: CREATED_AT + 1,
+      expiresAt: CREATED_AT + 60_000,
+    };
+    expect(isAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [claimedAt(CREATED_AT, valid)],
+    })).toBe(true);
+    expect(isAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [claimedAt(CREATED_AT, {
+        ...valid,
+        acquiredAt: CREATED_AT - 1,
+        expiresAt: CREATED_AT,
+      })],
+    })).toBe(false);
+
+    for (const processing of [
+      null,
+      {},
+      { ...valid, ownerId: undefined },
+      { ...valid, ownerId: "" },
+      { ...valid, ownerId: "x".repeat(AGENT_INTERACTION_LIMITS.maxIdLength + 1) },
+      { ...valid, token: "" },
+      { ...valid, token: undefined },
+      { ...valid, token: "x".repeat(AGENT_INTERACTION_LIMITS.maxIdLength + 1) },
+      { ...valid, acquiredAt: -1 },
+      { ...valid, acquiredAt: 1.5 },
+      { ...valid, expiresAt: Number.POSITIVE_INFINITY },
+      { ...valid, expiresAt: valid.acquiredAt },
+      { ...valid, expiresAt: valid.acquiredAt - 1 },
+      { ...valid, extra: true },
+      {
+        ...valid,
+        acquiredAt: CREATED_AT - 2,
+        expiresAt: CREATED_AT - 1,
+      },
+    ]) {
+      expect(isAgentInteractionResolutionJournal({
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [{ ...claimedAt(CREATED_AT), processing }],
+      })).toBe(false);
+    }
+  });
+
+  test("rejects processing leases after a claim reaches a resolved state", () => {
+    const processing = {
+      ownerId: "backend-process-1",
+      token: "lease-token-1",
+      acquiredAt: CREATED_AT,
+      expiresAt: CREATED_AT + 60_000,
+    };
+    for (const state of ["provider-resolved", "workflow-recorded"] as const) {
+      expect(isAgentInteractionResolutionJournal({
+        ...journal,
+        entries: [{
+          ...journal.entries[0]!,
+          state,
+          processing,
+          workflowRecordedAt: state === "workflow-recorded"
+            ? CREATED_AT + 2
+            : undefined,
+        }],
+      })).toBe(false);
+    }
+  });
+
   test("compares opaque session and interaction IDs without delimiter collisions", () => {
     expect(isAgentInteractionResolutionJournal({
       ...journal,
@@ -601,13 +687,17 @@ describe("resolution journal and summaries", () => {
     })).toBe(true);
   });
 
-  function claimedAt(at: number) {
+  function claimedAt(
+    at: number,
+    processing?: AgentInteractionResolutionProcessingLease,
+  ) {
     return {
       ...journal.entries[0]!,
       id: "journal-pending",
       interactionId: "interaction-pending",
       state: "claimed" as const,
       claim: { ...journal.entries[0]!.claim, claimedAt: at },
+      processing,
       outcome: undefined,
       providerResolvedAt: undefined,
       workflowRecordedAt: undefined,
@@ -624,15 +714,64 @@ describe("resolution journal and summaries", () => {
     expect(cleaned.entries).toEqual([unfinished]);
   });
 
-  test("cleanup reclaims an abandoned claim as a terminal stale record", () => {
+  test("cleanup preserves active leases and clears expired leases for reclaim", () => {
+    const now = CREATED_AT + 10_000;
+    const active = claimedAt(CREATED_AT, {
+      ownerId: "active-owner",
+      token: "active-token",
+      acquiredAt: now - 1_000,
+      expiresAt: now + 1,
+    });
+    const expired = {
+      ...claimedAt(CREATED_AT + 1, {
+        ownerId: "expired-owner",
+        token: "expired-token",
+        acquiredAt: now - 2_000,
+        expiresAt: now,
+      }),
+      id: "journal-expired-lease",
+      interactionId: "interaction-expired-lease",
+    };
+    const cleaned = pruneAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [active, expired],
+    }, now);
+    expect(cleaned.entries).toEqual([
+      active,
+      { ...expired, processing: undefined },
+    ]);
+  });
+
+  test("cleanup preserves an old claim while its processing lease is active", () => {
     const now = CREATED_AT + AGENT_INTERACTION_CLAIM_RETENTION_MS + 1;
-    const abandoned = claimedAt(CREATED_AT);
+    const active = claimedAt(CREATED_AT, {
+      ownerId: "active-owner",
+      token: "active-token",
+      acquiredAt: CREATED_AT + 1,
+      expiresAt: now + 60_000,
+    });
+    const cleaned = pruneAgentInteractionResolutionJournal({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [active],
+    }, now);
+    expect(cleaned.entries).toEqual([active]);
+  });
+
+  test("cleanup reclaims an old claim after its processing lease expires", () => {
+    const now = CREATED_AT + AGENT_INTERACTION_CLAIM_RETENTION_MS + 1;
+    const abandoned = claimedAt(CREATED_AT, {
+      ownerId: "abandoned-owner",
+      token: "abandoned-token",
+      acquiredAt: CREATED_AT + 1,
+      expiresAt: now,
+    });
     const cleaned = pruneAgentInteractionResolutionJournal({
       version: AGENT_INTERACTION_JOURNAL_VERSION,
       entries: [abandoned],
     }, now);
     expect(cleaned.entries).toEqual([{
       ...abandoned,
+      processing: undefined,
       state: "workflow-recorded",
       outcome: "stale",
       providerResolvedAt: CREATED_AT,
@@ -759,6 +898,12 @@ describe("resolution journal and summaries", () => {
         sessionId: `${index}-`.padEnd(AGENT_INTERACTION_LIMITS.maxIdLength, "s"),
         state: "claimed" as const,
         claim: { ...journal.entries[0]!.claim, claimedAt: now - index },
+        processing: {
+          ownerId: `${index}-`.padEnd(AGENT_INTERACTION_LIMITS.maxIdLength, "o"),
+          token: `${index}-`.padEnd(AGENT_INTERACTION_LIMITS.maxIdLength, "t"),
+          acquiredAt: now,
+          expiresAt: now + 1,
+        },
         outcome: undefined,
         providerResolvedAt: undefined,
         workflowRecordedAt: undefined,
@@ -769,6 +914,28 @@ describe("resolution journal and summaries", () => {
       version: AGENT_INTERACTION_JOURNAL_VERSION,
       entries,
     }, now);
+    expect(cleaned.entries.length).toBeLessThan(entries.length);
+    expect(isAgentInteractionResolutionJournal(cleaned)).toBe(true);
+  });
+
+  test("processing leases participate in the serialized journal byte bound", () => {
+    const now = CREATED_AT + 1_000;
+    const entries = Array.from({ length: 300 }, (_, index) => claimedAt(now, {
+      ownerId: `${index}-`.padEnd(AGENT_INTERACTION_LIMITS.maxIdLength, "o"),
+      token: `${index}-`.padEnd(AGENT_INTERACTION_LIMITS.maxIdLength, "t"),
+      acquiredAt: now,
+      expiresAt: now + 1,
+    })).map((entry, index) => ({
+      ...entry,
+      id: `lease-journal-${index}`,
+      interactionId: `lease-interaction-${index}`,
+    }));
+    const oversized = {
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries,
+    };
+    expect(isAgentInteractionResolutionJournal(oversized)).toBe(false);
+    const cleaned = pruneAgentInteractionResolutionJournal(oversized, now);
     expect(cleaned.entries.length).toBeLessThan(entries.length);
     expect(isAgentInteractionResolutionJournal(cleaned)).toBe(true);
   });

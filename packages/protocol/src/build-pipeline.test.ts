@@ -20,6 +20,7 @@ import {
 } from "./build-pipeline.js";
 import type { StructuredReviewReport } from "./structured-review.js";
 import {
+  AGENT_INTERACTION_LIMITS,
   AGENT_INTERACTION_SUMMARY_VERSION,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
   UNATTENDED_AGENT_INTERACTION_POLICY,
@@ -49,6 +50,69 @@ function snapshot(): BuildPipeline {
     },
     backendRevision: 1,
     controller: "backend",
+  };
+}
+
+function interactionTranscriptEntry(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id: "question-1",
+    provider: "codex",
+    kind: "question",
+    phase: "build",
+    requestedAt: 1,
+    resolvedAt: 2,
+    outcome: "auto-declined-headless",
+    title: "Choose safely",
+    body: "A choice was requested.",
+    questions: [{ prompt: "Which option?", options: ["Safe"] }],
+    ...overrides,
+  };
+}
+
+function pendingInteractionResolution(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    journalId: "journal-1",
+    sessionKey: "build-0",
+    sessionId: "session-1",
+    interactionId: "question-1",
+    provider: "codex",
+    kind: "question",
+    phase: "build",
+    requestedAt: 1,
+    claimedAt: 2,
+    action: "decline-and-continue",
+    title: "Choose safely",
+    body: "A choice was requested.",
+    questions: [{ prompt: "Which option?", options: ["Safe"] }],
+    ...overrides,
+  };
+}
+
+function snapshotWithInteractions({
+  pending,
+  transcript,
+}: {
+  pending?: unknown;
+  transcript?: unknown[];
+}): unknown {
+  return {
+    ...snapshot(),
+    sessions: [{
+      phase: "build",
+      iteration: 0,
+      sessionKey: "build-0",
+      sdkSessionId: "session-1",
+      status: "running",
+      startedAt: "2026-07-29T00:00:00.000Z",
+      label: "Build",
+      ...(transcript === undefined ? {} : { interactionTranscript: transcript }),
+    }],
+    currentSessionIndex: 0,
+    ...(pending === undefined ? {} : { pendingInteractionResolution: pending }),
   };
 }
 
@@ -381,6 +445,251 @@ describe("build pipeline protocol", () => {
     for (const override of invalidOverrides) {
       expect(isBuildPipeline({ ...valid, ...override })).toBe(false);
     }
+  });
+
+  test("binds every unattended interaction kind to its fail-closed action", () => {
+    const inputKinds = [
+      "question",
+      "mcp-form",
+      "mcp-url",
+      "elicitation",
+      "terminal-selection",
+    ];
+    const authorizationKinds = [
+      "plan-approval",
+      "command-approval",
+      "file-approval",
+      "permission",
+    ];
+
+    for (const kind of inputKinds) {
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({
+          kind,
+          action: "decline-and-continue",
+        }),
+        transcript: [interactionTranscriptEntry({ kind })],
+      }))).toBe(true);
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({ kind, action: "deny-and-fail" }),
+      }))).toBe(false);
+    }
+
+    for (const kind of authorizationKinds) {
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({ kind, action: "deny-and-fail" }),
+      }))).toBe(true);
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({
+          kind,
+          action: "decline-and-continue",
+        }),
+      }))).toBe(false);
+      // Workflow transcript entries describe successful auto-declines only;
+      // authorization requests instead terminate the phase.
+      expect(isBuildPipeline(snapshotWithInteractions({
+        transcript: [interactionTranscriptEntry({ kind })],
+      }))).toBe(false);
+    }
+  });
+
+  test("enforces identifier and presentation text boundaries", () => {
+    const maxId = "i".repeat(AGENT_INTERACTION_LIMITS.maxIdLength);
+    const oversizedId = `${maxId}i`;
+    for (const field of ["journalId", "sessionKey", "sessionId", "interactionId"]) {
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({ [field]: maxId }),
+      }))).toBe(true);
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({ [field]: oversizedId }),
+      }))).toBe(false);
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({ [field]: "" }),
+      }))).toBe(false);
+    }
+    expect(isBuildPipeline(snapshotWithInteractions({
+      transcript: [interactionTranscriptEntry({ id: maxId })],
+    }))).toBe(true);
+    expect(isBuildPipeline(snapshotWithInteractions({
+      transcript: [interactionTranscriptEntry({ id: oversizedId })],
+    }))).toBe(false);
+
+    const maxText = "t".repeat(AGENT_INTERACTION_LIMITS.maxTextLength);
+    const oversizedText = `${maxText}t`;
+    for (const [field, valid, invalid] of [
+      ["title", maxText, oversizedText],
+      ["body", maxText, oversizedText],
+    ]) {
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({ [field]: valid }),
+      }))).toBe(true);
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({ [field]: invalid }),
+      }))).toBe(false);
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({ [field]: "" }),
+      }))).toBe(false);
+    }
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: pendingInteractionResolution({
+        questions: [{ prompt: maxText, options: [maxText] }],
+      }),
+    }))).toBe(true);
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: pendingInteractionResolution({
+        questions: [{ prompt: oversizedText, options: ["Safe"] }],
+      }),
+    }))).toBe(false);
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: pendingInteractionResolution({
+        questions: [{ prompt: "Which?", options: [oversizedText] }],
+      }),
+    }))).toBe(false);
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: pendingInteractionResolution({
+        questions: [{ prompt: "", options: ["Safe"] }],
+      }),
+    }))).toBe(false);
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: pendingInteractionResolution({
+        questions: [{ prompt: "Which?", options: [""] }],
+      }),
+    }))).toBe(false);
+  });
+
+  test("enforces interaction collection bounds and nested record shapes", () => {
+    const question = { prompt: "Which option?", options: ["Safe"] };
+    const maxQuestions = Array.from(
+      { length: AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest },
+      () => question,
+    );
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: pendingInteractionResolution({ questions: maxQuestions }),
+    }))).toBe(true);
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: pendingInteractionResolution({ questions: [...maxQuestions, question] }),
+    }))).toBe(false);
+
+    const maxOptions = Array.from(
+      { length: AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion },
+      (_, index) => `option-${index}`,
+    );
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: pendingInteractionResolution({
+        questions: [{ prompt: "Which option?", options: maxOptions }],
+      }),
+    }))).toBe(true);
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: pendingInteractionResolution({
+        questions: [{
+          prompt: "Which option?",
+          options: [...maxOptions, "one-too-many"],
+        }],
+      }),
+    }))).toBe(false);
+
+    const maxTranscript = Array.from(
+      { length: AGENT_INTERACTION_LIMITS.maxWorkflowSummaries },
+      (_, index) => interactionTranscriptEntry({ id: `question-${index}` }),
+    );
+    expect(isBuildPipeline(snapshotWithInteractions({ transcript: maxTranscript })))
+      .toBe(true);
+    expect(isBuildPipeline(snapshotWithInteractions({
+      transcript: [...maxTranscript, interactionTranscriptEntry({ id: "overflow" })],
+    }))).toBe(false);
+
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: { ...pendingInteractionResolution(), unexpected: true },
+    }))).toBe(false);
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: pendingInteractionResolution({
+        questions: [{ ...question, unexpected: true }],
+      }),
+    }))).toBe(false);
+    expect(isBuildPipeline(snapshotWithInteractions({
+      transcript: [{ ...interactionTranscriptEntry(), unexpected: true }],
+    }))).toBe(false);
+  });
+
+  test("rejects unknown interaction presentation enums", () => {
+    for (const [field, value] of [
+      ["provider", "gemini"],
+      ["kind", "custom-approval"],
+      ["phase", "deploy"],
+    ]) {
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({ [field]: value }),
+      }))).toBe(false);
+      expect(isBuildPipeline(snapshotWithInteractions({
+        transcript: [interactionTranscriptEntry({ [field]: value })],
+      }))).toBe(false);
+    }
+  });
+
+  test("accepts only renderable, ordered interaction epochs", () => {
+    const maxRenderableEpoch = 8.64e15;
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: pendingInteractionResolution({
+        requestedAt: maxRenderableEpoch,
+        claimedAt: maxRenderableEpoch,
+      }),
+      transcript: [interactionTranscriptEntry({
+        requestedAt: maxRenderableEpoch,
+        resolvedAt: maxRenderableEpoch,
+      })],
+    }))).toBe(true);
+
+    for (const value of [-1, 1.5, maxRenderableEpoch + 1]) {
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({ requestedAt: value, claimedAt: value }),
+      }))).toBe(false);
+      expect(isBuildPipeline(snapshotWithInteractions({
+        pending: pendingInteractionResolution({ claimedAt: value }),
+      }))).toBe(false);
+      expect(isBuildPipeline(snapshotWithInteractions({
+        transcript: [interactionTranscriptEntry({
+          requestedAt: value,
+          resolvedAt: value,
+        })],
+      }))).toBe(false);
+      expect(isBuildPipeline(snapshotWithInteractions({
+        transcript: [interactionTranscriptEntry({ resolvedAt: value })],
+      }))).toBe(false);
+    }
+    expect(isBuildPipeline(snapshotWithInteractions({
+      pending: pendingInteractionResolution({ requestedAt: 2, claimedAt: 1 }),
+    }))).toBe(false);
+    expect(isBuildPipeline(snapshotWithInteractions({
+      transcript: [interactionTranscriptEntry({ requestedAt: 2, resolvedAt: 1 })],
+    }))).toBe(false);
+  });
+
+  test("rejects aggregate interaction payloads above the serialized byte limit", () => {
+    const maxText = "x".repeat(AGENT_INTERACTION_LIMITS.maxTextLength);
+    const oversizedPending = pendingInteractionResolution({
+      questions: Array.from(
+        { length: AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest },
+        () => ({ prompt: maxText, options: [] }),
+      ),
+    });
+    expect(new TextEncoder().encode(JSON.stringify(oversizedPending)).byteLength)
+      .toBeGreaterThan(AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes);
+    expect(isBuildPipeline(snapshotWithInteractions({ pending: oversizedPending })))
+      .toBe(false);
+
+    const oversizedTranscript = Array.from(
+      { length: 17 },
+      (_, index) => interactionTranscriptEntry({
+        id: `question-${index}`,
+        title: maxText,
+        body: undefined,
+        questions: [],
+      }),
+    );
+    expect(new TextEncoder().encode(JSON.stringify(oversizedTranscript)).byteLength)
+      .toBeGreaterThan(AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes);
+    expect(isBuildPipeline(snapshotWithInteractions({ transcript: oversizedTranscript })))
+      .toBe(false);
   });
 
   test("validates every source variant", () => {
@@ -762,6 +1071,7 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline(withSession({
       messagesFingerprint: "3:{}",
       messagesPersistedAt: "2026-07-29T00:00:01.000Z",
+      turnStartedAt: "2026-07-29T00:00:01.500Z",
       structuredWaitStartedAt: "2026-07-29T00:00:02.000Z",
     }))).toBe(true);
 
@@ -770,6 +1080,10 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline(withSession({ structuredWaitStartedAt: "soon" })))
       .toBe(false);
     expect(isBuildPipeline(withSession({ messagesPersistedAt: 0 }))).toBe(false);
+    expect(isBuildPipeline(withSession({ turnStartedAt: "soon" }))).toBe(false);
+    expect(isBuildPipeline(withSession({ turnStartedAt: "March 5 2020" })))
+      .toBe(false);
+    expect(isBuildPipeline(withSession({ turnStartedAt: 0 }))).toBe(false);
     expect(isBuildPipeline(withSession({ messagesFingerprint: "" }))).toBe(false);
   });
 

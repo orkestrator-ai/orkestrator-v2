@@ -2637,7 +2637,7 @@ describe("OpenCode build pipeline provider", () => {
     }
   });
 
-  test("does not monitor or answer requests for an interactive OpenCode provider", async () => {
+  test("does not monitor or answer requests when OpenCode auto-answering is omitted", async () => {
     const fake = openCodeFake();
     fake.setPending(
       [{ id: "permission-1", sessionID: "owned-session" }],
@@ -2652,7 +2652,6 @@ describe("OpenCode build pipeline provider", () => {
       },
       {
         openCodeClient: fake.client,
-        autoAnswerRequests: false,
       },
     );
 

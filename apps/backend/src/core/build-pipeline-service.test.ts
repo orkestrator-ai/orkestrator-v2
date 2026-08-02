@@ -8,10 +8,12 @@ import type {
   PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import {
+  isBuildPipeline,
   VERIFICATION_VERDICT_SCHEMA,
 } from "@orkestrator/protocol/build-pipeline";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
+  AGENT_INTERACTION_CLAIM_RETENTION_MS,
   AGENT_INTERACTION_JOURNAL_VERSION,
   UNATTENDED_AGENT_INTERACTION_POLICY,
   type AgentInteractionRequest,
@@ -82,7 +84,9 @@ class FakeProvider implements BuildPipelineProvider {
   readonly sent: Array<{
     sessionId: string;
     requestId: string;
+    prompt: string;
     schema?: JsonSchema;
+    mode?: "plan" | "build";
   }> = [];
   readonly created: Array<{
     phase: PipelineSessionPhase;
@@ -115,13 +119,15 @@ class FakeProvider implements BuildPipelineProvider {
 
   async send(
     sessionId: string,
-    _prompt: string,
-    options: { requestId: string; schema?: JsonSchema },
+    prompt: string,
+    options: { requestId: string; schema?: JsonSchema; mode?: "plan" | "build" },
   ): Promise<void> {
     this.sent.push({
       sessionId,
       requestId: options.requestId,
+      prompt,
       schema: options.schema,
+      mode: options.mode,
     });
   }
 
@@ -162,6 +168,7 @@ async function withService(
     provider: FakeProvider,
     invocations: Array<{ command: string; args: Record<string, unknown> }>,
     controls: {
+      dataDir: string;
       detection: {
         url: string;
         state: "open" | "merged" | "closed";
@@ -211,6 +218,7 @@ async function withService(
     comments: Array<{ text: string }>;
   }>();
   const controls = {
+    dataDir,
     detection: {
       url: "https://github.com/acme/repo/pull/1",
       state: "open" as const,
@@ -317,6 +325,29 @@ function startInput(
     },
     existingEnvironmentId: "env-1",
     ...overrides,
+  };
+}
+
+function pendingQuestion(
+  sessionId: string,
+  id = "question-1",
+): AgentInteractionRequest {
+  const now = Date.now();
+  return {
+    version: AGENT_INTERACTION_CONTRACT_VERSION,
+    id,
+    provider: "claude",
+    kind: "question",
+    origin: "build-pipeline",
+    sessionId,
+    state: "pending",
+    revision: 1,
+    presentation: {
+      title: "Choose a safe implementation",
+      questions: [],
+    },
+    createdAt: now,
+    updatedAt: now,
   };
 }
 
@@ -1613,7 +1644,10 @@ describe("BuildPipelineService", () => {
       const messages = await provider.messages(session.sdkSessionId);
       session.messages = messages;
       session.messagesFingerprint = `${messages.length}:${JSON.stringify(messages.at(-1))}`;
-      session.messagesPersistedAt = new Date(Date.now() - 11 * 60_000).toISOString();
+      const stalledAt = new Date(Date.now() - 11 * 60_000).toISOString();
+      session.startedAt = stalledAt;
+      session.messagesPersistedAt = stalledAt;
+      session.turnStartedAt = stalledAt;
       await storage.saveBuildPipeline(
         snapshot.id,
         snapshot.projectId,
@@ -1639,6 +1673,44 @@ describe("BuildPipelineService", () => {
       const resumed = await pipeline(storage, started.id);
       expect(resumed.phase).toBe("building");
       expect(resumed.stallWarning).toBeUndefined();
+    });
+  });
+
+  test("starts a fresh stall clock whenever a new turn is dispatched", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const record = await storage.getBuildPipeline(started.id);
+      if (!record) throw new Error("Pipeline disappeared");
+      const snapshot = record.snapshot as BuildPipeline;
+      const session = snapshot.sessions[snapshot.currentSessionIndex]!;
+      const messages = await provider.messages(session.sdkSessionId);
+      const stalledAt = new Date(Date.now() - 11 * 60_000).toISOString();
+      session.messages = messages;
+      session.messagesFingerprint = `${messages.length}:${JSON.stringify(messages.at(-1))}`;
+      session.messagesPersistedAt = stalledAt;
+      session.turnStartedAt = stalledAt;
+      await storage.saveBuildPipeline(
+        snapshot.id,
+        snapshot.projectId,
+        snapshot.environmentId,
+        record.version,
+        snapshot,
+        record.revision,
+      );
+
+      await service.sendMessage(started.id, "Continue with the safe assumption");
+      await service.advanceNow(started.id);
+      const dispatched = await pipeline(storage, started.id);
+      const dispatchedSession = dispatched.sessions[dispatched.currentSessionIndex]!;
+      expect(Date.parse(dispatchedSession.turnStartedAt!)).toBeGreaterThan(
+        Date.now() - 5_000,
+      );
+
+      provider.status = async () => "running";
+      await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).stallWarning).toBeUndefined();
     });
   });
 
@@ -1885,6 +1957,801 @@ describe("BuildPipelineService", () => {
         status: "running",
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       });
+    });
+  });
+
+  test("retries an addressing interaction with the findings prompt in build mode", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const record = await storage.getBuildPipeline(started.id);
+      if (!record) throw new Error("Pipeline disappeared");
+      const failed = record.snapshot as BuildPipeline;
+      const report: StructuredReviewReport = {
+        ...cleanReview,
+        issues: [{
+          severity: "P1",
+          confidence: 90,
+          category: "correctness",
+          title: "Address this exact finding",
+          file: "src/app.ts",
+          line: 12,
+          symbol: "run",
+          description: "The result is wrong.",
+          evidence: "The boundary test fails.",
+          suggestion: "Correct the boundary.",
+          verification: "Run the boundary test.",
+        }],
+        verdict: { ready: "with-fixes", reasoning: "One fix is required." },
+      };
+      failed.phase = "failed";
+      failed.structuredReview = report;
+      failed.failureContext = {
+        phase: "addressing",
+        kind: "interactive-request",
+        sessionId: failed.sessions[failed.currentSessionIndex]!.sdkSessionId,
+        requestId: "permission-1",
+      };
+      await storage.saveBuildPipeline(
+        failed.id,
+        failed.projectId,
+        failed.environmentId,
+        record.version,
+        failed,
+        record.revision,
+      );
+
+      const retried = await service.retryInteractionFailure(started.id);
+      const dispatch = provider.sent.at(-1)!;
+      expect(retried.phase).toBe("addressing");
+      expect(retried.structuredReview).toEqual(report);
+      expect(retried.sessions.at(-1)).toMatchObject({ phase: "review" });
+      expect(provider.created.at(-1)?.options?.mode).toBe("build");
+      expect(dispatch.mode).toBe("build");
+      expect(dispatch.schema).toBeUndefined();
+      expect(dispatch.prompt).toContain("Address this exact finding");
+      expect(dispatch.prompt).toContain("non-interactive build session");
+    });
+  });
+
+  test("reconciles stale provider outcomes and fails safely while the request is still live", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const running = await pipeline(storage, started.id);
+      const session = running.sessions[running.currentSessionIndex]!;
+      const request = pendingQuestion(session.sdkSessionId, "stale-question");
+      let listCalls = 0;
+      let resolveCalls = 0;
+      (provider as unknown as BuildPipelineProvider & {
+        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+      }).interactions = {
+        async listPendingInteractions() {
+          listCalls += 1;
+          return {
+            version: AGENT_INTERACTION_CONTRACT_VERSION,
+            revision: listCalls,
+            requests: [request],
+          };
+        },
+        async resolveInteraction(sessionId, interactionId) {
+          resolveCalls += 1;
+          return { result: "stale", sessionId, interactionId, revision: listCalls };
+        },
+      };
+
+      await service.advanceNow(started.id);
+      expect(resolveCalls).toBe(1);
+      expect(listCalls).toBeGreaterThanOrEqual(3);
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        failureContext: {
+          kind: "interactive-request",
+          requestId: "stale-question",
+        },
+      });
+      const journal = await storage.getAgentInteractionResolutionJournal();
+      expect(journal.entries.find((entry) =>
+        entry.interactionId === "stale-question"
+      )).toMatchObject({ state: "workflow-recorded", outcome: "failed" });
+    });
+  });
+
+  for (const result of ["rejected", "provider-unavailable"] as const) {
+    test(`fails safely when the provider interaction response is ${result}`, async () => {
+      await withService(async (service, storage, provider) => {
+        const started = await service.start(startInput({ taskId: `task-${result}` }));
+        await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
+        const running = await pipeline(storage, started.id);
+        const session = running.sessions[running.currentSessionIndex]!;
+        const request = pendingQuestion(session.sdkSessionId, `${result}-question`);
+        (provider as unknown as BuildPipelineProvider & {
+          interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+        }).interactions = {
+          async listPendingInteractions() {
+            return {
+              version: AGENT_INTERACTION_CONTRACT_VERSION,
+              revision: 1,
+              requests: [request],
+            };
+          },
+          async resolveInteraction(sessionId, interactionId) {
+            return { result, sessionId, interactionId, revision: 1 };
+          },
+        };
+
+        await service.advanceNow(started.id);
+        expect(await pipeline(storage, started.id)).toMatchObject({
+          phase: "failed",
+          failureContext: {
+            kind: "interactive-request",
+            requestId: request.id,
+          },
+        });
+        const journal = await storage.getAgentInteractionResolutionJournal();
+        expect(journal.entries.find((entry) => entry.interactionId === request.id))
+          .toMatchObject({ state: "workflow-recorded", outcome: "failed" });
+      });
+    });
+  }
+
+  test("rechecks an absent recovered request after leasing and resolves it if it reappears", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const running = await pipeline(storage, started.id);
+      const session = running.sessions[running.currentSessionIndex]!;
+      const request = pendingQuestion(session.sdkSessionId, "reappeared-question");
+      await storage.updateAgentInteractionResolutionJournal(() => ({
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [{
+          id: "reappeared-journal",
+          interactionId: request.id,
+          provider: "claude",
+          kind: "question",
+          sessionId: session.sdkSessionId,
+          state: "claimed",
+          claim: {
+            workflowType: "build-pipeline",
+            workflowId: running.id,
+            phase: "building",
+            fence: session.sessionKey,
+            claimedAt: Date.now(),
+          },
+        }],
+      }));
+      let listCalls = 0;
+      let resolveCalls = 0;
+      (provider as unknown as BuildPipelineProvider & {
+        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+      }).interactions = {
+        async listPendingInteractions() {
+          listCalls += 1;
+          return {
+            version: AGENT_INTERACTION_CONTRACT_VERSION,
+            revision: listCalls,
+            requests: listCalls === 1 ? [] : [request],
+          };
+        },
+        async resolveInteraction(sessionId, interactionId) {
+          resolveCalls += 1;
+          return { result: "applied", sessionId, interactionId, revision: listCalls };
+        },
+      };
+
+      await service.advanceNow(started.id);
+      expect(listCalls).toBeGreaterThanOrEqual(2);
+      expect(resolveCalls).toBe(1);
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "building",
+        autoDeclineCount: 1,
+      });
+    });
+  });
+
+  test("two backends race a new live interaction claim and converge on one response", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const running = await pipeline(storage, started.id);
+      const session = running.sessions[running.currentSessionIndex]!;
+      const request = pendingQuestion(session.sdkSessionId, "new-contended-question");
+      let requests = [request];
+      let initialListCalls = 0;
+      let releaseInitialLists!: () => void;
+      const bothListed = new Promise<void>((resolve) => {
+        releaseInitialLists = resolve;
+      });
+      let resolveCalls = 0;
+      (provider as unknown as BuildPipelineProvider & {
+        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+      }).interactions = {
+        async listPendingInteractions() {
+          initialListCalls += 1;
+          if (initialListCalls <= 2) {
+            if (initialListCalls === 2) releaseInitialLists();
+            await bothListed;
+          }
+          return {
+            version: AGENT_INTERACTION_CONTRACT_VERSION,
+            revision: initialListCalls,
+            requests,
+          };
+        },
+        async resolveInteraction(sessionId, interactionId) {
+          resolveCalls += 1;
+          requests = [];
+          return { result: "applied", sessionId, interactionId, revision: 3 };
+        },
+      };
+      const second = new BuildPipelineService(
+        storage,
+        async <T>(): Promise<T> => {
+          throw new Error("No backend command is expected");
+        },
+        { autoAdvance: false, provider: async () => provider },
+      );
+      try {
+        expect(running.pendingInteractionResolution).toBeUndefined();
+        expect((await storage.getAgentInteractionResolutionJournal()).entries)
+          .toHaveLength(0);
+
+        await Promise.all([
+          service.advanceNow(started.id),
+          second.advanceNow(started.id),
+        ]);
+
+        const resolved = await pipeline(storage, started.id);
+        expect(resolveCalls).toBe(1);
+        expect(resolved.phase).toBe("building");
+        expect(resolved.error).toBeUndefined();
+        expect(resolved.autoDeclineCount).toBe(1);
+        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript)
+          .toEqual([expect.objectContaining({ id: request.id })]);
+        const journal = await storage.getAgentInteractionResolutionJournal();
+        expect(journal.entries).toContainEqual(expect.objectContaining({
+          interactionId: request.id,
+          state: "workflow-recorded",
+          outcome: "auto-declined",
+        }));
+      } finally {
+        await second.shutdown();
+      }
+    });
+  });
+
+  test("a losing pending-envelope CAS re-reads after the winner records the outcome", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const running = await pipeline(storage, started.id);
+      const session = running.sessions[running.currentSessionIndex]!;
+      const request = pendingQuestion(session.sdkSessionId, "late-cas-reread-question");
+      let requests = [request];
+      let initialListCalls = 0;
+      let releaseInitialLists!: () => void;
+      const bothListed = new Promise<void>((resolve) => {
+        releaseInitialLists = resolve;
+      });
+      let resolveCalls = 0;
+      (provider as unknown as BuildPipelineProvider & {
+        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+      }).interactions = {
+        async listPendingInteractions() {
+          initialListCalls += 1;
+          if (initialListCalls <= 2) {
+            if (initialListCalls === 2) releaseInitialLists();
+            await bothListed;
+          }
+          return {
+            version: AGENT_INTERACTION_CONTRACT_VERSION,
+            revision: initialListCalls,
+            requests,
+          };
+        },
+        async resolveInteraction(sessionId, interactionId) {
+          resolveCalls += 1;
+          requests = [];
+          return { result: "applied", sessionId, interactionId, revision: 3 };
+        },
+      };
+      const second = new BuildPipelineService(
+        storage,
+        async <T>(): Promise<T> => {
+          throw new Error("No backend command is expected");
+        },
+        { autoAdvance: false, provider: async () => provider },
+      );
+      const originalSave = storage.saveBuildPipeline.bind(storage);
+      let pendingSaveAttempts = 0;
+      let releasePendingSaves!: () => void;
+      const bothPendingSaves = new Promise<void>((resolve) => {
+        releasePendingSaves = resolve;
+      });
+      let releaseWinnerOutcome!: () => void;
+      const winnerOutcomeSaved = new Promise<void>((resolve) => {
+        releaseWinnerOutcome = resolve;
+      });
+      let winnerOutcomeWasSaved = false;
+      storage.saveBuildPipeline = async (...args) => {
+        const candidate = args[4] as BuildPipeline;
+        const isPendingEnvelopeSave =
+          candidate.pendingInteractionResolution?.interactionId === request.id;
+        const isOutcomeSave =
+          candidate.pendingInteractionResolution === undefined
+          && candidate.sessions.some((candidateSession) =>
+            candidateSession.interactionTranscript?.some((entry) =>
+              entry.id === request.id
+            )
+          );
+        if (isPendingEnvelopeSave) {
+          pendingSaveAttempts += 1;
+          if (pendingSaveAttempts === 2) releasePendingSaves();
+          await bothPendingSaves;
+        }
+        try {
+          const saved = await originalSave(...args);
+          if (isOutcomeSave && !winnerOutcomeWasSaved) {
+            winnerOutcomeWasSaved = true;
+            releaseWinnerOutcome();
+          }
+          return saved;
+        } catch (error) {
+          if (
+            isPendingEnvelopeSave
+            && error instanceof Error
+            && error.message === "Build pipeline revision conflict"
+          ) {
+            // Surface the losing CAS only after the winner has removed the
+            // envelope and durably recorded the terminal interaction outcome.
+            await winnerOutcomeSaved;
+          }
+          throw error;
+        }
+      };
+      try {
+        await Promise.all([
+          service.advanceNow(started.id),
+          second.advanceNow(started.id),
+        ]);
+
+        const resolved = await pipeline(storage, started.id);
+        expect(pendingSaveAttempts).toBe(2);
+        expect(winnerOutcomeWasSaved).toBe(true);
+        expect(resolveCalls).toBe(1);
+        expect(resolved.phase).toBe("building");
+        expect(resolved.error).toBeUndefined();
+        expect(resolved.pendingInteractionResolution).toBeUndefined();
+        expect(resolved.autoDeclineCount).toBe(1);
+        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript)
+          .toEqual([expect.objectContaining({ id: request.id })]);
+      } finally {
+        storage.saveBuildPipeline = originalSave;
+        await second.shutdown();
+      }
+    });
+  });
+
+  test("interaction outcome save merges a concurrent queued user message", async () => {
+    await withService(async (service, storage, provider, _invocations, controls) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const running = await pipeline(storage, started.id);
+      const session = running.sessions[running.currentSessionIndex]!;
+      const request = pendingQuestion(session.sdkSessionId, "outcome-merge-question");
+      let requests = [request];
+      let resolveCalls = 0;
+      (provider as unknown as BuildPipelineProvider & {
+        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+      }).interactions = {
+        async listPendingInteractions() {
+          return {
+            version: AGENT_INTERACTION_CONTRACT_VERSION,
+            revision: resolveCalls,
+            requests,
+          };
+        },
+        async resolveInteraction(sessionId, interactionId) {
+          resolveCalls += 1;
+          requests = [];
+          return { result: "applied", sessionId, interactionId, revision: 1 };
+        },
+      };
+      const originalUpdateJournal = storage
+        .updateAgentInteractionResolutionJournal.bind(storage);
+      let releaseProviderResolved!: () => void;
+      const providerResolved = new Promise<void>((resolve) => {
+        releaseProviderResolved = resolve;
+      });
+      let allowOutcomeSave!: () => void;
+      const outcomeSaveAllowed = new Promise<void>((resolve) => {
+        allowOutcomeSave = resolve;
+      });
+      let blockedProviderResolved = false;
+      const concurrentStorage = new StorageService(controls.dataDir);
+      await concurrentStorage.init();
+      storage.updateAgentInteractionResolutionJournal = async (...args) => {
+        const journal = await originalUpdateJournal(...args);
+        if (
+          !blockedProviderResolved
+          && journal.entries.some((entry) =>
+            entry.interactionId === request.id && entry.state === "provider-resolved"
+          )
+        ) {
+          blockedProviderResolved = true;
+          releaseProviderResolved();
+          // The provider result and journal transition are durable here, while
+          // the service still holds its pre-mutation pipeline revision.
+          await outcomeSaveAllowed;
+        }
+        return journal;
+      };
+      try {
+        const advancing = service.advanceNow(started.id);
+        await providerResolved;
+
+        const concurrentRecord = await concurrentStorage.getBuildPipeline(started.id);
+        if (!concurrentRecord) throw new Error("Pipeline disappeared");
+        const concurrent = concurrentRecord.snapshot as BuildPipeline;
+        const concurrentMessage = {
+          id: "concurrent-follow-up",
+          text: "Preserve this concurrent follow-up",
+          createdAt: new Date().toISOString(),
+        };
+        concurrent.pendingUserMessages = [
+          ...(concurrent.pendingUserMessages ?? []),
+          concurrentMessage,
+        ];
+        await concurrentStorage.saveBuildPipeline(
+          concurrent.id,
+          concurrent.projectId,
+          concurrent.environmentId,
+          concurrentRecord.version,
+          concurrent,
+          concurrentRecord.revision,
+        );
+        allowOutcomeSave();
+        await advancing;
+
+        const resolved = await pipeline(storage, started.id);
+        expect(blockedProviderResolved).toBe(true);
+        expect(resolveCalls).toBe(1);
+        expect(resolved.phase).toBe("building");
+        expect(resolved.error).toBeUndefined();
+        expect(resolved.pendingInteractionResolution).toBeUndefined();
+        expect(resolved.pendingUserMessages).toEqual([concurrentMessage]);
+        expect(resolved.autoDeclineCount).toBe(1);
+        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript)
+          .toEqual([expect.objectContaining({ id: request.id })]);
+      } finally {
+        allowOutcomeSave();
+        storage.updateAgentInteractionResolutionJournal = originalUpdateJournal;
+      }
+    });
+  });
+
+  for (const concurrentAction of ["pause", "cancel"] as const) {
+    test(`terminal authorization outcome merges over a concurrent ${concurrentAction}`, async () => {
+      await withService(async (service, storage, provider, _invocations, controls) => {
+        const started = await service.start(startInput());
+        await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
+        const running = await pipeline(storage, started.id);
+        const session = running.sessions[running.currentSessionIndex]!;
+        const request: AgentInteractionRequest = {
+          ...pendingQuestion(
+            session.sdkSessionId,
+            `authorization-${concurrentAction}`,
+          ),
+          kind: "permission",
+          presentation: {
+            title: "Authorize an unexpected privilege",
+            questions: [],
+          },
+        };
+        let requests = [request];
+        let resolveCalls = 0;
+        let resolutionAction = "";
+        (provider as unknown as BuildPipelineProvider & {
+          interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+        }).interactions = {
+          async listPendingInteractions() {
+            return {
+              version: AGENT_INTERACTION_CONTRACT_VERSION,
+              revision: resolveCalls,
+              requests,
+            };
+          },
+          async resolveInteraction(sessionId, interactionId, resolution) {
+            resolveCalls += 1;
+            resolutionAction = resolution.action;
+            requests = [];
+            return { result: "applied", sessionId, interactionId, revision: 1 };
+          },
+        };
+        const concurrentStorage = new StorageService(controls.dataDir);
+        await concurrentStorage.init();
+        const concurrentService = new BuildPipelineService(
+          concurrentStorage,
+          async <T>(): Promise<T> => {
+            throw new Error("No backend command is expected");
+          },
+          { autoAdvance: false, provider: async () => provider },
+        );
+        const originalUpdateJournal = storage
+          .updateAgentInteractionResolutionJournal.bind(storage);
+        let releaseProviderResolved!: () => void;
+        const providerResolved = new Promise<void>((resolve) => {
+          releaseProviderResolved = resolve;
+        });
+        let allowOutcomeSave!: () => void;
+        const outcomeSaveAllowed = new Promise<void>((resolve) => {
+          allowOutcomeSave = resolve;
+        });
+        let blockedProviderResolved = false;
+        storage.updateAgentInteractionResolutionJournal = async (...args) => {
+          const journal = await originalUpdateJournal(...args);
+          if (
+            !blockedProviderResolved
+            && journal.entries.some((entry) =>
+              entry.interactionId === request.id
+              && entry.state === "provider-resolved"
+            )
+          ) {
+            blockedProviderResolved = true;
+            releaseProviderResolved();
+            await outcomeSaveAllowed;
+          }
+          return journal;
+        };
+        try {
+          const advancing = service.advanceNow(started.id);
+          await providerResolved;
+
+          if (concurrentAction === "pause") {
+            const paused = await concurrentService.pause(started.id);
+            expect(paused).toMatchObject({
+              phase: "paused",
+              pausedFromPhase: "building",
+            });
+          } else {
+            const cancelled = await concurrentService.cancel(started.id);
+            expect(cancelled).toMatchObject({
+              phase: "failed",
+              error: "Build cancelled",
+            });
+          }
+          allowOutcomeSave();
+          await advancing;
+
+          const resolved = await pipeline(storage, started.id);
+          expect(isBuildPipeline(resolved)).toBe(true);
+          expect(blockedProviderResolved).toBe(true);
+          expect(resolveCalls).toBe(1);
+          expect(resolutionAction).toBe("deny");
+          expect(resolved.pendingInteractionResolution).toBeUndefined();
+          if (concurrentAction === "pause") {
+            expect(resolved).toMatchObject({
+              phase: "failed",
+              error: expect.stringContaining("requested unexpected authorization"),
+              failureContext: {
+                phase: "building",
+                kind: "interactive-request",
+                sessionId: session.sdkSessionId,
+                requestId: request.id,
+              },
+            });
+            expect(resolved.pausedFromPhase).toBeUndefined();
+          } else {
+            expect(resolved).toMatchObject({
+              phase: "failed",
+              error: "Build cancelled",
+            });
+          }
+          const journal = await storage.getAgentInteractionResolutionJournal();
+          expect(journal.entries).toContainEqual(expect.objectContaining({
+            interactionId: request.id,
+            state: "workflow-recorded",
+            outcome: "denied",
+          }));
+        } finally {
+          allowOutcomeSave();
+          storage.updateAgentInteractionResolutionJournal = originalUpdateJournal;
+          await concurrentService.shutdown();
+        }
+      });
+    });
+  }
+
+  test("fails a live pending interaction whose journal claim cleanup reclaimed", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const record = await storage.getBuildPipeline(started.id);
+      if (!record) throw new Error("Pipeline disappeared");
+      const running = record.snapshot as BuildPipeline;
+      const session = running.sessions[running.currentSessionIndex]!;
+      const request = pendingQuestion(session.sdkSessionId, "reclaimed-live-question");
+      const claimedAt = Date.now() - AGENT_INTERACTION_CLAIM_RETENTION_MS - 1;
+      running.pendingInteractionResolution = {
+        journalId: "reclaimed-live-journal",
+        sessionKey: session.sessionKey,
+        sessionId: session.sdkSessionId,
+        interactionId: request.id,
+        provider: "claude",
+        kind: "question",
+        phase: "build",
+        requestedAt: claimedAt,
+        claimedAt,
+        action: "decline-and-continue",
+        title: request.presentation.title,
+        questions: [],
+      };
+      await storage.saveBuildPipeline(
+        running.id,
+        running.projectId,
+        running.environmentId,
+        record.version,
+        running,
+        record.revision,
+      );
+      await storage.updateAgentInteractionResolutionJournal(() => ({
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [{
+          id: "reclaimed-live-journal",
+          interactionId: request.id,
+          provider: "claude",
+          kind: "question",
+          sessionId: session.sdkSessionId,
+          state: "claimed",
+          claim: {
+            workflowType: "build-pipeline",
+            workflowId: running.id,
+            phase: "building",
+            fence: session.sessionKey,
+            claimedAt,
+          },
+        }],
+      }));
+      const reclaimed = await storage.getAgentInteractionResolutionJournal();
+      expect(reclaimed.entries).toContainEqual(expect.objectContaining({
+        id: "reclaimed-live-journal",
+        state: "workflow-recorded",
+        outcome: "stale",
+      }));
+      let resolveCalls = 0;
+      (provider as unknown as BuildPipelineProvider & {
+        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+      }).interactions = {
+        async listPendingInteractions() {
+          return {
+            version: AGENT_INTERACTION_CONTRACT_VERSION,
+            revision: 1,
+            requests: [request],
+          };
+        },
+        async resolveInteraction(sessionId, interactionId) {
+          resolveCalls += 1;
+          return { result: "applied", sessionId, interactionId, revision: 2 };
+        },
+      };
+
+      await service.advanceNow(started.id);
+
+      expect(resolveCalls).toBe(0);
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: expect.stringContaining("could not be resolved safely"),
+        failureContext: {
+          phase: "building",
+          kind: "interactive-request",
+          sessionId: session.sdkSessionId,
+          requestId: request.id,
+        },
+      });
+    });
+  });
+
+  test("leases a durable interaction response to only one backend process", async () => {
+    await withService(async (service, storage, provider) => {
+      const started = await service.start(startInput());
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      const record = await storage.getBuildPipeline(started.id);
+      if (!record) throw new Error("Pipeline disappeared");
+      const running = record.snapshot as BuildPipeline;
+      const session = running.sessions[running.currentSessionIndex]!;
+      const request = pendingQuestion(session.sdkSessionId, "contended-question");
+      const claimedAt = Date.now();
+      running.pendingInteractionResolution = {
+        journalId: "contended-journal",
+        sessionKey: session.sessionKey,
+        sessionId: session.sdkSessionId,
+        interactionId: request.id,
+        provider: "claude",
+        kind: "question",
+        phase: "build",
+        requestedAt: request.createdAt,
+        claimedAt,
+        action: "decline-and-continue",
+        title: request.presentation.title,
+        questions: [],
+      };
+      await storage.updateAgentInteractionResolutionJournal(() => ({
+        version: AGENT_INTERACTION_JOURNAL_VERSION,
+        entries: [{
+          id: "contended-journal",
+          interactionId: request.id,
+          provider: "claude",
+          kind: "question",
+          sessionId: session.sdkSessionId,
+          state: "claimed",
+          claim: {
+            workflowType: "build-pipeline",
+            workflowId: running.id,
+            phase: "building",
+            fence: session.sessionKey,
+            claimedAt,
+          },
+        }],
+      }));
+      await storage.saveBuildPipeline(
+        running.id,
+        running.projectId,
+        running.environmentId,
+        record.version,
+        running,
+        record.revision,
+      );
+
+      let requests = [request];
+      let resolveCalls = 0;
+      (provider as unknown as BuildPipelineProvider & {
+        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+      }).interactions = {
+        async listPendingInteractions() {
+          return {
+            version: AGENT_INTERACTION_CONTRACT_VERSION,
+            revision: resolveCalls,
+            requests,
+          };
+        },
+        async resolveInteraction(sessionId, interactionId) {
+          resolveCalls += 1;
+          requests = [];
+          await Bun.sleep(2);
+          return { result: "applied", sessionId, interactionId, revision: 2 };
+        },
+      };
+      const second = new BuildPipelineService(
+        storage,
+        async <T>(): Promise<T> => {
+          throw new Error("No backend command is expected");
+        },
+        { autoAdvance: false, provider: async () => provider },
+      );
+      try {
+        await Promise.all([
+          service.advanceNow(started.id),
+          second.advanceNow(started.id),
+        ]);
+        const resolved = await pipeline(storage, started.id);
+        expect(resolveCalls).toBe(1);
+        expect(resolved.phase).toBe("building");
+        expect(resolved.autoDeclineCount).toBe(1);
+        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript)
+          .toHaveLength(1);
+      } finally {
+        await second.shutdown();
+      }
     });
   });
 

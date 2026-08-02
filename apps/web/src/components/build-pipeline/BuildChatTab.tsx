@@ -293,7 +293,10 @@ export function BuildChatTab({
 
   const phaseLabel = PHASE_LABELS[pipeline.phase] ?? pipeline.phase;
   const active = !["paused", "complete", "failed"].includes(pipeline.phase);
+  const interactionFailure = pipeline.phase === "failed"
+    && pipeline.failureContext?.kind === "interactive-request";
   const canRetryReview = pipeline.phase !== "complete"
+    && !interactionFailure
     && pipeline.sessions.length > 0
     && Boolean(pipeline.environmentId);
   const canSendMessage = pipeline.phase !== "complete"
@@ -303,6 +306,11 @@ export function BuildChatTab({
   // can make different from the pipeline's build agent.
   const displayedAgent = selectedSession?.agent ?? pipeline.agentType;
   const agentLabel = AGENT_LABELS[displayedAgent] ?? displayedAgent;
+  const stalledSession = pipeline.stallWarning
+    ? pipeline.sessions.find(
+        (session) => session.sdkSessionId === pipeline.stallWarning?.sessionId,
+      )
+    : undefined;
   const reportSession = reviewReportSession(pipeline);
   const showReviewReport = Boolean(
     pipeline.structuredReview
@@ -429,14 +437,14 @@ export function BuildChatTab({
         </div>
       </div>
 
-      {pipeline.error && (
+      {pipeline.error && !interactionFailure && (
         <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           {pipeline.error}
         </div>
       )}
       {pipeline.stallWarning && (
         <div className="border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 text-xs text-amber-200/90">
-          This stage is still running, but its transcript has not changed for an extended period. It was not stopped automatically.
+          {stalledSession?.label ?? "The active stage"} is still running, but its transcript has not changed for an extended period. It was not stopped automatically.
         </div>
       )}
       <BuildCompletionStatus pipeline={pipeline} />

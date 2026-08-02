@@ -4,8 +4,10 @@ import {
 } from "./structured-review.js";
 import {
   AGENT_INTERACTION_LIMITS,
+  agentInteractionPolicyAction,
   isAgentInteractionPolicy,
   isAgentInteractionWorkflowSummary,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
   type AgentInteractionKind,
   type AgentInteractionProvider,
   type AgentInteractionWorkflowSummary,
@@ -242,6 +244,8 @@ export interface PipelineSession {
   messagesFingerprint?: string;
   /** Last time a transcript-only delta was persisted, used to throttle writes. */
   messagesPersistedAt?: string;
+  /** Start of the current provider turn, used by liveness and stall timing. */
+  turnStartedAt?: string;
   /** Stable structured-output key for review and verification turns. */
   structuredRequestId?: string;
   /**
@@ -504,6 +508,22 @@ function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
+/** Largest epoch millisecond value accepted by `Date` and `toISOString`. */
+const MAX_RENDERABLE_EPOCH_MS = 8.64e15;
+
+function isRenderableEpoch(value: unknown): value is number {
+  return isNonNegativeInteger(value) && value <= MAX_RENDERABLE_EPOCH_MS;
+}
+
+function isWithinInteractionPayloadLimit(value: unknown): boolean {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength
+      <= AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes;
+  } catch {
+    return false;
+  }
+}
+
 function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
 }
@@ -577,6 +597,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     && isOptionalNonBlankString(value.messagesFingerprint)
     && (value.messagesPersistedAt === undefined
       || isIsoDate(value.messagesPersistedAt))
+    && (value.turnStartedAt === undefined
+      || isIsoDate(value.turnStartedAt))
     && isOptionalNonBlankString(value.structuredRequestId)
     && (value.structuredWaitStartedAt === undefined
       || isIsoDate(value.structuredWaitStartedAt))
@@ -587,7 +609,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     && (value.interactionTranscript === undefined
       || (Array.isArray(value.interactionTranscript)
         && value.interactionTranscript.length <= AGENT_INTERACTION_LIMITS.maxWorkflowSummaries
-        && value.interactionTranscript.every(isPipelineInteractionTranscriptEntry)));
+        && value.interactionTranscript.every(isPipelineInteractionTranscriptEntry)
+        && isWithinInteractionPayloadLimit(value.interactionTranscript)));
 }
 
 function isPipelineInteractionQuestion(value: unknown): boolean {
@@ -616,8 +639,7 @@ function isPipelineInteractionPresentation(value: Record<string, unknown>): bool
       "permission", "mcp-form", "mcp-url", "elicitation", "terminal-selection",
     ].includes(value.kind)
     && SESSION_PHASES.has(value.phase as PipelineSessionPhase)
-    && Number.isSafeInteger(value.requestedAt)
-    && (value.requestedAt as number) >= 0
+    && isRenderableEpoch(value.requestedAt)
     && typeof value.title === "string"
     && value.title.length > 0
     && value.title.length <= AGENT_INTERACTION_LIMITS.maxTextLength
@@ -641,7 +663,11 @@ function isPipelineInteractionTranscriptEntry(
     && isNonBlankString(value.id)
     && value.id.length <= AGENT_INTERACTION_LIMITS.maxIdLength
     && isPipelineInteractionPresentation({ ...value, interactionId: value.id })
-    && Number.isSafeInteger(value.resolvedAt)
+    && agentInteractionPolicyAction(
+      UNATTENDED_AGENT_INTERACTION_POLICY,
+      value.kind,
+    ) === "decline-and-continue"
+    && isRenderableEpoch(value.resolvedAt)
     && (value.resolvedAt as number) >= (value.requestedAt as number)
     && value.outcome === "auto-declined-headless";
 }
@@ -661,9 +687,13 @@ function isPendingPipelineInteractionResolution(
     && value.sessionKey.length <= AGENT_INTERACTION_LIMITS.maxIdLength
     && isNonBlankString(value.sessionId)
     && value.sessionId.length <= AGENT_INTERACTION_LIMITS.maxIdLength
-    && Number.isSafeInteger(value.claimedAt)
-    && (value.claimedAt as number) >= 0
-    && (value.action === "decline-and-continue" || value.action === "deny-and-fail");
+    && isRenderableEpoch(value.claimedAt)
+    && (value.claimedAt as number) >= (value.requestedAt as number)
+    && value.action === agentInteractionPolicyAction(
+      UNATTENDED_AGENT_INTERACTION_POLICY,
+      value.kind,
+    )
+    && isWithinInteractionPayloadLimit(value);
 }
 
 function isUserMessage(value: unknown): value is PipelineUserMessage {

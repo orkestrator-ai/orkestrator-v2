@@ -1,5 +1,5 @@
 import { AlertCircle, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -55,6 +55,7 @@ export function BuildCompletionStatus({
 }: BuildCompletionStatusProps) {
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const [retryPending, setRetryPending] = useState(false);
+  const retryInFlight = useRef(false);
 
   const source = pipeline.source;
   const interactionFailure = pipeline.phase === "failed"
@@ -67,6 +68,41 @@ export function BuildCompletionStatus({
     return null;
   }
   const copy = source ? FAILURE_COPY[source.type] : undefined;
+  const retry = async (kind: "interaction" | "completion"): Promise<void> => {
+    if (retryInFlight.current) return;
+    retryInFlight.current = true;
+    setRetryPending(true);
+    try {
+      replacePipeline(kind === "interaction"
+        ? await retryBuildPipelineInteractionFailure(pipeline.id)
+        : await retryBuildPipelineCompletionComment(pipeline.id));
+    } catch (error) {
+      toast.error("Failed to retry build", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      retryInFlight.current = false;
+      setRetryPending(false);
+    }
+  };
+
+  const retryButton = (
+    kind: "interaction" | "completion",
+    ariaLabel: string,
+  ) => (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="h-7 gap-1.5 text-xs"
+      aria-label={ariaLabel}
+      disabled={retryPending}
+      onClick={() => void retry(kind)}
+    >
+      <RefreshCw className={`h-3.5 w-3.5${retryPending ? " animate-spin" : ""}`} />
+      {retryPending ? "Retrying…" : "Retry"}
+    </Button>
+  );
 
   return (
     <>
@@ -75,47 +111,29 @@ export function BuildCompletionStatus({
           {autoDeclines} unattended input request{autoDeclines === 1 ? " was" : "s were"} auto-declined. Review the muted transcript entries for details.
         </div>
       )}
-      {(interactionFailure || completionFailure) && (
+      {interactionFailure && (
         <div
           className="flex flex-wrap items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2"
           role="alert"
         >
           <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
           <span className="min-w-0 flex-1 text-xs text-destructive">
-            {interactionFailure
-              ? pipeline.error
-                ?? "An unattended interaction could not be resolved safely, so the active phase stopped."
-              : `${copy!.label}: ${pipeline.completionCommentError ?? copy!.fallback}`}
+            {pipeline.error
+              ?? "An unattended interaction could not be resolved safely, so the active phase stopped."}
           </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 gap-1.5 text-xs"
-            aria-label={interactionFailure
-              ? "Retry failed build phase"
-              : copy!.retryLabel}
-            disabled={retryPending}
-            onClick={async () => {
-              if (retryPending) return;
-              setRetryPending(true);
-              try {
-                replacePipeline(interactionFailure
-                  ? await retryBuildPipelineInteractionFailure(pipeline.id)
-                  : await retryBuildPipelineCompletionComment(pipeline.id));
-              } catch (error) {
-                toast.error("Failed to retry build", {
-                  description:
-                    error instanceof Error ? error.message : String(error),
-                });
-              } finally {
-                setRetryPending(false);
-              }
-            }}
-          >
-            <RefreshCw className={`h-3.5 w-3.5${retryPending ? " animate-spin" : ""}`} />
-            {retryPending ? "Retrying…" : "Retry"}
-          </Button>
+          {retryButton("interaction", "Retry failed build phase")}
+        </div>
+      )}
+      {completionFailure && (
+        <div
+          className="flex flex-wrap items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2"
+          role="alert"
+        >
+          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+          <span className="min-w-0 flex-1 text-xs text-destructive">
+            {copy!.label}: {pipeline.completionCommentError ?? copy!.fallback}
+          </span>
+          {retryButton("completion", copy!.retryLabel)}
         </div>
       )}
     </>

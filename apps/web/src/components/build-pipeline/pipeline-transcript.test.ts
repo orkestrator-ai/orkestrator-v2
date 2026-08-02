@@ -905,4 +905,72 @@ describe("toPipelineTranscript", () => {
     expect(history.content).toContain("No answer was fabricated");
     expect(history.content).toContain("Conservative, Expansive");
   });
+
+  test("appends multiple interaction entries in their persisted order", () => {
+    const transcript = toPipelineTranscript(
+      [],
+      "claude",
+      FALLBACK,
+      [
+        {
+          id: "interaction-1",
+          provider: "claude",
+          kind: "question",
+          phase: "build",
+          requestedAt: 1,
+          resolvedAt: 2,
+          outcome: "auto-declined-headless",
+          title: "First choice",
+          questions: [],
+        },
+        {
+          id: "interaction-2",
+          provider: "claude",
+          kind: "mcp-form",
+          phase: "build",
+          requestedAt: 3,
+          resolvedAt: 4,
+          outcome: "auto-declined-headless",
+          title: "Second choice",
+          questions: [],
+        },
+      ],
+    );
+
+    expect(transcript.map((message) => message.id)).toEqual([
+      "pipeline-interaction:interaction-1",
+      "pipeline-interaction:interaction-2",
+    ]);
+    expect(transcript[0]!.content).toContain("First choice");
+    expect(transcript[1]!.content).toContain("Second choice");
+  });
+
+  test("leaves an empty provider transcript empty when there is no interaction history", () => {
+    expect(toPipelineTranscript([], "codex", FALLBACK, [])).toEqual([]);
+    expect(toPipelineTranscript(undefined, "codex", FALLBACK)).toEqual([]);
+  });
+
+  test("uses the stable fallback for an interaction timestamp outside the time clip", () => {
+    const [history] = toPipelineTranscript(
+      [],
+      "codex",
+      FALLBACK,
+      [{
+        id: "invalid-time",
+        provider: "codex",
+        kind: "question",
+        phase: "build",
+        requestedAt: 1,
+        resolvedAt: Number.MAX_SAFE_INTEGER,
+        outcome: "auto-declined-headless",
+        title: "Choose safely",
+        questions: [],
+      }],
+    );
+
+    expect(history).toMatchObject({
+      id: "pipeline-interaction:invalid-time",
+      createdAt: FALLBACK,
+    });
+  });
 });

@@ -86,6 +86,14 @@ const retryReviewMock = mock(async (pipelineId: string) => ({
   phase: "reviewing" as const,
   backendRevision: 13,
 }));
+const retryInteractionFailureMock = mock(async (pipelineId: string) => ({
+  ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+  phase: "building" as const,
+  error: undefined,
+  failureContext: undefined,
+  backendRevision:
+    useBuildPipelineStore.getState().pipelines.get(pipelineId)!.backendRevision + 1,
+}));
 const getBuildPipelineConditionalMock = mock(
   async (_pipelineId: string) => null as unknown,
 );
@@ -97,6 +105,7 @@ mock.module("@/lib/backend", () => ({
   cancelBuildPipeline: cancelBuildPipelineMock,
   sendBuildPipelineMessage: sendMessageMock,
   retryBuildPipelineReview: retryReviewMock,
+  retryBuildPipelineInteractionFailure: retryInteractionFailureMock,
   getBuildPipelineConditional: getBuildPipelineConditionalMock,
 }));
 
@@ -171,6 +180,7 @@ describe("BuildChatTab backend projection", () => {
     cancelBuildPipelineMock.mockClear();
     sendMessageMock.mockClear();
     retryReviewMock.mockClear();
+    retryInteractionFailureMock.mockClear();
     mockToastError.mockClear();
     getBuildPipelineConditionalMock.mockClear();
     getBuildPipelineConditionalMock.mockImplementation(async () => null);
@@ -419,6 +429,38 @@ describe("BuildChatTab backend projection", () => {
     expect(screen.getByRole("button", {
       name: "Retry GitHub completion comment",
     })).toBeTruthy();
+  });
+
+  test("offers only the interaction retry and renders its failure message once", async () => {
+    useBuildPipelineStore.getState().replacePipeline({
+      ...pipeline,
+      phase: "failed",
+      error: "Unexpected authorization",
+      failureContext: {
+        phase: "building",
+        kind: "interactive-request",
+        sessionId: "build-session",
+        requestId: "permission-1",
+      },
+      backendRevision: 15,
+    });
+    render(<BuildChatTab data={{
+      pipelineId: pipeline.id,
+      environmentId: pipeline.environmentId,
+      taskId: pipeline.taskId,
+      isLocal: true,
+    }} />);
+
+    expect(screen.getAllByText("Unexpected authorization")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Retry Review" })).toBeNull();
+    const retry = screen.getByRole("button", { name: "Retry failed build phase" });
+    fireEvent.click(retry);
+
+    await waitFor(() => {
+      expect(retryInteractionFailureMock).toHaveBeenCalledWith(pipeline.id);
+      expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase)
+        .toBe("building");
+    });
   });
 });
 
@@ -709,6 +751,67 @@ describe("BuildChatTab presentation", () => {
     expect(running!.querySelector(".animate-spin")).toBeTruthy();
     // A running stage with nothing synchronized yet says so.
     expect(screen.getByText(/This stage is running/)).toBeTruthy();
+  });
+
+  test("names the warned active stage while a historical stage is pinned", async () => {
+    renderTab({
+      ...reviewed,
+      phase: "verifying",
+      stallWarning: {
+        sessionId: "verify-session",
+        detectedAt: "2026-07-29T00:12:00.000Z",
+      },
+      backendRevision: 48,
+    });
+
+    fireEvent.click(screen.getByText("Build Session"));
+    await waitFor(() => expect(screen.getByText("Implementation complete")).toBeTruthy());
+    const warning = screen.getByText(/transcript has not changed/);
+    expect(warning.textContent).toContain("Verification Session is still running");
+    expect(warning.textContent).not.toContain("Build Session is still running");
+  });
+
+  test("shows singular and plural auto-decline badges and passes each stage history", async () => {
+    const interaction = (id: string, title: string) => ({
+      id,
+      provider: "codex" as const,
+      kind: "question" as const,
+      phase: "build" as const,
+      requestedAt: 1,
+      resolvedAt: 2,
+      outcome: "auto-declined-headless" as const,
+      title,
+      questions: [],
+    });
+    renderTab({
+      ...pipeline,
+      id: "interaction-history",
+      autoDeclineCount: 3,
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          autoDeclineCount: 1,
+          interactionTranscript: [interaction("build-question", "Build choice")],
+        },
+        {
+          ...pipeline.sessions[1]!,
+          autoDeclineCount: 2,
+          interactionTranscript: [interaction("verify-question", "Verify choice")],
+        },
+      ],
+      currentSessionIndex: 1,
+      backendRevision: 49,
+    });
+
+    const [buildTab, verifyTab] = screen.getAllByRole("tab");
+    expect(buildTab!.textContent).toContain("1 input request auto-declined");
+    expect(verifyTab!.textContent).toContain("2 input requests auto-declined");
+    expect(screen.getByText(/3 unattended input requests were auto-declined/)).toBeTruthy();
+    expect(screen.getByText(/Verify choice/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Build Session"));
+    await waitFor(() => expect(screen.getByText(/Build choice/)).toBeTruthy());
+    expect(screen.queryByText(/Verify choice/)).toBeNull();
   });
 });
 

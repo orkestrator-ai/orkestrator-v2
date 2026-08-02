@@ -280,6 +280,20 @@ export interface AgentInteractionResolutionClaim {
   claimedAt: number;
 }
 
+/**
+ * Exclusive, renewable ownership of provider resolution work.
+ *
+ * This lease is deliberately distinct from the durable workflow claim: a
+ * crashed resolver may be replaced after `expiresAt`, while the journal entry
+ * continues to fence duplicate workflow resolution by interaction identity.
+ */
+export interface AgentInteractionResolutionProcessingLease {
+  ownerId: string;
+  token: string;
+  acquiredAt: number;
+  expiresAt: number;
+}
+
 export interface AgentInteractionResolutionJournalEntry {
   id: string;
   interactionId: string;
@@ -288,6 +302,8 @@ export interface AgentInteractionResolutionJournalEntry {
   sessionId: string;
   state: AgentInteractionJournalState;
   claim: AgentInteractionResolutionClaim;
+  /** Present only while a resolver exclusively owns a `claimed` entry. */
+  processing?: AgentInteractionResolutionProcessingLease;
   outcome?: AgentInteractionOutcome;
   providerResolvedAt?: number;
   workflowRecordedAt?: number;
@@ -742,10 +758,26 @@ function isResolutionClaim(value: unknown): value is AgentInteractionResolutionC
     && isEpochMilliseconds(value.claimedAt);
 }
 
+function isResolutionProcessingLease(
+  value: unknown,
+  claim: AgentInteractionResolutionClaim,
+): value is AgentInteractionResolutionProcessingLease {
+  if (!isRecord(value) || !hasOnlyKeys(value, new Set([
+    "ownerId", "token", "acquiredAt", "expiresAt",
+  ]))) return false;
+  return isId(value.ownerId)
+    && isId(value.token)
+    && isEpochMilliseconds(value.acquiredAt)
+    && isEpochMilliseconds(value.expiresAt)
+    && value.acquiredAt >= claim.claimedAt
+    && value.expiresAt > value.acquiredAt
+    && value.expiresAt >= claim.claimedAt;
+}
+
 function isJournalEntry(value: unknown): value is AgentInteractionResolutionJournalEntry {
   if (!isRecord(value) || !hasOnlyKeys(value, new Set([
     "id", "interactionId", "provider", "kind", "sessionId", "state", "claim",
-    "outcome", "providerResolvedAt", "workflowRecordedAt",
+    "processing", "outcome", "providerResolvedAt", "workflowRecordedAt",
   ]))) return false;
   if (
     !isId(value.id)
@@ -769,8 +801,11 @@ function isJournalEntry(value: unknown): value is AgentInteractionResolutionJour
   if (value.state === "claimed") {
     return value.outcome === undefined
       && value.providerResolvedAt === undefined
-      && value.workflowRecordedAt === undefined;
+      && value.workflowRecordedAt === undefined
+      && (value.processing === undefined
+        || isResolutionProcessingLease(value.processing, value.claim));
   }
+  if (value.processing !== undefined) return false;
   if (value.outcome === undefined || value.providerResolvedAt === undefined) return false;
   if (value.providerResolvedAt < value.claim.claimedAt) return false;
   if (value.state === "provider-resolved") return value.workflowRecordedAt === undefined;
@@ -853,7 +888,13 @@ export function isAgentInteractionWorkflowSummary(
 function unfinishedProgressAt(
   entry: AgentInteractionResolutionJournalEntry,
 ): number {
-  return entry.providerResolvedAt ?? entry.claim.claimedAt;
+  return Math.max(
+    entry.providerResolvedAt ?? entry.claim.claimedAt,
+    // An unexpired processing lease is active work even when the original
+    // claim is old. Counting the lease deadline keeps cleanup from destroying
+    // the token fence while a bounded provider response is still in flight.
+    entry.processing?.expiresAt ?? 0,
+  );
 }
 
 /**
@@ -872,6 +913,7 @@ function abandonUnfinishedEntry(
   const providerResolvedAt = entry.providerResolvedAt ?? entry.claim.claimedAt;
   return {
     ...entry,
+    processing: undefined,
     state: TERMINAL_JOURNAL_STATE,
     outcome: entry.outcome ?? "stale",
     providerResolvedAt,
@@ -909,7 +951,14 @@ export function pruneAgentInteractionResolutionJournal(
   }
   const terminalCutoff = now - AGENT_INTERACTION_JOURNAL_RETENTION_MS;
   const claimCutoff = now - AGENT_INTERACTION_CLAIM_RETENTION_MS;
-  const unfinished = journal.entries
+  const normalizedEntries = journal.entries.map((entry) => (
+    entry.state === "claimed"
+      && entry.processing !== undefined
+      && entry.processing.expiresAt <= now
+      ? { ...entry, processing: undefined }
+      : entry
+  ));
+  const unfinished = normalizedEntries
     .filter((entry) => entry.state !== TERMINAL_JOURNAL_STATE)
     .sort((a, b) => unfinishedProgressAt(b) - unfinishedProgressAt(a));
 
@@ -933,7 +982,7 @@ export function pruneAgentInteractionResolutionJournal(
   }
 
   const terminal = [
-    ...journal.entries.filter((entry) => entry.state === TERMINAL_JOURNAL_STATE),
+    ...normalizedEntries.filter((entry) => entry.state === TERMINAL_JOURNAL_STATE),
     ...reclaimed,
   ]
     .filter((entry) => (entry.workflowRecordedAt ?? 0) >= terminalCutoff)

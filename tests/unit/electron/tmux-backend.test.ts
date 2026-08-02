@@ -1971,10 +1971,10 @@ exit 0
     });
   });
 
-  // Model and effort switches are typed as slash commands into the running TUI
+  // Model, effort, and fast-mode switches are typed as slash commands into the running TUI
   // — the CLI flags only apply at launch — and each one then waits out the
   // no-hook settle window, so this needs more than the default per-test budget.
-  test("switches model and effort as slash commands in the live TUI", async () => {
+  test("switches model, effort, and fast mode as slash commands in the live TUI", async () => {
     const handlers = createHandlers();
 
     await withFakeTmuxRuntime(async ({ environment, alive }) => {
@@ -1994,6 +1994,12 @@ exit 0
 
       await invoke(handlers, "claude_tmux_switch_effort", { tabId, environmentId: environment.id, effort: "high" });
       await expect(fs.readFile(inputBuffer, "utf8")).resolves.toBe("/effort high");
+
+      await invoke(handlers, "claude_tmux_switch_fast_mode", { tabId, environmentId: environment.id, fastMode: true }, context);
+      await expect(fs.readFile(inputBuffer, "utf8")).resolves.toBe("/fast on");
+      await expect(
+        invoke(handlers, "claude_tmux_status", { tabId, environmentId: environment.id }, context),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -2021,14 +2027,16 @@ exit 0
           environmentId: environment.id,
           model: "sonnet",
           effort: "medium",
+          fastMode: true,
           // Legacy callers may still send this launch-time field. It must not
           // override the invariant that Claude starts in bypass mode.
           planMode: true,
         },
         context,
-      ) as { session_id: string; running: boolean };
+      ) as { session_id: string; running: boolean; fast_mode: boolean };
       expect(status.running).toBe(true);
       expect(status.session_id).toBeTruthy();
+      expect(status.fast_mode).toBe(true);
 
       const launchLog = await fs.readFile(log, "utf8");
       expect(launchLog).toContain(" --dangerously-skip-permissions");
@@ -2036,6 +2044,7 @@ exit 0
       // Without this the CLI defaults thinking display to "omitted" on recent
       // models, and every thinking block reaches the transcript with empty text.
       expect(launchLog).toContain(" --thinking adaptive --thinking-display summarized");
+      expect(launchLog).toContain(" --settings '{\"fastMode\":true}'");
 
       await expect(invoke(
         handlers,

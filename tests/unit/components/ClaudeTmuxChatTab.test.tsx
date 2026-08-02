@@ -192,6 +192,7 @@ const startSessionMock = mock(async () => ({
   resumed: false,
   busy: false,
   permission_mode: "bypassPermissions",
+  fast_mode: false,
 }));
 const getStatusMock = mock(async () => null);
 const getTranscriptMock = mock(async () => []);
@@ -211,6 +212,7 @@ const replyHookMock = mock(async () => {});
 const submitMock = mock(async () => {});
 const switchModelMock = mock(async () => {});
 const switchEffortMock = mock(async () => {});
+const switchFastModeMock = mock(async () => {});
 const switchPlanModeMock = mock(async (_tabId: string, planMode: boolean, _environmentId?: string) =>
   planMode ? "plan" : "bypassPermissions",
 );
@@ -266,6 +268,8 @@ mock.module("@/lib/claude-tmux-client", () => ({
     switchModelMock(tabId, model, environmentId),
   switchEffort: (tabId: string, effort: string, environmentId?: string) =>
     switchEffortMock(tabId, effort, environmentId),
+  switchFastMode: (tabId: string, fastMode: boolean, environmentId?: string) =>
+    switchFastModeMock(tabId, fastMode, environmentId),
   switchPlanMode: (tabId: string, planMode: boolean, environmentId?: string) =>
     switchPlanModeMock(tabId, planMode, environmentId),
   replyHook: (
@@ -693,6 +697,7 @@ describe("ClaudeTmuxChatTab", () => {
     submitMock.mockClear();
     switchModelMock.mockClear();
     switchEffortMock.mockClear();
+    switchFastModeMock.mockClear();
     switchPlanModeMock.mockClear();
     answerPreToolUseMock.mockClear();
     listPreviousSessionsMock.mockClear();
@@ -701,6 +706,7 @@ describe("ClaudeTmuxChatTab", () => {
     submitMock.mockImplementation(async () => {});
     switchModelMock.mockImplementation(async () => {});
     switchEffortMock.mockImplementation(async () => {});
+    switchFastModeMock.mockImplementation(async () => {});
     switchPlanModeMock.mockImplementation(async (_tabId: string, planMode: boolean, _environmentId?: string) =>
       planMode ? "plan" : "bypassPermissions",
     );
@@ -852,6 +858,7 @@ describe("ClaudeTmuxChatTab", () => {
         initialPrompt: "Run the audit",
         model: "sonnet",
         effort: "high",
+        fastMode: false,
         resumeSessionId: undefined,
         replaceExisting: false,
       },
@@ -903,6 +910,7 @@ describe("ClaudeTmuxChatTab", () => {
         initialPrompt: "Run the audit",
         model: "default",
         effort: "high",
+        fastMode: false,
         resumeSessionId: undefined,
         replaceExisting: false,
       });
@@ -3420,6 +3428,7 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "haiku",
         effort: undefined,
+        fastMode: false,
         resumeSessionId: undefined,
         replaceExisting: true,
       });
@@ -3457,6 +3466,7 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "haiku",
         effort: undefined,
+        fastMode: false,
         resumeSessionId: undefined,
         replaceExisting: true,
       });
@@ -3529,6 +3539,7 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "default",
         effort: "high",
+        fastMode: false,
         resumeSessionId: undefined,
         replaceExisting: true,
       });
@@ -3728,7 +3739,7 @@ Running 1 Explore agent...
 
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: "High" }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /\(High\)/ }));
     const maxOption = await screen.findByText("Max");
     await act(async () => {
       fireEvent.click(maxOption);
@@ -3741,6 +3752,7 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "sonnet",
         effort: "max",
+        fastMode: false,
         resumeSessionId: undefined,
         replaceExisting: true,
       });
@@ -3786,7 +3798,7 @@ Running 1 Explore agent...
     );
 
     expect(await screen.findByRole("button", { name: /Sonnet/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Low" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /\(Low\)/ })).toBeTruthy();
   });
 
   test("holds a one-shot model that only the live SDK catalog knows, then applies it", async () => {
@@ -3893,7 +3905,7 @@ Running 1 Explore agent...
     );
 
     const effortButton = screen.getByRole("button", {
-      name: "High",
+      name: /\(High\)/,
     }) as HTMLButtonElement;
     expect(effortButton.disabled).toBe(false);
 
@@ -3907,7 +3919,7 @@ Running 1 Explore agent...
     await waitFor(() => {
       expect(switchEffortMock).toHaveBeenCalledWith("tab-1", "low", "env-1");
     });
-    expect(screen.getByRole("button", { name: "Low" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /\(Low\)/ })).toBeTruthy();
   });
 
   test("keeps the previous effort and shows an error when effort switching fails", async () => {
@@ -3929,7 +3941,7 @@ Running 1 Explore agent...
       />,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: "High" }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /\(High\)/ }));
     const lowOption = await screen.findByText("Low");
     await act(async () => {
       fireEvent.click(lowOption);
@@ -3937,8 +3949,46 @@ Running 1 Explore agent...
     });
 
     expect(await screen.findByText("Error: tmux unavailable")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "High" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Low" })).toBeNull();
+    expect(screen.getByRole("button", { name: /\(High\)/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /\(Low\)/ })).toBeNull();
+  });
+
+  test("switches fast mode through Claude's explicit /fast command", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, claudeModel: "default" },
+      },
+    }));
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*\(High\)/ }));
+    const fastItem = await screen.findByRole("menuitemcheckbox", { name: /Fast/ });
+    expect(fastItem.getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => {
+      fireEvent.click(fastItem);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(switchFastModeMock).toHaveBeenCalledWith("tab-1", true, "env-1");
+    });
+    expect(screen.getByRole("button", { name: /Default.*\(High ⚡\)/ })).toBeTruthy();
   });
 
   test("hides the effort control for models without effort support", async () => {
@@ -3953,7 +4003,7 @@ Running 1 Explore agent...
     );
 
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "High" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /\(High\)/ })).toBeTruthy();
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /Sonnet/ }));
     const haikuOption = await screen.findByText("Haiku");
@@ -3961,7 +4011,7 @@ Running 1 Explore agent...
       fireEvent.click(haikuOption);
     });
 
-    expect(screen.queryByRole("button", { name: "High" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /\(High\)/ })).toBeNull();
   });
 
   test("resets effort to the default when the new model doesn't support the chosen level", async () => {
@@ -4005,12 +4055,12 @@ Running 1 Explore agent...
 
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: "High" }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /\(High\)/ }));
     const xhighOption = await screen.findByText("Extra High");
     await act(async () => {
       fireEvent.click(xhighOption);
     });
-    expect(screen.getByRole("button", { name: "Extra High" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /\(Extra High\)/ })).toBeTruthy();
 
     // This SDK-provided Sonnet entry has no xhigh level, so the preference
     // snaps back to the default.
@@ -4020,7 +4070,7 @@ Running 1 Explore agent...
       fireEvent.click(sonnetOption);
     });
 
-    expect(screen.getByRole("button", { name: "High" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /\(High\)/ })).toBeTruthy();
   });
 
   test("offers Opus 5 in the tmux fallback catalog", async () => {
@@ -4320,7 +4370,7 @@ Running 1 Explore agent...
     );
 
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
-    fireEvent.pointerDown(screen.getByRole("button", { name: "High" }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: /\(High\)/ }));
 
     expect(await screen.findByText("Low")).toBeTruthy();
     expect(screen.getByText("Medium")).toBeTruthy();
@@ -4366,8 +4416,8 @@ Running 1 Explore agent...
 
     // "high" isn't in Mini's level list, so the stored preference snaps to
     // the first supported level instead of an unsupported default.
-    expect(screen.getByRole("button", { name: "Low" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "High" })).toBeNull();
+    expect(screen.getByRole("button", { name: /\(Low\)/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /\(High\)/ })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
 
@@ -4495,7 +4545,7 @@ Running 1 Explore agent...
       "disabled",
       true,
     );
-    expect(screen.getByRole("button", { name: "High" })).toHaveProperty(
+    expect(screen.getByRole("button", { name: /\(High\)/ })).toHaveProperty(
       "disabled",
       true,
     );
@@ -4696,6 +4746,7 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "sonnet",
         effort: "high",
+        fastMode: false,
         resumeSessionId: "resume-1",
         replaceExisting: true,
       });
@@ -4731,6 +4782,7 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "default",
         effort: "high",
+        fastMode: false,
         resumeSessionId: "resume-1",
         replaceExisting: true,
       });

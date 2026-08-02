@@ -13,18 +13,12 @@ import {
   ChevronDown,
   ArrowUp,
   Square,
-  RefreshCw,
 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
-  DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import {cn, createSessionKey} from "@/lib/utils";
@@ -41,6 +35,7 @@ import {
   createWorkspaceAttachment,
   NativeAttachmentMenu,
 } from "@/components/chat/NativeAttachmentMenu";
+import { NativeModelPicker } from "@/components/chat/NativeModelPicker";
 import { useFileMentions, useFileSearch, useMediaQuery, useNativeComposeBarPaste } from "@/hooks";
 import { useSlashCommandMenu } from "@/hooks/useSlashCommandMenu";
 import { useNativeComposeSubmit } from "@/hooks/useNativeComposeSubmit";
@@ -94,6 +89,14 @@ const MAX_DATA_BACKED_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 /** Stable empty array to avoid infinite re-render loops in useSyncExternalStore */
 const EMPTY_QUEUE: OpenCodeQueuedMessage[] = [];
+const DEFAULT_VARIANT_ID = "__default__";
+
+function formatVariantLabel(variant: string): string {
+  if (variant === "xhigh") return "Extra high";
+  return variant
+    .replace(/[-_]+/g, " ")
+    .replace(/^\w/, (letter) => letter.toUpperCase());
+}
 
 function attachmentMimeType(attachment: OpenCodeAttachment): string {
   const lastDot = attachment.name.lastIndexOf(".");
@@ -210,7 +213,6 @@ export function OpenCodeComposeBar({
     useCallback((state) => state.getSelectedMode(sessionKey), [sessionKey]),
   );
 
-  const [modelSearch, setModelSearch] = useState("");
   const isMobile = useMediaQuery("(max-width: 767px)");
   // Sampled once so a later resize across the breakpoint cannot re-run the
   // mount focus effect and steal focus from whatever the user is doing.
@@ -539,77 +541,13 @@ export function OpenCodeComposeBar({
     () => selectedModelObj?.variants ?? [],
     [selectedModelObj?.id, selectedModelObj?.variants]
   );
-  const selectedVariantName = selectedVariant ?? "Default";
-
-  // Group models by provider
-  const modelsByProvider = models.reduce((acc, model) => {
-    const provider = model.provider || "Other";
-    if (!acc[provider]) {
-      acc[provider] = [];
-    }
-    acc[provider].push(model);
-    return acc;
-  }, {} as Record<string, OpenCodeModel[]>);
-
-  const favoriteModels = useMemo(() => {
-    const byId = new Map(models.map((model) => [model.id, model]));
-    const seen = new Set<string>();
-    const favorites: OpenCodeModel[] = [];
-
-    for (const id of favoriteModelIds) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-
-      const model = byId.get(id);
-      if (model) {
-        favorites.push(model);
-      }
-    }
-
-    return favorites;
-  }, [models, favoriteModelIds]);
+  const selectedVariantName = selectedVariant ? formatVariantLabel(selectedVariant) : "Default";
+  const favoriteModelIdSet = useMemo(() => new Set(favoriteModelIds), [favoriteModelIds]);
 
   const modelNameById = useMemo(
     () => new Map(models.map((model) => [model.id, model.name])),
     [models]
   );
-
-  // Filter models by search text - keeps provider grouping
-  const filteredModelsByProvider = useMemo(() => {
-    if (!modelSearch.trim()) return modelsByProvider;
-
-    const search = modelSearch.toLowerCase();
-    const filtered: Record<string, OpenCodeModel[]> = {};
-
-    for (const [provider, providerModels] of Object.entries(modelsByProvider)) {
-      const matches = providerModels.filter(
-        (m) =>
-          m.name.toLowerCase().includes(search) ||
-          m.provider.toLowerCase().includes(search) ||
-          m.id.toLowerCase().includes(search)
-      );
-      if (matches.length > 0) {
-        filtered[provider] = matches;
-      }
-    }
-
-    return filtered;
-  }, [modelsByProvider, modelSearch]);
-
-  // Sort filtered providers alphabetically
-  const filteredProviders = Object.keys(filteredModelsByProvider).sort();
-
-  // Check if search is active
-  const isModelSearchActive = modelSearch.trim().length > 0;
-
-  // Count total visible models
-  const totalVisibleModels = useMemo(() => {
-    let count = 0;
-    for (const models of Object.values(filteredModelsByProvider)) {
-      count += models.length;
-    }
-    return count;
-  }, [filteredModelsByProvider]);
 
   // Capitalize mode for display
   const modeDisplayName = selectedMode === "plan" ? "Planning" : "Build";
@@ -696,11 +634,11 @@ export function OpenCodeComposeBar({
         {/* Bottom toolbar */}
         <div
           data-native-compose-toolbar
-          className="flex flex-col gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden sm:flex-row sm:items-center"
+          className="flex min-w-0 items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           <div
             data-native-compose-controls="primary"
-            className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
+            className="flex min-w-0 flex-1 items-center gap-1"
           >
             <NativeAttachmentMenu
               key={isSending || pendingAttachmentSnapshots > 0 ? "blocked" : "idle"}
@@ -731,160 +669,41 @@ export function OpenCodeComposeBar({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Model dropdown - minimal style, grouped by provider */}
-          <DropdownMenu onOpenChange={(open) => { if (!open) setModelSearch(""); }}>
-            <DropdownMenuTrigger asChild>
-              <button className="flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground sm:flex-none">
-                <ChevronDown className="w-3 h-3" />
-                <span className="min-w-0 max-w-full truncate sm:max-w-[200px]">{selectedModelName}</span>
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="start"
-              collisionPadding={{ top: 52, right: 8, bottom: 8, left: 8 }}
-              className="w-[calc(100vw-1rem)] sm:w-[320px]"
-            >
-              {/* Search input and refresh button */}
-              <div className="p-2 pb-1">
-                <div className="flex items-center gap-1">
-                  <input
-                    type="text"
-                    placeholder="Search models..."
-                    value={modelSearch}
-                    onChange={(e) => setModelSearch(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => {
-                      if (e.key !== "Escape") e.stopPropagation();
-                    }}
-                    className="flex-1 h-7 px-2 text-xs rounded border border-border bg-background placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-ring"
-                  />
-                  {onRefreshModels && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onRefreshModels();
-                      }}
-                      className="h-7 w-7 flex items-center justify-center rounded border border-border bg-background hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                      title="Refresh models"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {models.length === 0 ? (
-                <DropdownMenuItem disabled>No models available</DropdownMenuItem>
-              ) : (
-                <>
-                  {favoriteModels.length > 0 && !isModelSearchActive && (
-                    <>
-                      <DropdownMenuSub>
-                        <DropdownMenuSubTrigger className="text-sm">
-                          Favorites
-                          <span className="ml-2 text-muted-foreground text-[10px]">
-                            ({favoriteModels.length})
-                          </span>
-                        </DropdownMenuSubTrigger>
-                        <DropdownMenuPortal>
-                          <DropdownMenuSubContent className="max-h-[300px] overflow-y-auto">
-                            {favoriteModels.map((model) => (
-                              <DropdownMenuItem
-                                key={model.id}
-                                onClick={() => handleModelChange(model.id)}
-                                className="text-sm"
-                              >
-                                <span className="truncate">{model.name}</span>
-                              </DropdownMenuItem>
-                            ))}
-                          </DropdownMenuSubContent>
-                        </DropdownMenuPortal>
-                      </DropdownMenuSub>
-
-                      <DropdownMenuSeparator />
-                    </>
-                  )}
-
-                  {isModelSearchActive && (
-                    <div className="px-2 py-1 text-[10px] text-muted-foreground">
-                      {totalVisibleModels} model{totalVisibleModels !== 1 ? "s" : ""} found
-                    </div>
-                  )}
-
-                  {filteredProviders.length === 0 ? (
-                    <DropdownMenuItem disabled className="text-muted-foreground">No matches</DropdownMenuItem>
-                  ) : (
-                    filteredProviders.map((provider) => {
-                      const providerModels = filteredModelsByProvider[provider] ?? [];
-                      return (
-                        <DropdownMenuSub key={provider}>
-                          <DropdownMenuSubTrigger className="text-sm">
-                            {provider}
-                            <span className="ml-2 text-muted-foreground text-[10px]">
-                              ({providerModels.length})
-                            </span>
-                          </DropdownMenuSubTrigger>
-                          <DropdownMenuPortal>
-                            <DropdownMenuSubContent className="max-h-[300px] overflow-y-auto">
-                              {providerModels.map((model) => (
-                                <DropdownMenuItem
-                                  key={model.id}
-                                  onClick={() => {
-                                    handleModelChange(model.id);
-                                    setModelSearch("");
-                                  }}
-                                  className="text-sm"
-                                >
-                                  <span className="truncate">{model.name}</span>
-                                </DropdownMenuItem>
-                              ))}
-                            </DropdownMenuSubContent>
-                          </DropdownMenuPortal>
-                        </DropdownMenuSub>
-                      );
-                    })
-                  )}
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          {/* Variant dropdown - model-specific variants (e.g. low/high/xhigh) */}
-          {availableVariants.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors">
-                  <ChevronDown className="w-3 h-3" />
-                  <span className="max-w-[100px] truncate">{selectedVariantName}</span>
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuItem onClick={() => handleVariantChange(undefined)}>
-                  {!selectedVariant && <span className="mr-1.5 text-foreground">&#10003;</span>}
-                  Default
-                </DropdownMenuItem>
-                {availableVariants.map((variant) => (
-                  <DropdownMenuItem key={variant} onClick={() => handleVariantChange(variant)}>
-                    {selectedVariant === variant && <span className="mr-1.5 text-foreground">&#10003;</span>}
-                    {variant}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+          <NativeModelPicker
+            models={models.map((model) => ({
+              id: model.id,
+              label: model.name,
+              description: model.provider || "Other",
+              searchText: model.provider,
+              favorite: favoriteModelIdSet.has(model.id),
+            }))}
+            selectedModelId={selectedModel}
+            selectedModelLabel={selectedModelName}
+            onModelChange={handleModelChange}
+            reasoningOptions={[
+              { id: DEFAULT_VARIANT_ID, label: "Default" },
+              ...availableVariants.map((variant) => ({
+                id: variant,
+                label: formatVariantLabel(variant),
+              })),
+            ]}
+            selectedReasoningId={selectedVariant ?? DEFAULT_VARIANT_ID}
+            selectedReasoningLabel={selectedVariantName}
+            onReasoningChange={(variant) => {
+              handleVariantChange(variant === DEFAULT_VARIANT_ID ? undefined : variant);
+            }}
+            fastModeAvailable={false}
+            disabled={disabled}
+            onRefreshModels={onRefreshModels}
+          />
 
           </div>
 
           <div
             data-native-compose-controls="secondary"
-            className="flex w-full items-center gap-1 sm:ml-auto sm:w-auto"
+            className="flex shrink-0 items-center gap-1"
           >
-
-          <ContextUsageWheel usage={contextUsage} className="ml-1" />
-
-          {/* Spacer */}
-          <div className="flex-1 sm:hidden" />
+          {!isMobile && <ContextUsageWheel usage={contextUsage} className="ml-1" />}
 
           {/* Queue indicator. A parked queue stops draining until a human
               retries, so the failure has to be legible without opening the

@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useMemo, useState, type KeyboardEvent } from "react";
-import { AlertCircle, X, FileText, ChevronDown, ArrowUp, Check, Square, Zap } from "lucide-react";
+import { AlertCircle, X, FileText, ChevronDown, ArrowUp, Check, Square } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,6 +29,7 @@ import {
   createWorkspaceAttachment,
   NativeAttachmentMenu,
 } from "@/components/chat/NativeAttachmentMenu";
+import { NativeModelPicker } from "@/components/chat/NativeModelPicker";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
@@ -461,7 +462,7 @@ export function ClaudeComposeBar({
   // Get display name for selected model - default to first model if none selected
   const effectiveSelectedModel = selectedModel ?? models[0]?.id;
   const selectedModelObj = models.find((m) => m.id === effectiveSelectedModel);
-  const selectedModelName = selectedModelObj?.name ?? (models.length > 0 ? models[0]?.name : "No models");
+  const selectedModelName = selectedModelObj?.name ?? models[0]?.name ?? "No models";
   const selectedModelSupportsFastMode = selectedModelObj?.supportsFastMode !== false;
 
   const handleModelChange = (modelId: string) => {
@@ -567,11 +568,11 @@ export function ClaudeComposeBar({
       {/* Bottom toolbar */}
       <div
         data-native-compose-toolbar
-        className="flex flex-col gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden sm:flex-row sm:items-center"
+        className="flex min-w-0 items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         <div
           data-native-compose-controls="primary"
-          className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
+          className="flex min-w-0 flex-1 items-center gap-1"
         >
           <NativeAttachmentMenu
             key={isSending ? "sending" : "idle"}
@@ -581,41 +582,30 @@ export function ClaudeComposeBar({
             onCloseAutoFocus={() => inputRef.current?.focus()}
           />
 
-        {/* Model dropdown - minimal style */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground sm:flex-none">
-              <ChevronDown className="w-3 h-3" />
-              <span className="min-w-0 max-w-full truncate sm:max-w-[200px]">{selectedModelName}</span>
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="max-h-[400px] overflow-y-auto min-w-[240px]">
-            {models.length === 0 ? (
-              <DropdownMenuItem disabled>No models available</DropdownMenuItem>
-            ) : (
-              models.map((model) => {
-                const isSelected = model.id === effectiveSelectedModel;
-                return (
-                  <DropdownMenuItem
-                    key={model.id}
-                    onClick={() => handleModelChange(model.id)}
-                    className="flex items-start gap-2 py-2"
-                  >
-                    <div className="w-4 h-4 flex-shrink-0 mt-0.5">
-                      {isSelected && <Check className="w-4 h-4 text-primary" />}
-                    </div>
-                    <div className="flex flex-col gap-0.5 min-w-0">
-                      <span className="text-sm font-medium truncate">{model.name}</span>
-                      {model.description && (
-                        <span className="text-xs text-muted-foreground line-clamp-2">{model.description}</span>
-                      )}
-                    </div>
-                  </DropdownMenuItem>
-                );
-              })
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <NativeModelPicker
+          models={models.map((model) => ({
+            id: model.id,
+            label: model.name,
+            description: model.description,
+          }))}
+          selectedModelId={effectiveSelectedModel}
+          selectedModelLabel={selectedModelName}
+          onModelChange={handleModelChange}
+          reasoningOptions={(selectedModelObj?.supportedEffortLevels
+            ?? (["low", "medium", "high"] as ClaudeEffortLevel[])).map((level) => ({
+              id: level,
+              label: EFFORT_LABELS[level],
+              description: EFFORT_DESCRIPTIONS[level],
+              annotation: level === "high" ? "default" : effort === level ? "current" : undefined,
+            }))}
+          selectedReasoningId={effort}
+          selectedReasoningLabel={EFFORT_LABELS[effort]}
+          onReasoningChange={(level) => setEffort(sessionKey, level as ClaudeEffortLevel)}
+          fastModeEnabled={fastModeEnabled}
+          fastModeAvailable={selectedModelSupportsFastMode}
+          onFastModeChange={(enabled) => setFastMode(sessionKey, enabled)}
+          disabled={disabled}
+        />
 
         {/* Plan/Build mode dropdown */}
         <DropdownMenu>
@@ -645,78 +635,13 @@ export function ClaudeComposeBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Effort level dropdown */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              disabled={disabled}
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-              title="Choose effort level"
-            >
-              <ChevronDown className="w-3 h-3" />
-              <span>{EFFORT_LABELS[effort]}</span>
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-[calc(100vw-1rem)] sm:min-w-[340px] sm:w-auto">
-            {(selectedModelObj?.supportedEffortLevels ?? (["low", "medium", "high"] as ClaudeEffortLevel[])).map((level) => (
-              <DropdownMenuItem
-                key={level}
-                onClick={() => setEffort(sessionKey, level)}
-                className="flex items-start gap-2 py-2"
-              >
-                <div className="w-4 h-4 shrink-0 mt-0.5">
-                  {effort === level && <Check className="w-4 h-4 text-primary" />}
-                </div>
-                <div className="flex flex-col gap-0.5 min-w-0">
-                  <span className="text-sm font-medium">
-                    {EFFORT_LABELS[level]}
-                    {level === "high" ? " (default)" : ""}
-                    {effort === level && level !== "high" ? " (current)" : ""}
-                  </span>
-                  <span className="text-xs text-muted-foreground line-clamp-2">
-                    {EFFORT_DESCRIPTIONS[level]}
-                  </span>
-                </div>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-
         </div>
 
         <div
           data-native-compose-controls="secondary"
-          className="flex w-full items-center gap-1 sm:ml-auto sm:w-auto"
+          className="flex shrink-0 items-center gap-1"
         >
-
-        {/* Fast mode toggle — only shown when the selected model supports it. */}
-        {selectedModelSupportsFastMode && (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => setFastMode(sessionKey, !fastModeEnabled)}
-            className={cn(
-              "flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
-              fastModeEnabled
-                ? "text-amber-500 hover:text-amber-400 bg-amber-500/10 hover:bg-amber-500/15"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-            )}
-            title={
-              fastModeEnabled
-                ? "Fast mode on — lower latency, higher credit rate"
-                : "Enable fast mode (lower latency, higher credit rate)"
-            }
-            aria-pressed={fastModeEnabled}
-          >
-            <Zap className={cn("w-3 h-3", fastModeEnabled && "fill-current")} />
-            <span>Fast</span>
-          </button>
-        )}
-
-        <ContextUsageWheel usage={contextUsage} className="ml-1" />
-
-        {/* Spacer */}
-        <div className="flex-1 sm:hidden" />
+        {!isMobile && <ContextUsageWheel usage={contextUsage} className="ml-1" />}
 
         {/* Queue indicator. A parked queue stops draining until a human retries,
             so the failure has to be legible without opening the dialog. */}

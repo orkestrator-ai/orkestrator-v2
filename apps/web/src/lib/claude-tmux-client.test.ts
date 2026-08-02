@@ -65,6 +65,7 @@ import {
   submit,
   switchModel,
   switchEffort,
+  switchFastMode,
   switchPlanMode,
   writeInteractiveTerminal,
 } from "./claude-tmux-client";
@@ -75,6 +76,7 @@ describe("claude-tmux-client invoke wrappers", () => {
       initialPrompt: "hi",
       model: "sonnet",
       effort: "high",
+      fastMode: true,
       resumeSessionId: "sess-resume",
       replaceExisting: true,
     });
@@ -86,6 +88,7 @@ describe("claude-tmux-client invoke wrappers", () => {
       initialPrompt: "hi",
       model: "sonnet",
       effort: "high",
+      fastMode: true,
       resumeSessionId: "sess-resume",
       replaceExisting: true,
     });
@@ -99,6 +102,7 @@ describe("claude-tmux-client invoke wrappers", () => {
       initialPrompt: undefined,
       model: undefined,
       effort: undefined,
+      fastMode: undefined,
       resumeSessionId: undefined,
       replaceExisting: undefined,
     });
@@ -192,6 +196,16 @@ describe("claude-tmux-client invoke wrappers", () => {
       tabId: "tab-1",
       environmentId: "env-1",
       effort: "xhigh",
+    });
+  });
+
+  test("switchFastMode forwards the explicit state and environmentId", async () => {
+    await switchFastMode("tab-1", true, "env-1");
+    expect(calls[0]!.cmd).toBe("claude_tmux_switch_fast_mode");
+    expect(calls[0]!.args).toEqual({
+      tabId: "tab-1",
+      environmentId: "env-1",
+      fastMode: true,
     });
   });
 

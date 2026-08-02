@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowUp, Check, ChevronDown, FileText, Square, X, Zap } from "lucide-react";
+import { AlertCircle, ArrowUp, ChevronDown, FileText, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -14,6 +14,7 @@ import { ContextUsageWheel } from "@/components/chat/ContextUsageWheel";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
+import { NativeModelPicker } from "@/components/chat/NativeModelPicker";
 import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
 import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
@@ -477,11 +478,11 @@ export function CodexComposeBar({
 
       <div
         data-native-compose-toolbar
-        className="flex flex-col gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden sm:flex-row sm:items-center"
+        className="flex min-w-0 items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         <div
           data-native-compose-controls="primary"
-          className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
+          className="flex min-w-0 flex-1 items-center gap-1"
         >
           <NativeAttachmentMenu
             key={isSending ? "sending" : "idle"}
@@ -516,128 +517,48 @@ export function CodexComposeBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              disabled={disabled || settingsLocked}
-              className="flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
-              title={settingsLocked ? "Wait for Codex to finish before changing the model" : "Choose model"}
-            >
-              <ChevronDown className="h-3 w-3" />
-              <span className="min-w-0 max-w-full truncate sm:max-w-[220px]">{selectedModelName}</span>
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-[260px] max-h-[360px] overflow-y-auto">
-            {models.length === 0 ? (
-              <DropdownMenuItem disabled>No models available</DropdownMenuItem>
-            ) : (
-              models.map((model) => {
-                const isSelected = model.id === selectedModel;
-                return (
-                  <DropdownMenuItem
-                    key={model.id}
-                    onClick={() => void onModelChange(model.id)}
-                    disabled={settingsLocked}
-                    className="flex items-start gap-2 py-2"
-                  >
-                    <div className="mt-0.5 h-4 w-4 shrink-0">
-                      {isSelected ? <Check className="h-4 w-4 text-primary" /> : null}
-                    </div>
-                    <div className="flex min-w-0 flex-col gap-0.5">
-                      <span className="truncate text-sm font-medium">{model.name}</span>
-                      {model.description ? (
-                        <span className="line-clamp-2 text-xs text-muted-foreground">
-                          {model.description}
-                        </span>
-                      ) : null}
-                    </div>
-                  </DropdownMenuItem>
-                );
-              })
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              disabled={disabled || settingsLocked}
-              className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-              title={settingsLocked ? "Wait for Codex to finish before changing reasoning" : "Choose reasoning effort"}
-            >
-              <ChevronDown className="h-3 w-3" />
-              <span>{reasoningDisplayLabel}</span>
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-[calc(100vw-1rem)] sm:min-w-[340px] sm:w-auto">
-            {availableReasoningOptions.map((option) => (
-              <DropdownMenuItem
-                key={option.effort}
-                onClick={() => void onReasoningEffortChange(option.effort)}
-                disabled={settingsLocked}
-                className="flex items-start gap-2 py-2"
-              >
-                <div className="mt-0.5 h-4 w-4 shrink-0">
-                  {effectiveReasoningEffort === option.effort ? (
-                    <Check className="h-4 w-4 text-primary" />
-                  ) : null}
-                </div>
-                <div className="flex min-w-0 flex-col gap-0.5">
-                  <span className="truncate text-sm font-medium">
-                    {option.label}
-                    {selectedModelObj?.defaultReasoningEffort === option.effort
-                      ? " (default)"
-                      : ""}
-                    {effectiveReasoningEffort === option.effort
-                      && selectedModelObj?.defaultReasoningEffort !== option.effort
-                      ? " (current)"
-                      : ""}
-                  </span>
-                  {option.description ? (
-                    <span className="line-clamp-2 text-xs text-muted-foreground">
-                      {option.description}
-                    </span>
-                  ) : null}
-                </div>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* Fast mode toggle — maps to Codex's `service_tier = fast` config. */}
-        <button
-          type="button"
+        <NativeModelPicker
+          models={models.map((model) => ({
+            id: model.id,
+            label: model.name,
+            description: model.description,
+          }))}
+          selectedModelId={selectedModel}
+          selectedModelLabel={selectedModelName}
+          onModelChange={(modelId) => { void onModelChange(modelId); }}
+          reasoningOptions={availableReasoningOptions.map((option) => ({
+            id: option.effort,
+            label: option.label,
+            description: option.description,
+            annotation: selectedModelObj?.defaultReasoningEffort === option.effort
+              ? "default"
+              : effectiveReasoningEffort === option.effort
+                ? "current"
+                : undefined,
+          }))}
+          selectedReasoningId={effectiveReasoningEffort}
+          selectedReasoningLabel={reasoningDisplayLabel}
+          onReasoningChange={(effort) => {
+            void onReasoningEffortChange(effort as CodexReasoningEffort);
+          }}
+          fastModeEnabled={fastModeEnabled}
+          fastModeAvailable
+          onFastModeChange={onFastModeChange}
           disabled={disabled || settingsLocked}
-          onClick={() => onFastModeChange(!fastModeEnabled)}
-          className={cn(
-            "flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-            fastModeEnabled
-              ? "bg-amber-500/10 text-amber-500 hover:bg-amber-500/15 hover:text-amber-400"
-              : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-          )}
           title={
-            fastModeEnabled
-              ? "Fast mode on — ~1.5x faster, higher credit rate"
-              : "Enable fast mode (~1.5x faster, higher credit rate)"
+            settingsLocked
+              ? "Wait for Codex to finish before changing model settings"
+              : "Choose model, reasoning, and speed"
           }
-          aria-pressed={fastModeEnabled}
-        >
-          <Zap className={cn("h-3 w-3", fastModeEnabled && "fill-current")} />
-          <span>Fast</span>
-        </button>
+        />
 
         </div>
 
         <div
           data-native-compose-controls="secondary"
-          className="flex w-full items-center gap-1 sm:ml-auto sm:w-auto"
+          className="flex shrink-0 items-center gap-1"
         >
-        <ContextUsageWheel usage={contextUsage} className="ml-1" />
-
-        {/* Spacer */}
-        <div className="flex-1 sm:hidden" />
+        {!isMobile && <ContextUsageWheel usage={contextUsage} className="ml-1" />}
 
         {/* A parked queue stops draining until a human retries, so the failure
             has to be legible without opening the dialog. */}

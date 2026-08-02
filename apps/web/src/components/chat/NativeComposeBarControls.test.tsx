@@ -7,6 +7,10 @@ import { OpenCodeComposeBar } from "@/components/opencode/OpenCodeComposeBar";
 import {useOpenCodeStore} from "@/stores/openCodeStore";
 import {useCodexStore} from "@/stores/codexStore";
 import {useClaudeStore} from "@/stores/claudeStore";
+import {
+  restoreMatchMedia,
+  setMobileViewport,
+} from "../../../../../tests/mocks/match-media";
 
 const noop = () => {};
 const noopAsync = async () => {};
@@ -72,17 +76,25 @@ function renderOpenCodeComposeBar(
 describe("native compose bar controls", () => {
   afterEach(() => {
     cleanup();
+    restoreMatchMedia();
     useCodexStore.getState().setDraftText("codex-session", "");
     useCodexStore.getState().setContextUsage("codex-session", null);
     useOpenCodeStore
       .getState()
       .setDraftText(createSessionKey("opencode-environment", "opencode-tab"), "");
+    useOpenCodeStore
+      .getState()
+      .setContextUsage(createSessionKey("opencode-environment", "opencode-tab"), null);
     useClaudeStore
       .getState()
       .setDraftText(createSessionKey("claude-environment", "claude-tab"), "");
+    useClaudeStore
+      .getState()
+      .setContextUsage(createSessionKey("claude-environment", "claude-tab"), null);
   });
 
-  test("uses two full-width control rows at mobile widths", () => {
+  test("keeps all compose controls on one row at mobile widths", () => {
+    setMobileViewport(true);
     const { container: claude } = renderClaudeComposeBar();
     const { container: codex } = renderCodexComposeBar();
     const { container: openCode } = renderOpenCodeComposeBar();
@@ -96,13 +108,15 @@ describe("native compose bar controls", () => {
         '[data-native-compose-controls="secondary"]',
       );
 
-      expect(toolbar?.className).toContain("flex-col");
-      expect(toolbar?.className).toContain("sm:flex-row");
+      expect(toolbar?.className).toContain("items-center");
+      expect(toolbar?.className).not.toContain("flex-col");
       expect(toolbar?.className).toContain("overflow-x-auto");
       expect(toolbar?.className).toContain("[scrollbar-width:none]");
-      expect(toolbar?.className).toContain("[&>*]:shrink-0");
-      expect(primary?.className).toContain("w-full");
-      expect(secondary?.className).toContain("w-full");
+      expect(primary?.className).toContain("flex-1");
+      expect(primary?.className).toContain("min-w-0");
+      expect(primary?.className).not.toContain("w-full");
+      expect(secondary?.className).toContain("shrink-0");
+      expect(secondary?.className).not.toContain("w-full");
     }
   });
 
@@ -158,7 +172,7 @@ describe("native compose bar controls", () => {
     }
   });
 
-  test("keeps the Codex Fast toggle beside the reasoning selector", () => {
+  test("uses one combined Codex model, reasoning, and speed control", () => {
     const { container } = renderCodexComposeBar();
     const primary = container.querySelector<HTMLElement>(
       '[data-native-compose-controls="primary"]',
@@ -166,14 +180,13 @@ describe("native compose bar controls", () => {
     const secondary = container.querySelector<HTMLElement>(
       '[data-native-compose-controls="secondary"]',
     );
-    const reasoning = container.querySelector<HTMLButtonElement>(
-      'button[title="Choose reasoning effort"]',
+    const picker = container.querySelector<HTMLButtonElement>(
+      'button[title="Choose model, reasoning, and speed"]',
     );
-    const fast = container.querySelector<HTMLButtonElement>('button[aria-pressed="false"]');
 
-    expect(primary?.contains(fast ?? null)).toBe(true);
-    expect(secondary?.contains(fast ?? null)).toBe(false);
-    expect(reasoning?.nextElementSibling).toBe(fast);
+    expect(primary?.contains(picker ?? null)).toBe(true);
+    expect(secondary?.contains(picker ?? null)).toBe(false);
+    expect(container.querySelector('button[aria-pressed="false"]')).toBeNull();
   });
 
   test("hides a disabled send button while Stop is visible", () => {
@@ -223,6 +236,7 @@ describe("native compose bar controls", () => {
   });
 
   test("shows the Codex context usage wheel from the store", () => {
+    setMobileViewport(false);
     useCodexStore.getState().setContextUsage("codex-session", {
       usedTokens: 50_000,
       totalTokens: 100_000,
@@ -238,6 +252,32 @@ describe("native compose bar controls", () => {
     renderCodexComposeBar();
 
     expect(screen.queryByLabelText(/Context window/)).toBeNull();
+  });
+
+  test("does not render context usage wheels on mobile", () => {
+    setMobileViewport(true);
+    const usage = {
+      usedTokens: 50_000,
+      totalTokens: 100_000,
+      percentUsed: 50,
+    };
+    useCodexStore.getState().setContextUsage("codex-session", usage);
+    useClaudeStore.getState().setContextUsage(
+      createSessionKey("claude-environment", "claude-tab"),
+      usage,
+    );
+    useOpenCodeStore.getState().setContextUsage(
+      createSessionKey("opencode-environment", "opencode-tab"),
+      usage,
+    );
+
+    const { container: claude } = renderClaudeComposeBar();
+    const { container: codex } = renderCodexComposeBar();
+    const { container: openCode } = renderOpenCodeComposeBar();
+
+    for (const container of [claude, codex, openCode]) {
+      expect(container.querySelector('[aria-label^="Context window"]')).toBeNull();
+    }
   });
 
   test("hides the queue action when a busy compose bar is disabled", () => {

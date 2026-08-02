@@ -149,8 +149,20 @@ interface ReconcileSessionOptions {
    * watchdog tick or SSE frame turn the user's refresh into a silent no-op.
    */
   manual?: boolean;
+  /** Stops a reconcile owned by an observation effect from applying after teardown. */
+  signal?: AbortSignal;
 }
-type ReconcileSessionResult = "applied" | "missing" | "unavailable" | "stale";
+type ReconcileSessionResult =
+  | "applied"
+  | "applied-stale-transcript"
+  | "missing"
+  | "unavailable"
+  | "stale";
+
+const MAX_AUTHORITATIVE_HYDRATION_FAILURES = 3;
+const AUTHORITATIVE_HYDRATION_RETRY_MS = 1_000;
+const AUTHORITATIVE_HYDRATION_ERROR =
+  "Could not refresh the complete Codex transcript. Live updates will continue; refresh to try again.";
 
 /**
  * Bun component tests historically stubbed these clients with their old
@@ -258,6 +270,7 @@ export function CodexChatTab({
   const reconcileSessionStateRef = useRef<
     (options?: ReconcileSessionOptions) => Promise<ReconcileSessionResult>
   >(async () => "unavailable");
+  const mountReconcilePromiseRef = useRef<Promise<ReconcileSessionResult> | null>(null);
   const retryablePromptRef = useRef<{
     fingerprint: string;
     requestId: string;
@@ -612,6 +625,11 @@ export function CodexChatTab({
   const handoffPending = !handoff.ready;
   const launchPromptRef = useRef<string | undefined>(undefined);
   launchPromptRef.current = launchPrompt;
+  const pendingInitialPromptRef = useRef(false);
+  pendingInitialPromptRef.current = hasPendingInitialPrompt(
+    launchPrompt,
+    initialPromptSent,
+  );
   const forkPlan = useMemo(
     () => buildMessageForkPlan(providerDisplayMessages, {
       responseInProgress: session?.isLoading ?? false,
@@ -804,6 +822,10 @@ export function CodexChatTab({
       logicalRequestId?: string,
     ): Promise<CodexDispatchResult> => {
       if (!client || !session?.sessionId) return "rejected";
+      // A user dispatch is newer than any pending mount reconcile. Invalidate
+      // that snapshot before it can reapply idle/running state over the turn
+      // this interaction is about to start.
+      reconcileSequenceRef.current += 1;
 
       if (
         handoff.pendingHistory
@@ -951,7 +973,8 @@ export function CodexChatTab({
           }
           return "unknown";
         } else if (
-          reconciliation === "applied"
+          (reconciliation === "applied"
+            || reconciliation === "applied-stale-transcript")
           && reconciledSession?.isLoading !== true
         ) {
           if (
@@ -971,7 +994,11 @@ export function CodexChatTab({
           clearMatchingUnconfirmedDispatch();
           return "accepted";
         }
-        if (reconciliation === "applied" && reconciledSession?.isLoading === true) {
+        if (
+          (reconciliation === "applied"
+            || reconciliation === "applied-stale-transcript")
+          && reconciledSession?.isLoading === true
+        ) {
           // The authoritative status proves this request is running even though
           // the HTTP response was lost.
           clearMatchingUnconfirmedDispatch();
@@ -1105,6 +1132,8 @@ export function CodexChatTab({
 
   const handleStop = useCallback(async () => {
     if (!client || !session?.sessionId) return;
+
+    reconcileSequenceRef.current += 1;
 
     setSessionError(sessionKey, undefined);
 
@@ -2116,7 +2145,9 @@ export function CodexChatTab({
       manualSequence === manualReconcileSequenceRef.current;
     const isLatestLiveState = () =>
       reconcileSequence === reconcileSequenceRef.current;
-    const shouldApply = options?.manual ? isLatestManual : isLatestLiveState;
+    const isNotAborted = () => options?.signal?.aborted !== true;
+    const shouldApplySequence = options?.manual ? isLatestManual : isLatestLiveState;
+    const shouldApply = () => isNotAborted() && shouldApplySequence();
     const lookup = await lookupSessionStatus(client, session.sessionId);
     if (!shouldApply()) return "stale";
 
@@ -2307,13 +2338,16 @@ export function CodexChatTab({
     }
 
     setSessionLoading(sessionKey, true, status.turnStartedAt);
+    setSessionError(sessionKey, undefined);
     finishBackendStartupTracking();
     if (options?.forceRefreshMessages) {
       const refreshed = await refreshMessages(client, session.sessionId, {
         throwOnError: options.throwOnError,
         shouldApply,
       });
-      if (!shouldApply() || !refreshed) return "stale";
+      if (!isNotAborted()) return "stale";
+      if (!shouldApplySequence()) return "applied-stale-transcript";
+      if (!refreshed) return "applied-stale-transcript";
     }
     return "applied";
   }, [
@@ -2360,6 +2394,13 @@ export function CodexChatTab({
     refresh: refreshManually,
   });
 
+  // The visible tab observes even an idle session so externally-started work is
+  // immediate. Hidden tabs only stay attached while a turn or backend-owned
+  // startup is in progress.
+  const shouldTrackRunningCodexSession =
+    (session?.isLoading ?? false) || trackingBackendStartupTurn;
+  const shouldObserveCodexSession = isActive || shouldTrackRunningCodexSession;
+
   useEffect(() => {
     if (
       connectionState !== "connected"
@@ -2370,7 +2411,17 @@ export function CodexChatTab({
       return;
     }
 
-    void reconcileSessionState();
+    // Legacy streams may not emit `connected`, so retain the mount reconcile.
+    // Publish its promise before the stream can drain: a modern handshake waits
+    // for it and then performs the forced transcript hydration, serializing the
+    // two authorities instead of racing them.
+    const request = reconcileSessionState();
+    mountReconcilePromiseRef.current = request;
+    void request.finally(() => {
+      if (mountReconcilePromiseRef.current === request) {
+        mountReconcilePromiseRef.current = null;
+      }
+    });
   }, [
     client,
     connectionState,
@@ -2391,10 +2442,6 @@ export function CodexChatTab({
   // point the renderer's snapshot legitimately says "idle". Waiting for
   // `isLoading` before subscribing then misses the event that changes it to
   // running, leaving the empty "Ready to build" surface visible until reload.
-  const shouldTrackRunningCodexSession =
-    (session?.isLoading ?? false) || trackingBackendStartupTurn;
-  const shouldObserveCodexSession = isActive || shouldTrackRunningCodexSession;
-
   useEffect(() => {
     if (
       !shouldObserveCodexSession
@@ -2406,10 +2453,10 @@ export function CodexChatTab({
     }
 
     const abortController = new AbortController();
-    let needsAuthoritativeHydration = !hasPendingInitialPrompt(
-      launchPrompt,
-      initialPromptSent,
-    );
+    // A stream opened before a launch prompt is dispatched already covers that
+    // prompt's whole lifetime. Do not restart it merely because the one-shot
+    // prompt state flips to sent; a new epoch would discard its useful cursor.
+    let needsAuthoritativeHydration = !pendingInitialPromptRef.current;
     const shouldTrackSession = () =>
       isActive
       || trackingBackendStartupTurnRef.current
@@ -2417,6 +2464,23 @@ export function CodexChatTab({
 
     (async () => {
       let patchRecovery: Promise<boolean> | null = null;
+      let consecutiveHydrationFailures = 0;
+      const waitForReconnectDelay = () => new Promise<void>((resolve) => {
+        if (abortController.signal.aborted) {
+          resolve();
+          return;
+        }
+        const timeout = setTimeout(
+          finish,
+          AUTHORITATIVE_HYDRATION_RETRY_MS,
+        );
+        function finish() {
+          clearTimeout(timeout);
+          abortController.signal.removeEventListener("abort", finish);
+          resolve();
+        }
+        abortController.signal.addEventListener("abort", finish, { once: true });
+      });
       const recoverMessagePatchGap = (): Promise<boolean> => {
         if (patchRecovery) return patchRecovery;
         const recovery = refreshMessages(client, session.sessionId, {
@@ -2474,20 +2538,74 @@ export function CodexChatTab({
 
             if (event.type === "connected" && needsAuthoritativeHydration) {
               // The bridge subscribes before it emits `connected`. Awaiting the
-              // snapshot here therefore gives one linear order: pre-subscription
-              // work comes from HTTP, and later SSE frames queue until it lands.
+              // snapshot fills the pre-subscription gap while later SSE frames
+              // queue. Full-message upserts reject lower revisions, so buffered
+              // pre-snapshot frames cannot roll the newer snapshot backwards.
+              const pendingMountReconcile = mountReconcilePromiseRef.current;
+              if (pendingMountReconcile) {
+                await pendingMountReconcile;
+              }
               const result = await reconcileSessionState({
                 forceRefreshMessages: true,
+                signal: abortController.signal,
               });
-              if (result === "applied" || result === "missing") {
+              if (abortController.signal.aborted) break;
+
+              if (
+                (result === "missing" || result === "unavailable")
+                && backendStartupIsStillPreDispatch()
+              ) {
+                // The deterministic thread may not exist until the backend
+                // dispatches its launch prompt. The already-anchored stream is
+                // the authority for that edge, so do not delay it behind status
+                // retries for a session that is expected to be absent.
+                needsAuthoritativeHydration = false;
+                continue;
+              }
+
+              if (result === "missing") {
+                needsAuthoritativeHydration = false;
+                setSessionPhase(sessionKey, undefined);
+                setSessionLoading(sessionKey, false);
+                setSessionError(
+                  sessionKey,
+                  "The Codex session is no longer available",
+                );
+                return;
+              }
+
+              if (
+                result === "applied"
+                || result === "applied-stale-transcript"
+                || result === "stale"
+              ) {
+                consecutiveHydrationFailures = 0;
                 needsAuthoritativeHydration = false;
                 if (!shouldTrackSession()) break;
               } else {
-                // Close this fresh stream and retry after the bounded reconnect
-                // delay. Marking hydration complete here would strand the exact
-                // transcript gap this connection was opened to repair.
-                retryHydration = true;
-                break;
+                consecutiveHydrationFailures += 1;
+                if (
+                  consecutiveHydrationFailures
+                  < MAX_AUTHORITATIVE_HYDRATION_FAILURES
+                ) {
+                  // A genuine authority failure gets a bounded number of fresh
+                  // snapshot attempts. Supersession does not: a newer authority
+                  // already owns that state and the healthy stream must survive.
+                  retryHydration = true;
+                  break;
+                }
+
+                // Do not let a broken status endpoint black out an otherwise
+                // healthy live stream forever. Surface that the pre-anchor gap
+                // may be stale, then continue draining frames from this anchor.
+                needsAuthoritativeHydration = false;
+                const currentSession = useCodexStore
+                  .getState()
+                  .sessions.get(sessionKey);
+                if (!currentSession?.error) {
+                  setSessionError(sessionKey, AUTHORITATIVE_HYDRATION_ERROR);
+                }
+                if (!shouldTrackSession()) break;
               }
               continue;
             }
@@ -2613,12 +2731,6 @@ export function CodexChatTab({
                 if (!terminal) {
                   setSessionError(sessionKey, undefined);
                 }
-              } else if (event.data?.status === "running") {
-                // Older bridge versions may omit `phase`, but metadata-only
-                // updates (usage, credits, compaction) are not turn starts.
-                finishBackendStartupTracking();
-                setSessionLoading(sessionKey, true, turnStartedAt);
-                setSessionError(sessionKey, undefined);
               }
               continue;
             }
@@ -2717,7 +2829,7 @@ export function CodexChatTab({
         }
 
         if (retryHydration) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          await waitForReconnectDelay();
           continue;
         }
 
@@ -2739,7 +2851,7 @@ export function CodexChatTab({
           break;
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await waitForReconnectDelay();
       }
     })();
 
@@ -2752,9 +2864,7 @@ export function CodexChatTab({
     client,
     connectionState,
     finishBackendStartupTracking,
-    initialPromptSent,
     isActive,
-    launchPrompt,
     refreshMessages,
     reconcileSessionState,
     removePendingApproval,

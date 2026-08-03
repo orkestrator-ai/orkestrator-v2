@@ -18,6 +18,8 @@ import {
   TURN_STOPPED_BY_USER,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
+  isOptimisticNativeMessage,
+  normalizeMessageContent,
 } from "@/lib/chat/client-only-messages";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
@@ -62,6 +64,7 @@ import {
   type QuestionRequest,
   type OpenCodeConversationMode,
   type OpenCodeMessage,
+  type OpenCodeMessagePart,
   type OpenCodeSlashCommand,
   type OpenCodeModel,
   type OpenCodeModelDefaults,
@@ -1980,6 +1983,9 @@ export function OpenCodeChatTab({
          * Feeding the server-owned projection through `setMessages` lets the
          * store's fingerprint reconciliation retire the matching optimistic
          * message as soon as the live user message has its text/file parts.
+         * The fingerprint ignores attachment URL encoding (see
+         * `client-only-messages.ts`), so attachment-carrying prompts are
+         * retired here too rather than only on the final refresh.
          */
         const upsertLiveMessage = (
           sessionTabId: string,
@@ -2012,6 +2018,35 @@ export function OpenCodeChatTab({
           setMessages(sessionTabId, authoritativeMessages);
         };
 
+        /**
+         * Seed the role/createdAt for a streamed part whose message the store
+         * has never seen. OpenCode announces a message (`message.updated`)
+         * before streaming its parts, but if the info frame is ever missed a
+         * user text part would otherwise be built with the assistant fallback
+         * and render the prompt as an assistant message. Matching the part's
+         * text against the pending optimistic bubble both restores the user
+         * role and lets `upsertLiveMessage` retire the bubble in the same
+         * write.
+         */
+        const findOptimisticEchoBase = (
+          messages: OpenCodeMessage[] | undefined,
+          part: OpenCodeMessagePart,
+        ): Pick<OpenCodeMessage, "role" | "createdAt"> | undefined => {
+          if (!messages || part.type !== "text") return undefined;
+          const partContent = normalizeMessageContent(part.content);
+          if (!partContent) return undefined;
+          for (const candidate of messages) {
+            if (
+              isOptimisticNativeMessage(candidate)
+              && candidate.role === "user"
+              && normalizeMessageContent(candidate.content) === partContent
+            ) {
+              return { role: "user", createdAt: candidate.createdAt };
+            }
+          }
+          return undefined;
+        };
+
         const applyPartUpdate = (
           sessionTabId: string,
           rawPart: unknown,
@@ -2030,7 +2065,7 @@ export function OpenCodeChatTab({
           upsertLiveMessage(
             sessionTabId,
             buildOpenCodeMessageFromPart(
-              existingMessage,
+              existingMessage ?? findOptimisticEchoBase(sessionState?.messages, part),
               part.sourceMessageId,
               part,
               delta,

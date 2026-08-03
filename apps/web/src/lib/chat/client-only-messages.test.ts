@@ -267,6 +267,63 @@ describe("client-only optimistic messages", () => {
     expect(merged[0]?.id).toBe("server-2");
   });
 
+  test("drops an optimistic attachment message when the echo names the same file with a different url", () => {
+    const optimistic = createOptimisticNativeMessage(
+      "optimistic-attachment",
+      "Please inspect the screenshot",
+      [{
+        path: "/workspace/a.png",
+        name: "a.png",
+        previewUrl: "data:image/png;base64,abc123",
+      }],
+      "2026-04-15T10:00:01.000Z",
+    );
+    const incoming: NativeMessage[] = [
+      {
+        id: "server-attachment",
+        role: "user",
+        content: "Please inspect the screenshot",
+        parts: [
+          { type: "text", content: "Please inspect the screenshot" },
+          { type: "file", content: "a.png", fileUrl: "file:///workspace/a.png" },
+        ],
+        createdAt: "2026-04-15T10:00:02.000Z",
+      },
+    ];
+
+    const merged = mergeNativeMessagesPreservingClientOnly([optimistic], incoming);
+
+    expect(merged.map((message) => message.id)).toEqual(["server-attachment"]);
+  });
+
+  test("keeps an optimistic attachment message when the echo names a different file even with a matching url", () => {
+    const optimistic = createOptimisticNativeMessage(
+      "optimistic-different-file",
+      "Please inspect the screenshot",
+      [{ path: "/workspace/a.png", name: "a.png" }],
+      "2026-04-15T10:00:01.000Z",
+    );
+    const incoming: NativeMessage[] = [
+      {
+        id: "server-different-file",
+        role: "user",
+        content: "Please inspect the screenshot",
+        parts: [
+          { type: "text", content: "Please inspect the screenshot" },
+          { type: "file", content: "b.png", fileUrl: "file:///workspace/a.png" },
+        ],
+        createdAt: "2026-04-15T10:00:02.000Z",
+      },
+    ];
+
+    const merged = mergeNativeMessagesPreservingClientOnly([optimistic], incoming);
+
+    expect(merged.map((message) => message.id)).toEqual([
+      "optimistic-different-file",
+      "server-different-file",
+    ]);
+  });
+
   test("keeps system messages in chronological order when merging", () => {
     const serverMessage = createServerMessage(
       "server-3",

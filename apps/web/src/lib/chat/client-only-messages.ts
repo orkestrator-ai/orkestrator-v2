@@ -21,7 +21,7 @@ interface OptimisticNativeAttachment {
   name: string;
 }
 
-function normalizeMessageContent(content: string): string {
+export function normalizeMessageContent(content: string): string {
   return content.replace(/\r\n/g, "\n").trim();
 }
 
@@ -52,12 +52,20 @@ function toOptimisticFileUrl(path: string, previewUrl?: string): string | undefi
  * payloads (`toolOutput`, `toolArgs`) can never influence a match — a tool
  * part already fails on `type` — and serializing them made every fingerprint
  * pay for the largest fields in the transcript.
+ *
+ * `fileUrl` is deliberately excluded: it is an implementation detail of how a
+ * file is referenced, not the identity of the attachment. The optimistic
+ * projection carries the client's `previewUrl` (often a data URL) or a
+ * client-encoded `file://` path, while the server echo reports its own URL
+ * for the same file. Matching on it would leave every attachment-carrying
+ * prompt duplicated next to its echo until the final transcript refresh. The
+ * attachment's `content` (its name) still participates in the match, so a
+ * genuinely different attachment keeps the optimistic message distinct.
  */
 function getPartFingerprint(part: NativeMessagePart): string {
   return JSON.stringify({
     type: part.type,
     content: normalizeMessageContent(part.content),
-    fileUrl: part.fileUrl,
     toolName: part.toolName,
     toolTitle: part.toolTitle,
     toolState: part.toolState,

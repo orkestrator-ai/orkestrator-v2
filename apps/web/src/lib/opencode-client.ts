@@ -1092,10 +1092,13 @@ export function getOpenCodePartKey(part: OpenCodeMessagePart): string | null {
  * no content but a text `delta`, the delta is appended to the existing part's
  * content (incremental text streaming). The aggregate `content` is recomputed
  * from all text parts. Role/createdAt are preserved from the existing message,
- * defaulting to an assistant message created now.
+ * defaulting to an assistant message created now. `existing` is partial so a
+ * caller that only knows the echo's role/createdAt (e.g. a streamed part that
+ * arrived before its `message.updated`) can seed the message without supplying
+ * the parts it will be built from.
  */
 export function buildOpenCodeMessageFromPart(
-  existing: OpenCodeMessage | undefined,
+  existing: Partial<OpenCodeMessage> | undefined,
   messageId: string,
   part: OpenCodeMessagePart,
   delta?: string,

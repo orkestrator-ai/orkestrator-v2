@@ -5546,6 +5546,258 @@ describe("OpenCodeChatTab", () => {
       channel.close();
     });
 
+    test("retires an optimistic attachment prompt once its echo streams the file part", async () => {
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [{
+        ...nativeMessage("optimistic-attach", "Please inspect the screenshot"),
+        id: `${OPTIMISTIC_MESSAGE_PREFIX}attach`,
+        role: "user",
+        parts: [
+          { type: "text", content: "Please inspect the screenshot" },
+          { type: "file", content: "a.png", fileUrl: "data:image/png;base64,abc123" },
+        ],
+      }]);
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      mockGetSessionMessages.mockClear();
+
+      channel.push({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "server-attach-user",
+            sessionID: "session-1",
+            role: "user",
+            time: { created: Date.parse("2026-07-16T12:04:57.000Z") },
+          },
+        },
+      });
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "server-attach-text",
+            messageID: "server-attach-user",
+            sessionID: "session-1",
+            type: "text",
+            text: "Please inspect the screenshot",
+          },
+        },
+      });
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "server-attach-file",
+            messageID: "server-attach-user",
+            sessionID: "session-1",
+            type: "file",
+            filename: "a.png",
+            url: "file:///workspace/a.png",
+          },
+        },
+      });
+
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({
+          id: "server-attach-user",
+          role: "user",
+          content: "Please inspect the screenshot",
+          parts: [
+            { type: "text", content: "Please inspect the screenshot" },
+            { type: "file", content: "a.png", fileUrl: "file:///workspace/a.png" },
+          ],
+        });
+      });
+      expect(mockGetSessionMessages).not.toHaveBeenCalled();
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("retires both optimistic prompts of two identical sends from their live echoes", async () => {
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [
+        {
+          ...nativeMessage("optimistic-dup-a", "run the tests"),
+          id: `${OPTIMISTIC_MESSAGE_PREFIX}dup-a`,
+          role: "user",
+          createdAt: "2026-07-16T12:00:00.000Z",
+        },
+        {
+          ...nativeMessage("optimistic-dup-b", "run the tests"),
+          id: `${OPTIMISTIC_MESSAGE_PREFIX}dup-b`,
+          role: "user",
+          createdAt: "2026-07-16T12:00:01.000Z",
+        },
+      ]);
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      mockGetSessionMessages.mockClear();
+
+      for (const serverId of ["server-dup-1", "server-dup-2"]) {
+        channel.push({
+          type: "message.updated",
+          properties: {
+            info: {
+              id: serverId,
+              sessionID: "session-1",
+              role: "user",
+              time: { created: Date.parse("2026-07-16T12:04:57.000Z") },
+            },
+          },
+        });
+        channel.push({
+          type: "message.part.updated",
+          properties: {
+            part: {
+              id: `${serverId}-text`,
+              messageID: serverId,
+              sessionID: "session-1",
+              type: "text",
+              text: "run the tests",
+            },
+          },
+        });
+      }
+
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        expect(messages).toHaveLength(2);
+        expect(messages.map((message) => message.id).sort()).toEqual([
+          "server-dup-1",
+          "server-dup-2",
+        ]);
+      });
+      expect(mockGetSessionMessages).not.toHaveBeenCalled();
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("keeps an unechoed optimistic prompt while retiring a later echoed one", async () => {
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [
+        {
+          ...nativeMessage("optimistic-first", "First prompt"),
+          id: `${OPTIMISTIC_MESSAGE_PREFIX}first`,
+          role: "user",
+          createdAt: "2026-07-16T12:00:00.000Z",
+        },
+        {
+          ...nativeMessage("optimistic-second", "Second prompt"),
+          id: `${OPTIMISTIC_MESSAGE_PREFIX}second`,
+          role: "user",
+          createdAt: "2026-07-16T12:00:01.000Z",
+        },
+      ]);
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      mockGetSessionMessages.mockClear();
+
+      channel.push({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "server-second",
+            sessionID: "session-1",
+            role: "user",
+            time: { created: Date.parse("2026-07-16T12:04:57.000Z") },
+          },
+        },
+      });
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "server-second-text",
+            messageID: "server-second",
+            sessionID: "session-1",
+            type: "text",
+            text: "Second prompt",
+          },
+        },
+      });
+
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        expect(messages.some((message) => message.id === "server-second")).toBe(true);
+        expect(
+          messages.some((message) => message.id === `${OPTIMISTIC_MESSAGE_PREFIX}first`),
+        ).toBe(true);
+        expect(
+          messages.some((message) => message.id === `${OPTIMISTIC_MESSAGE_PREFIX}second`),
+        ).toBe(false);
+      });
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("builds a user-role echo from the optimistic hint when a part arrives before its info", async () => {
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [{
+        ...nativeMessage("optimistic-early", "Hello from the part"),
+        id: `${OPTIMISTIC_MESSAGE_PREFIX}early`,
+        role: "user",
+      }]);
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      mockGetSessionMessages.mockClear();
+
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "early-text",
+            messageID: "server-early",
+            sessionID: "session-1",
+            type: "text",
+            text: "Hello from the part",
+          },
+        },
+      });
+
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({
+          id: "server-early",
+          role: "user",
+          content: "Hello from the part",
+        });
+      });
+
+      // A subsequent info frame merges metadata without re-introducing the
+      // optimistic bubble or a second server message.
+      channel.push({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "server-early",
+            sessionID: "session-1",
+            role: "user",
+            time: { created: Date.parse("2026-07-16T12:04:57.000Z") },
+          },
+        },
+      });
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({ id: "server-early", role: "user" });
+      });
+      expect(mockGetSessionMessages).not.toHaveBeenCalled();
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
     test("uses a newly observed backend user clock when it precedes the busy edge", async () => {
       const observedBusyAt = Date.parse("2026-07-16T12:05:00.000Z");
       const backendStartedAt = Date.parse("2026-07-16T12:04:58.000Z");

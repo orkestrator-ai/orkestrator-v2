@@ -220,6 +220,32 @@ describe("NativeMessage assistant attribution", () => {
     expect(screen.queryByText("GPT 5.6 Sol")).toBeNull();
     expect(screen.getByRole("button", { name: "Copy text" })).toBeTruthy();
   });
+
+  test("anchors attribution and duration on the user after an empty info block", () => {
+    // Transcript owners resolve previousMessage to the nearest content-bearing
+    // message, so the first real content after `user → empty info → content`
+    // renders the model label once and keeps the response duration that the
+    // empty placeholder would otherwise have swallowed.
+    const userMessage = makeMessage([{ type: "text", content: "Question" }], {
+      id: "user-block-anchor",
+      role: "user",
+      createdAt: "2026-03-21T10:00:00.000Z",
+    });
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Answer" }], {
+          id: "assistant-content-after-empty",
+          modelId: "gpt-5.6-sol",
+          createdAt: "2026-03-21T10:00:45.000Z",
+        })}
+        previousMessage={userMessage}
+        resolveModelLabel={() => "GPT 5.6 Sol"}
+      />,
+    );
+
+    expect(screen.getAllByText("GPT 5.6 Sol")).toHaveLength(1);
+    expect(screen.getByText(/responded in 45s/)).toBeTruthy();
+  });
 });
 
 describe("NativeMessage task list rendering", () => {

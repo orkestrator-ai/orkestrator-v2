@@ -363,6 +363,33 @@ export function messageHasVisibleContent(message: NativeMessage): boolean {
 }
 
 /**
+ * The effective predecessor for block-level continuity.
+ *
+ * Empty assistant messages (an info-only `message.updated` before any parts
+ * stream) contribute nothing to attribution, duration, or continuation, so
+ * they are skipped when picking the message a row should compare itself
+ * against. Without this a `user → empty → content` sequence would lose the
+ * response duration (the content row would think it follows an assistant, not
+ * the user), and a `content → empty → content` block would repeat the model
+ * label because the immediate predecessor appears content-less. Non-assistant
+ * predecessors and content-bearing assistants are returned as-is.
+ */
+export function findPreviousNativeMessage<TMessage extends NativeMessage>(
+  messages: readonly TMessage[],
+  index: number,
+): TMessage | null {
+  for (let i = index - 1; i >= 0; i--) {
+    const candidate = messages[i];
+    if (!candidate) continue;
+    if (candidate.role === "assistant" && !messageHasVisibleContent(candidate)) {
+      continue;
+    }
+    return candidate;
+  }
+  return null;
+}
+
+/**
  * Identity cache for normalized messages.
  *
  * `normalizeNativeMessage` is pure in its input object, but the transcript

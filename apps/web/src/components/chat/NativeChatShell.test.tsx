@@ -632,4 +632,38 @@ describe("NativeChatShell", () => {
       expect(scrollToBottom).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("previous-message resolution", () => {
+    const makeMessage = (
+      id: string,
+      role: "user" | "assistant",
+      content: string,
+    ): NativeMessage => ({
+      id,
+      role,
+      content,
+      createdAt: "2026-03-21T10:00:00.000Z",
+      parts: role === "assistant" && content ? [{ type: "text", content }] : [],
+    });
+
+    test("passes a resolver that skips empty assistant placeholders", () => {
+      const messages = [
+        makeMessage("user-1", "user", "Question"),
+        makeMessage("assistant-empty", "assistant", ""),
+        makeMessage("assistant-content", "assistant", "Answer"),
+      ];
+      render(<NativeChatShell {...shellProps()} messages={messages} />);
+
+      const resolver = lastVirtualizedMessageListProps
+        ?.resolvePreviousMessage as
+        | ((messages: readonly NativeMessage[], index: number) => NativeMessage | null)
+        | undefined;
+
+      expect(resolver).toBeTypeOf("function");
+      // The content message anchors on the user, not the empty placeholder.
+      expect(resolver?.(messages, 2)).toBe(messages[0]!);
+      // The placeholder itself still sees the user as its predecessor.
+      expect(resolver?.(messages, 1)).toBe(messages[0]!);
+    });
+  });
 });

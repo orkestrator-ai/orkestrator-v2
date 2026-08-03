@@ -1840,6 +1840,11 @@ export const NativeMessage = memo(function NativeMessage({
 
   const hasTextParts = message.parts.some((part) => part.type === "text");
   const hasContent = messageHasVisibleContent(message);
+  // Transcript owners resolve `previousMessage` to the nearest content-bearing
+  // predecessor (see findPreviousNativeMessage), so a `user → empty → content`
+  // block still anchors duration on the user and a `content → empty → content`
+  // block does not repeat attribution. The `previousHasContent` guard below
+  // remains a safety net for direct callers passing the raw predecessor.
   const previousHasContent = previousMessage
     ? messageHasVisibleContent(previousMessage)
     : false;

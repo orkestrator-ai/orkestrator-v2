@@ -666,6 +666,83 @@ describe("MessageShell", () => {
     const contentDiv = container.querySelector(".max-w-3xl") as HTMLElement;
     expect(contentDiv.className).toContain("custom-inner");
   });
+
+  test("hides the assistant footer row entirely when showFooter is false", () => {
+    const { container } = render(
+      <MessageShell
+        isUser={false}
+        authorLabel="Claude"
+        timestampLabel="1:00 PM"
+        showFooter={false}
+      >
+        <p>Content</p>
+      </MessageShell>,
+    );
+
+    expect(container.textContent).toContain("Content");
+    expect(container.textContent).not.toContain("Claude");
+    expect(container.textContent).not.toContain("1:00 PM");
+  });
+
+  test("drops caller-supplied actions together with the hidden footer", () => {
+    render(
+      <MessageShell
+        isUser={false}
+        authorLabel="Claude"
+        timestampLabel="1:00 PM"
+        showFooter={false}
+        actions={<button type="button">Fork</button>}
+      >
+        <p>Content</p>
+      </MessageShell>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
+  });
+
+  test("hides only the author label when showAuthorLabel is false", () => {
+    render(
+      <MessageShell
+        isUser={false}
+        authorLabel="Claude"
+        timestampLabel="1:00 PM · 45s"
+        showAuthorLabel={false}
+      >
+        <p>Content</p>
+      </MessageShell>,
+    );
+
+    expect(screen.queryByText("Claude")).toBeNull();
+    expect(screen.getByText("1:00 PM · 45s")).toBeTruthy();
+  });
+
+  test("keeps the author label and metadata by default", () => {
+    render(
+      <MessageShell isUser={false} authorLabel="Claude" timestampLabel="1:00 PM">
+        <p>Content</p>
+      </MessageShell>,
+    );
+
+    expect(screen.getByText("Claude")).toBeTruthy();
+    expect(screen.getByText("1:00 PM")).toBeTruthy();
+  });
+
+  test("hides the user action row when showFooter is false", () => {
+    render(
+      <MessageShell
+        isUser={true}
+        authorLabel="You"
+        timestampLabel="1:00 PM"
+        showFooter={false}
+        actions={<button type="button">Fork</button>}
+      >
+        <p>Content</p>
+      </MessageShell>,
+    );
+
+    expect(screen.queryByText("1:00 PM")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Fork" })).toBeNull();
+  });
 });
 
 describe("MessageErrorAlert", () => {

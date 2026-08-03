@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createRef, type RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
+import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 // Capture the props passed to Virtuoso so we can assert on them
 let lastVirtuosoProps: Record<string, any> = {};
@@ -159,6 +161,45 @@ describe("VirtualizedMessageList", () => {
 
     expect(prevMessages[0]).toBeNull();
     expect(prevMessages[1]).toEqual({ id: "1", text: "First" });
+  });
+
+  test("hands renderMessage the resolver's predecessor instead of the raw neighbor", () => {
+    const makeMessage = (
+      id: string,
+      role: "user" | "assistant",
+      content: string,
+    ): NativeMessage => ({
+      id,
+      role,
+      content,
+      createdAt: "2026-03-21T10:00:00.000Z",
+      parts: role === "assistant" && content ? [{ type: "text", content }] : [],
+    });
+    const messages = [
+      makeMessage("user-1", "user", "Question"),
+      makeMessage("assistant-empty", "assistant", ""),
+      makeMessage("assistant-content", "assistant", "Answer"),
+    ];
+    const prevMessages: (NativeMessage | null)[] = [];
+
+    render(
+      <VirtualizedMessageList
+        messages={messages}
+        computeItemKey={(_i, msg) => msg.id}
+        resolvePreviousMessage={findPreviousNativeMessage}
+        renderMessage={(_i, msg, prev) => {
+          prevMessages.push(prev);
+          return <span>{msg.id}</span>;
+        }}
+        scrollProps={makeScrollProps()}
+        virtuosoRef={createRef<VirtuosoHandle>()}
+      />
+    );
+
+    // The empty placeholder is skipped: content still anchors on the user.
+    expect(prevMessages[0]).toBeNull();
+    expect(prevMessages[1]).toBe(messages[0]);
+    expect(prevMessages[2]).toBe(messages[0]);
   });
 
   test("renders EmptyPlaceholder when messages array is empty", () => {

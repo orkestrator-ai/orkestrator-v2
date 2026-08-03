@@ -5,6 +5,7 @@ import {
   applyClaudeBackgroundTaskStates,
   dedupeStreamedNativeParts,
   dropEmptyThinkingParts,
+  findPreviousNativeMessage,
   getClaudeSourceMessageId,
   groupNativeAgentActivity,
   groupNativeToolActivity,
@@ -1990,5 +1991,98 @@ describe("messageHasVisibleContent", () => {
         ]),
       ),
     ).toBe(true);
+  });
+
+  test("treats an unknown future part type as visible until the renderer says otherwise", () => {
+    // The switch defaults to visible so a new part type the classifier has not
+    // been taught about cannot silently strip attribution from a rendered row.
+    // Casting keeps this honest about the fallback rather than pretending the
+    // type is a real member of the union.
+    const unknownPart = {
+      type: "future-part",
+      content: "Whatever it renders, it is not nothing",
+    } as unknown as NativeMessage["parts"][number];
+    expect(messageHasVisibleContent(makeMessage([unknownPart]))).toBe(true);
+  });
+});
+
+describe("findPreviousNativeMessage", () => {
+  const assistant = (
+    id: string,
+    parts: NativeMessage["parts"],
+    content = "",
+  ): NativeMessage => ({
+    id,
+    role: "assistant",
+    content,
+    createdAt: "2026-06-18T12:00:00.000Z",
+    parts,
+  });
+  const user = (id: string): NativeMessage => ({
+    id,
+    role: "user",
+    content: "Question",
+    createdAt: "2026-06-18T11:59:00.000Z",
+    parts: [],
+  });
+
+  test("returns null for the first message", () => {
+    expect(findPreviousNativeMessage([assistant("a", [])], 0)).toBeNull();
+  });
+
+  test("returns the immediate predecessor when it carries content", () => {
+    const messages = [
+      assistant("a", [{ type: "text", content: "Answer" }]),
+      assistant("b", [{ type: "text", content: "More" }]),
+    ];
+    expect(findPreviousNativeMessage(messages, 1)).toBe(messages[0]!);
+  });
+
+  test("skips empty assistant messages so content anchors on the user", () => {
+    const messages = [
+      user("u"),
+      assistant("empty", []),
+      assistant("content", [{ type: "text", content: "Answer" }]),
+    ];
+    expect(findPreviousNativeMessage(messages, 2)).toBe(messages[0]!);
+  });
+
+  test("skips a run of empty assistant messages", () => {
+    const messages = [
+      user("u"),
+      assistant("empty-1", []),
+      assistant("empty-2", []),
+      assistant("content", [{ type: "text", content: "Answer" }]),
+    ];
+    expect(findPreviousNativeMessage(messages, 3)).toBe(messages[0]!);
+  });
+
+  test("skips an empty message interleaved between two content messages", () => {
+    const messages = [
+      assistant("content-1", [{ type: "text", content: "First" }]),
+      assistant("empty", []),
+      assistant("content-2", [{ type: "text", content: "Second" }]),
+    ];
+    expect(findPreviousNativeMessage(messages, 2)).toBe(messages[0]!);
+  });
+
+  test("returns null when only empty assistant messages precede", () => {
+    const messages = [
+      assistant("empty-1", []),
+      assistant("empty-2", []),
+    ];
+    expect(findPreviousNativeMessage(messages, 1)).toBeNull();
+  });
+
+  test("returns non-assistant predecessors even when they are empty", () => {
+    const systemMessage: NativeMessage = {
+      id: "sys",
+      role: "system",
+      content: "",
+      createdAt: "2026-06-18T12:00:00.000Z",
+      parts: [],
+    };
+    const messages = [systemMessage, assistant("content", [])];
+    expect(findPreviousNativeMessage(messages, 1)).toBe(systemMessage);
   });
 });

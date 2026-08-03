@@ -161,6 +161,13 @@ function imageSupportedBySelectedModel(
   return model.supportsImageInput;
 }
 
+function showImageUnsupportedToast(): void {
+  toast.error("Model cannot read images", {
+    description:
+      "The selected model does not support image input. Switch to a vision-capable model or remove the image.",
+  });
+}
+
 export function OpenCodeComposeBar({
   environmentId,
   tabId,
@@ -385,10 +392,7 @@ export function OpenCodeComposeBar({
         return;
       }
       if (!imageSupportedBySelectedModel(attachment, models, selectedModel)) {
-        toast.error("Model cannot read images", {
-          description:
-            "The selected model does not support image input. Switch to a vision-capable model or remove the image.",
-        });
+        showImageUnsupportedToast();
         return;
       }
       pendingAttachmentSnapshotsRef.current += 1;
@@ -448,18 +452,18 @@ export function OpenCodeComposeBar({
     inputContainerRef,
     containerId: containerId ?? null,
     worktreePath,
+    // The gate runs in the hook before the pasted image is written to disk, so
+    // a refused image cannot orphan a file in the environment. `onAttach` is
+    // then free to add unconditionally.
+    canAttachImage: useCallback(
+      (attachment: { type: string }) =>
+        imageSupportedBySelectedModel(attachment, models, selectedModel),
+      [models, selectedModel],
+    ),
+    onImageRejected: useCallback(showImageUnsupportedToast, []),
     onAttach: useCallback(
-      (attachment) => {
-        if (!imageSupportedBySelectedModel(attachment, models, selectedModel)) {
-          toast.error("Model cannot read images", {
-            description:
-              "The selected model does not support image input. Switch to a vision-capable model or remove the image.",
-          });
-          return;
-        }
-        addAttachment(sessionKey, attachment);
-      },
-      [addAttachment, models, selectedModel, sessionKey],
+      (attachment) => addAttachment(sessionKey, attachment),
+      [addAttachment, sessionKey],
     ),
     logLabel: "OpenCodeComposeBar",
   });

@@ -38,6 +38,15 @@ interface UseNativeComposeBarPasteOptions {
   worktreePath?: string | null;
   /** Called once the image has been saved and an attachment is ready to add */
   onAttach: (attachment: PastedImageAttachment) => void;
+  /**
+   * Optional gate evaluated before the pasted image is written to disk. A
+   * `false` return refuses the paste without writing the file, so a refused
+   * image cannot orphan a file in the environment, and fires `onImageRejected`
+   * instead of `onAttach`.
+   */
+  canAttachImage?: (attachment: PastedImageAttachment) => boolean;
+  /** Fired when `canAttachImage` refuses the paste, so the caller can explain. */
+  onImageRejected?: () => void;
   /** Log prefix for unexpected errors, e.g. "ClaudeComposeBar" */
   logLabel: string;
 }
@@ -150,6 +159,8 @@ export function useNativeComposeBarPaste({
   containerId,
   worktreePath,
   onAttach,
+  canAttachImage,
+  onImageRejected,
   logLabel,
 }: UseNativeComposeBarPasteOptions): void {
   useEffect(() => {
@@ -214,6 +225,22 @@ export function useNativeComposeBarPaste({
 
         const filename = generateImageFilename();
         const filePath = `.orkestrator/clipboard/${filename}`;
+        const attachment: PastedImageAttachment = {
+          id: Math.random().toString(36).substring(2, 9),
+          type: "image",
+          path: containerId
+            ? `/workspace/${filePath}`
+            : worktreePath
+              ? `${worktreePath.replace(/\/+$/, "")}/${filePath}`
+              : filePath,
+          previewUrl: dataUrl,
+          name: filename,
+        };
+
+        if (canAttachImage && !canAttachImage(attachment)) {
+          onImageRejected?.();
+          return;
+        }
 
         let savedPath: string | null = null;
         if (containerId) {
@@ -230,13 +257,7 @@ export function useNativeComposeBarPaste({
           return;
         }
 
-        onAttach({
-          id: Math.random().toString(36).substring(2, 9),
-          type: "image",
-          path: savedPath,
-          previewUrl: dataUrl,
-          name: filename,
-        });
+        onAttach({ ...attachment, path: savedPath });
       } catch (error) {
         console.error(`[${logLabel}] Unexpected paste error:`, error);
       }
@@ -246,5 +267,5 @@ export function useNativeComposeBarPaste({
     return () => {
       document.removeEventListener("paste", handlePaste, { capture: true });
     };
-  }, [inputContainerRef, containerId, worktreePath, onAttach, logLabel]);
+  }, [inputContainerRef, containerId, worktreePath, onAttach, canAttachImage, onImageRejected, logLabel]);
 }

@@ -475,6 +475,195 @@ describe("opencode-client getModelsWithDefaults", () => {
     expect(result.defaults.modelId).toBe("openai/gpt-5-codex");
   });
 
+  test("maps capabilities.input.image onto models that report it", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              {
+                id: "deepseek",
+                models: {
+                  "deepseek-v4-flash": {
+                    id: "deepseek-v4-flash",
+                    name: "DeepSeek V4 Flash",
+                    capabilities: {
+                      input: { image: false },
+                    },
+                  },
+                  "deepseek-v4": {
+                    id: "deepseek-v4",
+                    name: "DeepSeek V4",
+                    capabilities: {
+                      input: { image: true },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        }),
+      },
+      config: {
+        providers: async () => ({ data: { providers: {}, default: {} } }),
+      },
+    } as unknown as OpencodeClient;
+
+    const result = await getModelsWithDefaults(client);
+
+    expect(result.models).toEqual([
+      {
+        id: "deepseek/deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        provider: "deepseek",
+        supportsImageInput: false,
+      },
+      {
+        id: "deepseek/deepseek-v4",
+        name: "DeepSeek V4",
+        provider: "deepseek",
+        supportsImageInput: true,
+      },
+    ]);
+  });
+
+  test("leaves supportsImageInput undefined when the catalog omits the capability", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              {
+                id: "deepseek",
+                models: {
+                  "deepseek-v4-flash": {
+                    id: "deepseek-v4-flash",
+                    name: "DeepSeek V4 Flash",
+                  },
+                  "deepseek-v4": {
+                    id: "deepseek-v4",
+                    name: "DeepSeek V4",
+                    capabilities: {
+                      input: {},
+                    },
+                  },
+                  "deepseek-v3": {
+                    id: "deepseek-v3",
+                    name: "DeepSeek V3",
+                    capabilities: {
+                      input: { image: "yes" },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        }),
+      },
+      config: {
+        providers: async () => ({ data: { providers: {}, default: {} } }),
+      },
+    } as unknown as OpencodeClient;
+
+    const result = await getModelsWithDefaults(client);
+    const byId = new Map(result.models.map((model) => [model.id, model]));
+
+    // Missing field, empty input map, and a non-boolean value all stay
+    // `undefined` so the compose bar lets the attach through rather than
+    // blocking on data the server did not actually report.
+    for (const id of ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4", "deepseek/deepseek-v3"]) {
+      expect(byId.get(id)?.supportsImageInput).toBeUndefined();
+    }
+  });
+
+  test("maps capabilities.input.image through the config.providers fallback", async () => {
+    const client = {
+      ...noProviderCatalog,
+      config: {
+        providers: async () => ({
+          data: {
+            providers: [
+              {
+                id: "deepseek",
+                models: {
+                  "deepseek-v4": {
+                    id: "deepseek-v4",
+                    name: "DeepSeek V4",
+                    capabilities: {
+                      input: { image: true },
+                    },
+                  },
+                },
+              },
+            ],
+            default: {},
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    const result = await getModelsWithDefaults(client);
+
+    expect(result.models).toEqual([
+      {
+        id: "deepseek/deepseek-v4",
+        name: "DeepSeek V4",
+        provider: "deepseek",
+        supportsImageInput: true,
+      },
+    ]);
+  });
+
+  test("keeps image capability alongside variants and cost metadata", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              {
+                id: "openai",
+                models: {
+                  "gpt-5": {
+                    id: "gpt-5",
+                    name: "GPT-5",
+                    cost: { input: 1, output: 2 },
+                    limit: { context: 400000 },
+                    capabilities: { input: { image: true } },
+                    variants: { low: {}, high: {}, retired: { disabled: true } },
+                  },
+                  "gpt-5-text": {
+                    id: "gpt-5-text",
+                    name: "GPT-5 Text",
+                    capabilities: { input: { image: false } },
+                    variants: { high: {} },
+                  },
+                },
+              },
+            ],
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    const result = await getModelsWithDefaults(client);
+    const byId = new Map(result.models.map((model) => [model.id, model]));
+
+    // Variant filtering runs after the capability read, so a variant-bearing
+    // model must not lose supportsImageInput on the way through.
+    expect(byId.get("openai/gpt-5")).toEqual({
+      id: "openai/gpt-5",
+      name: "GPT-5",
+      provider: "openai",
+      variants: ["low", "high"],
+      inputCost: 1,
+      outputCost: 2,
+      contextWindow: 400000,
+      supportsImageInput: true,
+    });
+    expect(byId.get("openai/gpt-5-text")?.supportsImageInput).toBe(false);
+    expect(byId.get("openai/gpt-5-text")?.variants).toEqual(["high"]);
+  });
+
   test("filters disabled variants and orders enabled variants consistently", async () => {
     const client = {
       provider: {

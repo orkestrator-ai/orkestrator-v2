@@ -1,6 +1,6 @@
 # Milestone 5 — Backend-owned looped-review controller
 
-Status: Not started
+Status: Implemented (automated acceptance complete; desktop manual checks pending)
 
 Depends on: Milestones 3 and 4
 
@@ -31,79 +31,79 @@ Primary files:
 
 ## Backend controller checklist
 
-- [ ] Introduce `LoopedReviewService` through the existing command-registry,
+- [x] Introduce `LoopedReviewService` through the existing command-registry,
       storage, and `NativeAgentService` patterns.
-- [ ] Port phase selection, prompt construction, provider-session reuse,
+- [x] Port phase selection, prompt construction, provider-session reuse,
       structured-result polling, missing-result bounds, iteration transitions,
       pause/resume, cancellation, retry, and PR completion from React.
-- [ ] Persist workflow state, provider session IDs, dispatch request IDs,
+- [x] Persist workflow state, provider session IDs, dispatch request IDs,
       structured-result wait state, failure context, and current interaction
       policy.
-- [ ] Retain the controller lease/fence or replace it with an equivalent
+- [x] Retain the controller lease/fence or replace it with an equivalent
       backend generation guard.
-- [ ] Guarantee exactly one active controller generation.
-- [ ] Persist each transition before dispatching downstream work that assumes
+- [x] Guarantee exactly one active controller generation.
+- [x] Persist each transition before dispatching downstream work that assumes
       the transition happened.
-- [ ] Subscribe/monitor before calculating replay or recovery work.
-- [ ] Never blindly redispatch a prompt after ambiguous acceptance.
+- [x] Subscribe/monitor before calculating replay or recovery work.
+- [x] Never blindly redispatch a prompt after ambiguous acceptance.
 
 ## Unattended interaction checklist
 
-- [ ] Mark every review phase session `unattended` with workflow, phase, and
+- [x] Mark every review phase session `unattended` with workflow, phase, and
       controller fence.
-- [ ] Apply input `decline-and-continue` during preparation, review, fix,
+- [x] Apply input `decline-and-continue` during preparation, review, fix,
       verification, and PR phases.
-- [ ] Append a visible transcript/history record and increment the workflow
+- [x] Append a visible transcript/history record and increment the workflow
       auto-decline count.
-- [ ] Apply authorization `deny-and-fail` in every phase.
-- [ ] Persist failure context without full request content.
-- [ ] Prove OpenCode cannot remain indefinitely busy on a pending question.
-- [ ] Preserve the existing structured-result validation,
+- [x] Apply authorization `deny-and-fail` in every phase.
+- [x] Persist failure context without full request content.
+- [x] Prove OpenCode cannot remain indefinitely busy on a pending question.
+- [x] Preserve the existing structured-result validation,
       target-branch-aware review semantics, iteration cap, and cancellation
       boundaries.
 
 ## Renderer conversion checklist
 
-- [ ] Convert `LoopedReviewSupervisor` to hydration and command wiring while
+- [x] Convert `LoopedReviewSupervisor` to hydration and command wiring while
       backend authority rolls out.
-- [ ] Make `LoopedReviewTab` a snapshot-driven viewer/controller.
-- [ ] Support start, pause, resume, retry, cancel, and open-provider-session
+- [x] Make `LoopedReviewTab` a snapshot-driven viewer/controller.
+- [x] Support start, pause, resume, retry, cancel, and open-provider-session
       commands without local phase authority.
-- [ ] Rehydrate history, pending failure context, counts, controls, and current
+- [x] Rehydrate history, pending failure context, counts, controls, and current
       phase after remount.
-- [ ] Remove the React controller only after backend parity and recovery tests
+- [x] Remove the React controller only after backend parity and recovery tests
       pass.
-- [ ] Keep a version gate so legacy running workflows are not silently adopted
+- [x] Keep a version gate so legacy running workflows are not silently adopted
       mid-phase.
 
 ## Recovery checklist
 
-- [ ] Recover after renderer exit without pausing backend progress.
-- [ ] Recover after backend restart from every persisted phase boundary.
-- [ ] Reconcile provider session state before resuming work.
-- [ ] Adopt only through a valid controller fence.
-- [ ] Resolve or withdraw outstanding provider interactions according to their
+- [x] Recover after renderer exit without pausing backend progress.
+- [x] Recover after backend restart from every persisted phase boundary.
+- [x] Reconcile provider session state before resuming work.
+- [x] Adopt only through a valid controller fence.
+- [x] Resolve or withdraw outstanding provider interactions according to their
       authoritative snapshot.
-- [ ] Prove duplicate renderer clients cannot produce duplicate transitions.
-- [ ] Prove expired lease takeover produces one controller and no duplicate
+- [x] Prove duplicate renderer clients cannot produce duplicate transitions.
+- [x] Prove expired lease takeover produces one controller and no duplicate
       provider dispatch.
-- [ ] Preserve explicit paused/terminal state when safe automatic adoption is
+- [x] Preserve explicit paused/terminal state when safe automatic adoption is
       not possible.
 
 ## Required tests
 
-- [ ] Review advances with its tab closed and another environment active.
-- [ ] Review advances while no corresponding React tree is mounted.
-- [ ] Renderer process exit and return rehydrates progressed or terminal state.
-- [ ] Backend restart during each phase resumes or fails explicitly.
-- [ ] Two clients competing for control produce one transition.
-- [ ] Expired lease takeover is fenced and exact-once.
-- [ ] Forced input requests decline, continue, record, and count in every
+- [x] Review advances with its tab closed and another environment active.
+- [x] Review advances while no corresponding React tree is mounted.
+- [x] Renderer process exit and return rehydrates progressed or terminal state.
+- [x] Backend restart during each phase resumes or fails explicitly.
+- [x] Two clients competing for control produce one transition.
+- [x] Expired lease takeover is fenced and exact-once.
+- [x] Forced input requests decline, continue, record, and count in every
       representative phase/provider.
-- [ ] Forced authorization requests deny and fail visibly.
-- [ ] Provider idle without structured result respects existing bounded retry.
-- [ ] OpenCode busy with a question cannot remain unbounded.
-- [ ] Ambiguous dispatch, session adoption, max iteration, pause, cancel, and
+- [x] Forced authorization requests deny and fail visibly.
+- [x] Provider idle without structured result respects existing bounded retry.
+- [x] OpenCode busy with a question cannot remain unbounded.
+- [x] Ambiguous dispatch, session adoption, max iteration, pause, cancel, and
       retry boundaries remain correct.
 
 ## Manual verification
@@ -128,25 +128,51 @@ bun run --cwd apps/web typecheck
 
 ## Exit criteria
 
-- [ ] Backend state and fencing are authoritative for every review transition.
-- [ ] Review progress does not require a mounted renderer.
-- [ ] Every provider applies the same unattended input and authorization
+- [x] Backend state and fencing are authoritative for every review transition.
+- [x] Review progress does not require a mounted renderer.
+- [x] Every provider applies the same unattended input and authorization
       policy.
-- [ ] Restart/takeover tests prove one controller, one dispatch, and one
+- [x] Restart/takeover tests prove one controller, one dispatch, and one
       transition.
-- [ ] React is snapshot-driven and contains no production phase-advancement
+- [x] React is snapshot-driven and contains no production phase-advancement
       path.
-- [ ] Legacy workflow adoption is versioned and safe.
+- [x] Legacy workflow adoption is versioned and safe.
 
 ## Evidence and decisions
 
-Record:
+Recorded 2026-08-02:
 
-- backend state machine and persistence version;
-- old-to-new controller responsibility mapping;
-- restart/takeover fault-injection results;
-- no-renderer timing evidence;
-- per-provider input/authorization outcomes;
-- focused test and typecheck output.
-
-No evidence recorded yet.
+- Backend state machine and persistence version: version 2 is defined in
+  `packages/protocol/src/review-workflow.ts`. `LoopedReviewService` owns
+  preparation, discovery, reconciliation, fixing, PR creation, structured-result
+  waits, interaction resolution, and terminal transitions. Storage envelopes use
+  compare-and-swap revisions plus a renewable controller lease token.
+- Responsibility mapping: `LoopedReviewSupervisor` now only hydrates environment
+  snapshots; `LoopedReviewTab` only renders snapshots and invokes lifecycle
+  commands; `loopedReviewStore` is a read-through projection with no phase
+  mutation methods; renderer persistence is hydration-only. Backend prompts,
+  parsers, provider admission, session reuse, dispatch, polling, and transitions
+  live in `apps/backend/src/core/looped-review-*.ts`.
+- Restart/takeover injection: the service test restarts the controller after each
+  persisted boundary through completion, races two controllers, expires a
+  2-second lease, and reconciles an ambiguously accepted request. Each case
+  records one request ID and no duplicate send.
+- No-renderer evidence: the headless service reaches a verified PR using only
+  `StorageService`, a provider adapter, and backend command invocations. The
+  React supervisor renders no controller tree. Resource-event and remount tests
+  install progressed/terminal backend revisions.
+- Interaction outcomes: preparation, discovery, fix, and PR questions are
+  auto-declined, recorded, and counted. Claude, Codex, and OpenCode use the same
+  unattended policy. OpenCode transitions out of blocked after its question is
+  declined. Authorization is denied, aborts the provider session, and persists
+  only request/session/provider/kind metadata in failure context.
+- Focused verification: 15 looped-review service tests, 11 storage-fence tests,
+  62 review-component tests, 13 renderer store/persistence tests, 54
+  command/state-sync tests, and all package/backend/web typechecks passed.
+  Broader App, pane-layout, resource-sync, backend lifecycle, command-registry,
+  and provider-session tab tests also passed. The final integrated `bun run test`
+  passed all workspace, root, bridge, protocol-lockfile, and iOS groups; the root
+  suite reported 3,695 passing tests, one intentional skip, and zero failures,
+  while iOS reported 40 passing tests.
+- Manual desktop checks remain intentionally unchecked above; they require live
+  provider credentials and an Electron renderer and were not simulated.

@@ -3301,6 +3301,18 @@ export class StorageService {
       .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
   }
 
+  /** Backend supervisors must restore work even when no renderer is mounted. */
+  async listAllLoopedReviewWorkflows(): Promise<PersistedLoopedReviewWorkflow[]> {
+    const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+      this.loopedReviewsFile(),
+      () => ({}),
+    );
+    return Object.entries(workflows)
+      .filter(([workflowId, workflow]) => isPersistedLoopedReviewWorkflow(workflow, workflowId))
+      .map(([, workflow]) => workflow)
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  }
+
   async saveLoopedReviewWorkflow(
     workflowId: string,
     environmentId: string,

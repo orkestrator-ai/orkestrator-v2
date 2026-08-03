@@ -20,6 +20,7 @@ import {
   useLoopedReviewStore,
   type LoopedReviewWorkflow,
 } from "@/stores/loopedReviewStore";
+import { loopedReviewFixture } from "@/test/looped-review-fixture";
 import type { AppConfig, Environment } from "@/types";
 import { PANE_LAYOUT_VERSION } from "@/types/paneLayout";
 import { mockToastError } from "../../../tests/mocks/sonner";
@@ -606,13 +607,13 @@ describe("App background processing mounts", () => {
       selectedProjectId: null,
       selectedEnvironmentId: null,
     });
-    useLoopedReviewStore.getState().createWorkflow({
+    useLoopedReviewStore.getState().replaceWorkflow(loopedReviewFixture({
       environmentId: "env-looped",
       projectId: "project-looped",
       agent: "codex",
       model: "gpt-5.4",
       targetBranch: "main",
-    });
+    }));
 
     render(<App />);
 
@@ -632,21 +633,21 @@ describe("App background processing mounts", () => {
     expect(screen.queryByTestId("looped-review-supervisor")).toBeNull();
     expect(mockLoopedReviewSupervisorRender).not.toHaveBeenCalled();
 
-    let workflowId = "";
+    const workflow = loopedReviewFixture({
+      environmentId: "env-looped",
+      projectId: "project-looped",
+      agent: "codex",
+      model: "gpt-5.4",
+      targetBranch: "main",
+    });
     act(() => {
-      workflowId = useLoopedReviewStore.getState().createWorkflow({
-        environmentId: "env-looped",
-        projectId: "project-looped",
-        agent: "codex",
-        model: "gpt-5.4",
-        targetBranch: "main",
-      });
+      useLoopedReviewStore.getState().replaceWorkflow(workflow);
     });
 
     expect(await screen.findByTestId("looped-review-supervisor")).toBeTruthy();
 
     act(() => {
-      useLoopedReviewStore.getState().removeWorkflow(workflowId);
+      useLoopedReviewStore.getState().removeWorkflow(workflow.id);
     });
 
     await waitFor(() => {
@@ -802,14 +803,14 @@ describe("App background processing mounts", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
     });
-    const workflowId = useLoopedReviewStore.getState().createWorkflow({
+    const workflow = loopedReviewFixture({
       environmentId: background.id,
       projectId: background.projectId,
       agent: "codex",
       model: "gpt-5.4",
       targetBranch: "main",
     });
-    const workflow = useLoopedReviewStore.getState().workflows.get(workflowId)!;
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
     useLoopedReviewStore.setState({ workflows: new Map() });
     mockListLoopedReviewWorkflows.mockImplementation(async (environmentId: string) =>
       environmentId === background.id
@@ -827,7 +828,7 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(useLoopedReviewStore.getState().workflows.get(workflowId))
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id))
         .toMatchObject({ backendRevision: 2, phase: "preparing" });
       expect(screen.getByTestId("terminal-env-looped")).toBeTruthy();
     });

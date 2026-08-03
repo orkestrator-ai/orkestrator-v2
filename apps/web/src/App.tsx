@@ -32,7 +32,6 @@ import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import {
   hydrateLoopedReviewWorkflowsForEnvironment,
-  startLoopedReviewPersistence,
 } from "@/lib/looped-review-persistence";
 import {
   hydrateBuildPipelinesForProject,
@@ -103,7 +102,6 @@ function App() {
   useEffect(() => startResourceSync({ loadManifest: getResourceRevisionManifest }), []);
   useEffect(() => startStoreResourceSync(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
-  useEffect(() => startLoopedReviewPersistence(), []);
   useEffect(() => {
     void migrateLegacyBuildPipelines().catch((error) => {
       // Keep the legacy key intact so the next launch can retry after a

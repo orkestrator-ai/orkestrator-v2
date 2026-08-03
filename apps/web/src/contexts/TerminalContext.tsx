@@ -41,6 +41,8 @@ export interface CreateTabOptions {
   initialUrl?: string;
   /** Existing authoritative workflow opened by a looped-review tab. */
   loopedReviewId?: string;
+  /** Existing native provider session opened from a backend-owned workflow. */
+  resumeSessionId?: string;
 }
 
 // Options for creating a file tab

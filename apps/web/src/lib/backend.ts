@@ -11,6 +11,10 @@ import type {
   StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import type {
+  LoopedReviewWorkflow as BackendLoopedReviewWorkflow,
+  StartLoopedReviewInput,
+} from "@orkestrator/protocol/review-workflow";
+import type {
   Project,
   Environment,
   EnvironmentType,
@@ -1897,6 +1901,38 @@ export async function deletePaneLayout(environmentId: string): Promise<void> {
 }
 
 // --- Looped Code Review Workflow Commands ---
+
+export async function startLoopedReview(
+  input: StartLoopedReviewInput,
+): Promise<BackendLoopedReviewWorkflow> {
+  return invoke<BackendLoopedReviewWorkflow>("start_looped_review", { ...input });
+}
+
+export async function pauseLoopedReview(workflowId: string): Promise<BackendLoopedReviewWorkflow> {
+  return invoke<BackendLoopedReviewWorkflow>("pause_looped_review", { workflowId });
+}
+
+export async function resumeLoopedReview(workflowId: string): Promise<BackendLoopedReviewWorkflow> {
+  return invoke<BackendLoopedReviewWorkflow>("resume_looped_review", { workflowId });
+}
+
+export async function retryLoopedReview(workflowId: string): Promise<BackendLoopedReviewWorkflow> {
+  return invoke<BackendLoopedReviewWorkflow>("retry_looped_review", { workflowId });
+}
+
+export async function cancelLoopedReview(workflowId: string): Promise<BackendLoopedReviewWorkflow> {
+  return invoke<BackendLoopedReviewWorkflow>("cancel_looped_review", { workflowId });
+}
+
+export async function getLoopedReviewProviderSession(
+  workflowId: string,
+  sessionId?: string,
+): Promise<{ providerSessionId: string } | null> {
+  return invoke("get_looped_review_provider_session", {
+    workflowId,
+    ...(sessionId ? { sessionId } : {}),
+  });
+}
 
 export async function getLoopedReviewWorkflow<T = unknown>(
   workflowId: string,

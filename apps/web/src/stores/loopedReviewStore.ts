@@ -10,12 +10,18 @@ import {
 } from "@orkestrator/protocol/structured-review";
 import {
   REVIEW_WORKFLOW_FAILURE_KINDS,
+  LOOPED_REVIEW_WORKFLOW_VERSION,
   type ReviewWorkflowFailureKind,
 } from "@orkestrator/protocol/review-workflow";
+import type {
+  AgentInteractionPolicy,
+  AgentInteractionWorkflowSummary,
+} from "@orkestrator/protocol/agent-interactions";
+import { isAgentInteractionPolicy } from "@orkestrator/protocol/agent-interactions";
 import type { DefaultAgent } from "@/types";
 import { createUuid } from "@/lib/uuid";
 
-export const LOOPED_REVIEW_WORKFLOW_VERSION = 1;
+export { LOOPED_REVIEW_WORKFLOW_VERSION };
 export const LOOPED_REVIEW_DEFAULT_ALLOWANCE = 6;
 export const LOOPED_REVIEW_MIN_ALLOWANCE = 1;
 export const LOOPED_REVIEW_MAX_ALLOWANCE = 10;
@@ -102,6 +108,12 @@ export interface LoopedReviewSession {
   round: number;
   pass?: number;
   providerSessionId: string;
+  sessionKey?: string;
+  origin?: "looped-review";
+  interactionPolicy?: AgentInteractionPolicy;
+  interactionSummary?: AgentInteractionWorkflowSummary;
+  interactionTranscript?: unknown[];
+  autoDeclineCount?: number;
   requestIds: string[];
   status: "running" | "idle" | "error" | "cancelled";
   startedAt: string;
@@ -169,7 +181,7 @@ export interface LoopedReviewDispatch {
   sessionId: string;
   phase: ActiveLoopedReviewPhase;
   kind: "prepare" | "discover" | "reconcile" | "fix" | "pr";
-  state: "prepared" | "sent";
+  state: "prepared" | "dispatching" | "sent";
   createdAt: string;
 }
 
@@ -188,6 +200,8 @@ export interface LoopedReviewFailure {
 
 export interface LoopedReviewWorkflow {
   version: typeof LOOPED_REVIEW_WORKFLOW_VERSION;
+  controller?: "backend";
+  controllerFence?: string;
   id: string;
   environmentId: string;
   projectId: string;
@@ -209,6 +223,11 @@ export interface LoopedReviewWorkflow {
   sessions: LoopedReviewSession[];
   activeSessionId?: string;
   dispatch?: LoopedReviewDispatch;
+  structuredWait?: { dispatchId: string; startedAt: string; idlePolls: number };
+  pendingInteractionResolution?: unknown;
+  interactionSummary?: AgentInteractionWorkflowSummary;
+  autoDeclineCount?: number;
+  interactionPolicy?: AgentInteractionPolicy;
   failure?: LoopedReviewFailure;
   pr: {
     status: "pending" | "running" | "failed" | "created";
@@ -536,10 +555,6 @@ function isLoopedReviewReconciliation(
   }
 }
 
-function emptyPool(): ReviewFindingPool {
-  return { issues: [], coverageGaps: [] };
-}
-
 export function normalizeReviewAllowance(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value)) {
     return LOOPED_REVIEW_DEFAULT_ALLOWANCE;
@@ -631,6 +646,7 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
     && allowance <= LOOPED_REVIEW_MAX_ALLOWANCE;
 
   return workflow.version === LOOPED_REVIEW_WORKFLOW_VERSION
+    && workflow.controller === "backend"
     && typeof workflow.id === "string"
     && typeof workflow.environmentId === "string"
     && typeof workflow.projectId === "string"
@@ -712,7 +728,12 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
     && workflow.sessions.every((session) =>
       !!session
       && typeof session.id === "string"
+      && typeof session.sessionKey === "string"
+      && session.sessionKey.length > 0
       && typeof session.providerSessionId === "string"
+      && session.origin === "looped-review"
+      && isAgentInteractionPolicy(session.interactionPolicy)
+      && session.interactionPolicy.mode === "unattended"
       && isOneOf(session.phase, ["preparation", "discovery", "fix", "pr"])
       && isIntegerAtLeast(session.round, 1)
       && (
@@ -728,6 +749,17 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
       && (session.error === undefined || typeof session.error === "string")
       && Array.isArray(session.requestIds)
       && session.requestIds.every((requestId) => typeof requestId === "string")
+    )
+    && isAgentInteractionPolicy(workflow.interactionPolicy)
+    && workflow.interactionPolicy.mode === "unattended"
+    && (
+      workflow.structuredWait === undefined
+      || (
+        isRecord(workflow.structuredWait)
+        && typeof workflow.structuredWait.dispatchId === "string"
+        && typeof workflow.structuredWait.startedAt === "string"
+        && isIntegerAtLeast(workflow.structuredWait.idlePolls, 0)
+      )
     )
     && (
       workflow.dispatch === undefined
@@ -765,6 +797,7 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
         && typeof workflow.dispatch.createdAt === "string"
         && (
           workflow.dispatch.state === "prepared"
+          || workflow.dispatch.state === "dispatching"
           || workflow.dispatch.state === "sent"
         )
       )
@@ -1015,644 +1048,35 @@ export function assertReconciliationAccountsForReport(
 
 interface LoopedReviewState {
   workflows: Map<string, LoopedReviewWorkflow>;
-  createWorkflow: (input: {
-    environmentId: string;
-    projectId: string;
-    agent: DefaultAgent;
-    model: string;
-    reasoningEffort?: string;
-    targetBranch: string;
-    reviewInstruction?: string;
-    context?: ReviewPackageContext;
-    allowance?: number;
-  }) => string;
+  /** Install an authoritative backend snapshot. */
   replaceWorkflow: (workflow: LoopedReviewWorkflow) => void;
+  /** Remove a projection after the backend resource or environment is deleted. */
   removeWorkflow: (workflowId: string) => void;
-  setBackendRevision: (workflowId: string, revision: number) => void;
-  setPhase: (workflowId: string, phase: ActiveLoopedReviewPhase) => void;
-  addSession: (
-    workflowId: string,
-    session: Omit<LoopedReviewSession, "id" | "requestIds" | "startedAt" | "status"> & {
-      id?: string;
-    },
-  ) => string | undefined;
-  updateSession: (
-    workflowId: string,
-    sessionId: string,
-    updates: Partial<LoopedReviewSession>,
-  ) => void;
-  setPreparedPackage: (workflowId: string, reviewPackage: ReviewPackage) => void;
-  startPass: (workflowId: string, sessionId: string) => void;
-  recordReport: (
-    workflowId: string,
-    sessionId: string,
-    report: StructuredReviewReport,
-  ) => void;
-  recordReconciliation: (
-    workflowId: string,
-    sessionId: string,
-    reconciliation: LoopedReviewReconciliation,
-  ) => ReconciliationApplyResult | undefined;
-  completeFix: (
-    workflowId: string,
-    fixSessionId: string,
-    outcome: ReviewFixOutcome,
-  ) => void;
-  claimDispatch: (
-    workflowId: string,
-    dispatch: Omit<LoopedReviewDispatch, "state" | "createdAt">,
-  ) => boolean;
-  markDispatchSent: (workflowId: string, dispatchId: string) => void;
-  clearDispatch: (workflowId: string, dispatchId: string) => void;
-  failWorkflow: (
-    workflowId: string,
-    failure: Omit<LoopedReviewFailure, "occurredAt">,
-  ) => void;
-  pauseWorkflow: (workflowId: string) => void;
-  resumeWorkflow: (workflowId: string) => void;
-  retryWorkflow: (workflowId: string) => void;
-  cancelWorkflow: (workflowId: string) => void;
-  startPr: (workflowId: string, sessionId: string) => void;
-  completePr: (workflowId: string, url: string) => void;
 }
 
-function updateWorkflow(
-  state: LoopedReviewState,
-  workflowId: string,
-  updater: (workflow: LoopedReviewWorkflow) => LoopedReviewWorkflow,
-): Partial<LoopedReviewState> | LoopedReviewState {
-  const workflow = state.workflows.get(workflowId);
-  if (!workflow) return state;
-  const next = updater(workflow);
-  if (next === workflow) return state;
-  const workflows = new Map(state.workflows);
-  workflows.set(workflowId, { ...next, updatedAt: new Date().toISOString() });
-  return { workflows };
-}
+/**
+ * Read-through projection of backend-owned workflows.
+ *
+ * Deliberately exposes no phase mutation methods: renderer commands go to the
+ * backend and resource-change hydration installs the resulting snapshot.
+ */
+export const useLoopedReviewStore = create<LoopedReviewState>()((set) => ({
+  workflows: new Map(),
 
-export const useLoopedReviewStore = create<LoopedReviewState>()((set, get) => ({
-    workflows: new Map(),
+  replaceWorkflow: (workflow) =>
+    set((state) => {
+      const existing = state.workflows.get(workflow.id);
+      if (existing && existing.backendRevision > workflow.backendRevision) return state;
+      const workflows = new Map(state.workflows);
+      workflows.set(workflow.id, workflow);
+      return { workflows };
+    }),
 
-    createWorkflow: (input) => {
-      const id = createUuid();
-      const now = new Date().toISOString();
-      const allowance = normalizeReviewAllowance(input.allowance);
-      const workflow: LoopedReviewWorkflow = {
-        version: LOOPED_REVIEW_WORKFLOW_VERSION,
-        id,
-        environmentId: input.environmentId,
-        projectId: input.projectId,
-        agent: input.agent,
-        model: input.model,
-        reasoningEffort: input.reasoningEffort,
-        targetBranch: input.targetBranch,
-        reviewInstruction: input.reviewInstruction,
-        context: input.context,
-        startingAllowance: allowance,
-        currentAllowance: allowance,
-        currentRound: 1,
-        currentPass: 0,
-        phase: "preparing",
-        rounds: [{
-          round: 1,
-          allowance,
-          status: "preparing",
-          passes: [],
-          startedAt: now,
-        }],
-        activePool: emptyPool(),
-        archivedPools: [],
-        sessions: [],
-        pr: { status: "pending" },
-        createdAt: now,
-        updatedAt: now,
-        backendRevision: 0,
-      };
-      set((state) => {
-        const workflows = new Map(state.workflows);
-        workflows.set(id, workflow);
-        return { workflows };
-      });
-      return id;
-    },
-
-    replaceWorkflow: (workflow) =>
-      set((state) => {
-        const workflows = new Map(state.workflows);
-        workflows.set(workflow.id, workflow);
-        return { workflows };
-      }),
-
-    removeWorkflow: (workflowId) =>
-      set((state) => {
-        if (!state.workflows.has(workflowId)) return state;
-        const workflows = new Map(state.workflows);
-        workflows.delete(workflowId);
-        return { workflows };
-      }),
-
-    setBackendRevision: (workflowId, revision) =>
-      set((state) => {
-        const workflow = state.workflows.get(workflowId);
-        if (
-          !workflow
-          || !isIntegerAtLeast(revision, 0)
-          || workflow.backendRevision === revision
-        ) {
-          return state;
-        }
-        const workflows = new Map(state.workflows);
-        // A backend acknowledgement is not a workflow transition. Preserve the
-        // durable updatedAt value so acknowledging a save cannot enqueue
-        // another save forever.
-        workflows.set(workflowId, { ...workflow, backendRevision: revision });
-        return { workflows };
-      }),
-
-    setPhase: (workflowId, phase) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => ({
-        ...workflow,
-        phase,
-        pausedFromPhase: undefined,
-        failure: undefined,
-      }))),
-
-    addSession: (workflowId, input) => {
-      const workflow = get().workflows.get(workflowId);
-      if (!workflow || !isLoopedReviewActivePhase(workflow.phase)) return undefined;
-      const id = input.id ?? createUuid();
-      if (workflow.sessions.some((session) => session.id === id)) return undefined;
-      set((state) => updateWorkflow(state, workflowId, (current) => ({
-        ...current,
-        sessions: [...current.sessions, {
-          ...input,
-          id,
-          requestIds: [],
-          status: "running",
-          startedAt: new Date().toISOString(),
-        }],
-        activeSessionId: id,
-      })));
-      return id;
-    },
-
-    updateSession: (workflowId, sessionId, updates) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        const {
-          id: _immutableId,
-          phase: _immutablePhase,
-          round: _immutableRound,
-          pass: _immutablePass,
-          startedAt: _immutableStartedAt,
-          ...mutableUpdates
-        } = updates;
-        if (!workflow.sessions.some((session) => session.id === sessionId)) {
-          return workflow;
-        }
-        return {
-          ...workflow,
-          sessions: workflow.sessions.map((session) =>
-            session.id === sessionId
-              ? { ...session, ...mutableUpdates }
-              : session
-          ),
-        };
-      })),
-
-    setPreparedPackage: (workflowId, reviewPackage) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        if (
-          workflow.phase !== "preparing"
-          || reviewPackage.round !== workflow.currentRound
-        ) {
-          return workflow;
-        }
-        return {
-          ...workflow,
-          phase: "discovering",
-          currentPass: 0,
-          dispatch: undefined,
-          rounds: workflow.rounds.map((round) =>
-            round.round === workflow.currentRound
-              ? { ...round, package: reviewPackage, status: "reviewing" }
-              : round
-          ),
-        };
-      })),
-
-    startPass: (workflowId, sessionId) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        if (workflow.phase !== "discovering") return workflow;
-        const nextPass = workflow.currentPass + 1;
-        if (nextPass > workflow.currentAllowance) return workflow;
-        const session = workflow.sessions.find((candidate) =>
-          candidate.id === sessionId
-        );
-        if (
-          !session
-          || session.phase !== "discovery"
-          || session.round !== workflow.currentRound
-          || session.pass !== nextPass
-        ) {
-          return workflow;
-        }
-        const pass: LoopedReviewPass = {
-          pass: nextPass,
-          sessionId,
-          status: "discovering",
-          startedAt: new Date().toISOString(),
-        };
-        return {
-          ...workflow,
-          currentPass: nextPass,
-          activeSessionId: sessionId,
-          rounds: workflow.rounds.map((round) =>
-            round.round === workflow.currentRound
-              ? { ...round, passes: [...round.passes, pass] }
-              : round
-          ),
-        };
-      })),
-
-    recordReport: (workflowId, sessionId, report) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        const activePass = workflow.rounds
-          .find((round) => round.round === workflow.currentRound)
-          ?.passes.some((pass) =>
-            pass.pass === workflow.currentPass
-            && pass.sessionId === sessionId
-          );
-        if (
-          workflow.phase !== "discovering"
-          || workflow.activeSessionId !== sessionId
-          || !activePass
-        ) {
-          return workflow;
-        }
-        return {
-          ...workflow,
-          phase: "reconciling",
-          dispatch: undefined,
-          rounds: workflow.rounds.map((round) =>
-            round.round === workflow.currentRound
-              ? {
-                  ...round,
-                  passes: round.passes.map((pass) =>
-                    pass.pass === workflow.currentPass
-                    && pass.sessionId === sessionId
-                      ? { ...pass, report, status: "reconciling" }
-                      : pass
-                  ),
-                }
-              : round
-          ),
-        };
-      })),
-
-    recordReconciliation: (workflowId, sessionId, reconciliation) => {
-      const workflow = get().workflows.get(workflowId);
-      if (
-        !workflow
-        || workflow.phase !== "reconciling"
-        || workflow.activeSessionId !== sessionId
-      ) {
-        return undefined;
-      }
-      const report = workflow.rounds
-        .find((round) => round.round === workflow.currentRound)
-        ?.passes.find((pass) =>
-          pass.pass === workflow.currentPass
-          && pass.sessionId === sessionId
-        )?.report;
-      if (!report) {
-        throw new Error("Cannot reconcile a pass without its validated report");
-      }
-      assertReconciliationAccountsForReport(
-        report,
-        workflow.activePool,
-        reconciliation,
-      );
-      const applied = applyReviewReconciliation(workflow.activePool, reconciliation);
-      const shouldStop =
-        applied.added + applied.updated === 0
-        || workflow.currentPass >= workflow.currentAllowance;
-      const now = new Date().toISOString();
-      set((state) => updateWorkflow(state, workflowId, (current) => ({
-        ...current,
-        phase: shouldStop
-          ? hasReviewFindings(applied.pool) ? "fixing" : "creating-pr"
-          : "discovering",
-        activePool: applied.pool,
-        dispatch: undefined,
-        rounds: current.rounds.map((round) =>
-          round.round === current.currentRound
-            ? {
-                ...round,
-                status: shouldStop
-                  ? hasReviewFindings(applied.pool) ? "fixing" : "completed"
-                  : round.status,
-                completedAt:
-                  shouldStop && !hasReviewFindings(applied.pool)
-                    ? now
-                    : round.completedAt,
-                passes: round.passes.map((pass) =>
-                  pass.pass === current.currentPass
-                  && pass.sessionId === sessionId
-                    ? {
-                        ...pass,
-                        reconciliation,
-                        status: "completed",
-                        completedAt: now,
-                      }
-                    : pass
-                ),
-              }
-            : round
-        ),
-      })));
-      return applied;
-    },
-
-    completeFix: (workflowId, fixSessionId, outcome) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        if (workflow.phase !== "fixing" || !hasReviewFindings(workflow.activePool)) {
-          return workflow;
-        }
-        const now = new Date().toISOString();
-        const archivedPools = [...workflow.archivedPools, {
-          round: workflow.currentRound,
-          fixedAt: now,
-          fixSessionId,
-          pool: workflow.activePool,
-          // The pool is cleared from here on, so this is the only durable record
-          // of what the fix session did and of findings it reported as disproved.
-          fixSummary: outcome.summary,
-          fixNotes: outcome.notes,
-        }];
-        const completedRounds = workflow.rounds.map((round) =>
-          round.round === workflow.currentRound
-            ? { ...round, status: "completed" as const, completedAt: now }
-            : round
-        );
-        if (workflow.currentAllowance === 1) {
-          return {
-            ...workflow,
-            phase: "creating-pr",
-            activePool: emptyPool(),
-            archivedPools,
-            rounds: completedRounds,
-            dispatch: undefined,
-          };
-        }
-        const allowance = nextReviewAllowance(workflow.currentAllowance);
-        const nextRound = workflow.currentRound + 1;
-        return {
-          ...workflow,
-          phase: "preparing",
-          currentAllowance: allowance,
-          currentRound: nextRound,
-          currentPass: 0,
-          activePool: emptyPool(),
-          archivedPools,
-          rounds: [...completedRounds, {
-            round: nextRound,
-            allowance,
-            status: "preparing",
-            passes: [],
-            startedAt: now,
-          }],
-          activeSessionId: undefined,
-          dispatch: undefined,
-        };
-      })),
-
-    claimDispatch: (workflowId, input) => {
-      const workflow = get().workflows.get(workflowId);
-      const expectedKind: Record<
-        ActiveLoopedReviewPhase,
-        LoopedReviewDispatch["kind"]
-      > = {
-        preparing: "prepare",
-        discovering: "discover",
-        reconciling: "reconcile",
-        fixing: "fix",
-        "creating-pr": "pr",
-      };
-      const expectedSessionPhase: Record<
-        ActiveLoopedReviewPhase,
-        LoopedReviewSessionPhase
-      > = {
-        preparing: "preparation",
-        discovering: "discovery",
-        reconciling: "discovery",
-        fixing: "fix",
-        "creating-pr": "pr",
-      };
-      const session = workflow?.sessions.find((candidate) =>
-        candidate.id === input.sessionId
-      );
-      if (
-        !workflow
-        || !isLoopedReviewActivePhase(workflow.phase)
-        || workflow.phase !== input.phase
-        || input.kind !== expectedKind[input.phase]
-        || !session
-        || session.phase !== expectedSessionPhase[input.phase]
-        || session.round !== workflow.currentRound
-        || workflow.dispatch
-      ) {
-        return false;
-      }
-      set((state) => updateWorkflow(state, workflowId, (current) => ({
-        ...current,
-        dispatch: {
-          ...input,
-          state: "prepared",
-          createdAt: new Date().toISOString(),
-        },
-        sessions: current.sessions.map((session) =>
-          session.id === input.sessionId
-            ? {
-                ...session,
-                status: "running",
-                error: undefined,
-                completedAt: undefined,
-                requestIds: session.requestIds.includes(input.requestId)
-                  ? session.requestIds
-                  : [...session.requestIds, input.requestId],
-              }
-            : session
-        ),
-      })));
-      return true;
-    },
-
-    markDispatchSent: (workflowId, dispatchId) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) =>
-        workflow.dispatch?.id !== dispatchId
-          ? workflow
-          : {
-              ...workflow,
-              dispatch: { ...workflow.dispatch, state: "sent" },
-            }
-      )),
-
-    clearDispatch: (workflowId, dispatchId) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) =>
-        workflow.dispatch?.id !== dispatchId
-          ? workflow
-          : { ...workflow, dispatch: undefined }
-      )),
-
-    failWorkflow: (workflowId, failure) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        if (isLoopedReviewTerminalPhase(workflow.phase)) return workflow;
-        return {
-          ...workflow,
-          phase: "failed",
-          pausedFromPhase: undefined,
-          failure: { ...failure, occurredAt: new Date().toISOString() },
-          pr: failure.code === "pr"
-            ? { ...workflow.pr, status: "failed", error: failure.message }
-            : workflow.pr,
-          rounds: workflow.rounds.map((round) =>
-            round.round !== workflow.currentRound
-              ? round
-              : {
-                  ...round,
-                  status: "failed",
-                  passes: round.passes.map((pass) =>
-                    pass.pass === workflow.currentPass
-                    && pass.sessionId === workflow.activeSessionId
-                      ? { ...pass, status: "failed" }
-                      : pass
-                  ),
-                }
-          ),
-        };
-      })),
-
-    pauseWorkflow: (workflowId) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        if (!isLoopedReviewActivePhase(workflow.phase)) return workflow;
-        return {
-          ...workflow,
-          phase: "paused",
-          pausedFromPhase: workflow.phase,
-        };
-      })),
-
-    resumeWorkflow: (workflowId) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        if (workflow.phase !== "paused" || !workflow.pausedFromPhase) return workflow;
-        return {
-          ...workflow,
-          phase: workflow.pausedFromPhase,
-          pausedFromPhase: undefined,
-        };
-      })),
-
-    retryWorkflow: (workflowId) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        if (workflow.phase !== "failed" || !workflow.failure) return workflow;
-        const failure = workflow.failure;
-        const preserveDispatch =
-          failure.preserveDispatch === true
-          && workflow.dispatch !== undefined;
-        const retryingDiscovery =
-          !preserveDispatch
-          &&
-          failure.retryPhase === "discovering"
-          && workflow.rounds
-            .find((round) => round.round === workflow.currentRound)
-            ?.passes.some((pass) =>
-              pass.pass === workflow.currentPass
-              && pass.report === undefined
-            );
-        return {
-          ...workflow,
-          phase: failure.retryPhase,
-          currentPass: retryingDiscovery
-            ? Math.max(0, workflow.currentPass - 1)
-            : workflow.currentPass,
-          failure: undefined,
-          dispatch: preserveDispatch ? workflow.dispatch : undefined,
-          rounds: workflow.rounds.map((round) =>
-            round.round !== workflow.currentRound
-              ? round
-              : {
-                  ...round,
-                  status:
-                    failure.retryPhase === "preparing"
-                      ? "preparing"
-                      : failure.retryPhase === "fixing"
-                        ? "fixing"
-                        : failure.retryPhase === "creating-pr"
-                          ? "completed"
-                        : "reviewing",
-                  passes: round.passes.map((pass) =>
-                    pass.pass === workflow.currentPass
-                    && pass.sessionId === workflow.activeSessionId
-                    && pass.status === "failed"
-                    && failure.retryPhase === "reconciling"
-                      ? { ...pass, status: "reconciling" }
-                      : pass
-                  ),
-                }
-          ),
-          pr: failure.code === "pr"
-            ? { ...workflow.pr, status: "pending", error: undefined }
-            : workflow.pr,
-        };
-      })),
-
-    cancelWorkflow: (workflowId) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        if (isLoopedReviewTerminalPhase(workflow.phase)) return workflow;
-        return {
-          ...workflow,
-          phase: "cancelled",
-          pausedFromPhase: undefined,
-          failure: undefined,
-          dispatch: undefined,
-          sessions: workflow.sessions.map((session) =>
-            session.status === "running"
-              ? { ...session, status: "cancelled" }
-              : session
-          ),
-        };
-      })),
-
-    startPr: (workflowId, sessionId) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        const session = workflow.sessions.find((candidate) =>
-          candidate.id === sessionId
-        );
-        if (
-          workflow.phase !== "creating-pr"
-          || !session
-          || session.phase !== "pr"
-          || session.round !== workflow.currentRound
-        ) {
-          return workflow;
-        }
-        return {
-          ...workflow,
-          activeSessionId: sessionId,
-          pr: { status: "running", sessionId },
-        };
-      })),
-
-    completePr: (workflowId, url) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        if (workflow.phase !== "creating-pr" || workflow.pr.status !== "running") {
-          return workflow;
-        }
-        return {
-          ...workflow,
-          phase: "completed",
-          dispatch: undefined,
-          pr: { ...workflow.pr, status: "created", url, error: undefined },
-        };
-      })),
+  removeWorkflow: (workflowId) =>
+    set((state) => {
+      if (!state.workflows.has(workflowId)) return state;
+      const workflows = new Map(state.workflows);
+      workflows.delete(workflowId);
+      return { workflows };
+    }),
 }));

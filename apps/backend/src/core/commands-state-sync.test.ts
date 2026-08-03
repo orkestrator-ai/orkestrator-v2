@@ -38,6 +38,7 @@ async function withCommands<T>(
     claudeStatePolls?: ClaudeStatePollManager;
     environment?: Record<string, unknown>;
     buildPipelines?: CommandContext["buildPipelines"];
+    loopedReviews?: CommandContext["loopedReviews"];
     nativeAgents?: CommandContext["nativeAgents"];
     nativeAgentsFactory?: (storage: StorageService) => CommandContext["nativeAgents"];
   } = {},
@@ -62,6 +63,7 @@ async function withCommands<T>(
     emit: () => undefined,
     storage,
     buildPipelines: options.buildPipelines,
+    loopedReviews: options.loopedReviews,
     nativeAgents: options.nativeAgents ?? options.nativeAgentsFactory?.(storage),
   } as unknown as CommandContext;
 
@@ -1015,6 +1017,77 @@ describe("native agent and looped-review controller commands", () => {
         pendingAgentLaunch: true,
       },
     });
+  });
+});
+
+describe("looped review commands", () => {
+  const startInput = {
+    environmentId: "e1",
+    projectId: "proj-1",
+    agent: "codex",
+    model: "gpt-5.4",
+    targetBranch: "main",
+    allowance: 6,
+  } as const;
+
+  test("delegates every renderer lifecycle command to the backend supervisor", async () => {
+    const start = mock(async (input: unknown) => ({ operation: "start", input }));
+    const pause = mock(async (id: string) => ({ operation: "pause", id }));
+    const resume = mock(async (id: string) => ({ operation: "resume", id }));
+    const retry = mock(async (id: string) => ({ operation: "retry", id }));
+    const cancel = mock(async (id: string) => ({ operation: "cancel", id }));
+    const providerSession = mock(async (id: string, sessionId?: string) => ({
+      providerSessionId: `${id}:${sessionId ?? "active"}`,
+    }));
+    const supervisor = {
+      start, pause, resume, retry, cancel, providerSession,
+    } as unknown as NonNullable<CommandContext["loopedReviews"]>;
+
+    await withCommands(async (invoke) => {
+      await expect(invoke("start_looped_review", startInput))
+        .resolves.toMatchObject({ operation: "start" });
+      await expect(invoke("pause_looped_review", { workflowId: "review-1" }))
+        .resolves.toEqual({ operation: "pause", id: "review-1" });
+      await expect(invoke("resume_looped_review", { workflowId: "review-1" }))
+        .resolves.toEqual({ operation: "resume", id: "review-1" });
+      await expect(invoke("retry_looped_review", { workflowId: "review-1" }))
+        .resolves.toEqual({ operation: "retry", id: "review-1" });
+      await expect(invoke("cancel_looped_review", { workflowId: "review-1" }))
+        .resolves.toEqual({ operation: "cancel", id: "review-1" });
+      await expect(invoke("get_looped_review_provider_session", {
+        workflowId: "review-1", sessionId: "session-1",
+      })).resolves.toEqual({ providerSessionId: "review-1:session-1" });
+
+      expect(start).toHaveBeenCalledWith(startInput);
+      expect(providerSession).toHaveBeenCalledWith("review-1", "session-1");
+    }, { loopedReviews: supervisor });
+  });
+
+  test("validates lifecycle input and rejects renderer writes to version 2", async () => {
+    const supervisor = {
+      start: mock(async () => undefined),
+      pause: mock(async () => undefined),
+      resume: mock(async () => undefined),
+      retry: mock(async () => undefined),
+      cancel: mock(async () => undefined),
+      providerSession: mock(async () => undefined),
+    } as unknown as NonNullable<CommandContext["loopedReviews"]>;
+
+    await withCommands(async (invoke, storage) => {
+      await expect(invoke("start_looped_review", { ...startInput, allowance: 11 }))
+        .rejects.toThrow("Invalid looped review start request");
+      await expect(invoke("pause_looped_review", { workflowId: " " }))
+        .rejects.toThrow("non-blank string");
+
+      await storage.saveLoopedReviewWorkflow("review-1", "e1", 2, { id: "review-1" }, 0);
+      await expect(invoke("save_looped_review_workflow", {
+        workflowId: "review-1", environmentId: "e1", version: 2,
+        snapshot: { id: "review-1", phase: "paused" }, expectedRevision: 1,
+      })).rejects.toThrow("only be changed through workflow commands");
+      await expect(invoke("claim_looped_review_controller", {
+        workflowId: "review-1", ownerId: "renderer", leaseMs: 15_000,
+      })).rejects.toThrow("not available to renderers");
+    }, { loopedReviews: supervisor });
   });
 });
 

@@ -1217,6 +1217,9 @@ describe("Linear and looped review command behavior", () => {
     expect(calls).toEqual([
       { method: "get", args: ["workflow-1"] },
       { method: "list", args: ["environment-1"] },
+      // Deletion reads first so an active backend-owned workflow cannot be
+      // removed without an explicit cancel transition.
+      { method: "get", args: ["workflow-1"] },
       { method: "delete", args: ["workflow-1"] },
       { method: "get", args: ["workflow-1"] },
     ]);

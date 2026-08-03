@@ -9,6 +9,18 @@
  */
 
 import { getReviewInstructionValidationError } from "./review-prompt.js";
+import type {
+  AgentInteractionKind,
+  AgentInteractionOutcome,
+  AgentInteractionPolicy,
+  AgentInteractionProvider,
+  AgentInteractionWorkflowSummary,
+} from "./agent-interactions.js";
+import type {
+  ReviewFindingPool,
+  StructuredReviewReport,
+} from "./structured-review.js";
+import { isReviewFindingPool } from "./structured-review.js";
 
 /** Shared failure vocabulary for current renderer-owned and future backend-owned reviews. */
 export const REVIEW_WORKFLOW_FAILURE_KINDS = [
@@ -25,6 +37,381 @@ export const REVIEW_WORKFLOW_FAILURE_KINDS = [
 ] as const;
 export type ReviewWorkflowFailureKind =
   (typeof REVIEW_WORKFLOW_FAILURE_KINDS)[number];
+
+/**
+ * Version 2 is the first backend-owned looped-review workflow. Version 1 was
+ * advanced by a React controller and is intentionally never adopted mid-turn.
+ */
+export const LOOPED_REVIEW_WORKFLOW_VERSION = 2 as const;
+export const LOOPED_REVIEW_LEGACY_WORKFLOW_VERSION = 1 as const;
+export const LOOPED_REVIEW_DEFAULT_ALLOWANCE = 6;
+export const LOOPED_REVIEW_MIN_ALLOWANCE = 1;
+export const LOOPED_REVIEW_MAX_ALLOWANCE = 10;
+
+export type LoopedReviewAgent = "claude" | "codex" | "opencode";
+export type LoopedReviewPhase =
+  | "preparing"
+  | "discovering"
+  | "reconciling"
+  | "fixing"
+  | "creating-pr"
+  | "paused"
+  | "failed"
+  | "cancelled"
+  | "completed";
+export type ActiveLoopedReviewPhase = Exclude<
+  LoopedReviewPhase,
+  "paused" | "failed" | "cancelled" | "completed"
+>;
+export type LoopedReviewSessionPhase = "preparation" | "discovery" | "fix" | "pr";
+
+export interface ReviewPackageCommandResult {
+  command: string;
+  status: "passed" | "failed" | "skipped";
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  limitation?: string;
+}
+
+export interface ReviewPackageFile {
+  path: string;
+  status: string;
+  content: string | null;
+  contentSha256: string | null;
+  omittedReason: string | null;
+}
+
+export interface ReviewPackageContext {
+  ticketTitle?: string;
+  ticketDescription?: string;
+  acceptanceCriteria?: string;
+  comments?: string[];
+  imageNames?: string[];
+  projectNotes?: string;
+}
+
+export interface ReviewPackage {
+  id: string;
+  round: number;
+  preparedAt: string;
+  targetBranch: string;
+  baseRef: string;
+  headRef: string;
+  commit: { sha: string; subject: string; committedFiles: string[] } | null;
+  completeDiff: string;
+  changedFiles: ReviewPackageFile[];
+  validation: ReviewPackageCommandResult[];
+  skippedFiles: Array<{ path: string; reason: string }>;
+  uncommittedFiles: Array<{ path: string; reason: string }>;
+  limitations: string[];
+  context?: ReviewPackageContext;
+}
+
+export interface LoopedReviewInteractionQuestion {
+  prompt: string;
+  options: string[];
+}
+
+export interface LoopedReviewInteractionTranscriptEntry {
+  id: string;
+  provider: AgentInteractionProvider;
+  kind: AgentInteractionKind;
+  phase: LoopedReviewSessionPhase;
+  requestedAt: number;
+  resolvedAt: number;
+  outcome: "auto-declined-headless";
+  title: string;
+  body?: string;
+  questions: LoopedReviewInteractionQuestion[];
+}
+
+export interface PendingLoopedReviewInteractionResolution {
+  journalId: string;
+  sessionKey: string;
+  sessionId: string;
+  interactionId: string;
+  provider: AgentInteractionProvider;
+  kind: AgentInteractionKind;
+  phase: LoopedReviewSessionPhase;
+  requestedAt: number;
+  claimedAt: number;
+  action: "decline-and-continue" | "deny-and-fail";
+  title: string;
+  body?: string;
+  questions: LoopedReviewInteractionQuestion[];
+}
+
+export interface LoopedReviewSession {
+  id: string;
+  phase: LoopedReviewSessionPhase;
+  round: number;
+  pass?: number;
+  /** Stable workflow generation used by provider interaction claims. */
+  sessionKey: string;
+  providerSessionId: string;
+  requestIds: string[];
+  origin: "looped-review";
+  interactionPolicy: AgentInteractionPolicy;
+  interactionSummary?: AgentInteractionWorkflowSummary;
+  interactionTranscript?: LoopedReviewInteractionTranscriptEntry[];
+  autoDeclineCount?: number;
+  status: "running" | "idle" | "error" | "cancelled";
+  startedAt: string;
+  completedAt?: string;
+  error?: string;
+}
+
+export interface LoopedReviewFindingOutcome {
+  reportIndex: number;
+  outcome: "new" | "updated" | "existing";
+  poolId: string | null;
+}
+
+export interface LoopedReviewReconciliation {
+  newIssues: StructuredReviewReport["issues"];
+  issueUpdates: Array<{ poolId: string; finding: StructuredReviewReport["issues"][number] }>;
+  newCoverageGaps: StructuredReviewReport["testCoverageGaps"];
+  coverageGapUpdates: Array<{
+    poolId: string;
+    finding: StructuredReviewReport["testCoverageGaps"][number];
+  }>;
+  issueOutcomes: LoopedReviewFindingOutcome[];
+  coverageGapOutcomes: LoopedReviewFindingOutcome[];
+}
+
+export interface LoopedReviewPass {
+  pass: number;
+  sessionId: string;
+  status: "discovering" | "reconciling" | "completed" | "failed";
+  report?: StructuredReviewReport;
+  reconciliation?: LoopedReviewReconciliation;
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface LoopedReviewRound {
+  round: number;
+  allowance: number;
+  status: "preparing" | "reviewing" | "fixing" | "completed" | "failed";
+  package?: ReviewPackage;
+  passes: LoopedReviewPass[];
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface ArchivedReviewPool {
+  round: number;
+  fixedAt: string;
+  fixSessionId: string;
+  pool: ReviewFindingPool;
+  fixSummary?: string;
+  fixNotes?: string[];
+}
+
+export interface LoopedReviewDispatch {
+  id: string;
+  requestId: string;
+  sessionId: string;
+  phase: ActiveLoopedReviewPhase;
+  kind: "prepare" | "discover" | "reconcile" | "fix" | "pr";
+  /** `dispatching` is persisted before provider I/O and is never blindly resent. */
+  state: "prepared" | "dispatching" | "sent";
+  createdAt: string;
+}
+
+export interface LoopedReviewFailure {
+  code: ReviewWorkflowFailureKind;
+  message: string;
+  retryPhase: ActiveLoopedReviewPhase;
+  preserveDispatch?: boolean;
+  occurredAt: string;
+  /** Content-free interaction context; full provider requests are never stored here. */
+  interaction?: {
+    requestId: string;
+    sessionId: string;
+    provider: AgentInteractionProvider;
+    kind: AgentInteractionKind;
+  };
+}
+
+export interface LoopedReviewStructuredWait {
+  dispatchId: string;
+  startedAt: string;
+  idlePolls: number;
+}
+
+export interface LoopedReviewWorkflow {
+  version: typeof LOOPED_REVIEW_WORKFLOW_VERSION;
+  controller: "backend";
+  /** Current storage lease token. Provider sessions and claims are fenced to it. */
+  controllerFence?: string;
+  id: string;
+  environmentId: string;
+  projectId: string;
+  agent: LoopedReviewAgent;
+  model: string;
+  reasoningEffort?: string;
+  targetBranch: string;
+  reviewInstruction?: string;
+  context?: ReviewPackageContext;
+  startingAllowance: number;
+  currentAllowance: number;
+  currentRound: number;
+  currentPass: number;
+  phase: LoopedReviewPhase;
+  pausedFromPhase?: ActiveLoopedReviewPhase;
+  rounds: LoopedReviewRound[];
+  activePool: ReviewFindingPool;
+  archivedPools: ArchivedReviewPool[];
+  sessions: LoopedReviewSession[];
+  activeSessionId?: string;
+  dispatch?: LoopedReviewDispatch;
+  structuredWait?: LoopedReviewStructuredWait;
+  pendingInteractionResolution?: PendingLoopedReviewInteractionResolution;
+  interactionSummary?: AgentInteractionWorkflowSummary;
+  autoDeclineCount?: number;
+  interactionPolicy: AgentInteractionPolicy;
+  failure?: LoopedReviewFailure;
+  pr: {
+    status: "pending" | "running" | "failed" | "created";
+    sessionId?: string;
+    url?: string;
+    error?: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+  backendRevision: number;
+}
+
+export interface StartLoopedReviewInput {
+  environmentId: string;
+  projectId: string;
+  agent: LoopedReviewAgent;
+  model: string;
+  reasoningEffort?: string;
+  targetBranch: string;
+  reviewInstruction?: string;
+  context?: ReviewPackageContext;
+  allowance?: number;
+}
+
+export function normalizeReviewAllowance(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    return LOOPED_REVIEW_DEFAULT_ALLOWANCE;
+  }
+  return Math.min(
+    LOOPED_REVIEW_MAX_ALLOWANCE,
+    Math.max(LOOPED_REVIEW_MIN_ALLOWANCE, value),
+  );
+}
+
+export function nextReviewAllowance(value: number): number {
+  return Math.max(1, Math.ceil(normalizeReviewAllowance(value) / 2));
+}
+
+export function isLoopedReviewTerminalPhase(phase: LoopedReviewPhase): boolean {
+  return phase === "cancelled" || phase === "completed";
+}
+
+export function isLoopedReviewActivePhase(
+  phase: LoopedReviewPhase,
+): phase is ActiveLoopedReviewPhase {
+  return !isLoopedReviewTerminalPhase(phase) && phase !== "paused" && phase !== "failed";
+}
+
+export function hasReviewFindings(pool: ReviewFindingPool): boolean {
+  return pool.issues.length > 0 || pool.coverageGaps.length > 0;
+}
+
+export function isStartLoopedReviewInput(value: unknown): value is StartLoopedReviewInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const input = value as Partial<StartLoopedReviewInput>;
+  return typeof input.environmentId === "string" && input.environmentId.trim().length > 0
+    && typeof input.projectId === "string" && input.projectId.trim().length > 0
+    && (input.agent === "claude" || input.agent === "codex" || input.agent === "opencode")
+    && typeof input.model === "string" && input.model.trim().length > 0
+    && typeof input.targetBranch === "string" && input.targetBranch.trim().length > 0
+    && (input.reasoningEffort === undefined || typeof input.reasoningEffort === "string")
+    && (input.reviewInstruction === undefined || typeof input.reviewInstruction === "string")
+    && (input.context === undefined || isReviewPackageContext(input.context))
+    && (input.allowance === undefined || (
+      Number.isInteger(input.allowance)
+      && input.allowance >= LOOPED_REVIEW_MIN_ALLOWANCE
+      && input.allowance <= LOOPED_REVIEW_MAX_ALLOWANCE
+    ));
+}
+
+function isReviewPackageContext(value: unknown): value is ReviewPackageContext {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const context = value as Record<string, unknown>;
+  const allowed = new Set([
+    "ticketTitle", "ticketDescription", "acceptanceCriteria", "comments",
+    "imageNames", "projectNotes",
+  ]);
+  if (Object.keys(context).some((key) => !allowed.has(key))) return false;
+  return ["ticketTitle", "ticketDescription", "acceptanceCriteria", "projectNotes"]
+    .every((key) => context[key] === undefined || typeof context[key] === "string")
+    && ["comments", "imageNames"].every((key) =>
+      context[key] === undefined
+      || (Array.isArray(context[key]) && context[key].every((entry) => typeof entry === "string"))
+    );
+}
+
+/** Strict enough for backend adoption; nested provider results are validated on application. */
+export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWorkflow {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const workflow = value as Partial<LoopedReviewWorkflow>;
+  const phases = new Set<unknown>([
+    "preparing", "discovering", "reconciling", "fixing", "creating-pr",
+    "paused", "failed", "cancelled", "completed",
+  ]);
+  return workflow.version === LOOPED_REVIEW_WORKFLOW_VERSION
+    && workflow.controller === "backend"
+    && typeof workflow.id === "string" && workflow.id.length > 0
+    && typeof workflow.environmentId === "string" && workflow.environmentId.length > 0
+    && typeof workflow.projectId === "string" && workflow.projectId.length > 0
+    && (workflow.agent === "claude" || workflow.agent === "codex" || workflow.agent === "opencode")
+    && typeof workflow.model === "string"
+    && typeof workflow.targetBranch === "string"
+    && typeof workflow.currentRound === "number" && Number.isInteger(workflow.currentRound)
+    && typeof workflow.currentPass === "number" && Number.isInteger(workflow.currentPass)
+    && phases.has(workflow.phase)
+    && Array.isArray(workflow.rounds)
+    && Array.isArray(workflow.sessions)
+    && isReviewFindingPool(workflow.activePool)
+    && Array.isArray(workflow.archivedPools)
+    && !!workflow.interactionPolicy && workflow.interactionPolicy.mode === "unattended"
+    && !!workflow.pr && typeof workflow.pr === "object"
+    && typeof workflow.createdAt === "string"
+    && typeof workflow.updatedAt === "string"
+    && typeof workflow.backendRevision === "number"
+    && Number.isInteger(workflow.backendRevision)
+    && workflow.backendRevision >= 0;
+}
+
+export function isSafelyAdoptableLegacyLoopedReview(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const workflow = value as Record<string, unknown>;
+  if (workflow.version !== LOOPED_REVIEW_LEGACY_WORKFLOW_VERSION) return false;
+  if (workflow.phase === "paused" || workflow.phase === "completed" || workflow.phase === "cancelled") {
+    return true;
+  }
+  // An active legacy phase with no dispatch is a persisted phase boundary. A
+  // live dispatch is ambiguous and remains legacy until the user explicitly
+  // pauses/cancels it in a compatible build.
+  return typeof workflow.phase === "string"
+    && phasesForLegacyAdoption.has(workflow.phase)
+    && workflow.dispatch === undefined;
+}
+
+const phasesForLegacyAdoption = new Set([
+  "preparing", "discovering", "reconciling", "fixing", "creating-pr", "failed",
+]);
+
+/** Metadata-only resolution outcome used by backend controller diagnostics. */
+export type LoopedReviewInteractionOutcome = AgentInteractionOutcome;
 
 /** Token available in the shared editable review instruction. */
 export const REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN = "{{targetBranch}}";

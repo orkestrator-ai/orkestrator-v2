@@ -15,6 +15,7 @@ import {
   useLoopedReviewStore,
   type LoopedReviewWorkflow,
 } from "@/stores/loopedReviewStore";
+import { loopedReviewFixture } from "@/test/looped-review-fixture";
 import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
 import {
   LEGACY_PANE_LAYOUT_VERSION,
@@ -1261,15 +1262,16 @@ describe("TerminalContainer", () => {
   });
 
   test("reconstructs a looped-review tab only after its authoritative workflow hydrates", async () => {
-    const workflowId = useLoopedReviewStore.getState().createWorkflow({
+    const workflow = loopedReviewFixture({
       environmentId: "env-hidden",
       projectId: "project-1",
       agent: "codex",
       model: "gpt-5.4",
       targetBranch: "main",
-      allowance: 6,
+      startingAllowance: 6,
+      currentAllowance: 6,
     });
-    const workflow = useLoopedReviewStore.getState().workflows.get(workflowId)!;
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
     useLoopedReviewStore.setState({ workflows: new Map() });
     listLoopedReviewWorkflowsMock.mockResolvedValue([{
       version: workflow.version,
@@ -1292,7 +1294,7 @@ describe("TerminalContainer", () => {
           type: "looped-review",
           loopedReviewTabData: {
             environmentId: "env-hidden",
-            workflowId,
+            workflowId: workflow.id,
             isLocal: false,
           },
         }],
@@ -1314,7 +1316,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(useLoopedReviewStore.getState().workflows.get(workflowId))
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id))
         .toMatchObject({ backendRevision: 3, phase: "preparing" });
       expect(usePaneLayoutStore.getState().getAllTabs("env-hidden"))
         .toMatchObject([{
@@ -1322,7 +1324,7 @@ describe("TerminalContainer", () => {
           type: "looped-review",
           loopedReviewTabData: {
             environmentId: "env-hidden",
-            workflowId,
+            workflowId: workflow.id,
           },
         }]);
     });
@@ -5295,6 +5297,34 @@ describe("TerminalContainer", () => {
             workflowId: "workflow-1",
           }),
         }));
+    });
+
+    test("opens a backend workflow provider session in the created native tab", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="codex"
+            options={{
+              agentLaunchMode: "native",
+              resumeSessionId: "provider-thread-1",
+              isReviewTab: true,
+            }}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
+        .toContainEqual(expect.objectContaining({
+          type: "codex-native",
+          isReviewTab: true,
+          codexNativeData: expect.objectContaining({ sessionId: "provider-thread-1" }),
+        })));
     });
 
     test("rejects a looped-review tab without a workflow id", async () => {

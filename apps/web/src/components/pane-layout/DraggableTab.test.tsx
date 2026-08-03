@@ -12,6 +12,7 @@ import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
+import { loopedReviewFixture } from "@/test/looped-review-fixture";
 
 const realSortableSnapshot = { ...realSortable };
 const realUtilitiesSnapshot = { ...realUtilities };
@@ -424,29 +425,23 @@ describe("DraggableTab title precedence", () => {
   });
 
   test("looped-review tabs reflect completed workflow state", () => {
-    const id = useLoopedReviewStore.getState().createWorkflow({
+    const workflow = loopedReviewFixture({
       environmentId: "env-1",
       projectId: "project-1",
       agent: "codex",
       model: "gpt-5.4",
       targetBranch: "main",
+      phase: "completed",
+      pr: { status: "created", url: "https://github.com/acme/repo/pull/1" },
     });
-    useLoopedReviewStore.setState((state) => {
-      const workflows = new Map(state.workflows);
-      workflows.set(id, {
-        ...workflows.get(id)!,
-        phase: "completed",
-        pr: { status: "created", url: "https://github.com/acme/repo/pull/1" },
-      });
-      return { workflows };
-    });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
 
     renderTab({
       id: "looped-complete",
       type: "looped-review",
       loopedReviewTabData: {
         environmentId: "env-1",
-        workflowId: id,
+        workflowId: workflow.id,
       },
     });
 

@@ -1968,6 +1968,7 @@ export function TerminalContainer({
             containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
             environmentId,
             isLocal: isLocalEnvironment,
+            sessionId: options?.resumeSessionId,
           },
           initialPrompt: options?.initialPrompt,
           displayTitle: options?.displayTitle,
@@ -1999,6 +2000,7 @@ export function TerminalContainer({
           isReviewTab: options?.isReviewTab,
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
+          sessionId: options?.resumeSessionId,
         });
         console.debug("[TerminalContainer] Creating", newTab.type, "tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         addTab(activePaneId, newTab, environmentId);
@@ -2013,6 +2015,7 @@ export function TerminalContainer({
             containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
             environmentId,
             isLocal: isLocalEnvironment,
+            sessionId: options?.resumeSessionId,
           },
           initialPrompt: options?.initialPrompt,
           displayTitle: options?.displayTitle,

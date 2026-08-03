@@ -152,6 +152,14 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { NativeAgentService } from "./native-agent-service.js";
+import type { LoopedReviewService } from "./looped-review-service.js";
+import {
+  LOOPED_REVIEW_WORKFLOW_VERSION,
+  isLoopedReviewTerminalPhase,
+  isLoopedReviewWorkflow,
+  isStartLoopedReviewInput,
+  type StartLoopedReviewInput,
+} from "@orkestrator/protocol/review-workflow";
 import {
   assertValidPromptAttachments,
   assertValidPromptImages,
@@ -176,6 +184,7 @@ export type CommandContext = {
   };
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;
+  loopedReviews?: LoopedReviewService;
   /** Backend-owned notification emitted by exact agent turn lifecycles. */
   notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
 };
@@ -9007,7 +9016,7 @@ export function createCommandRegistry(
   );
   register(
     "save_looped_review_workflow",
-    ({
+    async ({
       workflowId,
       environmentId,
       version,
@@ -9015,11 +9024,18 @@ export function createCommandRegistry(
       expectedRevision,
       controllerOwnerId,
       controllerToken,
-    }, { storage }) =>
-      storage.saveLoopedReviewWorkflow(
-        asString(workflowId, "workflowId"),
+    }, { storage }) => {
+      const parsedWorkflowId = asString(workflowId, "workflowId");
+      const parsedVersion = asNumber(version, "version");
+      const current = await storage.getLoopedReviewWorkflow(parsedWorkflowId);
+      if (parsedVersion >= LOOPED_REVIEW_WORKFLOW_VERSION
+        || (current?.version ?? 0) >= LOOPED_REVIEW_WORKFLOW_VERSION) {
+        throw new Error("Backend-owned looped reviews can only be changed through workflow commands");
+      }
+      return storage.saveLoopedReviewWorkflow(
+        parsedWorkflowId,
         asString(environmentId, "environmentId"),
-        asNumber(version, "version"),
+        parsedVersion,
         snapshot,
         expectedRevision === undefined
           ? undefined
@@ -9030,16 +9046,23 @@ export function createCommandRegistry(
               ownerId: asNonBlankString(controllerOwnerId, "controllerOwnerId"),
               token: asNonBlankString(controllerToken, "controllerToken"),
             },
-      ),
+      );
+    },
   );
   register(
     "claim_looped_review_controller",
-    ({ workflowId, ownerId, leaseMs }, { storage }) =>
-      storage.claimLoopedReviewController(
-        asNonBlankString(workflowId, "workflowId"),
+    async ({ workflowId, ownerId, leaseMs }, { storage }) => {
+      const parsedWorkflowId = asNonBlankString(workflowId, "workflowId");
+      const current = await storage.getLoopedReviewWorkflow(parsedWorkflowId);
+      if ((current?.version ?? 0) >= LOOPED_REVIEW_WORKFLOW_VERSION) {
+        throw new Error("Backend-owned looped-review controller leases are not available to renderers");
+      }
+      return storage.claimLoopedReviewController(
+        parsedWorkflowId,
         asNonBlankString(ownerId, "ownerId"),
         asNumber(leaseMs, "leaseMs"),
-      ),
+      );
+    },
   );
   register(
     "validate_looped_review_controller",
@@ -9059,9 +9082,43 @@ export function createCommandRegistry(
         asNonBlankString(token, "token"),
       ),
   );
-  register("delete_looped_review_workflow", ({ workflowId }, { storage }) =>
-    storage.deleteLoopedReviewWorkflow(asString(workflowId, "workflowId")),
-  );
+  register("delete_looped_review_workflow", async ({ workflowId }, { storage }) => {
+    const parsedWorkflowId = asString(workflowId, "workflowId");
+    const current = await storage.getLoopedReviewWorkflow(parsedWorkflowId);
+    if (current && isLoopedReviewWorkflow(current.snapshot)
+      && !isLoopedReviewTerminalPhase(current.snapshot.phase)) {
+      throw new Error("An active backend-owned looped review must be cancelled before deletion");
+    }
+    return storage.deleteLoopedReviewWorkflow(parsedWorkflowId);
+  });
+  register("start_looped_review", (args, context) => {
+    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
+    if (!isStartLoopedReviewInput(args)) throw new Error("Invalid looped review start request");
+    return context.loopedReviews.start(args as StartLoopedReviewInput);
+  });
+  register("pause_looped_review", ({ workflowId }, context) => {
+    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
+    return context.loopedReviews.pause(asNonBlankString(workflowId, "workflowId"));
+  });
+  register("resume_looped_review", ({ workflowId }, context) => {
+    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
+    return context.loopedReviews.resume(asNonBlankString(workflowId, "workflowId"));
+  });
+  register("retry_looped_review", ({ workflowId }, context) => {
+    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
+    return context.loopedReviews.retry(asNonBlankString(workflowId, "workflowId"));
+  });
+  register("cancel_looped_review", ({ workflowId }, context) => {
+    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
+    return context.loopedReviews.cancel(asNonBlankString(workflowId, "workflowId"));
+  });
+  register("get_looped_review_provider_session", ({ workflowId, sessionId }, context) => {
+    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
+    return context.loopedReviews.providerSession(
+      asNonBlankString(workflowId, "workflowId"),
+      sessionId === undefined ? undefined : asNonBlankString(sessionId, "sessionId"),
+    );
+  });
 
   register("start_build_pipeline", (args, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");

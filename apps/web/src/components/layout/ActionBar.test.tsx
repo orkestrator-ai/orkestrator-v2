@@ -69,8 +69,11 @@ const setEnvironmentPrBackendMock = mock(async (
 ) => {});
 const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => true);
-const createLoopedWorkflowMock = mock((_options: unknown) => "looped-workflow-1");
+const startLoopedReviewMock = mock(async (_options: unknown) => ({ id: "looped-workflow-1" }));
+const installLoopedWorkflowMock = mock((_workflow: unknown) => {});
 const removeLoopedWorkflowMock = mock((_workflowId: string) => {});
+const deleteLoopedReviewMock = mock(async (_workflowId: string) => {});
+const cancelLoopedReviewMock = mock(async (_workflowId: string) => ({ id: "looped-workflow-1" }));
 const selectTabMock = mock((_index: number) => {});
 const closeActiveTabMock = mock(() => {});
 const setProjectBoardTabMock = mock((_tab: string) => {});
@@ -484,10 +487,10 @@ mock.module("@/stores", () => ({
       selector,
     ),
   useLoopedReviewStore: <T,>(selector: (state: {
-    createWorkflow: typeof createLoopedWorkflowMock;
+    replaceWorkflow: typeof installLoopedWorkflowMock;
     removeWorkflow: typeof removeLoopedWorkflowMock;
   }) => T) => selector({
-    createWorkflow: createLoopedWorkflowMock,
+    replaceWorkflow: installLoopedWorkflowMock,
     removeWorkflow: removeLoopedWorkflowMock,
   }),
 }));
@@ -531,6 +534,9 @@ mock.module("@/lib/backend", () => ({
   readLocalFile: readLocalFileMock,
   recreateEnvironment: recreateEnvironmentMock,
   setEnvironmentPr: setEnvironmentPrBackendMock,
+  startLoopedReview: startLoopedReviewMock,
+  cancelLoopedReview: cancelLoopedReviewMock,
+  deleteLoopedReviewWorkflow: deleteLoopedReviewMock,
 }));
 
 mock.module("@/stores/kanbanStore", () => ({
@@ -578,9 +584,14 @@ beforeEach(() => {
   setEnvironmentPRStoreMock.mockReset();
   createTabMock.mockReset();
   createTabMock.mockImplementation(() => true);
-  createLoopedWorkflowMock.mockReset();
-  createLoopedWorkflowMock.mockImplementation(() => "looped-workflow-1");
+  startLoopedReviewMock.mockReset();
+  startLoopedReviewMock.mockImplementation(async () => ({ id: "looped-workflow-1" }));
+  installLoopedWorkflowMock.mockReset();
   removeLoopedWorkflowMock.mockReset();
+  deleteLoopedReviewMock.mockReset();
+  deleteLoopedReviewMock.mockImplementation(async () => {});
+  cancelLoopedReviewMock.mockReset();
+  cancelLoopedReviewMock.mockImplementation(async () => ({ id: "looped-workflow-1" }));
   selectTabMock.mockReset();
   closeActiveTabMock.mockReset();
   toastSuccessMock.mockReset();
@@ -2198,7 +2209,7 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).toHaveBeenCalledTimes(cases.length);
   });
 
-  test("launches one dedicated looped-review tab with the default six-pass allowance", () => {
+  test("launches one dedicated looped-review tab with the default six-pass allowance", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -2214,13 +2225,13 @@ describe("ActionBar workflow tabs", () => {
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(createLoopedWorkflowMock).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledWith(expect.objectContaining({
       environmentId: "env-1",
       projectId: "project-1",
       agent: "codex",
       targetBranch: "main",
       allowance: 6,
-    }));
+    })));
     expect(createTabMock).toHaveBeenCalledWith("looped-review", {
       loopedReviewId: "looped-workflow-1",
       displayTitle: "Looped Review",
@@ -2228,7 +2239,7 @@ describe("ActionBar workflow tabs", () => {
     expect(removeLoopedWorkflowMock).not.toHaveBeenCalled();
   });
 
-  test("passes linked ticket details and current project notes into looped review", () => {
+  test("passes linked ticket details and current project notes into looped review", async () => {
     currentWorkspaceReady = true;
     currentKanbanNotesProjectId = "project-1";
     currentKanbanNotes = "Prefer small, independently deployable changes.";
@@ -2257,7 +2268,7 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(createLoopedWorkflowMock).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledWith(expect.objectContaining({
       context: {
         ticketTitle: "Retry failed uploads",
         ticketDescription: "Keep failed uploads available for retry.",
@@ -2266,10 +2277,10 @@ describe("ActionBar workflow tabs", () => {
         imageNames: ["failed-upload.png"],
         projectNotes: "Prefer small, independently deployable changes.",
       },
-    }));
+    })));
   });
 
-  test("passes current project notes without requiring a linked ticket", () => {
+  test("passes current project notes without requiring a linked ticket", async () => {
     currentWorkspaceReady = true;
     currentKanbanNotesProjectId = "project-1";
     currentKanbanNotes = "Review database migrations carefully.";
@@ -2278,7 +2289,7 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(createLoopedWorkflowMock).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledWith(expect.objectContaining({
       context: {
         ticketTitle: undefined,
         ticketDescription: undefined,
@@ -2287,10 +2298,10 @@ describe("ActionBar workflow tabs", () => {
         imageNames: undefined,
         projectNotes: "Review database migrations carefully.",
       },
-    }));
+    })));
   });
 
-  test("excludes notes loaded for another project from looped review", () => {
+  test("excludes notes loaded for another project from looped review", async () => {
     currentWorkspaceReady = true;
     currentKanbanNotesProjectId = "other-project";
     currentKanbanNotes = "Unrelated project notes";
@@ -2299,9 +2310,9 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(createLoopedWorkflowMock).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledWith(expect.objectContaining({
       context: undefined,
-    }));
+    })));
   });
 
   test("requires a running, workspace-ready environment with setup complete", () => {
@@ -2312,7 +2323,7 @@ describe("ActionBar workflow tabs", () => {
       expect(
         screen.queryByRole("dialog", { name: "Configure looped code review" }),
       ).toBeNull();
-      expect(createLoopedWorkflowMock).not.toHaveBeenCalled();
+      expect(startLoopedReviewMock).not.toHaveBeenCalled();
     };
 
     currentEnvironment = { ...selectedEnvironment, status: "stopped" };
@@ -2342,11 +2353,11 @@ describe("ActionBar workflow tabs", () => {
     view.rerender(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(createLoopedWorkflowMock).not.toHaveBeenCalled();
+    expect(startLoopedReviewMock).not.toHaveBeenCalled();
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
-  test("rolls back the workflow when tab creation is refused", () => {
+  test("rolls back the workflow when tab creation is refused", async () => {
     currentWorkspaceReady = true;
     createTabMock.mockReturnValueOnce(false);
     render(<ActionBar />);
@@ -2354,8 +2365,9 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(createLoopedWorkflowMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledTimes(1));
     expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1");
+    expect(deleteLoopedReviewMock).toHaveBeenCalledWith("looped-workflow-1");
     expect(toastErrorMock).toHaveBeenCalledWith(
       "Could not open looped review",
       expect.objectContaining({ description: expect.stringContaining("maximum tab count") }),
@@ -2365,7 +2377,7 @@ describe("ActionBar workflow tabs", () => {
     ).toBeTruthy();
   });
 
-  test("rolls back the workflow when tab creation throws", () => {
+  test("rolls back the workflow when tab creation throws", async () => {
     currentWorkspaceReady = true;
     createTabMock.mockImplementationOnce(() => {
       throw new Error("pane rejected the tab");
@@ -2375,14 +2387,15 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1");
+    await waitFor(() => expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1"));
+    expect(deleteLoopedReviewMock).toHaveBeenCalledWith("looped-workflow-1");
     expect(toastErrorMock).toHaveBeenCalledWith(
       "Could not open looped review",
       { description: "pane rejected the tab" },
     );
   });
 
-  test("reports non-Error looped-review tab creation failures", () => {
+  test("reports non-Error looped-review tab creation failures", async () => {
     currentWorkspaceReady = true;
     createTabMock.mockImplementationOnce(() => {
       throw "pane rejected the tab";
@@ -2392,7 +2405,8 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1");
+    await waitFor(() => expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1"));
+    expect(deleteLoopedReviewMock).toHaveBeenCalledWith("looped-workflow-1");
     expect(toastErrorMock).toHaveBeenCalledWith(
       "Could not open looped review",
       { description: "pane rejected the tab" },
@@ -2982,7 +2996,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     }
 
     expect(createTabMock).not.toHaveBeenCalled();
-    expect(createLoopedWorkflowMock).not.toHaveBeenCalled();
+    expect(startLoopedReviewMock).not.toHaveBeenCalled();
     expect((screen.getByRole("button", { name: "Code review" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "Looped code review" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "New terminal tab" }) as HTMLButtonElement).disabled).toBe(true);

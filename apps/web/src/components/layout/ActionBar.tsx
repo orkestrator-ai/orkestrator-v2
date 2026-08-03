@@ -436,9 +436,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   // Get the default agent - per-environment override takes precedence over global config
   const defaultAgent = selectedEnvironment?.defaultAgent || config.global.defaultAgent || "claude";
-  const { createLoopedReviewWorkflow, removeLoopedReviewWorkflow } =
+  const { installLoopedReviewWorkflow, removeLoopedReviewWorkflow } =
     useLoopedReviewStore(useShallow((state) => ({
-      createLoopedReviewWorkflow: state.createWorkflow,
+      installLoopedReviewWorkflow: state.replaceWorkflow,
       removeLoopedReviewWorkflow: state.removeWorkflow,
     })));
 
@@ -523,7 +523,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     setReviewDialogOpen(false);
   }, [handleReview]);
 
-  const handleLoopedReview = useCallback((selection: ReviewLaunchSelection) => {
+  const handleLoopedReview = useCallback(async (selection: ReviewLaunchSelection) => {
     if (
       !createTab
       || !selectedEnvironmentId
@@ -551,31 +551,40 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           projectNotes: hasCurrentProjectNotes ? kanbanState.notes : undefined,
         }
       : undefined;
-    const workflowId = createLoopedReviewWorkflow({
-      environmentId: selectedEnvironmentId,
-      projectId: selectedProjectId,
-      agent: getReviewAgent(selection.tabType),
-      model: selection.model,
-      reasoningEffort: selection.reasoningEffort,
-      targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
-      reviewInstruction: config.global.reviewInstruction,
-      context,
-      allowance: selection.passAllowance,
-    });
+    let workflowId: string | undefined;
     try {
+      const workflow = await backend.startLoopedReview({
+        environmentId: selectedEnvironmentId,
+        projectId: selectedProjectId,
+        agent: getReviewAgent(selection.tabType),
+        model: selection.model,
+        reasoningEffort: selection.reasoningEffort,
+        targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
+        reviewInstruction: config.global.reviewInstruction,
+        context,
+        allowance: selection.passAllowance,
+      });
+      workflowId = workflow.id;
+      installLoopedReviewWorkflow(workflow);
       const created = createTab("looped-review", {
         loopedReviewId: workflowId,
         displayTitle: "Looped Review",
       });
       if (!created) {
         removeLoopedReviewWorkflow(workflowId);
+        await backend.cancelLoopedReview(workflowId).catch(() => undefined);
+        await backend.deleteLoopedReviewWorkflow(workflowId).catch(() => undefined);
         toast.error("Could not open looped review", {
           description: "The environment is not ready or the maximum tab count was reached.",
         });
         return;
       }
     } catch (error) {
-      removeLoopedReviewWorkflow(workflowId);
+      if (workflowId) {
+        removeLoopedReviewWorkflow(workflowId);
+        await backend.cancelLoopedReview(workflowId).catch(() => undefined);
+        await backend.deleteLoopedReviewWorkflow(workflowId).catch(() => undefined);
+      }
       toast.error("Could not open looped review", {
         description: error instanceof Error ? error.message : String(error),
       });
@@ -586,8 +595,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     canCreateTab,
     config.global.reviewInstruction,
     config.repositories,
-    createLoopedReviewWorkflow,
     createTab,
+    installLoopedReviewWorkflow,
     isRunning,
     removeLoopedReviewWorkflow,
     selectedEnvironment,

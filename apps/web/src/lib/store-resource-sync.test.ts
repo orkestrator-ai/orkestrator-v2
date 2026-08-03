@@ -35,6 +35,9 @@ afterAll(() => {
  */
 
 const hydrateLoopedReviewWorkflow = mock(async (_id: string): Promise<unknown> => undefined);
+const resolveLoopedReviewWorkflow = mock(
+  async (_id: string): Promise<{ status: string; workflow?: unknown }> => ({ status: "unreadable" }),
+);
 const hydrateLoopedReviewWorkflowsForEnvironment = mock(async (_id: string) => []);
 const hydrateBuildPipeline = mock(async (_id: string) => null as unknown);
 const hydrateBuildPipelinesForProject = mock(async (_id: string) => []);
@@ -44,6 +47,7 @@ const createPromptQueueSources = mock(() => []);
 mock.module("@/lib/looped-review-persistence", () => ({
   hydrateLoopedReviewWorkflow,
   hydrateLoopedReviewWorkflowsForEnvironment,
+  resolveLoopedReviewWorkflow,
 }));
 mock.module("@/lib/build-pipeline-persistence", () => ({
   hydrateBuildPipeline,
@@ -122,6 +126,8 @@ beforeEach(() => {
   resetResourceSync();
   hydrateLoopedReviewWorkflow.mockClear();
   hydrateLoopedReviewWorkflow.mockImplementation(async () => undefined);
+  resolveLoopedReviewWorkflow.mockClear();
+  resolveLoopedReviewWorkflow.mockImplementation(async () => ({ status: "unreadable" }));
   hydrateBuildPipeline.mockClear();
   hydrateBuildPipeline.mockImplementation(async () => null);
   hydrateBuildPipelinesForProject.mockClear();
@@ -335,29 +341,56 @@ describe("looped-review binding", () => {
     dispatchResourceChange({ resource: "looped-review", id: "workflow-1", revision: 1 });
     await tick();
 
-    expect(hydrateLoopedReviewWorkflow).toHaveBeenCalledWith("workflow-1");
+    expect(resolveLoopedReviewWorkflow).toHaveBeenCalledWith("workflow-1");
   });
 
   test("does not reject when the refetch fails", async () => {
-    hydrateLoopedReviewWorkflow.mockImplementationOnce(async () => {
+    resolveLoopedReviewWorkflow.mockImplementationOnce(async () => {
       throw new Error("backend down");
     });
 
     dispatchResourceChange({ resource: "looped-review", id: "workflow-1", revision: 1 });
     await tick();
 
-    expect(hydrateLoopedReviewWorkflow).toHaveBeenCalledTimes(1);
+    expect(resolveLoopedReviewWorkflow).toHaveBeenCalledTimes(1);
   });
 
   test("removes a stale projection after authoritative deletion", async () => {
     const workflow = loopedReviewFixture({ id: "workflow-deleted" });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
-    hydrateLoopedReviewWorkflow.mockImplementationOnce(async () => null);
+    resolveLoopedReviewWorkflow.mockImplementationOnce(async () => ({ status: "missing" }));
 
     dispatchResourceChange({ resource: "looped-review", id: workflow.id, revision: 2 });
     await tick();
 
     expect(useLoopedReviewStore.getState().workflows.has(workflow.id)).toBe(false);
+  });
+
+  test("keeps a workflow whose snapshot this build cannot read", async () => {
+    // A record the backend is still advancing but this bundle fails to
+    // validate — a version skew — must not be mistaken for a deletion, or the
+    // pane-layout reconciliation removes the user's tab along with it.
+    const workflow = loopedReviewFixture({ id: "workflow-unreadable" });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    resolveLoopedReviewWorkflow.mockImplementationOnce(async () => ({ status: "unreadable" }));
+
+    dispatchResourceChange({ resource: "looped-review", id: workflow.id, revision: 2 });
+    await tick();
+
+    expect(useLoopedReviewStore.getState().workflows.has(workflow.id)).toBe(true);
+  });
+
+  test("keeps a workflow when the refetch itself fails", async () => {
+    const workflow = loopedReviewFixture({ id: "workflow-offline" });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    resolveLoopedReviewWorkflow.mockImplementationOnce(async () => {
+      throw new Error("backend down");
+    });
+
+    dispatchResourceChange({ resource: "looped-review", id: workflow.id, revision: 2 });
+    await tick();
+
+    expect(useLoopedReviewStore.getState().workflows.has(workflow.id)).toBe(true);
   });
 });
 

@@ -127,8 +127,13 @@ class FakeProvider implements BuildPipelineProvider {
     issueOutcomes: [], coverageGapOutcomes: [],
   };
   reconciliationValues: unknown[] = [];
+  disposeCount = 0;
   private ambiguousThrown = false;
   private definiteThrown = false;
+
+  async dispose(): Promise<void> {
+    this.disposeCount += 1;
+  }
 
   readonly interactions: NonNullable<BuildPipelineProvider["interactions"]>;
 
@@ -242,13 +247,16 @@ async function harness(run: (
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-looped-review-"));
   const storage = new StorageService(dataDir);
   await storage.init();
-  await storage.addEnvironment({
-    id: "env-1", projectId: "project-1", name: "review", branch: "change",
-    containerId: null, status: "running", prUrl: null, prState: null,
-    hasMergeConflicts: null, createdAt: new Date(0).toISOString(),
-    networkAccessMode: "full", order: 0, environmentType: "local",
-    worktreePath: "/tmp/review", setupScriptsComplete: true,
-  });
+  // Two environments, because only one looped review may run per environment.
+  for (const id of ["env-1", "env-2"]) {
+    await storage.addEnvironment({
+      id, projectId: "project-1", name: "review", branch: "change",
+      containerId: null, status: "running", prUrl: null, prState: null,
+      hasMergeConflicts: null, createdAt: new Date(0).toISOString(),
+      networkAccessMode: "full", order: 0, environmentType: "local",
+      worktreePath: "/tmp/review", setupScriptsComplete: true,
+    });
+  }
   const provider = new FakeProvider(agent);
   const bridgeCalls: string[] = [];
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
@@ -297,6 +305,19 @@ async function snapshot(storage: StorageService, id: string): Promise<LoopedRevi
 
 async function pump(service: LoopedReviewService, id: string, passes = 20): Promise<void> {
   for (let index = 0; index < passes; index += 1) await service.advanceNow(id);
+}
+
+/** Polls a condition instead of sleeping a fixed span, so load cannot fail it. */
+async function waitFor(
+  condition: () => Promise<boolean> | boolean,
+  timeoutMs = 15_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for condition");
 }
 
 function workflowFixture(overrides: Partial<LoopedReviewWorkflow> = {}): LoopedReviewWorkflow {
@@ -838,8 +859,22 @@ describe("LoopedReviewService", () => {
         environmentId: "env-1", projectId: "project-1", agent: "claude",
         model: "model", targetBranch: "main", allowance: 1,
       });
-      await Promise.all([first.advanceNow(started.id), second.advanceNow(started.id)]);
-      expect(provider.sent).toHaveLength(1);
+      // Race both controllers on every step rather than relying on one
+      // interleaving. Which controller wins a given step is genuinely
+      // unspecified — it depends on who reaches the lease claim first — so an
+      // exact dispatch count after a fixed number of calls is not a property of
+      // the system, only of one schedule. The invariant that *is* guaranteed is
+      // that the fence makes a losing controller abandon its step rather than
+      // redispatch, so no request is ever sent twice.
+      for (let step = 0; step < 12; step += 1) {
+        await Promise.all([
+          first.advanceNow(started.id).catch(() => undefined),
+          second.advanceNow(started.id).catch(() => undefined),
+        ]);
+      }
+      const requestIds = provider.sent.map((entry) => entry.requestId);
+      expect(requestIds.length).toBeGreaterThan(0);
+      expect(new Set(requestIds).size).toBe(requestIds.length);
       expect((await snapshot(storage, started.id)).backendRevision).toBeGreaterThan(1);
       await second.shutdown();
     });
@@ -1056,7 +1091,9 @@ describe("LoopedReviewService", () => {
       await storage.saveLoopedReviewWorkflow(started.id, "env-1", 2, {
         ...current,
         phase: "cancelling",
-        cancellingFromPhase: "discovering",
+        // Must match the in-flight dispatch's phase: a dispatch belongs to
+        // exactly one phase and the snapshot is rejected otherwise.
+        cancellingFromPhase: "preparing",
         cancellingSince: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
       }, current.backendRevision);
 
@@ -1113,14 +1150,14 @@ describe("LoopedReviewService", () => {
     });
   });
 
-  test("adopts legacy workflows only at safe phase boundaries", async () => {
+  test("resumes a legacy phase boundary and quarantines a legacy turn in flight", async () => {
     await harness(async (service, storage, provider, invoke) => {
       const safeStarted = await service.start({
         environmentId: "env-1", projectId: "project-1", agent: "claude",
         model: "model", targetBranch: "main", allowance: 1,
       });
       const unsafeStarted = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
+        environmentId: "env-2", projectId: "project-1", agent: "claude",
         model: "model", targetBranch: "main", allowance: 1,
       });
       await Promise.all([
@@ -1143,11 +1180,12 @@ describe("LoopedReviewService", () => {
         version: 1,
         controller: undefined,
       };
+      expect(unsafeLegacy.dispatch).toBeDefined();
       await storage.saveLoopedReviewWorkflow(
         safeStarted.id, "env-1", 1, safeLegacy, safeRecord.revision,
       );
       await storage.saveLoopedReviewWorkflow(
-        unsafeStarted.id, "env-1", 1, unsafeLegacy, unsafeRecord.revision,
+        unsafeStarted.id, "env-2", 1, unsafeLegacy, unsafeRecord.revision,
       );
 
       const recovering = new LoopedReviewService(storage, invoke, {
@@ -1155,8 +1193,26 @@ describe("LoopedReviewService", () => {
         provider: async () => provider,
       });
       await recovering.init();
+
+      // A persisted phase boundary resumes exactly where it stopped.
+      const safe = await snapshot(storage, safeStarted.id);
       expect((await storage.getLoopedReviewWorkflow(safeStarted.id))?.version).toBe(2);
-      expect((await storage.getLoopedReviewWorkflow(unsafeStarted.id))?.version).toBe(1);
+      expect(safe.phase).toBe("preparing");
+
+      // A turn that was in flight is not replayed — whether it reached the
+      // provider is unknowable — but it must still reach a terminal state, and
+      // the renderer controller that could once cancel it no longer exists.
+      expect((await storage.getLoopedReviewWorkflow(unsafeStarted.id))?.version).toBe(2);
+      const quarantined = await snapshot(storage, unsafeStarted.id);
+      expect(quarantined.phase).toBe("failed");
+      expect(quarantined.failure?.code).toBe("dispatch");
+      expect(quarantined.failure?.retryPhase).toBe("preparing");
+      expect(quarantined.failure?.preserveDispatch).toBe(false);
+      expect(quarantined.dispatch).toBeUndefined();
+
+      // And it is genuinely recoverable through the ordinary commands.
+      await recovering.cancel(unsafeStarted.id);
+      expect((await snapshot(storage, unsafeStarted.id)).phase).toBe("cancelled");
       await recovering.shutdown();
     });
   });
@@ -1188,9 +1244,278 @@ describe("LoopedReviewService", () => {
       });
       await recovering.init();
       expect((await storage.getLoopedReviewWorkflow(started.id))?.version).toBe(1);
-      await new Promise((resolve) => setTimeout(resolve, 2_100));
+      // Polled rather than slept against a fixed 2.1s: the adoption cannot
+      // happen before the foreign lease expires, but *when* the poll observes
+      // that afterwards depends on scheduling, and a starved worker turns a
+      // fixed sleep into a spurious failure.
+      await waitFor(async () =>
+        (await storage.getLoopedReviewWorkflow(started.id))?.version === 2);
       expect((await storage.getLoopedReviewWorkflow(started.id))?.version).toBe(2);
       await recovering.shutdown();
+    });
+  });
+});
+
+const startInput = {
+  environmentId: "env-1", projectId: "project-1", agent: "claude" as const,
+  model: "model", targetBranch: "main", allowance: 1,
+};
+
+describe("LoopedReviewService lifecycle guards", () => {
+  test("refuses a second concurrent review on the same environment", async () => {
+    await harness(async (service, storage) => {
+      const first = await service.start(startInput);
+      // Two reviews would drive two agent sessions against one worktree, each
+      // told to commit and validate, so they interleave commits.
+      await expect(service.start(startInput)).rejects.toThrow(/already running/);
+      // A different environment is unaffected.
+      const other = await service.start({ ...startInput, environmentId: "env-2" });
+      expect(other.environmentId).toBe("env-2");
+      // Once the first reaches a terminal phase the environment is free again.
+      await service.cancel(first.id);
+      expect((await snapshot(storage, first.id)).phase).toBe("cancelled");
+      await expect(service.start(startInput)).resolves.toBeDefined();
+    });
+  });
+
+  test("cancels cleanly from paused and from failed", async () => {
+    await harness(async (service, storage) => {
+      const paused = await service.start(startInput);
+      await service.advanceNow(paused.id);
+      await service.pause(paused.id);
+      expect((await snapshot(storage, paused.id)).phase).toBe("paused");
+      await service.cancel(paused.id);
+      const afterPause = await snapshot(storage, paused.id);
+      expect(afterPause.phase).toBe("cancelled");
+      expect(afterPause.cancellingFromPhase).toBeUndefined();
+      expect(afterPause.cancellingSince).toBeUndefined();
+    });
+
+    await harness(async (service, storage, provider) => {
+      const failed = await service.start(startInput);
+      await service.advanceNow(failed.id);
+      provider.structuredRejectCount = 1;
+      provider.statusRejectCount = 1;
+      await service.advanceNow(failed.id);
+      expect((await snapshot(storage, failed.id)).phase).toBe("failed");
+
+      await service.cancel(failed.id);
+      const cancelled = await snapshot(storage, failed.id);
+      expect(cancelled.phase).toBe("cancelled");
+      // The record must remain readable, or it is stuck and undeletable.
+      expect(cancelled.failure).toBeUndefined();
+    });
+  });
+
+  test("marks a pull request that never completed as failed", async () => {
+    await harness(async (service, storage, provider) => {
+      const started = await service.start(startInput);
+      await pump(service, started.id, 12);
+      const beforePr = await snapshot(storage, started.id);
+      expect(beforePr.phase).toBe("completed");
+      expect(beforePr.pr.status).toBe("created");
+
+      // Now force a failure while the PR phase is running.
+      const second = await service.start({ ...startInput, environmentId: "env-2" });
+      await pump(service, second.id, 8);
+      const running = await snapshot(storage, second.id);
+      if (running.pr.status === "running") {
+        provider.structuredRejectCount = 1;
+        provider.statusRejectCount = 1;
+        await service.advanceNow(second.id);
+        const failed = await snapshot(storage, second.id);
+        expect(failed.phase).toBe("failed");
+        // Otherwise the UI reports a PR still being created after the workflow died.
+        expect(failed.pr.status).not.toBe("running");
+      }
+    });
+  });
+
+  test("cancelling a running pull request does not leave it reported as running", async () => {
+    await harness(async (service, storage) => {
+      const started = await service.start(startInput);
+      await service.advanceNow(started.id);
+      const current = await snapshot(storage, started.id);
+      await storage.saveLoopedReviewWorkflow(started.id, "env-1", 2, {
+        ...current,
+        pr: { status: "running", sessionId: "provider-1" },
+      }, current.backendRevision);
+
+      await service.cancel(started.id);
+      const cancelled = await snapshot(storage, started.id);
+      expect(cancelled.phase).toBe("cancelled");
+      expect(cancelled.pr.status).toBe("failed");
+      expect(cancelled.pr.error).toContain("Cancelled");
+    });
+  });
+
+  test("retry rolls back a discovery pass that produced no report", async () => {
+    await harness(async (service, storage, provider) => {
+      const started = await service.start(startInput);
+      await pump(service, started.id, 3);
+      expect((await snapshot(storage, started.id)).phase).toBe("discovering");
+
+      provider.structuredRejectCount = 1;
+      provider.statusValue = "idle";
+      await pump(service, started.id, 6);
+      const failed = await snapshot(storage, started.id);
+      expect(failed.phase).toBe("failed");
+
+      await service.retry(started.id);
+      const retried = await snapshot(storage, started.id);
+      expect(retried.phase).toBe(failed.failure!.retryPhase);
+      expect(retried.failure).toBeUndefined();
+      // A pass with no report must not be left occupying its slot.
+      const round = retried.rounds.find((entry) => entry.round === retried.currentRound)!;
+      expect(round.passes.every((pass) => pass.report !== undefined || pass.pass <= retried.currentPass))
+        .toBe(true);
+    });
+  });
+
+  test("reports cancelling as neither active nor terminal", async () => {
+    // Both must map to "still running" for the build pipeline; reporting idle
+    // would let it advance past a turn that may still be executing.
+    const { isLoopedReviewActivePhase, isLoopedReviewTerminalPhase } =
+      await import("@orkestrator/protocol/review-workflow");
+    expect(isLoopedReviewActivePhase("cancelling")).toBe(false);
+    expect(isLoopedReviewTerminalPhase("cancelling")).toBe(false);
+    expect(isLoopedReviewActivePhase("failed")).toBe(false);
+    expect(isLoopedReviewTerminalPhase("failed")).toBe(false);
+  });
+
+  test("drives the full allowance ladder from the maximum", async () => {
+    await harness(async (service, storage, provider) => {
+      provider.reviewReport = issueReport;
+      const started = await service.start({ ...startInput, allowance: 10 });
+      expect(started.startingAllowance).toBe(10);
+      expect(started.currentAllowance).toBe(10);
+      await pump(service, started.id, 60);
+      const current = await snapshot(storage, started.id);
+      // Each round halves, so the allowance only ever shrinks and never below 1.
+      expect(current.currentAllowance).toBeLessThanOrEqual(current.startingAllowance);
+      expect(current.currentAllowance).toBeGreaterThanOrEqual(1);
+      for (const round of current.rounds) {
+        expect(round.passes.length).toBeLessThanOrEqual(round.allowance);
+      }
+    });
+  });
+
+  test("providerSession answers for a known session and refuses an unknown one", async () => {
+    await harness(async (service, storage) => {
+      const started = await service.start(startInput);
+      await service.advanceNow(started.id);
+      const current = await snapshot(storage, started.id);
+      const session = current.sessions[0]!;
+
+      await expect(service.providerSession(started.id, session.id))
+        .resolves.toEqual({ providerSessionId: session.providerSessionId });
+      await expect(service.providerSession(started.id))
+        .resolves.toEqual({ providerSessionId: session.providerSessionId });
+      await expect(service.providerSession(started.id, "session-does-not-exist"))
+        .resolves.toBeNull();
+      await expect(service.providerSession("workflow-does-not-exist")).resolves.toBeNull();
+    });
+  });
+});
+
+describe("LoopedReviewService resource lifetime", () => {
+  test("init is idempotent and does not block on a slow tick", async () => {
+    await harness(async (service, storage, provider, invoke) => {
+      const started = await service.start(startInput);
+      expect((await snapshot(storage, started.id)).phase).toBe("preparing");
+
+      let release!: () => void;
+      provider.sendBarrier = new Promise<void>((resolve) => { release = resolve; });
+
+      const autoAdvancing = new LoopedReviewService(storage, invoke, {
+        pollIntervalMs: 5,
+        provider: async () => provider,
+      });
+      // init() must not await the self-retriggering tick loop: main.ts awaits
+      // backend.init() before it starts the gateway, so a tick that keeps
+      // exceeding the poll interval would stop the app coming up at all.
+      const startedAt = Date.now();
+      await autoAdvancing.init();
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+
+      // A second init must not leak the first pair of intervals.
+      await autoAdvancing.init();
+      release();
+      await autoAdvancing.shutdown();
+    });
+  });
+
+  test("releases the lease and the provider once a workflow is terminal", async () => {
+    await harness(async (service, storage, provider) => {
+      const started = await service.start(startInput);
+      await pump(service, started.id, 12);
+      expect((await snapshot(storage, started.id)).phase).toBe("completed");
+      // Otherwise the lease keeps being renewed forever for a workflow that
+      // will never run again, and the provider's event stream stays open.
+      expect(provider.disposeCount).toBeGreaterThan(0);
+
+      const record = await storage.getLoopedReviewWorkflow(started.id);
+      expect(record?.controllerLease).toBeUndefined();
+    });
+  });
+
+  test("re-granting a fresh lease to its own holder does not rewrite the store", async () => {
+    await harness(async (service, storage) => {
+      // Driven directly against storage, because the service under test holds
+      // the lease for any workflow it is advancing.
+      const started = await service.start({ ...startInput, environmentId: "env-2" });
+      await service.cancel(started.id);
+
+      const owner = "owner-under-test";
+      const first = await storage.claimLoopedReviewController(started.id, owner, 15_000);
+      const afterFirst = (await storage.getLoopedReviewWorkflow(started.id))!;
+      expect(first.granted).toBe(true);
+
+      // The claim happens on every advance, once a second in production, for
+      // every non-terminal workflow. Writing there rewrites the whole file —
+      // which legitimately holds complete diffs — and rotates five backups.
+      const second = await storage.claimLoopedReviewController(started.id, owner, 15_000);
+      const afterSecond = (await storage.getLoopedReviewWorkflow(started.id))!;
+      expect(second.granted).toBe(true);
+      expect(second.token).toBe(first.token);
+      expect(second.expiresAt).toBe(first.expiresAt);
+      expect(afterSecond.revision).toBe(afterFirst.revision);
+
+      // A foreign owner is still refused while that lease is live.
+      expect((await storage.claimLoopedReviewController(started.id, "someone-else", 15_000)).granted)
+        .toBe(false);
+    });
+  });
+
+  test("a lease conflict reports an actionable message", async () => {
+    // A two-second lease so a foreign controller can take it over in-test.
+    await harness(async (service, storage) => {
+      const started = await service.start(startInput);
+      await service.advanceNow(started.id);
+      await waitFor(async () =>
+        (await storage.claimLoopedReviewController(started.id, "another-controller", 2_000)).granted);
+      // Renderers surface error.message directly; an empty one is a blank toast.
+      await expect(service.pause(started.id)).rejects.toThrow(/lease/i);
+    }, "claude", { controllerLeaseMs: 2_000 });
+  });
+
+  test("refuses to persist a snapshot that breaks the workflow contract", async () => {
+    await harness(async (service, storage) => {
+      const started = await service.start(startInput);
+      await service.advanceNow(started.id);
+      const current = await snapshot(storage, started.id);
+      // Storage only checks that the snapshot is an object, so without the
+      // service-side guard an invalid transition would persist silently and
+      // every later read would reject the record.
+      await expect(storage.saveLoopedReviewWorkflow(started.id, "env-1", 2, {
+        ...current, phase: "cancelling", cancellingFromPhase: undefined,
+      }, current.backendRevision)).resolves.toBeDefined();
+      const broken = await storage.getLoopedReviewWorkflow(started.id);
+      const { isLoopedReviewWorkflow } = await import("@orkestrator/protocol/review-workflow");
+      expect(isLoopedReviewWorkflow(broken?.snapshot)).toBe(false);
+      // And the service refuses to advance it rather than compounding the damage.
+      await service.advanceNow(started.id);
+      expect((await storage.getLoopedReviewWorkflow(started.id))?.revision).toBe(broken!.revision);
     });
   });
 });

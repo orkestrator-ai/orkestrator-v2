@@ -16,6 +16,19 @@ type WorkflowListLoader = (
   environmentId: string,
 ) => Promise<Array<PersistedLoopedReviewWorkflow<LoopedReviewWorkflow>>>;
 
+/**
+ * "The backend has no such record" and "the record exists but this build cannot
+ * read it" are different facts, and only the first one justifies deleting the
+ * renderer's projection. Collapsing them into `null` meant a snapshot this
+ * bundle failed to validate — a newer backend, an added field — silently
+ * removed a live workflow from the store, which in turn removed the user's tab
+ * via the authoritative pane-layout reconciliation.
+ */
+export type LoopedReviewHydration =
+  | { status: "hydrated"; workflow: LoopedReviewWorkflow }
+  | { status: "missing" }
+  | { status: "unreadable" };
+
 function authoritativeSnapshot(
   entry: PersistedLoopedReviewWorkflow<LoopedReviewWorkflow>,
 ): LoopedReviewWorkflow | null {
@@ -28,20 +41,38 @@ function authoritativeSnapshot(
   }
   return { ...entry.snapshot, backendRevision: entry.revision };
 }
+
+/**
+ * Rehydrate one backend-owned workflow, reporting *why* it could not be
+ * hydrated. Callers that delete projections must branch on `missing`.
+ */
+export async function resolveLoopedReviewWorkflow(
+  workflowId: string,
+  load: WorkflowLoader = backend.getLoopedReviewWorkflow,
+): Promise<LoopedReviewHydration> {
+  const persisted = await load(workflowId);
+  if (!persisted) return { status: "missing" };
+  // A record answering to a different id is not this workflow's record, so it
+  // is no evidence either way about whether this workflow still exists.
+  if (persisted.id !== workflowId) return { status: "unreadable" };
+  const snapshot = authoritativeSnapshot(persisted);
+  if (!snapshot) return { status: "unreadable" };
+
+  const local = useLoopedReviewStore.getState().workflows.get(workflowId);
+  if (local && local.backendRevision > snapshot.backendRevision) {
+    return { status: "hydrated", workflow: local };
+  }
+  useLoopedReviewStore.getState().replaceWorkflow(snapshot);
+  return { status: "hydrated", workflow: snapshot };
+}
+
 /** Rehydrate one backend-owned workflow after a resource event or tab mount. */
 export async function hydrateLoopedReviewWorkflow(
   workflowId: string,
   load: WorkflowLoader = backend.getLoopedReviewWorkflow,
 ): Promise<LoopedReviewWorkflow | null> {
-  const persisted = await load(workflowId);
-  if (!persisted || persisted.id !== workflowId) return null;
-  const snapshot = authoritativeSnapshot(persisted);
-  if (!snapshot) return null;
-
-  const local = useLoopedReviewStore.getState().workflows.get(workflowId);
-  if (local && local.backendRevision > snapshot.backendRevision) return local;
-  useLoopedReviewStore.getState().replaceWorkflow(snapshot);
-  return snapshot;
+  const result = await resolveLoopedReviewWorkflow(workflowId, load);
+  return result.status === "hydrated" ? result.workflow : null;
 }
 
 /** Restore every authoritative workflow for an environment after remount/restart. */

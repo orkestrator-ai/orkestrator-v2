@@ -319,3 +319,50 @@ describe("StorageService looped-review controller lease", () => {
     });
   });
 });
+
+describe("listAllLoopedReviewWorkflows", () => {
+  test("spans environments, orders by update time, and includes legacy records", async () => {
+    await withWorkflowStorage(async (storage) => {
+      // The helper has already seeded a legacy `workflow-1` for env-1.
+      await storage.addEnvironment({
+        id: "env-2", projectId: "project-1", name: "Second", branch: "main",
+        containerId: null, status: "running", prUrl: null, prState: null,
+        hasMergeConflicts: null, createdAt: new Date(0).toISOString(),
+        networkAccessMode: "restricted", order: 1, environmentType: "local",
+        worktreePath: "/tmp/second",
+      });
+      await storage.saveLoopedReviewWorkflow("workflow-2", "env-2", 2, { id: "workflow-2" }, 0);
+
+      const all = await storage.listAllLoopedReviewWorkflows();
+      // The supervisor restores work across every environment, and a legacy
+      // version-1 record is exactly what it must find in order to adopt it.
+      expect(all.map(({ id }) => id).sort()).toEqual(["workflow-1", "workflow-2"]);
+      expect(all.find((entry) => entry.id === "workflow-1")?.version).toBe(1);
+      expect(all.find((entry) => entry.id === "workflow-2")?.version).toBe(2);
+      // Sorted by updatedAt, so the most recently written record is last.
+      expect(all.at(-1)?.id).toBe("workflow-2");
+      // listLoopedReviewWorkflows is the per-environment view of the same data.
+      expect((await storage.listLoopedReviewWorkflows("env-2")).map(({ id }) => id))
+        .toEqual(["workflow-2"]);
+      expect(await storage.listLoopedReviewWorkflows("env-unknown")).toEqual([]);
+    });
+  });
+
+  test("refuses a renderer write once the stored record is backend-owned", async () => {
+    await withWorkflowStorage(async (storage) => {
+      await storage.saveLoopedReviewWorkflow("workflow-2", "env-1", 2, { id: "workflow-2" }, 0);
+      // Evaluated inside the mutation queue, so a concurrent backend adoption
+      // between a caller's read and its write cannot slip past it.
+      await expect(storage.saveLoopedReviewWorkflow(
+        "workflow-2", "env-1", 1, { id: "workflow-2" }, 1, undefined,
+        { rejectStoredVersionAtLeast: 2 },
+      )).rejects.toThrow(/can only be changed through workflow commands/);
+
+      // A legacy record is still writable through the same path.
+      await expect(storage.saveLoopedReviewWorkflow(
+        "workflow-1", "env-1", 1, { id: "workflow-1", x: 1 }, 1, undefined,
+        { rejectStoredVersionAtLeast: 2 },
+      )).resolves.toBeDefined();
+    });
+  });
+});

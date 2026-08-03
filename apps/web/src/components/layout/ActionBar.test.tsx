@@ -2269,6 +2269,52 @@ describe("ActionBar workflow tabs", () => {
     ).toBeNull();
   });
 
+  test("disables the toolbar entry point while a launch is in flight", async () => {
+    currentWorkspaceReady = true;
+    let resolveStart!: (workflow: typeof startedLoopedWorkflow) => void;
+    startLoopedReviewMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveStart = resolve;
+    }));
+    render(<ActionBar />);
+
+    const toolbarButton = screen.getByRole("button", { name: "Looped code review" });
+    expect((toolbarButton as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(toolbarButton);
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    // Otherwise a second review could be launched for the same environment
+    // from the toolbar while the first is still being created. The open dialog
+    // marks the toolbar aria-hidden, so it is queried explicitly.
+    const toolbarEntry = () => screen.getByRole(
+      "button", { name: "Looped code review", hidden: true },
+    ) as HTMLButtonElement;
+    await waitFor(() => {
+      expect(toolbarEntry().disabled).toBe(true);
+    });
+
+    resolveStart(startedLoopedWorkflow);
+    await waitFor(() => {
+      expect(toolbarEntry().disabled).toBe(false);
+    });
+  });
+
+  test("allows a fresh launch after a failed one", async () => {
+    currentWorkspaceReady = true;
+    startLoopedReviewMock.mockImplementationOnce(async () => {
+      throw new Error("backend unavailable");
+    });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
+
+    // The synchronous in-flight guard must be cleared on the failure path too,
+    // or the user can never retry without reloading.
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledTimes(2));
+  });
+
   test("surfaces a backend start rejection without attempting cleanup", async () => {
     currentWorkspaceReady = true;
     startLoopedReviewMock.mockImplementationOnce(async () => {

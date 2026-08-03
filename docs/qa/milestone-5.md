@@ -23,10 +23,9 @@ Primary files:
 - `apps/backend/src/core/commands.ts`
 - `apps/backend/src/core/storage.ts`
 - `packages/protocol/src/review-workflow.ts`
-- `apps/web/src/components/review/LoopedReviewSupervisor.tsx`
 - `apps/web/src/components/review/LoopedReviewTab.tsx`
-- `apps/web/src/lib/structured-review-agent.ts`
 - `apps/web/src/lib/looped-review-persistence.ts`
+- `apps/web/src/App.tsx` (the single renderer-side hydration pass)
 - `apps/web/src/stores/loopedReviewStore.ts`
 
 ## Backend controller checklist
@@ -64,8 +63,9 @@ Primary files:
 
 ## Renderer conversion checklist
 
-- [x] Convert `LoopedReviewSupervisor` to hydration and command wiring while
-      backend authority rolls out.
+- [x] Remove `LoopedReviewSupervisor` entirely. It duplicated the hydration
+      effect in `App.tsx`, and its `workflowCount > 0` mount gate made the
+      cold-start recovery it existed for structurally unreachable.
 - [x] Make `LoopedReviewTab` a snapshot-driven viewer/controller.
 - [x] Support start, pause, resume, retry, cancel, and open-provider-session
       commands without local phase authority.
@@ -96,8 +96,15 @@ Primary files:
 - [x] Review advances while no corresponding React tree is mounted.
 - [x] Renderer process exit and return rehydrates progressed or terminal state.
 - [x] Backend restart during each phase resumes or fails explicitly.
-- [x] Two clients competing for control produce one transition.
+- [x] Two clients competing for control never dispatch the same request twice.
+      Which controller wins a given step is genuinely unspecified — it depends
+      on who reaches the lease claim first — so the test asserts the fencing
+      invariant across repeated racing steps rather than an exact dispatch count
+      from one schedule.
 - [x] Expired lease takeover is fenced and exact-once.
+- [x] Only one looped review may run per environment at a time.
+- [x] A version-1 workflow interrupted mid-dispatch is quarantined into `failed`
+      rather than replayed, and stays retryable and cancellable.
 - [x] Forced input requests decline, continue, record, and count in every
       representative phase/provider.
 - [x] Forced authorization requests deny and fail visibly.
@@ -122,8 +129,10 @@ bun test apps/backend/src/core/looped-review-service.test.ts --parallel
 bun test apps/backend/src/core/storage-looped-review-controller.test.ts --parallel
 bun test apps/web/src/components/review --parallel
 bun test apps/web/src/stores/loopedReviewStore.test.ts --parallel
+bun test packages/protocol/src/review-workflow.test.ts --parallel
 bun run --cwd apps/backend typecheck
 bun run --cwd apps/web typecheck
+bun run --cwd packages/protocol build
 ```
 
 ## Exit criteria
@@ -147,9 +156,10 @@ Recorded 2026-08-02:
   preparation, discovery, reconciliation, fixing, PR creation, structured-result
   waits, interaction resolution, and terminal transitions. Storage envelopes use
   compare-and-swap revisions plus a renewable controller lease token.
-- Responsibility mapping: `LoopedReviewSupervisor` now only hydrates environment
-  snapshots; `LoopedReviewTab` only renders snapshots and invokes lifecycle
-  commands; `loopedReviewStore` is a read-through projection with no phase
+- Responsibility mapping: `App.tsx` performs the one renderer-side hydration
+  pass per environment; `LoopedReviewTab` only renders snapshots, invokes
+  lifecycle commands, and re-reads the authoritative record when it becomes
+  visible again; `loopedReviewStore` is a read-through projection with no phase
   mutation methods; renderer persistence is hydration-only. Backend prompts,
   parsers, provider admission, session reuse, dispatch, polling, and transitions
   live in `apps/backend/src/core/looped-review-*.ts`.
@@ -166,13 +176,18 @@ Recorded 2026-08-02:
   unattended policy. OpenCode transitions out of blocked after its question is
   declined. Authorization is denied, aborts the provider session, and persists
   only request/session/provider/kind metadata in failure context.
-- Focused verification: 15 looped-review service tests, 11 storage-fence tests,
-  62 review-component tests, 13 renderer store/persistence tests, 54
-  command/state-sync tests, and all package/backend/web typechecks passed.
-  Broader App, pane-layout, resource-sync, backend lifecycle, command-registry,
-  and provider-session tab tests also passed. The final integrated `bun run test`
-  passed all workspace, root, bridge, protocol-lockfile, and iOS groups; the root
-  suite reported 3,695 passing tests, one intentional skip, and zero failures,
-  while iOS reported 40 passing tests.
+- Focused verification: the looped-review service, storage-fence, review
+  component, renderer store/persistence, prompt-contract, protocol-contract and
+  command/state-sync suites all pass, as do the web, backend, desktop and
+  protocol typechecks. The integrated `bun run test` passes every workspace,
+  root, bridge, protocol-lockfile and iOS group.
+- Counts in this document are deliberately not pinned to exact numbers: they
+  went stale within a single change, and a test count is not evidence of a
+  property holding. The exit criteria above name the properties instead, and
+  each is asserted by a named test.
+- The renderer no longer carries its own copy of the workflow contract. Every
+  type and guard is re-exported from `@orkestrator/protocol/review-workflow`,
+  so a snapshot the backend accepts cannot be silently rejected — and therefore
+  dropped from the UI — by a divergent renderer guard.
 - Manual desktop checks remain intentionally unchecked above; they require live
   provider credentials and an Electron renderer and were not simulated.

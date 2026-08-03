@@ -42,7 +42,6 @@ import * as realHooks from "@/hooks";
 import * as realBackend from "@/lib/backend";
 import * as realLucideReact from "lucide-react";
 import * as realProcess from "@/lib/native/process";
-import * as realLoopedReviewSupervisor from "@/components/review/LoopedReviewSupervisor";
 import * as realBuildPipelinePersistence from "@/lib/build-pipeline-persistence";
 import * as realPromptQueuePersistence from "@/lib/prompt-queue-persistence";
 
@@ -63,7 +62,6 @@ const realHooksSnapshot = { ...realHooks };
 const realBackendSnapshot = { ...realBackend };
 const realLucideReactSnapshot = { ...realLucideReact };
 const realProcessSnapshot = { ...realProcess };
-const realLoopedReviewSupervisorSnapshot = { ...realLoopedReviewSupervisor };
 const realBuildPipelinePersistenceSnapshot = { ...realBuildPipelinePersistence };
 const realPromptQueuePersistenceSnapshot = { ...realPromptQueuePersistence };
 
@@ -269,7 +267,6 @@ const mockSaveLoopedReviewWorkflow = mock(async (
   updatedAt: "2026-07-26T00:00:00.000Z",
   revision: expectedRevision + 1,
 }));
-const mockLoopedReviewSupervisorRender = mock(() => undefined);
 const mockListPromptQueues = mock(async (_environmentId: string) => []);
 const mockListBuildPipelines = mock(async (_projectId: string) => []);
 const appPersistenceLifecycle: string[] = [];
@@ -295,13 +292,6 @@ mock.module("@/lib/prompt-queue-persistence", () => ({
   ...realPromptQueuePersistenceSnapshot,
   hydratePromptQueuesForEnvironment: (environmentId: string) =>
     mockListPromptQueues(environmentId),
-}));
-
-mock.module("@/components/review/LoopedReviewSupervisor", () => ({
-  LoopedReviewSupervisor: () => {
-    mockLoopedReviewSupervisorRender();
-    return <div data-testid="looped-review-supervisor" />;
-  },
 }));
 
 mock.module("@/lib/backend", () => ({
@@ -494,7 +484,6 @@ function resetAppMocks() {
   });
   mockStartBuildPipelinePersistence.mockClear();
   mockSaveLoopedReviewWorkflow.mockClear();
-  mockLoopedReviewSupervisorRender.mockClear();
   mockToastError.mockClear();
   mockAppUnlisten.mockClear();
   appEventCallbacks = new Map();
@@ -524,10 +513,6 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("lucide-react", () => realLucideReactSnapshot);
   mock.module("@/lib/native/process", () => realProcessSnapshot);
-  mock.module(
-    "@/components/review/LoopedReviewSupervisor",
-    () => realLoopedReviewSupervisorSnapshot,
-  );
   mock.module(
     "@/lib/build-pipeline-persistence",
     () => realBuildPipelinePersistenceSnapshot,
@@ -601,57 +586,25 @@ describe("App background processing mounts", () => {
     expect(screen.getByTestId("terminal-env-background").getAttribute("data-active")).toBe("false");
   });
 
-  test("mounts the looped-review supervisor globally", async () => {
+  test("hydrates looped reviews exactly once per environment, starting from an empty store", async () => {
+    // Cold start is the case that matters: the store is empty, so hydration
+    // must not be conditional on already holding a workflow. It must also not
+    // be duplicated — a second hydration path would double every list call.
     resetStores({
-      environments: [],
-      selectedProjectId: null,
-      selectedEnvironmentId: null,
+      environments: [
+        makeEnvironment("env-a", "project-1"),
+        makeEnvironment("env-b", "project-1"),
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-a",
     });
-    useLoopedReviewStore.getState().replaceWorkflow(loopedReviewFixture({
-      environmentId: "env-looped",
-      projectId: "project-looped",
-      agent: "codex",
-      model: "gpt-5.4",
-      targetBranch: "main",
-    }));
+    expect(useLoopedReviewStore.getState().workflows.size).toBe(0);
 
     render(<App />);
-
-    expect(await screen.findByTestId("looped-review-supervisor")).toBeTruthy();
-    expect(mockLoopedReviewSupervisorRender).toHaveBeenCalled();
-  });
-
-  test("mounts the looped-review supervisor on the first workflow and removes it with the last", async () => {
-    resetStores({
-      environments: [],
-      selectedProjectId: null,
-      selectedEnvironmentId: null,
-    });
-
-    render(<App />);
-
-    expect(screen.queryByTestId("looped-review-supervisor")).toBeNull();
-    expect(mockLoopedReviewSupervisorRender).not.toHaveBeenCalled();
-
-    const workflow = loopedReviewFixture({
-      environmentId: "env-looped",
-      projectId: "project-looped",
-      agent: "codex",
-      model: "gpt-5.4",
-      targetBranch: "main",
-    });
-    act(() => {
-      useLoopedReviewStore.getState().replaceWorkflow(workflow);
-    });
-
-    expect(await screen.findByTestId("looped-review-supervisor")).toBeTruthy();
-
-    act(() => {
-      useLoopedReviewStore.getState().removeWorkflow(workflow.id);
-    });
 
     await waitFor(() => {
-      expect(screen.queryByTestId("looped-review-supervisor")).toBeNull();
+      expect(mockListLoopedReviewWorkflows.mock.calls.map(([id]) => id).sort())
+        .toEqual(["env-a", "env-b"]);
     });
   });
 

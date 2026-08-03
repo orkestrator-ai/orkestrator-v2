@@ -17,7 +17,7 @@ import {
   isLoopedReviewActivePhase,
   isLoopedReviewTerminalPhase,
   isLoopedReviewWorkflow,
-  isSafelyAdoptableLegacyLoopedReview,
+  legacyLoopedReviewAdoption,
   isStartLoopedReviewInput,
   nextReviewAllowance,
   normalizeReviewAllowance,
@@ -126,6 +126,38 @@ function failureKind(kind: LoopedReviewDispatch["kind"] | undefined): LoopedRevi
   return "provider";
 }
 
+/**
+ * Crosses a version-1 record that was mid-dispatch into `failed` rather than
+ * resuming it. Whether that prompt reached the provider is unknowable, so the
+ * turn must not be replayed — but the React controller that could once have
+ * paused or cancelled it is gone, so leaving the record alone would strand it
+ * with no route to a terminal state. `failed` is both retryable and cancellable
+ * through the ordinary backend commands.
+ */
+function quarantineLegacyTurn(adopted: Record<string, unknown>): void {
+  const existingRetryPhase = (adopted.failure as { retryPhase?: unknown } | undefined)?.retryPhase;
+  const candidate = typeof adopted.phase === "string" && isLoopedReviewActivePhase(
+    adopted.phase as LoopedReviewWorkflow["phase"],
+  ) ? adopted.phase
+    // An already-failed legacy record keeps the phase it should retry from
+    // rather than restarting the whole review from preparation.
+    : typeof existingRetryPhase === "string" ? existingRetryPhase : "preparing";
+  const retryPhase = (isLoopedReviewActivePhase(candidate as LoopedReviewWorkflow["phase"])
+    ? candidate : "preparing") as ActiveLoopedReviewPhase;
+  delete adopted.dispatch;
+  delete adopted.structuredWait;
+  delete adopted.pausedFromPhase;
+  adopted.phase = "failed";
+  adopted.failure = {
+    code: "dispatch" as const,
+    message: "This review was interrupted by an upgrade while a turn was in flight. "
+      + "Retry to run the phase again, or cancel it.",
+    retryPhase,
+    preserveDispatch: false,
+    occurredAt: nowIso(),
+  };
+}
+
 function reviewPackage(value: unknown, expected: {
   id: string;
   round: number;
@@ -146,7 +178,13 @@ function reviewPackage(value: unknown, expected: {
     || !Array.isArray(candidate.limitations)) {
     throw new Error("Prepared package does not match the active review round");
   }
-  return { ...candidate, ...(expected.context ? { context: expected.context } : {}) } as ReviewPackage;
+  // The package generator returns `context: null` for a review with no ticket
+  // or project notes. Merging the expected context conditionally would leave
+  // that null in place, and a null context is not a `ReviewPackageContext` — the
+  // persisted snapshot would fail validation on the very next read and the
+  // workflow would be abandoned mid-flight. Drop the key instead of carrying it.
+  const { context: _generated, ...rest } = candidate;
+  return { ...rest, ...(expected.context ? { context: expected.context } : {}) } as ReviewPackage;
 }
 
 function parseReconciliation(value: unknown): LoopedReviewReconciliation {
@@ -170,8 +208,24 @@ function parseReconciliation(value: unknown): LoopedReviewReconciliation {
   return { ...shared, issueOutcomes, coverageGapOutcomes } as LoopedReviewReconciliation;
 }
 
+/**
+ * Recursively sorts object keys so two structurally identical findings compare
+ * equal regardless of the order the model happened to emit their properties in.
+ * Arrays keep their order — element order is meaningful in a report.
+ */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (!value || typeof value !== "object") return value;
+  const source = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(source).sort()) result[key] = canonical(source[key]);
+  return result;
+}
+
 function same(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  // Key order is not part of the JSON Schema contract, so a semantically
+  // identical restatement of a finding must not fail the whole reconciliation.
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
 }
 
 function applyReconciliation(
@@ -192,6 +246,7 @@ function applyReconciliation(
     if (byIndex.size !== outcomes.length) throw new Error(`Reconciliation duplicated a ${label} index`);
     let addition = 0;
     const usedUpdates = new Set<string>();
+    const updateById = new Map(updates.map((entry) => [entry.poolId, entry.finding]));
     findings.forEach((finding, index) => {
       const result = byIndex.get(index);
       if (!result) throw new Error(`Reconciliation omitted ${label} index ${index}`);
@@ -201,8 +256,8 @@ function applyReconciliation(
         const poolId = result.poolId!;
         if (!ids.has(poolId)) throw new Error(`Reconciliation referenced unknown ${label} pool ID`);
         if (result.outcome === "updated") {
-          const update = updates.find((entry) => entry.poolId === poolId);
-          if (!update || usedUpdates.has(poolId) || !same(update.finding, finding)) {
+          const update = updateById.get(poolId);
+          if (!update || usedUpdates.has(poolId) || !same(update, finding)) {
             throw new Error(`Reconciliation ${label} update mismatch`);
           }
           usedUpdates.add(poolId);
@@ -262,11 +317,15 @@ export class LoopedReviewService {
   private readonly locks = new Map<string, Promise<void>>();
   private readonly scheduledRuns = new Map<string, { pending: boolean; promise: Promise<void> }>();
   private readonly providers = new Map<string, BuildPipelineProvider>();
+  /** Provider cache key → workflow ids still using it, so finished work can free it. */
+  private readonly providerUsers = new Map<string, Set<string>>();
   private readonly leases = new Map<string, { token: string; expiresAt: string }>();
   private readonly interactionWatches = new Map<string, () => void>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private renewTimer: ReturnType<typeof setInterval> | null = null;
   private tickRun: { pending: boolean; promise: Promise<void> } | null = null;
+  /** Workflow id → revision that last passed full validation, to skip re-walking it. */
+  private validatedRevisions = new Map<string, number>();
   private stopped = false;
 
   constructor(
@@ -277,9 +336,15 @@ export class LoopedReviewService {
 
   async init(): Promise<void> {
     this.stopped = false;
+    // A second init() would otherwise orphan the previous handles, permanently
+    // doubling the tick and renew rate with no way for shutdown() to clear them.
+    if (this.timer) clearInterval(this.timer);
+    if (this.renewTimer) clearInterval(this.renewTimer);
+    this.timer = null;
+    this.renewTimer = null;
     for (const record of await this.storage.listAllLoopedReviewWorkflows()) {
       if (isLoopedReviewWorkflow(record.snapshot)) continue;
-      if (isSafelyAdoptableLegacyLoopedReview(record.snapshot)) {
+      if (legacyLoopedReviewAdoption(record.snapshot)) {
         await this.adoptLegacy(record).catch(() => undefined);
       }
     }
@@ -291,7 +356,12 @@ export class LoopedReviewService {
         this.options.controllerRenewMs ?? CONTROLLER_RENEW_MS,
       );
       this.renewTimer.unref?.();
-      await this.requestTick();
+      // Deliberately not awaited. requestTick() loops while the interval keeps
+      // re-arming it, so awaiting here makes backend startup — and with it the
+      // gateway, which main.ts starts only after init() resolves — wait on
+      // however long ticks keep exceeding the poll interval. Bridge startup and
+      // multi-megabyte snapshot writes routinely exceed one second.
+      void this.requestTick();
     }
   }
 
@@ -310,6 +380,8 @@ export class LoopedReviewService {
     this.interactionWatches.clear();
     await Promise.allSettled([...this.providers.values()].map((provider) => provider.dispose?.()));
     this.providers.clear();
+    this.providerUsers.clear();
+    this.validatedRevisions.clear();
     await Promise.allSettled([...this.leases].map(([workflowId, lease]) =>
       this.storage.releaseLoopedReviewController(workflowId, this.ownerId, lease.token)));
     this.leases.clear();
@@ -320,6 +392,16 @@ export class LoopedReviewService {
     const environment = await this.storage.getEnvironment(input.environmentId);
     if (!environment || environment.projectId !== input.projectId || environment.deletionRequestedAt) {
       throw new Error("The review environment is unavailable");
+    }
+    // Two reviews on one environment drive two agent sessions against the same
+    // worktree, each told to stage, commit and run the validation suite, so they
+    // interleave commits and each reviews a tree the other mutated. The renderer
+    // guards double-clicks, but that does not survive a second window or a
+    // direct command invocation.
+    const existing = await this.storage.listLoopedReviewWorkflows(input.environmentId);
+    if (existing.some((record) => isLoopedReviewWorkflow(record.snapshot)
+      && !isLoopedReviewTerminalPhase(record.snapshot.phase))) {
+      throw new Error("A looped review is already running for this environment");
     }
     const allowance = normalizeReviewAllowance(input.allowance);
     const timestamp = nowIso();
@@ -412,11 +494,15 @@ export class LoopedReviewService {
     const workflow = await this.mutate(workflowId, (current) => {
       if (isLoopedReviewTerminalPhase(current.phase)) return;
       if (current.phase === "cancelling") return;
+      // Every branch must yield an active phase: the protocol requires
+      // `cancellingFromPhase` whenever the phase is `cancelling`, and a snapshot
+      // that breaks that invariant is unreadable from then on — the workflow
+      // would be stuck and undeletable rather than cancelled.
       current.cancellingFromPhase = isLoopedReviewActivePhase(current.phase)
         ? current.phase
         : current.phase === "paused"
-          ? current.pausedFromPhase
-          : current.failure?.retryPhase;
+          ? current.pausedFromPhase ?? "preparing"
+          : current.failure?.retryPhase ?? "preparing";
       current.phase = "cancelling";
       current.cancellingSince = nowIso();
       delete current.pausedFromPhase;
@@ -471,15 +557,32 @@ export class LoopedReviewService {
   private async tick(): Promise<void> {
     if (this.stopped) return;
     const records = await this.storage.listAllLoopedReviewWorkflows();
+    // Validating a snapshot walks every round's package — which retains the
+    // complete diff and changed-file contents — so re-running it once a second
+    // for every workflow is the dominant cost of an otherwise idle tick. The
+    // revision changes on every write, so an unchanged revision is decisive.
+    const validated = new Map<string, number>();
     await Promise.all(records.map(async (record) => {
-      if (!isLoopedReviewWorkflow(record.snapshot)) {
-        if (isSafelyAdoptableLegacyLoopedReview(record.snapshot)) {
+      const known = this.validatedRevisions.get(record.id) === record.revision
+        || isLoopedReviewWorkflow(record.snapshot);
+      if (!known) {
+        if (legacyLoopedReviewAdoption(record.snapshot)) {
           await this.adoptLegacy(record).catch(() => undefined);
         }
         return;
       }
-      if (!isLoopedReviewTerminalPhase(record.snapshot.phase)) await this.runLocked(record.id);
+      validated.set(record.id, record.revision);
+      const phase = (record.snapshot as LoopedReviewWorkflow).phase;
+      // `paused` and `failed` cannot progress without a user command, and
+      // resume/retry/cancel each advance explicitly. Polling them would claim a
+      // lease and re-read the store every second for nothing.
+      if (isLoopedReviewActivePhase(phase) || phase === "cancelling") {
+        await this.runLocked(record.id);
+      }
     }));
+    // Rebuilt rather than mutated so entries for deleted workflows cannot
+    // accumulate for the lifetime of the process.
+    this.validatedRevisions = validated;
   }
 
   private runLocked(workflowId: string): Promise<void> {
@@ -511,13 +614,26 @@ export class LoopedReviewService {
     const previous = this.locks.get(workflowId) ?? Promise.resolve();
     const current = previous.catch(() => undefined).then(operation);
     this.locks.set(workflowId, current);
-    void current.finally(() => {
+    const release = () => {
       if (this.locks.get(workflowId) === current) this.locks.delete(workflowId);
-    });
+    };
+    // `current.finally(release)` would derive a *new* promise that rejects
+    // whenever the operation does, with nothing attached to it — an unhandled
+    // rejection on every lease conflict. Passing both handlers to `then`
+    // releases the lock without creating that branch; the caller still sees the
+    // rejection through the returned `current`.
+    current.then(release, release);
     return current;
   }
 
   private async advance(workflowId: string): Promise<void> {
+    // Claiming a lease for a workflow that has already finished would re-acquire
+    // the controller the terminal transition just released, and keep renewing it
+    // for the rest of the process. The tick already skips terminal workflows;
+    // this covers direct advanceNow callers.
+    const existing = await this.storage.getLoopedReviewWorkflow(workflowId);
+    if (existing && isLoopedReviewWorkflow(existing.snapshot)
+      && isLoopedReviewTerminalPhase(existing.snapshot.phase)) return;
     const { workflow, lease } = await this.loadControlled(workflowId);
     if (workflow.phase === "cancelling") {
       await this.reconcileCancellation(workflow, lease.token);
@@ -535,7 +651,10 @@ export class LoopedReviewService {
     const dispatch = workflow.dispatch;
     const session = workflow.sessions.find((entry) => entry.id === dispatch.sessionId);
     if (!session) throw new Error("Active dispatch lost its provider session");
-    if (await this.enforceInteraction(workflow, session, provider, lease.token)) return;
+    // The dispatch session is almost always the active one, and enforcing twice
+    // costs two bridge round-trips and two journal reads per tick for nothing.
+    if (session.id !== active?.id
+      && await this.enforceInteraction(workflow, session, provider, lease.token)) return;
     if (dispatch.state === "prepared") {
       dispatch.state = "dispatching";
       await this.save(workflow, lease.token);
@@ -649,11 +768,16 @@ export class LoopedReviewService {
     delete workflow.dispatch;
     delete workflow.structuredWait;
     delete workflow.pendingInteractionResolution;
+    // A cancelled workflow never finished creating its PR, so leaving the block
+    // at `running` would report work that stopped as still in progress.
+    if (workflow.pr.status === "running") {
+      workflow.pr = { ...workflow.pr, status: "failed", error: "Cancelled before the pull request was created" };
+    }
     for (const session of workflow.sessions) {
       if (session.status === "running") session.status = "cancelled";
     }
     await this.save(workflow, token);
-    this.stopInteractionWatches(workflow);
+    await this.releaseWorkflowResources(workflow);
   }
 
   private async readWorkflow(workflowId: string): Promise<LoopedReviewWorkflow | null> {
@@ -900,11 +1024,14 @@ export class LoopedReviewService {
       delete workflow.dispatch;
     }
     await this.save(workflow, token);
-    if (isLoopedReviewTerminalPhase(workflow.phase)) this.stopInteractionWatches(workflow);
+    if (isLoopedReviewTerminalPhase(workflow.phase)) await this.releaseWorkflowResources(workflow);
   }
 
   private async provider(workflow: LoopedReviewWorkflow): Promise<BuildPipelineProvider> {
     const key = `${workflow.environmentId}:${workflow.agent}`;
+    const users = this.providerUsers.get(key) ?? new Set<string>();
+    users.add(workflow.id);
+    this.providerUsers.set(key, users);
     const cached = this.providers.get(key);
     if (cached) return cached;
     if (this.options.provider) {
@@ -959,6 +1086,32 @@ export class LoopedReviewService {
     }
   }
 
+  /**
+   * Frees everything a finished workflow was holding. Without this the lease
+   * keeps being renewed every few seconds for a workflow that will never run
+   * again, and the provider — which for OpenCode owns an environment-wide event
+   * stream and its retry loop — stays alive for the rest of the process.
+   */
+  private async releaseWorkflowResources(workflow: LoopedReviewWorkflow): Promise<void> {
+    this.stopInteractionWatches(workflow);
+    const lease = this.leases.get(workflow.id);
+    if (lease) {
+      this.leases.delete(workflow.id);
+      await this.storage
+        .releaseLoopedReviewController(workflow.id, this.ownerId, lease.token)
+        .catch(() => undefined);
+    }
+    const key = `${workflow.environmentId}:${workflow.agent}`;
+    const users = this.providerUsers.get(key);
+    if (!users) return;
+    users.delete(workflow.id);
+    if (users.size > 0) return;
+    this.providerUsers.delete(key);
+    const provider = this.providers.get(key);
+    this.providers.delete(key);
+    await Promise.resolve(provider?.dispose?.()).catch(() => undefined);
+  }
+
   private async bridgeConnection(
     agent: LoopedReviewWorkflow["agent"],
     environment: Environment,
@@ -1006,16 +1159,25 @@ export class LoopedReviewService {
 
   private async enforceInteraction(
     workflow: LoopedReviewWorkflow,
-    session: LoopedReviewSession,
+    requested: LoopedReviewSession,
     provider: BuildPipelineProvider,
     token: string,
   ): Promise<boolean> {
     if (!provider.interactions) return false;
-    const snapshot = await provider.interactions.listPendingInteractions(session.providerSessionId);
-    let pending = workflow.pendingInteractionResolution;
+    const pendingResolution = workflow.pendingInteractionResolution;
+    // A pending resolution belongs to the session that raised it, and a pass can
+    // probe more than one session. Enforcing it against whichever session was
+    // passed in would query the wrong provider session, see the request missing,
+    // record a terminal outcome for an interaction that is still parked at the
+    // provider, and abort an unrelated session on the way out.
+    const session = pendingResolution
+      ? workflow.sessions.find((entry) => entry.sessionKey === pendingResolution.sessionKey) ?? requested
+      : requested;
+    let pending = pendingResolution;
     let journal = await this.storage.getAgentInteractionResolutionJournal();
     let entry = pending ? journal.entries.find((item) => item.id === pending!.journalId) : undefined;
     if (!pending) {
+      const snapshot = await provider.interactions.listPendingInteractions(session.providerSessionId);
       entry = journal.entries.find((item) => item.claim.workflowType === "looped-review"
         && item.claim.workflowId === workflow.id && item.claim.fence === session.sessionKey
         && item.state !== "workflow-recorded");
@@ -1247,6 +1409,13 @@ export class LoopedReviewService {
     await this.assertFence(workflow.id, token);
     workflow.updatedAt = nowIso();
     workflow.controllerFence = token;
+    // Storage only checks that the snapshot is an object, so an invalid
+    // transition would persist silently and every later read would reject the
+    // record — a permanently stuck, invisible workflow. Failing here instead
+    // surfaces a writer bug as an ordinary workflow failure.
+    if (!isLoopedReviewWorkflow(workflow)) {
+      throw new DefiniteResultError("Refusing to persist an invalid looped review snapshot");
+    }
     const saved = await this.storage.saveLoopedReviewWorkflow(
       workflow.id, workflow.environmentId, LOOPED_REVIEW_WORKFLOW_VERSION,
       workflow, workflow.backendRevision, { ownerId: this.ownerId, token },
@@ -1298,6 +1467,12 @@ export class LoopedReviewService {
       occurredAt: nowIso(),
     };
     workflow.phase = "failed";
+    // Otherwise a workflow that died during PR creation reports `failed` while
+    // the PR block still reads `running`, which is what the UI shows. `retry()`
+    // already resets a failed PR to `pending`, so this is the missing half.
+    if (workflow.pr.status === "running") {
+      workflow.pr = { ...workflow.pr, status: "failed", error: message(error) };
+    }
     const round = workflow.rounds.find((entry) => entry.round === workflow.currentRound);
     if (round) round.status = "failed";
     if (!preserve) {
@@ -1308,6 +1483,8 @@ export class LoopedReviewService {
   }
 
   private async adoptLegacy(record: PersistedLoopedReviewWorkflow): Promise<void> {
+    const adoption = legacyLoopedReviewAdoption(record.snapshot);
+    if (!adoption) return;
     const source = record.snapshot as Record<string, unknown>;
     const sessions = Array.isArray(source.sessions) ? source.sessions.map((value) => {
       const session = value as Record<string, unknown>;
@@ -1319,7 +1496,7 @@ export class LoopedReviewService {
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       };
     }) : [];
-    const adopted = {
+    const adopted: Record<string, unknown> = {
       ...source,
       version: LOOPED_REVIEW_WORKFLOW_VERSION,
       controller: "backend" as const,
@@ -1327,6 +1504,7 @@ export class LoopedReviewService {
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
       backendRevision: record.revision,
     };
+    if (adoption === "quarantine") quarantineLegacyTurn(adopted);
     if (!isLoopedReviewWorkflow(adopted)) return;
     const claimed = await this.storage.claimLoopedReviewController(
       record.id, this.ownerId, this.controllerLeaseMs(),
@@ -1343,7 +1521,13 @@ export class LoopedReviewService {
   }
 }
 
-class ControllerFenceError extends Error {}
+class ControllerFenceError extends Error {
+  constructor() {
+    // Renderers surface `error.message` directly, so an empty message would
+    // show the user a blank toast when a lifecycle command loses the lease.
+    super("Another controller holds the looped-review lease");
+  }
+}
 class DefiniteDispatchError extends Error {}
 class DefiniteResultError extends Error {}
 class MissingProviderSessionError extends ProviderUnavailableError {

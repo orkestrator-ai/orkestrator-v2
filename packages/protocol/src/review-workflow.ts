@@ -18,6 +18,7 @@ import type {
 } from "./agent-interactions.js";
 import {
   AGENT_INTERACTION_KINDS,
+  AGENT_INTERACTION_LIMITS,
   isAgentInteractionPolicy,
   isAgentInteractionWorkflowSummary,
 } from "./agent-interactions.js";
@@ -27,6 +28,7 @@ import type {
 } from "./structured-review.js";
 import {
   isReviewFindingPool,
+  isReviewReconciliation,
   isStructuredReviewReport,
 } from "./structured-review.js";
 
@@ -62,6 +64,20 @@ export const LOOPED_REVIEW_MAX_TARGET_BRANCH_LENGTH = 255;
 export const LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH = 100_000;
 export const LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES = 128;
 export const LOOPED_REVIEW_MAX_CONTEXT_BYTES = 512 * 1024;
+
+/**
+ * Count bounds for every persisted collection. The writer already truncates
+ * provider-derived interaction text, but a guard that cannot detect a writer
+ * which stops truncating is not a bound — storage's 32 MB save rejection would
+ * make the workflow unadvanceable rather than trimmed. Sized well above any
+ * real workflow: allowance caps at 10 passes per round, and rounds only grow
+ * while findings remain.
+ */
+export const LOOPED_REVIEW_MAX_ROUNDS = 64;
+export const LOOPED_REVIEW_MAX_SESSIONS = 512;
+export const LOOPED_REVIEW_MAX_ARCHIVED_POOLS = 64;
+export const LOOPED_REVIEW_MAX_REQUEST_IDS = 256;
+export const LOOPED_REVIEW_MAX_TRANSCRIPT_ENTRIES = 64;
 
 export type LoopedReviewAgent = "claude" | "codex" | "opencode";
 export type LoopedReviewPhase =
@@ -361,6 +377,11 @@ function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
+/** A string a deadline can actually subtract from, not merely a string. */
+function isTimestamp(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
 function isPositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 1;
 }
@@ -376,6 +397,37 @@ function serializedBytes(value: unknown): number {
   } catch {
     return Number.POSITIVE_INFINITY;
   }
+}
+
+/**
+ * Worst-case serialized bytes per source character: 4 for UTF-8 expansion, and
+ * 6 for a `\uXXXX` escape — the escape path never coincides with the 4-byte
+ * path, so 6 bounds both.
+ */
+const MAX_SERIALIZED_BYTES_PER_CHAR = 6;
+/** Structural slack for the fixed six-key allowlist plus array punctuation. */
+const CONTEXT_STRUCTURAL_BYTES = 1_024;
+
+/**
+ * Cheap size verdict that avoids `JSON.stringify` on the overwhelmingly common
+ * small context. This guard runs on every tick for every persisted workflow, so
+ * serializing a multi-hundred-kilobyte value just to discover it fits is the
+ * same "serialize to discover it is too big" amplification `agent-interactions`
+ * already avoids. Characters are counted instead: UTF-8 bytes are never fewer
+ * than characters, so an over-cap character count is decisive, and an
+ * under-cap-by-6x count cannot possibly serialize over the cap.
+ */
+function contextSizeVerdict(value: Record<string, unknown>): "under" | "over" | "unknown" {
+  let characters = 0;
+  for (const entry of Object.values(value)) {
+    if (typeof entry === "string") characters += entry.length;
+    else if (Array.isArray(entry)) {
+      for (const item of entry) if (typeof item === "string") characters += item.length;
+    }
+  }
+  if (characters > LOOPED_REVIEW_MAX_CONTEXT_BYTES) return "over";
+  const worstCase = characters * MAX_SERIALIZED_BYTES_PER_CHAR + CONTEXT_STRUCTURAL_BYTES;
+  return worstCase <= LOOPED_REVIEW_MAX_CONTEXT_BYTES ? "under" : "unknown";
 }
 
 export function isSafeLoopedReviewTargetBranch(value: unknown): value is string {
@@ -413,13 +465,16 @@ export function isStartLoopedReviewInput(value: unknown): value is StartLoopedRe
 }
 
 function isReviewPackageContext(value: unknown): value is ReviewPackageContext {
-  if (!isRecord(value) || serializedBytes(value) > LOOPED_REVIEW_MAX_CONTEXT_BYTES) return false;
+  if (!isRecord(value)) return false;
   const context = value;
   const allowed = new Set([
     "ticketTitle", "ticketDescription", "acceptanceCriteria", "comments",
     "imageNames", "projectNotes",
   ]);
   if (Object.keys(context).some((key) => !allowed.has(key))) return false;
+  const size = contextSizeVerdict(context);
+  if (size === "over") return false;
+  if (size === "unknown" && serializedBytes(context) > LOOPED_REVIEW_MAX_CONTEXT_BYTES) return false;
   return ["ticketTitle", "ticketDescription", "acceptanceCriteria", "projectNotes"]
     .every((key) => context[key] === undefined || (
       typeof context[key] === "string"
@@ -470,7 +525,11 @@ function isReviewPackage(value: unknown, round: number): value is ReviewPackage 
     || !Array.isArray(value.skippedFiles)
     || !Array.isArray(value.uncommittedFiles)
     || !isStringArray(value.limitations)
-    || (value.context !== undefined && !isReviewPackageContext(value.context))) return false;
+    // `null` means "this review has no ticket/notes context". The package
+    // generator emits it explicitly, so rejecting it here would make every
+    // context-free review unreadable the moment its package is persisted.
+    || (value.context !== undefined && value.context !== null
+      && !isReviewPackageContext(value.context))) return false;
   if (value.commit !== null && (!isRecord(value.commit)
     || !isBoundedNonEmptyString(value.commit.sha, LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH)
     || typeof value.commit.subject !== "string"
@@ -497,25 +556,25 @@ function isFindingOutcome(value: unknown): value is LoopedReviewFindingOutcome {
   return isRecord(value)
     && isNonNegativeInteger(value.reportIndex)
     && (value.outcome === "new" || value.outcome === "updated" || value.outcome === "existing")
-    && (value.poolId === null || isBoundedNonEmptyString(value.poolId, LOOPED_REVIEW_MAX_ID_LENGTH));
+    // A `new` finding has no pool entry yet and an existing/updated one always
+    // does. Consumers dereference `poolId` non-null for the latter, so the
+    // correlation is part of the contract, not an incidental shape.
+    && (value.outcome === "new"
+      ? value.poolId === null
+      : isBoundedNonEmptyString(value.poolId, LOOPED_REVIEW_MAX_ID_LENGTH));
 }
 
 function isLoopedReviewReconciliation(value: unknown): value is LoopedReviewReconciliation {
-  return isRecord(value)
-    && Array.isArray(value.newIssues)
-    && Array.isArray(value.issueUpdates)
-    && value.issueUpdates.every((entry) => isRecord(entry)
-      && isBoundedNonEmptyString(entry.poolId, LOOPED_REVIEW_MAX_ID_LENGTH)
-      && isRecord(entry.finding))
-    && Array.isArray(value.newCoverageGaps)
-    && Array.isArray(value.coverageGapUpdates)
-    && value.coverageGapUpdates.every((entry) => isRecord(entry)
-      && isBoundedNonEmptyString(entry.poolId, LOOPED_REVIEW_MAX_ID_LENGTH)
-      && isRecord(entry.finding))
-    && Array.isArray(value.issueOutcomes)
-    && value.issueOutcomes.every(isFindingOutcome)
-    && Array.isArray(value.coverageGapOutcomes)
-    && value.coverageGapOutcomes.every(isFindingOutcome);
+  if (!isRecord(value)
+    || !Array.isArray(value.issueOutcomes) || !value.issueOutcomes.every(isFindingOutcome)
+    || !Array.isArray(value.coverageGapOutcomes)
+    || !value.coverageGapOutcomes.every(isFindingOutcome)) return false;
+  // The findings themselves are the shared structured-review contract. Checking
+  // only `Array.isArray` here would certify `newIssues: [null]` as a valid
+  // `StructuredReviewReport["issues"]`, which is exactly what consumers spread
+  // into the pool.
+  const { issueOutcomes: _outcomes, coverageGapOutcomes: _gapOutcomes, ...shared } = value;
+  return isReviewReconciliation(shared);
 }
 
 function isLoopedReviewPass(value: unknown): value is LoopedReviewPass {
@@ -537,21 +596,45 @@ function isLoopedReviewRound(value: unknown): value is LoopedReviewRound {
       || value.status === "fixing" || value.status === "completed" || value.status === "failed")
     && typeof value.startedAt === "string" && isOptionalString(value.completedAt)
     && (value.package === undefined || isReviewPackage(value.package, value.round))
-    && Array.isArray(value.passes) && value.passes.every(isLoopedReviewPass)
+    && Array.isArray(value.passes) && value.passes.length <= LOOPED_REVIEW_MAX_ALLOWANCE
+    && value.passes.every(isLoopedReviewPass)
     && new Set(value.passes.map((entry) => entry.pass)).size === value.passes.length;
 }
 
+/**
+ * Provider-supplied interaction text is truncated by the writer, but the guard
+ * is what makes that detectable. Reuses the sibling contract's limits so the
+ * same payload cannot be bounded in one place and unbounded in another.
+ */
+function isBoundedInteractionText(value: unknown): value is string {
+  return typeof value === "string" && value.length <= AGENT_INTERACTION_LIMITS.maxTextLength;
+}
+
+function isOptionalBoundedInteractionText(value: unknown): value is string | undefined {
+  return value === undefined || isBoundedInteractionText(value);
+}
+
+function areBoundedInteractionQuestions(value: unknown): boolean {
+  return Array.isArray(value)
+    && value.length <= AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest
+    && value.every((question) => isRecord(question)
+      && isBoundedInteractionText(question.prompt)
+      && isStringArray(question.options)
+      && question.options.length <= AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
+      && question.options.every(isBoundedInteractionText));
+}
+
 function isInteractionTranscript(value: unknown): value is LoopedReviewInteractionTranscriptEntry[] {
-  return Array.isArray(value) && value.every((entry) => isRecord(entry)
-    && isBoundedNonEmptyString(entry.id, LOOPED_REVIEW_MAX_ID_LENGTH)
-    && (entry.provider === "claude" || entry.provider === "codex" || entry.provider === "opencode")
-    && SESSION_PHASES.has(entry.phase)
-    && isNonNegativeInteger(entry.requestedAt) && isNonNegativeInteger(entry.resolvedAt)
-    && entry.outcome === "auto-declined-headless"
-    && typeof entry.title === "string" && isOptionalString(entry.body)
-    && Array.isArray(entry.questions)
-    && entry.questions.every((question) => isRecord(question)
-      && typeof question.prompt === "string" && isStringArray(question.options)));
+  return Array.isArray(value)
+    && value.length <= LOOPED_REVIEW_MAX_TRANSCRIPT_ENTRIES
+    && value.every((entry) => isRecord(entry)
+      && isBoundedNonEmptyString(entry.id, LOOPED_REVIEW_MAX_ID_LENGTH)
+      && (entry.provider === "claude" || entry.provider === "codex" || entry.provider === "opencode")
+      && SESSION_PHASES.has(entry.phase)
+      && isNonNegativeInteger(entry.requestedAt) && isNonNegativeInteger(entry.resolvedAt)
+      && entry.outcome === "auto-declined-headless"
+      && isBoundedInteractionText(entry.title) && isOptionalBoundedInteractionText(entry.body)
+      && areBoundedInteractionQuestions(entry.questions));
 }
 
 function isPendingInteractionResolution(
@@ -568,10 +651,8 @@ function isPendingInteractionResolution(
     && SESSION_PHASES.has(value.phase)
     && isNonNegativeInteger(value.requestedAt) && isNonNegativeInteger(value.claimedAt)
     && (value.action === "decline-and-continue" || value.action === "deny-and-fail")
-    && typeof value.title === "string" && isOptionalString(value.body)
-    && Array.isArray(value.questions)
-    && value.questions.every((question) => isRecord(question)
-      && typeof question.prompt === "string" && isStringArray(question.options));
+    && isBoundedInteractionText(value.title) && isOptionalBoundedInteractionText(value.body)
+    && areBoundedInteractionQuestions(value.questions);
 }
 
 function isLoopedReviewSession(value: unknown): value is LoopedReviewSession {
@@ -582,6 +663,7 @@ function isLoopedReviewSession(value: unknown): value is LoopedReviewSession {
     && isBoundedNonEmptyString(value.sessionKey, LOOPED_REVIEW_MAX_ID_LENGTH)
     && isBoundedNonEmptyString(value.providerSessionId, LOOPED_REVIEW_MAX_ID_LENGTH)
     && isStringArray(value.requestIds)
+    && value.requestIds.length <= LOOPED_REVIEW_MAX_REQUEST_IDS
     && value.requestIds.every((entry) => entry.length > 0 && entry.length <= LOOPED_REVIEW_MAX_ID_LENGTH)
     && value.origin === "looped-review"
     && isAgentInteractionPolicy(value.interactionPolicy)
@@ -650,17 +732,20 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
     || workflow.currentAllowance > workflow.startingAllowance
     || !isPositiveInteger(workflow.currentRound) || !isNonNegativeInteger(workflow.currentPass)
     || !LOOPED_REVIEW_PHASES.has(workflow.phase)
-    || !Array.isArray(workflow.rounds) || !workflow.rounds.every(isLoopedReviewRound)
+    || !Array.isArray(workflow.rounds) || workflow.rounds.length > LOOPED_REVIEW_MAX_ROUNDS
+    || !workflow.rounds.every(isLoopedReviewRound)
     || new Set(workflow.rounds.map((entry) => entry.round)).size !== workflow.rounds.length
     || !workflow.rounds.some((entry) => entry.round === workflow.currentRound)
     || !isReviewFindingPool(workflow.activePool)
     || !Array.isArray(workflow.archivedPools)
+    || workflow.archivedPools.length > LOOPED_REVIEW_MAX_ARCHIVED_POOLS
     || !workflow.archivedPools.every((archive) => isRecord(archive)
       && isPositiveInteger(archive.round) && typeof archive.fixedAt === "string"
       && isBoundedNonEmptyString(archive.fixSessionId, LOOPED_REVIEW_MAX_ID_LENGTH)
       && isReviewFindingPool(archive.pool) && isOptionalString(archive.fixSummary)
       && (archive.fixNotes === undefined || isStringArray(archive.fixNotes)))
-    || !Array.isArray(workflow.sessions) || !workflow.sessions.every(isLoopedReviewSession)
+    || !Array.isArray(workflow.sessions) || workflow.sessions.length > LOOPED_REVIEW_MAX_SESSIONS
+    || !workflow.sessions.every(isLoopedReviewSession)
     || new Set(workflow.sessions.map((entry) => entry.id)).size !== workflow.sessions.length
     || !isAgentInteractionPolicy(workflow.interactionPolicy)
     || workflow.interactionPolicy.mode !== "unattended"
@@ -682,14 +767,22 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
     || !isOptionalString(workflow.pr.error)
     || typeof workflow.createdAt !== "string" || typeof workflow.updatedAt !== "string"
     || !isNonNegativeInteger(workflow.backendRevision)
-    || (workflow.cancellingSince !== undefined && typeof workflow.cancellingSince !== "string")) return false;
+    // A `cancellingSince` the deadline cannot parse silently disables the bound
+    // on a stuck abort, which is the failure the field exists to prevent.
+    || (workflow.cancellingSince !== undefined
+      && !isTimestamp(workflow.cancellingSince))) return false;
 
   if ((workflow.phase === "paused") !== (workflow.pausedFromPhase !== undefined)
     || (workflow.pausedFromPhase !== undefined
       && !ACTIVE_LOOPED_REVIEW_PHASES.has(workflow.pausedFromPhase))
     || (workflow.phase === "cancelling") !== (workflow.cancellingFromPhase !== undefined)
     || (workflow.cancellingFromPhase !== undefined
-      && !ACTIVE_LOOPED_REVIEW_PHASES.has(workflow.cancellingFromPhase))) return false;
+      && !ACTIVE_LOOPED_REVIEW_PHASES.has(workflow.cancellingFromPhase))
+    // Cancelling without a start time cannot ever time out.
+    || (workflow.phase === "cancelling") !== (workflow.cancellingSince !== undefined)
+    // A failed workflow with no failure record is unretryable, and cancelling
+    // one would derive no `cancellingFromPhase` at all.
+    || (workflow.phase === "failed") !== (workflow.failure !== undefined)) return false;
   if (workflow.currentPass > workflow.currentAllowance
     || workflow.rounds.some((round) => round.passes.some((pass) => pass.pass > round.allowance))
     || workflow.rounds.some((round) => round.package !== undefined
@@ -698,24 +791,50 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
     && !workflow.sessions.some((session) => session.id === workflow.activeSessionId)) return false;
   if (workflow.dispatch !== undefined
     && !workflow.sessions.some((session) => session.id === workflow.dispatch?.sessionId)) return false;
+  // A dispatch belongs to exactly one phase, and the result handler branches on
+  // `dispatch.kind` alone. A stale dispatch left over from an earlier phase
+  // would therefore drive the wrong completion branch — e.g. a `prepare`
+  // dispatch on a `fixing` workflow would rewrite the round's package.
+  if (workflow.dispatch !== undefined) {
+    const dispatchPhase = workflow.pausedFromPhase
+      ?? workflow.cancellingFromPhase
+      ?? workflow.failure?.retryPhase
+      ?? workflow.phase;
+    if (workflow.dispatch.phase !== dispatchPhase) return false;
+  }
   if (workflow.structuredWait !== undefined
     && workflow.structuredWait.dispatchId !== workflow.dispatch?.id) return false;
   return true;
 }
 
-export function isSafelyAdoptableLegacyLoopedReview(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+/**
+ * How a persisted version-1 record should cross into backend ownership.
+ *
+ * `resume` — a persisted phase boundary with no in-flight dispatch. The backend
+ * can pick the workflow up where the React controller left it.
+ *
+ * `quarantine` — an active legacy phase with a live dispatch. Whether that
+ * prompt reached the provider is unknowable, so the turn must not be resumed.
+ * The renderer-owned controller that could once have paused or cancelled it no
+ * longer exists, so leaving the record unadopted would strand it forever with
+ * no route to a terminal state. It is adopted into `failed` instead, which is
+ * retryable and cancellable through the ordinary backend commands.
+ */
+export type LegacyLoopedReviewAdoption = "resume" | "quarantine";
+
+export function legacyLoopedReviewAdoption(value: unknown): LegacyLoopedReviewAdoption | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const workflow = value as Record<string, unknown>;
-  if (workflow.version !== LOOPED_REVIEW_LEGACY_WORKFLOW_VERSION) return false;
+  if (workflow.version !== LOOPED_REVIEW_LEGACY_WORKFLOW_VERSION) return null;
   if (workflow.phase === "paused" || workflow.phase === "completed" || workflow.phase === "cancelled") {
-    return true;
+    return "resume";
   }
-  // An active legacy phase with no dispatch is a persisted phase boundary. A
-  // live dispatch is ambiguous and remains legacy until the user explicitly
-  // pauses/cancels it in a compatible build.
-  return typeof workflow.phase === "string"
-    && phasesForLegacyAdoption.has(workflow.phase)
-    && workflow.dispatch === undefined;
+  if (typeof workflow.phase !== "string" || !phasesForLegacyAdoption.has(workflow.phase)) return null;
+  return workflow.dispatch === undefined ? "resume" : "quarantine";
+}
+
+export function isSafelyAdoptableLegacyLoopedReview(value: unknown): boolean {
+  return legacyLoopedReviewAdoption(value) === "resume";
 }
 
 const phasesForLegacyAdoption = new Set([
@@ -793,6 +912,13 @@ export function buildReviewBody(opts: ReviewBodyOptions): string {
     allowClarifyingQuestions,
     outputFormat = "structured",
   } = opts;
+
+  // NOTE: `targetBranch` is interpolated literally here, which the interactive
+  // review prompts depend on — a human picks that branch, and the placeholder
+  // token is substituted later. The looped-review path never relies on this:
+  // `isSafeLoopedReviewTargetBranch` gates the branch at the IPC boundary
+  // (`isStartLoopedReviewInput`), inside the persisted workflow, and again
+  // inside the persisted package, so no unsafe branch can reach here from it.
 
   const clarifyingLine = allowClarifyingQuestions
     ? "8. Ask clarifying questions if needed about unclear changes."

@@ -4,6 +4,7 @@ import {
   hydrateLoopedReviewWorkflowsForEnvironment,
   persistLoopedReviewWorkflowNow,
   registerLoopedReviewControllerFence,
+  resolveLoopedReviewWorkflow,
   startLoopedReviewPersistence,
 } from "./looped-review-persistence";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
@@ -121,5 +122,80 @@ describe("looped-review authoritative hydration", () => {
     await expect(persistLoopedReviewWorkflowNow("workflow")).rejects.toThrow(
       "cannot be persisted by the renderer",
     );
+  });
+});
+
+describe("hydration distinguishes a missing record from an unreadable one", () => {
+  beforeEach(() => {
+    useLoopedReviewStore.setState({ workflows: new Map() });
+  });
+
+  test("reports a genuinely absent record as missing", async () => {
+    await expect(resolveLoopedReviewWorkflow("workflow-1", async () => null))
+      .resolves.toEqual({ status: "missing" });
+  });
+
+  test("reports a record this build cannot validate as unreadable, not missing", async () => {
+    // Only "missing" justifies deleting the projection. A snapshot a newer
+    // backend wrote — an added field, a version skew — still exists and is
+    // very likely still being advanced.
+    const workflow = loopedReviewFixture();
+    const entry = persisted(workflow);
+    await expect(resolveLoopedReviewWorkflow(workflow.id, async () => ({
+      ...entry, snapshot: { ...workflow, phase: "teleporting" } as never,
+    }))).resolves.toEqual({ status: "unreadable" });
+  });
+
+  test("treats an id or environment mismatch as unreadable", async () => {
+    const workflow = loopedReviewFixture();
+    await expect(resolveLoopedReviewWorkflow(workflow.id, async () => ({
+      ...persisted(workflow), id: "a-different-workflow",
+    }))).resolves.toEqual({ status: "unreadable" });
+
+    // A snapshot claiming a different environment than the record it is filed
+    // under cannot be trusted to belong to either.
+    await expect(resolveLoopedReviewWorkflow(workflow.id, async () => ({
+      ...persisted(workflow),
+      snapshot: { ...workflow, environmentId: "another-environment" },
+    }))).resolves.toEqual({ status: "unreadable" });
+  });
+
+  test("hydrates and stamps the record's revision onto the snapshot", async () => {
+    const workflow = loopedReviewFixture({ backendRevision: 1 });
+    const result = await resolveLoopedReviewWorkflow(workflow.id, async () =>
+      persisted(workflow, 9));
+    expect(result).toMatchObject({ status: "hydrated" });
+    expect(useLoopedReviewStore.getState().workflows.get(workflow.id)?.backendRevision).toBe(9);
+  });
+
+  test("keeps a newer local projection when the backend read is behind", async () => {
+    const workflow = loopedReviewFixture({ backendRevision: 12, phase: "fixing" });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    const result = await resolveLoopedReviewWorkflow(workflow.id, async () =>
+      persisted({ ...workflow, phase: "preparing" }, 3));
+    expect(result).toEqual({ status: "hydrated", workflow });
+    expect(useLoopedReviewStore.getState().workflows.get(workflow.id)?.phase).toBe("fixing");
+  });
+
+  test("out-of-order concurrent hydrations converge on the newest revision", async () => {
+    const workflow = loopedReviewFixture({ backendRevision: 1 });
+    let resolveSlow!: (value: ReturnType<typeof persisted>) => void;
+    const slow = new Promise<ReturnType<typeof persisted>>((resolve) => { resolveSlow = resolve; });
+
+    const stale = resolveLoopedReviewWorkflow(workflow.id, () => slow);
+    await resolveLoopedReviewWorkflow(workflow.id, async () => persisted(workflow, 7));
+    resolveSlow(persisted(workflow, 2));
+    await stale;
+
+    // The store's own revision fence is what makes a late, older response safe.
+    expect(useLoopedReviewStore.getState().workflows.get(workflow.id)?.backendRevision).toBe(7);
+  });
+
+  test("hydrateLoopedReviewWorkflow keeps returning null for both failure shapes", async () => {
+    const workflow = loopedReviewFixture();
+    await expect(hydrateLoopedReviewWorkflow(workflow.id, async () => null)).resolves.toBeNull();
+    await expect(hydrateLoopedReviewWorkflow(workflow.id, async () => ({
+      ...persisted(workflow), snapshot: { ...workflow, version: 1 } as never,
+    }))).resolves.toBeNull();
   });
 });

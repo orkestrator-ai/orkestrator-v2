@@ -1396,64 +1396,6 @@ describe("backend native agent and looped review wrappers", () => {
     expect(minimalPayload).not.toHaveProperty("schema");
   });
 
-  test("maps looped review controller claim, validation, and release commands", async () => {
-    const claim = {
-      granted: true,
-      token: "lease-token",
-      expiresAt: "2026-07-29T12:01:00.000Z",
-    };
-    invokeMock.mockResolvedValueOnce(claim);
-    await expect(
-      backendWrappers.claimLoopedReviewController(
-        "workflow-1",
-        "owner-1",
-        30_000,
-      ),
-    ).resolves.toBe(claim);
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "claim_looped_review_controller",
-      {
-        workflowId: "workflow-1",
-        ownerId: "owner-1",
-        leaseMs: 30_000,
-      },
-    );
-
-    invokeMock.mockResolvedValueOnce(true);
-    await expect(
-      backendWrappers.validateLoopedReviewController(
-        "workflow-1",
-        "owner-1",
-        "lease-token",
-      ),
-    ).resolves.toBe(true);
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "validate_looped_review_controller",
-      {
-        workflowId: "workflow-1",
-        ownerId: "owner-1",
-        token: "lease-token",
-      },
-    );
-
-    invokeMock.mockResolvedValueOnce(undefined);
-    await expect(
-      backendWrappers.releaseLoopedReviewController(
-        "workflow-1",
-        "owner-1",
-        "lease-token",
-      ),
-    ).resolves.toBeUndefined();
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "release_looped_review_controller",
-      {
-        workflowId: "workflow-1",
-        ownerId: "owner-1",
-        token: "lease-token",
-      },
-    );
-  });
-
   test("carries an optional controller fence on workflow saves", async () => {
     const snapshot = {
       id: "workflow-1",
@@ -1548,6 +1490,25 @@ describe("backend native agent and looped review wrappers", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("delete_looped_review_workflow", { workflowId: "workflow-1" });
   });
 
+  test("forwards a blank provider session id instead of falling back to the active one", async () => {
+    // A blank id is a caller bug. Substituting the active session would open
+    // the wrong provider transcript; forwarding it lets the backend reject it.
+    invokeMock.mockResolvedValueOnce(null);
+    await backendWrappers.getLoopedReviewProviderSession("workflow-1", "");
+    expect(invokeMock).toHaveBeenLastCalledWith("get_looped_review_provider_session", {
+      workflowId: "workflow-1",
+      sessionId: "",
+    });
+  });
+
+  test("propagates a null provider session and a null workflow read", async () => {
+    invokeMock.mockResolvedValueOnce(null);
+    await expect(backendWrappers.getLoopedReviewProviderSession("workflow-1"))
+      .resolves.toBeNull();
+    invokeMock.mockResolvedValueOnce(null);
+    await expect(backendWrappers.getLoopedReviewWorkflow("workflow-1")).resolves.toBeNull();
+  });
+
   test("propagates native dispatch and controller errors unchanged", async () => {
     const dispatchError = new Error("dispatch denied");
     invokeMock.mockRejectedValueOnce(dispatchError);
@@ -1560,16 +1521,6 @@ describe("backend native agent and looped review wrappers", () => {
         requestId: "request-1",
       }),
     ).rejects.toBe(dispatchError);
-
-    const controllerError = new Error("lease expired");
-    invokeMock.mockRejectedValueOnce(controllerError);
-    await expect(
-      backendWrappers.validateLoopedReviewController(
-        "workflow-1",
-        "owner-1",
-        "lease-token",
-      ),
-    ).rejects.toBe(controllerError);
   });
 });
 
@@ -1666,24 +1617,9 @@ describe("backend command wrapper coverage", () => {
       uncommittedFiles: [],
       limitations: [],
     };
-    invokeMock.mockResolvedValueOnce({});
-    await backendWrappers.generateLoopedReviewPackage(
-      "env-1",
-      "package-1",
-      2,
-      "main",
-      preparation,
-    );
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "generate_looped_review_package",
-      {
-        environmentId: "env-1",
-        packageId: "package-1",
-        round: 2,
-        targetBranch: "main",
-        preparation,
-      },
-    );
+    // generate_looped_review_package is invoked by the backend service, never
+    // by the renderer, so there is no wrapper here to exercise.
+    void preparation;
   });
 
   test("forwards backend-owned merge and cleanup intent as one command", async () => {

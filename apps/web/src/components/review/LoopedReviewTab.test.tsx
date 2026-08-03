@@ -297,3 +297,256 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
     expect(screen.getByRole("link").getAttribute("href")).toBe("https://github.com/acme/repo/pull/42");
   });
 });
+
+const poolIssue = {
+  poolId: "issue-1", severity: "P1" as const, confidence: 92,
+  category: "correctness" as const, title: "Lost transition",
+  file: "src/controller.ts", line: 42, symbol: "advance",
+  description: "The phase advances twice.", evidence: "Two callers pass the guard.",
+  suggestion: "Persist a dispatch lease.", verification: "Reconnect mid-dispatch.",
+  alternativeFixes: ["Serialize on a queue", "Serialize on a queue"],
+};
+
+const poolGap = {
+  poolId: "gap-1", file: "src/controller.ts", untestedBehavior: "restart mid-dispatch",
+};
+
+describe("LoopedReviewTab content rendering", () => {
+  test("renders pooled issues with their category, symbol and alternatives", () => {
+    const workflow = loopedReviewFixture({
+      id: data.workflowId, phase: "fixing",
+      activePool: { issues: [poolIssue], coverageGaps: [poolGap] },
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+
+    expect(screen.getByText("Lost transition")).toBeTruthy();
+    expect(screen.getByText(/issue-1 · P1 · 92% · correctness/)).toBeTruthy();
+    expect(screen.getByText(/src\/controller\.ts:42 · advance/)).toBeTruthy();
+    expect(screen.getByText(/The phase advances twice\./)).toBeTruthy();
+    // Duplicate alternatives are legitimate model output and must not collide
+    // on their React key.
+    expect(screen.getAllByText("Serialize on a queue")).toHaveLength(2);
+    expect(screen.getByText("restart mid-dispatch")).toBeTruthy();
+  });
+
+  test("renders the empty pool state", () => {
+    const workflow = loopedReviewFixture({ id: data.workflowId, phase: "discovering" });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+    expect(screen.getAllByText("No pooled findings.").length).toBeGreaterThan(0);
+    expect(screen.getByText("No completed passes yet.")).toBeTruthy();
+  });
+
+  test("surfaces the review package's limitations and provenance", () => {
+    // Without these the user cannot tell that the review ran against a
+    // truncated package — files omitted, validation skipped.
+    const workflow = loopedReviewFixture({
+      id: data.workflowId, phase: "discovering",
+      rounds: [{
+        round: 1, allowance: 6, status: "reviewing", startedAt: "2026-08-03T00:00:00.000Z",
+        passes: [],
+        package: {
+          id: "package-1", round: 1, preparedAt: "2026-08-03T00:00:00.000Z",
+          targetBranch: "main", baseRef: "a".repeat(40), headRef: "b".repeat(40),
+          commit: null, completeDiff: "diff --git a/a.ts b/a.ts",
+          changedFiles: [{
+            path: "src/a.ts", status: "M", content: "x",
+            contentSha256: "sha", omittedReason: null,
+          }],
+          validation: [], skippedFiles: [], uncommittedFiles: [],
+          limitations: ["Skipped the integration suite: no database available"],
+        },
+      }],
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+
+    expect(screen.getByText("Review package limitations")).toBeTruthy();
+    expect(screen.getByText(/no database available/)).toBeTruthy();
+    expect(screen.getByText(/1 changed file/)).toBeTruthy();
+    expect(screen.getByLabelText("Review round 1")).toBeTruthy();
+  });
+
+  test("renders archived pools with duplicate fix notes and their fix session", () => {
+    const workflow = loopedReviewFixture({
+      id: data.workflowId, phase: "discovering",
+      archivedPools: [{
+        round: 1, fixedAt: "2026-08-03T00:00:00.000Z", fixSessionId: "fix-session-1",
+        pool: { issues: [poolIssue], coverageGaps: [] },
+        fixSummary: "Serialized the transition.",
+        // A model can legitimately repeat itself; the position is the only
+        // stable key.
+        fixNotes: ["Rewrote the guard", "Rewrote the guard"],
+      }],
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+
+    expect(screen.getByLabelText("Archived findings from round 1")).toBeTruthy();
+    expect(screen.getByText("Fix session fix-session-1")).toBeTruthy();
+    expect(screen.getByText("Serialized the transition.")).toBeTruthy();
+    expect(screen.getAllByText("Rewrote the guard")).toHaveLength(2);
+  });
+
+  test("labels the failure with its code and the phase a retry would restart", () => {
+    const workflow = loopedReviewFixture({
+      id: data.workflowId, phase: "failed",
+      failure: {
+        code: "structured-output", message: "The provider returned no report",
+        retryPhase: "discovering", occurredAt: "2026-08-03T00:00:00.000Z",
+      },
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+
+    expect(screen.getByText("Phase failed · structured-output")).toBeTruthy();
+    expect(screen.getByText(/Retry starts only the discovering phase again/)).toBeTruthy();
+  });
+
+  test("reports a pull request that never completed", () => {
+    const workflow = loopedReviewFixture({
+      id: data.workflowId, phase: "cancelled",
+      pr: { status: "failed", error: "Cancelled before the pull request was created" },
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+    expect(screen.getByText("Pull request not created")).toBeTruthy();
+    expect(screen.getByText(/Cancelled before the pull request/)).toBeTruthy();
+  });
+
+  test("renders only https pull-request links", () => {
+    const hostile = loopedReviewFixture({
+      id: data.workflowId, phase: "completed",
+      // eslint-disable-next-line no-script-url
+      pr: { status: "created", url: "javascript:alert(1)" },
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(hostile);
+    const view = render(
+      <LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => hostile)} />,
+    );
+    // The URL comes from agent output and is read back from disk, so an
+    // unvalidated href would be one click from script execution.
+    expect(view.container.querySelector("a")).toBeNull();
+    view.unmount();
+
+    const safe = loopedReviewFixture({
+      id: data.workflowId, phase: "completed",
+      pr: { status: "created", url: "https://github.com/acme/repo/pull/7" },
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(safe);
+    render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => safe)} />);
+    expect(screen.getByRole("link", { name: "https://github.com/acme/repo/pull/7" })).toBeTruthy();
+  });
+
+  test("names the agent, model and target branch in the header", () => {
+    const workflow = loopedReviewFixture({
+      id: data.workflowId, agent: "claude", model: "opus-5",
+      reasoningEffort: "high", targetBranch: "release/v2",
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+    expect(screen.getByText(/claude · opus-5 · high · target release\/v2/)).toBeTruthy();
+  });
+
+  test("labels every phase it can be handed", () => {
+    for (const [phase, label] of [
+      ["preparing", "Preparing immutable review package"],
+      ["discovering", "Discovering findings"],
+      ["reconciling", "Reconciling this pass"],
+      ["fixing", "Fixing active pool"],
+      ["creating-pr", "Creating pull request"],
+    ] as const) {
+      const workflow = loopedReviewFixture({ id: data.workflowId, phase });
+      useLoopedReviewStore.getState().replaceWorkflow(workflow);
+      const view = render(
+        <LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />,
+      );
+      expect(screen.getByText(new RegExp(label))).toBeTruthy();
+      view.unmount();
+    }
+  });
+});
+
+describe("LoopedReviewTab command guards", () => {
+  test("a command failure survives an unrelated backend snapshot update", async () => {
+    const running = loopedReviewFixture({ id: data.workflowId, phase: "fixing" });
+    useLoopedReviewStore.getState().replaceWorkflow(running);
+    const failing = {
+      ...commands(running),
+      pause: mock(async () => { throw new Error("lease lost"); }),
+    };
+    render(
+      <LoopedReviewTab
+        data={data} isActive hydrateWorkflow={mock(async () => running)} commands={failing}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText("lease lost")).toBeTruthy();
+
+    // A running review publishes a new revision roughly once a second. That
+    // must not erase the error the user is still reading.
+    useLoopedReviewStore.getState().replaceWorkflow({ ...running, backendRevision: 99 });
+    await waitFor(() => {
+      expect(screen.getByText("lease lost")).toBeTruthy();
+    });
+  });
+
+  test("a double click runs one command and opens one provider tab", async () => {
+    const workflow = loopedReviewFixture({
+      id: data.workflowId, phase: "discovering", activeSessionId: "session-1",
+      sessions: [{
+        id: "session-1", phase: "discovery", round: 1, pass: 1,
+        sessionKey: "key-1", providerSessionId: "provider-1", requestIds: [],
+        origin: "looped-review", interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        status: "running", startedAt: "2026-08-03T00:00:00.000Z",
+      }],
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock(() => true);
+    const workflowCommands = commands(workflow);
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <LoopedReviewTab
+          data={data} isActive hydrateWorkflow={mock(async () => workflow)}
+          commands={workflowCommands}
+        />
+      </TerminalProvider>,
+    );
+
+    const button = screen.getByRole("button", { name: /Provider session/ });
+    // `disabled` only takes effect after a re-render, so two clicks in one tick
+    // would both run without a synchronous guard.
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => {
+      expect(createTab).toHaveBeenCalledTimes(1);
+    });
+    expect(workflowCommands.providerSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("re-reads the authoritative record when the tab becomes active again", async () => {
+    const workflow = loopedReviewFixture({ id: data.workflowId, phase: "discovering" });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    const hydrate = mock(async () => workflow);
+    const view = render(
+      <LoopedReviewTab data={data} isActive={false} hydrateWorkflow={hydrate} />,
+    );
+    // Present in the store, so the mount path does not fetch.
+    expect(hydrate).toHaveBeenCalledTimes(0);
+
+    // A hidden tab can miss resource events entirely, so becoming visible again
+    // must re-read rather than trust whatever is left in the store.
+    view.rerender(<LoopedReviewTab data={data} isActive hydrateWorkflow={hydrate} />);
+    await waitFor(() => {
+      expect(hydrate).toHaveBeenCalledTimes(1);
+    });
+
+    // Staying active must not re-fetch on every render.
+    view.rerender(<LoopedReviewTab data={data} isActive hydrateWorkflow={hydrate} />);
+    expect(hydrate).toHaveBeenCalledTimes(1);
+  });
+});

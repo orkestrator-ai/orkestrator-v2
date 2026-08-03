@@ -1115,6 +1115,41 @@ describe("looped review commands", () => {
     }, { loopedReviews: supervisor });
   });
 
+  test("strips the controller fence from every lifecycle response", async () => {
+    // The supervisor stamps the live lease token onto the workflow it returns,
+    // and the renderer installs these responses straight into its store — in
+    // gateway mode across a network. `get`/`list` already redact it; the
+    // lifecycle commands must not be the hole in that guarantee.
+    const workflow = (operation: string) => ({
+      operation, id: "review-1", phase: "preparing", controllerFence: "secret-fence",
+    });
+    const supervisor = {
+      start: mock(async () => workflow("start")),
+      pause: mock(async () => workflow("pause")),
+      resume: mock(async () => workflow("resume")),
+      retry: mock(async () => workflow("retry")),
+      cancel: mock(async () => workflow("cancel")),
+      providerSession: mock(async () => null),
+    } as unknown as NonNullable<CommandContext["loopedReviews"]>;
+
+    await withCommands(async (invoke) => {
+      const commands: Array<[string, Record<string, unknown>]> = [
+        ["start_looped_review", startInput as unknown as Record<string, unknown>],
+        ["pause_looped_review", { workflowId: "review-1" }],
+        ["resume_looped_review", { workflowId: "review-1" }],
+        ["retry_looped_review", { workflowId: "review-1" }],
+        ["cancel_looped_review", { workflowId: "review-1" }],
+      ];
+      for (const [command, args] of commands) {
+        const result = await invoke(command, args) as Record<string, unknown>;
+        expect(result).not.toHaveProperty("controllerFence");
+        // The rest of the snapshot must survive untouched.
+        expect(result.id).toBe("review-1");
+        expect(result.phase).toBe("preparing");
+      }
+    }, { loopedReviews: supervisor });
+  });
+
   test("validates lifecycle input and rejects renderer writes to version 2", async () => {
     const supervisor = {
       start: mock(async () => undefined),

@@ -15,6 +15,7 @@ import type {
   NativeMessagePart,
 } from "@/lib/chat/native-message-types";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import * as realVirtualizedMessageList from "./VirtualizedMessageList";
 
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
@@ -31,7 +32,12 @@ mock.module("./VirtualizedMessageList", () => ({
             {props.renderMessage(
               index,
               message,
-              index > 0 ? props.messages[index - 1] : null,
+              // Mirror the real list: honour the caller's resolver when it
+              // supplies one, so these tests exercise the predecessor the shell
+              // actually renders with rather than the raw neighbour.
+              props.resolvePreviousMessage
+                ? props.resolvePreviousMessage(props.messages, index)
+                : index > 0 ? props.messages[index - 1] : null,
             )}
           </div>
         ))}
@@ -630,6 +636,59 @@ describe("NativeChatShell", () => {
         screen.getByRole("button", { name: "Scroll to bottom of conversation" }),
       );
       expect(scrollToBottom).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("previous-message resolution", () => {
+    const makeMessage = (
+      id: string,
+      role: "user" | "assistant",
+      content: string,
+    ): NativeMessage => ({
+      id,
+      role,
+      content,
+      createdAt: "2026-03-21T10:00:00.000Z",
+      parts: role === "assistant" && content ? [{ type: "text", content }] : [],
+    });
+
+    test("renders attribution once and keeps the duration across an empty placeholder", () => {
+      const messages: NativeMessage[] = [
+        {
+          ...makeMessage("user-1", "user", "Question"),
+          createdAt: "2026-03-21T10:00:00.000Z",
+        },
+        {
+          ...makeMessage("assistant-empty", "assistant", ""),
+          createdAt: "2026-03-21T10:00:20.000Z",
+          modelId: "gpt-5.6-sol",
+        },
+        {
+          ...makeMessage("assistant-content", "assistant", "Answer"),
+          createdAt: "2026-03-21T10:00:45.000Z",
+          modelId: "gpt-5.6-sol",
+        },
+      ];
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          messages={messages}
+          resolveModelLabel={() => "GPT 5.6 Sol"}
+        />,
+      );
+
+      // Attribution lands once, on the content row, and the empty placeholder
+      // has not swallowed the response duration.
+      expect(screen.getAllByText("GPT 5.6 Sol")).toHaveLength(1);
+      expect(screen.getByText(/responded in 45s/)).toBeTruthy();
+    });
+
+    test("passes the resolver through to the list", () => {
+      render(<NativeChatShell {...shellProps()} messages={[]} />);
+
+      expect(lastVirtualizedMessageListProps?.resolvePreviousMessage).toBe(
+        findPreviousNativeMessage,
+      );
     });
   });
 });

@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
+import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
 import { BuildCompletionStatus } from "./BuildCompletionStatus";
 import { toPipelineTranscript } from "./pipeline-transcript";
@@ -559,6 +560,7 @@ export function BuildChatTab({
           <VirtualizedMessageList
             messages={messages}
             computeItemKey={(_index, message) => message.id}
+            resolvePreviousMessage={findPreviousNativeMessage}
             renderMessage={(_index, message, previous) => (
               <NativeMessage
                 message={message}

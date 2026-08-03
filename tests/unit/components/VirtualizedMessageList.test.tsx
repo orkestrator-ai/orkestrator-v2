@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createRef, type RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
+import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 // Capture the props passed to Virtuoso so we can assert on them
 let lastVirtuosoProps: Record<string, any> = {};
@@ -161,6 +163,93 @@ describe("VirtualizedMessageList", () => {
     expect(prevMessages[1]).toEqual({ id: "1", text: "First" });
   });
 
+  test("hands renderMessage the resolver's predecessor instead of the raw neighbor", () => {
+    const makeMessage = (
+      id: string,
+      role: "user" | "assistant",
+      content: string,
+    ): NativeMessage => ({
+      id,
+      role,
+      content,
+      createdAt: "2026-03-21T10:00:00.000Z",
+      parts: role === "assistant" && content ? [{ type: "text", content }] : [],
+    });
+    const messages = [
+      makeMessage("user-1", "user", "Question"),
+      makeMessage("assistant-empty", "assistant", ""),
+      makeMessage("assistant-content", "assistant", "Answer"),
+    ];
+    const prevMessages: (NativeMessage | null)[] = [];
+
+    render(
+      <VirtualizedMessageList
+        messages={messages}
+        computeItemKey={(_i, msg) => msg.id}
+        resolvePreviousMessage={findPreviousNativeMessage}
+        renderMessage={(_i, msg, prev) => {
+          prevMessages.push(prev);
+          return <span>{msg.id}</span>;
+        }}
+        scrollProps={makeScrollProps()}
+        virtuosoRef={createRef<VirtuosoHandle>()}
+      />
+    );
+
+    // The empty placeholder is skipped: content still anchors on the user.
+    expect(prevMessages[0]).toBeNull();
+    expect(prevMessages[1]).toBe(messages[0]);
+    expect(prevMessages[2]).toBe(messages[0]);
+  });
+
+  test("calls the resolver with the full list and the item index", () => {
+    const messages: TestMessage[] = [
+      { id: "1", text: "First" },
+      { id: "2", text: "Second" },
+    ];
+    const resolve = mock((_messages: readonly TestMessage[], _index: number) => null);
+
+    render(
+      <VirtualizedMessageList
+        messages={messages}
+        computeItemKey={(_i, msg) => msg.id}
+        resolvePreviousMessage={resolve}
+        renderMessage={(_i, msg) => <span>{msg.text}</span>}
+        scrollProps={makeScrollProps()}
+        virtuosoRef={createRef<VirtuosoHandle>()}
+      />
+    );
+
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(resolve.mock.calls[0]).toEqual([messages, 0]);
+    expect(resolve.mock.calls[1]).toEqual([messages, 1]);
+  });
+
+  test("honours a resolver that returns null past the first item", () => {
+    const messages: TestMessage[] = [
+      { id: "1", text: "First" },
+      { id: "2", text: "Second" },
+    ];
+    const prevMessages: (TestMessage | null)[] = [];
+
+    render(
+      <VirtualizedMessageList
+        messages={messages}
+        computeItemKey={(_i, msg) => msg.id}
+        resolvePreviousMessage={() => null}
+        renderMessage={(_i, msg, prev) => {
+          prevMessages.push(prev);
+          return <span>{msg.text}</span>;
+        }}
+        scrollProps={makeScrollProps()}
+        virtuosoRef={createRef<VirtuosoHandle>()}
+      />
+    );
+
+    // The default would have handed index 1 its neighbour; the resolver wins.
+    expect(prevMessages).toEqual([null, null]);
+  });
+
   test("renders EmptyPlaceholder when messages array is empty", () => {
     render(
       <VirtualizedMessageList
@@ -256,6 +345,24 @@ describe("VirtualizedMessageList", () => {
     expect(lastVirtuosoProps.atBottomThreshold).toBe(75);
     expect(lastVirtuosoProps.totalListHeightChanged).toBe(totalListHeightChanged);
     expect(lastVirtuosoProps.restoreStateFrom).toBe(restoreState);
+  });
+
+  test("passes scrollerRef through to Virtuoso", () => {
+    // The only scroll prop the pass-through test above omits; the scroll
+    // container is what the find feature and the jump-to-bottom control need.
+    const scrollerRef = () => {};
+
+    render(
+      <VirtualizedMessageList
+        messages={[]}
+        computeItemKey={(_i, msg) => (msg as any).id}
+        renderMessage={() => null}
+        scrollProps={{ ...makeScrollProps(), scrollerRef }}
+        virtuosoRef={createRef<VirtuosoHandle>()}
+      />
+    );
+
+    expect(lastVirtuosoProps.scrollerRef).toBe(scrollerRef);
   });
 
   test("passes computeItemKey through to Virtuoso", () => {
@@ -613,6 +720,43 @@ describe("VirtualizedMessageList", () => {
     });
     expect(screen.getByText("1 of 1")).toBeTruthy();
     expect(scrollToIndex).toHaveBeenCalled();
+  });
+
+  test("cycles matches in both directions and wraps at each end", () => {
+    // Only the forward control was exercised; `onPrevious` wraps from the first
+    // match to the last, which is the branch a stale index would break.
+    render(
+      <VirtualizedMessageList
+        messages={[
+          { id: "1", text: "needle one" },
+          { id: "2", text: "needle two" },
+        ]}
+        computeItemKey={(_index, message) => message.id}
+        renderMessage={(_index, message) => <span>{message.text}</span>}
+        scrollProps={makeScrollProps()}
+        virtuosoRef={{
+          current: { scrollToIndex: mock(() => {}) },
+        } as unknown as RefObject<VirtuosoHandle>}
+        find={{ isActive: true, getSearchText: (message) => message.text }}
+      />,
+    );
+
+    fireEvent.keyDown(document, { key: "f", metaKey: true });
+    fireEvent.change(screen.getByRole("textbox", { name: "Find in chat" }), {
+      target: { value: "needle" },
+    });
+    expect(screen.getByText("1 of 2")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+    expect(screen.getByText("2 of 2")).toBeTruthy();
+
+    // Forward from the last match wraps to the first.
+    fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+    expect(screen.getByText("1 of 2")).toBeTruthy();
+
+    // Backward from the first match wraps to the last.
+    fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
+    expect(screen.getByText("2 of 2")).toBeTruthy();
   });
 
   test("bounds materialization retries when the current row is still unmounted", () => {

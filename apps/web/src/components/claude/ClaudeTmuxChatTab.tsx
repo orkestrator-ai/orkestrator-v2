@@ -102,7 +102,7 @@ import {
   type TmuxAttachment,
   type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
-import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
+import { findPreviousNativeMessage, normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import {
@@ -1830,6 +1830,7 @@ export function ClaudeTmuxChatTab({
             <VirtualizedMessageList
               messages={displayMessages}
               computeItemKey={(_index, message) => message.id}
+              resolvePreviousMessage={findPreviousNativeMessage}
               renderMessage={(_index, message, previousMessage) => (
                 <NativeMessage
                   message={message}

@@ -5,7 +5,8 @@
  * compile-time contract only — these tests are the runtime half. They are gated
  * because they need the pinned binary present:
  *
- *   RUN_LIVE_CODEX_APP_SERVER=1 bun test bridges/codex-bridge/src/app-server/live-contract.test.ts
+ *   CODEX_PROTOCOL_BINARY=/path/to/codex RUN_LIVE_CODEX_APP_SERVER=1 \
+ *     bun test bridges/codex-bridge/src/app-server/live-contract.test.ts
  *
  * Nothing here starts a turn, so no credits are spent and no model is called.
  * Turn-level behaviour (interrupt, deltas, subagents) needs an authenticated
@@ -59,7 +60,27 @@ function managedBinary(version: string): string | null {
 
 async function resolveBinary(): Promise<string> {
   const version = await pinnedVersion();
-  return process.env.CODEX_PROTOCOL_BINARY?.trim() || managedBinary(version) || "codex";
+  const binary = process.env.CODEX_PROTOCOL_BINARY?.trim() || managedBinary(version) || "codex";
+  const probe = Bun.spawn([binary, "--version"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(probe.stdout).text(),
+    new Response(probe.stderr).text(),
+    probe.exited,
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(`Could not execute ${binary}: ${stderr.trim()}`);
+  }
+  const reportedVersion = stdout.trim().split(/\s+/).at(-1);
+  if (reportedVersion !== version) {
+    throw new Error(
+      `${binary} reports ${reportedVersion || "an unknown version"}, but `
+      + `config/codex-version.json pins ${version}`,
+    );
+  }
+  return binary;
 }
 
 interface LiveSession {

@@ -234,7 +234,7 @@ async function main(): Promise<void> {
   }
 
   // `--emit` prints the computed digests instead of asserting them, for the
-  // version-bump workflow in docs/codex-upgrade-guide.md.
+  // version-bump workflow in docs/upgrade-agents.md.
   const { emit, filters } = parseArguments(process.argv.slice(2));
   const selected = PINNED_TOOLCHAIN_ARTIFACTS.filter((artifact) =>
     (!filters.tool || artifact.name === filters.tool)

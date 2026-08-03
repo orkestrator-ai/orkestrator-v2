@@ -233,9 +233,7 @@ verify that the unused entry disappears.
 
 Other textual references are intentional history or guards: `AGENTS.md` and
 `codex-item-types.ts` explain the SDK's removal, while
-`tests/unit/version-drift.test.ts` enforces it. The Dockerfile's nearby comment
-that still says `CODEX_CLI_VERSION` tracks `@openai/codex-sdk` is obsolete; the
-executable/protocol pinning described here is authoritative.
+`tests/unit/version-drift.test.ts` enforces it.
 
 `config/codex-version.json` is the Codex source of truth. Its `version` and
 `appServerProtocol.generatedFrom` fields must match. The generated lockfile-like
@@ -302,7 +300,8 @@ hermetic `codex exec` exception.
    bun test tests/unit/codex-app-server-protocol.test.ts
    bun run --cwd bridges/codex-bridge typecheck
    bun test bridges/codex-bridge/src --parallel
-   RUN_LIVE_CODEX_APP_SERVER=1 \
+   CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
+     RUN_LIVE_CODEX_APP_SERVER=1 \
      bun test bridges/codex-bridge/src/app-server/live-contract.test.ts
    ```
 
@@ -389,7 +388,8 @@ contract.
      bun run verify:opencode:live
    ```
 
-   The live compatibility test starts `opencode serve` with isolated XDG
+   The live compatibility test starts a clean Bun child process outside the web
+   test's browser preload, then starts `opencode serve` with isolated XDG
    directories, verifies that CLI health reports the same version as the SDK
    pin, constructs the real v2 client, and lists sessions. It does not call a
    model or spend credits.
@@ -409,6 +409,13 @@ bun test tests/unit/version-drift.test.ts \
   tests/unit/download-scripts.test.ts \
   tests/unit/verify-toolchain-artifacts.test.ts \
   tests/unit/electron/toolchain-manager.test.ts --parallel
+```
+
+For a repository-wide agent upgrade, verify every pinned URL, archive digest,
+and extracted executable digest rather than only the current host target:
+
+```bash
+bun run verify:toolchains:live
 ```
 
 Then run provider-specific typechecks and tests above, build the Docker image,

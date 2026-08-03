@@ -119,8 +119,8 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
   -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
   -x
 
-# Keep these in sync with the pinned SDK versions. tests/unit/version-drift.test.ts enforces Codex/OpenCode.
-#   CODEX_CLI_VERSION     ↔ @openai/codex-sdk in bridges/codex-bridge/package.json (and scripts/download-codex.sh)
+# Keep these in sync with the repository pins. tests/unit/version-drift.test.ts enforces Codex/OpenCode.
+#   CODEX_CLI_VERSION     ↔ config/codex-version.json and the generated app-server protocol (and scripts/download-codex.sh)
 #   OPENCODE_CLI_VERSION  ↔ @opencode-ai/sdk in package.json (and scripts/download-opencode.sh)
 # Claude CLI has its own release train distinct from @anthropic-ai/claude-agent-sdk.
 ARG CLAUDE_CLI_VERSION=2.1.220

@@ -131,6 +131,10 @@ import {
   OPTIMISTIC_MESSAGE_PREFIX,
   TURN_STOPPED_BY_USER,
 } from "@/lib/chat/client-only-messages";
+import {
+  ERROR_MESSAGE_PREFIX,
+  SYSTEM_MESSAGE_PREFIX,
+} from "@/lib/opencode-client";
 import type {
   OpenCodeModelCatalogSnapshot,
   OpenCodeModelRef,
@@ -5668,10 +5672,17 @@ describe("OpenCodeChatTab", () => {
       await waitFor(() => {
         const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
         expect(messages).toHaveLength(2);
-        expect(messages.map((message) => message.id).sort()).toEqual([
+        // Asserted in transcript order, not sorted: the echoes must land in
+        // the order they streamed, and neither optimistic bubble may survive.
+        expect(messages.map((message) => message.id)).toEqual([
           "server-dup-1",
           "server-dup-2",
         ]);
+        expect(messages.map((message) => message.content)).toEqual([
+          "run the tests",
+          "run the tests",
+        ]);
+        expect(messages.every((message) => message.role === "user")).toBe(true);
       });
       expect(mockGetSessionMessages).not.toHaveBeenCalled();
 
@@ -5726,13 +5737,16 @@ describe("OpenCodeChatTab", () => {
 
       await waitFor(() => {
         const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
-        expect(messages.some((message) => message.id === "server-second")).toBe(true);
-        expect(
-          messages.some((message) => message.id === `${OPTIMISTIC_MESSAGE_PREFIX}first`),
-        ).toBe(true);
-        expect(
-          messages.some((message) => message.id === `${OPTIMISTIC_MESSAGE_PREFIX}second`),
-        ).toBe(false);
+        // The still-unechoed first prompt keeps its own send time, so it must
+        // stay ahead of the echo rather than being re-sorted to the tail.
+        expect(messages.map((message) => message.id)).toEqual([
+          `${OPTIMISTIC_MESSAGE_PREFIX}first`,
+          "server-second",
+        ]);
+        expect(messages[0]).toMatchObject({
+          role: "user",
+          content: "First prompt",
+        });
       });
 
       useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
@@ -5790,12 +5804,352 @@ describe("OpenCodeChatTab", () => {
       await waitFor(() => {
         const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
         expect(messages).toHaveLength(1);
-        expect(messages[0]).toMatchObject({ id: "server-early", role: "user" });
+        expect(messages[0]).toMatchObject({
+          id: "server-early",
+          role: "user",
+          content: "Hello from the part",
+        });
+        // The info frame does not overwrite createdAt, so the turn clock keeps
+        // the client send time seeded from the optimistic bubble.
+        expect(messages[0]?.createdAt).toBe("2026-07-16T12:00:00.000Z");
       });
       expect(mockGetSessionMessages).not.toHaveBeenCalled();
 
       useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
       channel.close();
+    });
+
+    test("builds a user-role echo when the attachment part arrives before any text", async () => {
+      // The mirror of the test above. Without file-part matching the message
+      // would be stamped `assistant`, and every later part of the same message
+      // inherits that role from the store — the prompt renders as a reply and
+      // the optimistic bubble never retires.
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [{
+        ...nativeMessage("optimistic-file-first", "Please inspect the screenshot"),
+        id: `${OPTIMISTIC_MESSAGE_PREFIX}file-first`,
+        role: "user",
+        parts: [
+          { type: "text", content: "Please inspect the screenshot" },
+          { type: "file", content: "a.png", fileUrl: "data:image/png;base64,abc123" },
+        ],
+      }]);
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      mockGetSessionMessages.mockClear();
+
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "server-file-first-file",
+            messageID: "server-file-first",
+            sessionID: "session-1",
+            type: "file",
+            filename: "a.png",
+            url: "file:///workspace/a.png",
+          },
+        },
+      });
+
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        const echo = messages.find((message) => message.id === "server-file-first");
+        expect(echo).toMatchObject({ role: "user", content: "" });
+      });
+
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "server-file-first-text",
+            messageID: "server-file-first",
+            sessionID: "session-1",
+            type: "text",
+            text: "Please inspect the screenshot",
+          },
+        },
+      });
+
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({
+          id: "server-file-first",
+          role: "user",
+          content: "Please inspect the screenshot",
+        });
+      });
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("keeps error and system messages when a live user echo rewrites the transcript", async () => {
+      // upsertLiveMessage strips every client-only row before handing the
+      // authoritative list to setMessages, so this pins that the merge puts
+      // them back — and puts them back in the right place.
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [
+        {
+          ...nativeMessage("server-old", "Earlier reply"),
+          id: "server-old",
+          createdAt: "2026-07-16T11:00:00.000Z",
+        },
+        {
+          ...nativeMessage("system-naming", "Naming environment..."),
+          id: `${SYSTEM_MESSAGE_PREFIX}naming-1`,
+          createdAt: "2026-07-16T11:30:00.000Z",
+        },
+        {
+          ...nativeMessage("error-send", "Failed to send prompt"),
+          id: `${ERROR_MESSAGE_PREFIX}send-1`,
+          createdAt: "2026-07-16T11:45:00.000Z",
+        },
+        {
+          ...nativeMessage("optimistic-with-siblings", "Try again"),
+          id: `${OPTIMISTIC_MESSAGE_PREFIX}with-siblings`,
+          role: "user",
+          createdAt: "2026-07-16T12:00:00.000Z",
+        },
+      ]);
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      mockGetSessionMessages.mockClear();
+
+      channel.push({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "server-retry",
+            sessionID: "session-1",
+            role: "user",
+            time: { created: Date.parse("2026-07-16T12:04:57.000Z") },
+          },
+        },
+      });
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "server-retry-text",
+            messageID: "server-retry",
+            sessionID: "session-1",
+            type: "text",
+            text: "Try again",
+          },
+        },
+      });
+
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        expect(messages.map((message) => message.id)).toEqual([
+          "server-old",
+          `${SYSTEM_MESSAGE_PREFIX}naming-1`,
+          `${ERROR_MESSAGE_PREFIX}send-1`,
+          "server-retry",
+        ]);
+      });
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("updates a live user echo in place when a second part streams for it", async () => {
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, []);
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      mockGetSessionMessages.mockClear();
+
+      channel.push({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "server-inplace",
+            sessionID: "session-1",
+            role: "user",
+            time: { created: Date.parse("2026-07-16T12:04:57.000Z") },
+          },
+        },
+      });
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "server-inplace-text",
+            messageID: "server-inplace",
+            sessionID: "session-1",
+            type: "text",
+            text: "Look at this",
+          },
+        },
+      });
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "server-inplace-file",
+            messageID: "server-inplace",
+            sessionID: "session-1",
+            type: "file",
+            filename: "a.png",
+            url: "file:///workspace/a.png",
+          },
+        },
+      });
+
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        // One message with both parts, not two rows for the same id.
+        expect(messages).toHaveLength(1);
+        expect(messages[0]?.id).toBe("server-inplace");
+        expect(messages[0]?.parts.map((part) => part.type)).toEqual(["text", "file"]);
+      });
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("does not let a transcript fetch that predates a live echo erase it", async () => {
+      // The regression this guards: the optimistic bubble used to survive a
+      // stale snapshot and keep the prompt on screen. Now that a live echo
+      // retires its bubble, an older in-flight transcript response would take
+      // both away and leave the user's prompt invisible for the whole turn.
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [{
+        ...nativeMessage("server-prior", "Earlier reply"),
+        id: "server-prior",
+        createdAt: "2026-07-16T11:00:00.000Z",
+      }]);
+      const staleFetch = deferred<NativeMessage[]>();
+      mockGetSessionMessages.mockImplementation(() => staleFetch.promise);
+
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      // The end of the previous turn kicks off the authoritative refetch.
+      channel.push({ type: "session.idle", properties: { sessionID: "session-1" } });
+      await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+      // The user sends again; the echo arrives while that fetch is still out.
+      useOpenCodeStore.getState().addMessage(SESSION_KEY, {
+        ...nativeMessage("optimistic-race", "Race the fetch"),
+        id: `${OPTIMISTIC_MESSAGE_PREFIX}race`,
+        role: "user",
+        createdAt: "2026-07-16T12:00:00.000Z",
+      });
+      channel.push({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "server-race",
+            sessionID: "session-1",
+            role: "user",
+            time: { created: Date.parse("2026-07-16T12:04:57.000Z") },
+          },
+        },
+      });
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "server-race-text",
+            messageID: "server-race",
+            sessionID: "session-1",
+            type: "text",
+            text: "Race the fetch",
+          },
+        },
+      });
+
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        expect(messages.map((message) => message.id)).toEqual([
+          "server-prior",
+          "server-race",
+        ]);
+      });
+
+      // The response was computed before the new prompt existed. It also
+      // carries a message the store has never seen, so the assertion below can
+      // wait for proof that this snapshot really was applied rather than
+      // passing before it lands.
+      staleFetch.resolve([
+        {
+          ...nativeMessage("server-prior", "Earlier reply"),
+          id: "server-prior",
+          createdAt: "2026-07-16T11:00:00.000Z",
+        },
+        {
+          ...nativeMessage("server-prior-hydrated", "Earlier reply, hydrated"),
+          id: "server-prior-hydrated",
+          createdAt: "2026-07-16T11:10:00.000Z",
+        },
+      ]);
+
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        expect(messages.map((message) => message.id)).toContain("server-prior-hydrated");
+      });
+      const messagesAfterStaleFetch = useOpenCodeStore
+        .getState()
+        .getSession(SESSION_KEY)?.messages ?? [];
+      expect(messagesAfterStaleFetch.map((message) => message.id)).toEqual([
+        "server-prior",
+        "server-prior-hydrated",
+        "server-race",
+      ]);
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+      mockGetSessionMessages.mockImplementation(async () => []);
+    });
+
+    test("still drops a message the server removed while a fetch was in flight", async () => {
+      // The carry-over must not resurrect deletions: a message present before
+      // the request and absent from its response was genuinely removed.
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [
+        {
+          ...nativeMessage("server-kept", "Kept"),
+          id: "server-kept",
+          createdAt: "2026-07-16T11:00:00.000Z",
+        },
+        {
+          ...nativeMessage("server-deleted", "Deleted"),
+          id: "server-deleted",
+          createdAt: "2026-07-16T11:10:00.000Z",
+        },
+      ]);
+      const pendingFetch = deferred<NativeMessage[]>();
+      mockGetSessionMessages.mockImplementation(() => pendingFetch.promise);
+
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      channel.push({ type: "session.idle", properties: { sessionID: "session-1" } });
+      await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+      pendingFetch.resolve([{
+        ...nativeMessage("server-kept", "Kept"),
+        id: "server-kept",
+        createdAt: "2026-07-16T11:00:00.000Z",
+      }]);
+
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        expect(messages.map((message) => message.id)).toEqual(["server-kept"]);
+      });
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+      mockGetSessionMessages.mockImplementation(async () => []);
     });
 
     test("uses a newly observed backend user clock when it precedes the busy edge", async () => {

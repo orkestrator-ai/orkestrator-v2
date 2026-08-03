@@ -61,6 +61,20 @@ function toOptimisticFileUrl(path: string, previewUrl?: string): string | undefi
  * prompt duplicated next to its echo until the final transcript refresh. The
  * attachment's `content` (its name) still participates in the match, so a
  * genuinely different attachment keeps the optimistic message distinct.
+ *
+ * Known and accepted consequence: the filename is now the *whole* attachment
+ * identity, so two attachments sharing a basename in different directories
+ * fingerprint identically. This cannot be narrowed back down symmetrically.
+ * A path-derived key would have to be computed the same way on both sides,
+ * and for an image the optimistic side holds a `data:` preview URL while the
+ * echo holds whatever URL the server assigned — one side has no path at all,
+ * so any path-aware fingerprint would stop matching the exact case this
+ * exclusion exists to fix. Retirement is ordered and budgeted
+ * ({@link mergeNativeMessagesPreservingClientOnly}), so a collision retires
+ * the oldest pending send rather than an arbitrary one, and both prompts are
+ * still retired once both echoes arrive. The test named `retires an optimistic
+ * attachment against a same-named file in a different directory` pins this
+ * trade-off rather than leaving it latent.
  */
 function getPartFingerprint(part: NativeMessagePart): string {
   return JSON.stringify({
@@ -73,11 +87,26 @@ function getPartFingerprint(part: NativeMessagePart): string {
   });
 }
 
+/**
+ * Part fingerprints are sorted, so the same prompt matches its echo whichever
+ * order the parts arrive in.
+ *
+ * A live echo is assembled part by part as frames stream in, so an
+ * attachment-carrying prompt whose file part precedes its text part builds
+ * `[file, text]` where the optimistic projection always builds `[text, file]`.
+ * Comparing positionally made retirement depend on the server's streaming
+ * order and silently deferred those prompts to the final transcript refresh —
+ * the very duplicate this matching exists to remove.
+ *
+ * Sorting cannot merge two genuinely different messages: the aggregate
+ * `content` is part of the same fingerprint and is order-sensitive, so a
+ * message whose text parts are reordered still differs here.
+ */
 function getMessageFingerprint(message: Pick<NativeMessage, "role" | "content" | "parts">): string {
   return JSON.stringify({
     role: message.role,
     content: normalizeMessageContent(message.content),
-    parts: message.parts.map(getPartFingerprint),
+    parts: message.parts.map(getPartFingerprint).sort(),
   });
 }
 
@@ -157,6 +186,46 @@ export function isClientOnlyNativeMessage(message: Pick<NativeMessage, "id">): b
     || message.id.startsWith(SYSTEM_MESSAGE_PREFIX)
     || isOptimisticNativeMessage(message)
   );
+}
+
+/**
+ * Carry authoritative messages that landed *while a transcript fetch was in
+ * flight* over into that fetch's snapshot.
+ *
+ * A transcript GET is a point-in-time read. Live SSE frames keep applying
+ * while it is outstanding, so a response that was computed before the user's
+ * latest prompt would erase that prompt when installed verbatim. This used to
+ * be masked: the optimistic bubble is client-only, so it survived the
+ * overwrite and kept the prompt on screen. Now that a live backend echo
+ * retires its optimistic bubble on arrival, nothing is left to mask it and the
+ * prompt would vanish for the rest of the turn.
+ *
+ * `idsBeforeFetch` is the set of message ids the store held when the request
+ * started. A message that is absent from the snapshot *and* absent from that
+ * set can only have arrived live during the request, so it is appended —
+ * arriving after the snapshot was computed makes the tail chronologically
+ * correct. A message that was already present before the request and is absent
+ * from the snapshot was genuinely removed server-side and is correctly dropped.
+ *
+ * Client-only messages are skipped: `mergeNativeMessagesPreservingClientOnly`
+ * owns their preservation and re-orders them by timestamp. Returns `snapshot`
+ * by reference when there is nothing to carry over, so the store's
+ * identity-preserving no-op write still applies.
+ */
+export function carryOverMessagesAddedDuringFetch<T extends Pick<NativeMessage, "id">>(
+  snapshot: T[],
+  currentMessages: readonly T[],
+  idsBeforeFetch: ReadonlySet<string>,
+): T[] {
+  const snapshotIds = new Set(snapshot.map((message) => message.id));
+  const missed = currentMessages.filter(
+    (message) =>
+      !isClientOnlyNativeMessage(message)
+      && !snapshotIds.has(message.id)
+      && !idsBeforeFetch.has(message.id),
+  );
+
+  return missed.length === 0 ? snapshot : [...snapshot, ...missed];
 }
 
 export function mergeNativeMessagesPreservingClientOnly(

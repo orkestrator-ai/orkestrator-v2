@@ -614,6 +614,56 @@ describe("opencode-client getModelsWithDefaults", () => {
     ]);
   });
 
+  test("keeps image capability alongside variants and cost metadata", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              {
+                id: "openai",
+                models: {
+                  "gpt-5": {
+                    id: "gpt-5",
+                    name: "GPT-5",
+                    cost: { input: 1, output: 2 },
+                    limit: { context: 400000 },
+                    capabilities: { input: { image: true } },
+                    variants: { low: {}, high: {}, retired: { disabled: true } },
+                  },
+                  "gpt-5-text": {
+                    id: "gpt-5-text",
+                    name: "GPT-5 Text",
+                    capabilities: { input: { image: false } },
+                    variants: { high: {} },
+                  },
+                },
+              },
+            ],
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    const result = await getModelsWithDefaults(client);
+    const byId = new Map(result.models.map((model) => [model.id, model]));
+
+    // Variant filtering runs after the capability read, so a variant-bearing
+    // model must not lose supportsImageInput on the way through.
+    expect(byId.get("openai/gpt-5")).toEqual({
+      id: "openai/gpt-5",
+      name: "GPT-5",
+      provider: "openai",
+      variants: ["low", "high"],
+      inputCost: 1,
+      outputCost: 2,
+      contextWindow: 400000,
+      supportsImageInput: true,
+    });
+    expect(byId.get("openai/gpt-5-text")?.supportsImageInput).toBe(false);
+    expect(byId.get("openai/gpt-5-text")?.variants).toEqual(["high"]);
+  });
+
   test("filters disabled variants and orders enabled variants consistently", async () => {
     const client = {
       provider: {

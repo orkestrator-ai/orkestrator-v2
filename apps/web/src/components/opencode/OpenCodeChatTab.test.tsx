@@ -4172,6 +4172,33 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
+  test("passes unrelated send failures through verbatim", async () => {
+    // The image rewrite matches on a phrase, so an unrelated failure must not
+    // be relabelled as an image problem the user cannot act on.
+    const providerError = "ERROR: provider returned 503 (upstream overloaded)";
+    composeText = "Summarise the diff";
+    mockSendPrompt.mockImplementation(async () => ({
+      success: false,
+      error: providerError,
+    }));
+    resetStores("review-table");
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("opencode-send"));
+
+    await waitFor(() => {
+      const session = useOpenCodeStore.getState().getSession(SESSION_KEY);
+      expect(session?.messages.some((message) => message.content === providerError)).toBe(true);
+      expect(session?.isLoading).toBe(false);
+    });
+  });
+
   test("stores optimistic attachment parts and forwards attachments to sendPrompt", async () => {
     composeText = "Please inspect the screenshot";
     composeAttachments = [

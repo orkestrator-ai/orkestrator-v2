@@ -455,12 +455,21 @@ export function OpenCodeComposeBar({
     // The gate runs in the hook before the pasted image is written to disk, so
     // a refused image cannot orphan a file in the environment. `onAttach` is
     // then free to add unconditionally.
+    //
+    // The model is read from the store rather than the render closure: the gate
+    // fires after an async decode, so a model switch during that window would
+    // otherwise be invisible to it. Depending only on `sessionKey` also stops
+    // the document paste listener re-registering on every model change.
     canAttachImage: useCallback(
       (attachment: { type: string }) =>
-        imageSupportedBySelectedModel(attachment, models, selectedModel),
-      [models, selectedModel],
+        imageSupportedBySelectedModel(
+          attachment,
+          models,
+          useOpenCodeStore.getState().getSelectedModel(sessionKey),
+        ),
+      [models, sessionKey],
     ),
-    onImageRejected: useCallback(showImageUnsupportedToast, []),
+    onImageRejected: showImageUnsupportedToast,
     onAttach: useCallback(
       (attachment) => addAttachment(sessionKey, attachment),
       [addAttachment, sessionKey],
@@ -559,6 +568,16 @@ export function OpenCodeComposeBar({
   const handleModelChange = (modelId: string) => {
     setSelectedModel(sessionKey, modelId);
     void persistAgentModelDefault("opencodeModel", modelId, "OpenCode");
+
+    // The attach-time gate cannot see a later model switch, so an image
+    // attached under a vision model would otherwise sit in the composer until
+    // the server rejected the send. Warn while the user can still act on it.
+    if (
+      attachments.some((attachment) => attachment.type === "image")
+      && !imageSupportedBySelectedModel({ type: "image" }, models, modelId)
+    ) {
+      showImageUnsupportedToast();
+    }
 
     // Clear variant if the newly selected model doesn't support it
     const nextModel = models.find((m) => m.id === modelId);

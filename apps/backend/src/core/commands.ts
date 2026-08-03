@@ -38,6 +38,7 @@ import {
   type EnvironmentStatus,
   type EnvironmentType,
   type OpenCodeModelCatalogEntry,
+  type PersistedLoopedReviewWorkflow,
   type PortMapping,
   type PrState,
   type SessionStatus,
@@ -152,6 +153,14 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { NativeAgentService } from "./native-agent-service.js";
+import type { LoopedReviewService } from "./looped-review-service.js";
+import {
+  LOOPED_REVIEW_WORKFLOW_VERSION,
+  isLoopedReviewTerminalPhase,
+  isLoopedReviewWorkflow,
+  isStartLoopedReviewInput,
+  type StartLoopedReviewInput,
+} from "@orkestrator/protocol/review-workflow";
 import {
   assertValidPromptAttachments,
   assertValidPromptImages,
@@ -176,6 +185,7 @@ export type CommandContext = {
   };
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;
+  loopedReviews?: LoopedReviewService;
   /** Backend-owned notification emitted by exact agent turn lifecycles. */
   notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
 };
@@ -2474,7 +2484,10 @@ async function generateLoopedReviewPackage(
       left.path < right.path ? -1 : left.path > right.path ? 1 : 0
     ),
     limitations,
-    context: null,
+    // Deliberately absent rather than `null`. The context is supplied by the
+    // workflow, not by package generation, and a null here is not a valid
+    // `ReviewPackageContext` — persisting it would make the snapshot fail
+    // validation on its next read.
   };
 }
 
@@ -2860,6 +2873,39 @@ function conditionalSnapshot<T>(value: T, knownDigest: unknown): T | {
   return typeof knownDigest === "string" && knownDigest === digest
     ? { unchanged: true, digest }
     : { unchanged: false, digest, value };
+}
+
+type RendererLoopedReviewWorkflow = Omit<
+  PersistedLoopedReviewWorkflow,
+  "snapshot" | "controllerLease"
+> & { snapshot?: unknown };
+
+/**
+ * Backend-owned workflows carry a controller lease (top level) and a fence
+ * token (inside the snapshot) that the renderer must never see. Copies the
+ * record without them. A record without a snapshot is returned untouched so
+ * the response always mirrors the stored shape.
+ */
+function stripLoopedReviewRendererSecrets(
+  workflow: PersistedLoopedReviewWorkflow,
+): RendererLoopedReviewWorkflow {
+  const { controllerLease: _controllerLease, ...rendererWorkflow } = workflow;
+  if (workflow.snapshot === undefined) return rendererWorkflow;
+  return { ...rendererWorkflow, snapshot: stripLoopedReviewSnapshotSecrets(workflow.snapshot) };
+}
+
+/**
+ * The lifecycle commands return the supervisor's own workflow object, and
+ * `save()` stamps the live lease token onto it before handing it back. That
+ * token is the fence provider sessions are pinned to, so it must be removed
+ * here for the same reason `get`/`list` remove it — the renderer installs these
+ * responses straight into its store, and in gateway mode that crosses a network.
+ */
+function stripLoopedReviewSnapshotSecrets<T>(snapshot: T): T {
+  if (typeof snapshot !== "object" || snapshot === null) return snapshot;
+  const { controllerFence: _controllerFence, ...rest } =
+    snapshot as Record<string, unknown> & { controllerFence?: unknown };
+  return rest as T;
 }
 
 /**
@@ -8998,16 +9044,18 @@ export function createCommandRegistry(
   });
 
   register("get_looped_review_workflow", ({ workflowId }, { storage }) =>
-    storage.getLoopedReviewWorkflow(asString(workflowId, "workflowId")),
+    storage.getLoopedReviewWorkflow(asString(workflowId, "workflowId"))
+      .then((workflow) => workflow ? stripLoopedReviewRendererSecrets(workflow) : null),
   );
   register("list_looped_review_workflows", (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "looped-review", () =>
       storage.listLoopedReviewWorkflows(asString(args.environmentId, "environmentId"))
+        .then((workflows) => workflows.map(stripLoopedReviewRendererSecrets))
     ),
   );
   register(
     "save_looped_review_workflow",
-    ({
+    async ({
       workflowId,
       environmentId,
       version,
@@ -9015,11 +9063,20 @@ export function createCommandRegistry(
       expectedRevision,
       controllerOwnerId,
       controllerToken,
-    }, { storage }) =>
-      storage.saveLoopedReviewWorkflow(
-        asString(workflowId, "workflowId"),
+    }, { storage }) => {
+      const parsedWorkflowId = asString(workflowId, "workflowId");
+      const parsedVersion = asNumber(version, "version");
+      // A renderer may never write a v2 record, and the stored-version half of
+      // the guard runs inside the storage mutation queue: checking it here would
+      // be a read-then-act that a concurrent backend adoption can overtake,
+      // letting a legacy write land on an adopted backend-owned snapshot.
+      if (parsedVersion >= LOOPED_REVIEW_WORKFLOW_VERSION) {
+        throw new Error("Backend-owned looped reviews can only be changed through workflow commands");
+      }
+      return storage.saveLoopedReviewWorkflow(
+        parsedWorkflowId,
         asString(environmentId, "environmentId"),
-        asNumber(version, "version"),
+        parsedVersion,
         snapshot,
         expectedRevision === undefined
           ? undefined
@@ -9030,38 +9087,102 @@ export function createCommandRegistry(
               ownerId: asNonBlankString(controllerOwnerId, "controllerOwnerId"),
               token: asNonBlankString(controllerToken, "controllerToken"),
             },
-      ),
+        { rejectStoredVersionAtLeast: LOOPED_REVIEW_WORKFLOW_VERSION },
+      );
+    },
   );
   register(
     "claim_looped_review_controller",
-    ({ workflowId, ownerId, leaseMs }, { storage }) =>
-      storage.claimLoopedReviewController(
-        asNonBlankString(workflowId, "workflowId"),
+    async ({ workflowId, ownerId, leaseMs }, { storage }) => {
+      const parsedWorkflowId = asNonBlankString(workflowId, "workflowId");
+      const current = await storage.getLoopedReviewWorkflow(parsedWorkflowId);
+      if ((current?.version ?? 0) >= LOOPED_REVIEW_WORKFLOW_VERSION) {
+        throw new Error("Backend-owned looped-review controller leases are not available to renderers");
+      }
+      return storage.claimLoopedReviewController(
+        parsedWorkflowId,
         asNonBlankString(ownerId, "ownerId"),
         asNumber(leaseMs, "leaseMs"),
-      ),
+      );
+    },
   );
   register(
     "validate_looped_review_controller",
-    ({ workflowId, ownerId, token }, { storage }) =>
-      storage.validateLoopedReviewController(
-        asNonBlankString(workflowId, "workflowId"),
+    async ({ workflowId, ownerId, token }, { storage }) => {
+      const parsedWorkflowId = asNonBlankString(workflowId, "workflowId");
+      const current = await storage.getLoopedReviewWorkflow(parsedWorkflowId);
+      if ((current?.version ?? 0) >= LOOPED_REVIEW_WORKFLOW_VERSION) {
+        throw new Error("Backend-owned looped-review controller leases are not available to renderers");
+      }
+      return storage.validateLoopedReviewController(
+        parsedWorkflowId,
         asNonBlankString(ownerId, "ownerId"),
         asNonBlankString(token, "token"),
-      ),
+      );
+    },
   );
   register(
     "release_looped_review_controller",
-    ({ workflowId, ownerId, token }, { storage }) =>
-      storage.releaseLoopedReviewController(
-        asNonBlankString(workflowId, "workflowId"),
+    async ({ workflowId, ownerId, token }, { storage }) => {
+      const parsedWorkflowId = asNonBlankString(workflowId, "workflowId");
+      const current = await storage.getLoopedReviewWorkflow(parsedWorkflowId);
+      if ((current?.version ?? 0) >= LOOPED_REVIEW_WORKFLOW_VERSION) {
+        throw new Error("Backend-owned looped-review controller leases are not available to renderers");
+      }
+      return storage.releaseLoopedReviewController(
+        parsedWorkflowId,
         asNonBlankString(ownerId, "ownerId"),
         asNonBlankString(token, "token"),
-      ),
+      );
+    },
   );
-  register("delete_looped_review_workflow", ({ workflowId }, { storage }) =>
-    storage.deleteLoopedReviewWorkflow(asString(workflowId, "workflowId")),
-  );
+  register("delete_looped_review_workflow", async ({ workflowId }, { storage }) => {
+    const parsedWorkflowId = asString(workflowId, "workflowId");
+    const current = await storage.getLoopedReviewWorkflow(parsedWorkflowId);
+    // Gated on the stored *version*, like the three controller commands. Gating
+    // on whether the snapshot parses would fail open for a backend-owned record
+    // whose snapshot is unreadable — exactly the record most likely to have a
+    // live supervisor still driving it.
+    if (current && (current.version ?? 0) >= LOOPED_REVIEW_WORKFLOW_VERSION
+      && !(isLoopedReviewWorkflow(current.snapshot)
+        && isLoopedReviewTerminalPhase(current.snapshot.phase))) {
+      throw new Error("An active backend-owned looped review must be cancelled before deletion");
+    }
+    return storage.deleteLoopedReviewWorkflow(parsedWorkflowId);
+  });
+  register("start_looped_review", (args, context) => {
+    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
+    if (!isStartLoopedReviewInput(args)) throw new Error("Invalid looped review start request");
+    return context.loopedReviews.start(args as StartLoopedReviewInput)
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("pause_looped_review", ({ workflowId }, context) => {
+    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
+    return context.loopedReviews.pause(asNonBlankString(workflowId, "workflowId"))
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("resume_looped_review", ({ workflowId }, context) => {
+    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
+    return context.loopedReviews.resume(asNonBlankString(workflowId, "workflowId"))
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("retry_looped_review", ({ workflowId }, context) => {
+    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
+    return context.loopedReviews.retry(asNonBlankString(workflowId, "workflowId"))
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("cancel_looped_review", ({ workflowId }, context) => {
+    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
+    return context.loopedReviews.cancel(asNonBlankString(workflowId, "workflowId"))
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("get_looped_review_provider_session", ({ workflowId, sessionId }, context) => {
+    if (!context.loopedReviews) throw new Error("Looped review supervisor is unavailable");
+    return context.loopedReviews.providerSession(
+      asNonBlankString(workflowId, "workflowId"),
+      sessionId === undefined ? undefined : asNonBlankString(sessionId, "sessionId"),
+    );
+  });
 
   register("start_build_pipeline", (args, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");

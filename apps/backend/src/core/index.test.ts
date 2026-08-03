@@ -105,6 +105,25 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
           }): Promise<void>;
         };
       };
+      loopedReviews: {
+        options: {
+          onInteractionObservation(event: {
+            environmentId: string;
+            provider: "opencode";
+            sessionId: string;
+            interactionId: string;
+            kind: "permission";
+            registration: {
+              origin: "looped-review";
+              interactionPolicy: typeof UNATTENDED_AGENT_INTERACTION_POLICY;
+              phase: string;
+            };
+            state: "detected" | "withdrawn";
+            providerState?: "running";
+          }): Promise<void>;
+        };
+      };
+      context: { loopedReviews: unknown };
       nativeAgents: {
         getInteractionObservations(): Array<Record<string, unknown>>;
       };
@@ -130,12 +149,40 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
       state: "withdrawn",
       providerState: "running",
     });
+    const reviewEvent = {
+      ...event,
+      sessionId: "session-2",
+      interactionId: "permission-2",
+      registration: {
+        origin: "looped-review" as const,
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        phase: "discovery",
+      },
+    };
+    await internals.loopedReviews.options.onInteractionObservation({
+      ...reviewEvent,
+      state: "detected",
+    });
+    await internals.loopedReviews.options.onInteractionObservation({
+      ...reviewEvent,
+      state: "withdrawn",
+      providerState: "running",
+    });
+    expect(internals.context.loopedReviews).toBe(internals.loopedReviews);
     expect(internals.nativeAgents.getInteractionObservations()).toEqual([
       expect.objectContaining({
         provider: "opencode",
         kind: "permission",
         workflowSurface: "build-pipeline",
         phase: "pipeline",
+        count: 1,
+        eventualOutcome: "withdrawn",
+      }),
+      expect.objectContaining({
+        provider: "opencode",
+        kind: "permission",
+        workflowSurface: "looped-review",
+        phase: "discovery",
         count: 1,
         eventualOutcome: "withdrawn",
       }),
@@ -404,7 +451,7 @@ test("startup remains available when the tmux runtime reaper fails", async () =>
   }
 });
 
-test("native-agent restore failure leaves commands available and shutdown still drains pipelines", async () => {
+test("supervisor failures are isolated during restore and shutdown", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-native-lifecycle-"));
   const calls: string[] = [];
   const tools = fakeAgentTools({
@@ -432,6 +479,10 @@ test("native-agent restore failure leaves commands available and shutdown still 
       init: () => Promise<void>;
       shutdown: () => Promise<void>;
     };
+    loopedReviews: {
+      init: () => Promise<void>;
+      shutdown: () => Promise<void>;
+    };
     nativeAgents: {
       init: () => Promise<void>;
       shutdown: () => Promise<void>;
@@ -440,6 +491,10 @@ test("native-agent restore failure leaves commands available and shutdown still 
   };
   internals.buildPipelines.init = mock(async () => {
     calls.push("pipelines:init");
+  });
+  internals.loopedReviews.init = mock(async () => {
+    calls.push("reviews:init");
+    throw new Error("review restore failed");
   });
   internals.nativeAgents.init = mock(async () => {
     calls.push("native:init");
@@ -456,6 +511,10 @@ test("native-agent restore failure leaves commands available and shutdown still 
   internals.buildPipelines.shutdown = mock(async () => {
     calls.push("pipelines:shutdown");
   });
+  internals.loopedReviews.shutdown = mock(async () => {
+    calls.push("reviews:shutdown");
+    throw new Error("review drain failed");
+  });
 
   const originalWarn = console.warn;
   console.warn = () => undefined;
@@ -464,6 +523,7 @@ test("native-agent restore failure leaves commands available and shutdown still 
     expect(calls).toEqual([
       "tools:start",
       "pipelines:init",
+      "reviews:init",
       "native:init",
     ]);
     await expect(backend.invoke("ensure_native_agent_session", {
@@ -482,9 +542,10 @@ test("native-agent restore failure leaves commands available and shutdown still 
     });
 
     await expect(backend.shutdown()).resolves.toBeUndefined();
-    expect(calls.slice(-3)).toEqual([
+    expect(calls.slice(-4)).toEqual([
       "native:shutdown",
       "pipelines:shutdown",
+      "reviews:shutdown",
       "tools:stop",
     ]);
   } finally {

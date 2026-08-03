@@ -278,6 +278,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   selectedEnvironmentIdRef.current = selectedEnvironmentId;
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [loopedReviewDialogOpen, setLoopedReviewDialogOpen] = useState(false);
+  const [loopedReviewLaunchPending, setLoopedReviewLaunchPending] = useState(false);
+  const loopedReviewLaunchInFlightRef = useRef(false);
   const [opencodeFavoriteModelIds, setOpencodeFavoriteModelIds] = useState<string[]>([]);
   const reviewLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewClickSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -464,9 +466,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   // Get the default agent - per-environment override takes precedence over global config
   const defaultAgent = selectedEnvironment?.defaultAgent || config.global.defaultAgent || "claude";
-  const { createLoopedReviewWorkflow, removeLoopedReviewWorkflow } =
+  const { installLoopedReviewWorkflow, removeLoopedReviewWorkflow } =
     useLoopedReviewStore(useShallow((state) => ({
-      createLoopedReviewWorkflow: state.createWorkflow,
+      installLoopedReviewWorkflow: state.replaceWorkflow,
       removeLoopedReviewWorkflow: state.removeWorkflow,
     })));
 
@@ -551,9 +553,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     setReviewDialogOpen(false);
   }, [handleReview]);
 
-  const handleLoopedReview = useCallback((selection: ReviewLaunchSelection) => {
+  const handleLoopedReview = useCallback(async (selection: ReviewLaunchSelection) => {
     if (
-      !createTab
+      loopedReviewLaunchInFlightRef.current
+      || !createTab
       || !selectedEnvironmentId
       || !selectedProjectId
       || !selectedEnvironment
@@ -564,58 +567,124 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     ) {
       return;
     }
-    const { task } = findTaskForEnvironment(selectedEnvironmentId);
-    const kanbanState = useKanbanStore.getState();
-    const hasCurrentProjectNotes =
-      kanbanState.currentNotesProjectId === selectedProjectId
-      && kanbanState.notes.trim().length > 0;
-    const context = task || hasCurrentProjectNotes
-      ? {
-          ticketTitle: task?.title,
-          ticketDescription: task?.description,
-          acceptanceCriteria: task?.acceptanceCriteria,
-          comments: task?.comments.map((comment) => comment.text),
-          imageNames: task?.images.map((image) => image.filename),
-          projectNotes: hasCurrentProjectNotes ? kanbanState.notes : undefined,
-        }
-      : undefined;
-    const workflowId = createLoopedReviewWorkflow({
-      environmentId: selectedEnvironmentId,
-      projectId: selectedProjectId,
-      agent: getReviewAgent(selection.tabType),
-      model: selection.model,
-      reasoningEffort: selection.reasoningEffort,
-      targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
-      reviewInstruction: config.global.reviewInstruction,
-      context,
-      allowance: selection.passAllowance,
-    });
+    // React state does not update until this event returns. Keep a synchronous
+    // guard as well so a double click/submit cannot start two backend workflows.
+    loopedReviewLaunchInFlightRef.current = true;
+    setLoopedReviewLaunchPending(true);
+    let workflowId: string | undefined;
+    let launchError: string | undefined;
     try {
+      const { task } = findTaskForEnvironment(selectedEnvironmentId);
+      const kanbanState = useKanbanStore.getState();
+      const hasCurrentProjectNotes =
+        kanbanState.currentNotesProjectId === selectedProjectId
+        && kanbanState.notes.trim().length > 0;
+      const context = task || hasCurrentProjectNotes
+        ? {
+            ticketTitle: task?.title,
+            ticketDescription: task?.description,
+            acceptanceCriteria: task?.acceptanceCriteria,
+            comments: task?.comments.map((comment) => comment.text),
+            imageNames: task?.images.map((image) => image.filename),
+            projectNotes: hasCurrentProjectNotes ? kanbanState.notes : undefined,
+          }
+        : undefined;
+      const workflow = await backend.startLoopedReview({
+        environmentId: selectedEnvironmentId,
+        projectId: selectedProjectId,
+        agent: getReviewAgent(selection.tabType),
+        model: selection.model,
+        reasoningEffort: selection.reasoningEffort,
+        targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
+        reviewInstruction: config.global.reviewInstruction,
+        context,
+        allowance: selection.passAllowance,
+      });
+      workflowId = workflow.id;
+      installLoopedReviewWorkflow(workflow);
       const created = createTab("looped-review", {
         loopedReviewId: workflowId,
         displayTitle: "Looped Review",
       });
       if (!created) {
-        removeLoopedReviewWorkflow(workflowId);
-        toast.error("Could not open looped review", {
-          description: "The environment is not ready or the maximum tab count was reached.",
-        });
-        return;
+        launchError = "The environment is not ready or the maximum tab count was reached.";
       }
     } catch (error) {
-      removeLoopedReviewWorkflow(workflowId);
-      toast.error("Could not open looped review", {
-        description: error instanceof Error ? error.message : String(error),
-      });
-      return;
+      launchError = error instanceof Error ? error.message : String(error);
     }
-    setLoopedReviewDialogOpen(false);
+
+    try {
+      if (!launchError) {
+        setLoopedReviewDialogOpen(false);
+        return;
+      }
+
+      if (!workflowId) {
+        toast.error("Could not open looped review", { description: launchError });
+        return;
+      }
+
+      const reportPreservedWorkflow = (description: string) => {
+        toast.error("Could not open looped review", {
+          description,
+          action: {
+            label: "Open workflow",
+            onClick: () => {
+              try {
+                const opened = createTab("looped-review", {
+                  loopedReviewId: workflowId,
+                  displayTitle: "Looped Review",
+                });
+                if (!opened) {
+                  toast.error("Could not restore looped review", {
+                    description: "Free a tab and try opening the saved workflow again.",
+                  });
+                }
+              } catch (error) {
+                toast.error("Could not restore looped review", {
+                  description: error instanceof Error ? error.message : String(error),
+                });
+              }
+            },
+          },
+        });
+      };
+
+      // Keep the authoritative snapshot installed until both cancellation and
+      // deletion are confirmed. If either operation fails, the workflow stays
+      // available for hydration/recovery instead of becoming invisible while
+      // its provider may still be running.
+      try {
+        const cancelledWorkflow = await backend.cancelLoopedReview(workflowId);
+        installLoopedReviewWorkflow(cancelledWorkflow);
+        if (cancelledWorkflow.phase === "cancelled") {
+          await backend.deleteLoopedReviewWorkflow(workflowId);
+          removeLoopedReviewWorkflow(workflowId);
+          toast.error("Could not open looped review", { description: launchError });
+          return;
+        }
+
+        reportPreservedWorkflow(
+          `${launchError} Cancellation is still in progress; the saved workflow remains available for recovery.`,
+        );
+      } catch (cleanupError) {
+        const cleanupMessage = cleanupError instanceof Error
+          ? cleanupError.message
+          : String(cleanupError);
+        reportPreservedWorkflow(
+          `${launchError} Cleanup failed: ${cleanupMessage}. The saved workflow remains available for recovery.`,
+        );
+      }
+    } finally {
+      loopedReviewLaunchInFlightRef.current = false;
+      setLoopedReviewLaunchPending(false);
+    }
   }, [
     canCreateTab,
     config.global.reviewInstruction,
     config.repositories,
-    createLoopedReviewWorkflow,
     createTab,
+    installLoopedReviewWorkflow,
     isRunning,
     removeLoopedReviewWorkflow,
     selectedEnvironment,
@@ -1446,6 +1515,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     || !isRunning
                     || !workspaceReady
                     || setupRunning
+                    || loopedReviewLaunchPending
                   }
                   aria-label="Looped code review"
                 >
@@ -2005,7 +2075,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       <ReviewLaunchDialog
         kind="looped"
         open={loopedReviewDialogOpen}
-        onOpenChange={setLoopedReviewDialogOpen}
+        onOpenChange={(open) => {
+          if (!loopedReviewLaunchInFlightRef.current) {
+            setLoopedReviewDialogOpen(open);
+          }
+        }}
         defaultTabType={resolveDefaultReviewTabType({
           defaultAgent,
           environment: selectedEnvironment ?? undefined,
@@ -2023,6 +2097,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredReasoningEfforts={{
           codex: config.global.codexReasoningEffort,
         }}
+        busy={loopedReviewLaunchPending}
         opencodeFavoriteModelIds={opencodeFavoriteModelIds}
         onConfirm={handleLoopedReview}
       />

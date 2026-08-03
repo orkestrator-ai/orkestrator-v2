@@ -11,6 +11,10 @@ import type {
   StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import type {
+  LoopedReviewWorkflow as BackendLoopedReviewWorkflow,
+  StartLoopedReviewInput,
+} from "@orkestrator/protocol/review-workflow";
+import type {
   Project,
   Environment,
   EnvironmentType,
@@ -63,9 +67,6 @@ import type {
   GitHubIssuesSnapshot,
   GitHubIssueStatus,
 } from "@/types/github";
-import type {
-  ReviewPreparationResult,
-} from "@/lib/looped-review-prompts";
 import type { CodexModel } from "@/lib/codex-client";
 import {
   isResourceRevisionManifest,
@@ -687,22 +688,6 @@ export async function verifyEnvironmentPr(
     environmentId,
     prUrl,
     targetBranch,
-  });
-}
-
-export async function generateLoopedReviewPackage(
-  environmentId: string,
-  packageId: string,
-  round: number,
-  targetBranch: string,
-  preparation: ReviewPreparationResult,
-): Promise<unknown> {
-  return invoke<unknown>("generate_looped_review_package", {
-    environmentId,
-    packageId,
-    round,
-    targetBranch,
-    preparation,
   });
 }
 
@@ -1898,6 +1883,41 @@ export async function deletePaneLayout(environmentId: string): Promise<void> {
 
 // --- Looped Code Review Workflow Commands ---
 
+export async function startLoopedReview(
+  input: StartLoopedReviewInput,
+): Promise<BackendLoopedReviewWorkflow> {
+  return invoke<BackendLoopedReviewWorkflow>("start_looped_review", { ...input });
+}
+
+export async function pauseLoopedReview(workflowId: string): Promise<BackendLoopedReviewWorkflow> {
+  return invoke<BackendLoopedReviewWorkflow>("pause_looped_review", { workflowId });
+}
+
+export async function resumeLoopedReview(workflowId: string): Promise<BackendLoopedReviewWorkflow> {
+  return invoke<BackendLoopedReviewWorkflow>("resume_looped_review", { workflowId });
+}
+
+export async function retryLoopedReview(workflowId: string): Promise<BackendLoopedReviewWorkflow> {
+  return invoke<BackendLoopedReviewWorkflow>("retry_looped_review", { workflowId });
+}
+
+export async function cancelLoopedReview(workflowId: string): Promise<BackendLoopedReviewWorkflow> {
+  return invoke<BackendLoopedReviewWorkflow>("cancel_looped_review", { workflowId });
+}
+
+export async function getLoopedReviewProviderSession(
+  workflowId: string,
+  sessionId?: string,
+): Promise<{ providerSessionId: string } | null> {
+  return invoke("get_looped_review_provider_session", {
+    workflowId,
+    // Only an *absent* session id means "use the active session". A blank one
+    // is a caller bug, and silently substituting the active session would open
+    // the wrong provider transcript rather than reporting it.
+    ...(sessionId === undefined ? {} : { sessionId }),
+  });
+}
+
 export async function getLoopedReviewWorkflow<T = unknown>(
   workflowId: string,
 ): Promise<PersistedLoopedReviewWorkflow<T> | null> {
@@ -1948,41 +1968,9 @@ export async function deleteLoopedReviewWorkflow(
   return invoke("delete_looped_review_workflow", { workflowId });
 }
 
-export async function claimLoopedReviewController(
-  workflowId: string,
-  ownerId: string,
-  leaseMs: number,
-): Promise<{ granted: boolean; token?: string; expiresAt: string }> {
-  return invoke("claim_looped_review_controller", {
-    workflowId,
-    ownerId,
-    leaseMs,
-  });
-}
-
-export async function validateLoopedReviewController(
-  workflowId: string,
-  ownerId: string,
-  token: string,
-): Promise<boolean> {
-  return invoke<boolean>("validate_looped_review_controller", {
-    workflowId,
-    ownerId,
-    token,
-  });
-}
-
-export async function releaseLoopedReviewController(
-  workflowId: string,
-  ownerId: string,
-  token: string,
-): Promise<void> {
-  return invoke("release_looped_review_controller", {
-    workflowId,
-    ownerId,
-    token,
-  });
-}
+// Controller leases are backend-only. The renderer has no caller for
+// claim/validate/release, and the commands reject version-2 records anyway, so
+// keeping wrappers here would only advertise an API the renderer must not use.
 
 export async function ensureNativeAgentSession(input: {
   environmentId: string;

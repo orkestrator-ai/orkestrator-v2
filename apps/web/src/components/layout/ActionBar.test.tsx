@@ -80,8 +80,15 @@ const getOpencodeModelPreferencesMock = mock(
 );
 const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => true);
-const createLoopedWorkflowMock = mock((_options: unknown) => "looped-workflow-1");
+const startedLoopedWorkflow = { id: "looped-workflow-1", phase: "preparing" as const };
+const cancelledLoopedWorkflow = { id: "looped-workflow-1", phase: "cancelled" as const };
+const startLoopedReviewMock = mock(async (_options: unknown) => startedLoopedWorkflow);
+const installLoopedWorkflowMock = mock((_workflow: unknown) => {});
 const removeLoopedWorkflowMock = mock((_workflowId: string) => {});
+const deleteLoopedReviewMock = mock(async (_workflowId: string) => {});
+const cancelLoopedReviewMock = mock(async (
+  _workflowId: string,
+): Promise<{ id: string; phase: string }> => cancelledLoopedWorkflow);
 const selectTabMock = mock((_index: number) => {});
 const closeActiveTabMock = mock(() => {});
 const setProjectBoardTabMock = mock((_tab: string) => {});
@@ -495,10 +502,10 @@ mock.module("@/stores", () => ({
       selector,
     ),
   useLoopedReviewStore: <T,>(selector: (state: {
-    createWorkflow: typeof createLoopedWorkflowMock;
+    replaceWorkflow: typeof installLoopedWorkflowMock;
     removeWorkflow: typeof removeLoopedWorkflowMock;
   }) => T) => selector({
-    createWorkflow: createLoopedWorkflowMock,
+    replaceWorkflow: installLoopedWorkflowMock,
     removeWorkflow: removeLoopedWorkflowMock,
   }),
 }));
@@ -542,6 +549,9 @@ mock.module("@/lib/backend", () => ({
   readLocalFile: readLocalFileMock,
   recreateEnvironment: recreateEnvironmentMock,
   setEnvironmentPr: setEnvironmentPrBackendMock,
+  startLoopedReview: startLoopedReviewMock,
+  cancelLoopedReview: cancelLoopedReviewMock,
+  deleteLoopedReviewWorkflow: deleteLoopedReviewMock,
   getOpencodeModelPreferences: getOpencodeModelPreferencesMock,
 }));
 
@@ -596,9 +606,14 @@ beforeEach(() => {
   }));
   createTabMock.mockReset();
   createTabMock.mockImplementation(() => true);
-  createLoopedWorkflowMock.mockReset();
-  createLoopedWorkflowMock.mockImplementation(() => "looped-workflow-1");
+  startLoopedReviewMock.mockReset();
+  startLoopedReviewMock.mockImplementation(async () => startedLoopedWorkflow);
+  installLoopedWorkflowMock.mockReset();
   removeLoopedWorkflowMock.mockReset();
+  deleteLoopedReviewMock.mockReset();
+  deleteLoopedReviewMock.mockImplementation(async () => {});
+  cancelLoopedReviewMock.mockReset();
+  cancelLoopedReviewMock.mockImplementation(async () => cancelledLoopedWorkflow);
   selectTabMock.mockReset();
   closeActiveTabMock.mockReset();
   toastSuccessMock.mockReset();
@@ -2216,7 +2231,7 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).toHaveBeenCalledTimes(cases.length);
   });
 
-  test("launches one dedicated looped-review tab with the default six-pass allowance", () => {
+  test("launches one dedicated looped-review tab with the default six-pass allowance", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -2232,21 +2247,114 @@ describe("ActionBar workflow tabs", () => {
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(createLoopedWorkflowMock).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledWith(expect.objectContaining({
       environmentId: "env-1",
       projectId: "project-1",
       agent: "codex",
       targetBranch: "main",
       allowance: 6,
-    }));
+    })));
     expect(createTabMock).toHaveBeenCalledWith("looped-review", {
       loopedReviewId: "looped-workflow-1",
       displayTitle: "Looped Review",
     });
+    expect(installLoopedWorkflowMock).toHaveBeenCalledWith(startedLoopedWorkflow);
     expect(removeLoopedWorkflowMock).not.toHaveBeenCalled();
   });
 
-  test("passes linked ticket details and current project notes into looped review", () => {
+  test("blocks duplicate submissions and exposes a busy launch state", async () => {
+    currentWorkspaceReady = true;
+    let resolveStart!: (workflow: typeof startedLoopedWorkflow) => void;
+    startLoopedReviewMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveStart = resolve;
+    }));
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    const startButton = screen.getByRole("button", { name: "Start looped review" });
+    fireEvent.click(startButton);
+
+    const busyButton = await screen.findByRole("button", { name: "Starting looped review…" });
+    expect((busyButton as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(busyButton.closest("form")!);
+    expect(startLoopedReviewMock).toHaveBeenCalledTimes(1);
+
+    resolveStart(startedLoopedWorkflow);
+    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
+    expect(
+      screen.queryByRole("dialog", { name: "Configure looped code review" }),
+    ).toBeNull();
+  });
+
+  test("disables the toolbar entry point while a launch is in flight", async () => {
+    currentWorkspaceReady = true;
+    let resolveStart!: (workflow: typeof startedLoopedWorkflow) => void;
+    startLoopedReviewMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveStart = resolve;
+    }));
+    render(<ActionBar />);
+
+    const toolbarButton = screen.getByRole("button", { name: "Looped code review" });
+    expect((toolbarButton as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(toolbarButton);
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    // Otherwise a second review could be launched for the same environment
+    // from the toolbar while the first is still being created. The open dialog
+    // marks the toolbar aria-hidden, so it is queried explicitly.
+    const toolbarEntry = () => screen.getByRole(
+      "button", { name: "Looped code review", hidden: true },
+    ) as HTMLButtonElement;
+    await waitFor(() => {
+      expect(toolbarEntry().disabled).toBe(true);
+    });
+
+    resolveStart(startedLoopedWorkflow);
+    await waitFor(() => {
+      expect(toolbarEntry().disabled).toBe(false);
+    });
+  });
+
+  test("allows a fresh launch after a failed one", async () => {
+    currentWorkspaceReady = true;
+    startLoopedReviewMock.mockImplementationOnce(async () => {
+      throw new Error("backend unavailable");
+    });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
+
+    // The synchronous in-flight guard must be cleared on the failure path too,
+    // or the user can never retry without reloading.
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledTimes(2));
+  });
+
+  test("surfaces a backend start rejection without attempting cleanup", async () => {
+    currentWorkspaceReady = true;
+    startLoopedReviewMock.mockImplementationOnce(async () => {
+      throw new Error("backend unavailable");
+    });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open looped review",
+      { description: "backend unavailable" },
+    ));
+    expect(cancelLoopedReviewMock).not.toHaveBeenCalled();
+    expect(deleteLoopedReviewMock).not.toHaveBeenCalled();
+    expect(removeLoopedWorkflowMock).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Start looped review" }) as HTMLButtonElement).disabled)
+      .toBe(false);
+  });
+
+  test("passes linked ticket details and current project notes into looped review", async () => {
     currentWorkspaceReady = true;
     currentKanbanNotesProjectId = "project-1";
     currentKanbanNotes = "Prefer small, independently deployable changes.";
@@ -2275,7 +2383,7 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(createLoopedWorkflowMock).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledWith(expect.objectContaining({
       context: {
         ticketTitle: "Retry failed uploads",
         ticketDescription: "Keep failed uploads available for retry.",
@@ -2284,10 +2392,10 @@ describe("ActionBar workflow tabs", () => {
         imageNames: ["failed-upload.png"],
         projectNotes: "Prefer small, independently deployable changes.",
       },
-    }));
+    })));
   });
 
-  test("passes current project notes without requiring a linked ticket", () => {
+  test("passes current project notes without requiring a linked ticket", async () => {
     currentWorkspaceReady = true;
     currentKanbanNotesProjectId = "project-1";
     currentKanbanNotes = "Review database migrations carefully.";
@@ -2296,7 +2404,7 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(createLoopedWorkflowMock).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledWith(expect.objectContaining({
       context: {
         ticketTitle: undefined,
         ticketDescription: undefined,
@@ -2305,10 +2413,10 @@ describe("ActionBar workflow tabs", () => {
         imageNames: undefined,
         projectNotes: "Review database migrations carefully.",
       },
-    }));
+    })));
   });
 
-  test("excludes notes loaded for another project from looped review", () => {
+  test("excludes notes loaded for another project from looped review", async () => {
     currentWorkspaceReady = true;
     currentKanbanNotesProjectId = "other-project";
     currentKanbanNotes = "Unrelated project notes";
@@ -2317,9 +2425,9 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(createLoopedWorkflowMock).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledWith(expect.objectContaining({
       context: undefined,
-    }));
+    })));
   });
 
   test("requires a running, workspace-ready environment with setup complete", () => {
@@ -2330,7 +2438,7 @@ describe("ActionBar workflow tabs", () => {
       expect(
         screen.queryByRole("dialog", { name: "Configure looped code review" }),
       ).toBeNull();
-      expect(createLoopedWorkflowMock).not.toHaveBeenCalled();
+      expect(startLoopedReviewMock).not.toHaveBeenCalled();
     };
 
     currentEnvironment = { ...selectedEnvironment, status: "stopped" };
@@ -2360,11 +2468,11 @@ describe("ActionBar workflow tabs", () => {
     view.rerender(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(createLoopedWorkflowMock).not.toHaveBeenCalled();
+    expect(startLoopedReviewMock).not.toHaveBeenCalled();
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
-  test("rolls back the workflow when tab creation is refused", () => {
+  test("rolls back the workflow when tab creation is refused", async () => {
     currentWorkspaceReady = true;
     createTabMock.mockReturnValueOnce(false);
     render(<ActionBar />);
@@ -2372,7 +2480,11 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(createLoopedWorkflowMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledTimes(1));
+    expect(cancelLoopedReviewMock).toHaveBeenCalledWith("looped-workflow-1");
+    expect(installLoopedWorkflowMock).toHaveBeenNthCalledWith(1, startedLoopedWorkflow);
+    expect(installLoopedWorkflowMock).toHaveBeenNthCalledWith(2, cancelledLoopedWorkflow);
+    expect(deleteLoopedReviewMock).toHaveBeenCalledWith("looped-workflow-1");
     expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1");
     expect(toastErrorMock).toHaveBeenCalledWith(
       "Could not open looped review",
@@ -2383,7 +2495,7 @@ describe("ActionBar workflow tabs", () => {
     ).toBeTruthy();
   });
 
-  test("rolls back the workflow when tab creation throws", () => {
+  test("rolls back the workflow when tab creation throws", async () => {
     currentWorkspaceReady = true;
     createTabMock.mockImplementationOnce(() => {
       throw new Error("pane rejected the tab");
@@ -2393,14 +2505,16 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1");
+    await waitFor(() => expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1"));
+    expect(cancelLoopedReviewMock).toHaveBeenCalledWith("looped-workflow-1");
+    expect(deleteLoopedReviewMock).toHaveBeenCalledWith("looped-workflow-1");
     expect(toastErrorMock).toHaveBeenCalledWith(
       "Could not open looped review",
       { description: "pane rejected the tab" },
     );
   });
 
-  test("reports non-Error looped-review tab creation failures", () => {
+  test("reports non-Error looped-review tab creation failures", async () => {
     currentWorkspaceReady = true;
     createTabMock.mockImplementationOnce(() => {
       throw "pane rejected the tab";
@@ -2410,10 +2524,115 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1");
+    await waitFor(() => expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1"));
+    expect(deleteLoopedReviewMock).toHaveBeenCalledWith("looped-workflow-1");
     expect(toastErrorMock).toHaveBeenCalledWith(
       "Could not open looped review",
       { description: "pane rejected the tab" },
+    );
+  });
+
+  test("preserves the workflow projection when cancellation fails", async () => {
+    currentWorkspaceReady = true;
+    createTabMock.mockReturnValueOnce(false);
+    cancelLoopedReviewMock.mockImplementationOnce(async () => {
+      throw new Error("provider abort failed");
+    });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open looped review",
+      expect.objectContaining({
+        description: expect.stringContaining("saved workflow remains available for recovery"),
+      }),
+    ));
+    expect(installLoopedWorkflowMock).toHaveBeenCalledWith(startedLoopedWorkflow);
+    expect(deleteLoopedReviewMock).not.toHaveBeenCalled();
+    expect(removeLoopedWorkflowMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Configure looped code review" })).toBeTruthy();
+
+    const recoveryToast = toastErrorMock.mock.calls.at(-1)?.[1] as {
+      action?: { label: string; onClick: () => void };
+    };
+    expect(recoveryToast.action?.label).toBe("Open workflow");
+    recoveryToast.action?.onClick();
+    expect(createTabMock).toHaveBeenLastCalledWith("looped-review", {
+      loopedReviewId: "looped-workflow-1",
+      displayTitle: "Looped Review",
+    });
+  });
+
+  test("reports when the recovery action cannot reopen the workflow tab", async () => {
+    currentWorkspaceReady = true;
+    createTabMock.mockImplementation(() => false);
+    cancelLoopedReviewMock.mockImplementationOnce(async () => {
+      throw new Error("provider abort failed");
+    });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open looped review",
+      expect.objectContaining({
+        description: expect.stringContaining("saved workflow remains available for recovery"),
+      }),
+    ));
+
+    const recoveryToast = toastErrorMock.mock.calls.at(-1)?.[1] as {
+      action?: { label: string; onClick: () => void };
+    };
+    expect(recoveryToast.action?.label).toBe("Open workflow");
+    recoveryToast.action?.onClick();
+    expect(toastErrorMock).toHaveBeenLastCalledWith("Could not restore looped review", {
+      description: expect.stringContaining("Free a tab"),
+    });
+  });
+
+  test("keeps the cancelled snapshot visible when deletion fails", async () => {
+    currentWorkspaceReady = true;
+    createTabMock.mockReturnValueOnce(false);
+    deleteLoopedReviewMock.mockImplementationOnce(async () => {
+      throw new Error("storage unavailable");
+    });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open looped review",
+      expect.objectContaining({
+        description: expect.stringContaining("saved workflow remains available for recovery"),
+      }),
+    ));
+    expect(installLoopedWorkflowMock).toHaveBeenLastCalledWith(cancelledLoopedWorkflow);
+    expect(removeLoopedWorkflowMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Configure looped code review" })).toBeTruthy();
+  });
+
+  test("preserves a cancelling workflow without attempting premature deletion", async () => {
+    currentWorkspaceReady = true;
+    createTabMock.mockReturnValueOnce(false);
+    const cancellingWorkflow = { id: "looped-workflow-1", phase: "cancelling" as const };
+    cancelLoopedReviewMock.mockImplementationOnce(async () => cancellingWorkflow);
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    await waitFor(() => expect(installLoopedWorkflowMock).toHaveBeenLastCalledWith(
+      cancellingWorkflow,
+    ));
+    expect(deleteLoopedReviewMock).not.toHaveBeenCalled();
+    expect(removeLoopedWorkflowMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open looped review",
+      expect.objectContaining({ description: expect.stringContaining("Cancellation is still in progress") }),
     );
   });
 
@@ -3256,7 +3475,7 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     }
 
     expect(createTabMock).not.toHaveBeenCalled();
-    expect(createLoopedWorkflowMock).not.toHaveBeenCalled();
+    expect(startLoopedReviewMock).not.toHaveBeenCalled();
     expect((screen.getByRole("button", { name: "Code review" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "Looped code review" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "New terminal tab" }) as HTMLButtonElement).disabled).toBe(true);

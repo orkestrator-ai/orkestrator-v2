@@ -1,4 +1,4 @@
-import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@/lib/native/events";
 import { exit } from "@/lib/native/process";
 import { getCurrentWindow } from "@/lib/native/window";
@@ -32,7 +32,6 @@ import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import {
   hydrateLoopedReviewWorkflowsForEnvironment,
-  startLoopedReviewPersistence,
 } from "@/lib/looped-review-persistence";
 import {
   hydrateBuildPipelinesForProject,
@@ -61,11 +60,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
-import { LazyLoadBoundary } from "@/components/LazyLoadBoundary";
-
-const LazyLoopedReviewSupervisor = lazy(async () => ({
-  default: (await import("@/components/review/LoopedReviewSupervisor")).LoopedReviewSupervisor,
-}));
 
 function App() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
@@ -103,7 +97,6 @@ function App() {
   useEffect(() => startResourceSync({ loadManifest: getResourceRevisionManifest }), []);
   useEffect(() => startStoreResourceSync(), []);
   useEffect(() => startPaneLayoutPersistence(), []);
-  useEffect(() => startLoopedReviewPersistence(), []);
   useEffect(() => {
     void migrateLegacyBuildPipelines().catch((error) => {
       // Keep the legacy key intact so the next launch can retry after a
@@ -125,6 +118,9 @@ function App() {
     }
   }, [environments, promptQueueSources]);
 
+  // The single renderer-side hydration pass for backend-owned reviews. Resource
+  // change events perform incremental refreshes; this closes the gap after a
+  // renderer exit/remount, when the store starts empty.
   useEffect(() => {
     for (const environment of environments) {
       void hydrateLoopedReviewWorkflowsForEnvironment(environment.id).catch((error) => {
@@ -217,9 +213,6 @@ function App() {
   const claudeTmuxMessageQueue = useClaudeTmuxStore((state) => state.messageQueue);
   const codexMessageQueue = useCodexStore((state) => state.messageQueue);
   const openCodeMessageQueue = useOpenCodeStore((state) => state.messageQueue);
-  const loopedReviewWorkflowCount = useLoopedReviewStore(
-    (state) => state.workflows.size,
-  );
   const loadingNativeSessionEnvironmentIds = useMemo(() => {
     const environmentIds = new Set<string>();
     const sessionMaps = [claudeSessions, codexSessions, openCodeSessions];
@@ -698,11 +691,6 @@ function App() {
     <TooltipProvider>
       <TerminalProvider>
         <AppShell>
-          {loopedReviewWorkflowCount > 0 && (
-            <LazyLoadBoundary>
-              <LazyLoopedReviewSupervisor />
-            </LazyLoadBoundary>
-          )}
           {selectedEnvironment ? (
             <div className="relative h-full bg-background">
               <div className="absolute inset-0 z-10 bg-background">

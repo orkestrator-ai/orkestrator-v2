@@ -8,6 +8,12 @@
  *   CODEX_PROTOCOL_BINARY=/path/to/codex RUN_LIVE_CODEX_APP_SERVER=1 \
  *     bun test bridges/codex-bridge/src/app-server/live-contract.test.ts
  *
+ * The override is optional: `live-binary.ts` otherwise falls back to the managed
+ * toolchain copy, then `CODEX_PATH`, then `codex` on PATH, and verifies in every
+ * case that the binary reports the version pinned in `config/codex-version.json`
+ * — a contract test against the wrong build proves nothing. That resolution is
+ * unit-tested by `live-binary.test.ts`, which runs in the default suite.
+ *
  * Nothing here starts a turn, so no credits are spent and no model is called.
  * Turn-level behaviour (interrupt, deltas, subagents) needs an authenticated
  * account and is covered by the canary rollout instead.
@@ -16,72 +22,15 @@ import { describe, test, expect } from "bun:test";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
-import { homedir, platform, tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlRpcClient } from "./jsonl-rpc-client.js";
 import { AppServerRpcError, isUnmaterializedThreadError } from "./errors.js";
+import { pinnedVersion, resolveCodexBinary } from "./live-binary.js";
 import type { InboundNotification } from "./envelope-validation.js";
 
 const LIVE = process.env.RUN_LIVE_CODEX_APP_SERVER === "1";
 const describeLive = LIVE ? describe : describe.skip;
-
-interface VersionConfig {
-  version: string;
-}
-
-const repoRoot = join(import.meta.dir, "..", "..", "..", "..");
-
-async function pinnedVersion(): Promise<string> {
-  const config = JSON.parse(
-    await readFile(join(repoRoot, "config", "codex-version.json"), "utf8"),
-  ) as VersionConfig;
-  return config.version;
-}
-
-function managedBinary(version: string): string | null {
-  const arch = process.arch === "arm64" ? "arm64" : "x64";
-  const root =
-    platform() === "darwin"
-      ? join(homedir(), "Library", "Application Support", "orkestrator-v2", "toolchains")
-      : join(
-          process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
-          "orkestrator-v2",
-          "toolchains",
-        );
-  const candidate = join(
-    root,
-    "codex",
-    version,
-    `${platform() === "darwin" ? "darwin" : "linux"}-${arch}`,
-    "codex",
-  );
-  return existsSync(candidate) ? candidate : null;
-}
-
-async function resolveBinary(): Promise<string> {
-  const version = await pinnedVersion();
-  const binary = process.env.CODEX_PROTOCOL_BINARY?.trim() || managedBinary(version) || "codex";
-  const probe = Bun.spawn([binary, "--version"], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(probe.stdout).text(),
-    new Response(probe.stderr).text(),
-    probe.exited,
-  ]);
-  if (exitCode !== 0) {
-    throw new Error(`Could not execute ${binary}: ${stderr.trim()}`);
-  }
-  const reportedVersion = stdout.trim().split(/\s+/).at(-1);
-  if (reportedVersion !== version) {
-    throw new Error(
-      `${binary} reports ${reportedVersion || "an unknown version"}, but `
-      + `config/codex-version.json pins ${version}`,
-    );
-  }
-  return binary;
-}
 
 interface LiveSession {
   client: JsonlRpcClient;
@@ -106,7 +55,7 @@ async function boot(options: { copyAuth?: boolean } = {}): Promise<LiveSession> 
     }
   }
 
-  const binary = await resolveBinary();
+  const binary = await resolveCodexBinary();
   const child = spawn(binary, ["app-server", "--stdio"], {
     cwd: workspace,
     env: { ...process.env, CODEX_HOME: codexHome, LOG_FORMAT: "json" },

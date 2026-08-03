@@ -18,7 +18,7 @@ type Digest = {
   sha256: string;
 };
 
-type Filters = {
+export type Filters = {
   tool?: ToolchainName;
   platform?: ToolchainPlatform;
   architecture?: ToolchainArchitecture;
@@ -225,8 +225,40 @@ export async function verifyArtifact(
   await rm(archivePath, { force: true });
 }
 
-async function main(): Promise<void> {
-  if (process.env.RUN_LIVE_TOOLCHAIN_ARTIFACTS !== "1") {
+export function selectArtifacts(
+  filters: Filters,
+  artifacts: readonly ToolchainArtifact[] = PINNED_TOOLCHAIN_ARTIFACTS,
+): ToolchainArtifact[] {
+  return artifacts.filter((artifact) =>
+    (!filters.tool || artifact.name === filters.tool)
+    && (!filters.platform || artifact.platform === filters.platform)
+    && (!filters.architecture || artifact.architecture === filters.architecture)
+  );
+}
+
+export interface RunOptions {
+  argv?: string[];
+  env?: Record<string, string | undefined>;
+  artifacts?: readonly ToolchainArtifact[];
+  /** Injected so the run/selection/cleanup logic is testable without downloads. */
+  verify?: (
+    artifact: ToolchainArtifact,
+    temporaryRoot: string,
+    options: { emit: boolean },
+  ) => Promise<void>;
+  log?: (message: string) => void;
+}
+
+export async function run(options: RunOptions = {}): Promise<void> {
+  const {
+    argv = process.argv.slice(2),
+    env = process.env,
+    artifacts = PINNED_TOOLCHAIN_ARTIFACTS,
+    verify = verifyArtifact,
+    log = console.log,
+  } = options;
+
+  if (env.RUN_LIVE_TOOLCHAIN_ARTIFACTS !== "1") {
     throw new Error(
       "This downloads every selected release artifact. Re-run with "
       + "RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 after reviewing the optional filters.",
@@ -235,23 +267,21 @@ async function main(): Promise<void> {
 
   // `--emit` prints the computed digests instead of asserting them, for the
   // version-bump workflow in docs/upgrade-agents.md.
-  const { emit, filters } = parseArguments(process.argv.slice(2));
-  const selected = PINNED_TOOLCHAIN_ARTIFACTS.filter((artifact) =>
-    (!filters.tool || artifact.name === filters.tool)
-    && (!filters.platform || artifact.platform === filters.platform)
-    && (!filters.architecture || artifact.architecture === filters.architecture)
-  );
+  const { emit, filters } = parseArguments(argv);
+  const selected = selectArtifacts(filters, artifacts);
   if (selected.length === 0) throw new Error("No artifacts matched the filters");
 
   const temporaryRoot = await mkdtemp(join(tmpdir(), "ork-toolchain-verify-"));
   try {
     for (const artifact of selected) {
-      await verifyArtifact(artifact, temporaryRoot, { emit });
+      await verify(artifact, temporaryRoot, { emit });
     }
   } finally {
+    // The scratch root holds full release archives, so it has to go even when a
+    // digest mismatch aborts the loop part-way through.
     await rm(temporaryRoot, { recursive: true, force: true });
   }
-  console.log(
+  log(
     emit
       ? `Hashed ${selected.length} artifact(s); paste the values into toolchain-manifest.ts`
       : `Verified ${selected.length} pinned toolchain artifact(s)`,
@@ -259,5 +289,5 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-  await main();
+  await run();
 }

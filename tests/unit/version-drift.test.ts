@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CODEX_RELEASE_BASE,
@@ -14,6 +14,39 @@ const repoRoot = join(import.meta.dir, "..", "..");
 
 function read(rel: string): string {
   return readFileSync(join(repoRoot, rel), "utf8");
+}
+
+/** Every `bun.lock` the repo tracks: the workspace root plus any nested one. */
+function lockfilePaths(): string[] {
+  const found = existsSync(join(repoRoot, "bun.lock")) ? ["bun.lock"] : [];
+  for (const group of ["apps", "bridges", "packages"]) {
+    const groupDir = join(repoRoot, group);
+    if (!existsSync(groupDir)) continue;
+    for (const entry of readdirSync(groupDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const rel = `${group}/${entry.name}/bun.lock`;
+      if (existsSync(join(repoRoot, rel))) found.push(rel);
+    }
+  }
+  return found;
+}
+
+/** `bun.lock` is JSONC — trailing commas are legal and `JSON.parse` rejects them. */
+function lockfileRootDependencies(rel: string): Record<string, string> {
+  const lock = JSON.parse(read(rel).replace(/,(\s*[}\]])/g, "$1")) as {
+    workspaces?: Record<string, { dependencies?: Record<string, string> }>;
+  };
+  return lock.workspaces?.[""]?.dependencies ?? {};
+}
+
+/**
+ * Bun resolves `workspace:*` siblings from the workspace root rather than
+ * recording them in a nested lockfile, so they are not drift when absent.
+ */
+function externalDependencies(deps: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(deps).filter(([, spec]) => !spec.startsWith("workspace:")),
+  );
 }
 
 function expectExactVersion(pkgJsonRel: string, depName: string): string {
@@ -171,6 +204,38 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(pkg.devDependencies?.["@openai/codex-sdk"]).toBeUndefined();
   });
 
+  test("Codex: no lockfile anywhere still resolves the removed Codex SDK", () => {
+    // package.json alone was not enough. bridges/codex-bridge/bun.lock kept
+    // resolving @openai/codex-sdk (and its ~100MB platform binaries) for three
+    // upgrades after ADR 0001 removed the dependency, because no test read a
+    // lockfile. That file ships: .dockerignore does not exclude bun.lock and the
+    // image `mv`s the bridge to /opt/codex-bridge, leaving a lockfile with no
+    // workspace root above it, where `bun install` would resurrect the second
+    // execution path at a version that no longer matches the pin.
+    for (const lockfile of lockfilePaths()) {
+      expect(read(lockfile), `${lockfile} still resolves @openai/codex-sdk`).not.toContain(
+        "@openai/codex-sdk",
+      );
+    }
+  });
+
+  test("every nested lockfile agrees with its own package.json", () => {
+    // A nested lockfile is only safe while it describes the package next to it.
+    // Once it drifts it is a lie that survives every package.json-only check.
+    for (const lockfile of lockfilePaths()) {
+      if (lockfile === "bun.lock") continue;
+      const packageRel = lockfile.replace(/bun\.lock$/, "package.json");
+      const manifest = JSON.parse(read(packageRel)) as {
+        dependencies?: Record<string, string>;
+      };
+      const locked = lockfileRootDependencies(lockfile);
+
+      expect(locked, `${lockfile} disagrees with ${packageRel}`).toEqual(
+        externalDependencies(manifest.dependencies ?? {}),
+      );
+    }
+  });
+
   test("Codex: config/codex-version.json is the single source of truth for every pin", () => {
     // The app-server binary and the generated protocol bindings are only valid
     // as a matched pair, so every place that names a Codex version has to agree
@@ -279,12 +344,18 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
   test("OpenCode: SDK pin, managed binary, download script, and Docker CLI all match", () => {
     const sdkPin = expectExactVersion("apps/web/package.json", "@opencode-ai/sdk");
+    // The backend drives build pipelines through the same SDK. Checking only the
+    // web workspace is how native chat can look healthy while pipelines still
+    // speak the previous contract — the exact split docs/upgrade-agents.md warns
+    // about, which was documented as enforced here long before it actually was.
+    const backendPin = expectExactVersion("apps/backend/package.json", "@opencode-ai/sdk");
     const downloadScriptPin = getShellVar(
       "scripts/download-opencode.sh",
       "OPENCODE_VERSION",
     );
     const dockerfilePin = getDockerfileArg("OPENCODE_CLI_VERSION");
 
+    expect(backendPin).toBe(sdkPin);
     expect(downloadScriptPin).toBe(sdkPin);
     expect(dockerfilePin).toBe(sdkPin);
     expect(PINNED_TOOLCHAIN_VERSIONS.opencode).toBe(sdkPin);

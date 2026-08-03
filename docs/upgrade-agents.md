@@ -225,11 +225,15 @@ The Codex bridge does **not** use `@openai/codex-sdk`. Its
 local item types in `bridges/codex-bridge/src/codex-item-types.ts` and supervises
 one persistent `codex app-server --stdio` process per environment.
 
-The only remaining `@openai/codex-sdk` package record is in
-`bridges/codex-bridge/bun.lock`. It is a stale historical lockfile entry, not an
-import or declared dependency and not an upgrade target. Do not add the SDK back
-to make that lock entry look current; if the nested lockfile is regenerated,
-verify that the unused entry disappears.
+The bridge used to carry its own nested `bun.lock` that still resolved
+`@openai/codex-sdk` and its six platform binaries. That file has been
+removed: the root `bun.lock` is authoritative for every workspace member, and the
+nested copy shipped into the image (`.dockerignore` does not exclude `bun.lock`,
+and the build `mv`s the bridge to `/opt/codex-bridge`, leaving a lockfile with no
+workspace root above it) where a `bun install` would have resurrected the removed
+execution path. `tests/unit/version-drift.test.ts` now asserts that no lockfile
+resolves the SDK and that any nested lockfile agrees with its own `package.json`,
+so a regenerated lockfile cannot quietly reintroduce it.
 
 Other textual references are intentional history or guards: `AGENTS.md` and
 `codex-item-types.ts` explain the SDK's removal, while

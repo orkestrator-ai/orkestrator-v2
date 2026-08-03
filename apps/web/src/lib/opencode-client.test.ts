@@ -475,6 +475,58 @@ describe("opencode-client getModelsWithDefaults", () => {
     expect(result.defaults.modelId).toBe("openai/gpt-5-codex");
   });
 
+  test("maps capabilities.input.image onto models that report it", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              {
+                id: "deepseek",
+                models: {
+                  "deepseek-v4-flash": {
+                    id: "deepseek-v4-flash",
+                    name: "DeepSeek V4 Flash",
+                    capabilities: {
+                      input: { image: false },
+                    },
+                  },
+                  "deepseek-v4": {
+                    id: "deepseek-v4",
+                    name: "DeepSeek V4",
+                    capabilities: {
+                      input: { image: true },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        }),
+      },
+      config: {
+        providers: async () => ({ data: { providers: {}, default: {} } }),
+      },
+    } as unknown as OpencodeClient;
+
+    const result = await getModelsWithDefaults(client);
+
+    expect(result.models).toEqual([
+      {
+        id: "deepseek/deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        provider: "deepseek",
+        supportsImageInput: false,
+      },
+      {
+        id: "deepseek/deepseek-v4",
+        name: "DeepSeek V4",
+        provider: "deepseek",
+        supportsImageInput: true,
+      },
+    ]);
+  });
+
   test("filters disabled variants and orders enabled variants consistently", async () => {
     const client = {
       provider: {

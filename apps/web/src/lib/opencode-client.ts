@@ -47,6 +47,12 @@ export interface OpenCodeModel {
   /** Output cost per token (0 means free) */
   outputCost?: number;
   contextWindow?: number;
+  /**
+   * Whether the model accepts image input. Mirrors the SDK's
+   * `capabilities.input.image`; `undefined` means the catalog did not report
+   * it (assume the model may read images rather than blocking the attach).
+   */
+  supportsImageInput?: boolean;
 }
 
 export interface OpenCodeModelDefaults {
@@ -1323,6 +1329,15 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
           const outputCost = m.cost?.output ?? m.outputCost ?? m.output_cost;
           const contextWindow = m.limit?.context ?? m.contextWindow ?? m.context_window;
 
+          // Image input support lives under capabilities.input.image on the
+          // provider catalog. The server rejects image attachments to models
+          // without it, so surface it on the model so the compose bar can warn
+          // before the send instead of surfacing the server's raw error.
+          const supportsImageInput =
+            typeof m.capabilities?.input?.image === "boolean"
+              ? m.capabilities.input.image
+              : undefined;
+
           // Variants are provider/model specific (e.g. low/high/xhigh)
           // Response shape: variants: { [variantName]: { disabled?: boolean, ... } }
           const variantEntries = m.variants && typeof m.variants === "object"
@@ -1361,6 +1376,7 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
               && contextWindow > 0
                 ? contextWindow
                 : undefined,
+            supportsImageInput,
           });
         }
       }

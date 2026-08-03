@@ -4145,6 +4145,33 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
+  test("translates the opencode no-image-input rejection into an actionable message", async () => {
+    composeText = "Review this screenshot";
+    mockSendPrompt.mockImplementation(async () => ({
+      success: false,
+      error: 'ERROR: Cannot read "clipboard-2026-08-03T11-09-35-qualuq.png" (this model does not support image input). Inform the user.',
+    }));
+    resetStores("review-table");
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("opencode-send"));
+
+    await waitFor(() => {
+      const session = useOpenCodeStore.getState().getSession(SESSION_KEY);
+      expect(session?.messages.some(
+        (message) => message.content
+          === "The selected model does not support image input. Switch to a vision-capable model or remove the image from the prompt.",
+      )).toBe(true);
+      expect(session?.isLoading).toBe(false);
+    });
+  });
+
   test("stores optimistic attachment parts and forwards attachments to sendPrompt", async () => {
     composeText = "Please inspect the screenshot";
     composeAttachments = [

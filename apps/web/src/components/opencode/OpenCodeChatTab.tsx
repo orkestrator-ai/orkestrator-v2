@@ -208,6 +208,24 @@ function isOpenCodeTurnActive(status: string | null): boolean {
   return status === "busy" || status === "retry";
 }
 
+/**
+ * Translate the opencode server's raw "model cannot read the image" rejection
+ * into an actionable message.
+ *
+ * The server answers `Cannot read "<path>" (this model does not support image
+ * input). Inform the user.` when a prompt carries an image but the selected
+ * model has no vision support. Surfacing that verbatim leaves users unsure what
+ * to do, so rewrite it into a short, actionable explanation. Any other failure
+ * (or an absent message) is passed through unchanged.
+ */
+function translateOpenCodeSendError(errorText: string | undefined): string {
+  if (!errorText) return "Failed to send prompt";
+  if (/does not support image input/i.test(errorText)) {
+    return "The selected model does not support image input. Switch to a vision-capable model or remove the image from the prompt.";
+  }
+  return errorText;
+}
+
 
 function resolveModelSelection(input: {
   availableModels: OpenCodeModel[];
@@ -2651,7 +2669,7 @@ export function OpenCodeChatTab({
 
       if (!sendResult.success) {
         console.error("[OpenCodeChatTab] Failed to send prompt");
-        const errorText = sendResult.error || "Failed to send prompt";
+        const errorText = translateOpenCodeSendError(sendResult.error);
         removeMessage(sessionKey, userMessage.id);
         addMessage(sessionKey, {
           id: `${ERROR_MESSAGE_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2)}`,

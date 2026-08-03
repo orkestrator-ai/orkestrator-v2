@@ -139,6 +139,28 @@ function dataUrlByteLength(dataUrl: string | undefined): number {
   return base64DecodedByteLength(dataUrl.slice(separatorIndex + 1));
 }
 
+/**
+ * Whether the currently selected model can read image attachments.
+ *
+ * OpenCode's server rejects prompts that carry an image when the model has no
+ * vision support (`Cannot read "..." (this model does not support image
+ * input)`). The catalog reports `capabilities.input.image`; `undefined` means
+ * it did not say, in which case the attach is allowed through.
+ */
+function imageSupportedBySelectedModel(
+  attachment: { type: string },
+  models: OpenCodeModel[],
+  selectedModel: string | undefined,
+): boolean {
+  if (attachment.type !== "image") return true;
+  if (!selectedModel || selectedModel === "default") return true;
+  const model = models.find((candidate) => candidate.id === selectedModel);
+  // An unknown catalog entry or a missing capability report lets the attach
+  // through; only an explicit "no image input" blocks it.
+  if (!model || model.supportsImageInput === undefined) return true;
+  return model.supportsImageInput;
+}
+
 export function OpenCodeComposeBar({
   environmentId,
   tabId,
@@ -362,6 +384,13 @@ export function OpenCodeComposeBar({
         });
         return;
       }
+      if (!imageSupportedBySelectedModel(attachment, models, selectedModel)) {
+        toast.error("Model cannot read images", {
+          description:
+            "The selected model does not support image input. Switch to a vision-capable model or remove the image.",
+        });
+        return;
+      }
       pendingAttachmentSnapshotsRef.current += 1;
       setPendingAttachmentSnapshots((count) => count + 1);
       try {
@@ -412,7 +441,7 @@ export function OpenCodeComposeBar({
         }
       }
     },
-    [addAttachment, containerId, disabled, isSending, sessionKey, worktreePath],
+    [addAttachment, containerId, disabled, isSending, models, selectedModel, sessionKey, worktreePath],
   );
 
   useNativeComposeBarPaste({
@@ -420,8 +449,17 @@ export function OpenCodeComposeBar({
     containerId: containerId ?? null,
     worktreePath,
     onAttach: useCallback(
-      (attachment) => addAttachment(sessionKey, attachment),
-      [addAttachment, sessionKey],
+      (attachment) => {
+        if (!imageSupportedBySelectedModel(attachment, models, selectedModel)) {
+          toast.error("Model cannot read images", {
+            description:
+              "The selected model does not support image input. Switch to a vision-capable model or remove the image.",
+          });
+          return;
+        }
+        addAttachment(sessionKey, attachment);
+      },
+      [addAttachment, models, selectedModel, sessionKey],
     ),
     logLabel: "OpenCodeComposeBar",
   });

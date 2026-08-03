@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, act, fireEvent, render, screen, within } from "@testing-library/react";
 import { createContext, useContext } from "react";
 import * as realDialog from "@/components/ui/dialog";
 import * as realSelect from "@/components/ui/select";
@@ -336,6 +336,35 @@ describe("ReviewLaunchDialog", () => {
     const openCodeTrigger = screen.getByRole("combobox", { name: "Model" });
     expect(openCodeTrigger.getAttribute("aria-expanded")).not.toBeNull();
     expect(openCodeTrigger.textContent).toContain("OpenCode A");
+  });
+
+  test("orders OpenCode models favourites-first in the searchable picker", () => {
+    renderDialog({
+      preferredModels: { opencode: "provider/model-a" },
+      opencodeFavoriteModelIds: ["provider/model-a"],
+      catalog: {
+        ...catalog,
+        opencode: [
+          { id: "provider/model-a", name: "OpenCode A", reasoningEfforts: ["fast"] },
+          { id: "provider/model-b", name: "OpenCode B", reasoningEfforts: ["fast"] },
+        ],
+      },
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+
+    const trigger = screen.getByRole("combobox", { name: "Model" });
+    act(() => {
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(trigger);
+    });
+
+    // The favourite is pinned under "Favorites" ahead of the rest of the
+    // catalogue under "All models".
+    expect(screen.getByText("Favorites")).toBeTruthy();
+    expect(screen.getByText("provider/model-a")).toBeTruthy();
+    expect(screen.getByText("All models")).toBeTruthy();
+    expect(screen.getByText("provider/model-b")).toBeTruthy();
   });
 
   test("closes without launching when cancelled", () => {

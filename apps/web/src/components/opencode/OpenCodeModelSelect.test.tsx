@@ -97,4 +97,108 @@ describe("OpenCodeModelSelect", () => {
     expect(screen.getByText("Favorites")).toBeTruthy();
     expect(screen.getByText("google/gemini")).toBeTruthy();
   });
+
+  test("shows the empty label when there are no options at all", () => {
+    render(
+      <OpenCodeModelSelect
+        value=""
+        options={[]}
+        emptyLabel="Choose a model"
+        onValueChange={mock(() => undefined)}
+      />,
+    );
+
+    expect(screen.getByRole("combobox").textContent).toContain("Choose a model");
+  });
+
+  test("defaults the empty label when no options are present", () => {
+    render(<OpenCodeModelSelect value="" options={[]} onValueChange={mock(() => undefined)} />);
+
+    expect(screen.getByRole("combobox").textContent).toContain("No models cached");
+  });
+
+  test("shows a placeholder when options exist but nothing is selected", () => {
+    render(<OpenCodeModelSelect value="" options={options} onValueChange={mock(() => undefined)} />);
+
+    expect(screen.getByRole("combobox").textContent).toContain("Select model");
+  });
+
+  test("renders the selected model's description in the trigger when enabled", () => {
+    render(
+      <OpenCodeModelSelect
+        value="anthropic/claude-sonnet"
+        options={options}
+        showDescriptionInTrigger
+        onValueChange={mock(() => undefined)}
+      />,
+    );
+
+    const trigger = screen.getByRole("combobox");
+    expect(trigger.textContent).toContain("Claude Sonnet");
+    expect(trigger.textContent).toContain("anthropic");
+  });
+
+  test("keeps the description out of the trigger by default", () => {
+    render(
+      <OpenCodeModelSelect
+        value="anthropic/claude-sonnet"
+        options={options}
+        onValueChange={mock(() => undefined)}
+      />,
+    );
+
+    const trigger = screen.getByRole("combobox");
+    expect(trigger.textContent).toContain("Claude Sonnet");
+    expect(trigger.textContent).not.toContain("anthropic");
+  });
+
+  test("reports no matching models for an unmatched search", () => {
+    render(<OpenCodeModelSelect value="" options={options} onValueChange={mock(() => undefined)} />);
+
+    const trigger = screen.getByRole("combobox");
+    act(() => {
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(trigger);
+    });
+
+    fireEvent.change(screen.getByPlaceholderText("Search models or providers…"), {
+      target: { value: "does-not-exist" },
+    });
+
+    expect(screen.getByText("No matching models")).toBeTruthy();
+  });
+
+  test("selects the highlighted model with the keyboard", () => {
+    const onValueChange = mock((_value: string) => undefined);
+    render(<OpenCodeModelSelect value="" options={options} onValueChange={onValueChange} />);
+
+    const trigger = screen.getByRole("combobox");
+    act(() => {
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(trigger);
+    });
+
+    const search = screen.getByPlaceholderText("Search models or providers…");
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(search, { key: "Enter" });
+
+    // Models sort by provider description then name, so the first result is the
+    // "anthropic" entry.
+    expect(onValueChange).toHaveBeenCalledWith("anthropic/claude-sonnet");
+  });
+
+  test("selects a model on click", () => {
+    const onValueChange = mock((_value: string) => undefined);
+    render(<OpenCodeModelSelect value="" options={options} onValueChange={onValueChange} />);
+
+    const trigger = screen.getByRole("combobox");
+    act(() => {
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(trigger);
+    });
+
+    fireEvent.click(screen.getByText("GPT-5"));
+
+    expect(onValueChange).toHaveBeenCalledWith("openrouter/gpt-5");
+  });
 });

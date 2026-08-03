@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createContext, useContext, useState } from "react";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realContextMenu from "@/components/ui/context-menu";
@@ -12,8 +12,9 @@ import * as realHooks from "@/hooks";
 import * as realContexts from "@/contexts";
 import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { Environment, Project } from "@/types";
-import type { KanbanTask } from "@/lib/backend";
+import type { KanbanTask, OpenCodeModelPreferences } from "@/lib/backend";
 import {
   mockToastError as toastErrorMock,
   mockToastSuccess as toastSuccessMock,
@@ -66,11 +67,13 @@ const setEnvironmentPrBackendMock = mock(async (
   _prUrl: string,
   _kind: "external" | "internal",
 ) => {});
-const getOpencodeModelPreferencesMock = mock(async () => ({
-  recent: [],
-  favorite: [],
-  variant: {},
-}));
+const getOpencodeModelPreferencesMock = mock(
+  async (): Promise<OpenCodeModelPreferences> => ({
+    recent: [],
+    favorite: [],
+    variant: {},
+  }),
+);
 const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => true);
 const createLoopedWorkflowMock = mock((_options: unknown) => "looped-workflow-1");
@@ -581,6 +584,12 @@ beforeEach(() => {
   readLocalFileMock.mockReset();
   setEnvironmentPrBackendMock.mockReset();
   setEnvironmentPRStoreMock.mockReset();
+  getOpencodeModelPreferencesMock.mockReset();
+  getOpencodeModelPreferencesMock.mockImplementation(async () => ({
+    recent: [],
+    favorite: [],
+    variant: {},
+  }));
   createTabMock.mockReset();
   createTabMock.mockImplementation(() => true);
   createLoopedWorkflowMock.mockReset();
@@ -2421,6 +2430,81 @@ describe("ActionBar workflow tabs", () => {
       "claude",
       expect.objectContaining({ displayTitle: "PR" }),
     );
+  });
+});
+
+describe("ActionBar OpenCode review model preferences", () => {
+  test("loads OpenCode model preferences on mount for the review dialogs", async () => {
+    render(<ActionBar />);
+
+    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalled());
+  });
+
+  test("keeps review launches working when OpenCode preferences cannot be read", async () => {
+    getOpencodeModelPreferencesMock.mockRejectedValueOnce(new Error("preferences unavailable"));
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar />);
+
+    await waitFor(() => expect(console.warn).toHaveBeenCalledWith(
+      "[ActionBar] Failed to load OpenCode model preferences:",
+      expect.any(Error),
+    ));
+
+    // The dialog must still open and launch despite the failed preferences read.
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(createTabMock).toHaveBeenCalledWith(
+      "opencode",
+      expect.objectContaining({
+        agentLaunchMode: "native",
+        isReviewTab: true,
+      }),
+    );
+  });
+
+  test("pins OpenCode TUI favourites at the top of the review model picker", async () => {
+    useOpenCodeStore.getState().setModels("env-1", [
+      { id: "openrouter/model-a", name: "OpenCode A", provider: "openrouter" },
+      { id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
+    ], "server");
+    getOpencodeModelPreferencesMock.mockResolvedValueOnce({
+      recent: [],
+      favorite: ["openrouter/model-a"],
+      variant: {},
+    });
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar />);
+
+    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalled());
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+
+    const trigger = screen.getByRole("combobox", { name: "Model" });
+    expect(trigger.textContent).toContain("OpenCode A");
+
+    act(() => {
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(trigger);
+    });
+
+    await waitFor(() => expect(screen.getByText("Favorites")).toBeTruthy());
+    expect(screen.getByText("openrouter/model-a")).toBeTruthy();
+    expect(screen.getByText("All models")).toBeTruthy();
+    expect(screen.getByText("anthropic/claude-sonnet-5")).toBeTruthy();
+
+    useOpenCodeStore.setState({ models: new Map(), modelSource: new Map() });
   });
 });
 

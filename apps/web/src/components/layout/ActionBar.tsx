@@ -88,10 +88,7 @@ import {
   buildReviewModelCatalog,
   resolveDefaultReviewTabType,
 } from "@/lib/review-launch-options";
-import {
-  normalizeOpenCodeModelPreferences,
-  openCodeModelRefToId,
-} from "@/lib/opencode-model-preferences";
+import { normalizeOpenCodeModelReferences } from "@/lib/opencode-model-preferences";
 import {
   LazyDialogLoadingFallback,
   LazyLoadBoundary,
@@ -287,24 +284,23 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const reviewLongPressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const suppressReviewClickRef = useRef(false);
 
-  // OpenCode model preferences live in the TUI's global state file, so they can
-  // be fetched once on mount and shared by both review dialogs. The favorite
-  // ids drive the favorites-first ordering in the searchable OpenCode picker.
+  // OpenCode model preferences live in the TUI's global state file, which the
+  // user can edit while Orkestrator is running. Re-read it every time a review
+  // dialog opens rather than once on mount, so a model favorited in the TUI
+  // reaches the picker without an app restart. The file is untrusted, so the
+  // favorite list goes through the shared normalizer, which drops unparseable
+  // entries and duplicates and yields plain `provider/model` ids. Those ids
+  // drive the favorites-first ordering in the searchable OpenCode picker.
+  const anyReviewDialogOpen = reviewDialogOpen || loopedReviewDialogOpen;
   useEffect(() => {
+    if (!anyReviewDialogOpen) return;
     let cancelled = false;
     void backend.getOpencodeModelPreferences()
       .then((rawPreferences) => {
         if (cancelled) return;
-        const preferences = normalizeOpenCodeModelPreferences(rawPreferences);
-        const ids: string[] = [];
-        const seen = new Set<string>();
-        for (const favorite of preferences.favorite) {
-          const modelId = openCodeModelRefToId(favorite);
-          if (!modelId || seen.has(modelId)) continue;
-          seen.add(modelId);
-          ids.push(modelId);
-        }
-        setOpencodeFavoriteModelIds(ids);
+        setOpencodeFavoriteModelIds(
+          normalizeOpenCodeModelReferences(rawPreferences?.favorite),
+        );
       })
       .catch((error) => {
         console.warn("[ActionBar] Failed to load OpenCode model preferences:", error);
@@ -312,7 +308,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [anyReviewDialogOpen]);
 
   // Drag-to-scroll state for toolbar
   const scrollContainerRef = useRef<HTMLDivElement>(null);

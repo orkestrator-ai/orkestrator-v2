@@ -194,7 +194,12 @@ export function OpenCodeModelSelect({
         if (!nextOpen) setQuery("");
       }}
     >
-      <DropdownMenuTrigger asChild>
+      {/*
+        Radix gates its own trigger handlers on this prop. Without it the only
+        thing stopping a disabled picker from opening is the native `disabled`
+        attribute on the child button.
+      */}
+      <DropdownMenuTrigger asChild disabled={disabled}>
         <button
           id={id}
           type="button"
@@ -207,12 +212,18 @@ export function OpenCodeModelSelect({
             className,
           )}
         >
+          {/*
+            The label spans need `w-full`: under `items-start` a column flex
+            child is sized to fit-content, and `truncate` sets `nowrap`, so
+            without an explicit width the text would size to its own length and
+            overflow the trigger instead of ellipsizing.
+          */}
           <span className="flex min-w-0 flex-1 flex-col items-start text-left">
-            <span className="truncate">
+            <span className="w-full truncate">
               {selected?.name ?? (options.length ? "Select model" : emptyLabel)}
             </span>
             {showDescriptionInTrigger && selected?.description && (
-              <span className="truncate text-[11px] font-normal text-muted-foreground">
+              <span className="w-full truncate text-[11px] font-normal text-muted-foreground">
                 {selected.description}
               </span>
             )}

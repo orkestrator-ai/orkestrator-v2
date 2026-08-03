@@ -13,7 +13,7 @@ import * as realContexts from "@/contexts";
 import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
-import type { Environment, Project } from "@/types";
+import type { Environment, PrState, Project } from "@/types";
 import type { KanbanTask, OpenCodeModelPreferences } from "@/lib/backend";
 import {
   mockToastError as toastErrorMock,
@@ -62,10 +62,14 @@ const openInEditorMock = mock(async (_containerId: string, _editor: string) => {
 const openLocalInEditorMock = mock(async (_worktreePath: string, _editor: string) => {});
 const readContainerFileMock = mock(async (_containerId: string, _path: string) => ({ content: "{}" }));
 const readLocalFileMock = mock(async (_worktreePath: string, _path: string) => ({ content: "{}" }));
+// Mirrors `backend.setEnvironmentPr`; keep the parameters in step with it so
+// argument assertions here cannot be written against a signature that does not
+// exist.
 const setEnvironmentPrBackendMock = mock(async (
   _environmentId: string,
   _prUrl: string,
-  _kind: "external" | "internal",
+  _prState: PrState,
+  _hasMergeConflicts: boolean | null,
 ) => {});
 const getOpencodeModelPreferencesMock = mock(
   async (): Promise<OpenCodeModelPreferences> => ({
@@ -2434,21 +2438,73 @@ describe("ActionBar workflow tabs", () => {
 });
 
 describe("ActionBar OpenCode review model preferences", () => {
-  test("loads OpenCode model preferences on mount for the review dialogs", async () => {
-    render(<ActionBar />);
-
-    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalled());
+  const preferences = (favorite: string[]): OpenCodeModelPreferences => ({
+    recent: [],
+    favorite,
+    variant: {},
   });
 
-  test("keeps review launches working when OpenCode preferences cannot be read", async () => {
-    getOpencodeModelPreferencesMock.mockRejectedValueOnce(new Error("preferences unavailable"));
+  const seedOpenCodeCatalog = () => {
+    useOpenCodeStore.getState().setModels("env-1", [
+      { id: "openrouter/model-a", name: "OpenCode A", provider: "openrouter" },
+      { id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
+    ], "server");
+  };
+
+  const readyEnvironment = () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
     };
+    currentWorkspaceReady = true;
+  };
+
+  const openReviewDialog = () =>
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
+  const chooseOpenCode = () =>
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+  const openModelPicker = () => {
+    const trigger = screen.getByRole("combobox", { name: "Model" });
+    act(() => {
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(trigger);
+    });
+    return trigger;
+  };
+  /** True when `first` appears before `second` in document order. */
+  const renderedBefore = (first: Element, second: Element) =>
+    Boolean(
+      first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+
+  // The OpenCode store is shared by every test in this file, so it has to be
+  // cleared unconditionally rather than at the end of a test body: a failed
+  // assertion must not leak a catalogue into `buildReviewModelCatalog` for the
+  // remaining tests.
+  afterEach(() => {
+    useOpenCodeStore.setState({ models: new Map(), modelSource: new Map() });
+  });
+
+  test("does not read OpenCode model preferences until a review dialog opens", () => {
+    readyEnvironment();
     render(<ActionBar />);
+
+    expect(getOpencodeModelPreferencesMock).not.toHaveBeenCalled();
+
+    openReviewDialog();
+
+    expect(getOpencodeModelPreferencesMock).toHaveBeenCalled();
+  });
+
+  test("keeps review launches working when OpenCode preferences cannot be read", async () => {
+    getOpencodeModelPreferencesMock.mockRejectedValueOnce(new Error("preferences unavailable"));
+    seedOpenCodeCatalog();
+    readyEnvironment();
+    render(<ActionBar />);
+
+    openReviewDialog();
 
     await waitFor(() => expect(console.warn).toHaveBeenCalledWith(
       "[ActionBar] Failed to load OpenCode model preferences:",
@@ -2456,8 +2512,17 @@ describe("ActionBar OpenCode review model preferences", () => {
     ));
 
     // The dialog must still open and launch despite the failed preferences read.
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
-    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+    chooseOpenCode();
+    openModelPicker();
+    // A failed read leaves the favourites empty, so the picker shows the plain
+    // catalogue with no "Favorites" section.
+    expect(screen.queryByText("Favorites")).toBeNull();
+    expect(screen.queryByText("All models")).toBeNull();
+    expect(screen.getByText("openrouter/model-a")).toBeTruthy();
+
+    fireEvent.keyDown(screen.getByPlaceholderText("Search models or providers…"), {
+      key: "Escape",
+    });
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(createTabMock).toHaveBeenCalledWith(
       "opencode",
@@ -2468,43 +2533,163 @@ describe("ActionBar OpenCode review model preferences", () => {
     );
   });
 
-  test("pins OpenCode TUI favourites at the top of the review model picker", async () => {
-    useOpenCodeStore.getState().setModels("env-1", [
-      { id: "openrouter/model-a", name: "OpenCode A", provider: "openrouter" },
-      { id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
-    ], "server");
-    getOpencodeModelPreferencesMock.mockResolvedValueOnce({
-      recent: [],
-      favorite: ["openrouter/model-a"],
-      variant: {},
-    });
-    currentEnvironment = {
-      ...selectedEnvironment,
-      prUrl: null,
-      prState: null,
-      hasMergeConflicts: null,
-    };
+  test("pins OpenCode TUI favourites above the rest of the catalogue", async () => {
+    seedOpenCodeCatalog();
+    getOpencodeModelPreferencesMock.mockResolvedValueOnce(
+      preferences(["openrouter/model-a"]),
+    );
+    readyEnvironment();
     render(<ActionBar />);
 
+    openReviewDialog();
     await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalled());
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
-    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
-
-    const trigger = screen.getByRole("combobox", { name: "Model" });
-    expect(trigger.textContent).toContain("OpenCode A");
-
-    act(() => {
-      fireEvent.pointerDown(trigger);
-      fireEvent.click(trigger);
-    });
+    chooseOpenCode();
+    expect(screen.getByRole("combobox", { name: "Model" }).textContent)
+      .toContain("OpenCode A");
+    openModelPicker();
 
     await waitFor(() => expect(screen.getByText("Favorites")).toBeTruthy());
-    expect(screen.getByText("openrouter/model-a")).toBeTruthy();
-    expect(screen.getByText("All models")).toBeTruthy();
-    expect(screen.getByText("anthropic/claude-sonnet-5")).toBeTruthy();
+    const favouritesLabel = screen.getByText("Favorites");
+    const allModelsLabel = screen.getByText("All models");
+    const favourite = screen.getByText("openrouter/model-a");
+    const other = screen.getByText("anthropic/claude-sonnet-5");
 
-    useOpenCodeStore.setState({ models: new Map(), modelSource: new Map() });
+    // Order, not mere presence: an inversion must fail this test.
+    expect(renderedBefore(favouritesLabel, favourite)).toBe(true);
+    expect(renderedBefore(favourite, allModelsLabel)).toBe(true);
+    expect(renderedBefore(allModelsLabel, other)).toBe(true);
+  });
+
+  test("re-reads the TUI favourites every time a review dialog opens", async () => {
+    seedOpenCodeCatalog();
+    getOpencodeModelPreferencesMock.mockResolvedValueOnce(
+      preferences(["openrouter/model-a"]),
+    );
+    getOpencodeModelPreferencesMock.mockResolvedValueOnce(
+      preferences(["anthropic/claude-sonnet-5"]),
+    );
+    readyEnvironment();
+    render(<ActionBar />);
+
+    openReviewDialog();
+    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalledTimes(1));
+    chooseOpenCode();
+    openModelPicker();
+    await waitFor(() => expect(screen.getByText("Favorites")).toBeTruthy());
+    expect(renderedBefore(
+      screen.getByText("openrouter/model-a"),
+      screen.getByText("All models"),
+    )).toBe(true);
+
+    fireEvent.keyDown(screen.getByPlaceholderText("Search models or providers…"), {
+      key: "Escape",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    // The TUI favourite changed while Orkestrator stayed open; reopening the
+    // dialog must pick it up rather than reuse the mount-time snapshot.
+    openReviewDialog();
+    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalledTimes(2));
+    chooseOpenCode();
+    openModelPicker();
+
+    await waitFor(() => expect(screen.getByText("Favorites")).toBeTruthy());
+    expect(renderedBefore(
+      screen.getByText("anthropic/claude-sonnet-5"),
+      screen.getByText("All models"),
+    )).toBe(true);
+    expect(renderedBefore(
+      screen.getByText("All models"),
+      screen.getByText("openrouter/model-a"),
+    )).toBe(true);
+  });
+
+  test("ignores a preferences read that resolves after the dialog closed", async () => {
+    seedOpenCodeCatalog();
+    let resolveStaleRead: (value: OpenCodeModelPreferences) => void = () => {};
+    const staleRead = new Promise<OpenCodeModelPreferences>((resolve) => {
+      resolveStaleRead = resolve;
+    });
+    getOpencodeModelPreferencesMock.mockImplementationOnce(() => staleRead);
+    getOpencodeModelPreferencesMock.mockRejectedValueOnce(new Error("still unavailable"));
+    readyEnvironment();
+    render(<ActionBar />);
+
+    openReviewDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    openReviewDialog();
+    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalledTimes(2));
+
+    // The first read only lands now, after its dialog was dismissed. Without the
+    // cancellation guard it would repopulate the favourites behind the newer,
+    // failed read.
+    await act(async () => {
+      resolveStaleRead(preferences(["openrouter/model-a"]));
+      await staleRead;
+    });
+
+    chooseOpenCode();
+    openModelPicker();
+    expect(screen.queryByText("Favorites")).toBeNull();
+  });
+
+  test("renders no favourites section when the TUI has no favourites", async () => {
+    seedOpenCodeCatalog();
+    getOpencodeModelPreferencesMock.mockResolvedValueOnce(preferences([]));
+    readyEnvironment();
+    render(<ActionBar />);
+
+    openReviewDialog();
+    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalled());
+    chooseOpenCode();
+    openModelPicker();
+
+    await waitFor(() => expect(screen.getByText("openrouter/model-a")).toBeTruthy());
+    expect(screen.queryByText("Favorites")).toBeNull();
+    expect(screen.queryByText("All models")).toBeNull();
+  });
+
+  test("drops favourite ids that the environment catalogue does not contain", async () => {
+    seedOpenCodeCatalog();
+    getOpencodeModelPreferencesMock.mockResolvedValueOnce(
+      preferences(["openrouter/uninstalled-model", "not-a-model-ref"]),
+    );
+    readyEnvironment();
+    render(<ActionBar />);
+
+    openReviewDialog();
+    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalled());
+    chooseOpenCode();
+    openModelPicker();
+
+    await waitFor(() => expect(screen.getByText("openrouter/model-a")).toBeTruthy());
+    expect(screen.queryByText("Favorites")).toBeNull();
+    expect(screen.queryByText("openrouter/uninstalled-model")).toBeNull();
+  });
+
+  test("pins the TUI favourites in the looped review dialog too", async () => {
+    seedOpenCodeCatalog();
+    getOpencodeModelPreferencesMock.mockResolvedValueOnce(
+      preferences(["openrouter/model-a"]),
+    );
+    readyEnvironment();
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    expect(
+      screen.getByRole("dialog", { name: "Configure looped code review" }),
+    ).toBeTruthy();
+    await waitFor(() => expect(getOpencodeModelPreferencesMock).toHaveBeenCalled());
+
+    chooseOpenCode();
+    openModelPicker();
+
+    await waitFor(() => expect(screen.getByText("Favorites")).toBeTruthy());
+    expect(renderedBefore(
+      screen.getByText("openrouter/model-a"),
+      screen.getByText("All models"),
+    )).toBe(true);
   });
 });
 

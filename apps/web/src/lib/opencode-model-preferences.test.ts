@@ -156,6 +156,22 @@ describe("normalizeOpenCodeModelPreferences", () => {
     });
   });
 
+  test("salvages the readable fields when the file is partly corrupt", () => {
+    // A hand-edited file can be wrong in one place and fine in another; each
+    // field is normalized independently rather than discarding the whole file.
+    expect(
+      normalizeOpenCodeModelPreferences({
+        recent: "openai/gpt-5",
+        favorite: [{ providerID: "openai" }, "anthropic/claude-sonnet-5", 7],
+        variant: { "anthropic/claude-sonnet-5": "high", "": "low" },
+      }),
+    ).toEqual({
+      recent: [],
+      favorite: ["anthropic/claude-sonnet-5"],
+      variant: { "anthropic/claude-sonnet-5": "high" },
+    });
+  });
+
   test("does not mutate or alias the shared empty constant", () => {
     const result = normalizeOpenCodeModelPreferences({ recent: ["a/b"] });
     expect(result).not.toBe(EMPTY_OPENCODE_MODEL_PREFERENCES);

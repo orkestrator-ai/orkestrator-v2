@@ -21,7 +21,7 @@ function commands(result: LoopedReviewWorkflow) {
     resume: mock(async () => result),
     retry: mock(async () => result),
     cancel: mock(async () => result),
-    providerSession: mock(async () => ({ providerSessionId: "provider-1" })),
+    providerSession: mock(async (): Promise<{ providerSessionId: string } | null> => ({ providerSessionId: "provider-1" })),
   };
 }
 
@@ -57,6 +57,47 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
 
     expect(await screen.findByText("Workflow paused")).toBeTruthy();
     expect(screen.getByText(/Backend progress is paused at fixing/)).toBeTruthy();
+  });
+
+  test("retries a null restore through the guarded hydration path", async () => {
+    const restored = loopedReviewFixture({
+      id: data.workflowId,
+      phase: "paused",
+      pausedFromPhase: "discovering",
+      backendRevision: 3,
+    });
+    let attempts = 0;
+    const hydrate = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) return null;
+      useLoopedReviewStore.getState().replaceWorkflow(restored);
+      return restored;
+    });
+
+    render(<LoopedReviewTab data={data} isActive hydrateWorkflow={hydrate} />);
+    expect(await screen.findByText("Looped review unavailable")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry restore" }));
+
+    expect(await screen.findByText("Workflow paused")).toBeTruthy();
+    expect(hydrate).toHaveBeenCalledTimes(2);
+  });
+
+  test("reports restore rejection and ignores its completion after unmount", async () => {
+    const rejected = mock(async () => {
+      throw new Error("workflow store unavailable");
+    });
+    const view = render(<LoopedReviewTab data={data} isActive hydrateWorkflow={rejected} />);
+    expect(await screen.findByText("workflow store unavailable")).toBeTruthy();
+    view.unmount();
+
+    let resolveRestore!: (workflow: LoopedReviewWorkflow | null) => void;
+    const deferred = new Promise<LoopedReviewWorkflow | null>((resolve) => {
+      resolveRestore = resolve;
+    });
+    const second = render(<LoopedReviewTab data={data} isActive hydrateWorkflow={() => deferred} />);
+    second.unmount();
+    resolveRestore(null);
+    await deferred;
   });
 
   test("rehydrates failure context, unattended history, counts, and controls", () => {
@@ -123,6 +164,43 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
     expect(await screen.findByText("Workflow paused")).toBeTruthy();
   });
 
+  test("resume, retry, and cancel install only authoritative command results", async () => {
+    for (const scenario of [
+      { phase: "paused" as const, pausedFromPhase: "fixing" as const, label: "Resume", command: "resume" as const },
+      { phase: "failed" as const, pausedFromPhase: undefined, label: "Retry phase", command: "retry" as const },
+      { phase: "discovering" as const, pausedFromPhase: undefined, label: "Cancel", command: "cancel" as const },
+    ]) {
+      cleanup();
+      useLoopedReviewStore.setState({ workflows: new Map() });
+      const current = loopedReviewFixture({
+        id: data.workflowId,
+        phase: scenario.phase,
+        pausedFromPhase: scenario.pausedFromPhase,
+      });
+      const next = loopedReviewFixture({ id: data.workflowId, phase: "cancelled", backendRevision: 20 });
+      const api = commands(next);
+      useLoopedReviewStore.getState().replaceWorkflow(current);
+      render(<LoopedReviewTab data={data} isActive commands={api} />);
+
+      fireEvent.click(screen.getByRole("button", { name: scenario.label }));
+      await waitFor(() => expect(api[scenario.command]).toHaveBeenCalledWith(data.workflowId));
+      expect(useLoopedReviewStore.getState().workflows.get(data.workflowId)).toEqual(next);
+    }
+  });
+
+  test("surfaces lifecycle command failures without replacing the snapshot", async () => {
+    const running = loopedReviewFixture({ id: data.workflowId, phase: "discovering" });
+    const api = commands(running);
+    api.pause.mockImplementationOnce(async () => { throw new Error("pause refused"); });
+    useLoopedReviewStore.getState().replaceWorkflow(running);
+
+    render(<LoopedReviewTab data={data} isActive commands={api} />);
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("pause refused");
+    expect(useLoopedReviewStore.getState().workflows.get(data.workflowId)).toBe(running);
+  });
+
   test("opens the authoritative provider session in a native agent tab", async () => {
     const workflow = loopedReviewFixture({
       id: data.workflowId,
@@ -159,6 +237,52 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
       isReviewTab: true,
     })));
     expect(api.providerSession).toHaveBeenCalledWith(data.workflowId, "session-1");
+  });
+
+  test("surfaces missing and refused provider-session tabs", async () => {
+    const workflow = loopedReviewFixture({
+      id: data.workflowId,
+      activeSessionId: "session-1",
+      sessions: [{
+        id: "session-1",
+        phase: "discovery",
+        round: 1,
+        pass: 1,
+        sessionKey: "session-key",
+        providerSessionId: "provider-1",
+        requestIds: [],
+        origin: "looped-review",
+        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        status: "running",
+        startedAt: "2026-08-02T00:00:00.000Z",
+      }],
+    });
+    const api = commands(workflow);
+    api.providerSession.mockImplementationOnce(async () => null);
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    const createTab = mock(() => false);
+
+    render(<TerminalProvider><TabRegistrar createTab={createTab} /><LoopedReviewTab data={data} isActive commands={api} /></TerminalProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Provider session" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("no longer available");
+
+    fireEvent.click(screen.getByRole("button", { name: "Provider session" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("could not be opened");
+  });
+
+  test("renders cancellation progress without offering duplicate lifecycle actions", () => {
+    const workflow = loopedReviewFixture({
+      id: data.workflowId,
+      phase: "cancelling",
+      cancellingFromPhase: "fixing",
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    render(<LoopedReviewTab data={data} isActive commands={commands(workflow)} />);
+
+    expect(screen.getByText("Cancellation in progress")).toBeTruthy();
+    expect(screen.getByText(/provider work from fixing/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
   });
 
   test("renders the completed PR from an authoritative terminal snapshot", () => {

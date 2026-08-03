@@ -1330,7 +1330,7 @@ describe("TerminalContainer", () => {
     });
   });
 
-  test("restores ordinary tabs when looped-review hydration rejects", async () => {
+  test("preserves persisted review tabs when workflow hydration is unavailable", async () => {
     listLoopedReviewWorkflowsMock.mockRejectedValue(new Error("workflow store unavailable"));
     getPaneLayoutMock.mockResolvedValue({
       version: PANE_LAYOUT_VERSION,
@@ -1340,15 +1340,26 @@ describe("TerminalContainer", () => {
       root: {
         kind: "leaf",
         id: "restored-pane",
-        tabs: [{
-          id: "restored-file",
-          type: "file",
-          displayTitle: "README",
-          fileData: {
-            filePath: "README.md",
-            containerId: "container-hidden",
+        tabs: [
+          {
+            id: "restored-file",
+            type: "file",
+            displayTitle: "README",
+            fileData: {
+              filePath: "README.md",
+              containerId: "container-hidden",
+            },
           },
-        }],
+          {
+            id: "restored-review",
+            type: "looped-review",
+            loopedReviewTabData: {
+              environmentId: "env-hidden",
+              workflowId: "workflow-unknown",
+              isLocal: false,
+            },
+          },
+        ],
         activeTabId: "restored-file",
       },
       updatedAt: "2026-01-01T00:00:00.000Z",
@@ -1368,11 +1379,14 @@ describe("TerminalContainer", () => {
 
     await waitFor(() => {
       expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
-      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([{
-        id: "restored-file",
-        type: "file",
-        displayTitle: "README",
-      }]);
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+        { id: "restored-file", type: "file", displayTitle: "README" },
+        {
+          id: "restored-review",
+          type: "looped-review",
+          loopedReviewTabData: { workflowId: "workflow-unknown" },
+        },
+      ]);
     });
   });
 
@@ -5324,6 +5338,62 @@ describe("TerminalContainer", () => {
           type: "codex-native",
           isReviewTab: true,
           codexNativeData: expect.objectContaining({ sessionId: "provider-thread-1" }),
+        })));
+    });
+
+    test("propagates provider session identity to Claude native tabs", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="claude"
+            options={{
+              agentLaunchMode: "native",
+              resumeSessionId: "provider-claude-1",
+              isReviewTab: true,
+            }}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
+        .toContainEqual(expect.objectContaining({
+          type: "claude-native",
+          isReviewTab: true,
+          claudeNativeData: expect.objectContaining({ sessionId: "provider-claude-1" }),
+        })));
+    });
+
+    test("propagates provider session identity to OpenCode native tabs", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="opencode"
+            options={{
+              agentLaunchMode: "native",
+              resumeSessionId: "provider-opencode-1",
+              isReviewTab: true,
+            }}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
+        .toContainEqual(expect.objectContaining({
+          type: "opencode-native",
+          isReviewTab: true,
+          openCodeNativeData: expect.objectContaining({ sessionId: "provider-opencode-1" }),
         })));
     });
 

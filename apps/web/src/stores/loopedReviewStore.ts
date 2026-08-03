@@ -34,6 +34,7 @@ export type LoopedReviewPhase =
   | "reconciling"
   | "fixing"
   | "creating-pr"
+  | "cancelling"
   | "paused"
   | "failed"
   | "cancelled"
@@ -41,7 +42,7 @@ export type LoopedReviewPhase =
 
 export type ActiveLoopedReviewPhase = Exclude<
   LoopedReviewPhase,
-  "paused" | "failed" | "cancelled" | "completed"
+  "cancelling" | "paused" | "failed" | "cancelled" | "completed"
 >;
 
 export type LoopedReviewSessionPhase =
@@ -217,6 +218,7 @@ export interface LoopedReviewWorkflow {
   currentPass: number;
   phase: LoopedReviewPhase;
   pausedFromPhase?: ActiveLoopedReviewPhase;
+  cancellingFromPhase?: ActiveLoopedReviewPhase;
   rounds: LoopedReviewRound[];
   activePool: ReviewFindingPool;
   archivedPools: ArchivedReviewPool[];
@@ -578,7 +580,8 @@ export function isLoopedReviewActivePhase(
 ): phase is ActiveLoopedReviewPhase {
   return !isLoopedReviewTerminalPhase(phase)
     && phase !== "paused"
-    && phase !== "failed";
+    && phase !== "failed"
+    && phase !== "cancelling";
 }
 
 export function hasReviewFindings(pool: ReviewFindingPool): boolean {
@@ -634,6 +637,7 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
     "reconciling",
     "fixing",
     "creating-pr",
+    "cancelling",
     "paused",
     "failed",
     "cancelled",
@@ -833,6 +837,16 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
       ])
     )
     && (
+      workflow.cancellingFromPhase === undefined
+      || isOneOf(workflow.cancellingFromPhase, [
+        "preparing",
+        "discovering",
+        "reconciling",
+        "fixing",
+        "creating-pr",
+      ])
+    )
+    && (
       workflow.failure === undefined
       || (
         isRecord(workflow.failure)
@@ -881,6 +895,11 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
       workflow.phase === "paused"
         ? workflow.pausedFromPhase !== undefined
         : workflow.pausedFromPhase === undefined
+    )
+    && (
+      workflow.phase === "cancelling"
+        ? workflow.cancellingFromPhase !== undefined
+        : workflow.cancellingFromPhase === undefined
     );
 }
 

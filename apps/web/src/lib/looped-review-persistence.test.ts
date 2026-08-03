@@ -3,6 +3,7 @@ import {
   hydrateLoopedReviewWorkflow,
   hydrateLoopedReviewWorkflowsForEnvironment,
   persistLoopedReviewWorkflowNow,
+  registerLoopedReviewControllerFence,
   startLoopedReviewPersistence,
 } from "./looped-review-persistence";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
@@ -49,6 +50,14 @@ describe("looped-review authoritative hydration", () => {
     )).resolves.toBeNull();
   });
 
+  test("returns null for a missing record without changing a local projection", async () => {
+    const workflow = loopedReviewFixture();
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    await expect(hydrateLoopedReviewWorkflow(workflow.id, async () => null))
+      .resolves.toBeNull();
+    expect(useLoopedReviewStore.getState().workflows.get(workflow.id)).toBe(workflow);
+  });
+
   test("lists one environment and ignores cross-environment records", async () => {
     const workflow = loopedReviewFixture({ environmentId: "env-a" });
     const other = loopedReviewFixture({ environmentId: "env-b" });
@@ -58,6 +67,36 @@ describe("looped-review authoritative hydration", () => {
     );
     expect(restored.map((entry) => entry.id)).toEqual([workflow.id]);
     expect(useLoopedReviewStore.getState().workflows.has(other.id)).toBe(false);
+  });
+
+  test("skips malformed list entries and propagates list failures", async () => {
+    const workflow = loopedReviewFixture({ environmentId: "env-a" });
+    const restored = await hydrateLoopedReviewWorkflowsForEnvironment(
+      "env-a",
+      async () => [
+        { ...persisted(workflow), snapshot: { ...workflow, sessions: null } as never },
+        persisted(workflow, 4),
+      ],
+    );
+    expect(restored).toHaveLength(1);
+    expect(restored[0]?.backendRevision).toBe(4);
+
+    await expect(hydrateLoopedReviewWorkflowsForEnvironment(
+      "env-a",
+      async () => { throw new Error("list unavailable"); },
+    )).rejects.toThrow("list unavailable");
+  });
+
+  test("list hydration keeps strictly newer local state and replaces equal revisions", async () => {
+    const server = loopedReviewFixture({ environmentId: "env-a", backendRevision: 5, phase: "paused", pausedFromPhase: "fixing" });
+    useLoopedReviewStore.getState().replaceWorkflow({ ...server, backendRevision: 7, phase: "completed", pausedFromPhase: undefined });
+    let restored = await hydrateLoopedReviewWorkflowsForEnvironment("env-a", async () => [persisted(server, 6)]);
+    expect(restored[0]?.phase).toBe("completed");
+
+    useLoopedReviewStore.setState({ workflows: new Map() });
+    useLoopedReviewStore.getState().replaceWorkflow({ ...server, phase: "fixing" });
+    restored = await hydrateLoopedReviewWorkflowsForEnvironment("env-a", async () => [persisted(server, 5)]);
+    expect(restored[0]?.phase).toBe("paused");
   });
 
   test("rehydration replaces equal revisions and preserves only a strictly newer snapshot", async () => {
@@ -72,6 +111,11 @@ describe("looped-review authoritative hydration", () => {
   });
 
   test("renderer persistence compatibility APIs cannot write version-2 state", async () => {
+    const unregister = registerLoopedReviewControllerFence("workflow", {
+      ownerId: "legacy-renderer",
+      token: "legacy-token",
+    });
+    expect(unregister()).toBeUndefined();
     const stop = startLoopedReviewPersistence();
     stop();
     await expect(persistLoopedReviewWorkflowNow("workflow")).rejects.toThrow(

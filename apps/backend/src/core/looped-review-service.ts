@@ -74,6 +74,8 @@ const CONTROLLER_RENEW_MS = 5_000;
 const DEFAULT_POLL_MS = 1_000;
 const DEFAULT_MISSING_RESULT_POLLS = 5;
 const INTERACTION_PROCESSING_LEASE_MS = 2 * 60_000;
+const MISSING_PROVIDER_SESSION_MESSAGE =
+  "The native provider session no longer exists; retry creates a replacement";
 const UNATTENDED_POLICY_INSTRUCTION =
   "This is an unattended looped-review phase. No user can answer input. If input is declined, make the safest reasonable assumption, state it, and continue. Never treat the absence of a person as authorization.";
 
@@ -254,11 +256,13 @@ export class LoopedReviewService {
   private readonly ownerId = randomUUID();
   private readonly interactionOwnerId = randomUUID();
   private readonly locks = new Map<string, Promise<void>>();
+  private readonly scheduledRuns = new Map<string, { pending: boolean; promise: Promise<void> }>();
   private readonly providers = new Map<string, BuildPipelineProvider>();
   private readonly leases = new Map<string, { token: string; expiresAt: string }>();
   private readonly interactionWatches = new Map<string, () => void>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private renewTimer: ReturnType<typeof setInterval> | null = null;
+  private tickRun: { pending: boolean; promise: Promise<void> } | null = null;
   private stopped = false;
 
   constructor(
@@ -276,14 +280,14 @@ export class LoopedReviewService {
       }
     }
     if (this.options.autoAdvance !== false) {
-      this.timer = setInterval(() => void this.tick(), this.options.pollIntervalMs ?? DEFAULT_POLL_MS);
+      this.timer = setInterval(() => void this.requestTick(), this.options.pollIntervalMs ?? DEFAULT_POLL_MS);
       this.timer.unref?.();
       this.renewTimer = setInterval(
         () => void this.renewLeases(),
         this.options.controllerRenewMs ?? CONTROLLER_RENEW_MS,
       );
       this.renewTimer.unref?.();
-      await this.tick();
+      await this.requestTick();
     }
   }
 
@@ -293,7 +297,11 @@ export class LoopedReviewService {
     if (this.renewTimer) clearInterval(this.renewTimer);
     this.timer = null;
     this.renewTimer = null;
-    await Promise.allSettled([...this.locks.values()]);
+    await Promise.allSettled([
+      ...this.locks.values(),
+      ...[...this.scheduledRuns.values()].map((entry) => entry.promise),
+      ...(this.tickRun ? [this.tickRun.promise] : []),
+    ]);
     for (const stop of this.interactionWatches.values()) stop();
     this.interactionWatches.clear();
     await Promise.allSettled([...this.providers.values()].map((provider) => provider.dispose?.()));
@@ -397,26 +405,21 @@ export class LoopedReviewService {
   }
 
   async cancel(workflowId: string): Promise<LoopedReviewWorkflow> {
-    let providerSessionId: string | undefined;
     const workflow = await this.mutate(workflowId, (current) => {
       if (isLoopedReviewTerminalPhase(current.phase)) return;
-      providerSessionId = current.sessions.find((entry) => entry.id === current.activeSessionId)?.providerSessionId;
-      current.phase = "cancelled";
+      if (current.phase === "cancelling") return;
+      current.cancellingFromPhase = isLoopedReviewActivePhase(current.phase)
+        ? current.phase
+        : current.phase === "paused"
+          ? current.pausedFromPhase
+          : current.failure?.retryPhase;
+      current.phase = "cancelling";
       delete current.pausedFromPhase;
       delete current.failure;
-      delete current.dispatch;
-      delete current.structuredWait;
-      delete current.pendingInteractionResolution;
-      for (const session of current.sessions) {
-        if (session.status === "running") session.status = "cancelled";
-      }
     });
-    if (providerSessionId) {
-      const provider = await this.provider(workflow).catch(() => null);
-      await provider?.abort(providerSessionId).catch(() => undefined);
-    }
-    this.stopInteractionWatches(workflow);
-    return workflow;
+    if (workflow.phase !== "cancelling") return workflow;
+    await this.advanceNow(workflowId);
+    return await this.readWorkflow(workflowId) ?? workflow;
   }
 
   async providerSession(workflowId: string, sessionId?: string): Promise<{ providerSessionId: string } | null> {
@@ -442,23 +445,61 @@ export class LoopedReviewService {
     return result;
   }
 
+  private requestTick(): Promise<void> {
+    if (this.tickRun) {
+      this.tickRun.pending = true;
+      return this.tickRun.promise;
+    }
+    const run = { pending: false, promise: Promise.resolve() };
+    run.promise = (async () => {
+      do {
+        run.pending = false;
+        await this.tick();
+      } while (run.pending && !this.stopped);
+    })().finally(() => {
+      if (this.tickRun === run) this.tickRun = null;
+    });
+    this.tickRun = run;
+    return run.promise;
+  }
+
   private async tick(): Promise<void> {
     if (this.stopped) return;
     const records = await this.storage.listAllLoopedReviewWorkflows();
-    await Promise.all(records
-      .filter((record) => isLoopedReviewWorkflow(record.snapshot)
-        && !isLoopedReviewTerminalPhase(record.snapshot.phase))
-      .map((record) => this.runLocked(record.id)));
+    await Promise.all(records.map(async (record) => {
+      if (!isLoopedReviewWorkflow(record.snapshot)) {
+        if (isSafelyAdoptableLegacyLoopedReview(record.snapshot)) {
+          await this.adoptLegacy(record).catch(() => undefined);
+        }
+        return;
+      }
+      if (!isLoopedReviewTerminalPhase(record.snapshot.phase)) await this.runLocked(record.id);
+    }));
   }
 
   private runLocked(workflowId: string): Promise<void> {
-    return this.withLock(workflowId, async () => {
-      try {
-        await this.advance(workflowId);
-      } catch (error) {
-        await this.fail(workflowId, error).catch(() => undefined);
-      }
+    const existing = this.scheduledRuns.get(workflowId);
+    if (existing) {
+      existing.pending = true;
+      return existing.promise;
+    }
+    const run = { pending: false, promise: Promise.resolve() };
+    run.promise = (async () => {
+      do {
+        run.pending = false;
+        await this.withLock(workflowId, async () => {
+          try {
+            await this.advance(workflowId);
+          } catch (error) {
+            await this.fail(workflowId, error).catch(() => undefined);
+          }
+        });
+      } while (run.pending && !this.stopped);
+    })().finally(() => {
+      if (this.scheduledRuns.get(workflowId) === run) this.scheduledRuns.delete(workflowId);
     });
+    this.scheduledRuns.set(workflowId, run);
+    return run.promise;
   }
 
   private withLock(workflowId: string, operation: () => Promise<void>): Promise<void> {
@@ -473,6 +514,10 @@ export class LoopedReviewService {
 
   private async advance(workflowId: string): Promise<void> {
     const { workflow, lease } = await this.loadControlled(workflowId);
+    if (workflow.phase === "cancelling") {
+      await this.reconcileCancellation(workflow, lease.token);
+      return;
+    }
     if (!isLoopedReviewActivePhase(workflow.phase)) return;
     const provider = await this.provider(workflow);
     this.registerSessions(workflow, provider);
@@ -509,7 +554,15 @@ export class LoopedReviewService {
       await this.save(workflow, lease.token);
       return;
     }
-    const result = await provider.structured<unknown>(session.providerSessionId, dispatch.requestId);
+    let result: StructuredOutputResult<unknown> | null;
+    try {
+      result = await provider.structured<unknown>(session.providerSessionId, dispatch.requestId);
+    } catch (structuredError) {
+      const status = await provider.status(session.providerSessionId).catch(() => null);
+      await this.assertFence(workflow.id, lease.token);
+      if (status === "missing") throw new MissingProviderSessionError();
+      throw structuredError;
+    }
     await this.assertFence(workflow.id, lease.token);
     if (result) {
       await this.applyResult(workflow, session, dispatch, result, lease.token);
@@ -520,9 +573,11 @@ export class LoopedReviewService {
     if (status === "blocked") {
       // An authoritative interaction snapshot was already checked above. A
       // provider that still reports blocked cannot be left busy indefinitely.
-      throw new Error("Native provider is blocked without a resolvable interaction");
+      throw new DefiniteResultError("Native provider is blocked without a resolvable interaction");
     }
-    if (status === "error") throw new Error("Native provider failed before returning structured output");
+    if (status === "error") {
+      throw new DefiniteResultError("Native provider failed before returning structured output");
+    }
     if (status === "missing") throw new MissingProviderSessionError();
     if (status === "idle") {
       const wait = workflow.structuredWait?.dispatchId === dispatch.id
@@ -531,10 +586,64 @@ export class LoopedReviewService {
       wait.idlePolls += 1;
       workflow.structuredWait = wait;
       if (wait.idlePolls >= (this.options.missingResultPollLimit ?? DEFAULT_MISSING_RESULT_POLLS)) {
-        throw new Error("Native provider completed without a structured result");
+        throw new DefiniteResultError("Native provider completed without a structured result");
       }
       await this.save(workflow, lease.token);
     }
+  }
+
+  private async reconcileCancellation(workflow: LoopedReviewWorkflow, token: string): Promise<void> {
+    const session = workflow.sessions.find((entry) => entry.id === workflow.activeSessionId);
+    if (!session) {
+      await this.finalizeCancellation(workflow, token);
+      return;
+    }
+    let provider: BuildPipelineProvider;
+    try {
+      provider = await this.provider(workflow);
+    } catch (error) {
+      session.error = `Cancellation is waiting for the provider: ${message(error)}`;
+      await this.save(workflow, token);
+      return;
+    }
+    try {
+      await provider.abort(session.providerSessionId);
+      await this.assertFence(workflow.id, token);
+      await this.finalizeCancellation(workflow, token);
+      return;
+    } catch (abortError) {
+      try {
+        const status = await provider.status(session.providerSessionId);
+        await this.assertFence(workflow.id, token);
+        if (status === "idle" || status === "missing") {
+          await this.finalizeCancellation(workflow, token);
+          return;
+        }
+      } catch {
+        // The persisted cancelling intent remains authoritative and will retry.
+      }
+      session.error = `Cancellation is waiting for the provider to stop: ${message(abortError)}`;
+      await this.save(workflow, token);
+    }
+  }
+
+  private async finalizeCancellation(workflow: LoopedReviewWorkflow, token: string): Promise<void> {
+    workflow.phase = "cancelled";
+    delete workflow.cancellingFromPhase;
+    delete workflow.dispatch;
+    delete workflow.structuredWait;
+    delete workflow.pendingInteractionResolution;
+    for (const session of workflow.sessions) {
+      if (session.status === "running") session.status = "cancelled";
+    }
+    await this.save(workflow, token);
+    this.stopInteractionWatches(workflow);
+  }
+
+  private async readWorkflow(workflowId: string): Promise<LoopedReviewWorkflow | null> {
+    const record = await this.storage.getLoopedReviewWorkflow(workflowId);
+    if (!record || !isLoopedReviewWorkflow(record.snapshot)) return null;
+    return { ...record.snapshot, backendRevision: record.revision };
   }
 
   private async startCurrentPhase(
@@ -544,13 +653,19 @@ export class LoopedReviewService {
   ): Promise<void> {
     let phase: LoopedReviewSessionPhase;
     let pass: number | undefined;
+    let replacingReconciliationSession = false;
     if (workflow.phase === "preparing") phase = "preparation";
     else if (workflow.phase === "discovering") { phase = "discovery"; pass = workflow.currentPass + 1; }
     else if (workflow.phase === "reconciling") {
       const current = workflow.sessions.find((entry) => entry.id === workflow.activeSessionId);
       if (!current || current.phase !== "discovery") throw new Error("Reconciliation lost its discovery session");
-      await this.prepareDispatch(workflow, current, token);
-      return;
+      if (current.error !== MISSING_PROVIDER_SESSION_MESSAGE) {
+        await this.prepareDispatch(workflow, current, token);
+        return;
+      }
+      phase = "discovery";
+      pass = workflow.currentPass;
+      replacingReconciliationSession = true;
     } else if (workflow.phase === "fixing") {
       if (!hasReviewFindings(workflow.activePool)) throw new Error("Fixing phase has no active findings");
       phase = "fix";
@@ -558,9 +673,17 @@ export class LoopedReviewService {
       if (hasReviewFindings(workflow.activePool)) throw new Error("PR creation is blocked by active findings");
       phase = "pr";
     }
-    const sessionKey = `looped-review:${workflow.id}:${phase}:round-${workflow.currentRound}:pass-${pass ?? 0}`;
-    let session = workflow.sessions.find((entry) => entry.sessionKey === sessionKey);
+    const sessionKeyBase =
+      `looped-review:${workflow.id}:${phase}:round-${workflow.currentRound}:pass-${pass ?? 0}`;
+    const matchingSessions = workflow.sessions.filter((entry) =>
+      entry.sessionKey === sessionKeyBase
+      || entry.sessionKey.startsWith(`${sessionKeyBase}:replacement-`));
+    let session = [...matchingSessions].reverse().find((entry) =>
+      entry.error !== MISSING_PROVIDER_SESSION_MESSAGE);
     if (!session) {
+      const sessionKey = matchingSessions.length === 0
+        ? sessionKeyBase
+        : `${sessionKeyBase}:replacement-${matchingSessions.length}`;
       const providerSessionId = await provider.createSession(providerPhase(phase),
         sessionLabel(phase, workflow.currentRound, pass), {
           clientSessionKey: sessionKey,
@@ -592,7 +715,10 @@ export class LoopedReviewService {
     if (phase === "discovery") {
       workflow.currentPass = pass!;
       const round = workflow.rounds.find((entry) => entry.round === workflow.currentRound);
-      if (!round?.passes.some((entry) => entry.pass === pass! && entry.sessionId === session.id)) {
+      const existingPass = round?.passes.find((entry) => entry.pass === pass!);
+      if (replacingReconciliationSession && existingPass) {
+        existingPass.sessionId = session.id;
+      } else if (!existingPass) {
         round?.passes.push({
           pass: pass!, sessionId: session.id, status: "discovering", startedAt: nowIso(),
         });
@@ -673,7 +799,7 @@ export class LoopedReviewService {
     if (dispatch.kind !== "discover") session.completedAt = timestamp;
     delete workflow.structuredWait;
     if (dispatch.kind === "prepare") {
-      const preparation = parseReviewPreparationResult(result.value);
+      const preparation = definiteResult(() => parseReviewPreparationResult(result.value));
       const packageId = `review-package-${workflow.id}-r${workflow.currentRound}`;
       const generated = await this.invoke<unknown>("generate_looped_review_package", {
         environmentId: workflow.environmentId, packageId, round: workflow.currentRound,
@@ -691,7 +817,7 @@ export class LoopedReviewService {
       workflow.currentPass = 0;
       delete workflow.dispatch;
     } else if (dispatch.kind === "discover") {
-      const report = parseStructuredReviewReport(result.value);
+      const report = definiteResult(() => parseStructuredReviewReport(result.value));
       const pass = workflow.rounds.find((entry) => entry.round === workflow.currentRound)?.passes
         .find((entry) => entry.pass === workflow.currentPass && entry.sessionId === session.id);
       if (!pass) throw new Error("Discovery result lost its active pass");
@@ -700,11 +826,12 @@ export class LoopedReviewService {
       workflow.phase = "reconciling";
       delete workflow.dispatch;
     } else if (dispatch.kind === "reconcile") {
-      const reconciliation = parseReconciliation(result.value);
+      const reconciliation = definiteResult(() => parseReconciliation(result.value));
       const pass = workflow.rounds.find((entry) => entry.round === workflow.currentRound)?.passes
         .find((entry) => entry.pass === workflow.currentPass && entry.sessionId === session.id);
       if (!pass?.report) throw new Error("Reconciliation lost its validated report");
-      const applied = applyReconciliation(workflow.activePool, pass.report, reconciliation);
+      const applied = definiteResult(() =>
+        applyReconciliation(workflow.activePool, pass.report!, reconciliation));
       workflow.activePool = applied.pool;
       pass.reconciliation = reconciliation;
       pass.status = "completed";
@@ -719,8 +846,12 @@ export class LoopedReviewService {
       } else workflow.phase = "discovering";
       delete workflow.dispatch;
     } else if (dispatch.kind === "fix") {
-      const fixed = parseFixResult(result.value);
-      if (!fixed.complete) throw new Error(`The fix session did not resolve the active pool: ${fixed.summary}`);
+      const fixed = definiteResult(() => parseFixResult(result.value));
+      if (!fixed.complete) {
+        throw new DefiniteResultError(
+          `The fix session did not resolve the active pool: ${fixed.summary}`,
+        );
+      }
       workflow.archivedPools.push({
         round: workflow.currentRound, fixedAt: timestamp, fixSessionId: session.id,
         pool: workflow.activePool, fixSummary: fixed.summary, fixNotes: fixed.notes,
@@ -743,7 +874,7 @@ export class LoopedReviewService {
         delete workflow.activeSessionId;
       }
     } else {
-      const pr = parsePrResult(result.value);
+      const pr = definiteResult(() => parsePrResult(result.value));
       const verified = await this.invoke<{ url: string }>("verify_environment_pr", {
         environmentId: workflow.environmentId, prUrl: pr.url, targetBranch: workflow.targetBranch,
       });
@@ -1015,11 +1146,13 @@ export class LoopedReviewService {
   ): Promise<void> {
     const resolvedAt = Date.now();
     const continued = pending.action === "decline-and-continue" && outcome === "auto-declined";
-    session.interactionSummary = this.appendSummary(session.interactionSummary, pending, outcome, resolvedAt);
-    workflow.interactionSummary = this.appendSummary(workflow.interactionSummary, pending, outcome, resolvedAt);
     if (continued) {
       const history = session.interactionTranscript ?? [];
       if (!history.some((entry) => entry.id === pending.interactionId)) {
+        session.interactionSummary = this.appendSummary(
+          session.interactionSummary, pending, outcome, resolvedAt);
+        workflow.interactionSummary = this.appendSummary(
+          workflow.interactionSummary, pending, outcome, resolvedAt);
         const item: LoopedReviewInteractionTranscriptEntry = {
           id: pending.interactionId, provider: pending.provider, kind: pending.kind,
           phase: pending.phase, requestedAt: pending.requestedAt,
@@ -1034,6 +1167,10 @@ export class LoopedReviewService {
       }
       delete workflow.pendingInteractionResolution;
     } else {
+      session.interactionSummary = this.appendSummary(
+        session.interactionSummary, pending, outcome, resolvedAt);
+      workflow.interactionSummary = this.appendSummary(
+        workflow.interactionSummary, pending, outcome, resolvedAt);
       const retryPhase = isLoopedReviewActivePhase(workflow.phase)
         ? workflow.phase : workflow.pausedFromPhase ?? "preparing";
       workflow.phase = "failed";
@@ -1147,7 +1284,10 @@ export class LoopedReviewService {
     workflow.phase = "failed";
     const round = workflow.rounds.find((entry) => entry.round === workflow.currentRound);
     if (round) round.status = "failed";
-    if (!preserve) delete workflow.dispatch;
+    if (!preserve) {
+      delete workflow.dispatch;
+      delete workflow.structuredWait;
+    }
     await this.save(workflow, claimed.token);
   }
 
@@ -1191,5 +1331,14 @@ class ControllerFenceError extends Error {}
 class DefiniteDispatchError extends Error {}
 class DefiniteResultError extends Error {}
 class MissingProviderSessionError extends ProviderUnavailableError {
-  constructor() { super("The native provider session no longer exists; retry creates a replacement"); }
+  constructor() { super(MISSING_PROVIDER_SESSION_MESSAGE); }
+}
+
+function definiteResult<T>(parse: () => T): T {
+  try {
+    return parse();
+  } catch (error) {
+    if (error instanceof DefiniteResultError) throw error;
+    throw new DefiniteResultError(message(error));
+  }
 }

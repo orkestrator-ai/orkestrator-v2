@@ -512,12 +512,18 @@ export function startStoreResourceSync(
   unsubscribes.push(onResourceChanged("looped-review", ({ id: workflowId }) => {
     // hydrate compares backend revisions against the local snapshot, so a
     // workflow this client is actively driving is not clobbered by its own echo.
-    void hydrateLoopedReviewWorkflow(workflowId).catch((error) => {
-      console.warn(
-        `[store-resource-sync] Failed to refresh looped review ${workflowId}:`,
-        error,
-      );
-    });
+    void hydrateLoopedReviewWorkflow(workflowId)
+      .then((workflow) => {
+        if (!workflow) {
+          useLoopedReviewStore.getState().removeWorkflow(workflowId);
+        }
+      })
+      .catch((error) => {
+        console.warn(
+          `[store-resource-sync] Failed to refresh looped review ${workflowId}:`,
+          error,
+        );
+      });
   }));
 
   return () => {

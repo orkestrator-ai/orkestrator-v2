@@ -9007,11 +9007,24 @@ export function createCommandRegistry(
   });
 
   register("get_looped_review_workflow", ({ workflowId }, { storage }) =>
-    storage.getLoopedReviewWorkflow(asString(workflowId, "workflowId")),
+    storage.getLoopedReviewWorkflow(asString(workflowId, "workflowId"))
+      .then((workflow) => {
+        if (!workflow) return null;
+        const { controllerLease: _controllerLease, ...rendererWorkflow } = workflow;
+        const rendererSnapshot = { ...(workflow.snapshot as Record<string, unknown>) };
+        delete rendererSnapshot.controllerFence;
+        return { ...rendererWorkflow, snapshot: rendererSnapshot };
+      }),
   );
   register("list_looped_review_workflows", (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "looped-review", () =>
       storage.listLoopedReviewWorkflows(asString(args.environmentId, "environmentId"))
+        .then((workflows) => workflows.map((workflow) => {
+          const { controllerLease: _controllerLease, ...rendererWorkflow } = workflow;
+          const rendererSnapshot = { ...(workflow.snapshot as Record<string, unknown>) };
+          delete rendererSnapshot.controllerFence;
+          return { ...rendererWorkflow, snapshot: rendererSnapshot };
+        }))
     ),
   );
   register(
@@ -9066,21 +9079,33 @@ export function createCommandRegistry(
   );
   register(
     "validate_looped_review_controller",
-    ({ workflowId, ownerId, token }, { storage }) =>
-      storage.validateLoopedReviewController(
-        asNonBlankString(workflowId, "workflowId"),
+    async ({ workflowId, ownerId, token }, { storage }) => {
+      const parsedWorkflowId = asNonBlankString(workflowId, "workflowId");
+      const current = await storage.getLoopedReviewWorkflow(parsedWorkflowId);
+      if ((current?.version ?? 0) >= LOOPED_REVIEW_WORKFLOW_VERSION) {
+        throw new Error("Backend-owned looped-review controller leases are not available to renderers");
+      }
+      return storage.validateLoopedReviewController(
+        parsedWorkflowId,
         asNonBlankString(ownerId, "ownerId"),
         asNonBlankString(token, "token"),
-      ),
+      );
+    },
   );
   register(
     "release_looped_review_controller",
-    ({ workflowId, ownerId, token }, { storage }) =>
-      storage.releaseLoopedReviewController(
-        asNonBlankString(workflowId, "workflowId"),
+    async ({ workflowId, ownerId, token }, { storage }) => {
+      const parsedWorkflowId = asNonBlankString(workflowId, "workflowId");
+      const current = await storage.getLoopedReviewWorkflow(parsedWorkflowId);
+      if ((current?.version ?? 0) >= LOOPED_REVIEW_WORKFLOW_VERSION) {
+        throw new Error("Backend-owned looped-review controller leases are not available to renderers");
+      }
+      return storage.releaseLoopedReviewController(
+        parsedWorkflowId,
         asNonBlankString(ownerId, "ownerId"),
         asNonBlankString(token, "token"),
-      ),
+      );
+    },
   );
   register("delete_looped_review_workflow", async ({ workflowId }, { storage }) => {
     const parsedWorkflowId = asString(workflowId, "workflowId");

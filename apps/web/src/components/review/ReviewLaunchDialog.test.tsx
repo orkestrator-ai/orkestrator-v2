@@ -183,6 +183,26 @@ describe("ReviewLaunchDialog", () => {
     });
   });
 
+  test("disables dismissal and submission while a launch is busy", () => {
+    const onOpenChange = mock((_open: boolean) => undefined);
+    const { onConfirm } = renderDialog({
+      kind: "looped",
+      busy: true,
+      onOpenChange,
+    });
+
+    const startButton = screen.getByRole("button", { name: "Starting looped review…" });
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    expect((startButton as HTMLButtonElement).disabled).toBe(true);
+    expect((cancelButton as HTMLButtonElement).disabled).toBe(true);
+    expect(startButton.closest("form")?.getAttribute("aria-busy")).toBe("true");
+
+    fireEvent.submit(startButton.closest("form")!);
+    fireEvent.click(cancelButton);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   test("changes provider, model, and compatible effort together", () => {
     const onConfirm = mock((_selection: ReviewLaunchSelection) => undefined);
     render(

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Environment } from "@/types";
+import { loopedReviewFixture } from "@/test/looped-review-fixture";
 
 // Each of the modules stubbed below has its own test file. Snapshot the real
 // modules before replacing them and restore in afterAll, so a non-isolated run
@@ -33,7 +34,7 @@ afterAll(() => {
  * downstream store's own loading behaviour.
  */
 
-const hydrateLoopedReviewWorkflow = mock(async (_id: string) => undefined);
+const hydrateLoopedReviewWorkflow = mock(async (_id: string): Promise<unknown> => undefined);
 const hydrateLoopedReviewWorkflowsForEnvironment = mock(async (_id: string) => []);
 const hydrateBuildPipeline = mock(async (_id: string) => null as unknown);
 const hydrateBuildPipelinesForProject = mock(async (_id: string) => []);
@@ -120,6 +121,7 @@ function pipeline(id: string, backendRevision: number) {
 beforeEach(() => {
   resetResourceSync();
   hydrateLoopedReviewWorkflow.mockClear();
+  hydrateLoopedReviewWorkflow.mockImplementation(async () => undefined);
   hydrateBuildPipeline.mockClear();
   hydrateBuildPipeline.mockImplementation(async () => null);
   hydrateBuildPipelinesForProject.mockClear();
@@ -345,6 +347,17 @@ describe("looped-review binding", () => {
     await tick();
 
     expect(hydrateLoopedReviewWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  test("removes a stale projection after authoritative deletion", async () => {
+    const workflow = loopedReviewFixture({ id: "workflow-deleted" });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    hydrateLoopedReviewWorkflow.mockImplementationOnce(async () => null);
+
+    dispatchResourceChange({ resource: "looped-review", id: workflow.id, revision: 2 });
+    await tick();
+
+    expect(useLoopedReviewStore.getState().workflows.has(workflow.id)).toBe(false);
   });
 });
 

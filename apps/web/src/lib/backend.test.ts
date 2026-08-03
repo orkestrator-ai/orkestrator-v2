@@ -1499,6 +1499,55 @@ describe("backend native agent and looped review wrappers", () => {
     );
   });
 
+  test("maps looped-review lifecycle commands and exact payloads", async () => {
+    const input = {
+      environmentId: "env-1",
+      projectId: "project-1",
+      agent: "codex" as const,
+      model: "gpt-5.6-sol",
+      targetBranch: "main",
+      allowance: 6,
+    };
+    const workflow = { id: "workflow-1" } as unknown as Awaited<
+      ReturnType<typeof backendWrappers.startLoopedReview>
+    >;
+    invokeMock.mockResolvedValue(workflow);
+
+    await expect(backendWrappers.startLoopedReview(input)).resolves.toBe(workflow);
+    expect(invokeMock).toHaveBeenLastCalledWith("start_looped_review", input);
+
+    for (const [method, command] of [
+      [backendWrappers.pauseLoopedReview, "pause_looped_review"],
+      [backendWrappers.resumeLoopedReview, "resume_looped_review"],
+      [backendWrappers.retryLoopedReview, "retry_looped_review"],
+      [backendWrappers.cancelLoopedReview, "cancel_looped_review"],
+    ] as const) {
+      await expect(method("workflow-1")).resolves.toBe(workflow);
+      expect(invokeMock).toHaveBeenLastCalledWith(command, { workflowId: "workflow-1" });
+    }
+  });
+
+  test("omits an absent provider session id and maps workflow reads and deletion", async () => {
+    invokeMock.mockResolvedValueOnce({ providerSessionId: "provider-1" });
+    await backendWrappers.getLoopedReviewProviderSession("workflow-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("get_looped_review_provider_session", {
+      workflowId: "workflow-1",
+    });
+
+    await backendWrappers.getLoopedReviewProviderSession("workflow-1", "session-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("get_looped_review_provider_session", {
+      workflowId: "workflow-1",
+      sessionId: "session-1",
+    });
+
+    await backendWrappers.getLoopedReviewWorkflow("workflow-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("get_looped_review_workflow", { workflowId: "workflow-1" });
+    await backendWrappers.listLoopedReviewWorkflows("env-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("list_looped_review_workflows", { environmentId: "env-1" });
+    await backendWrappers.deleteLoopedReviewWorkflow("workflow-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("delete_looped_review_workflow", { workflowId: "workflow-1" });
+  });
+
   test("propagates native dispatch and controller errors unchanged", async () => {
     const dispatchError = new Error("dispatch denied");
     invokeMock.mockRejectedValueOnce(dispatchError);

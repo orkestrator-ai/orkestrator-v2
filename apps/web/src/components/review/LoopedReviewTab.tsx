@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Archive, CheckCircle2, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import type { ReviewFindingPool } from "@orkestrator/protocol/structured-review";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,7 @@ function phaseLabel(workflow: LoopedReviewWorkflow): string {
     reconciling: "Reconciling this pass",
     fixing: "Fixing active pool",
     "creating-pr": "Creating pull request",
+    cancelling: "Cancelling provider work",
     paused: "Paused", failed: "Needs attention", cancelled: "Cancelled", completed: "Completed",
   };
   return labels[workflow.phase];
@@ -94,22 +95,36 @@ export function LoopedReviewTab({
   const [hydrating, setHydrating] = useState(!workflow);
   const [error, setError] = useState<string | null>(null);
   const [commandPending, setCommandPending] = useState(false);
+  const restoreGeneration = useRef(0);
 
-  useEffect(() => {
-    if (workflow) { setHydrating(false); return; }
-    let live = true;
+  const restoreWorkflow = useCallback(async () => {
+    const generation = ++restoreGeneration.current;
     setHydrating(true);
-    void hydrateWorkflow(data.workflowId).then((restored) => {
-      if (!live) return;
+    setError(null);
+    try {
+      const restored = await hydrateWorkflow(data.workflowId);
+      if (restoreGeneration.current !== generation) return;
       setHydrating(false);
-      if (!restored) setError("The authoritative looped-review workflow could not be found.");
-    }).catch((reason) => {
-      if (!live) return;
+      if (!restored) {
+        setError("The authoritative looped-review workflow could not be found.");
+      }
+    } catch (reason) {
+      if (restoreGeneration.current !== generation) return;
       setHydrating(false);
       setError(reason instanceof Error ? reason.message : String(reason));
-    });
-    return () => { live = false; };
-  }, [data.workflowId, hydrateWorkflow, workflow]);
+    }
+  }, [data.workflowId, hydrateWorkflow]);
+
+  useEffect(() => {
+    if (workflow) {
+      ++restoreGeneration.current;
+      setHydrating(false);
+      setError(null);
+      return;
+    }
+    void restoreWorkflow();
+    return () => { ++restoreGeneration.current; };
+  }, [restoreWorkflow, workflow]);
 
   const runCommand = async (command: () => Promise<LoopedReviewWorkflow>) => {
     setCommandPending(true);
@@ -151,7 +166,7 @@ export function LoopedReviewTab({
       <AlertCircle className="mx-auto size-6 text-red-400" />
       <p className="mt-3 font-semibold">Looped review unavailable</p>
       <p className="mt-2 text-sm text-muted-foreground">{error ?? "The workflow snapshot is missing."}</p>
-      <Button className="mt-4" variant="outline" onClick={() => void hydrateWorkflow(data.workflowId)}>
+      <Button className="mt-4" variant="outline" disabled={hydrating} onClick={() => void restoreWorkflow()}>
         <RefreshCw className="mr-2 size-4" />Retry restore
       </Button>
     </div>
@@ -195,6 +210,10 @@ export function LoopedReviewTab({
       {workflow.phase === "paused" && <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
         <h2 className="font-medium text-amber-300">Workflow paused</h2>
         <p className="mt-1 text-sm text-muted-foreground">Backend progress is paused at {workflow.pausedFromPhase ?? "the current phase"}.</p>
+      </section>}
+      {workflow.phase === "cancelling" && <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+        <h2 className="flex items-center gap-2 font-medium text-amber-300"><Loader2 className="size-4 animate-spin" />Cancellation in progress</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Waiting for provider work from {workflow.cancellingFromPhase ?? "the active phase"} to stop.</p>
       </section>}
       {workflow.phase === "cancelled" && <section className="rounded-xl border p-4">
         <h2 className="font-medium">Workflow cancelled</h2>

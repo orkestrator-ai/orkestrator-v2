@@ -272,4 +272,50 @@ describe("StorageService looped-review controller lease", () => {
         .rejects.toThrow("identity must not be blank");
     });
   });
+
+  test("lists valid workflows across environments in update order", async () => {
+    await withWorkflowStorage(async (storage) => {
+      const dataDir = storage.getDataDir();
+      await storage.addEnvironment({
+        id: "env-2",
+        projectId: "project-1",
+        name: "Second environment",
+        branch: "second",
+        containerId: null,
+        status: "running",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "restricted",
+        order: 1,
+        environmentType: "local",
+        worktreePath: dataDir,
+      });
+      await storage.saveLoopedReviewWorkflow("workflow-2", "env-2", 2, {
+        id: "workflow-2",
+      });
+      await storage.saveLoopedReviewWorkflow("workflow-3", "env-1", 2, {
+        id: "workflow-3",
+      });
+
+      const file = path.join(dataDir, "looped-reviews.json");
+      const stored = JSON.parse(await fs.readFile(file, "utf8"));
+      stored["workflow-1"].updatedAt = new Date(3_000).toISOString();
+      stored["workflow-2"].updatedAt = new Date(1_000).toISOString();
+      stored["workflow-3"].updatedAt = new Date(2_000).toISOString();
+      stored["workflow-malformed"] = {
+        ...stored["workflow-2"],
+        id: "different-key",
+      };
+      await fs.writeFile(file, JSON.stringify(stored));
+
+      expect((await storage.listAllLoopedReviewWorkflows()).map(({ id }) => id))
+        .toEqual(["workflow-2", "workflow-3", "workflow-1"]);
+      expect((await storage.listLoopedReviewWorkflows("env-1")).map(({ id }) => id))
+        .toEqual(["workflow-3", "workflow-1"]);
+      expect((await storage.listLoopedReviewWorkflows("env-2")).map(({ id }) => id))
+        .toEqual(["workflow-2"]);
+    });
+  });
 });

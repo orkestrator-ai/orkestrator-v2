@@ -1210,7 +1210,11 @@ export function TerminalContainer({
               hasBuildPipeline: (pipelineId) =>
                 useBuildPipelineStore.getState().pipelines.has(pipelineId),
               hasLoopedReview: (workflowId) =>
-                useLoopedReviewStore.getState().workflows.has(workflowId),
+                // A failed workflow-list request means existence is unknown,
+                // not that every persisted review was deleted. Preserve those
+                // tabs so their own read-through view can retry hydration.
+                workflowResult.status === "rejected"
+                || useLoopedReviewStore.getState().workflows.has(workflowId),
             });
             const restored =
               restoredSnapshot && persisted?.version === LEGACY_PANE_LAYOUT_VERSION

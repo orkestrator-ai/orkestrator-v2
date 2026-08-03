@@ -88,6 +88,7 @@ import {
   buildReviewModelCatalog,
   resolveDefaultReviewTabType,
 } from "@/lib/review-launch-options";
+import { normalizeOpenCodeModelReferences } from "@/lib/opencode-model-preferences";
 import {
   LazyDialogLoadingFallback,
   LazyLoadBoundary,
@@ -277,10 +278,37 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   selectedEnvironmentIdRef.current = selectedEnvironmentId;
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [loopedReviewDialogOpen, setLoopedReviewDialogOpen] = useState(false);
+  const [opencodeFavoriteModelIds, setOpencodeFavoriteModelIds] = useState<string[]>([]);
   const reviewLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewClickSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewLongPressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const suppressReviewClickRef = useRef(false);
+
+  // OpenCode model preferences live in the TUI's global state file, which the
+  // user can edit while Orkestrator is running. Re-read it every time a review
+  // dialog opens rather than once on mount, so a model favorited in the TUI
+  // reaches the picker without an app restart. The file is untrusted, so the
+  // favorite list goes through the shared normalizer, which drops unparseable
+  // entries and duplicates and yields plain `provider/model` ids. Those ids
+  // drive the favorites-first ordering in the searchable OpenCode picker.
+  const anyReviewDialogOpen = reviewDialogOpen || loopedReviewDialogOpen;
+  useEffect(() => {
+    if (!anyReviewDialogOpen) return;
+    let cancelled = false;
+    void backend.getOpencodeModelPreferences()
+      .then((rawPreferences) => {
+        if (cancelled) return;
+        setOpencodeFavoriteModelIds(
+          normalizeOpenCodeModelReferences(rawPreferences?.favorite),
+        );
+      })
+      .catch((error) => {
+        console.warn("[ActionBar] Failed to load OpenCode model preferences:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [anyReviewDialogOpen]);
 
   // Drag-to-scroll state for toolbar
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -1971,6 +1999,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredReasoningEfforts={{
           codex: config.global.codexReasoningEffort,
         }}
+        opencodeFavoriteModelIds={opencodeFavoriteModelIds}
         onConfirm={handleConfiguredReview}
       />
       <ReviewLaunchDialog
@@ -1994,6 +2023,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredReasoningEfforts={{
           codex: config.global.codexReasoningEffort,
         }}
+        opencodeFavoriteModelIds={opencodeFavoriteModelIds}
         onConfirm={handleLoopedReview}
       />
 

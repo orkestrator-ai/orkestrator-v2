@@ -38,12 +38,18 @@ function renderPicker({
   value = "anthropic/claude-sonnet",
   onValueChange = mock(() => {}),
   disabled = false,
+  showDescriptionInTrigger,
+  emptyLabel,
+  className,
 }: {
   options?: OpenCodeModelSelectOption[];
   favorites?: string[];
   value?: string;
   onValueChange?: (value: string) => void;
   disabled?: boolean;
+  showDescriptionInTrigger?: boolean;
+  emptyLabel?: string;
+  className?: string;
 } = {}) {
   render(
     <>
@@ -55,6 +61,9 @@ function renderPicker({
         favoriteModelIds={favorites}
         onValueChange={onValueChange}
         disabled={disabled}
+        showDescriptionInTrigger={showDescriptionInTrigger}
+        emptyLabel={emptyLabel}
+        className={className}
       />
     </>,
   );
@@ -118,6 +127,20 @@ describe("filterAndOrderOpenCodeModels", () => {
         (model) => model.name,
       ),
     ).toEqual(["Alpha", "Zulu"]);
+  });
+
+  test("drops a favorite that does not match the current search", () => {
+    // A favorite is pinned, not exempt from filtering: a query it cannot match
+    // must remove it from the favorites section rather than leave it stranded
+    // above unrelated results.
+    expect(
+      filterAndOrderOpenCodeModels(models, ["openrouter/google/gemini"], "gpt"),
+    ).toEqual({ favorites: [], models: [models[0]!] });
+
+    // ...while a query it does match keeps it pinned.
+    expect(
+      filterAndOrderOpenCodeModels(models, ["openrouter/google/gemini"], "gemini"),
+    ).toEqual({ favorites: [models[2]!], models: [] });
   });
 
   test("supports models without a provider description", () => {
@@ -268,6 +291,16 @@ describe("OpenCodeModelSelect", () => {
     expect((trigger as HTMLButtonElement).disabled).toBe(true);
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByRole("searchbox")).toBeNull();
+
+    // Radix gates its trigger on its own `disabled` prop, so a dispatched
+    // pointer event must not open what a real user could not click.
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
+
+    // Asserted as a boolean: a failure here would otherwise serialize the whole
+    // open portal tree, which is megabytes of unreadable output.
+    expect(screen.queryByRole("searchbox") !== null).toBe(false);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
   test("shows an explicit empty catalogue state", () => {
@@ -283,6 +316,66 @@ describe("OpenCodeModelSelect", () => {
     expect(screen.getByText("0 models")).toBeTruthy();
     expect(screen.getByText("No matching models")).toBeTruthy();
     expect(screen.queryByRole("menuitemradio")).toBeNull();
+  });
+
+  test("lets a host override the empty-catalogue label", () => {
+    // The review dialog keeps its own wording rather than the picker default.
+    const { trigger } = renderPicker({
+      options: [],
+      favorites: [],
+      value: "",
+      emptyLabel: "Choose a model",
+    });
+
+    expect(trigger.textContent).toContain("Choose a model");
+    expect(trigger.textContent).not.toContain("No models cached");
+  });
+
+  test("shows the selected model's provider in the trigger only when asked", () => {
+    const { trigger } = renderPicker({ showDescriptionInTrigger: true });
+    expect(trigger.textContent).toContain("Claude Sonnet");
+    expect(trigger.textContent).toContain("anthropic");
+
+    cleanup();
+
+    const plain = renderPicker().trigger;
+    expect(plain.textContent).toContain("Claude Sonnet");
+    expect(plain.textContent).not.toContain("anthropic");
+  });
+
+  test("constrains both trigger labels so long names ellipsize", () => {
+    // `truncate` cannot ellipsize a fit-content column child, so each label
+    // span has to take the full trigger width or long names overflow the
+    // control instead of being cut off.
+    const { trigger } = renderPicker({ showDescriptionInTrigger: true });
+
+    const labels = trigger.querySelectorAll("span.truncate");
+    expect(labels).toHaveLength(2);
+    for (const label of labels) {
+      expect(label.className).toContain("w-full");
+    }
+  });
+
+  test("passes an id and className through to the trigger", () => {
+    const { trigger } = renderPicker({ className: "min-h-11" });
+
+    expect(trigger.id).toBe("model-select");
+    expect(trigger.className).toContain("min-h-11");
+  });
+
+  test("marks a selected favorite with a check rather than a star", () => {
+    const { trigger } = renderPicker({
+      favorites: ["anthropic/claude-sonnet", "openrouter/google/gemini"],
+      value: "anthropic/claude-sonnet",
+    });
+    openPicker(trigger);
+
+    const [selectedFavorite, unselectedFavorite] =
+      screen.getAllByRole("menuitemradio");
+    expect(selectedFavorite?.querySelector(".lucide-check")).toBeTruthy();
+    expect(selectedFavorite?.querySelector(".lucide-star")).toBeNull();
+    expect(unselectedFavorite?.querySelector(".lucide-star")).toBeTruthy();
+    expect(unselectedFavorite?.querySelector(".lucide-check")).toBeNull();
   });
 
   test("shows a no-match state and the singular result count", () => {

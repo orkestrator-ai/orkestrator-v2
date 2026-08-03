@@ -24,6 +24,10 @@ interface OpenCodeModelSelectProps {
   onValueChange: (value: string) => void;
   disabled?: boolean;
   className?: string;
+  /** Render the selected model's description under its name in the trigger. */
+  showDescriptionInTrigger?: boolean;
+  /** Text shown in the trigger when there are no options at all. */
+  emptyLabel?: string;
 }
 
 export function filterAndOrderOpenCodeModels(
@@ -126,6 +130,8 @@ export function OpenCodeModelSelect({
   onValueChange,
   disabled = false,
   className,
+  showDescriptionInTrigger = false,
+  emptyLabel = "No models cached",
 }: OpenCodeModelSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -188,7 +194,12 @@ export function OpenCodeModelSelect({
         if (!nextOpen) setQuery("");
       }}
     >
-      <DropdownMenuTrigger asChild>
+      {/*
+        Radix gates its own trigger handlers on this prop. Without it the only
+        thing stopping a disabled picker from opening is the native `disabled`
+        attribute on the child button.
+      */}
+      <DropdownMenuTrigger asChild disabled={disabled}>
         <button
           id={id}
           type="button"
@@ -201,8 +212,21 @@ export function OpenCodeModelSelect({
             className,
           )}
         >
-          <span className="truncate">
-            {selected?.name ?? (options.length ? "Select model" : "No models cached")}
+          {/*
+            The label spans need `w-full`: under `items-start` a column flex
+            child is sized to fit-content, and `truncate` sets `nowrap`, so
+            without an explicit width the text would size to its own length and
+            overflow the trigger instead of ellipsizing.
+          */}
+          <span className="flex min-w-0 flex-1 flex-col items-start text-left">
+            <span className="w-full truncate">
+              {selected?.name ?? (options.length ? "Select model" : emptyLabel)}
+            </span>
+            {showDescriptionInTrigger && selected?.description && (
+              <span className="w-full truncate text-[11px] font-normal text-muted-foreground">
+                {selected.description}
+              </span>
+            )}
           </span>
           <ChevronDown className="size-4 shrink-0 text-muted-foreground opacity-50" />
         </button>

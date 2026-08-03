@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, act, fireEvent, render, screen, within } from "@testing-library/react";
 import { createContext, useContext } from "react";
 import * as realDialog from "@/components/ui/dialog";
 import * as realSelect from "@/components/ui/select";
@@ -107,6 +107,38 @@ const sparseCatalog: ReviewModelCatalog = {
   ],
   codex: [{ id: "codex-a", name: "Codex A", reasoningEfforts: ["medium"] }],
   opencode: [],
+};
+
+/** OpenCode entries carry the provider as their description, like the real catalog. */
+const openCodeCatalog: ReviewModelCatalog = {
+  ...catalog,
+  opencode: [
+    {
+      id: "provider/model-a",
+      name: "OpenCode A",
+      description: "provider",
+      reasoningEfforts: ["fast"],
+    },
+    {
+      id: "other/model-b",
+      name: "OpenCode B",
+      description: "other",
+      reasoningEfforts: ["fast"],
+    },
+  ],
+};
+
+/** True when `first` appears before `second` in document order. */
+const renderedBefore = (first: Element, second: Element) =>
+  Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+const openModelPicker = () => {
+  const trigger = screen.getByRole("combobox", { name: "Model" });
+  act(() => {
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+  });
+  return trigger;
 };
 
 function renderDialog(overrides: Partial<Parameters<typeof ReviewLaunchDialog>[0]> = {}) {
@@ -318,6 +350,86 @@ describe("ReviewLaunchDialog", () => {
       model: "provider/model-a",
       reasoningEffort: "deep",
     });
+  });
+
+  test("swaps the model list for the searchable picker when OpenCode is chosen", () => {
+    renderDialog({
+      preferredModels: { opencode: "provider/model-a" },
+      opencodeFavoriteModelIds: ["provider/model-a"],
+    });
+
+    // The searchable OpenCode picker exposes the catalogue in a combobox with
+    // aria-expanded; the plain Select does not.
+    const modelTrigger = screen.getByRole("combobox", { name: "Model" });
+    expect(modelTrigger.hasAttribute("aria-expanded")).toBe(false);
+
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+
+    const openCodeTrigger = screen.getByRole("combobox", { name: "Model" });
+    expect(openCodeTrigger.getAttribute("aria-expanded")).not.toBeNull();
+    expect(openCodeTrigger.textContent).toContain("OpenCode A");
+    // The defining feature of the swap is the search field, so assert it rather
+    // than only the attribute that distinguishes the two triggers.
+    openModelPicker();
+    expect(screen.getByPlaceholderText("Search models or providers…")).toBeTruthy();
+  });
+
+  test("keeps the OpenCode trigger sized like the other review controls", () => {
+    renderDialog({
+      catalog: openCodeCatalog,
+      preferredModels: { opencode: "provider/model-a" },
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+
+    const trigger = screen.getByRole("combobox", { name: "Model" });
+    expect(trigger.className).toContain("min-h-11");
+    // `showDescriptionInTrigger` puts the provider under the model name, which
+    // is what the plain Select did before the swap.
+    expect(trigger.textContent).toContain("OpenCode A");
+    expect(trigger.textContent).toContain("provider");
+  });
+
+  test("orders OpenCode models favourites-first in the searchable picker", () => {
+    renderDialog({
+      catalog: openCodeCatalog,
+      preferredModels: { opencode: "provider/model-a" },
+      opencodeFavoriteModelIds: ["provider/model-a"],
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+    openModelPicker();
+
+    // Order, not mere presence: the favourite is pinned under "Favorites" ahead
+    // of the rest of the catalogue under "All models".
+    const favouritesLabel = screen.getByText("Favorites");
+    const favourite = screen.getByText("provider/model-a");
+    const allModelsLabel = screen.getByText("All models");
+    const other = screen.getByText("other/model-b");
+    expect(renderedBefore(favouritesLabel, favourite)).toBe(true);
+    expect(renderedBefore(favourite, allModelsLabel)).toBe(true);
+    expect(renderedBefore(allModelsLabel, other)).toBe(true);
+  });
+
+  test("orders OpenCode models favourites-first in the looped dialog too", () => {
+    renderDialog({
+      kind: "looped",
+      catalog: openCodeCatalog,
+      preferredModels: { opencode: "provider/model-a" },
+      opencodeFavoriteModelIds: ["other/model-b"],
+    });
+
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+    openModelPicker();
+
+    expect(renderedBefore(
+      screen.getByText("other/model-b"),
+      screen.getByText("All models"),
+    )).toBe(true);
+    expect(renderedBefore(
+      screen.getByText("All models"),
+      screen.getByText("provider/model-a"),
+    )).toBe(true);
   });
 
   test("closes without launching when cancelled", () => {

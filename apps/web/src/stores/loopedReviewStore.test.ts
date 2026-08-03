@@ -178,6 +178,48 @@ describe("looped review shared bounds and validation", () => {
     })).toBe(false);
   });
 
+  test("rejects mismatched dispatch phase/kind pairs and non-string cancelling timestamps", () => {
+    const dispatch = {
+      id: "dispatch-1", requestId: "request-1", sessionId: "session-1",
+      phase: "preparing" as const, kind: "prepare" as const, state: "sent" as const,
+      createdAt: "2026-08-01T00:00:00.000Z",
+    };
+    const withDispatch = loopedReviewFixture({
+      dispatch,
+      sessions: [{
+        id: "session-1",
+        phase: "preparation",
+        round: 1,
+        sessionKey: "key-1",
+        providerSessionId: "provider-1",
+        requestIds: [],
+        origin: "looped-review",
+        interactionPolicy: loopedReviewFixture().interactionPolicy,
+        status: "idle",
+        startedAt: "2026-08-01T00:00:00.000Z",
+      }],
+    });
+    expect(isLoopedReviewWorkflow(withDispatch)).toBe(true);
+    expect(isLoopedReviewWorkflow({
+      ...withDispatch,
+      dispatch: { ...dispatch, kind: "discover" },
+    })).toBe(false);
+    expect(isLoopedReviewWorkflow({
+      ...withDispatch,
+      dispatch: { ...dispatch, phase: "fixing" },
+    })).toBe(false);
+    expect(isLoopedReviewWorkflow({
+      ...withDispatch,
+      dispatch: { ...dispatch, state: "queued" },
+    })).toBe(false);
+
+    expect(isLoopedReviewWorkflow({
+      ...withDispatch,
+      cancellingSince: "2026-08-01T00:00:00.000Z",
+    })).toBe(true);
+    expect(isLoopedReviewWorkflow({ ...withDispatch, cancellingSince: 123 })).toBe(false);
+  });
+
   test("detects both kinds of pooled finding", () => {
     expect(hasReviewFindings({ issues: [], coverageGaps: [] })).toBe(false);
     expect(hasReviewFindings({ issues: [{ poolId: "issue-1", ...issue }], coverageGaps: [] })).toBe(true);

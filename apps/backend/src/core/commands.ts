@@ -38,6 +38,7 @@ import {
   type EnvironmentStatus,
   type EnvironmentType,
   type OpenCodeModelCatalogEntry,
+  type PersistedLoopedReviewWorkflow,
   type PortMapping,
   type PrState,
   type SessionStatus,
@@ -2869,6 +2870,27 @@ function conditionalSnapshot<T>(value: T, knownDigest: unknown): T | {
   return typeof knownDigest === "string" && knownDigest === digest
     ? { unchanged: true, digest }
     : { unchanged: false, digest, value };
+}
+
+type RendererLoopedReviewWorkflow = Omit<
+  PersistedLoopedReviewWorkflow,
+  "snapshot" | "controllerLease"
+> & { snapshot?: unknown };
+
+/**
+ * Backend-owned workflows carry a controller lease (top level) and a fence
+ * token (inside the snapshot) that the renderer must never see. Copies the
+ * record without them. A record without a snapshot is returned untouched so
+ * the response always mirrors the stored shape.
+ */
+function stripLoopedReviewRendererSecrets(
+  workflow: PersistedLoopedReviewWorkflow,
+): RendererLoopedReviewWorkflow {
+  const { controllerLease: _controllerLease, ...rendererWorkflow } = workflow;
+  if (workflow.snapshot === undefined) return rendererWorkflow;
+  const rendererSnapshot = { ...(workflow.snapshot as Record<string, unknown>) };
+  delete rendererSnapshot.controllerFence;
+  return { ...rendererWorkflow, snapshot: rendererSnapshot };
 }
 
 /**
@@ -9008,23 +9030,12 @@ export function createCommandRegistry(
 
   register("get_looped_review_workflow", ({ workflowId }, { storage }) =>
     storage.getLoopedReviewWorkflow(asString(workflowId, "workflowId"))
-      .then((workflow) => {
-        if (!workflow) return null;
-        const { controllerLease: _controllerLease, ...rendererWorkflow } = workflow;
-        const rendererSnapshot = { ...(workflow.snapshot as Record<string, unknown>) };
-        delete rendererSnapshot.controllerFence;
-        return { ...rendererWorkflow, snapshot: rendererSnapshot };
-      }),
+      .then((workflow) => workflow ? stripLoopedReviewRendererSecrets(workflow) : null),
   );
   register("list_looped_review_workflows", (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "looped-review", () =>
       storage.listLoopedReviewWorkflows(asString(args.environmentId, "environmentId"))
-        .then((workflows) => workflows.map((workflow) => {
-          const { controllerLease: _controllerLease, ...rendererWorkflow } = workflow;
-          const rendererSnapshot = { ...(workflow.snapshot as Record<string, unknown>) };
-          delete rendererSnapshot.controllerFence;
-          return { ...rendererWorkflow, snapshot: rendererSnapshot };
-        }))
+        .then((workflows) => workflows.map(stripLoopedReviewRendererSecrets))
     ),
   );
   register(

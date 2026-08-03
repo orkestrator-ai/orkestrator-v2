@@ -279,6 +279,8 @@ export interface LoopedReviewWorkflow {
   phase: LoopedReviewPhase;
   pausedFromPhase?: ActiveLoopedReviewPhase;
   cancellingFromPhase?: ActiveLoopedReviewPhase;
+  /** ISO timestamp of when cancellation began; bounds how long a stuck abort retries. */
+  cancellingSince?: string;
   rounds: LoopedReviewRound[];
   activePool: ReviewFindingPool;
   archivedPools: ArchivedReviewPool[];
@@ -679,7 +681,8 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
     || !isOptionalString(workflow.pr.sessionId) || !isOptionalString(workflow.pr.url)
     || !isOptionalString(workflow.pr.error)
     || typeof workflow.createdAt !== "string" || typeof workflow.updatedAt !== "string"
-    || !isNonNegativeInteger(workflow.backendRevision)) return false;
+    || !isNonNegativeInteger(workflow.backendRevision)
+    || (workflow.cancellingSince !== undefined && typeof workflow.cancellingSince !== "string")) return false;
 
   if ((workflow.phase === "paused") !== (workflow.pausedFromPhase !== undefined)
     || (workflow.pausedFromPhase !== undefined

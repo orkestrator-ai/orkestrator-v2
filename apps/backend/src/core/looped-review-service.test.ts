@@ -4,11 +4,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
   type AgentInteractionRequest,
   type AgentInteractionSnapshot,
 } from "@orkestrator/protocol/agent-interactions";
-import type { LoopedReviewWorkflow } from "@orkestrator/protocol/review-workflow";
-import type { LoopedReviewAgent } from "@orkestrator/protocol/review-workflow";
+import {
+  LOOPED_REVIEW_WORKFLOW_VERSION,
+  type LoopedReviewWorkflow,
+  type LoopedReviewAgent,
+} from "@orkestrator/protocol/review-workflow";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { StorageService } from "./storage.js";
@@ -105,6 +109,7 @@ class FakeProvider implements BuildPipelineProvider {
   readonly sessions = new Map<string, string>();
   readonly pending = new Map<string, AgentInteractionRequest[]>();
   statusValue: ProviderStatus = "idle";
+  statusRejectCount = 0;
   returnNull = false;
   ambiguousOnce = false;
   definiteRejectOnce = false;
@@ -178,7 +183,13 @@ class FakeProvider implements BuildPipelineProvider {
     }
   }
 
-  async status(): Promise<ProviderStatus> { return this.statusValue; }
+  async status(): Promise<ProviderStatus> {
+    if (this.statusRejectCount > 0) {
+      this.statusRejectCount -= 1;
+      throw new Error("status transport unavailable");
+    }
+    return this.statusValue;
+  }
   async messages(): Promise<unknown[]> { return []; }
 
   async structured<T>(_sessionId: string, requestId: string): Promise<StructuredOutputResult<T> | null> {
@@ -224,6 +235,7 @@ async function harness(run: (
   invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
 ) => Promise<void>, agent: LoopedReviewAgent = "claude", serviceOptions: {
   controllerLeaseMs?: number;
+  cancellationDeadlineMs?: number;
   useProductionProvider?: boolean;
   bridgeAuthToken?: string;
 } = {}): Promise<void> {
@@ -285,6 +297,35 @@ async function snapshot(storage: StorageService, id: string): Promise<LoopedRevi
 
 async function pump(service: LoopedReviewService, id: string, passes = 20): Promise<void> {
   for (let index = 0; index < passes; index += 1) await service.advanceNow(id);
+}
+
+function workflowFixture(overrides: Partial<LoopedReviewWorkflow> = {}): LoopedReviewWorkflow {
+  const now = "2026-08-03T00:00:00.000Z";
+  return {
+    version: LOOPED_REVIEW_WORKFLOW_VERSION,
+    controller: "backend",
+    id: "workflow-1",
+    environmentId: "env-1",
+    projectId: "project-1",
+    agent: "claude",
+    model: "model",
+    targetBranch: "main",
+    startingAllowance: 1,
+    currentAllowance: 1,
+    currentRound: 1,
+    currentPass: 0,
+    phase: "preparing",
+    rounds: [{ round: 1, allowance: 1, status: "preparing", passes: [], startedAt: now }],
+    activePool: { issues: [], coverageGaps: [] },
+    archivedPools: [],
+    sessions: [],
+    interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+    pr: { status: "pending" },
+    createdAt: now,
+    updatedAt: now,
+    backendRevision: 1,
+    ...overrides,
+  };
 }
 
 describe("LoopedReviewService", () => {
@@ -948,6 +989,106 @@ describe("LoopedReviewService", () => {
       expect(cancelled.sessions[0]?.status).toBe("cancelled");
       expect(provider.abortCount).toBe(2);
       await service.shutdown();
+    });
+  });
+
+  test("finalizes cancellation immediately when no provider session is active", async () => {
+    await harness(async (service, storage) => {
+      const started = await service.start({
+        environmentId: "env-1", projectId: "project-1", agent: "claude",
+        model: "model", targetBranch: "main", allowance: 1,
+      });
+      await service.advanceNow(started.id);
+      const current = await snapshot(storage, started.id);
+      expect(current.sessions).toHaveLength(1);
+      await storage.saveLoopedReviewWorkflow(started.id, "env-1", 2, {
+        ...current,
+        phase: "cancelling",
+        cancellingFromPhase: "preparing",
+        cancellingSince: new Date().toISOString(),
+        activeSessionId: undefined,
+      }, current.backendRevision);
+
+      await service.advanceNow(started.id);
+      const cancelled = await snapshot(storage, started.id);
+      expect(cancelled.phase).toBe("cancelled");
+      expect(cancelled.sessions[0]?.status).toBe("cancelled");
+      expect(cancelled.cancellingSince).toBeUndefined();
+    });
+  });
+
+  test("keeps cancellation waiting when the provider cannot be reached", async () => {
+    await harness(async (service, storage, provider) => {
+      const now = new Date().toISOString();
+      await storage.saveLoopedReviewWorkflow(
+        "workflow-1", "env-1", LOOPED_REVIEW_WORKFLOW_VERSION, workflowFixture({
+          phase: "cancelling",
+          cancellingFromPhase: "preparing",
+          cancellingSince: now,
+          activeSessionId: "session-1",
+          sessions: [{
+            id: "session-1", phase: "preparation", round: 1,
+            sessionKey: "session-key", providerSessionId: "provider-1",
+            requestIds: [], origin: "looped-review",
+            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+            status: "running", startedAt: now,
+          }],
+        }), 0,
+      );
+
+      await service.advanceNow("workflow-1");
+      const cancelling = await snapshot(storage, "workflow-1");
+      expect(cancelling.phase).toBe("cancelling");
+      expect(cancelling.sessions[0]?.error).toContain("Cancellation is waiting for the provider");
+      expect(provider.abortCount).toBe(0);
+    }, "claude", { useProductionProvider: true, bridgeAuthToken: "" });
+  });
+
+  test("force-finalizes a cancellation that exceeds the abort deadline", async () => {
+    await harness(async (service, storage, provider) => {
+      const started = await service.start({
+        environmentId: "env-1", projectId: "project-1", agent: "claude",
+        model: "model", targetBranch: "main", allowance: 1,
+      });
+      await service.advanceNow(started.id);
+      const current = await snapshot(storage, started.id);
+      provider.abortRejectCount = 10;
+      await storage.saveLoopedReviewWorkflow(started.id, "env-1", 2, {
+        ...current,
+        phase: "cancelling",
+        cancellingFromPhase: "discovering",
+        cancellingSince: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      }, current.backendRevision);
+
+      await service.advanceNow(started.id);
+      const cancelled = await snapshot(storage, started.id);
+      expect(cancelled.phase).toBe("cancelled");
+      expect(cancelled.sessions[0]?.error).toContain("Cancellation timed out");
+      expect(provider.abortCount).toBe(0);
+    }, "claude", { cancellationDeadlineMs: 0 });
+  });
+
+  test("preserves the dispatch when the structured read and status probe both fail", async () => {
+    await harness(async (service, storage, provider) => {
+      const started = await service.start({
+        environmentId: "env-1", projectId: "project-1", agent: "claude",
+        model: "model", targetBranch: "main", allowance: 1,
+      });
+      await service.advanceNow(started.id);
+      const firstRequestId = provider.sent[0]!.requestId;
+      provider.structuredRejectCount = 1;
+      provider.statusRejectCount = 1;
+      await service.advanceNow(started.id);
+      const failed = await snapshot(storage, started.id);
+      expect(failed.phase).toBe("failed");
+      expect(failed.dispatch).toBeDefined();
+      expect(failed.failure?.preserveDispatch).toBe(true);
+
+      await service.retry(started.id);
+      await pump(service, started.id, 2);
+      expect((await snapshot(storage, started.id)).phase).toBe("discovering");
+      expect(provider.structuredCount).toBeGreaterThan(1);
+      expect(provider.sent.some((entry) => entry.requestId === firstRequestId)).toBe(true);
     });
   });
 

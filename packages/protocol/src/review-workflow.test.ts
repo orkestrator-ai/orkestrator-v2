@@ -339,5 +339,13 @@ describe("review workflow contract", () => {
     }))).toBe(true);
     expect(isLoopedReviewWorkflow(workflowFixture({ phase: "cancelling" }))).toBe(false);
     expect(isLoopedReviewWorkflow(workflowFixture({ cancellingFromPhase: "discovering" }))).toBe(false);
+    expect(isLoopedReviewWorkflow(workflowFixture({
+      phase: "cancelling", cancellingFromPhase: "discovering",
+      cancellingSince: "2026-08-03T00:00:00.000Z",
+    }))).toBe(true);
+    expect(isLoopedReviewWorkflow(workflowFixture({
+      phase: "cancelling", cancellingFromPhase: "discovering",
+      cancellingSince: 123 as never,
+    }))).toBe(false);
   });
 });

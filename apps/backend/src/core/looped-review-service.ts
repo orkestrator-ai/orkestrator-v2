@@ -74,6 +74,8 @@ const CONTROLLER_RENEW_MS = 5_000;
 const DEFAULT_POLL_MS = 1_000;
 const DEFAULT_MISSING_RESULT_POLLS = 5;
 const INTERACTION_PROCESSING_LEASE_MS = 2 * 60_000;
+/** Hard bound on how long a stuck provider abort is retried before force-cancelling. */
+const CANCELLATION_DEADLINE_MS = 10 * 60_000;
 const MISSING_PROVIDER_SESSION_MESSAGE =
   "The native provider session no longer exists; retry creates a replacement";
 const UNATTENDED_POLICY_INSTRUCTION =
@@ -241,6 +243,8 @@ export interface LoopedReviewServiceOptions {
   /** Test/recovery tuning; production defaults preserve the 15s/5s lease cadence. */
   controllerLeaseMs?: number;
   controllerRenewMs?: number;
+  /** Overrides the hard bound after which a stuck cancellation force-finalizes. */
+  cancellationDeadlineMs?: number;
   provider?: (workflow: LoopedReviewWorkflow) => Promise<BuildPipelineProvider>;
   providerDependencies?: Pick<ProviderDependencies, "openCodeClient" | "monitorRetryMs">;
   onInteractionObservation?: (
@@ -414,6 +418,7 @@ export class LoopedReviewService {
           ? current.pausedFromPhase
           : current.failure?.retryPhase;
       current.phase = "cancelling";
+      current.cancellingSince = nowIso();
       delete current.pausedFromPhase;
       delete current.failure;
     });
@@ -598,6 +603,16 @@ export class LoopedReviewService {
       await this.finalizeCancellation(workflow, token);
       return;
     }
+    // A provider that never confirms the abort must not leave the workflow stuck
+    // in cancelling forever. After the deadline, finalize with an explicit note
+    // so the record becomes terminal and deletable again.
+    const since = workflow.cancellingSince ? Date.parse(workflow.cancellingSince) : Number.NaN;
+    if (Number.isFinite(since)
+      && Date.now() - since >= (this.options.cancellationDeadlineMs ?? CANCELLATION_DEADLINE_MS)) {
+      session.error = "Cancellation timed out; the provider did not confirm the abort in time";
+      await this.finalizeCancellation(workflow, token);
+      return;
+    }
     let provider: BuildPipelineProvider;
     try {
       provider = await this.provider(workflow);
@@ -630,6 +645,7 @@ export class LoopedReviewService {
   private async finalizeCancellation(workflow: LoopedReviewWorkflow, token: string): Promise<void> {
     workflow.phase = "cancelled";
     delete workflow.cancellingFromPhase;
+    delete workflow.cancellingSince;
     delete workflow.dispatch;
     delete workflow.structuredWait;
     delete workflow.pendingInteractionResolution;

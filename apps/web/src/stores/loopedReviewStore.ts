@@ -219,6 +219,7 @@ export interface LoopedReviewWorkflow {
   phase: LoopedReviewPhase;
   pausedFromPhase?: ActiveLoopedReviewPhase;
   cancellingFromPhase?: ActiveLoopedReviewPhase;
+  cancellingSince?: string;
   rounds: LoopedReviewRound[];
   activePool: ReviewFindingPool;
   archivedPools: ArchivedReviewPool[];
@@ -882,6 +883,10 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
     && typeof workflow.createdAt === "string"
     && typeof workflow.updatedAt === "string"
     && isIntegerAtLeast(workflow.backendRevision, 0)
+    && (
+      workflow.cancellingSince === undefined
+      || typeof workflow.cancellingSince === "string"
+    )
     && workflow.rounds.some((round) => round.round === workflow.currentRound)
     && (
       workflow.activeSessionId === undefined

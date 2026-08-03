@@ -17,6 +17,7 @@ import {
   OPTIMISTIC_MESSAGE_PREFIX,
   TURN_STOPPED_BY_USER,
   createOptimisticNativeMessage,
+  isClientOnlyNativeMessage,
 } from "@/lib/chat/client-only-messages";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
@@ -1971,6 +1972,46 @@ export function OpenCodeChatTab({
          */
         const partStreamHealthyBySession = new Set<string>();
 
+        /**
+         * Apply one live message while treating backend user messages as an
+         * authoritative transcript update. OpenCode emits a fresh id for the
+         * user prompt, so a plain id-based upsert would leave the optimistic
+         * bubble beside its backend echo until the final transcript refresh.
+         * Feeding the server-owned projection through `setMessages` lets the
+         * store's fingerprint reconciliation retire the matching optimistic
+         * message as soon as the live user message has its text/file parts.
+         */
+        const upsertLiveMessage = (
+          sessionTabId: string,
+          message: OpenCodeMessage,
+        ) => {
+          if (
+            message.role !== "user"
+            || message.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX)
+          ) {
+            upsertMessage(sessionTabId, message);
+            return;
+          }
+
+          const currentMessages = useOpenCodeStore
+            .getState()
+            .sessions.get(sessionTabId)?.messages;
+          if (!currentMessages) return;
+
+          const authoritativeMessages = currentMessages.filter(
+            (candidate) => !isClientOnlyNativeMessage(candidate),
+          );
+          const existingIndex = authoritativeMessages.findIndex(
+            (candidate) => candidate.id === message.id,
+          );
+          if (existingIndex === -1) {
+            authoritativeMessages.push(message);
+          } else {
+            authoritativeMessages[existingIndex] = message;
+          }
+          setMessages(sessionTabId, authoritativeMessages);
+        };
+
         const applyPartUpdate = (
           sessionTabId: string,
           rawPart: unknown,
@@ -1986,7 +2027,7 @@ export function OpenCodeChatTab({
           const existingMessage = sessionState?.messages.find(
             (message) => message.id === part.sourceMessageId,
           );
-          upsertMessage(
+          upsertLiveMessage(
             sessionTabId,
             buildOpenCodeMessageFromPart(
               existingMessage,
@@ -2015,7 +2056,7 @@ export function OpenCodeChatTab({
             : undefined;
           const merged = mergeOpenCodeMessageInfo(existingMessage, rawInfo);
           if (!merged) return false;
-          upsertMessage(sessionTabId, merged);
+          upsertLiveMessage(sessionTabId, merged);
           if (
             merged.role === "user"
             && !merged.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX)

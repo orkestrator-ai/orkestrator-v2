@@ -5494,6 +5494,58 @@ describe("OpenCodeChatTab", () => {
       channel.close();
     });
 
+    test("replaces an optimistic prompt with its streamed backend echo", async () => {
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [{
+        ...nativeMessage("optimistic-current", "Please address all the issues"),
+        id: `${OPTIMISTIC_MESSAGE_PREFIX}current`,
+        role: "user",
+      }]);
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      mockGetSessionMessages.mockClear();
+
+      // OpenCode announces the user message before streaming its text part.
+      channel.push({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "server-current-user",
+            sessionID: "session-1",
+            role: "user",
+            time: { created: Date.parse("2026-07-16T12:04:57.000Z") },
+          },
+        },
+      });
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "server-current-user-text",
+            messageID: "server-current-user",
+            sessionID: "session-1",
+            type: "text",
+            text: "Please address all the issues",
+          },
+        },
+      });
+
+      await waitFor(() => {
+        const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({
+          id: "server-current-user",
+          role: "user",
+          content: "Please address all the issues",
+        });
+      });
+      expect(mockGetSessionMessages).not.toHaveBeenCalled();
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
     test("uses a newly observed backend user clock when it precedes the busy edge", async () => {
       const observedBusyAt = Date.parse("2026-07-16T12:05:00.000Z");
       const backendStartedAt = Date.parse("2026-07-16T12:04:58.000Z");

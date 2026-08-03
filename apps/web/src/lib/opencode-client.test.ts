@@ -2514,6 +2514,36 @@ describe("opencode-client getOpenCodePartKey", () => {
   test("returns null when the part has no source identity", () => {
     expect(getOpenCodePartKey({ type: "text", content: "x" })).toBeNull();
   });
+
+  test("includes the file url so two attachments of a message stay distinct", () => {
+    // Deliberate asymmetry with getPartFingerprint, which excludes fileUrl:
+    // this key identifies a part *within one message* for in-place streaming
+    // replacement, where the client and server URL never disagree.
+    const first = getOpenCodePartKey({
+      type: "file",
+      content: "logo.png",
+      fileUrl: "file:///one/logo.png",
+      sourceMessageId: "m1",
+    });
+    const second = getOpenCodePartKey({
+      type: "file",
+      content: "logo.png",
+      fileUrl: "file:///two/logo.png",
+      sourceMessageId: "m1",
+    });
+
+    expect(first).toBe("m1:file:file:///one/logo.png:logo.png");
+    expect(first).not.toBe(second);
+  });
+
+  test("collapses two empty-content file parts of one message onto the same key", () => {
+    // `.filter(Boolean)` drops empty segments, so parts that differ only in an
+    // absent field share a key and overwrite each other during streaming.
+    const key = getOpenCodePartKey({ type: "file", content: "", sourceMessageId: "m1" });
+
+    expect(key).toBe("m1:file");
+    expect(getOpenCodePartKey({ type: "file", content: "", sourceMessageId: "m1" })).toBe(key);
+  });
 });
 
 describe("opencode-client buildOpenCodeMessageFromPart", () => {
@@ -2626,6 +2656,129 @@ describe("opencode-client buildOpenCodeMessageFromPart", () => {
     expect(updated.turnId).toBe("turn-1");
     expect(updated.providerUsage).toEqual(existing.providerUsage);
   });
+
+  test("seeds role and createdAt from a partial base carrying no parts", () => {
+    // This is the shape OpenCodeChatTab supplies when a part streams in before
+    // its `message.updated`: the echo's role/createdAt are known from the
+    // pending optimistic bubble, but none of its parts are.
+    const message = buildOpenCodeMessageFromPart(
+      { role: "user", createdAt: "2026-04-15T10:00:01.000Z" },
+      "server-early",
+      {
+        type: "text",
+        content: "Hello from the part",
+        sourcePartId: "p1",
+        sourceMessageId: "server-early",
+      },
+    );
+
+    expect(message).toMatchObject({
+      id: "server-early",
+      role: "user",
+      content: "Hello from the part",
+      createdAt: "2026-04-15T10:00:01.000Z",
+    });
+    expect(message.parts).toHaveLength(1);
+  });
+
+  test("keeps a user role across a follow-up part of the same message", () => {
+    const seeded = buildOpenCodeMessageFromPart(
+      { role: "user", createdAt: "2026-04-15T10:00:01.000Z" },
+      "server-early",
+      { type: "text", content: "Look", sourcePartId: "p1", sourceMessageId: "server-early" },
+    );
+
+    const withFile = buildOpenCodeMessageFromPart(seeded, "server-early", {
+      type: "file",
+      content: "a.png",
+      fileUrl: "file:///workspace/a.png",
+      sourcePartId: "p2",
+      sourceMessageId: "server-early",
+    });
+
+    expect(withFile.role).toBe("user");
+    expect(withFile.parts).toHaveLength(2);
+    // Aggregate content is recomputed from text parts only.
+    expect(withFile.content).toBe("Look");
+  });
+
+  test("yields empty content when the first part of a message is a file", () => {
+    const message = buildOpenCodeMessageFromPart(
+      { role: "user", createdAt: "2026-04-15T10:00:01.000Z" },
+      "server-file-first",
+      {
+        type: "file",
+        content: "a.png",
+        fileUrl: "file:///workspace/a.png",
+        sourcePartId: "p1",
+        sourceMessageId: "server-file-first",
+      },
+    );
+
+    expect(message.role).toBe("user");
+    expect(message.content).toBe("");
+    expect(message.parts).toHaveLength(1);
+  });
+
+  test("drops the delta when no existing part matches", () => {
+    const message = buildOpenCodeMessageFromPart(
+      undefined,
+      "message-1",
+      { type: "text", content: "", sourcePartId: "p1", sourceMessageId: "message-1" },
+      "lo",
+    );
+
+    // There is nothing to append to, so the empty part is stored as-is rather
+    // than inventing a message body from a fragment.
+    expect(message.content).toBe("");
+    expect(message.parts).toHaveLength(1);
+  });
+
+  test("drops the delta when the matched part has a different type", () => {
+    const existing: OpenCodeMessage = {
+      id: "message-1",
+      role: "assistant",
+      content: "",
+      parts: [{
+        type: "file",
+        content: "a.png",
+        sourcePartId: "p1",
+        sourceMessageId: "message-1",
+      }],
+      createdAt: new Date(0).toISOString(),
+    };
+
+    const updated = buildOpenCodeMessageFromPart(
+      existing,
+      "message-1",
+      { type: "text", content: "", sourcePartId: "p1", sourceMessageId: "message-1" },
+      "lo",
+    );
+
+    expect(updated.parts).toHaveLength(1);
+    expect(updated.parts[0]).toMatchObject({ type: "text", content: "" });
+  });
+
+  test("carries message-level metadata from the supplied base onto the new id", () => {
+    // `existing` is spread wholesale, so a caller passing another message's
+    // metadata would relabel this one. Pinned so the coupling is visible.
+    const updated = buildOpenCodeMessageFromPart(
+      {
+        role: "assistant",
+        createdAt: "2026-04-15T10:00:00.000Z",
+        modelId: "anthropic/claude-sonnet-4",
+        turnId: "turn-9",
+      },
+      "message-2",
+      { type: "text", content: "Hi", sourcePartId: "p1", sourceMessageId: "message-2" },
+    );
+
+    expect(updated).toMatchObject({
+      id: "message-2",
+      modelId: "anthropic/claude-sonnet-4",
+      turnId: "turn-9",
+    });
+  });
 });
 
 describe("opencode-client incremental message helpers", () => {
@@ -2657,6 +2810,41 @@ describe("opencode-client incremental message helpers", () => {
     )?.hasError).toBeUndefined();
     expect(mergeOpenCodeMessageInfo(existing, null)).toBeNull();
     expect(mergeOpenCodeMessageInfo(existing, {})).toBeNull();
+  });
+
+  test("keeps the existing createdAt rather than adopting the incoming clock", () => {
+    // Consequence worth pinning: when a part streamed in before its info frame
+    // and seeded createdAt from the optimistic bubble, the later info frame
+    // does not replace that client send time with the server's.
+    const existing: OpenCodeMessage = {
+      id: "message-1",
+      role: "user",
+      content: "Run the tests",
+      parts: [{ type: "text", content: "Run the tests" }],
+      createdAt: "2026-04-15T10:00:01.000Z",
+    };
+
+    const merged = mergeOpenCodeMessageInfo(existing, {
+      id: "message-1",
+      role: "user",
+      time: { created: Date.parse("2026-04-15T10:00:09.000Z") },
+    });
+
+    expect(merged?.createdAt).toBe("2026-04-15T10:00:01.000Z");
+  });
+
+  test("adopts the authoritative role from a later info frame", () => {
+    const existing: OpenCodeMessage = {
+      id: "message-1",
+      role: "user",
+      content: "Run the tests",
+      parts: [{ type: "text", content: "Run the tests" }],
+      createdAt: "2026-04-15T10:00:01.000Z",
+    };
+
+    expect(
+      mergeOpenCodeMessageInfo(existing, { id: "message-1", role: "assistant" })?.role,
+    ).toBe("assistant");
   });
 
   test("preserves hydrated child actions and terminal state during a cheap refresh", () => {

@@ -16,7 +16,11 @@ import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import {
   OPTIMISTIC_MESSAGE_PREFIX,
   TURN_STOPPED_BY_USER,
+  carryOverMessagesAddedDuringFetch,
   createOptimisticNativeMessage,
+  isClientOnlyNativeMessage,
+  isOptimisticNativeMessage,
+  normalizeMessageContent,
 } from "@/lib/chat/client-only-messages";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
@@ -61,6 +65,7 @@ import {
   type QuestionRequest,
   type OpenCodeConversationMode,
   type OpenCodeMessage,
+  type OpenCodeMessagePart,
   type OpenCodeSlashCommand,
   type OpenCodeModel,
   type OpenCodeModelDefaults,
@@ -1910,6 +1915,16 @@ export function OpenCodeChatTab({
             pendingReloads.delete(reloadKey);
             const now = Date.now();
             lastReloadTimeBySession.set(reloadKey, now);
+            /**
+             * The transcript GET below is a point-in-time read, but live frames
+             * keep applying while it is outstanding. Record what the store held
+             * when the request started so anything that arrives in the gap can
+             * be carried over instead of being erased by an older snapshot.
+             */
+            const idsBeforeFetch = new Set(
+              (useOpenCodeStore.getState().sessions.get(sessionKey)?.messages ?? [])
+                .map((message) => message.id),
+            );
             try {
               const messages = await getSessionMessages(sdkClient, sessionId, {
                 throwOnError: true,
@@ -1920,12 +1935,17 @@ export function OpenCodeChatTab({
                 .getState()
                 .sessions.get(sessionKey);
               if (currentSession?.sessionId !== sessionId) return;
-              const reconciledMessages = includeSubagents
+              const hydratedMessages = includeSubagents
                 ? messages
                 : carryOverOpenCodeSubagentHydration(
                     currentSession.messages,
                     messages,
                   );
+              const reconciledMessages = carryOverMessagesAddedDuringFetch(
+                hydratedMessages,
+                currentSession.messages,
+                idsBeforeFetch,
+              );
               setMessages(sessionKey, reconciledMessages);
               if (currentSession.isLoading) {
                 setSessionLoading(
@@ -1971,6 +1991,101 @@ export function OpenCodeChatTab({
          */
         const partStreamHealthyBySession = new Set<string>();
 
+        /**
+         * Apply one live message while treating backend user messages as an
+         * authoritative transcript update. OpenCode emits a fresh id for the
+         * user prompt, so a plain id-based upsert would leave the optimistic
+         * bubble beside its backend echo until the final transcript refresh.
+         * Feeding the server-owned projection through `setMessages` lets the
+         * store's fingerprint reconciliation retire the matching optimistic
+         * message as soon as the live user message has its text/file parts.
+         * The fingerprint ignores attachment URL encoding (see
+         * `client-only-messages.ts`), so attachment-carrying prompts are
+         * retired here too rather than only on the final refresh.
+         *
+         * Returns false when the session is no longer in the store, so the
+         * caller can fall back to a refetch instead of reporting a healthy
+         * part stream for a write that applied nothing.
+         */
+        const upsertLiveMessage = (
+          sessionTabId: string,
+          message: OpenCodeMessage,
+        ): boolean => {
+          const currentMessages = useOpenCodeStore
+            .getState()
+            .sessions.get(sessionTabId)?.messages;
+          if (!currentMessages) return false;
+
+          if (
+            message.role !== "user"
+            || message.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX)
+          ) {
+            upsertMessage(sessionTabId, message);
+            return true;
+          }
+
+          const authoritativeMessages = currentMessages.filter(
+            (candidate) => !isClientOnlyNativeMessage(candidate),
+          );
+          const existingIndex = authoritativeMessages.findIndex(
+            (candidate) => candidate.id === message.id,
+          );
+          if (existingIndex === -1) {
+            authoritativeMessages.push(message);
+          } else {
+            authoritativeMessages[existingIndex] = message;
+          }
+          setMessages(sessionTabId, authoritativeMessages);
+          return true;
+        };
+
+        /**
+         * Seed the role/createdAt for a streamed part whose message the store
+         * has never seen. OpenCode announces a message (`message.updated`)
+         * before streaming its parts, but if the info frame is ever missed the
+         * part would otherwise be built with the assistant fallback and render
+         * the prompt as an assistant message. Matching the part against the
+         * pending optimistic bubble both restores the user role and lets
+         * `upsertLiveMessage` retire the bubble in the same write.
+         *
+         * A `file` part matches on the attachment's name against the
+         * optimistic message's file parts, because an attachment-carrying
+         * prompt can present its file part first — text-only matching would
+         * stamp that message `assistant`, and every later part of the same
+         * message then inherits that wrong role from the store.
+         *
+         * Text is compared whole, not by prefix: a user echo carries the
+         * complete prompt in one frame, whereas a prefix rule would let the
+         * first delta of an unrelated assistant message claim a pending
+         * bubble.
+         */
+        const findOptimisticEchoBase = (
+          messages: OpenCodeMessage[] | undefined,
+          part: OpenCodeMessagePart,
+        ): Pick<OpenCodeMessage, "role" | "createdAt"> | undefined => {
+          if (!messages || (part.type !== "text" && part.type !== "file")) {
+            return undefined;
+          }
+          const partContent = normalizeMessageContent(part.content);
+          if (!partContent) return undefined;
+          for (const candidate of messages) {
+            if (!isOptimisticNativeMessage(candidate) || candidate.role !== "user") {
+              continue;
+            }
+            const matches = part.type === "text"
+              ? normalizeMessageContent(candidate.content) === partContent
+              : candidate.parts.some(
+                  (candidatePart) =>
+                    candidatePart.type === "file"
+                    && normalizeMessageContent(candidatePart.content) === partContent,
+                );
+            if (matches) {
+              return { role: "user", createdAt: candidate.createdAt };
+            }
+          }
+          return undefined;
+        };
+
         const applyPartUpdate = (
           sessionTabId: string,
           rawPart: unknown,
@@ -1986,15 +2101,19 @@ export function OpenCodeChatTab({
           const existingMessage = sessionState?.messages.find(
             (message) => message.id === part.sourceMessageId,
           );
-          upsertMessage(
+          const applied = upsertLiveMessage(
             sessionTabId,
             buildOpenCodeMessageFromPart(
-              existingMessage,
+              existingMessage ?? findOptimisticEchoBase(sessionState?.messages, part),
               part.sourceMessageId,
               part,
               delta,
             ),
           );
+          if (!applied) {
+            partStreamHealthyBySession.delete(sessionTabId);
+            return null;
+          }
           partStreamHealthyBySession.add(sessionTabId);
           return part;
         };
@@ -2015,7 +2134,7 @@ export function OpenCodeChatTab({
             : undefined;
           const merged = mergeOpenCodeMessageInfo(existingMessage, rawInfo);
           if (!merged) return false;
-          upsertMessage(sessionTabId, merged);
+          if (!upsertLiveMessage(sessionTabId, merged)) return false;
           if (
             merged.role === "user"
             && !merged.id.startsWith(OPTIMISTIC_MESSAGE_PREFIX)

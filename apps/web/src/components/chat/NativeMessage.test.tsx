@@ -162,6 +162,64 @@ describe("NativeMessage assistant attribution", () => {
     expect(screen.getByText("You")).toBeTruthy();
     expect(screen.queryByText("gpt-5.6-sol")).toBeNull();
   });
+
+  test("hides the model label on an empty assistant message with no streamed content", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([], {
+          id: "assistant-empty",
+          modelId: "gpt-5.6-sol",
+        })}
+        resolveModelLabel={() => "GPT 5.6 Sol"}
+      />,
+    );
+
+    expect(screen.queryByText("GPT 5.6 Sol")).toBeNull();
+    expect(screen.queryByText("gpt-5.6-sol")).toBeNull();
+  });
+
+  test("shows the model label on the first content-bearing message of a block", () => {
+    // An info-only empty message precedes the streamed content in the same
+    // minute; the empty block stays unlabeled and attribution lands once.
+    const emptyPrevious = makeMessage([], {
+      id: "assistant-empty-before-content",
+      modelId: "gpt-5.6-sol",
+    });
+    render(
+      <NativeMessage
+        message={makeMessage(
+          [{ type: "text", content: "Streamed answer" }],
+          { id: "assistant-content", modelId: "gpt-5.6-sol" },
+        )}
+        previousMessage={emptyPrevious}
+        resolveModelLabel={() => "GPT 5.6 Sol"}
+      />,
+    );
+
+    expect(screen.getByText("GPT 5.6 Sol")).toBeTruthy();
+    expect(screen.getAllByText("GPT 5.6 Sol")).toHaveLength(1);
+  });
+
+  test("drops the model label on same-minute assistant continuations", () => {
+    const previousContent = makeMessage([{ type: "text", content: "First chunk" }], {
+      id: "assistant-content-start",
+      modelId: "gpt-5.6-sol",
+    });
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Second chunk" }], {
+          id: "assistant-content-continuation",
+          modelId: "gpt-5.6-sol",
+        })}
+        previousMessage={previousContent}
+        resolveModelLabel={() => "GPT 5.6 Sol"}
+      />,
+    );
+
+    // The continuation keeps its timestamp row but must not repeat the model.
+    expect(screen.queryByText("GPT 5.6 Sol")).toBeNull();
+    expect(screen.getByRole("button", { name: "Copy text" })).toBeTruthy();
+  });
 });
 
 describe("NativeMessage task list rendering", () => {
@@ -2564,13 +2622,15 @@ describe("NativeMessage part routing and message-level fallbacks", () => {
     expect(container.textContent).not.toContain("unknown payload");
   });
 
-  test("renders no body and no copy control for an empty assistant message", () => {
+  test("renders no body, no attribution, and no copy control for an empty assistant message", () => {
     const { container } = render(
       <NativeMessage message={makeMessage([], { id: "assistant-empty", content: "" })} />,
     );
 
     expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
-    expect(container.textContent).toContain("Assistant");
+    // An info-only message with no streamed content must not carry a dangling
+    // model attribution; the label appears only once real content lands.
+    expect(container.textContent).not.toContain("Assistant");
   });
 
   test("copies assistant message content when the message has no text parts", async () => {

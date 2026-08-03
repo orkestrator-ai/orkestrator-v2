@@ -67,6 +67,7 @@ import {
 import {
   isBackgroundTaskActionTool,
   isBackgroundTaskStopTool,
+  messageHasVisibleContent,
   normalizeNativeMessage,
 } from "@/lib/chat/native-message-adapters";
 import { writeText } from "@/lib/native/clipboard";
@@ -1838,6 +1839,18 @@ export const NativeMessage = memo(function NativeMessage({
     : assistantLabel;
 
   const hasTextParts = message.parts.some((part) => part.type === "text");
+  const hasContent = messageHasVisibleContent(message);
+  const previousHasContent = previousMessage
+    ? messageHasVisibleContent(previousMessage)
+    : false;
+  // Attribution belongs on the first content-bearing message of a transcript
+  // block. Empty assistant messages (an info-only `message.updated` before any
+  // part streams) render no footer at all, and same-block continuations drop
+  // the model label so it is not repeated for every streamed chunk.
+  const showAssistantFooter =
+    !isUser && !isSystem && !isError && hasContent;
+  const showAssistantAuthorLabel =
+    showAssistantFooter && (!isContinuation || !previousHasContent);
   const userCopyContent = isUser
     ? (
         message.parts
@@ -1917,6 +1930,8 @@ export const NativeMessage = memo(function NativeMessage({
         timestampLabel={formatTime(message.createdAt)}
         durationLabel={durationLabel}
         showHeader={!isContinuation}
+        showFooter={isUser || showAssistantFooter}
+        showAuthorLabel={showAssistantAuthorLabel}
         className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
         onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
         actions={(isUser ? userCopyContent : assistantCopyContent) || messageActions ? (

@@ -8,6 +8,7 @@ import {
   getClaudeSourceMessageId,
   groupNativeAgentActivity,
   groupNativeToolActivity,
+  messageHasVisibleContent,
   normalizeClaudeMessage,
   normalizeClaudeMessages,
   normalizeClaudeMessagesForDisplay,
@@ -1913,5 +1914,81 @@ describe("normalization identity cache", () => {
       normalizeClaudeMessagesForDisplay([claudeMessage]),
     ];
     expect(firstRows[0]).toBe(secondRows[0]!);
+  });
+});
+
+describe("messageHasVisibleContent", () => {
+  const makeMessage = (
+    parts: NativeMessage["parts"],
+    content = "",
+  ): NativeMessage => ({
+    id: "native-content-1",
+    role: "assistant",
+    content,
+    createdAt: "2026-06-18T12:00:00.000Z",
+    parts,
+  });
+
+  test("treats an info-only message with no parts as empty", () => {
+    expect(messageHasVisibleContent(makeMessage([]))).toBe(false);
+  });
+
+  test("treats concatenated text content as visible", () => {
+    expect(messageHasVisibleContent(makeMessage([], "Streamed answer"))).toBe(true);
+  });
+
+  test("treats non-empty text and thinking parts as visible", () => {
+    expect(
+      messageHasVisibleContent(
+        makeMessage([{ type: "text", content: "Answer" }]),
+      ),
+    ).toBe(true);
+    expect(
+      messageHasVisibleContent(
+        makeMessage([{ type: "thinking", content: "Reasoning" }]),
+      ),
+    ).toBe(true);
+  });
+
+  test("treats an empty text part as empty until content streams in", () => {
+    expect(
+      messageHasVisibleContent(makeMessage([{ type: "text", content: "" }])),
+    ).toBe(false);
+  });
+
+  test("treats a lone tool result as empty since it renders nothing", () => {
+    expect(
+      messageHasVisibleContent(
+        makeMessage([{ type: "tool-result", content: "" }]),
+      ),
+    ).toBe(false);
+  });
+
+  test("treats tool invocations, files, and agent activity as visible", () => {
+    expect(
+      messageHasVisibleContent(
+        makeMessage([
+          { type: "tool-invocation", content: "", toolName: "Read", toolState: "success" },
+        ]),
+      ),
+    ).toBe(true);
+    expect(
+      messageHasVisibleContent(
+        makeMessage([{ type: "file", content: "/tmp/a.txt" }]),
+      ),
+    ).toBe(true);
+    expect(
+      messageHasVisibleContent(
+        makeMessage([
+          {
+            type: "subagent",
+            content: "Reviewer",
+            subagentName: "Reviewer",
+            toolState: "pending",
+            subagentActions: [],
+          },
+        ]),
+      ),
+    ).toBe(true);
   });
 });

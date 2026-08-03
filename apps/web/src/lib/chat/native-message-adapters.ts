@@ -337,6 +337,32 @@ export function dropEmptyThinkingParts(
 }
 
 /**
+ * Whether a normalized message renders any visible content.
+ *
+ * A provider can materialize an assistant message from message-level metadata
+ * alone (OpenCode's `message.updated` info payload) before any parts stream in.
+ * Such a block has nothing to attribute, so the model label would flicker or
+ * duplicate once the real content lands in a sibling message. Attribution
+ * therefore only applies to messages this helper says carry content.
+ */
+export function messageHasVisibleContent(message: NativeMessage): boolean {
+  if (message.content.trim().length > 0) return true;
+  return message.parts.some((part) => {
+    switch (part.type) {
+      case "text":
+      case "thinking":
+        return part.content.trim().length > 0;
+      // Tool results are rendered inline with their invocation, never on their
+      // own, so a message holding only results is still an empty block.
+      case "tool-result":
+        return false;
+      default:
+        return true;
+    }
+  });
+}
+
+/**
  * Identity cache for normalized messages.
  *
  * `normalizeNativeMessage` is pure in its input object, but the transcript

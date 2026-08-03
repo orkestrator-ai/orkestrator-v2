@@ -320,6 +320,24 @@ describe("ReviewLaunchDialog", () => {
     });
   });
 
+  test("swaps the model list for the searchable picker when OpenCode is chosen", () => {
+    renderDialog({
+      preferredModels: { opencode: "provider/model-a" },
+      opencodeFavoriteModelIds: ["provider/model-a"],
+    });
+
+    // The searchable OpenCode picker exposes the catalogue in a combobox with
+    // aria-expanded; the plain Select does not.
+    const modelTrigger = screen.getByRole("combobox", { name: "Model" });
+    expect(modelTrigger.hasAttribute("aria-expanded")).toBe(false);
+
+    fireEvent.click(screen.getByRole("radio", { name: /^OpenCode/ }));
+
+    const openCodeTrigger = screen.getByRole("combobox", { name: "Model" });
+    expect(openCodeTrigger.getAttribute("aria-expanded")).not.toBeNull();
+    expect(openCodeTrigger.textContent).toContain("OpenCode A");
+  });
+
   test("closes without launching when cancelled", () => {
     const onOpenChange = mock((_open: boolean) => undefined);
     const { onConfirm } = renderDialog({ onOpenChange });

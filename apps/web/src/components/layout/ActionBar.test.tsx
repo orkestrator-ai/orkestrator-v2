@@ -64,9 +64,13 @@ const readLocalFileMock = mock(async (_worktreePath: string, _path: string) => (
 const setEnvironmentPrBackendMock = mock(async (
   _environmentId: string,
   _prUrl: string,
-  _prState: string,
-  _hasMergeConflicts: boolean,
+  _kind: "external" | "internal",
 ) => {});
+const getOpencodeModelPreferencesMock = mock(async () => ({
+  recent: [],
+  favorite: [],
+  variant: {},
+}));
 const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => true);
 const createLoopedWorkflowMock = mock((_options: unknown) => "looped-workflow-1");
@@ -531,6 +535,7 @@ mock.module("@/lib/backend", () => ({
   readLocalFile: readLocalFileMock,
   recreateEnvironment: recreateEnvironmentMock,
   setEnvironmentPr: setEnvironmentPrBackendMock,
+  getOpencodeModelPreferences: getOpencodeModelPreferencesMock,
 }));
 
 mock.module("@/stores/kanbanStore", () => ({

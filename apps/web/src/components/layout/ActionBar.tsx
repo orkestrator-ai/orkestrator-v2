@@ -89,6 +89,10 @@ import {
   resolveDefaultReviewTabType,
 } from "@/lib/review-launch-options";
 import {
+  normalizeOpenCodeModelPreferences,
+  openCodeModelRefToId,
+} from "@/lib/opencode-model-preferences";
+import {
   LazyDialogLoadingFallback,
   LazyLoadBoundary,
 } from "@/components/LazyLoadBoundary";
@@ -277,10 +281,38 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   selectedEnvironmentIdRef.current = selectedEnvironmentId;
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [loopedReviewDialogOpen, setLoopedReviewDialogOpen] = useState(false);
+  const [opencodeFavoriteModelIds, setOpencodeFavoriteModelIds] = useState<string[]>([]);
   const reviewLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewClickSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reviewLongPressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const suppressReviewClickRef = useRef(false);
+
+  // OpenCode model preferences live in the TUI's global state file, so they can
+  // be fetched once on mount and shared by both review dialogs. The favorite
+  // ids drive the favorites-first ordering in the searchable OpenCode picker.
+  useEffect(() => {
+    let cancelled = false;
+    void backend.getOpencodeModelPreferences()
+      .then((rawPreferences) => {
+        if (cancelled) return;
+        const preferences = normalizeOpenCodeModelPreferences(rawPreferences);
+        const ids: string[] = [];
+        const seen = new Set<string>();
+        for (const favorite of preferences.favorite) {
+          const modelId = openCodeModelRefToId(favorite);
+          if (!modelId || seen.has(modelId)) continue;
+          seen.add(modelId);
+          ids.push(modelId);
+        }
+        setOpencodeFavoriteModelIds(ids);
+      })
+      .catch((error) => {
+        console.warn("[ActionBar] Failed to load OpenCode model preferences:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Drag-to-scroll state for toolbar
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -1971,6 +2003,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredReasoningEfforts={{
           codex: config.global.codexReasoningEffort,
         }}
+        opencodeFavoriteModelIds={opencodeFavoriteModelIds}
         onConfirm={handleConfiguredReview}
       />
       <ReviewLaunchDialog
@@ -1994,6 +2027,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredReasoningEfforts={{
           codex: config.global.codexReasoningEffort,
         }}
+        opencodeFavoriteModelIds={opencodeFavoriteModelIds}
         onConfirm={handleLoopedReview}
       />
 

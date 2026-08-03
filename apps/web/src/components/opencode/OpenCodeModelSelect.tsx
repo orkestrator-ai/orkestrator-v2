@@ -24,6 +24,10 @@ interface OpenCodeModelSelectProps {
   onValueChange: (value: string) => void;
   disabled?: boolean;
   className?: string;
+  /** Render the selected model's description under its name in the trigger. */
+  showDescriptionInTrigger?: boolean;
+  /** Text shown in the trigger when there are no options at all. */
+  emptyLabel?: string;
 }
 
 export function filterAndOrderOpenCodeModels(
@@ -126,6 +130,8 @@ export function OpenCodeModelSelect({
   onValueChange,
   disabled = false,
   className,
+  showDescriptionInTrigger = false,
+  emptyLabel = "No models cached",
 }: OpenCodeModelSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -201,8 +207,15 @@ export function OpenCodeModelSelect({
             className,
           )}
         >
-          <span className="truncate">
-            {selected?.name ?? (options.length ? "Select model" : "No models cached")}
+          <span className="flex min-w-0 flex-1 flex-col items-start text-left">
+            <span className="truncate">
+              {selected?.name ?? (options.length ? "Select model" : emptyLabel)}
+            </span>
+            {showDescriptionInTrigger && selected?.description && (
+              <span className="truncate text-[11px] font-normal text-muted-foreground">
+                {selected.description}
+              </span>
+            )}
           </span>
           <ChevronDown className="size-4 shrink-0 text-muted-foreground opacity-50" />
         </button>

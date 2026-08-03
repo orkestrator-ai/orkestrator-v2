@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AgentRadioGroup } from "@/components/agents/AgentRadioGroup";
+import { OpenCodeModelSelect } from "@/components/opencode/OpenCodeModelSelect";
 import {
   defaultEffortFor,
   effortLabel,
@@ -124,6 +125,11 @@ interface ReviewLaunchDialogProps {
   catalog: ReviewModelCatalog;
   preferredModels?: Partial<Record<ReviewAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<ReviewAgent, string>>;
+  /**
+   * OpenCode `provider/model` ids pinned as favorites in the OpenCode TUI.
+   * Rendered first in the searchable OpenCode model list.
+   */
+  opencodeFavoriteModelIds?: string[];
   kind?: "review" | "looped";
   onConfirm: (selection: ReviewLaunchSelection) => void;
 }
@@ -135,6 +141,7 @@ export function ReviewLaunchDialog({
   catalog,
   preferredModels,
   preferredReasoningEfforts,
+  opencodeFavoriteModelIds,
   kind = "review",
   onConfirm,
 }: ReviewLaunchDialogProps) {
@@ -296,35 +303,48 @@ export function ReviewLaunchDialog({
               <Label htmlFor="review-model" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
                 Model
               </Label>
-              <Select value={selectedModel?.id ?? model} onValueChange={handleModelChange}>
-                <SelectTrigger
+              {agent === "opencode" ? (
+                <OpenCodeModelSelect
                   id="review-model"
-                  className="min-h-11 w-full border-zinc-700/80 bg-zinc-900 py-2.5 data-[size=default]:h-auto"
-                >
-                  <span className="flex min-w-0 flex-1 flex-col text-left">
-                    <span className="truncate text-sm">{selectedModel?.name ?? "Choose a model"}</span>
-                    {selectedModel?.description && (
-                      <span className="truncate text-[11px] font-normal text-zinc-500">
-                        {selectedModel.description}
-                      </span>
-                    )}
-                  </span>
-                </SelectTrigger>
-                <SelectContent position="popper" className="max-h-72">
-                  {models.map((option) => (
-                    <SelectItem key={option.id} value={option.id} className="py-2">
-                      <span>
-                        <span className="block">{option.name}</span>
-                        {option.description && (
-                          <span className="block max-w-[28rem] truncate text-[11px] text-zinc-500">
-                            {option.description}
-                          </span>
-                        )}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  value={selectedModel?.id ?? model}
+                  options={models}
+                  favoriteModelIds={opencodeFavoriteModelIds ?? []}
+                  onValueChange={handleModelChange}
+                  showDescriptionInTrigger
+                  emptyLabel="Choose a model"
+                  className="min-h-11"
+                />
+              ) : (
+                <Select value={selectedModel?.id ?? model} onValueChange={handleModelChange}>
+                  <SelectTrigger
+                    id="review-model"
+                    className="min-h-11 w-full border-zinc-700/80 bg-zinc-900 py-2.5 data-[size=default]:h-auto"
+                  >
+                    <span className="flex min-w-0 flex-1 flex-col text-left">
+                      <span className="truncate text-sm">{selectedModel?.name ?? "Choose a model"}</span>
+                      {selectedModel?.description && (
+                        <span className="truncate text-[11px] font-normal text-zinc-500">
+                          {selectedModel.description}
+                        </span>
+                      )}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent position="popper" className="max-h-72">
+                    {models.map((option) => (
+                      <SelectItem key={option.id} value={option.id} className="py-2">
+                        <span>
+                          <span className="block">{option.name}</span>
+                          {option.description && (
+                            <span className="block max-w-[28rem] truncate text-[11px] text-zinc-500">
+                              {option.description}
+                            </span>
+                          )}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </Step>
 
             <Step

@@ -6306,6 +6306,117 @@ Running 1 Explore agent...
     await waitFor(() => expect(textarea.disabled).toBe(false));
   });
 
+  test("renders no dangling model label for an empty assistant placeholder", async () => {
+    // End-to-end over the real VirtualizedMessageList and real NativeMessage.
+    // `compactConsecutiveAssistantMessages` already merges a placeholder into
+    // the content that follows it, so the case that survives to the renderer is
+    // a placeholder with nothing after it — which must render no row at all
+    // rather than a model label floating above blank space.
+    const messages: ClaudeMessageType[] = [
+      {
+        id: "msg-user",
+        role: "user" as const,
+        content: "Question",
+        parts: [{ type: "text" as const, content: "Question" }],
+        timestamp: "2026-03-07T12:00:00.000Z",
+      },
+      {
+        id: "msg-empty",
+        role: "assistant" as const,
+        content: "",
+        parts: [],
+        timestamp: "2026-03-07T12:00:20.000Z",
+        modelId: "claude-test-model",
+      },
+    ];
+    const current = useClaudeTmuxStore.getState().getTab("tab-1");
+    useClaudeTmuxStore.setState({
+      tabs: new Map([
+        [
+          "tab-1",
+          {
+            ...current,
+            environmentId: "env-1",
+            sessionId: "session-1",
+            running: true,
+            busy: false,
+            messages,
+          },
+        ],
+      ]),
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("Question")).toBeTruthy();
+    expect(screen.queryByText("claude-test-model")).toBeNull();
+  });
+
+  test("attributes a compacted reply once and dates it from the block's first message", async () => {
+    // The tab compacts consecutive assistant messages, keeping the earliest
+    // timestamp, so a `user → placeholder → content` turn reaches the renderer
+    // as one row whose duration is measured from the placeholder's arrival.
+    const messages: ClaudeMessageType[] = [
+      {
+        id: "msg-user",
+        role: "user" as const,
+        content: "Question",
+        parts: [{ type: "text" as const, content: "Question" }],
+        timestamp: "2026-03-07T12:00:00.000Z",
+      },
+      {
+        id: "msg-empty",
+        role: "assistant" as const,
+        content: "",
+        parts: [],
+        timestamp: "2026-03-07T12:00:20.000Z",
+        modelId: "claude-test-model",
+      },
+      {
+        id: "msg-content",
+        role: "assistant" as const,
+        content: "Answer",
+        parts: [{ type: "text" as const, content: "Answer" }],
+        timestamp: "2026-03-07T12:00:45.000Z",
+        modelId: "claude-test-model",
+      },
+    ];
+    const current = useClaudeTmuxStore.getState().getTab("tab-1");
+    useClaudeTmuxStore.setState({
+      tabs: new Map([
+        [
+          "tab-1",
+          {
+            ...current,
+            environmentId: "env-1",
+            sessionId: "session-1",
+            running: true,
+            busy: false,
+            messages,
+          },
+        ],
+      ]),
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("Answer")).toBeTruthy();
+    expect(screen.getAllByText("claude-test-model")).toHaveLength(1);
+    expect(screen.getByText(/responded in 20s/)).toBeTruthy();
+  });
+
   test("review tabs submit the shared Address all follow-up prompt", async () => {
     const message: ClaudeMessageType = {
       id: "msg-review-complete",

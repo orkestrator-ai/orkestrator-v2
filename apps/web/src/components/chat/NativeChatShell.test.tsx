@@ -15,6 +15,7 @@ import type {
   NativeMessagePart,
 } from "@/lib/chat/native-message-types";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import * as realVirtualizedMessageList from "./VirtualizedMessageList";
 
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
@@ -31,7 +32,12 @@ mock.module("./VirtualizedMessageList", () => ({
             {props.renderMessage(
               index,
               message,
-              index > 0 ? props.messages[index - 1] : null,
+              // Mirror the real list: honour the caller's resolver when it
+              // supplies one, so these tests exercise the predecessor the shell
+              // actually renders with rather than the raw neighbour.
+              props.resolvePreviousMessage
+                ? props.resolvePreviousMessage(props.messages, index)
+                : index > 0 ? props.messages[index - 1] : null,
             )}
           </div>
         ))}
@@ -646,24 +652,43 @@ describe("NativeChatShell", () => {
       parts: role === "assistant" && content ? [{ type: "text", content }] : [],
     });
 
-    test("passes a resolver that skips empty assistant placeholders", () => {
-      const messages = [
-        makeMessage("user-1", "user", "Question"),
-        makeMessage("assistant-empty", "assistant", ""),
-        makeMessage("assistant-content", "assistant", "Answer"),
+    test("renders attribution once and keeps the duration across an empty placeholder", () => {
+      const messages: NativeMessage[] = [
+        {
+          ...makeMessage("user-1", "user", "Question"),
+          createdAt: "2026-03-21T10:00:00.000Z",
+        },
+        {
+          ...makeMessage("assistant-empty", "assistant", ""),
+          createdAt: "2026-03-21T10:00:20.000Z",
+          modelId: "gpt-5.6-sol",
+        },
+        {
+          ...makeMessage("assistant-content", "assistant", "Answer"),
+          createdAt: "2026-03-21T10:00:45.000Z",
+          modelId: "gpt-5.6-sol",
+        },
       ];
-      render(<NativeChatShell {...shellProps()} messages={messages} />);
+      render(
+        <NativeChatShell
+          {...shellProps()}
+          messages={messages}
+          resolveModelLabel={() => "GPT 5.6 Sol"}
+        />,
+      );
 
-      const resolver = lastVirtualizedMessageListProps
-        ?.resolvePreviousMessage as
-        | ((messages: readonly NativeMessage[], index: number) => NativeMessage | null)
-        | undefined;
+      // Attribution lands once, on the content row, and the empty placeholder
+      // has not swallowed the response duration.
+      expect(screen.getAllByText("GPT 5.6 Sol")).toHaveLength(1);
+      expect(screen.getByText(/responded in 45s/)).toBeTruthy();
+    });
 
-      expect(resolver).toBeTypeOf("function");
-      // The content message anchors on the user, not the empty placeholder.
-      expect(resolver?.(messages, 2)).toBe(messages[0]!);
-      // The placeholder itself still sees the user as its predecessor.
-      expect(resolver?.(messages, 1)).toBe(messages[0]!);
+    test("passes the resolver through to the list", () => {
+      render(<NativeChatShell {...shellProps()} messages={[]} />);
+
+      expect(lastVirtualizedMessageListProps?.resolvePreviousMessage).toBe(
+        findPreviousNativeMessage,
+      );
     });
   });
 });

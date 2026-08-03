@@ -15,6 +15,7 @@ import {
   normalizeClaudeMessagesForDisplay,
   normalizeClaudePart,
   normalizeCodexNativeMessage,
+  normalizeNativeMessage,
   normalizeOpenCodeNativeMessage,
   parseNativeAttachmentsFromContent,
   splitClaudeAssistantTextBlocks,
@@ -1938,6 +1939,12 @@ describe("messageHasVisibleContent", () => {
     expect(messageHasVisibleContent(makeMessage([], "Streamed answer"))).toBe(true);
   });
 
+  test("treats whitespace-only message content as empty", () => {
+    // The `content` short-circuit trims, so an assistant whose only payload is
+    // layout whitespace is still an empty block.
+    expect(messageHasVisibleContent(makeMessage([], "   \n\t "))).toBe(false);
+  });
+
   test("treats non-empty text and thinking parts as visible", () => {
     expect(
       messageHasVisibleContent(
@@ -1957,12 +1964,91 @@ describe("messageHasVisibleContent", () => {
     ).toBe(false);
   });
 
+  test("treats whitespace-only text and thinking parts as empty", () => {
+    expect(
+      messageHasVisibleContent(makeMessage([{ type: "text", content: "   " }])),
+    ).toBe(false);
+    expect(
+      messageHasVisibleContent(
+        makeMessage([{ type: "thinking", content: "\n\t " }]),
+      ),
+    ).toBe(false);
+  });
+
+  test("treats an empty thinking part as empty", () => {
+    expect(
+      messageHasVisibleContent(makeMessage([{ type: "thinking", content: "" }])),
+    ).toBe(false);
+  });
+
   test("treats a lone tool result as empty since it renders nothing", () => {
     expect(
       messageHasVisibleContent(
         makeMessage([{ type: "tool-result", content: "" }]),
       ),
     ).toBe(false);
+  });
+
+  test("treats a tool result as empty even when it carries output", () => {
+    // The result renders inline with its invocation, so its content never
+    // reaches the transcript on its own — having output changes nothing.
+    expect(
+      messageHasVisibleContent(
+        makeMessage([
+          { type: "tool-result", content: "exit 0\n42 files changed" },
+        ]),
+      ),
+    ).toBe(false);
+  });
+
+  test("treats empty tool and agent groups as empty", () => {
+    // Both group renderers return null at zero children, so classifying them
+    // as visible would hang a model label above a row that paints nothing.
+    expect(
+      messageHasVisibleContent(
+        makeMessage([{ type: "tool-group", content: "", parts: [] }]),
+      ),
+    ).toBe(false);
+    expect(
+      messageHasVisibleContent(
+        makeMessage([{ type: "agent-group", content: "", parts: [] }]),
+      ),
+    ).toBe(false);
+  });
+
+  test("treats populated tool and agent groups as visible", () => {
+    expect(
+      messageHasVisibleContent(
+        makeMessage([
+          {
+            type: "tool-group",
+            content: "",
+            parts: [
+              { type: "tool-invocation", content: "", toolName: "Read", toolState: "success" },
+            ],
+          },
+        ]),
+      ),
+    ).toBe(true);
+    expect(
+      messageHasVisibleContent(
+        makeMessage([
+          {
+            type: "agent-group",
+            content: "",
+            parts: [
+              {
+                type: "subagent",
+                content: "Reviewer",
+                subagentName: "Reviewer",
+                toolState: "pending",
+                subagentActions: [],
+              },
+            ],
+          },
+        ]),
+      ),
+    ).toBe(true);
   });
 
   test("treats tool invocations, files, and agent activity as visible", () => {
@@ -1991,6 +2077,37 @@ describe("messageHasVisibleContent", () => {
         ]),
       ),
     ).toBe(true);
+  });
+
+  test("agrees with itself before and after normalization", () => {
+    // `findPreviousNativeMessage` classifies raw list messages while
+    // `NativeMessage` classifies the normalized copy. If those two verdicts
+    // diverge, a row's predecessor and its own footer disagree about whether
+    // the same message counts as content.
+    const shapes: NativeMessage["parts"][] = [
+      [],
+      [{ type: "text", content: "Answer" }],
+      [{ type: "text", content: "   " }],
+      [{ type: "thinking", content: "" }],
+      [{ type: "tool-result", content: "output" }],
+      [{ type: "tool-group", content: "", parts: [] }],
+      [{ type: "agent-group", content: "", parts: [] }],
+      [
+        { type: "thinking", content: "Reasoning" },
+        { type: "tool-result", content: "output" },
+      ],
+    ];
+
+    for (const parts of shapes) {
+      const raw = makeMessage(parts);
+      expect({
+        parts: JSON.stringify(parts),
+        visible: messageHasVisibleContent(normalizeNativeMessage(raw)),
+      }).toEqual({
+        parts: JSON.stringify(parts),
+        visible: messageHasVisibleContent(raw),
+      });
+    }
   });
 
   test("treats an unknown future part type as visible until the renderer says otherwise", () => {
@@ -2028,6 +2145,34 @@ describe("findPreviousNativeMessage", () => {
 
   test("returns null for the first message", () => {
     expect(findPreviousNativeMessage([assistant("a", [])], 0)).toBeNull();
+  });
+
+  test("returns null for an empty list", () => {
+    expect(findPreviousNativeMessage([], 0)).toBeNull();
+  });
+
+  test("returns null for a negative index", () => {
+    // Virtuoso should never hand us one, but the loop must not read backwards
+    // off the front of the array if it ever does.
+    expect(findPreviousNativeMessage([assistant("a", [])], -1)).toBeNull();
+  });
+
+  test("scans back from the end when the index is past the last message", () => {
+    const messages = [
+      user("u"),
+      assistant("content", [{ type: "text", content: "Answer" }]),
+    ];
+    expect(findPreviousNativeMessage(messages, 10)).toBe(messages[1]!);
+  });
+
+  test("skips holes in a sparse list", () => {
+    const messages = [
+      user("u"),
+      assistant("content", [{ type: "text", content: "Answer" }]),
+    ];
+    // eslint-disable-next-line no-sparse-arrays
+    const sparse = [messages[0]!, , messages[1]!] as NativeMessage[];
+    expect(findPreviousNativeMessage(sparse, 2)).toBe(messages[0]!);
   });
 
   test("returns the immediate predecessor when it carries content", () => {

@@ -727,6 +727,41 @@ describe("MessageShell", () => {
     expect(screen.getByText("1:00 PM")).toBeTruthy();
   });
 
+  test("still renders assistant actions when there is no metadata to show", () => {
+    // `metadata` collapses to "" only when both timestamp and duration are
+    // blank; the row must survive on actions alone rather than disappearing.
+    render(
+      <MessageShell
+        isUser={false}
+        authorLabel="Claude"
+        timestampLabel=""
+        durationLabel={null}
+        actions={<button type="button">Fork</button>}
+      >
+        <p>Content</p>
+      </MessageShell>,
+    );
+
+    expect(screen.getByRole("button", { name: "Fork" })).toBeTruthy();
+    expect(screen.queryByText("Claude")).toBeNull();
+  });
+
+  test("still renders user actions when there is no metadata to show", () => {
+    render(
+      <MessageShell
+        isUser={true}
+        authorLabel="You"
+        timestampLabel=""
+        durationLabel={null}
+        actions={<button type="button">Fork</button>}
+      >
+        <p>Content</p>
+      </MessageShell>,
+    );
+
+    expect(screen.getByRole("button", { name: "Fork" })).toBeTruthy();
+  });
+
   test("hides the user action row when showFooter is false", () => {
     render(
       <MessageShell

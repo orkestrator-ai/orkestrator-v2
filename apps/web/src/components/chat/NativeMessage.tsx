@@ -1850,12 +1850,21 @@ export const NativeMessage = memo(function NativeMessage({
     : false;
   // Attribution belongs on the first content-bearing message of a transcript
   // block. Empty assistant messages (an info-only `message.updated` before any
-  // part streams) render no footer at all, and same-block continuations drop
-  // the model label so it is not repeated for every streamed chunk.
+  // part streams) carry no attribution, and same-block continuations drop the
+  // model label so it is not repeated for every streamed chunk.
   const showAssistantFooter =
     !isUser && !isSystem && !isError && hasContent;
+  // A continuation that switched model is the one case where repeating the
+  // label carries information: providers stamp `modelId` per message (Claude
+  // records one per tool round-trip), so a mid-block fallback would otherwise
+  // leave the new model rendering under the previous row's label.
   const showAssistantAuthorLabel =
-    showAssistantFooter && (!isContinuation || !previousHasContent);
+    showAssistantFooter
+    && (
+      !isContinuation
+      || !previousHasContent
+      || previousMessage?.modelId !== message.modelId
+    );
   const userCopyContent = isUser
     ? (
         message.parts
@@ -1874,6 +1883,13 @@ export const NativeMessage = memo(function NativeMessage({
           .trim() || message.content
       )
     : "";
+  // Whether the assistant footer still has a reason to exist once attribution
+  // is suppressed. `buildMessageForkActionKinds` places a block's only
+  // "fork response" action on its *last* assistant row without checking for
+  // content, so a content-empty trailing row can be the sole host of that
+  // affordance — hiding the row there would strand the whole exchange.
+  const hasAssistantFooterContent =
+    !isUser && (Boolean(messageActions) || Boolean(assistantCopyContent));
   const handleUserLongPress = useCallback(async () => {
     if (!userCopyContent) return;
 
@@ -1923,6 +1939,13 @@ export const NativeMessage = memo(function NativeMessage({
     );
   }
 
+  // An assistant row with no content, no actions and nothing to copy would
+  // render as a bare `py-3` spacer: a gap the reader cannot account for. Drop
+  // it entirely rather than reserve blank space for it.
+  if (!isUser && !hasContent && !hasAssistantFooterContent) {
+    return null;
+  }
+
   return (
     <AgentExpansionScopeContext.Provider value={messageAgentExpansionScope}>
       <MessageShell
@@ -1935,8 +1958,8 @@ export const NativeMessage = memo(function NativeMessage({
         timestampLabel={formatTime(message.createdAt)}
         durationLabel={durationLabel}
         showHeader={!isContinuation}
-        showFooter={isUser || showAssistantFooter}
-        showAuthorLabel={showAssistantAuthorLabel}
+        showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
+        showAuthorLabel={isUser || showAssistantAuthorLabel}
         className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
         onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
         actions={(isUser ? userCopyContent : assistantCopyContent) || messageActions ? (

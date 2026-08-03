@@ -356,6 +356,13 @@ export function messageHasVisibleContent(message: NativeMessage): boolean {
       // own, so a message holding only results is still an empty block.
       case "tool-result":
         return false;
+      // Both group renderers bail out on an empty child list, so an empty group
+      // is as invisible as no part at all. `groupNativeToolActivity` leaves an
+      // existing `tool-group` untouched, so normalization cannot be relied on to
+      // remove one first.
+      case "tool-group":
+      case "agent-group":
+        return part.parts.length > 0;
       default:
         return true;
     }

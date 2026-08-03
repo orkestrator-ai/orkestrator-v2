@@ -55,6 +55,7 @@ export type { MultiAgentMode } from "./MultiAgentMode.js";
 export type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment.js";
 export type { NetworkPolicyRuleAction } from "./NetworkPolicyRuleAction.js";
 export type { ParsedCommand } from "./ParsedCommand.js";
+export type { PathUri } from "./PathUri.js";
 export type { Personality } from "./Personality.js";
 export type { PlanType } from "./PlanType.js";
 export type { RealtimeConversationVersion } from "./RealtimeConversationVersion.js";

@@ -1,9 +1,9 @@
 {
-  "codexVersion": "0.145.0",
-  "typescriptDigest": "sha256:eb5adbfb919d8f6520acb0954cd9b1693e0307229f8ea3f643b0aeb5ad610111",
-  "schemaDigest": "sha256:ce2167107de7c764e1bc73e170499dd48c887fe63a5ef6bc4eed1a282dd4b5b0",
-  "typescriptFileCount": 617,
-  "schemaFileCount": 273,
+  "codexVersion": "0.146.0",
+  "typescriptDigest": "sha256:b77921c076a6d239ec05fddde7d014b602fa96414c3b8b50ecac48aa20a97451",
+  "schemaDigest": "sha256:28161abf152e09a7a4c47427e9098a2407b048f5d16c099a4ec9cb282fbf8448",
+  "typescriptFileCount": 622,
+  "schemaFileCount": 275,
   "clientRequestMethods": [
     "account/login/cancel",
     "account/login/start",
@@ -31,6 +31,7 @@
     "externalAgentConfig/detect",
     "externalAgentConfig/import",
     "externalAgentConfig/import/readHistories",
+    "externalAgentConfig/import/recordHistory",
     "feedback/upload",
     "fs/copy",
     "fs/createDirectory",

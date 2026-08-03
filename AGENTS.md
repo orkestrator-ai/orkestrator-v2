@@ -244,7 +244,7 @@ When touching the app-server engine:
   gone" it would delete a live session mapping against an older bridge. For the
   same reason the claude bridge answers a failed existence probe `idle`, never
   `missing` — an error is not evidence of deletion.
-- Codex version bumps follow [`docs/codex-upgrade-guide.md`](docs/codex-upgrade-guide.md);
+- Agent version bumps follow [`docs/upgrade-agents.md`](docs/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,
   generation death and unparseable answer denies. Approving on a technicality would

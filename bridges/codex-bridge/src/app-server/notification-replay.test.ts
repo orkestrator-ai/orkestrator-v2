@@ -49,7 +49,7 @@ describe("recorded app-server stream replay", () => {
       test("uses no unknown methods or unrenderable items", async () => {
         const summary = await replayRecording(readFixture(name));
         // If this fails after a Codex bump, the protocol added something the
-        // reducer drops on the floor. Follow docs/codex-upgrade-guide.md.
+        // reducer drops on the floor. Follow docs/upgrade-agents.md.
         expect(summary.unknownMethods).toEqual([]);
         expect(summary.unsupportedItemTypes).toEqual([]);
         expect(summary.invalidLines).toBe(0);

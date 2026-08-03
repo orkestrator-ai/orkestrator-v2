@@ -30,6 +30,14 @@ function makeMessage(
   };
 }
 
+/** Mirrors `formatTime` in NativeMessage.tsx, which is module-private. */
+function expectedTimeLabel(isoString: string): string {
+  return new Date(isoString).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function getClassTokens(element: Element | null | undefined): string[] {
   return element?.getAttribute("class")?.split(/\s+/).filter(Boolean) ?? [];
 }
@@ -161,6 +169,190 @@ describe("NativeMessage assistant attribution", () => {
 
     expect(screen.getByText("You")).toBeTruthy();
     expect(screen.queryByText("gpt-5.6-sol")).toBeNull();
+  });
+
+  test("hides the model label on an empty assistant message with no streamed content", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([], {
+          id: "assistant-empty",
+          modelId: "gpt-5.6-sol",
+        })}
+        resolveModelLabel={() => "GPT 5.6 Sol"}
+      />,
+    );
+
+    expect(screen.queryByText("GPT 5.6 Sol")).toBeNull();
+    expect(screen.queryByText("gpt-5.6-sol")).toBeNull();
+  });
+
+  test("renders nothing at all for an empty assistant message with no actions", () => {
+    // Not just the label: the whole row goes, so the placeholder does not leave
+    // an unexplained blank gap between the prompt and the reply.
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([], {
+          id: "assistant-empty-no-actions",
+          modelId: "gpt-5.6-sol",
+        })}
+        resolveModelLabel={() => "GPT 5.6 Sol"}
+      />,
+    );
+
+    expect(container.firstElementChild).toBeNull();
+    expect(container.textContent).toBe("");
+  });
+
+  test("hides the timestamp too, not only the model label, on an empty assistant message", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "tool-result", content: "exit 0" }], {
+          id: "assistant-empty-timestamp",
+          modelId: "gpt-5.6-sol",
+          createdAt: "2026-03-21T13:00:00.000Z",
+        })}
+        resolveModelLabel={() => "GPT 5.6 Sol"}
+        actions={<button type="button">Fork</button>}
+      />,
+    );
+
+    // The action keeps the row alive, but nothing attributes it.
+    expect(screen.getByRole("button", { name: "Fork" })).toBeTruthy();
+    expect(screen.queryByText("GPT 5.6 Sol")).toBeNull();
+  });
+
+  test("keeps a caller-supplied action reachable on a content-empty assistant message", () => {
+    // `buildMessageForkActionKinds` can place a block's only "fork response"
+    // action on a content-empty trailing row; suppressing the footer there
+    // would strand the affordance for the whole exchange.
+    render(
+      <NativeMessage
+        message={makeMessage([], {
+          id: "assistant-empty-with-fork",
+          modelId: "gpt-5.6-sol",
+        })}
+        resolveModelLabel={() => "GPT 5.6 Sol"}
+        actions={<button type="button">Fork response</button>}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Fork response" })).toBeTruthy();
+    expect(screen.queryByText("GPT 5.6 Sol")).toBeNull();
+  });
+
+  test("shows attribution on a thinking-only assistant message", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "thinking", content: "Reasoning" }], {
+          id: "assistant-thinking-only",
+          modelId: "gpt-5.6-sol",
+        })}
+        resolveModelLabel={() => "GPT 5.6 Sol"}
+      />,
+    );
+
+    expect(screen.getByText("GPT 5.6 Sol")).toBeTruthy();
+  });
+
+  test("repeats the model label when a same-minute continuation switched model", () => {
+    // Suppressing attribution here would render Sonnet's output under Opus's
+    // label — the one thing the reader cannot infer from the row above.
+    const previousContent = makeMessage([{ type: "text", content: "First chunk" }], {
+      id: "assistant-opus",
+      modelId: "opus-5",
+    });
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Second chunk" }], {
+          id: "assistant-sonnet",
+          modelId: "sonnet-5",
+        })}
+        previousMessage={previousContent}
+        resolveModelLabel={(modelId) =>
+          modelId === "opus-5" ? "Opus 5" : "Sonnet 5"}
+      />,
+    );
+
+    expect(screen.getByText("Sonnet 5")).toBeTruthy();
+  });
+
+  test("shows the model label on the first content-bearing message of a block", () => {
+    // An info-only empty message precedes the streamed content in the same
+    // minute; the empty block stays unlabeled and attribution lands once. The
+    // timestamps are pinned to the same minute so the continuation branch is
+    // genuinely exercised rather than trivially skipped.
+    const emptyPrevious = makeMessage([], {
+      id: "assistant-empty-before-content",
+      modelId: "gpt-5.6-sol",
+      createdAt: "2026-03-21T10:00:10.000Z",
+    });
+    render(
+      <NativeMessage
+        message={makeMessage(
+          [{ type: "text", content: "Streamed answer" }],
+          {
+            id: "assistant-content",
+            modelId: "gpt-5.6-sol",
+            createdAt: "2026-03-21T10:00:40.000Z",
+          },
+        )}
+        previousMessage={emptyPrevious}
+        resolveModelLabel={() => "GPT 5.6 Sol"}
+      />,
+    );
+
+    expect(screen.getByText("GPT 5.6 Sol")).toBeTruthy();
+    expect(screen.getAllByText("GPT 5.6 Sol")).toHaveLength(1);
+  });
+
+  test("drops the model label on same-minute assistant continuations", () => {
+    const previousContent = makeMessage([{ type: "text", content: "First chunk" }], {
+      id: "assistant-content-start",
+      modelId: "gpt-5.6-sol",
+      createdAt: "2026-03-21T10:00:10.000Z",
+    });
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Second chunk" }], {
+          id: "assistant-content-continuation",
+          modelId: "gpt-5.6-sol",
+          createdAt: "2026-03-21T10:00:40.000Z",
+        })}
+        previousMessage={previousContent}
+        resolveModelLabel={() => "GPT 5.6 Sol"}
+      />,
+    );
+
+    // The continuation keeps its timestamp row but must not repeat the model.
+    expect(screen.queryByText("GPT 5.6 Sol")).toBeNull();
+    expect(screen.getByText(expectedTimeLabel("2026-03-21T10:00:40.000Z"))).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy text" })).toBeTruthy();
+  });
+
+  test("anchors attribution and duration on the user after an empty info block", () => {
+    // Transcript owners resolve previousMessage to the nearest content-bearing
+    // message, so the first real content after `user → empty info → content`
+    // renders the model label once and keeps the response duration that the
+    // empty placeholder would otherwise have swallowed.
+    const userMessage = makeMessage([{ type: "text", content: "Question" }], {
+      id: "user-block-anchor",
+      role: "user",
+      createdAt: "2026-03-21T10:00:00.000Z",
+    });
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Answer" }], {
+          id: "assistant-content-after-empty",
+          modelId: "gpt-5.6-sol",
+          createdAt: "2026-03-21T10:00:45.000Z",
+        })}
+        previousMessage={userMessage}
+        resolveModelLabel={() => "GPT 5.6 Sol"}
+      />,
+    );
+
+    expect(screen.getAllByText("GPT 5.6 Sol")).toHaveLength(1);
+    expect(screen.getByText(/responded in 45s/)).toBeTruthy();
   });
 });
 
@@ -2564,13 +2756,15 @@ describe("NativeMessage part routing and message-level fallbacks", () => {
     expect(container.textContent).not.toContain("unknown payload");
   });
 
-  test("renders no body and no copy control for an empty assistant message", () => {
+  test("renders no body, no attribution, and no copy control for an empty assistant message", () => {
     const { container } = render(
       <NativeMessage message={makeMessage([], { id: "assistant-empty", content: "" })} />,
     );
 
     expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
-    expect(container.textContent).toContain("Assistant");
+    // An info-only message with no streamed content must not carry a dangling
+    // model attribution; the label appears only once real content lands.
+    expect(container.textContent).not.toContain("Assistant");
   });
 
   test("copies assistant message content when the message has no text parts", async () => {

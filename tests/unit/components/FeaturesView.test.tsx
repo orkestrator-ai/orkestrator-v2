@@ -136,18 +136,33 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
   VirtualizedMessageList: ({
     messages,
     renderMessage,
+    resolvePreviousMessage,
     computeItemKey,
     footer,
   }: {
     messages: Array<{ id: string }>;
     renderMessage: (index: number, message: never, previousMessage: never) => ReactNode;
+    resolvePreviousMessage?: (
+      messages: readonly { id: string }[],
+      index: number,
+    ) => { id: string } | null;
     computeItemKey: (index: number, message: { id: string }) => string;
     footer?: ReactNode;
   }) => (
-    <div data-testid="virtualized-list">
+    <div
+      data-testid="virtualized-list"
+      data-has-previous-resolver={resolvePreviousMessage ? "true" : "false"}
+    >
       {messages.map((message, index) => (
         <div key={message.id} data-item-key={computeItemKey(index, message)}>
-          {renderMessage(index, message as never, messages[index - 1] as never)}
+          {renderMessage(
+            index,
+            message as never,
+            // Mirror the real list so the panel's resolver actually runs here.
+            (resolvePreviousMessage
+              ? resolvePreviousMessage(messages, index)
+              : messages[index - 1]) as never,
+          )}
         </div>
       ))}
       {footer}
@@ -3083,6 +3098,11 @@ describe("NativeStyleChatPanel", () => {
     expect(screen.getByTestId("native-message-visible").textContent).toBe("Visible reply");
     expect(screen.queryByTestId("native-message-state-only")).toBeNull();
     expect(screen.getByTestId("native-message-second").dataset.previousId).toBe("visible");
+    // The panel opts into block-level continuity, so an empty assistant
+    // placeholder cannot become a row's attribution anchor.
+    expect(
+      screen.getByTestId("virtualized-list").dataset.hasPreviousResolver,
+    ).toBe("true");
     expect(screen.getByTestId("native-message-second").dataset.modelId).toBe("gpt-5.3-codex");
     expect(screen.getByTestId("native-message-visible").parentElement?.dataset.itemKey).toBe("visible");
     expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({

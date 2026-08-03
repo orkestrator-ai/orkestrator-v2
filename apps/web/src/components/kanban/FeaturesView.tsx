@@ -68,6 +68,7 @@ import type {
   FeatureStoryCard,
 } from "@/stores/featurePlanStore";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
+import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 
 type RightPaneTab = "chat" | "stories" | `story:${string}`;
 
@@ -2392,6 +2393,7 @@ export function NativeStyleChatPanel({
         <VirtualizedMessageList
           messages={nativeMessages}
           computeItemKey={(_index, message) => message.id}
+          resolvePreviousMessage={findPreviousNativeMessage}
           renderMessage={(_index, message, previousMessage) => (
             <NativeMessage
               message={message}

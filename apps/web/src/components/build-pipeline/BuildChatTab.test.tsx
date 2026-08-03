@@ -19,6 +19,7 @@ import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelin
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
+import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
@@ -44,13 +45,20 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   VirtualizedMessageList: (props: any) => {
     listProps = props;
-    const { messages, renderMessage, emptyState, footer } = props;
+    const { messages, renderMessage, resolvePreviousMessage, emptyState, footer } = props;
     return (
       <div>
         {messages.length === 0 ? emptyState : null}
         {messages.map((message: unknown, index: number) => (
           <div key={index}>
-            {renderMessage(index, message, index > 0 ? messages[index - 1] : null)}
+            {renderMessage(
+              index,
+              message,
+              // Mirror the real list so the tab's resolver actually runs here.
+              resolvePreviousMessage
+                ? resolvePreviousMessage(messages, index)
+                : index > 0 ? messages[index - 1] : null,
+            )}
           </div>
         ))}
         {footer}
@@ -924,6 +932,27 @@ describe("BuildChatTab transcript wiring", () => {
     expect(listProps.messages.map((message: { id: string }) => message.id))
       .toEqual(["answer-2"]);
     expect(listProps.computeItemKey(0, listProps.messages[0])).toBe("answer-2");
+  });
+
+  test("resolves each row's predecessor past empty assistant placeholders", () => {
+    renderTab();
+
+    // Without this the transcript would anchor attribution and duration on an
+    // info-only placeholder instead of the message that produced the content.
+    expect(listProps.resolvePreviousMessage).toBe(findPreviousNativeMessage);
+
+    const messages = [
+      { id: "u", role: "user", content: "Q", createdAt: "2026-03-21T10:00:00.000Z", parts: [] },
+      { id: "empty", role: "assistant", content: "", createdAt: "2026-03-21T10:00:10.000Z", parts: [] },
+      {
+        id: "answer",
+        role: "assistant",
+        content: "A",
+        createdAt: "2026-03-21T10:00:20.000Z",
+        parts: [{ type: "text", content: "A" }],
+      },
+    ];
+    expect(listProps.resolvePreviousMessage(messages, 2)).toBe(messages[0]);
   });
 
   test("claims the find shortcut only while its pane owns the keyboard", () => {

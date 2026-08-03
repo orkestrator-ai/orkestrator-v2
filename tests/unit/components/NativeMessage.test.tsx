@@ -555,7 +555,9 @@ describe("NativeMessage", () => {
     );
 
     expect(screen.getByText("Continuation response")).toBeTruthy();
-    expect(screen.getByText("Worker")).toBeTruthy();
+    // A same-minute continuation repeats no attribution; the model label is
+    // shown once, on the first content-bearing message of the block.
+    expect(screen.queryByText("Worker")).toBeNull();
   });
 
   test("opens local image previews and closes the overlay with Escape", async () => {

@@ -29,6 +29,17 @@ export interface PastedImageAttachment {
   name: string;
 }
 
+/**
+ * What a `canAttachImage` gate is shown. Deliberately narrower than
+ * `PastedImageAttachment`: the gate runs before the write, so there is no real
+ * path or id yet, and offering a guess would invite callers to depend on a
+ * value that is not the one the finished attachment carries.
+ */
+export interface PendingPastedImage {
+  type: "image";
+  name: string;
+}
+
 interface UseNativeComposeBarPasteOptions {
   /** Ref to the input container — paste is only processed when focus is inside */
   inputContainerRef: RefObject<HTMLElement | null>;
@@ -38,6 +49,15 @@ interface UseNativeComposeBarPasteOptions {
   worktreePath?: string | null;
   /** Called once the image has been saved and an attachment is ready to add */
   onAttach: (attachment: PastedImageAttachment) => void;
+  /**
+   * Optional gate evaluated before the pasted image is written to disk. A
+   * `false` return refuses the paste without writing the file, so a refused
+   * image cannot orphan a file in the environment, and fires `onImageRejected`
+   * instead of `onAttach`.
+   */
+  canAttachImage?: (attachment: PendingPastedImage) => boolean;
+  /** Fired when `canAttachImage` refuses the paste, so the caller can explain. */
+  onImageRejected?: () => void;
   /** Log prefix for unexpected errors, e.g. "ClaudeComposeBar" */
   logLabel: string;
 }
@@ -150,6 +170,8 @@ export function useNativeComposeBarPaste({
   containerId,
   worktreePath,
   onAttach,
+  canAttachImage,
+  onImageRejected,
   logLabel,
 }: UseNativeComposeBarPasteOptions): void {
   useEffect(() => {
@@ -162,9 +184,16 @@ export function useNativeComposeBarPaste({
       // input cannot also insert a filename, URL, or empty text payload.
       const pastedBlob = getPastedImageBlob(event);
       const nativePaste = !pastedBlob && isDesktopRenderer();
-      const restoreTextPaste = nativePaste
+      let pendingTextRestore = nativePaste
         ? captureTextPasteFallback(event, activeEl)
         : null;
+      // At most once: several bail-outs restore and then run further code that
+      // could itself throw into the catch below, which restores again.
+      const restoreTextPaste = () => {
+        const restore = pendingTextRestore;
+        pendingTextRestore = null;
+        restore?.();
+      };
       if (pastedBlob || nativePaste) {
         event.preventDefault();
         event.stopPropagation();
@@ -174,13 +203,16 @@ export function useNativeComposeBarPaste({
       try {
         image = await readImage(pastedBlob);
       } catch (error) {
-        restoreTextPaste?.();
+        restoreTextPaste();
         if (!isExpectedClipboardError(error)) {
           console.error(`[${logLabel}] Unexpected paste error:`, error);
         }
         return;
       }
 
+      // Every exit below this point has already claimed the paste with
+      // preventDefault(), so it hands the user's text back rather than
+      // swallowing the whole paste and leaving the input empty.
       try {
         const rgba = await image.rgba();
         const { width, height } = await image.size();
@@ -190,6 +222,7 @@ export function useNativeComposeBarPaste({
         canvas.height = height;
         const ctx = canvas.getContext("2d");
         if (!ctx) {
+          restoreTextPaste();
           return;
         }
 
@@ -201,6 +234,7 @@ export function useNativeComposeBarPaste({
 
         const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
         if (!encodedImage) {
+          restoreTextPaste();
           toast.error("Image too large", {
             description: "The image could not be resized below the 8MB attachment limit.",
           });
@@ -215,6 +249,14 @@ export function useNativeComposeBarPaste({
         const filename = generateImageFilename();
         const filePath = `.orkestrator/clipboard/${filename}`;
 
+        // Runs before the first write, so a refused image cannot orphan a file
+        // in the environment.
+        if (canAttachImage && !canAttachImage({ type: "image", name: filename })) {
+          restoreTextPaste();
+          onImageRejected?.();
+          return;
+        }
+
         let savedPath: string | null = null;
         if (containerId) {
           await writeContainerFile(containerId, filePath, base64Data);
@@ -224,6 +266,7 @@ export function useNativeComposeBarPaste({
         }
 
         if (!savedPath) {
+          restoreTextPaste();
           toast.error("Cannot save image", {
             description: "Environment not properly configured for attachments",
           });
@@ -238,6 +281,7 @@ export function useNativeComposeBarPaste({
           name: filename,
         });
       } catch (error) {
+        restoreTextPaste();
         console.error(`[${logLabel}] Unexpected paste error:`, error);
       }
     };
@@ -246,5 +290,5 @@ export function useNativeComposeBarPaste({
     return () => {
       document.removeEventListener("paste", handlePaste, { capture: true });
     };
-  }, [inputContainerRef, containerId, worktreePath, onAttach, logLabel]);
+  }, [inputContainerRef, containerId, worktreePath, onAttach, canAttachImage, onImageRejected, logLabel]);
 }

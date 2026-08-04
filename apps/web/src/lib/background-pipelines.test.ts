@@ -78,7 +78,7 @@ describe("getBackgroundProcessingEnvironments signals", () => {
   const none = new Map<string, BuildPipeline>();
 
   /**
-   * Each of these arrives in its own positional slot. With eleven parameters an
+   * Each of these arrives in its own positional slot. With ten parameters an
    * argument passed into the wrong slot still typechecks — both sides are
    * iterables of strings — and the only thing that catches it is asserting each
    * slot independently.
@@ -87,12 +87,11 @@ describe("getBackgroundProcessingEnvironments signals", () => {
     ["pendingNativeLaunch", 4],
     ["pendingInitialPrompt", 5],
     ["loadingNativeSession", 6],
-    ["queuedAgentPrompt", 7],
-    ["pendingSetup", 8],
-    ["durablePendingAgentLaunch", 10],
+    ["pendingSetup", 7],
+    ["durablePendingAgentLaunch", 9],
   ])("mounts an off-screen environment for %s work", (_name, position) => {
     const args: unknown[] = [none, environments, null];
-    for (let index = 3; index <= 10; index += 1) {
+    for (let index = 3; index <= 9; index += 1) {
       args[index] = index === 3 ? new Set<string>() : [];
     }
     args[position] = [second.id];
@@ -111,7 +110,6 @@ describe("getBackgroundProcessingEnvironments signals", () => {
       environments,
       null,
       new Set(),
-      [""],
       [""],
       [""],
       [""],
@@ -142,7 +140,7 @@ describe("getBackgroundProcessingEnvironments signals", () => {
       environments,
       null,
       new Set(),
-      [], [], [], [], [],
+      [], [], [], [],
       [workflow({})],
     ).map((env) => env.id)).toEqual([second.id]);
 
@@ -154,7 +152,7 @@ describe("getBackgroundProcessingEnvironments signals", () => {
         environments,
         null,
         new Set(),
-        [], [], [], [], [],
+        [], [], [], [],
         [workflow({ phase })],
       )).toEqual([]);
     }
@@ -166,7 +164,7 @@ describe("getBackgroundProcessingEnvironments signals", () => {
       environments,
       null,
       new Set(),
-      [], [], [], [], [],
+      [], [], [], [],
       [workflowFixture({ environmentId: "" })],
     )).toEqual([]);
   });

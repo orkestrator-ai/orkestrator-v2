@@ -1,0 +1,311 @@
+import {
+  buildTmuxPromptWithAttachments,
+  parseClaudeTmuxStateKey,
+  parseTmuxPromptAttachments,
+} from "@orkestrator/protocol/tmux-prompt";
+import type { StorageService } from "./storage.js";
+import type { Environment } from "./models.js";
+
+type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+
+/** Queues this drainer owns. Native agent queues are drained by `NativeAgentService`. */
+const TMUX_AGENT = "claude-tmux";
+
+const QUEUE_RETRY_BASE_MS = 2_000;
+const QUEUE_RETRY_CEILING_MS = 60_000;
+const MAX_QUEUE_DISPATCH_ATTEMPTS = 5;
+
+const LEGACY_TIMESTAMP_ENVIRONMENT_NAME = /^\d{8}-\d{6}$/;
+const COMPACT_TIMESTAMP_ENVIRONMENT_NAME = /^\d{15}$/;
+
+/** Backend view of a tmux tab, as `claude_tmux_status` reports it. */
+interface TmuxStatusSnapshot {
+  running?: unknown;
+  busy?: unknown;
+}
+
+function nonBlank(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * An agent can only be driven once its environment is running and its setup has
+ * finished. Mirrors the guard `NativeAgentService` applies to its own queues.
+ */
+function isEnvironmentReadyForAgents(environment: Environment): boolean {
+  return environment.status === "running"
+    && environment.setupScriptsComplete === true;
+}
+
+/**
+ * True for a name generated before the environment had a prompt-derived title.
+ *
+ * A renamed environment is skipped, so a still-generated name is exactly the
+ * condition "no first prompt has driven a rename yet".
+ */
+function isGeneratedEnvironmentName(name: string): boolean {
+  return LEGACY_TIMESTAMP_ENVIRONMENT_NAME.test(name)
+    || COMPACT_TIMESTAMP_ENVIRONMENT_NAME.test(name);
+}
+
+export interface PromptQueueDrainerOptions {
+  retryBaseMs?: number;
+  retryCeilingMs?: number;
+  maxDispatchAttempts?: number;
+}
+
+/**
+ * Backend-owned drainer for claude-tmux prompt queues.
+ *
+ * The native agent queues (claude, codex, opencode) are drained by
+ * `NativeAgentService`, which dispatches through a bridge provider. tmux has no
+ * bridge — a prompt is typed into a pane — so it needs its own supervisor, and
+ * until it had one nothing sent the next queued tmux prompt unless a React tree
+ * happened to be mounted, connected and re-rendering.
+ *
+ * The durable pieces already existed: the queue, the claim lease, and the
+ * `dispatchError` latch all live in storage. This only moves the *dispatcher*
+ * server-side, where a renderer reload cannot abandon a claim.
+ */
+export class PromptQueueDrainer {
+  private readonly queueTasks = new Map<string, Promise<void>>();
+  private readonly queueAttempts = new Map<string, number>();
+  private readonly queueRetryAt = new Map<string, number>();
+  private sweep: Promise<void> | null = null;
+  private stopped = false;
+
+  constructor(
+    private readonly storage: StorageService,
+    private readonly invoke: CommandInvoker,
+    private readonly options: PromptQueueDrainerOptions = {},
+  ) {}
+
+  async shutdown(): Promise<void> {
+    this.stopped = true;
+    await Promise.allSettled([
+      ...(this.sweep ? [this.sweep] : []),
+      ...this.queueTasks.values(),
+    ]);
+    this.queueTasks.clear();
+    this.queueAttempts.clear();
+    this.queueRetryAt.clear();
+  }
+
+  /**
+   * One pass over every tmux queue that is due.
+   *
+   * Deliberately timer-free: the backend drives this from the activity sweep it
+   * already runs, so tmux queues share one cadence with the native ones instead
+   * of adding a third interval polling the same store.
+   */
+  drainAll(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    if (this.sweep) return this.sweep;
+    const sweep = this.runSweep().finally(() => {
+      if (this.sweep === sweep) this.sweep = null;
+    });
+    this.sweep = sweep;
+    return sweep;
+  }
+
+  private async runSweep(): Promise<void> {
+    const now = Date.now();
+    const queues = await this.storage.listAllPromptQueues();
+    if (this.stopped) return;
+    await Promise.allSettled(
+      queues
+        .filter((queue) => {
+          const separator = queue.queueKey.indexOf("\0");
+          if (queue.queueKey.slice(0, separator) !== TMUX_AGENT) return false;
+          return (
+            (queue.messages.length > 0 || queue.inFlight !== undefined)
+            // A latched dispatch error is the user's to clear; retrying it here
+            // would spin on the same prompt and hide the error they must see.
+            && queue.dispatchError === undefined
+            && (this.queueRetryAt.get(queue.queueKey) ?? 0) <= now
+          );
+        })
+        .map((queue) => this.drainQueue(queue.queueKey)),
+    );
+  }
+
+  /** Drain one queue, collapsing concurrent requests onto the in-flight pass. */
+  drainQueue(queueKey: string): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    const existing = this.queueTasks.get(queueKey);
+    if (existing) return existing;
+    const task = this.drainQueueOnce(queueKey).finally(() => {
+      if (this.queueTasks.get(queueKey) === task) this.queueTasks.delete(queueKey);
+    });
+    this.queueTasks.set(queueKey, task);
+    return task;
+  }
+
+  private async drainQueueOnce(queueKey: string): Promise<void> {
+    try {
+      await this.drainReadyQueue(queueKey);
+    } catch (error) {
+      // Any fault that escapes must still back off. A storage read that throws
+      // bypasses every inner handler and the sweep's `allSettled` swallows it,
+      // so without this the queue would be retried every two seconds with no
+      // attempt counter, no latch and no log.
+      await this.defer(
+        queueKey,
+        error instanceof Error ? error.name : "unknown drain error",
+      ).catch(() => undefined);
+    }
+  }
+
+  private async drainReadyQueue(queueKey: string): Promise<void> {
+    if (this.stopped) return;
+    const separator = queueKey.indexOf("\0");
+    if (separator <= 0) return;
+    if (queueKey.slice(0, separator) !== TMUX_AGENT) return;
+    const stateKey = queueKey.slice(separator + 1);
+    const target = parseClaudeTmuxStateKey(stateKey);
+    if (!target) return;
+
+    const queue = await this.storage.getPromptQueue(queueKey);
+    if (!queue || queue.dispatchError) return;
+    const environment = await this.storage.getEnvironment(queue.environmentId);
+    if (!environment || environment.deletionRequestedAt) return;
+    // A stopped or still-provisioning environment must not be driven by a
+    // leftover queued prompt.
+    if (!isEnvironmentReadyForAgents(environment)) {
+      await this.defer(queueKey, "environment is not ready for agents");
+      return;
+    }
+
+    // The composer owns the pane while the user is mid-draft. Draining under it
+    // would type the queued prompt into whatever they are still writing.
+    const draftKey =
+      `${TMUX_AGENT}:${queue.environmentId}:${encodeURIComponent(stateKey)}`;
+    const draft = await this.storage.getComposeDraft(draftKey);
+    if (this.composeDraftHoldsQueue(draft?.value)) return;
+
+    const status = await this.invoke<TmuxStatusSnapshot | null>("claude_tmux_status", {
+      environmentId: target.environmentId,
+      tabId: target.tabId,
+    });
+    if (!status || status.running !== true) {
+      await this.defer(queueKey, "tmux session is not running");
+      return;
+    }
+    // Busy is not a failure: the turn in flight will finish and the next sweep
+    // picks the queue up. Backing off here would delay it for no reason.
+    if (status.busy === true) return;
+
+    if (this.stopped) return;
+    // Re-read the draft: the whole point of the interlock is the window between
+    // the first check and taking the head.
+    const latestDraft = await this.storage.getComposeDraft(draftKey);
+    if (this.composeDraftHoldsQueue(latestDraft?.value)) return;
+
+    const reservation = await this.storage.reservePromptQueueHeadForDispatch(queueKey);
+    if (!reservation || typeof reservation.message !== "object") return;
+    const message = reservation.message as Record<string, unknown>;
+    const attachments = parseTmuxPromptAttachments(message.attachments);
+    if (!nonBlank(message.text) && attachments.length === 0) {
+      // Nothing to type. Consume it rather than retrying an empty prompt.
+      await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
+      return;
+    }
+
+    const prompt = buildTmuxPromptWithAttachments(
+      nonBlank(message.text) ? message.text : "",
+      attachments,
+      environment.containerId ?? undefined,
+    );
+    try {
+      await this.renameEnvironmentFromFirstPrompt(environment, prompt);
+      await this.invoke("claude_tmux_submit", {
+        environmentId: target.environmentId,
+        tabId: target.tabId,
+        text: prompt,
+      });
+      await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
+      this.clearBackoff(queueKey);
+    } catch (error) {
+      // Keep the in-flight record durable and retry the same request id after
+      // backoff, so a submit whose outcome is unclear cannot become two turns.
+      await this.defer(
+        queueKey,
+        error instanceof Error ? error.name : "unknown dispatch error",
+        reservation.requestId,
+      );
+    }
+  }
+
+  /**
+   * Back off a queue and, once the attempts are clearly not transient, park it
+   * with a durable error the renderer can render from the snapshot.
+   *
+   * An unbounded 2s retry is invisible: nothing is logged, no `dispatchError`
+   * is latched, and the user sees a queue that simply never drains.
+   */
+  private async defer(
+    queueKey: string,
+    reason: string,
+    requestId?: string,
+  ): Promise<void> {
+    const attempts = (this.queueAttempts.get(queueKey) ?? 0) + 1;
+    this.queueAttempts.set(queueKey, attempts);
+    if (attempts >= (this.options.maxDispatchAttempts ?? MAX_QUEUE_DISPATCH_ATTEMPTS)) {
+      // The key and the reason are safe to log; the prompt itself never is.
+      console.warn(
+        `[prompt-queue] tmux queue ${queueKey} has failed ${attempts} times: ${reason}`,
+      );
+      if (requestId !== undefined) {
+        this.clearBackoff(queueKey);
+        await this.storage.failPromptQueueDispatch(queueKey, requestId, reason);
+        return;
+      }
+    }
+    const backoff = Math.min(
+      this.options.retryCeilingMs ?? QUEUE_RETRY_CEILING_MS,
+      (this.options.retryBaseMs ?? QUEUE_RETRY_BASE_MS) * 2 ** Math.min(attempts - 1, 8),
+    );
+    this.queueRetryAt.set(queueKey, Date.now() + backoff);
+  }
+
+  private clearBackoff(queueKey: string): void {
+    this.queueAttempts.delete(queueKey);
+    this.queueRetryAt.delete(queueKey);
+  }
+
+  /**
+   * A draft that cannot be read is treated as holding the composer.
+   *
+   * Failing closed is the safe direction: the cost is a queue that waits, and
+   * the alternative is typing over what the user is writing.
+   */
+  private composeDraftHoldsQueue(value: unknown): boolean {
+    if (value === undefined || value === null) return false;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return true;
+    const draft = value as Record<string, unknown>;
+    if (typeof draft.text !== "string") return true;
+    if (!Array.isArray(draft.mentions) || !Array.isArray(draft.attachments)) return true;
+    return draft.text.trim().length > 0
+      || draft.mentions.length > 0
+      || draft.attachments.length > 0;
+  }
+
+  private async renameEnvironmentFromFirstPrompt(
+    environment: Environment,
+    prompt: string,
+  ): Promise<void> {
+    if (!nonBlank(prompt) || !isGeneratedEnvironmentName(environment.name)) return;
+    try {
+      await this.invoke("rename_environment_from_prompt", {
+        environmentId: environment.id,
+        prompt,
+      });
+    } catch (error) {
+      // A name is cosmetic; never let it block the prompt.
+      console.warn(
+        `[prompt-queue] Failed to rename ${environment.id} from its first prompt:`,
+        error instanceof Error ? error.name : "unknown error",
+      );
+    }
+  }
+}

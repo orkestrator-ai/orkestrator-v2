@@ -7,7 +7,7 @@ import {
   useManualSessionRefresh,
   type RefreshSessionOptions,
 } from "@/hooks/useManualSessionRefresh";
-import type { QueueDispatchOutcome } from "@/hooks/useNativeMessageQueue";
+import type { QueueDispatchOutcome } from "@/lib/prompt-queue-persistence";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";

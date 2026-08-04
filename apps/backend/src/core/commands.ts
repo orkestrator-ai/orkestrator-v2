@@ -154,6 +154,8 @@ import {
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { LoopedReviewService } from "./looped-review-service.js";
+import type { FeaturePlanningService } from "./feature-planning.js";
+import type { FeaturePlanningKind } from "@orkestrator/protocol/feature-planning";
 import {
   LOOPED_REVIEW_WORKFLOW_VERSION,
   isLoopedReviewTerminalPhase,
@@ -186,6 +188,7 @@ export type CommandContext = {
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;
   loopedReviews?: LoopedReviewService;
+  featurePlanning?: FeaturePlanningService;
   /** Backend-owned notification emitted by exact agent turn lifecycles. */
   notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
 };
@@ -1312,6 +1315,18 @@ function asCachedCodexModels(value: unknown): CodexModelCatalogEntry[] {
 function asFeaturePlanRole(value: unknown): "user" | "assistant" | "system" {
   if (value === "user" || value === "assistant" || value === "system") return value;
   throw new Error("Expected role to be user, assistant, or system");
+}
+
+function asFeaturePlanningKind(value: unknown): FeaturePlanningKind {
+  if (value === "feature" || value === "story") return value;
+  throw new Error("Expected kind to be feature or story");
+}
+
+function requireFeaturePlanning(context: CommandContext): FeaturePlanningService {
+  if (!context.featurePlanning) {
+    throw new Error("Feature planning supervisor is unavailable");
+  }
+  return context.featurePlanning;
 }
 
 function asFeaturePlanStateApplication(
@@ -10418,6 +10433,39 @@ export function createCommandRegistry(
       asFeaturePlanModelId(modelId),
     ),
   );
+
+  // Backend-owned planning workflow. The renderer sends the user's message and
+  // then renders the record; every step after this — environment, bridge,
+  // session, dispatch, reply, parse, persist — happens without it.
+  register("start_feature_planning", (args, context) => {
+    assertOnlyKeys(args, ["featureId", "kind", "storyId", "userMessage"], "arguments");
+    return requireFeaturePlanning(context).start({
+      featureId: asNonBlankString(args.featureId, "featureId"),
+      kind: asFeaturePlanningKind(args.kind),
+      ...(args.storyId === undefined
+        ? {}
+        : { storyId: asNonBlankString(args.storyId, "storyId") }),
+      userMessage: asString(args.userMessage, "userMessage"),
+    });
+  });
+  register("get_feature_planning_snapshot", (args, context) => {
+    assertOnlyKeys(args, ["projectId"], "arguments");
+    return requireFeaturePlanning(context).snapshot(
+      asNonBlankString(args.projectId, "projectId"),
+    );
+  });
+  register("retry_feature_planning", (args, context) => {
+    assertOnlyKeys(args, ["featureId"], "arguments");
+    return requireFeaturePlanning(context).retry(
+      asNonBlankString(args.featureId, "featureId"),
+    );
+  });
+  register("cancel_feature_planning", (args, context) => {
+    assertOnlyKeys(args, ["featureId"], "arguments");
+    return requireFeaturePlanning(context).cancel(
+      asNonBlankString(args.featureId, "featureId"),
+    );
+  });
 
   registerTmuxBackendCommands(register, {
     claudeStatePolls: options.claudeStatePolls,

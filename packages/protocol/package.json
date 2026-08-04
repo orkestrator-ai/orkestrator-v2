@@ -10,6 +10,7 @@
     "./build-pipeline": "./src/build-pipeline.ts",
     "./connections": "./src/connections.ts",
     "./diff-stats": "./src/diff-stats.ts",
+    "./feature-planning": "./src/feature-planning.ts",
     "./gateway-token": "./src/gateway-token.ts",
     "./model-id": "./src/model-id.ts",
     "./pane-layout": "./src/pane-layout.ts",
@@ -24,6 +25,7 @@
     "./structured-output": "./src/structured-output.ts",
     "./task-list": "./src/task-list.ts",
     "./terminal-websocket": "./src/terminal-websocket.ts",
+    "./tmux-prompt": "./src/tmux-prompt.ts",
     "./web-client": "./src/web-client.ts"
   },
   "scripts": {

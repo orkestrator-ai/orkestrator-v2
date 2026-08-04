@@ -7,12 +7,16 @@ import type { Environment } from "@/types";
  * when they are not currently visible in the main content area.
  *
  * Build pipelines are deliberately not included: their complete state machine
- * is supervised by the backend. This includes environments whose setup scripts are still
- * running, native agent tabs that have not yet dispatched their initial prompt,
- * native agent sessions that are still loading, and agent tabs with queued
- * prompts waiting to drain. These must stay mounted so terminal listeners,
- * xterm parser handlers, SSE subscriptions, and pending prompt effects continue
- * running.
+ * is supervised by the backend. Neither are queued prompts — `NativeAgentService`
+ * and `PromptQueueDrainer` dispatch them server-side, so a queue no longer needs
+ * a mounted React tree and force-mounting one for it kept an environment alive
+ * for work the renderer was not doing.
+ *
+ * What remains are environments whose setup scripts are still running, native
+ * agent tabs that have not yet dispatched their initial prompt, and native agent
+ * sessions that are still loading. These must stay mounted so terminal
+ * listeners, xterm parser handlers, SSE subscriptions, and pending prompt
+ * effects continue running.
  */
 export function getBackgroundProcessingEnvironments(
   pipelines: Map<string, BuildPipeline>,
@@ -22,7 +26,6 @@ export function getBackgroundProcessingEnvironments(
   pendingNativeLaunchEnvironmentIds: Iterable<string> = [],
   pendingInitialPromptEnvironmentIds: Iterable<string> = [],
   loadingNativeSessionEnvironmentIds: Iterable<string> = [],
-  queuedAgentPromptEnvironmentIds: Iterable<string> = [],
   pendingSetupEnvironmentIds: Iterable<string> = [],
   loopedReviews: Iterable<LoopedReviewWorkflow> = [],
   durablePendingAgentLaunchEnvironmentIds: Iterable<string> = [],
@@ -39,11 +42,6 @@ export function getBackgroundProcessingEnvironments(
     }
   }
   for (const environmentId of loadingNativeSessionEnvironmentIds) {
-    if (environmentId) {
-      backgroundEnvIds.add(environmentId);
-    }
-  }
-  for (const environmentId of queuedAgentPromptEnvironmentIds) {
     if (environmentId) {
       backgroundEnvIds.add(environmentId);
     }

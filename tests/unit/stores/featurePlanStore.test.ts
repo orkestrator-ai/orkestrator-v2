@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { FeaturePlan, FeaturePlanMessage } from "@/lib/backend";
+import type { FeaturePlanningRecord } from "@orkestrator/protocol/feature-planning";
 
 // In-memory backing store the mocked backend wrappers operate on.
 let backing: FeaturePlan[] = [];
@@ -32,6 +33,35 @@ function makeFeature(overrides: Partial<FeaturePlan> = {}): FeaturePlan {
     order: 0,
     ...overrides,
   };
+}
+
+function makePlanning(
+  overrides: Partial<FeaturePlanningRecord> = {},
+): FeaturePlanningRecord {
+  return {
+    version: 1,
+    operationId: "operation-1",
+    featureId: "feature-1",
+    projectId: "project-1",
+    kind: "feature",
+    userMessage: "plan this",
+    phase: "running",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    backendRevision: 1,
+    ...overrides,
+  };
+}
+
+async function waitForProjection(
+  predicate: () => boolean,
+  attempts = 50,
+): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("Projection did not converge");
 }
 
 function deferred<T>() {
@@ -104,6 +134,36 @@ const mockAppendFeatureStoryMessage = mock(
   },
 );
 
+const mockStartFeaturePlanning = mock(async (
+  featureId: string,
+  kind: "feature" | "story",
+  userMessage: string,
+  storyId?: string,
+) => {
+  const feature = backing.find((candidate) => candidate.id === featureId);
+  if (!feature) throw new Error(`Feature plan not found: ${featureId}`);
+  if (feature.planning && feature.planning.phase !== "complete" && feature.planning.phase !== "failed") {
+    throw new Error("A planning request is already running for this feature");
+  }
+  feature.planning = makePlanning({
+    featureId,
+    kind,
+    userMessage,
+    ...(storyId ? { storyId } : {}),
+  });
+  return feature.planning;
+});
+const mockRetryFeaturePlanning = mock(async (featureId: string) => {
+  const feature = backing.find((candidate) => candidate.id === featureId);
+  if (!feature?.planning) throw new Error("There is no planning request to retry");
+  feature.planning = { ...feature.planning, phase: "dispatching", backendRevision: feature.planning.backendRevision + 1 };
+  return feature.planning;
+});
+const mockCancelFeaturePlanning = mock(async (featureId: string) => {
+  const feature = backing.find((candidate) => candidate.id === featureId);
+  if (feature) delete feature.planning;
+});
+
 // Snapshot the real module before mocking so we can restore it for other suites.
 import * as realBackend from "@/lib/backend";
 const realBackendSnapshot = { ...realBackend };
@@ -116,6 +176,9 @@ mock.module("@/lib/backend", () => ({
   claimFeaturePlanBuild: mockClaimFeaturePlanBuild,
   appendFeaturePlanMessage: mockAppendFeaturePlanMessage,
   appendFeatureStoryMessage: mockAppendFeatureStoryMessage,
+  startFeaturePlanning: mockStartFeaturePlanning,
+  retryFeaturePlanning: mockRetryFeaturePlanning,
+  cancelFeaturePlanning: mockCancelFeaturePlanning,
 }));
 
 afterAll(() => {
@@ -151,8 +214,10 @@ describe("featurePlanStore", () => {
       isLoading: false,
       currentProjectId: null,
       chatDrafts: new Map(),
-      activeConversations: new Map(),
     });
+    mockStartFeaturePlanning.mockClear();
+    mockRetryFeaturePlanning.mockClear();
+    mockCancelFeaturePlanning.mockClear();
   });
 
   test("stores chat drafts by id and removes them when cleared", () => {
@@ -183,209 +248,105 @@ describe("featurePlanStore", () => {
     expect(state.chatDrafts.has("feature:missing")).toBe(false);
   });
 
-  test("keeps active feature conversations outside the mounted view until they settle", () => {
-    const store = useFeaturePlanStore.getState();
-    const dispatchingConversation = {
-      operationId: "operation-1",
-      featureId: "feature-1",
-      storyId: "story-1",
-      startedAt: "2026-01-01T00:00:00.000Z",
-      phase: "dispatching" as const,
-    };
-    expect(store.startConversation(dispatchingConversation)).toBe(true);
+  test("startPlanning hands the message to the backend and refreshes the projection", async () => {
+    backing = [makeFeature({ id: "feature-1", projectId: "project-1" })];
+    await useFeaturePlanStore.getState().loadFeatures("project-1");
 
-    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual(
-      dispatchingConversation,
+    const record = await useFeaturePlanStore.getState()
+      .startPlanning("feature-1", "feature", "plan this");
+
+    expect(record?.phase).toBe("running");
+    expect(mockStartFeaturePlanning).toHaveBeenCalledWith(
+      "feature-1",
+      "feature",
+      "plan this",
+      undefined,
     );
-
-    expect(store.updateConversation(dispatchingConversation, { phase: "running" })).toBe(true);
-    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")?.phase).toBe("running");
-
-    expect(useFeaturePlanStore.getState().settleConversation(dispatchingConversation)).toBe(true);
-    expect(useFeaturePlanStore.getState().settleConversation(dispatchingConversation)).toBe(false);
-
-    expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
-  });
-
-  test("keeps state and map identity for duplicate conversation mutations", () => {
-    const conversation = {
-      operationId: "operation-1",
-      featureId: "feature-1",
-      startedAt: "2026-01-01T00:00:00.000Z",
-      phase: "dispatching" as const,
-    };
-    useFeaturePlanStore.getState().startConversation(conversation);
-
-    const beforeDuplicateStart = useFeaturePlanStore.getState();
-    const mapBeforeDuplicateStart = beforeDuplicateStart.activeConversations;
-    expect(useFeaturePlanStore.getState().startConversation({ ...conversation })).toBe(false);
-
-    expect(useFeaturePlanStore.getState()).toBe(beforeDuplicateStart);
-    expect(useFeaturePlanStore.getState().activeConversations).toBe(mapBeforeDuplicateStart);
-
-    const beforeDuplicateUpdate = useFeaturePlanStore.getState();
-    const mapBeforeDuplicateUpdate = beforeDuplicateUpdate.activeConversations;
-    expect(
-      useFeaturePlanStore.getState().updateConversation(conversation, { phase: "dispatching" }),
-    ).toBe(true);
-
-    expect(useFeaturePlanStore.getState()).toBe(beforeDuplicateUpdate);
-    expect(useFeaturePlanStore.getState().activeConversations).toBe(mapBeforeDuplicateUpdate);
-  });
-
-  test("prevents stale activation, updates, and settlement from affecting another turn", () => {
-    const staleConversation = {
-      operationId: "operation-1",
-      featureId: "feature-1",
-      startedAt: "2026-01-01T00:00:00.000Z",
-      phase: "dispatching" as const,
-    };
-    const replacementConversation = {
-      operationId: "operation-2",
-      featureId: "feature-1",
-      storyId: "story-2",
-      startedAt: "2026-01-01T00:01:00.000Z",
-      phase: "dispatching" as const,
-    };
-    const store = useFeaturePlanStore.getState();
-    expect(store.startConversation(staleConversation)).toBe(true);
-    expect(store.startConversation(replacementConversation)).toBe(false);
-    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual(
-      staleConversation,
-    );
-
-    expect(store.settleConversation(staleConversation)).toBe(true);
-    expect(store.startConversation(replacementConversation)).toBe(true);
-
-    const replacementState = useFeaturePlanStore.getState();
-    const replacementMap = replacementState.activeConversations;
-    expect(store.updateConversation(staleConversation, { phase: "running" })).toBe(false);
-
-    expect(useFeaturePlanStore.getState()).toBe(replacementState);
-    expect(useFeaturePlanStore.getState().activeConversations).toBe(replacementMap);
-
-    expect(store.settleConversation(staleConversation)).toBe(false);
-
-    expect(useFeaturePlanStore.getState()).toBe(replacementState);
-    expect(useFeaturePlanStore.getState().activeConversations).toBe(replacementMap);
-    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual(
-      replacementConversation,
+    await waitForProjection(() =>
+      useFeaturePlanStore.getState().features[0]?.planning?.phase === "running"
     );
   });
 
-  test("updates and settles conversations independently across features", () => {
-    const firstConversation = {
-      operationId: "operation-1",
-      featureId: "feature-1",
-      startedAt: "2026-01-01T00:00:00.000Z",
-      phase: "dispatching" as const,
-    };
-    const secondConversation = {
-      operationId: "operation-2",
-      featureId: "feature-2",
-      storyId: "story-1",
-      startedAt: "2026-01-01T00:01:00.000Z",
-      phase: "dispatching" as const,
-    };
-    const store = useFeaturePlanStore.getState();
-    store.startConversation(firstConversation);
-    store.startConversation(secondConversation);
-    store.updateConversation(firstConversation, { phase: "running" });
+  test("startPlanning reports the backend's refusal of a second concurrent turn", async () => {
+    backing = [makeFeature({
+      id: "feature-1",
+      projectId: "project-1",
+      planning: makePlanning(),
+    })];
+    await useFeaturePlanStore.getState().loadFeatures("project-1");
 
-    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")?.phase).toBe("running");
-    expect(useFeaturePlanStore.getState().activeConversations.get("feature-2")).toEqual(
-      secondConversation,
-    );
+    const record = await useFeaturePlanStore.getState()
+      .startPlanning("feature-1", "feature", "plan this too");
 
-    store.settleConversation(firstConversation);
+    expect(record).toBeUndefined();
+  });
 
-    expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
-    expect(useFeaturePlanStore.getState().activeConversations.get("feature-2")).toEqual(
-      secondConversation,
+  test("cancelPlanning detaches the record from the projection", async () => {
+    backing = [makeFeature({
+      id: "feature-1",
+      projectId: "project-1",
+      planning: makePlanning(),
+    })];
+    await useFeaturePlanStore.getState().loadFeatures("project-1");
+
+    expect(await useFeaturePlanStore.getState().cancelPlanning("feature-1")).toBe(true);
+    await waitForProjection(() =>
+      useFeaturePlanStore.getState().features[0]?.planning === undefined
     );
   });
 
-  test("retains a recoverable unavailable state until the matching operation settles", () => {
-    const conversation = {
-      operationId: "operation-recovery",
-      featureId: "feature-1",
-      startedAt: "2026-01-01T00:00:00.000Z",
-      phase: "running" as const,
-    };
-    const store = useFeaturePlanStore.getState();
-    store.startConversation(conversation);
+  test("retryPlanning re-enters the dispatching phase", async () => {
+    backing = [makeFeature({
+      id: "feature-1",
+      projectId: "project-1",
+      planning: makePlanning({ phase: "failed" }),
+    })];
+    await useFeaturePlanStore.getState().loadFeatures("project-1");
 
-    expect(store.updateConversation(conversation, {
-      phase: "unavailable",
-      error: "Bridge unavailable",
-    })).toBe(true);
-    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual({
-      ...conversation,
-      phase: "unavailable",
-      error: "Bridge unavailable",
+    const record = await useFeaturePlanStore.getState().retryPlanning("feature-1");
+
+    expect(record?.phase).toBe("dispatching");
+  });
+
+  test("a single-feature response cannot move a planning record backwards", async () => {
+    const stale = makePlanning({ backendRevision: 1, phase: "dispatching" });
+    backing = [makeFeature({ id: "feature-1", projectId: "project-1", planning: stale })];
+    await useFeaturePlanStore.getState().loadFeatures("project-1");
+    // The projection has since seen a newer revision of the same exchange.
+    useFeaturePlanStore.setState({
+      features: [{
+        ...useFeaturePlanStore.getState().features[0]!,
+        planning: { ...stale, phase: "persisting", backendRevision: 4 },
+      }],
     });
 
-    expect(store.settleConversation({
-      featureId: "feature-1",
-      operationId: "another-operation",
-    })).toBe(false);
-    expect(store.settleConversation(conversation)).toBe(true);
+    // updateFeature returns the plan as the backend had it before that bump.
+    await useFeaturePlanStore.getState().updateFeature("feature-1", { title: "renamed" });
+
+    const projected = useFeaturePlanStore.getState().features[0];
+    expect(projected?.title).toBe("renamed");
+    expect(projected?.planning?.phase).toBe("persisting");
+    expect(projected?.planning?.backendRevision).toBe(4);
   });
 
-  test("allows exactly one response persister and preserves its recovery payload", () => {
-    const conversation = {
-      operationId: "operation-persistence",
-      featureId: "feature-1",
-      userMessageId: "user-1",
-      startedAt: "2026-01-01T00:00:00.000Z",
-      phase: "dispatching" as const,
-    };
-    const store = useFeaturePlanStore.getState();
-    expect(store.startConversation(conversation)).toBe(true);
-    expect(store.markConversationRunning(conversation)).toBe(true);
-
-    const runningState = useFeaturePlanStore.getState();
-    expect(runningState.activeConversations.get("feature-1")).toMatchObject({
-      phase: "running",
-      userMessageId: "user-1",
+  test("a record for a different exchange replaces the projection regardless of revision", async () => {
+    backing = [makeFeature({
+      id: "feature-1",
+      projectId: "project-1",
+      planning: makePlanning({ operationId: "operation-2", backendRevision: 0 }),
+    })];
+    await useFeaturePlanStore.getState().loadFeatures("project-1");
+    useFeaturePlanStore.setState({
+      features: [{
+        ...useFeaturePlanStore.getState().features[0]!,
+        planning: makePlanning({ operationId: "operation-1", backendRevision: 9 }),
+      }],
     });
-    expect(store.markConversationRunning(conversation)).toBe(true);
-    expect(useFeaturePlanStore.getState()).toBe(runningState);
 
-    expect(store.claimConversationPersistence(
-      conversation,
-      "response",
-      "gpt-5.3-codex",
-    )).toBe(true);
-    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
-      phase: "persisting",
-      responseContent: "response",
-      responseModelId: "gpt-5.3-codex",
-    });
-    expect(store.claimConversationPersistence(conversation, "duplicate")).toBe(false);
-    expect(store.markConversationRunning(conversation)).toBe(false);
-    expect(store.claimConversationPersistence({
-      featureId: "feature-1",
-      operationId: "stale-operation",
-    }, "stale")).toBe(false);
+    await useFeaturePlanStore.getState().updateFeature("feature-1", { title: "renamed" });
 
-    expect(store.updateConversation(conversation, {
-      phase: "unavailable",
-      error: "Persistence failed",
-    })).toBe(true);
-    expect(store.markConversationRunning(conversation)).toBe(false);
-    expect(store.resumeConversation({
-      featureId: "feature-1",
-      operationId: "stale-operation",
-    })).toBe(false);
-    expect(store.resumeConversation(conversation)).toBe(true);
-    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
-      phase: "running",
-      responseContent: "response",
-      responseModelId: "gpt-5.3-codex",
-      error: undefined,
-    });
-    expect(store.claimConversationPersistence(conversation, "response")).toBe(true);
+    expect(useFeaturePlanStore.getState().features[0]?.planning?.operationId)
+      .toBe("operation-2");
   });
 
   test("loadFeatures populates features and tracks the current project", async () => {
@@ -403,24 +364,14 @@ describe("featurePlanStore", () => {
     expect(state.features.map((feature) => feature.id)).toEqual(["b", "a"]);
   });
 
-  test("loadFeatures preserves active conversations", async () => {
-    backing = [makeFeature({ id: "feature-1", projectId: "project-1" })];
-    const conversation = {
-      operationId: "operation-1",
-      featureId: "feature-1",
-      startedAt: "2026-01-01T00:00:00.000Z",
-      phase: "running" as const,
-    };
-    useFeaturePlanStore.getState().startConversation(conversation);
-    const activeConversations = useFeaturePlanStore.getState().activeConversations;
+  test("loadFeatures carries the backend planning record into the projection", async () => {
+    const planning = makePlanning();
+    backing = [makeFeature({ id: "feature-1", projectId: "project-1", planning })];
 
     const loaded = await useFeaturePlanStore.getState().loadFeatures("project-1");
 
     expect(loaded).toBe(true);
-    expect(useFeaturePlanStore.getState().activeConversations).toBe(activeConversations);
-    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual(
-      conversation,
-    );
+    expect(useFeaturePlanStore.getState().features[0]?.planning).toEqual(planning);
   });
 
   test("loadFeatures preserves existing features and clears loading when the backend rejects", async () => {

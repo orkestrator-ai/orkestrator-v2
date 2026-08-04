@@ -26,6 +26,11 @@ import {
   type StoredDesktopConnections,
 } from "@orkestrator/protocol/connections";
 import {
+  isFeaturePlanningRecord,
+  isTerminalFeaturePlanningPhase,
+  type FeaturePlanningRecord,
+} from "@orkestrator/protocol/feature-planning";
+import {
   getReviewInstructionValidationError,
   parseReviewInstruction,
 } from "@orkestrator/protocol/review-instruction";
@@ -123,9 +128,9 @@ type ProjectNotes = {
   updatedAt: string;
 };
 
-type FeaturePlanStatus = "collecting" | "confirming" | "stories" | "building" | "built";
+export type FeaturePlanStatus = "collecting" | "confirming" | "stories" | "building" | "built";
 
-type FeaturePlanMessage = {
+export type FeaturePlanMessage = {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
@@ -134,7 +139,7 @@ type FeaturePlanMessage = {
   stateApplication?: "pending" | "applied" | "superseded";
 };
 
-type FeatureStoryCard = {
+export type FeatureStoryCard = {
   id: string;
   title: string;
   description: string;
@@ -144,7 +149,7 @@ type FeatureStoryCard = {
   updatedAt: string;
 };
 
-type FeaturePlan = {
+export type FeaturePlan = {
   id: string;
   projectId: string;
   title: string;
@@ -159,6 +164,14 @@ type FeaturePlan = {
   codexSessionId?: string;
   buildTaskId?: string;
   buildPipelineId?: string;
+  /**
+   * The backend-owned planning exchange currently attached to this plan.
+   *
+   * Stored inline rather than in its own collection so that applying a reply
+   * and clearing the record are one atomic write, and so the record rides the
+   * existing `feature-plan` resource-change channel with no second sync path.
+   */
+  planning?: FeaturePlanningRecord;
 };
 
 type LinearAuth = {
@@ -1424,6 +1437,20 @@ function getUnscopedLegacyOpenCodeModelCatalog(value: unknown): unknown {
 }
 
 export type ResourceChangeListener = (change: ResourceChange) => void;
+
+/**
+ * A planning mutation arrived for an exchange that is no longer attached.
+ *
+ * Distinguished from a generic failure so the service can drop the work
+ * silently instead of marking a live exchange failed: whatever replaced this
+ * record is now the authority.
+ */
+export class FeaturePlanningFenceError extends Error {
+  constructor(readonly featureId: string, readonly operationId: string) {
+    super(`Feature planning exchange ${operationId} is no longer attached`);
+    this.name = "FeaturePlanningFenceError";
+  }
+}
 
 export class StorageService {
   private readonly dataDir: string;
@@ -6230,6 +6257,107 @@ export class StorageService {
         ...(stateApplication ? { stateApplication } : {}),
       });
       story.updatedAt = nowIso();
+      plan.updatedAt = nowIso();
+      return plan;
+    }, (plan) => plan.projectId);
+  }
+
+  /** Every plan across every project, for backend sweeps that are not project-scoped. */
+  async listAllFeaturePlans(): Promise<FeaturePlan[]> {
+    return await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+  }
+
+  async getFeaturePlan(featureId: string): Promise<FeaturePlan | null> {
+    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+    return plans.find((candidate) => candidate.id === featureId) ?? null;
+  }
+
+  /**
+   * Every plan carrying a planning record the backend still has to advance.
+   *
+   * Records that fail validation are ignored rather than repaired here: the
+   * service quarantines them, because a record this cannot read is one no
+   * amount of ticking will move.
+   */
+  async listActiveFeaturePlanning(): Promise<FeaturePlanningRecord[]> {
+    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+    const active: FeaturePlanningRecord[] = [];
+    for (const plan of plans) {
+      const record = plan.planning;
+      if (!isFeaturePlanningRecord(record)) continue;
+      if (isTerminalFeaturePlanningPhase(record.phase)) continue;
+      active.push(record);
+    }
+    return active;
+  }
+
+  /**
+   * Attaches a planning record, refusing when one is already in flight.
+   *
+   * This is the interlock that stops a second window — or a reload that resets
+   * a renderer latch — from dispatching a second turn into the same session.
+   */
+  async startFeaturePlanning(
+    record: FeaturePlanningRecord,
+  ): Promise<{ started: boolean; feature: FeaturePlan }> {
+    return this.mutateFeaturePlans((plans) => {
+      const plan = plans.find((candidate) => candidate.id === record.featureId);
+      if (!plan) throw new Error(`Feature plan not found: ${record.featureId}`);
+      const existing = plan.planning;
+      if (isFeaturePlanningRecord(existing) && !isTerminalFeaturePlanningPhase(existing.phase)) {
+        return { started: false, feature: plan };
+      }
+      plan.planning = { ...record, projectId: plan.projectId };
+      plan.updatedAt = nowIso();
+      return { started: true, feature: plan };
+    }, (result) => result.feature.projectId);
+  }
+
+  /**
+   * Runs `mutator` against the plan and its planning record in one serialized
+   * write, then bumps the record's revision.
+   *
+   * The `operationId` is a fence: a mutation for an exchange that has already
+   * been replaced must not land, or a superseded turn's reply would overwrite
+   * the current one.
+   */
+  async mutateFeaturePlanning<T>(
+    featureId: string,
+    operationId: string,
+    mutator: (plan: FeaturePlan, record: FeaturePlanningRecord) => T,
+  ): Promise<{ result: T; feature: FeaturePlan }> {
+    return this.mutateFeaturePlans((plans) => {
+      const plan = plans.find((candidate) => candidate.id === featureId);
+      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+      const record = plan.planning;
+      if (!isFeaturePlanningRecord(record) || record.operationId !== operationId) {
+        throw new FeaturePlanningFenceError(featureId, operationId);
+      }
+      const result = mutator(plan, record);
+      // Re-read: the mutator may have replaced the record wholesale.
+      const updated = plan.planning;
+      if (isFeaturePlanningRecord(updated) && updated.operationId === operationId) {
+        updated.backendRevision += 1;
+        updated.updatedAt = nowIso();
+      }
+      plan.updatedAt = nowIso();
+      return { result, feature: plan };
+    }, (outcome) => outcome.feature.projectId);
+  }
+
+  /**
+   * Detaches a finished exchange. A mismatched fence is a no-op, not an error:
+   * the exchange it would have cleared has already been replaced.
+   */
+  async clearFeaturePlanning(
+    featureId: string,
+    operationId: string,
+  ): Promise<FeaturePlan> {
+    return this.mutateFeaturePlans((plans) => {
+      const plan = plans.find((candidate) => candidate.id === featureId);
+      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+      if (plan.planning?.operationId !== operationId) return plan;
+      delete plan.planning;
       plan.updatedAt = nowIso();
       return plan;
     }, (plan) => plan.projectId);

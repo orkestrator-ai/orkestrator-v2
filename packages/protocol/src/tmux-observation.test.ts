@@ -4,6 +4,7 @@ import {
   parseTmuxAgentUsageSummaries,
   parseTmuxSelectionPrompt,
   stripTmuxAnsi,
+  tmuxSelectionPromptFingerprint,
 } from "./tmux-observation";
 
 describe("tmux observations", () => {
@@ -125,7 +126,7 @@ describe("tmux observations", () => {
     ].join("\n"))?.inputMode).toBe("navigate");
   });
 
-  test("uses a nearby well-formed block instead of a later unrelated hint", () => {
+  test("does not revive a completed prompt when later pane output is present", () => {
     const prompt = parseTmuxSelectionPrompt([
       "Choose a deployment target",
       "",
@@ -141,11 +142,42 @@ describe("tmux observations", () => {
       "Enter to confirm · Esc to cancel",
     ].join("\n"));
 
-    expect(prompt?.question).toBe("Choose a deployment target");
-    expect(prompt?.options.map((option) => option.label)).toEqual([
-      "Staging",
-      "Production",
-    ]);
+    expect(prompt).toBeNull();
+  });
+
+  test("does not let a running-agent header classify later token text", () => {
+    expect(parseTmuxAgentUsageSummaries([
+      "Running 1 Explore agent...",
+      "└ Review api correctness · 2 tool uses · 3k tokens",
+      "context left until auto-compact: 12.0k tokens",
+    ].join("\n"))).toEqual([{
+      name: "Review api correctness",
+      role: "Explore",
+      toolUseCount: 2,
+      tokenCount: 3_000,
+      tokenCountText: "3k tokens",
+    }]);
+  });
+
+  test("fingerprints the complete prompt semantics", () => {
+    const prompt = parseTmuxSelectionPrompt([
+      "Choose one",
+      "",
+      "› 1. First",
+      "  2. Second",
+      "",
+      "Enter to select · Arrow keys to navigate · Esc to cancel",
+    ].join("\n"));
+    expect(prompt).not.toBeNull();
+    expect(tmuxSelectionPromptFingerprint(prompt!)).toBe(
+      tmuxSelectionPromptFingerprint({ ...prompt! }),
+    );
+    expect(tmuxSelectionPromptFingerprint(prompt!)).not.toBe(
+      tmuxSelectionPromptFingerprint({ ...prompt!, selectedOptionIndex: 1 }),
+    );
+    expect(tmuxSelectionPromptFingerprint(prompt!)).not.toBe(
+      tmuxSelectionPromptFingerprint({ ...prompt!, question: "Different" }),
+    );
   });
 
   test("rejects non-contiguous transcript lists that resemble options", () => {

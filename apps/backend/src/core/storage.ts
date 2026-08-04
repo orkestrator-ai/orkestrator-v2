@@ -3108,6 +3108,43 @@ export class StorageService {
     });
   }
 
+  /**
+   * Persist one backend-observed session completion independently of the
+   * environment-wide activity aggregate. Several native tabs can share the
+   * `native-agent` source, so one tab may complete while a sibling keeps that
+   * aggregate `working`.
+   *
+   * Backend observations are serialized but may share a millisecond with the
+   * preceding working edge. Advance the durable token on a collision rather
+   * than dropping a real completion as stale. Callers must invoke this exactly
+   * once per observed per-session transition.
+   */
+  async recordEnvironmentSessionCompletion(
+    environmentId: string,
+    occurredAt: string,
+  ): Promise<Environment> {
+    if (!isAgentActivityTimestamp(occurredAt)) {
+      throw new Error("occurredAt must be a valid ISO timestamp");
+    }
+    const occurredTime = Date.parse(occurredAt);
+
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+
+      const previousTime = Date.parse(environment.lastActivityAt ?? "");
+      const acceptedTime = Number.isFinite(previousTime) && previousTime >= occurredTime
+        ? previousTime + 1
+        : occurredTime;
+      environment.lastActivityAt = new Date(acceptedTime).toISOString();
+      environment.hasUnreadWork = true;
+      await this.saveEnvironments(environments);
+      this.announce("environment", environmentId, environment.projectId);
+      return environment;
+    });
+  }
+
   async setEnvironmentUnread(
     environmentId: string,
     unread: boolean,

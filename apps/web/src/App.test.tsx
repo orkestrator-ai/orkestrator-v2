@@ -117,17 +117,20 @@ mock.module("@/components/terminal", () => ({
   TerminalContainer: ({
     environmentId,
     isActive,
+    isContainerRunning,
     onStartContainer,
     onCreateScript,
   }: {
     environmentId: string;
     isActive: boolean;
+    isContainerRunning?: boolean;
     onStartContainer?: (initialPrompt?: string) => void;
     onCreateScript?: (initialPrompt: string) => void;
   }) => (
     <div
       data-testid={`terminal-${environmentId}`}
       data-active={String(isActive)}
+      data-container-running={String(isContainerRunning)}
     >
       {environmentId}
       <button
@@ -550,6 +553,40 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     expect(mockUseCodexBackgroundSync).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps a live container available when its setup phase failed", async () => {
+    resetStores({
+      environments: [{
+        ...makeEnvironment("env-failed-setup", "project-1"),
+        status: "error",
+        setupPhase: "failed",
+      }],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-failed-setup",
+    });
+
+    render(<App />);
+
+    const terminal = await screen.findByTestId("terminal-env-failed-setup");
+    expect(terminal.getAttribute("data-container-running")).toBe("true");
+  });
+
+  test("does not treat a stopped container with failed setup as available", async () => {
+    resetStores({
+      environments: [{
+        ...makeEnvironment("env-stopped-setup", "project-1"),
+        status: "stopped",
+        setupPhase: "failed",
+      }],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-stopped-setup",
+    });
+
+    render(<App />);
+
+    const terminal = await screen.findByTestId("terminal-env-stopped-setup");
+    expect(terminal.getAttribute("data-container-running")).toBe("false");
   });
 
   test("does not mount off-screen environments solely for backend-owned setup work", async () => {

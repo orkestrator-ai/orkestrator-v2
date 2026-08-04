@@ -130,6 +130,7 @@ beforeEach(() => {
   useCodexStore.setState({
     clients: new Map(),
     sessions: new Map(),
+    sessionLoadingRevisions: new Map(),
     pendingApprovals: new Map(),
     pendingInteractions: new Map(),
     sessionPhase: new Map(),
@@ -316,6 +317,83 @@ describe("Codex background synchronization", () => {
     expect(session?.isLoading).toBe(true);
     expect(session?.loadingStartedAt).toBe(200);
     expect(session?.messages[0]?.parts[0]?.toolState).toBe("pending");
+  });
+
+  test("does not apply an old response after an undefined-id turn rolls over", async () => {
+    seedLoadingSession(100);
+    useCodexStore.setState((state) => {
+      const sessions = new Map(state.sessions);
+      sessions.set(SESSION_KEY, {
+        ...sessions.get(SESSION_KEY)!,
+        turnId: undefined,
+      });
+      return {
+        sessions,
+        sessionLoadingRevisions: new Map([[SESSION_KEY, 1]]),
+      };
+    });
+    const lookup = deferred<CodexSessionStatusLookupResult>();
+    let messageReads = 0;
+    const synchronizer = createCodexBackgroundSynchronizer({
+      dependencies: {
+        ...dependencies({ kind: "unavailable", error: new Error("unused") }),
+        lookupSessionStatus: async () => lookup.promise,
+        getSessionMessages: async () => {
+          messageReads += 1;
+          return [toolMessage("success")];
+        },
+      },
+    });
+
+    const pending = synchronizer.reconcileNow();
+    // A live idle frame unlocks the old turn, and the user starts a new prompt
+    // before its POST has returned a provider turn id.
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, false);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+    lookup.resolve({
+      kind: "found",
+      session: { status: "idle", phase: "idle" },
+    });
+    await pending;
+
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+      isLoading: true,
+      turnId: undefined,
+      messages: [toolMessage("pending")],
+    });
+    expect(messageReads).toBe(0);
+  });
+
+  test("adopts a running status turn id even when its start time is absent", async () => {
+    seedLoadingSession(100);
+    useCodexStore.setState((state) => {
+      const sessions = new Map(state.sessions);
+      sessions.set(SESSION_KEY, {
+        ...sessions.get(SESSION_KEY)!,
+        turnId: undefined,
+      });
+      return {
+        sessions,
+        sessionLoadingRevisions: new Map([[SESSION_KEY, 1]]),
+      };
+    });
+    const synchronizer = createCodexBackgroundSynchronizer({
+      dependencies: dependencies({
+        kind: "found",
+        session: {
+          status: "running",
+          phase: "running",
+          turnId: "turn-authoritative",
+        },
+      }),
+    });
+
+    await synchronizer.reconcileNow();
+
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+      isLoading: true,
+      turnId: "turn-authoritative",
+    });
   });
 
   test("does not apply a delayed terminal transcript to a newer turn", async () => {

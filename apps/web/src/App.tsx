@@ -60,8 +60,23 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
+import type { Environment } from "@/types";
 
 const NO_BACKGROUND_SETUP = new Set<string>();
+
+/**
+ * Setup can fail after Docker has successfully created and started the
+ * container. The backend reports that lifecycle outcome as `status: "error"`,
+ * but the existing container is still the workspace in which retry/override
+ * must run. Keep that surface live until setup is resolved.
+ */
+export function isEnvironmentContainerAvailable(
+  environment: Pick<Environment, "containerId" | "environmentType" | "setupPhase" | "status">,
+): boolean {
+  if (environment.environmentType === "local" || !environment.containerId) return false;
+  return environment.status === "running"
+    || (environment.status === "error" && environment.setupPhase === "failed");
+}
 
 function App() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
@@ -659,7 +674,7 @@ function App() {
                 <TerminalContainer
                   environmentId={selectedEnvironment.id}
                   containerId={selectedEnvironment.containerId ?? null}
-                  isContainerRunning={selectedEnvironment.status === "running"}
+                  isContainerRunning={isEnvironmentContainerAvailable(selectedEnvironment)}
                   isContainerCreating={selectedEnvironment.status === "creating"}
                   isActive
                   className="h-full"
@@ -702,7 +717,7 @@ function App() {
                   key={`bg-pipeline-${environment.id}`}
                   environmentId={environment.id}
                   containerId={environment.containerId ?? null}
-                  isContainerRunning={environment.status === "running"}
+                  isContainerRunning={isEnvironmentContainerAvailable(environment)}
                   isContainerCreating={environment.status === "creating"}
                   isActive={false}
                   className="h-full"

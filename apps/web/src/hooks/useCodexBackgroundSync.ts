@@ -50,6 +50,8 @@ interface SessionTarget {
   sessionKey: string;
   sessionId: string;
   turnId: string | undefined;
+  /** Renderer lifecycle generation used until the bridge supplies turnId. */
+  loadingRevision: number;
   client: CodexClient;
 }
 
@@ -57,7 +59,7 @@ function targetId(target: SessionTarget): string {
   return [
     target.sessionKey,
     target.sessionId,
-    target.turnId ?? "",
+    target.turnId ?? `local:${target.loadingRevision}`,
   ].join("\u0000");
 }
 
@@ -65,14 +67,17 @@ function targetId(target: SessionTarget): string {
  * True only while this is still the turn the request was started for.
  *
  * Session ids survive across turns, so checking only the id lets a delayed
- * `idle` response from the previous turn unlock a newly started one. The
- * The turn id is issued by the bridge and survives renderer reloads.
+ * `idle` response from the previous turn unlock a newly started one. The turn
+ * id is issued by the bridge and survives renderer reloads.
  */
 function isCurrentTurn(target: SessionTarget): boolean {
-  const current = useCodexStore.getState().sessions.get(target.sessionKey);
-  return current?.sessionId === target.sessionId
-    && current.isLoading
-    && current.turnId === target.turnId;
+  const state = useCodexStore.getState();
+  const current = state.sessions.get(target.sessionKey);
+  if (current?.sessionId !== target.sessionId || !current.isLoading) return false;
+  if (target.turnId !== undefined) return current.turnId === target.turnId;
+  return current.turnId === undefined
+    && (state.sessionLoadingRevisions.get(target.sessionKey) ?? 0)
+      === target.loadingRevision;
 }
 
 function clearPendingInput(sessionKey: string): void {
@@ -102,6 +107,7 @@ function currentTargets(): SessionTarget[] {
       sessionKey,
       sessionId: session.sessionId,
       turnId: session.turnId,
+      loadingRevision: state.sessionLoadingRevisions.get(sessionKey) ?? 0,
       client,
     });
   }
@@ -224,7 +230,7 @@ export function createCodexBackgroundSynchronizer(
       let status = lookup.session;
       if (status.status === "running") {
         terminalTargets.delete(id);
-        if (status.turnStartedAt !== undefined) {
+        if (status.turnStartedAt !== undefined || status.turnId !== undefined) {
           // Keep inactive tabs synchronized even when no mounted SSE consumer
           // was present to observe the turn-start frame.
           state.setSessionLoading(
@@ -238,6 +244,9 @@ export function createCodexBackgroundSynchronizer(
           // the authoritative correction so their valid snapshots are not
           // mistaken for results from an older turn.
           if (status.turnId !== undefined) target.turnId = status.turnId;
+          target.loadingRevision =
+            useCodexStore.getState().sessionLoadingRevisions.get(target.sessionKey)
+            ?? target.loadingRevision;
         }
         // The foreground SSE stream owns within-turn phase and usage updates.
         // Applying an HTTP running snapshot here could roll those values back

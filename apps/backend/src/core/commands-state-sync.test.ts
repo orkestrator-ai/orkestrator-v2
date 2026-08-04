@@ -46,6 +46,7 @@ async function withCommands<T>(
     loopedReviews?: CommandContext["loopedReviews"];
     nativeAgents?: CommandContext["nativeAgents"];
     nativeAgentsFactory?: (storage: StorageService) => CommandContext["nativeAgents"];
+    tabTeardown?: NonNullable<Parameters<typeof createCommandRegistry>[0]>["tabTeardown"];
   } = {},
 ): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-state-sync-"));
@@ -60,6 +61,7 @@ async function withCommands<T>(
   } as Parameters<StorageService["addEnvironment"]>[0]);
   const commands = createCommandRegistry({
     claudeStatePolls: options.claudeStatePolls,
+    tabTeardown: options.tabTeardown,
   });
   const context = {
     appRoot: "",
@@ -176,6 +178,198 @@ describe("durable tab teardown commands", () => {
         expect(await storage.getNativeAgentSession(key)).toBeNull();
       }
       expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    }, {
+      tabTeardown: {
+        peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
+        fetch: (async () => new Response(null, { status: 204 })) as unknown as typeof fetch,
+      },
+    });
+  });
+
+  test("refuses terminal resources owned by another tab or environment", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.addEnvironment({
+        id: "e2", name: "Other", projectId: "proj-1", status: "running",
+        environmentType: "local", branch: "other", order: 1,
+        containerId: null, prUrl: null, prState: null, hasMergeConflicts: null,
+        networkAccessMode: "restricted", createdAt: new Date(0).toISOString(),
+      });
+      const otherTab = await invoke("create_local_terminal_session", {
+        environmentId: "e1",
+        terminalKey: "tab-other",
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: false,
+      }) as { sessionId: string };
+      const otherEnvironment = await storage.createSession(
+        "e2",
+        "local",
+        "tab-target",
+        "plain",
+      );
+
+      await expect(invoke("teardown_tab", {
+        environmentId: "e1",
+        tabId: "tab-target",
+        kind: "terminal",
+        sessionId: otherTab.sessionId,
+      })).rejects.toThrow("not owned by the requested environment and tab");
+      expect(await invoke("create_local_terminal_session", {
+        environmentId: "e1",
+        terminalKey: "tab-other",
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: false,
+      })).toEqual({ sessionId: otherTab.sessionId, created: false });
+
+      await expect(invoke("teardown_tab", {
+        environmentId: "e1",
+        tabId: "tab-target",
+        kind: "terminal",
+        persistentSessionId: otherEnvironment.id,
+      })).rejects.toThrow("not owned by the requested environment and tab");
+      expect((await storage.getSession(otherEnvironment.id))?.status).toBe("connected");
+
+      await invoke("close_local_terminal_session", { sessionId: otherTab.sessionId });
+    });
+  });
+
+  test("refuses a native provider session owned by another tab or environment", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.addEnvironment({
+        id: "e2", name: "Other", projectId: "proj-1", status: "running",
+        environmentType: "local", branch: "other", order: 1,
+        containerId: null, prUrl: null, prState: null, hasMergeConflicts: null,
+        networkAccessMode: "restricted", createdAt: new Date(0).toISOString(),
+      });
+      for (const [environmentId, tabId] of [
+        ["e1", "tab-other"],
+        ["e2", "tab-target"],
+      ] as const) {
+        const logicalSessionKey = `env-${environmentId}:${tabId}`;
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey(environmentId, "codex", logicalSessionKey),
+          environmentId,
+          agent: "codex",
+          logicalSessionKey,
+          providerSessionId: `provider-${environmentId}-${tabId}`,
+          origin: "interactive-native",
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        });
+      }
+
+      for (const providerSessionId of [
+        "provider-e1-tab-other",
+        "provider-e2-tab-target",
+      ]) {
+        await expect(invoke("teardown_tab", {
+          environmentId: "e1",
+          tabId: "tab-target",
+          kind: "codex-native",
+          sessionId: providerSessionId,
+        })).rejects.toThrow("owned by a different environment or tab");
+      }
+      expect(await storage.listNativeAgentSessions()).toHaveLength(2);
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents)
+        .toHaveProperty("tab-target");
+    });
+  });
+
+  test("retains the native mapping and intent while the bridge is unavailable", async () => {
+    const peekBridge = mock(async () => null as { port: number; authToken: string } | null);
+    peekBridge.mockResolvedValueOnce(null);
+    peekBridge.mockResolvedValue({ port: 4000, authToken: "test-token" });
+    const deleteRequest = mock(async () => new Response(null, { status: 204 }));
+    await withCommands(async (invoke, storage) => {
+      const logicalSessionKey = "env-e1:tab-codex";
+      const key = nativeAgentSessionStorageKey("e1", "codex", logicalSessionKey);
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "e1",
+        agent: "codex",
+        logicalSessionKey,
+        providerSessionId: "provider-codex",
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      });
+
+      await expect(invoke("teardown_tab", {
+        environmentId: "e1",
+        tabId: "tab-codex",
+        kind: "codex-native",
+        sessionId: "provider-codex",
+      })).rejects.toThrow("unavailable or unhealthy");
+      expect(await storage.getNativeAgentSession(key)).not.toBeNull();
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents)
+        .toHaveProperty("tab-codex");
+      expect(deleteRequest).not.toHaveBeenCalled();
+
+      await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+      expect(deleteRequest).toHaveBeenCalledTimes(1);
+      expect(await storage.getNativeAgentSession(key)).toBeNull();
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    }, {
+      tabTeardown: {
+        peekBridge,
+        fetch: deleteRequest as unknown as typeof fetch,
+      },
+    });
+  });
+
+  test("times out a hanging provider delete without blocking other intents", async () => {
+    const deleteRequest = mock((input: string | URL | Request, _init?: RequestInit) => {
+      if (!String(input).includes("provider-hanging")) {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      // Deliberately ignore AbortSignal. The command's own deadline must bound
+      // reconciliation even if the transport never settles cooperatively.
+      return new Promise<Response>(() => undefined);
+    });
+    await withCommands(async (invoke, storage) => {
+      for (const [tabId, providerSessionId] of [
+        ["tab-hanging", "provider-hanging"],
+        ["tab-fast", "provider-fast"],
+      ] as const) {
+        const logicalSessionKey = `env-e1:${tabId}`;
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("e1", "codex", logicalSessionKey),
+          environmentId: "e1",
+          agent: "codex",
+          logicalSessionKey,
+          providerSessionId,
+          origin: "interactive-native",
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        });
+        await storage.setTabTeardownIntent("e1", {
+          tabId,
+          kind: "codex-native",
+          sessionId: providerSessionId,
+          createdAt: `2026-08-04T10:00:0${tabId === "tab-hanging" ? "0" : "1"}.000Z`,
+        });
+      }
+
+      const startedAt = performance.now();
+      await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+      expect(performance.now() - startedAt).toBeLessThan(250);
+
+      const hangingKey = nativeAgentSessionStorageKey(
+        "e1",
+        "codex",
+        "env-e1:tab-hanging",
+      );
+      const fastKey = nativeAgentSessionStorageKey("e1", "codex", "env-e1:tab-fast");
+      expect(await storage.getNativeAgentSession(hangingKey)).not.toBeNull();
+      expect(await storage.getNativeAgentSession(fastKey)).toBeNull();
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents)
+        .toHaveProperty("tab-hanging");
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents)
+        .not.toHaveProperty("tab-fast");
+    }, {
+      tabTeardown: {
+        peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
+        fetch: deleteRequest as unknown as typeof fetch,
+        deleteTimeoutMs: 20,
+      },
     });
   });
 });

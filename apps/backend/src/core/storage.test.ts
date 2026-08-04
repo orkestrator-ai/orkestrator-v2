@@ -205,6 +205,32 @@ describe("backend-owned setup and build surfaces", () => {
       });
     });
   });
+
+  test("recovers pane layouts from a valid backup during reconciliation", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-layout-backup";
+      await storage.addEnvironment(environment);
+      const saved = await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
+      }, 0);
+      const filePath = path.join(dataDir, "pane-layouts.json");
+      await fs.writeFile(
+        `${filePath}.bak.1`,
+        `${JSON.stringify({ [environment.id]: saved })}\n`,
+        "utf8",
+      );
+      await fs.writeFile(filePath, "{truncated", "utf8");
+
+      await expect(storage.loadPaneLayoutsForReconciliation()).resolves.toEqual({
+        available: true,
+        layouts: { [environment.id]: saved },
+      });
+    });
+  });
 });
 
 describe("durable tab teardown intents", () => {
@@ -722,6 +748,27 @@ describe("hot store read caching", () => {
 });
 
 describe("environment completion and unread state", () => {
+  test("records a per-session completion even when its timestamp collides with aggregate activity", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const collision = environment.lastActivityAt!;
+
+      const completed = await storage.recordEnvironmentSessionCompletion(
+        environment.id,
+        collision,
+      );
+
+      expect(completed.hasUnreadWork).toBe(true);
+      expect(Date.parse(completed.lastActivityAt!)).toBe(Date.parse(collision) + 1);
+      await expect(
+        storage.recordEnvironmentSessionCompletion(environment.id, "not-an-iso-time"),
+      ).rejects.toThrow("occurredAt must be a valid ISO timestamp");
+      await expect(
+        storage.recordEnvironmentSessionCompletion("missing", new Date().toISOString()),
+      ).rejects.toThrow("Environment not found: missing");
+    });
+  });
+
   test("does not move the unread activity token backwards for a fresh observer", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
@@ -794,6 +841,18 @@ describe("environment completion and unread state", () => {
       await expect(
         storage.setEnvironmentUnread(environment.id, true, 123 as never),
       ).rejects.toThrow("expectedLastActivityAt must be a string or null");
+    });
+  });
+});
+
+describe("Kanban point reads", () => {
+  test("returns one task by id and null when it is absent", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const task = await storage.addKanbanTask("project-1", "Build", "Details");
+      await storage.addKanbanTask("project-2", "Other", "Other details");
+
+      await expect(storage.getKanbanTask(task.id)).resolves.toEqual(task);
+      await expect(storage.getKanbanTask("missing-task")).resolves.toBeNull();
     });
   });
 });

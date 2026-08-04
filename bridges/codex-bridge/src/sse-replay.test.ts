@@ -553,6 +553,34 @@ describe("/event/subscribe", () => {
     }
   });
 
+  test("starts keepalives only after the buffered replay tail is written", async () => {
+    const cursor = __testing.eventRingForTesting().latestRevision;
+    const order: string[] = [];
+    __testing.setSseRouteTestHooksForTesting({
+      beforeBufferedDrain: () => {
+        order.push("drain");
+        __testing.emitForTesting({
+          type: "session.updated",
+          sessionId: "keepalive-order",
+        });
+      },
+      beforeBufferedWrite: () => {
+        order.push("write");
+      },
+      afterKeepaliveStarted: () => {
+        order.push("keepalive");
+      },
+    });
+
+    try {
+      const frames = await collect(`?since=${cursor}`, () => undefined, { expected: 1 });
+      expect(frames.some((frame) => frame.data.sessionId === "keepalive-order")).toBe(true);
+      expect(order).toEqual(["drain", "write", "keepalive"]);
+    } finally {
+      __testing.setSseRouteTestHooksForTesting(null);
+    }
+  });
+
   test("closes a subscriber whose handshake replay buffer exceeds its cap", async () => {
     const cursor = __testing.eventRingForTesting().latestRevision;
     const originalError = console.error;

@@ -79,3 +79,19 @@ test("retrySetupRuntime runs setup and projects the authoritative result", async
     expect.objectContaining({ setupPhase: "ready", setupScriptsComplete: true }),
   );
 });
+
+test("retrySetupRuntime ignores unknown environments", async () => {
+  await retrySetupRuntime("missing");
+  expect(runEnvironmentSetup).not.toHaveBeenCalled();
+});
+
+test("retrySetupRuntime leaves the failed phase intact when retry rejects", async () => {
+  useEnvironmentStore.setState({
+    environments: [{ id: "env-1", setupPhase: "failed" } as Environment],
+  });
+  runEnvironmentSetup.mockRejectedValueOnce(new Error("retry unavailable"));
+
+  await expect(retrySetupRuntime("env-1")).rejects.toThrow("retry unavailable");
+  expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
+    .toBe("failed");
+});

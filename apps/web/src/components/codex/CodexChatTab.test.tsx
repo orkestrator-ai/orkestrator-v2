@@ -157,6 +157,7 @@ const mockGetSessionStatus = mock<
     title?: string;
     error?: string;
     turnStartedAt?: number;
+    turnId?: string;
   } | null>
 >(async () => ({ status: "idle" }));
 const mockLookupSessionStatus = mock<
@@ -1928,6 +1929,11 @@ describe("CodexChatTab", () => {
 
   test("rehydrates the session id saved in a restored pane tab", async () => {
     const restoredSessionId = "restored-codex-session";
+    mockGetSessionStatus.mockResolvedValueOnce({
+      status: "running",
+      turnStartedAt: 4_000,
+      turnId: "restored-turn",
+    });
     useCodexStore.setState({ sessions: new Map() });
     usePaneLayoutStore
       .getState()
@@ -1946,6 +1952,11 @@ describe("CodexChatTab", () => {
       expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
         restoredSessionId,
       );
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        isLoading: true,
+        loadingStartedAt: 4_000,
+        turnId: "restored-turn",
+      });
     });
     expect(mockCreateSession).not.toHaveBeenCalled();
     const restoredRoot = usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)?.root;
@@ -2140,6 +2151,7 @@ describe("CodexChatTab", () => {
     mockGetSessionStatus.mockResolvedValue({
       status: "running",
       title: "Backend startup",
+      turnId: "backend-startup-turn",
     });
     mockGetSessionMessages.mockResolvedValue([restoredMessage]);
 
@@ -2156,6 +2168,7 @@ describe("CodexChatTab", () => {
         sessionId: projectedSessionId,
         messages: [restoredMessage],
         isLoading: true,
+        turnId: "backend-startup-turn",
         title: "Backend startup",
       });
     });

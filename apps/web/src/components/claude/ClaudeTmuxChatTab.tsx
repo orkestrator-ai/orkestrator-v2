@@ -60,13 +60,13 @@ import {
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
 import {
+  answerSelectionPrompt,
   answerPreToolUse,
   getPendingHooks,
   getStatus,
   getTranscript,
   interruptSession,
   replyHook,
-  sendKeys,
   startSession,
   submit as submitToTmux,
   switchEffort,
@@ -81,9 +81,11 @@ import {
   buildTmuxPromptWithAttachments,
   escapePathForTerminalInput,
 } from "@orkestrator/protocol/tmux-prompt";
-import type {
-  TmuxSelectionOption,
-  TmuxSelectionPrompt,
+import {
+  tmuxSelectionPromptFingerprint,
+  type TmuxAgentObservation,
+  type TmuxSelectionOption,
+  type TmuxSelectionPrompt,
 } from "@orkestrator/protocol/tmux-observation";
 import {
   payloadToApproval,
@@ -1209,12 +1211,26 @@ export function ClaudeTmuxChatTab({
     }
   };
 
-  const handlePromptKeys = async (keys: string[]) => {
-    if (keys.length === 0 || promptControlBusyRef.current) return false;
+  const handleSelectPromptOption = async (
+    observation: TmuxAgentObservation,
+    prompt: TmuxSelectionPrompt,
+    optionIndex: number,
+  ): Promise<boolean> => {
+    if (!prompt.options[optionIndex] || promptControlBusyRef.current) return false;
+    if (!observation.generation) {
+      setError("Selection prompt has no backend generation");
+      return false;
+    }
     promptControlBusyRef.current = true;
     setError(null);
     try {
-      await sendKeys(tabId, keys, environmentId);
+      await answerSelectionPrompt(tabId, environmentId, {
+        expectedGeneration: observation.generation,
+        expectedRevision: observation.revision,
+        expectedPromptFingerprint: tmuxSelectionPromptFingerprint(prompt),
+        optionIndex,
+      });
+      clearSelectionPrompt(storeKey, prompt);
       return true;
     } catch (e) {
       setError(String(e));
@@ -1224,19 +1240,8 @@ export function ClaudeTmuxChatTab({
     }
   };
 
-  const handleSelectPromptOption = async (
-    prompt: TmuxSelectionPrompt,
-    optionIndex: number,
-  ) => {
-    const option = prompt.options[optionIndex];
-    if (!option) return;
-
-    if (await handlePromptKeys(selectionPromptSubmitKeys(prompt, optionIndex))) {
-      clearSelectionPrompt(storeKey, prompt);
-    }
-  };
-
   const handleSelectionPromptAnswers = async (
+    observation: TmuxAgentObservation,
     prompt: TmuxSelectionPrompt,
     answers: string[][],
   ): Promise<boolean> => {
@@ -1246,8 +1251,7 @@ export function ClaudeTmuxChatTab({
     );
     if (!selectedOption) return false;
 
-    await handleSelectPromptOption(prompt, selectedOption.optionIndex);
-    return true;
+    return handleSelectPromptOption(observation, prompt, selectedOption.optionIndex);
   };
 
   const handleResume = (sessionId: string) => {
@@ -1581,7 +1585,7 @@ export function ClaudeTmuxChatTab({
                   />
                 ))}
 
-                {visibleSelectionPrompt && (
+                {visibleSelectionPrompt && tabState && (
                   <ClaudeQuestionCard
                     key={selectionPromptKey(visibleSelectionPrompt)}
                     question={selectionPromptToQuestion(visibleSelectionPrompt, storeKey)}
@@ -1590,7 +1594,7 @@ export function ClaudeTmuxChatTab({
                     allowOptionDeselect={false}
                     hideDismiss
                     onSubmitAnswers={(answers) =>
-                      handleSelectionPromptAnswers(visibleSelectionPrompt, answers)
+                      handleSelectionPromptAnswers(tabState.observation, visibleSelectionPrompt, answers)
                     }
                   />
                 )}
@@ -2055,37 +2059,6 @@ function TmuxElicitationCard({
 }
 
 // ─── In-TUI selection prompt controls ───────────────────────────────────────
-
-function selectionPromptNavigationKeys(
-  prompt: TmuxSelectionPrompt,
-  optionIndex: number,
-): string[] {
-  if (prompt.selectedOptionIndex === null) {
-    return [
-      ...Array.from({ length: prompt.options.length }, () => "Up"),
-      ...Array.from({ length: optionIndex }, () => "Down"),
-      "Enter",
-    ];
-  }
-  const delta = optionIndex - prompt.selectedOptionIndex;
-  const navKey = delta > 0 ? "Down" : "Up";
-  return [...Array.from({ length: Math.abs(delta) }, () => navKey), "Enter"];
-}
-
-function selectionPromptSubmitKeys(
-  prompt: TmuxSelectionPrompt,
-  optionIndex: number,
-): string[] {
-  const option = prompt.options[optionIndex];
-  if (!option) return [];
-  if (prompt.inputMode === "number") {
-    return option.number.toString().split("");
-  }
-  if (optionIndex === prompt.selectedOptionIndex) {
-    return ["Enter"];
-  }
-  return selectionPromptNavigationKeys(prompt, optionIndex);
-}
 
 function pendingSnapshotFromHooks(hooks: TmuxPendingHook[]) {
   const approvals: TmuxPendingApproval[] = [];

@@ -32,7 +32,7 @@ export interface TmuxAgentObservation {
 }
 
 const AGENT_ROLE_COLUMN_RE = /^[\p{L}\p{N}_-]+$/u;
-const AGENT_HEADER_RE = /\bRunning[ \t]+\d+[ \t]+(?<role>[^\r\n]+?)[ \t]+agents?\b/i;
+const AGENT_HEADER_RE = /\bRunning[ \t]+(?<count>\d+)[ \t]+(?<role>[^\r\n]+?)[ \t]+agents?\b/i;
 const TOOL_USE_COLUMN_RE = /^(?<count>\d[\d,]*)[ \t]+tools?[ \t]+uses?$/i;
 const TOKEN_COLUMN_RE = /^(?<tokens>\d[\d,.]*(?:[kKmMbB])?)[ \t]+tokens?$/i;
 const TOKEN_SUFFIX_RE = /(?<tokens>\d[\d,.]*(?:[kKmMbB])?)[ \t]+tokens?[ \t]*$/i;
@@ -147,12 +147,17 @@ export function parseTmuxAgentUsageSummaries(
 ): TmuxAgentUsageSummary[] {
   const summaries: TmuxAgentUsageSummary[] = [];
   let currentRole: string | undefined;
+  let remainingHeaderRows = 0;
   for (const rawLine of boundedSnapshotLines(snapshot)) {
     if (rawLine.length > MAX_PATTERN_LINE_CHARS) continue;
     const line = stripTreePrefix(rawLine);
     if (!line) continue;
     const headerMatch = AGENT_HEADER_RE.exec(line);
-    if (headerMatch?.groups?.role) currentRole = headerMatch.groups.role.trim();
+    if (headerMatch?.groups?.role && headerMatch.groups.count) {
+      currentRole = headerMatch.groups.role.trim();
+      remainingHeaderRows = Number.parseInt(headerMatch.groups.count, 10);
+      continue;
+    }
 
     const columns = line.split(/[·•]/u).map((column) => column.trim());
     const toolColumn = columns.length >= 3 ? TOOL_USE_COLUMN_RE.exec(columns[1] ?? "") : null;
@@ -166,11 +171,12 @@ export function parseTmuxAgentUsageSummaries(
       if (!name || !Number.isFinite(toolUseCount) || tokenCount === null) continue;
       summaries.push({
         name,
-        role: currentRole,
+        role: remainingHeaderRows > 0 ? currentRole : undefined,
         toolUseCount,
         tokenCount,
         tokenCountText: `${tokens} tokens`,
       });
+      if (remainingHeaderRows > 0 && --remainingHeaderRows === 0) currentRole = undefined;
       continue;
     }
 
@@ -187,15 +193,17 @@ export function parseTmuxAgentUsageSummaries(
     const hasRole = Boolean(first && rest.length > 0 && AGENT_ROLE_COLUMN_RE.test(first));
     const inlineRole = hasRole ? first!.trim() : undefined;
     const name = hasRole ? rest.join(" ").trim() : label;
-    if (!inlineRole && !currentRole && !hasAgentLineMarker(rawLine)) continue;
+    const markedAgentRow = hasAgentLineMarker(rawLine);
+    if (!inlineRole && !markedAgentRow) continue;
     const tokenCount = parseCompactNumber(tokens);
     if (!name || tokenCount === null) continue;
     summaries.push({
       name,
-      role: inlineRole ?? currentRole,
+      role: inlineRole ?? (remainingHeaderRows > 0 ? currentRole : undefined),
       tokenCount,
       tokenCountText: `${tokens} tokens`,
     });
+    if (remainingHeaderRows > 0 && --remainingHeaderRows === 0) currentRole = undefined;
   }
   return summaries;
 }
@@ -265,15 +273,28 @@ function selectionQuestion(lines: string[], optionBlockStart: number): string | 
 
 export function parseTmuxSelectionPrompt(snapshot: string): TmuxSelectionPrompt | null {
   const lines = boundedSnapshotLines(snapshot).map((line) => line.trimEnd());
-  for (let hintIndex = lines.length - 1; hintIndex >= 0; hintIndex -= 1) {
-    const hintLine = lines[hintIndex] ?? "";
-    if (hintLine.length > MAX_PATTERN_LINE_CHARS || !SELECTION_PROMPT_HINT.test(hintLine)) {
-      continue;
-    }
-    const prompt = parseSelectionPromptAtHint(lines, hintIndex);
-    if (prompt) return prompt;
+  const hintIndex = findLastIndex(lines, (line) => line.trim() !== "");
+  if (hintIndex < 0) return null;
+  const hintLine = lines[hintIndex] ?? "";
+  if (hintLine.length > MAX_PATTERN_LINE_CHARS || !SELECTION_PROMPT_HINT.test(hintLine)) {
+    return null;
   }
-  return null;
+  return parseSelectionPromptAtHint(lines, hintIndex);
+}
+
+/** Stable semantic identity used to bind a UI action to one observed prompt. */
+export function tmuxSelectionPromptFingerprint(prompt: TmuxSelectionPrompt): string {
+  return JSON.stringify({
+    question: prompt.question,
+    options: prompt.options.map(({ number, label, optionIndex, selected }) => ({
+      number,
+      label,
+      optionIndex,
+      selected,
+    })),
+    selectedOptionIndex: prompt.selectedOptionIndex,
+    inputMode: prompt.inputMode,
+  });
 }
 
 function parseSelectionPromptAtHint(

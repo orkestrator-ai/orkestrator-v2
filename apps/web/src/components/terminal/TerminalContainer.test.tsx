@@ -464,6 +464,77 @@ describe("TerminalContainer", () => {
     expect(screen.getByRole("button", { name: /skip setup/i })).toBeTruthy();
   });
 
+  test("keeps setup recovery visible for a live container reported as errored", async () => {
+    useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      status: "error",
+      setupScriptsComplete: false,
+      setupPhase: "failed",
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
+      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+    });
+    expect(screen.getByText("Environment setup failed.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /retry setup/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /skip setup/i })).toBeTruthy();
+  });
+
+  test("shows the stopped overlay and clears panes for a stopped failed setup", async () => {
+    useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      status: "stopped",
+      setupScriptsComplete: false,
+      setupPhase: "failed",
+    });
+    usePaneLayoutStore.setState((state) => {
+      const environments = new Map(state.environments);
+      environments.set("env-hidden", {
+        root: {
+          kind: "leaf",
+          id: "stale-pane",
+          tabs: [{ id: "stale-tab", type: "plain" }],
+          activeTabId: "stale-tab",
+        },
+        activePaneId: "stale-pane",
+        containerId: "container-hidden",
+      });
+      return { environments };
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning={false}
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    expect(screen.getByText("Container is not running")).toBeTruthy();
+    expect(screen.queryByText("Environment setup failed.")).toBeNull();
+    await waitFor(() => {
+      const panes = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(panes?.containerId).toBeNull();
+      expect(panes?.root).toMatchObject({
+        kind: "leaf",
+        tabs: [],
+      });
+    });
+  });
+
   test("hydrates and preserves a build tab inserted before the container mounts", async () => {
     const pipeline = buildPipelineFixture({
       id: "pipeline-pre-mount",

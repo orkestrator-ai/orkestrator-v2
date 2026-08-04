@@ -271,6 +271,7 @@ const stopSessionMock = mock(async () => {});
 const interruptSessionMock = mock(async () => {});
 const capturePaneMock = mock(async () => "");
 const sendKeysMock = mock(async () => {});
+const answerSelectionPromptMock = mock(async () => {});
 const replyHookMock = mock(async () => {});
 const submitMock = mock(async () => {});
 const switchModelMock = mock(async () => {});
@@ -327,6 +328,8 @@ mock.module("@/lib/claude-tmux-client", () => ({
     capturePaneMock(tabId, environmentId),
   sendKeys: (tabId: string, keys: string[], environmentId?: string) =>
     sendKeysMock(tabId, keys, environmentId),
+  answerSelectionPrompt: (tabId: string, environmentId: string, input: unknown) =>
+    answerSelectionPromptMock(tabId, environmentId, input),
   switchModel: (tabId: string, model: string, environmentId?: string) =>
     switchModelMock(tabId, model, environmentId),
   switchEffort: (tabId: string, effort: string, environmentId?: string) =>
@@ -441,7 +444,10 @@ mock.module("react-virtuoso", () => ({
 const { ClaudeTmuxChatTab } = await import(
   "@/components/claude/ClaudeTmuxChatTab"
 );
-const { parseTmuxAgentObservation, parseTmuxSelectionPrompt } = await import(
+const {
+  parseTmuxAgentObservation,
+  parseTmuxSelectionPrompt,
+} = await import(
   "@orkestrator/protocol/tmux-observation"
 );
 
@@ -486,12 +492,19 @@ function mockRunningTmuxStatus(pane = "") {
     busy: false,
     permission_mode: "bypassPermissions",
     fast_mode: false,
-    observation: parseTmuxAgentObservation(
+    observation_generation: "generation-1",
+    observation: generatedObservation(
       pane,
       1,
-      "2026-08-04T12:00:00.000Z",
     ),
   }));
+}
+
+function generatedObservation(pane: string, revision: number) {
+  return {
+    ...parseTmuxAgentObservation(pane, revision, "2026-08-04T12:00:00.000Z"),
+    generation: "generation-1",
+  };
 }
 
 function deferred<T>() {
@@ -508,8 +521,17 @@ async function adoptMockedPaneObservation(revision = 1) {
   const pane = await capturePaneMock();
   useClaudeTmuxStore.getState().setObservation(
     "tab-1",
-    parseTmuxAgentObservation(pane, revision, "2026-08-04T12:00:00.000Z"),
+    generatedObservation(pane, revision),
   );
+}
+
+function expectSelectionAnswer(optionIndex: number) {
+  expect(answerSelectionPromptMock).toHaveBeenCalledWith("tab-1", "env-1", {
+    expectedGeneration: "generation-1",
+    expectedRevision: 1,
+    expectedPromptFingerprint: expect.any(String),
+    optionIndex,
+  });
 }
 
 function seedPane(
@@ -807,6 +829,7 @@ describe("ClaudeTmuxChatTab", () => {
     interruptSessionMock.mockClear();
     capturePaneMock.mockClear();
     sendKeysMock.mockClear();
+    answerSelectionPromptMock.mockClear();
     replyHookMock.mockClear();
     submitMock.mockClear();
     switchModelMock.mockClear();
@@ -6422,7 +6445,7 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel
       });
     useClaudeTmuxStore.getState().setObservation(
       "tab-1",
-      parseTmuxAgentObservation(pane, 1, "2026-08-04T12:00:00.000Z"),
+      generatedObservation(pane, 1),
     );
 
     render(
@@ -6438,12 +6461,12 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel
     fireEvent.click(
       screen.getByRole("button", { name: /Randomize tmux session name/ }),
     );
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["Down", "Enter"], "env-1");
+      expectSelectionAnswer(2);
     });
   });
 
@@ -6528,12 +6551,12 @@ Enter to confirm · Esc to cancel
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Yes, I accept/ }));
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["2"], "env-1");
+      expectSelectionAnswer(1);
     });
   });
 
@@ -6569,7 +6592,7 @@ Enter to confirm · Esc to cancel
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["1"], "env-1");
+      expectSelectionAnswer(0);
     });
   });
 
@@ -6684,11 +6707,11 @@ Enter to confirm · Esc to cancel
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Yes, I accept/ }));
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenLastCalledWith("tab-1", ["2"], "env-1");
+      expectSelectionAnswer(1);
     });
   });
 
@@ -6721,12 +6744,12 @@ Enter to confirm · Esc to cancel
 
     const retryButtons = screen.getAllByRole("button", { name: "Retry" });
     fireEvent.click(retryButtons[1]!);
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["2"], "env-1");
+      expectSelectionAnswer(1);
     });
   });
 
@@ -6758,16 +6781,12 @@ Enter to confirm · ↑/↓ to navigate · Esc to cancel
 
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Allow once/ }));
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", [
-        "Up",
-        "Up",
-        "Enter",
-      ], "env-1");
+      expectSelectionAnswer(0);
     });
   });
 
@@ -6800,7 +6819,7 @@ Enter to confirm · Esc to cancel
 
   test("keeps selection prompt controls disabled while tmux keys are pending", async () => {
     let resolveSendKeys: (() => void) | null = null;
-    sendKeysMock.mockImplementationOnce(
+    answerSelectionPromptMock.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           resolveSendKeys = resolve;
@@ -6820,7 +6839,7 @@ Enter to confirm · Esc to cancel
       });
     useClaudeTmuxStore.getState().setObservation(
       "tab-1",
-      parseTmuxAgentObservation(pane, 1, "2026-08-04T12:00:00.000Z"),
+      generatedObservation(pane, 1),
     );
 
     render(
@@ -6836,7 +6855,7 @@ Enter to confirm · Esc to cancel
     const noButton = screen.getByRole("button", { name: /No, exit/ }) as HTMLButtonElement;
     const yesButton = screen.getByRole("button", { name: /Yes, I accept/ }) as HTMLButtonElement;
     fireEvent.click(yesButton);
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     const submitButton = screen.getByRole("button", { name: "Submit" });
     fireEvent.click(submitButton);
@@ -6845,12 +6864,12 @@ Enter to confirm · Esc to cancel
     fireEvent.click(submitButton);
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledTimes(1);
+      expect(answerSelectionPromptMock).toHaveBeenCalledTimes(1);
       expect(yesButton.disabled).toBe(true);
     });
 
     fireEvent.click(noButton);
-    expect(sendKeysMock).toHaveBeenCalledTimes(1);
+    expect(answerSelectionPromptMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       resolveSendKeys?.();
@@ -6874,7 +6893,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     });
     useClaudeTmuxStore.getState().setObservation(
       "tab-1",
-      parseTmuxAgentObservation(pane, 1, "2026-08-04T12:00:00.000Z"),
+      generatedObservation(pane, 1),
     );
 
     render(
@@ -6890,19 +6909,12 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", [
-        "Up",
-        "Up",
-        "Up",
-        "Down",
-        "Down",
-        "Enter",
-      ], "env-1");
+      expectSelectionAnswer(2);
     });
   });
 
   test("shows an error and re-enables selection controls when tmux key submission fails", async () => {
-    sendKeysMock.mockImplementationOnce(async () => {
+    answerSelectionPromptMock.mockImplementationOnce(async () => {
       throw new Error("tmux unavailable");
     });
     capturePaneMock.mockImplementation(async () => `
@@ -6968,7 +6980,7 @@ Enter to confirm · Esc to cancel
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["2"], "env-1");
+      expectSelectionAnswer(1);
       expect(screen.queryByText("Claude is asking for a choice")).toBeNull();
     });
     await act(async () => {
@@ -6977,11 +6989,7 @@ Enter to confirm · Esc to cancel
         tab_id: "tab-1",
         environment_id: "env-1",
         session_id: "session-1",
-        observation: parseTmuxAgentObservation(
-          await capturePaneMock(),
-          2,
-          "2026-08-04T12:00:01.000Z",
-        ),
+        observation: generatedObservation(await capturePaneMock(), 2),
       });
     });
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
@@ -7012,12 +7020,12 @@ Enter to confirm · Esc to cancel
 
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Option 10/ }));
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["1", "0"], "env-1");
+      expectSelectionAnswer(9);
     });
   });
 
@@ -7050,12 +7058,12 @@ Enter to select · Esc to cancel
     fireEvent.click(
       screen.getByRole("button", { name: /Always kill before launch/ }),
     );
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["Enter"], "env-1");
+      expectSelectionAnswer(1);
     });
   });
 

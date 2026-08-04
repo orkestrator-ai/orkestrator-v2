@@ -17,6 +17,8 @@ import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
 import {
   parseTmuxAgentObservation,
+  parseTmuxSelectionPrompt,
+  tmuxSelectionPromptFingerprint,
   type TmuxAgentObservation,
 } from "@orkestrator/protocol/tmux-observation";
 
@@ -181,6 +183,13 @@ function asPositiveInt(value: unknown, name: string): number {
     throw new Error(`Expected ${name} to be a positive number`);
   }
   return Math.floor(value);
+}
+
+function asNonNegativeInt(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Expected ${name} to be a non-negative integer`);
+  }
+  return value;
 }
 
 function asStringArray(value: unknown): string[] {
@@ -2410,6 +2419,67 @@ class TmuxSession {
     await this.inputMutex.runExclusive(() => this.sendKeysUnlocked(keys));
   }
 
+  async answerSelectionPrompt(input: {
+    expectedGeneration: string;
+    expectedRevision: number;
+    expectedPromptFingerprint: string;
+    optionIndex: number;
+  }): Promise<void> {
+    await this.inputMutex.runExclusive(async () => {
+      const markPromptForRefresh = (): void => {
+        this.paneCache = undefined;
+        this.forceNextObservation = true;
+        this.nextObservationAt = 0;
+      };
+      const observedPrompt = this.observation.prompt;
+      if (
+        input.expectedGeneration !== this.observationGeneration
+        || input.expectedRevision !== this.observation.revision
+        || !observedPrompt
+        || tmuxSelectionPromptFingerprint(observedPrompt) !== input.expectedPromptFingerprint
+      ) {
+        markPromptForRefresh();
+        throw new Error("Selection prompt is no longer current");
+      }
+
+      // The observation can become stale between its SSE emission and this
+      // command. Re-read the pane while holding the same mutex as every input
+      // path so validation and key delivery form one serialized operation.
+      const currentPrompt = parseTmuxSelectionPrompt(await this.capturePane());
+      if (
+        !currentPrompt
+        || tmuxSelectionPromptFingerprint(currentPrompt) !== input.expectedPromptFingerprint
+      ) {
+        markPromptForRefresh();
+        throw new Error("Selection prompt is no longer current");
+      }
+      const option = currentPrompt.options[input.optionIndex];
+      if (!option) {
+        markPromptForRefresh();
+        throw new Error("Selection prompt is no longer current");
+      }
+
+      let keys: string[];
+      if (currentPrompt.inputMode === "number") {
+        keys = option.number.toString().split("");
+      } else if (currentPrompt.selectedOptionIndex === null) {
+        keys = [
+          ...Array.from({ length: currentPrompt.options.length }, () => "Up"),
+          ...Array.from({ length: input.optionIndex }, () => "Down"),
+          "Enter",
+        ];
+      } else {
+        const delta = input.optionIndex - currentPrompt.selectedOptionIndex;
+        const navKey = delta > 0 ? "Down" : "Up";
+        keys = [...Array.from({ length: Math.abs(delta) }, () => navKey), "Enter"];
+      }
+      await this.sendKeysUnlocked(keys);
+      this.paneCache = undefined;
+      this.forceNextObservation = true;
+      this.nextObservationAt = 0;
+    });
+  }
+
   private async submitUnlocked(text: string): Promise<void> {
     if (text) {
       await this.sendTextUnlocked(text);
@@ -2727,14 +2797,16 @@ class TmuxSession {
   }
 
   async stop(): Promise<boolean> {
-    this.stopRequested = true;
     const result = await this.backend
       .exec([this.tmuxCommand, "kill-session", "-t", this.tmuxSession])
       .catch(() => null);
+    const stopped = Boolean(result && (
+      result.status === 0 || isMissingTmuxSessionError(result.stderr)
+    ));
+    if (!stopped) return false;
+    this.stopRequested = true;
     await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
-    if (!result) return false;
-    if (result.status === 0) return true;
-    return isMissingTmuxSessionError(result.stderr);
+    return true;
   }
 }
 
@@ -3931,6 +4003,20 @@ export function registerTmuxBackendCommands(
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId"))
       .sendKeysAndRefresh(asStringArray(keys)),
   );
+  register("claude_tmux_answer_selection_prompt", ({
+    tabId,
+    environmentId,
+    expectedGeneration,
+    expectedRevision,
+    expectedPromptFingerprint,
+    optionIndex,
+  }) => requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId"))
+    .answerSelectionPrompt({
+      expectedGeneration: asString(expectedGeneration, "expectedGeneration"),
+      expectedRevision: asNonNegativeInt(expectedRevision, "expectedRevision"),
+      expectedPromptFingerprint: asString(expectedPromptFingerprint, "expectedPromptFingerprint"),
+      optionIndex: asNonNegativeInt(optionIndex, "optionIndex"),
+    }));
   register("claude_tmux_submit", async ({ tabId, text, environmentId }, context) => {
     const envId = asString(environmentId, "environmentId");
     await requireSession(envId, asString(tabId, "tabId")).submit(asString(text, "text"));
@@ -4048,12 +4134,13 @@ export function registerTmuxBackendCommands(
       }
       const listed = await backend.exec(["tmux", "list-sessions", "-F", "#{session_name}"])
         .catch(() => null);
-      if (!listed || listed.status !== 0) continue;
+      if (!listed) continue;
+      if (listed.status !== 0 && !isMissingTmuxSessionError(listed.stderr)) continue;
       const layout = paneLayouts.layouts[environment.id];
       const referenced = new Set<string>();
       if (layout) collectReferencedNames(environment.id, layout.root, referenced);
       const names = selectReapableTmuxSessions({
-        names: parseTmuxSessionNames(listed.stdout),
+        names: listed.status === 0 ? parseTmuxSessionNames(listed.stdout) : [],
         environmentId: environment.id,
         survivingEnvironmentIds: survivingIds,
       });
@@ -4072,8 +4159,12 @@ export function registerTmuxBackendCommands(
         if (now - missingSince < graceMs) continue;
         const managed = tmuxManager.findByTmuxName(environment.id, name);
         if (managed) {
-          tmuxManager.remove(environment.id, managed.tabId);
-          await managed.stop();
+          const stopped = await tmuxManager.installLock(environment.id).runExclusive(async () => {
+            if (tmuxManager.findByTmuxName(environment.id, name) !== managed) return false;
+            if (!await managed.stop()) return false;
+            return tmuxManager.removeIfSame(environment.id, managed.tabId, managed);
+          });
+          if (!stopped) continue;
         } else {
           const killed = await backend.exec(["tmux", "kill-session", "-t", name]);
           if (killed.status !== 0) continue;

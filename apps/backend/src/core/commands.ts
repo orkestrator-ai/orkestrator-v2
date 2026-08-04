@@ -7660,7 +7660,18 @@ async function refreshClaudeModelCatalog(
 }
 
 export function createCommandRegistry(
-  options: { claudeStatePolls?: ClaudeStatePollManager } = {},
+  options: {
+    claudeStatePolls?: ClaudeStatePollManager;
+    tabTeardown?: {
+      peekBridge?: (
+        environment: Environment,
+        agent: LocalServerKind,
+        context: CommandContext,
+      ) => Promise<{ port: number; authToken: string } | null>;
+      fetch?: typeof fetch;
+      deleteTimeoutMs?: number;
+    };
+  } = {},
 ): Map<string, CommandHandler> {
   const commands = new Map<string, CommandHandler>();
   const register = (name: string, handler: CommandHandler) => commands.set(name, handler);
@@ -10758,6 +10769,60 @@ export function createCommandRegistry(
   });
 
   type TabTeardownIntent = NonNullable<Environment["tabTeardownIntents"]>[string];
+  const tabTeardownFetch = options.tabTeardown?.fetch ?? fetch;
+  const tabTeardownDeleteTimeoutMs = Math.max(
+    1,
+    options.tabTeardown?.deleteTimeoutMs ?? 5_000,
+  );
+  const tabTeardownReconciliationConcurrency = 4;
+  const peekTabTeardownBridge = options.tabTeardown?.peekBridge
+    ?? (async (
+      environment: Environment,
+      agent: LocalServerKind,
+      context: CommandContext,
+    ): Promise<{ port: number; authToken: string } | null> => {
+      const bridge = environment.environmentType === "local"
+        ? await peekLocalAgentBridge(environment.id, context, agent)
+        : environment.containerId
+          ? await peekContainerAgentBridge(environment.containerId, agent)
+          : null;
+      if (!bridge) return null;
+      return {
+        port: "port" in bridge ? bridge.port : bridge.hostPort,
+        authToken: bridge.authToken,
+      };
+    });
+
+  const deleteProviderTabSession = async (
+    url: URL,
+    headers: Record<string, string>,
+  ): Promise<Response> => {
+    const controller = new AbortController();
+    let rejectTimeout!: (error: Error) => void;
+    const timeoutResult = new Promise<Response>((_resolve, reject) => {
+      rejectTimeout = reject;
+    });
+    const timeout = setTimeout(() => {
+      rejectTimeout(new Error(
+        `Tab teardown request timed out after ${tabTeardownDeleteTimeoutMs}ms`,
+      ));
+      controller.abort();
+    }, tabTeardownDeleteTimeoutMs);
+    timeout.unref?.();
+    try {
+      return await Promise.race([
+        tabTeardownFetch(url, {
+          method: "DELETE",
+          headers,
+          signal: controller.signal,
+        }),
+        timeoutResult,
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
   const executeTabTeardown = async (
     environment: Environment,
     intent: TabTeardownIntent,
@@ -10765,12 +10830,38 @@ export function createCommandRegistry(
   ): Promise<void> => {
     if (intent.kind === "terminal") {
       const sessionIds = new Set<string>();
-      if (intent.sessionId) sessionIds.add(intent.sessionId);
+      if (intent.sessionId) {
+        const expectedStableKeys = new Set(
+          ["container", "local"].map((kind) =>
+            stableTerminalKey(kind as "container" | "local", environment.id, intent.tabId)
+          ),
+        );
+        const actualStableKey = terminalStableKeysBySessionId.get(intent.sessionId);
+        if (actualStableKey && !expectedStableKeys.has(actualStableKey)) {
+          throw new Error("Terminal session is not owned by the requested environment and tab");
+        }
+        // An unknown process id is already gone. Only an exact stable-key match
+        // is authority to kill a live terminal; renderer-supplied ids are not.
+        if (actualStableKey) sessionIds.add(intent.sessionId);
+      }
       for (const kind of ["container", "local"] as const) {
         const stableId = terminalSessionIdsByStableKey.get(
           stableTerminalKey(kind, environment.id, intent.tabId) ?? "",
         );
         if (stableId) sessionIds.add(stableId);
+      }
+      if (intent.persistentSessionId) {
+        const session = await context.storage.getSession(intent.persistentSessionId);
+        if (session) {
+          if (
+            session.environmentId !== environment.id
+            || session.tabId !== intent.tabId
+          ) {
+            throw new Error(
+              "Persistent terminal session is not owned by the requested environment and tab",
+            );
+          }
+        }
       }
       for (const sessionId of sessionIds) explicitlyCloseTerminalSession(sessionId);
       if (intent.persistentSessionId) {
@@ -10805,33 +10896,54 @@ export function createCommandRegistry(
       logicalSessionKey,
     );
     const persistedSession = await context.storage.getNativeAgentSession(storageKey);
-    const providerSessionId = persistedSession?.providerSessionId ?? intent.sessionId;
+    if (persistedSession && (
+      persistedSession.environmentId !== environment.id
+      || persistedSession.agent !== agent
+      || persistedSession.logicalSessionKey !== logicalSessionKey
+    )) {
+      throw new Error("Native session mapping is not owned by the requested environment and tab");
+    }
+    if (
+      persistedSession
+      && intent.sessionId
+      && intent.sessionId !== persistedSession.providerSessionId
+    ) {
+      throw new Error("Native session id does not match the requested environment and tab");
+    }
+    if (!persistedSession && intent.sessionId) {
+      const claimedElsewhere = (await context.storage.listNativeAgentSessions()).find(
+        (session) => session.providerSessionId === intent.sessionId,
+      );
+      if (claimedElsewhere) {
+        throw new Error("Native session is owned by a different environment or tab");
+      }
+    }
+    // A provider id supplied by a renderer is not deletion authority on its
+    // own. Legacy/unmapped sessions are left to orphan reconciliation rather
+    // than risking deletion of another tab's transcript.
+    const providerSessionId = persistedSession?.providerSessionId;
     if (!providerSessionId) return;
-    const bridge = environment.environmentType === "local"
-      ? await peekLocalAgentBridge(environment.id, context, agent)
-      : environment.containerId
-        ? await peekContainerAgentBridge(environment.containerId, agent)
-        : null;
-    if (bridge) {
-      const port = "port" in bridge ? bridge.port : bridge.hostPort;
-      const url = new URL(`http://127.0.0.1:${port}/session/${encodeURIComponent(providerSessionId)}`);
-      if (agent === "opencode") {
-        url.searchParams.set(
-          "directory",
-          environment.environmentType === "local"
-            ? environment.worktreePath ?? ""
-            : "/workspace",
-        );
-      }
-      const response = await fetch(url, {
-        method: "DELETE",
-        headers: agent === "opencode"
-          ? openCodeHealthHeaders(bridge.authToken)
-          : { Authorization: `Bearer ${bridge.authToken}` },
-      });
-      if (!response.ok && response.status !== 404) {
-        throw new Error(`Tab teardown failed with HTTP ${response.status}`);
-      }
+    const bridge = await peekTabTeardownBridge(environment, agent, context);
+    if (!bridge) {
+      throw new Error("Tab teardown bridge is unavailable or unhealthy");
+    }
+    const url = new URL(`http://127.0.0.1:${bridge.port}/session/${encodeURIComponent(providerSessionId)}`);
+    if (agent === "opencode") {
+      url.searchParams.set(
+        "directory",
+        environment.environmentType === "local"
+          ? environment.worktreePath ?? ""
+          : "/workspace",
+      );
+    }
+    const response = await deleteProviderTabSession(
+      url,
+      agent === "opencode"
+        ? openCodeHealthHeaders(bridge.authToken)
+        : { Authorization: `Bearer ${bridge.authToken}` },
+    );
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`Tab teardown failed with HTTP ${response.status}`);
     }
     // The provider transcript may already be gone, but the durable logical-tab
     // mapping must be retired as part of the same idempotent intent.
@@ -10883,9 +10995,20 @@ export function createCommandRegistry(
 
   register("reconcile_tab_teardowns", async (_args, context) => {
     const environments = await context.storage.loadEnvironments();
+    const pending = environments.flatMap((environment) =>
+      Object.values(environment.tabTeardownIntents ?? {}).map((intent) => ({
+        environment,
+        intent,
+      }))
+    );
+    let nextPendingIndex = 0;
     let completed = 0;
-    for (const environment of environments) {
-      for (const intent of Object.values(environment.tabTeardownIntents ?? {})) {
+    const reconcileNext = async (): Promise<void> => {
+      while (nextPendingIndex < pending.length) {
+        const entry = pending[nextPendingIndex];
+        nextPendingIndex += 1;
+        if (!entry) return;
+        const { environment, intent } = entry;
         try {
           await executeTabTeardown(environment, intent, context);
           await finishTabTeardown(environment.id, intent, context);
@@ -10894,7 +11017,13 @@ export function createCommandRegistry(
           console.warn(`[backend] Tab teardown remains pending for ${environment.id}/${intent.tabId}:`, conciseError(error));
         }
       }
-    }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(tabTeardownReconciliationConcurrency, pending.length) },
+        () => reconcileNext(),
+      ),
+    );
     return { completed };
   });
 

@@ -150,6 +150,7 @@ interface SseRouteTestHooks {
   afterSubscriberRegistered?: () => Promise<void> | void;
   beforeBufferedDrain?: () => Promise<void> | void;
   beforeBufferedWrite?: (revision: number) => Promise<void> | void;
+  afterKeepaliveStarted?: () => Promise<void> | void;
   maxBufferedReplayEvents?: number;
 }
 let sseRouteTestHooks: SseRouteTestHooks | null = null;
@@ -1711,6 +1712,9 @@ app.get("/event/subscribe", (c) => {
         },
         30_000,
       );
+      if (sseRouteTestHooks?.afterKeepaliveStarted) {
+        await sseRouteTestHooks.afterKeepaliveStarted();
+      }
 
       await Promise.race([
         connectionClosed,

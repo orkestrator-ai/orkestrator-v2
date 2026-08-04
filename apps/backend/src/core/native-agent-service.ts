@@ -1222,7 +1222,7 @@ export class NativeAgentService {
         // every two seconds to re-learn an answer that cannot have changed.
         if ((this.absentBridgeUntil.get(groupKey) ?? 0) > this.now()) {
           for (const session of group) {
-            if (this.recordActivity(
+            if (await this.recordActivity(
               activityByEnvironment,
               session,
               "idle",
@@ -1239,7 +1239,7 @@ export class NativeAgentService {
             // executing. That is an answer, not a failure — recording it is
             // what retires a `working` indicator left behind by a crash.
             for (const session of group) {
-              if (this.recordActivity(
+              if (await this.recordActivity(
                 activityByEnvironment,
                 session,
                 "idle",
@@ -1290,7 +1290,7 @@ export class NativeAgentService {
               );
               continue;
             }
-            if (this.recordActivity(
+            if (await this.recordActivity(
               activityByEnvironment,
               session,
               activity,
@@ -1378,7 +1378,7 @@ export class NativeAgentService {
   }
 
   /** Stage one session's observed state into the per-environment aggregate. */
-  private recordActivity(
+  private async recordActivity(
     activityByEnvironment: Map<
       string,
       Record<string, { state: AgentActivityState; updatedAt: string }>
@@ -1386,11 +1386,32 @@ export class NativeAgentService {
     session: PersistedNativeAgentSession,
     state: AgentActivityState,
     countUnknownIdleAsCompletion: boolean,
-  ): boolean {
+  ): Promise<boolean> {
     const observed = this.observedSessionActivity.get(session.key);
     const previous = observed?.providerSessionId === session.providerSessionId
       ? observed.state
       : undefined;
+    const durableAttentionEdge = (state === "idle" || state === "waiting")
+      && (
+        previous === "working"
+        || (state === "idle" && observed === undefined && countUnknownIdleAsCompletion)
+      );
+    // PR reconciliation retains its narrower historical completion contract:
+    // a parked waiting turn needs the user's attention, but it has not ended.
+    const completed = state === "idle"
+      && (
+        previous === "working"
+        || (observed === undefined && countUnknownIdleAsCompletion)
+      );
+    // Persist the exact session edge before advancing the in-memory observation.
+    // If storage fails, the provider group backs off and the next scan still
+    // sees `previous === "working"`, so the durable completion is retried.
+    if (durableAttentionEdge) {
+      await this.storage.recordEnvironmentSessionCompletion(
+        session.environmentId,
+        new Date(this.now()).toISOString(),
+      );
+    }
     this.observedSessionActivity.set(session.key, {
       providerSessionId: session.providerSessionId,
       state,
@@ -1412,11 +1433,7 @@ export class NativeAgentService {
       updatedAt: "1970-01-01T00:00:00.000Z",
     };
     activityByEnvironment.set(session.environmentId, sources);
-    return state === "idle"
-      && (
-        previous === "working"
-        || (observed === undefined && countUnknownIdleAsCompletion)
-      );
+    return completed;
   }
 
   /** Deliver pending completion notifications with the same bound as status IO. */

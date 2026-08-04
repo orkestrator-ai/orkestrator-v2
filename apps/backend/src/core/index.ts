@@ -42,6 +42,7 @@ export class OrkestratorBackend {
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
   private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
+  private setupStartupReconciled = false;
   private readonly reapPidServers: typeof reapOrphanedLocalServers;
   private readonly reapTmuxRuntimes: typeof reapOrphanedClaudeTmuxRuntimes;
   private readonly agentTools: Pick<
@@ -266,23 +267,41 @@ export class OrkestratorBackend {
         },
       );
     }
-    // Setup is backend-owned. Adopt incomplete running environments left by an
-    // older renderer or a backend restart; the command deduplicates live runs.
-    const ensureEnvironmentSetup = this.commands.get("ensure_environment_setup");
-    if (ensureEnvironmentSetup) {
+    if (!this.setupStartupReconciled) {
       const environments = await this.context.storage.loadEnvironments();
+      // Mark before starting any pending setup. If init is retried on this same
+      // backend instance, a live setup task must not be mistaken for work left
+      // by a dead process or admitted a second time.
+      this.setupStartupReconciled = true;
+      const ensureEnvironmentSetup = this.commands.get("ensure_environment_setup");
       for (const environment of environments) {
         if (
           environment.status !== "running"
           || environment.setupScriptsComplete
-          || environment.setupPhase === "ready"
           || environment.setupOverride
         ) continue;
+        if (environment.setupPhase === "running") {
+          // A persisted `running` phase belongs to the process that owned its
+          // PTY. Repository-controlled setup may not be idempotent, so fence
+          // that interrupted attempt and require an explicit retry or override.
+          await this.context.storage.updateEnvironment(environment.id, {
+            setupPhase: "failed",
+            setupCompletedAt: new Date().toISOString(),
+            lifecycleError: "Environment setup was interrupted. Retry setup to continue.",
+          }).catch((error: unknown) => {
+            console.warn(`[backend] Failed to fence interrupted setup for ${environment.id}:`, error);
+          });
+          continue;
+        }
+        if (environment.setupPhase !== "pending" || !ensureEnvironmentSetup) continue;
+        // Pending means no setup attempt was published, so there is no side
+        // effect to replay. Adopt it once now that setup no longer depends on a
+        // mounted terminal component.
         void Promise.resolve(ensureEnvironmentSetup(
           { environmentId: environment.id },
           this.context,
         )).catch((error: unknown) => {
-          console.warn(`[backend] Failed to adopt setup for ${environment.id}:`, error);
+          console.warn(`[backend] Failed to adopt pending setup for ${environment.id}:`, error);
         });
       }
     }

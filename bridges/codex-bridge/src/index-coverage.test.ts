@@ -399,6 +399,36 @@ describe("codex bridge private boundary coverage", () => {
     ]);
   });
 
+  test("writes keepalives with the latest replay cursor and an empty payload", async () => {
+    jest.useFakeTimers();
+    __testing.emitForTesting({
+      type: "session.updated",
+      sessionId: "keepalive-cursor",
+    });
+    const revision = __testing.eventRingForTesting().latestRevision;
+    const writes: Array<{ event: string; data: string; id?: string }> = [];
+    const timer = __testing.startSseKeepaliveForTesting(
+      async (frame) => {
+        writes.push(frame);
+      },
+      5,
+    );
+
+    try {
+      jest.advanceTimersByTime(5);
+      await Promise.resolve();
+    } finally {
+      clearInterval(timer);
+      jest.useRealTimers();
+    }
+
+    expect(writes).toEqual([{
+      event: "keepalive",
+      id: String(revision),
+      data: "{}",
+    }]);
+  });
+
   test("keeps an idle heartbeat floor while using the faster active cadence", async () => {
     jest.useFakeTimers();
     const idleWrites: number[] = [];

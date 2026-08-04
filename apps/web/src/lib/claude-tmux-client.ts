@@ -287,6 +287,23 @@ export async function sendKeys(tabId: string, keys: string[], environmentId: str
   await invoke("claude_tmux_send_keys", { tabId, environmentId, keys });
 }
 
+export async function answerSelectionPrompt(
+  tabId: string,
+  environmentId: string,
+  input: {
+    expectedGeneration: string;
+    expectedRevision: number;
+    expectedPromptFingerprint: string;
+    optionIndex: number;
+  },
+): Promise<void> {
+  await invoke("claude_tmux_answer_selection_prompt", {
+    tabId,
+    environmentId,
+    ...input,
+  });
+}
+
 export async function capturePane(tabId: string, environmentId: string): Promise<string> {
   return invoke<string>("claude_tmux_capture_pane", { tabId, environmentId });
 }

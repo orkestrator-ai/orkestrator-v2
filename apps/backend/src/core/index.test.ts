@@ -8,7 +8,7 @@ import { __testing as commandTesting } from "./commands.js";
 import { OrkestratorBackend } from "./index.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
-import { StorageService } from "./storage.js";
+import { createEnvironment, StorageService } from "./storage.js";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 
 function fakeAgentTools(overrides: {
@@ -640,6 +640,96 @@ function controlledIntervals() {
 }
 
 describe("native-agent activity reconciliation lifecycle", () => {
+  test("fences interrupted setup and adopts pending setup exactly once", async () => {
+    const dataDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ork-backend-interrupted-setup-"),
+    );
+    const backend = new OrkestratorBackend({
+      dataDir,
+      toolchainBinDir: "",
+      appRoot: "",
+      resourceRoot: "",
+      emit: () => undefined,
+      agentTools: fakeAgentTools(),
+      startupReapers: {
+        localServers: async () => [],
+        claudeTmuxRuntimes: async () => [],
+      },
+    });
+    const internals = backend as unknown as {
+      commands: Map<string, (args: Record<string, unknown>, context: unknown) => unknown>;
+      context: { storage: StorageService };
+    };
+    const ensureEnvironmentSetup = mock(async () => undefined);
+    internals.commands.set("ensure_environment_setup", ensureEnvironmentSetup);
+
+    const interrupted = {
+      ...createEnvironment("project-1"),
+      id: "env-setup-interrupted",
+      status: "running" as const,
+      setupPhase: "running" as const,
+      setupScriptsComplete: false,
+      setupSessionId: "setup-env-setup-interrupted",
+      setupStartedAt: "2026-08-04T10:00:00.000Z",
+      pendingAgentLaunch: true,
+    };
+    const pending = {
+      ...createEnvironment("project-1"),
+      id: "env-setup-pending",
+      status: "running" as const,
+      setupPhase: "pending" as const,
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    };
+    const failed = {
+      ...createEnvironment("project-1"),
+      id: "env-setup-failed",
+      status: "running" as const,
+      setupPhase: "failed" as const,
+      setupScriptsComplete: false,
+      lifecycleError: "Keep this failure",
+    };
+    await internals.context.storage.addEnvironment(interrupted);
+    await internals.context.storage.addEnvironment(pending);
+    await internals.context.storage.addEnvironment(failed);
+
+    try {
+      await backend.init();
+      await backend.init();
+
+      expect(ensureEnvironmentSetup).toHaveBeenCalledTimes(1);
+      expect(ensureEnvironmentSetup).toHaveBeenCalledWith(
+        { environmentId: pending.id },
+        expect.any(Object),
+      );
+      expect(await internals.context.storage.getEnvironment(interrupted.id))
+        .toMatchObject({
+          status: "running",
+          setupPhase: "failed",
+          setupScriptsComplete: false,
+          setupSessionId: interrupted.setupSessionId,
+          setupStartedAt: interrupted.setupStartedAt,
+          setupCompletedAt: expect.any(String),
+          lifecycleError: "Environment setup was interrupted. Retry setup to continue.",
+          pendingAgentLaunch: true,
+        });
+      expect(await internals.context.storage.getEnvironment(pending.id))
+        .toMatchObject({
+          setupPhase: "pending",
+          setupScriptsComplete: false,
+          pendingAgentLaunch: true,
+        });
+      expect(await internals.context.storage.getEnvironment(failed.id))
+        .toMatchObject({
+          setupPhase: "failed",
+          lifecycleError: "Keep this failure",
+        });
+    } finally {
+      await backend.shutdown().catch(() => undefined);
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("coalesces tab-resource sweeps on a one-minute cadence", async () => {
     const dataDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "ork-backend-tab-resource-sweep-"),

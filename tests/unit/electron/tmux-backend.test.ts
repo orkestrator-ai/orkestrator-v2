@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
@@ -52,6 +52,10 @@ import {
 } from "../../../apps/backend/src/core/tmux";
 import type { Environment } from "../../../apps/backend/src/core/models";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
+import {
+  tmuxSelectionPromptFingerprint,
+  type TmuxSelectionPrompt,
+} from "../../../packages/protocol/src/tmux-observation";
 
 const tempDirs: string[] = [];
 /** mkdtemp prefix for the fake tmux runtime; also the guard for its cleanup path. */
@@ -859,6 +863,7 @@ describe("Electron tmux backend command registration", () => {
       "claude_tmux_detach_interactive_terminal",
       "claude_tmux_send_text",
       "claude_tmux_send_keys",
+      "claude_tmux_answer_selection_prompt",
       "claude_tmux_submit",
       "claude_tmux_submit_queued",
       "claude_tmux_switch_model",
@@ -1536,6 +1541,79 @@ describe("Electron tmux backend command registration", () => {
       await expect(fs.stat(runtimeRoot)).rejects.toThrow();
     });
   });
+
+  test("orphan reconciliation retains failed managed stops and cleans hooks when tmux has no server", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, worktree, runtimeRoot }) => {
+      const settingsPath = path.join(worktree, ".claude", "settings.local.json");
+      const backupPath = path.join(runtimeRoot, "settings.local.json.orkestrator-v2-backup");
+      const hookPath = path.join(runtimeRoot, "hook.sh");
+      const originalSettings = JSON.stringify({ permissions: { allow: ["Bash(git status)"] } }, null, 2);
+      await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+      await fs.writeFile(settingsPath, originalSettings);
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+          loadEnvironments: async () => [environment],
+          loadPaneLayoutsForReconciliation: async () => ({ available: true, layouts: {} }),
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-orphan-stop-failure";
+      const status = await invoke(handlers, "claude_tmux_start", {
+        tabId,
+        environmentId: environment.id,
+      }, context) as { session_id: string };
+      const installedSettings = await fs.readFile(settingsPath, "utf8");
+      const installedHook = await fs.readFile(hookPath, "utf8");
+      const installedBackup = await fs.readFile(backupPath, "utf8");
+      const sessionDir = path.join(runtimeRoot, "sessions", status.session_id);
+      const nowSpy = spyOn(Date, "now");
+      const originalFailKill = process.env.FAKE_TMUX_FAIL_KILL;
+      let now = Date.now() + 1_000_000_000;
+      nowSpy.mockImplementation(() => now);
+      try {
+        await invoke(handlers, "claude_tmux_reconcile_orphans", {}, context);
+        process.env.FAKE_TMUX_FAIL_KILL = "1";
+        now += 60 * 60 * 1_000 + 60_001;
+        await expect(invoke(handlers, "claude_tmux_reconcile_orphans", {}, context))
+          .resolves.toEqual({ reaped: 0, skipped: false });
+        await expect(invoke(handlers, "claude_tmux_status", {
+          tabId,
+          environmentId: environment.id,
+        }, context)).resolves.not.toBeNull();
+        expect(existsSync(sessionDir)).toBe(true);
+
+        delete process.env.FAKE_TMUX_FAIL_KILL;
+        now += 60_001;
+        await expect(invoke(handlers, "claude_tmux_reconcile_orphans", {}, context))
+          .resolves.toEqual({ reaped: 1, skipped: false });
+        await expect(invoke(handlers, "claude_tmux_status", {
+          tabId,
+          environmentId: environment.id,
+        }, context)).resolves.toBeNull();
+
+        // Recreate only the persisted managed hook state. With no tmux server
+        // and no in-memory sessions, reconciliation must still restore it.
+        await fs.mkdir(runtimeRoot, { recursive: true });
+        await fs.writeFile(hookPath, installedHook);
+        await fs.writeFile(backupPath, installedBackup);
+        await fs.writeFile(settingsPath, installedSettings);
+        now += 60_001;
+        await expect(invoke(handlers, "claude_tmux_reconcile_orphans", {}, context))
+          .resolves.toEqual({ reaped: 0, skipped: false });
+        await expect(fs.readFile(settingsPath, "utf8")).resolves.toBe(originalSettings);
+        await expect(fs.stat(runtimeRoot)).rejects.toThrow();
+      } finally {
+        nowSpy.mockRestore();
+        if (originalFailKill === undefined) delete process.env.FAKE_TMUX_FAIL_KILL;
+        else process.env.FAKE_TMUX_FAIL_KILL = originalFailKill;
+      }
+    });
+  }, 20_000);
 
   test("a start queued behind environment teardown rejects the deletion tombstone", async () => {
     const handlers = createHandlers();
@@ -5348,6 +5426,82 @@ describe("live session read paths", () => {
       );
     });
   }, 15_000);
+
+  test("answers only the exact selection prompt observed by the renderer", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, alive, log }) => {
+      const observations: Array<{
+        generation?: string;
+        revision: number;
+        prompt: TmuxSelectionPrompt | null;
+      }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: (event: string, payload: unknown) => {
+          const candidate = payload as { kind?: string; observation?: typeof observations[number] };
+          if (event === "claude-tmux:event" && candidate.kind === "observation") {
+            observations.push(candidate.observation!);
+          }
+        },
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-bound-prompt";
+      const session = tmuxSessionName(environment.id, tabId);
+      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      await fs.writeFile(path.join(alive, `${session}.mode`), "selection");
+      await waitFor(() => observations.some((entry) => entry.prompt !== null), 5_000);
+      const observed = observations.findLast((entry) => entry.prompt !== null)!;
+      const input = {
+        expectedGeneration: observed.generation!,
+        expectedRevision: observed.revision,
+        expectedPromptFingerprint: tmuxSelectionPromptFingerprint(observed.prompt!),
+        optionIndex: 1,
+      };
+      const logBefore = await fs.readFile(log, "utf8");
+
+      await expect(invoke(handlers, "claude_tmux_answer_selection_prompt", {
+        tabId,
+        environmentId: environment.id,
+        ...input,
+        expectedRevision: input.expectedRevision - 1,
+      }, context)).rejects.toThrow("no longer current");
+      await expect(invoke(handlers, "claude_tmux_answer_selection_prompt", {
+        tabId,
+        environmentId: environment.id,
+        ...input,
+        expectedPromptFingerprint: `${input.expectedPromptFingerprint}-spoofed`,
+      }, context)).rejects.toThrow("no longer current");
+
+      await fs.writeFile(path.join(alive, `${session}.mode`), "bypassPermissions");
+      await expect(invoke(handlers, "claude_tmux_answer_selection_prompt", {
+        tabId,
+        environmentId: environment.id,
+        ...input,
+      }, context)).rejects.toThrow("no longer current");
+      expect((await fs.readFile(log, "utf8")).match(/send-keys/g)?.length ?? 0)
+        .toBe(logBefore.match(/send-keys/g)?.length ?? 0);
+
+      await fs.writeFile(path.join(alive, `${session}.mode`), "selection");
+      await waitFor(() => observations.some((entry) =>
+        entry.prompt !== null && entry.revision > observed.revision), 5_000);
+      const current = observations.findLast((entry) => entry.prompt !== null)!;
+      await invoke(handlers, "claude_tmux_answer_selection_prompt", {
+        tabId,
+        environmentId: environment.id,
+        expectedGeneration: current.generation,
+        expectedRevision: current.revision,
+        expectedPromptFingerprint: tmuxSelectionPromptFingerprint(current.prompt!),
+        optionIndex: 1,
+      }, context);
+      expect(await fs.readFile(log, "utf8")).toContain(
+        `send-keys -t ${session} -- 2`,
+      );
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  }, 20_000);
 
   test("a failed poll snapshot skips the tick without ending the loop", async () => {
     const handlers = createHandlers();

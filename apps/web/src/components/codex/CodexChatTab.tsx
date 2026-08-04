@@ -1562,6 +1562,8 @@ export function CodexChatTab({
                 sessionId: projectedSessionId,
                 messages: restoredMessages,
                 isLoading: restoredStatus.status === "running",
+                turnId: restoredStatus.turnId,
+                loadingStartedAt: restoredStatus.turnStartedAt,
                 title: restoredStatus.title,
                 error: restoredStatus.status === "error" ? restoredStatus.error : undefined,
               });
@@ -1737,6 +1739,17 @@ export function CodexChatTab({
             // Preserve client-only transcript parts when reconnecting the same
             // identity; setMessages performs the store's normal merge.
             setMessages(sessionKey, messages);
+            setSessionLoading(
+              sessionKey,
+              existingStatus.status === "running",
+              existingStatus.turnStartedAt,
+              existingStatus.turnId,
+            );
+            setSessionTitle(sessionKey, existingStatus.title);
+            setSessionError(
+              sessionKey,
+              existingStatus.status === "error" ? existingStatus.error : undefined,
+            );
           } else {
             // A projected backend session can supersede a short-lived cached
             // session. Replace the whole identity and its authoritative metadata;
@@ -1746,6 +1759,8 @@ export function CodexChatTab({
               sessionId: existingSessionId,
               messages,
               isLoading: existingStatus.status === "running",
+              turnId: existingStatus.turnId,
+              loadingStartedAt: existingStatus.turnStartedAt,
               title: existingStatus.title,
               error: existingStatus.status === "error" ? existingStatus.error : undefined,
             });
@@ -1870,6 +1885,9 @@ export function CodexChatTab({
     setSelectedModel,
     setServerStatus,
     setSession,
+    setSessionError,
+    setSessionLoading,
+    setSessionTitle,
     seedInitialFastMode,
     setupPending,
     tabId,

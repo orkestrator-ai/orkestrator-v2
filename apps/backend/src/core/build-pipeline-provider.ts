@@ -258,6 +258,9 @@ export type ProviderDependencies = {
   /** Shared by production providers; injectable to isolate deterministic tests. */
   openCodeMessageIdCoordinator?: OpenCodeMessageIdCoordinator;
   monitorRetryMs?: number;
+  /** Injectable clock and cache lifetime for deterministic lifecycle tests. */
+  now?: () => number;
+  openCodeExistenceCacheTtlMs?: number;
   /**
    * Stage base64 images into the workspace so they can be attached by path.
    *
@@ -291,6 +294,13 @@ const DEFAULT_SESSION_REGISTRATION: ProviderSessionRegistration = Object.freeze(
 });
 const MAX_TRACKED_INTERACTION_SESSIONS = 1_024;
 const MAX_TRACKED_PROVIDER_INTERACTIONS = 4_096;
+// This page is only a bounded positive-existence cache seed. Absence from it
+// never proves deletion; only a per-session 404 may manufacture `missing`.
+const MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS =
+  MAX_TRACKED_INTERACTION_SESSIONS + 1;
+const MAX_OPENCODE_EXISTENCE_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+const DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS = 10_000;
+const OPENCODE_EXISTENCE_PROBE_CONCURRENCY = 8;
 const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";
 const MAX_RENDERED_FILE_CHANGES = 48;
 const MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH = 256;
@@ -412,6 +422,84 @@ function boundedOwnedOpenCodeCollection(
     owned.push(entry);
   }
   return owned;
+}
+
+type OpenCodeSessionLifecycleState =
+  | "running"
+  | "idle"
+  | "unknown"
+  | "missing";
+
+type OpenCodeExistenceSnapshot = ReturnType<
+  typeof boundedOpenCodeExistenceSnapshot
+>;
+
+type OpenCodeExistenceProbe = {
+  state: "exists" | "missing" | "unknown";
+  error?: unknown;
+};
+
+function boundedOpenCodeStatusSnapshot(
+  value: unknown,
+  requestedSessionIds: ReadonlySet<string>,
+): Record<string, Record<string, unknown>> {
+  const snapshot = asRecord(value);
+  if (!snapshot) {
+    throw new ProviderUnavailableError("OpenCode status read is malformed");
+  }
+  const entries = Object.entries(snapshot);
+  if (
+    entries.length > MAX_TRACKED_PROVIDER_INTERACTIONS
+    || serializedByteLength(value) > AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
+  ) {
+    throw new ProviderUnavailableError("OpenCode status read is oversized");
+  }
+  const validated: Record<string, Record<string, unknown>> = Object.create(null);
+  for (const sessionId of requestedSessionIds) {
+    if (!Object.prototype.hasOwnProperty.call(snapshot, sessionId)) continue;
+    const rawStatus = snapshot[sessionId];
+    const status = asRecord(rawStatus);
+    if (
+      sessionId.length === 0
+      || sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength
+      || !status
+      || typeof status.type !== "string"
+    ) {
+      throw new ProviderUnavailableError(
+        "OpenCode status read contains a malformed entry",
+      );
+    }
+    validated[sessionId] = status;
+  }
+  return validated;
+}
+
+function boundedOpenCodeExistenceSnapshot(value: unknown): {
+  sessionIds: Set<string>;
+} {
+  if (!Array.isArray(value)) {
+    throw new ProviderUnavailableError("OpenCode session list is malformed");
+  }
+  if (
+    value.length > MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS
+    || serializedByteLength(value) > MAX_OPENCODE_EXISTENCE_SNAPSHOT_BYTES
+  ) {
+    throw new ProviderUnavailableError("OpenCode session list is oversized");
+  }
+  const sessionIds = new Set<string>();
+  for (const entry of value) {
+    const sessionId = nonEmptyString(asRecord(entry)?.id);
+    // The list is directory-wide and may contain sessions Orkestrator has
+    // never owned. A malformed foreign entry cannot prove that a valid target
+    // exists or is absent, so ignore it instead of stalling every tracked
+    // session in the environment.
+    if (
+      !sessionId
+      || sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength
+    ) continue;
+    sessionIds.add(sessionId);
+  }
+  return { sessionIds };
 }
 
 function opaqueOptionId(questionIndex: number, optionIndex: number): string {
@@ -1657,6 +1745,17 @@ class OpenCodeProvider implements BuildPipelineProvider {
   private readonly failedQuestionSessions = new Set<string>();
   private readonly monitorController = new AbortController();
   private readonly monitorRetryMs: number;
+  private readonly now: () => number;
+  private readonly existenceCacheTtlMs: number;
+  private readonly sessionExistenceCache = new Map<string, number>();
+  private readonly sessionExistenceRetryAt = new Map<string, number>();
+  private sessionListCache: {
+    snapshot: OpenCodeExistenceSnapshot;
+    expiresAt: number;
+  } | null = null;
+  private sessionListFailure: { error: unknown; expiresAt: number } | null = null;
+  private sessionListRead: Promise<OpenCodeExistenceSnapshot> | null = null;
+  private existenceProbeCursor = 0;
   private readonly answeringRequestIds = new Set<string>();
   private readonly requestTasks = new Set<Promise<void>>();
   private activeStreamController: AbortController | null = null;
@@ -1687,6 +1786,12 @@ class OpenCodeProvider implements BuildPipelineProvider {
     this.monitorRetryMs = Math.max(
       1,
       dependencies.monitorRetryMs ?? DEFAULT_MONITOR_RETRY_MS,
+    );
+    this.now = dependencies.now ?? Date.now;
+    this.existenceCacheTtlMs = Math.max(
+      1,
+      dependencies.openCodeExistenceCacheTtlMs
+        ?? DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS,
     );
     this.autoAnswerRequests = dependencies.autoAnswerRequests === true;
     this.onInteractionObservation = dependencies.onInteractionObservation;
@@ -1938,6 +2043,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
       );
       assertSdkResponse(response, "OpenCode session creation");
       if (!response.data?.id) throw new Error("OpenCode returned an empty session");
+      this.rememberExistingSession(response.data.id);
       this.registerSession(response.data.id, _options.interaction);
       return response.data.id;
     } catch (error) {
@@ -2044,16 +2150,15 @@ class OpenCodeProvider implements BuildPipelineProvider {
     if (this.blockedSessions.has(sessionId)) return "blocked";
     if (this.failedQuestionSessions.has(sessionId)) return "error";
     try {
-      const response = await this.client.session.status(
-        { directory: this.connection.directory },
-        this.requestOptions(),
-      );
-      assertSdkResponse(response, "OpenCode status read");
-      if (!response.data) throw new Error("OpenCode returned no status");
-      const status = response.data[sessionId];
-      if (!status) return "missing";
-      if (status.type === "busy" || status.type === "retry") return "running";
-      return status.type === "idle" ? "idle" : "error";
+      const lifecycle = (
+        await this.readSessionLifecycle([sessionId], false, true)
+      ).get(sessionId);
+      if (!lifecycle) {
+        throw new Error(`OpenCode lifecycle snapshot omitted ${sessionId}`);
+      }
+      if (lifecycle === "running") return "running";
+      if (lifecycle === "idle" || lifecycle === "missing") return lifecycle;
+      return "error";
     } catch (error) {
       throw new ProviderUnavailableError("OpenCode status is unavailable", {
         cause: error,
@@ -2092,22 +2197,21 @@ class OpenCodeProvider implements BuildPipelineProvider {
       });
       if (sessionIdsToRead.length === 0) return activity;
 
-      const statusResponse = await this.client.session.status(
-        { directory: this.connection.directory },
-        this.requestOptions(),
-      );
-      assertSdkResponse(statusResponse, "OpenCode status read");
-      if (!statusResponse.data) throw new Error("OpenCode returned no status");
+      const lifecycle = await this.readSessionLifecycle(sessionIdsToRead, true);
 
       const runningSessionIds = new Set<string>();
       for (const sessionId of sessionIdsToRead) {
-        const status = statusResponse.data[sessionId];
-        if (!status) {
+        const state = lifecycle.get(sessionId);
+        if (state === "missing") {
           activity.set(sessionId, "missing");
-        } else if (status.type === "busy" || status.type === "retry") {
+        } else if (state === "running") {
           runningSessionIds.add(sessionId);
-        } else {
+        } else if (state) {
           activity.set(sessionId, "idle");
+        } else {
+          throw new ProviderUnavailableError(
+            `OpenCode lifecycle snapshot omitted ${sessionId}`,
+          );
         }
       }
       if (runningSessionIds.size === 0) return activity;
@@ -2166,6 +2270,262 @@ class OpenCodeProvider implements BuildPipelineProvider {
         cause: error,
       });
     }
+  }
+
+  /**
+   * Combine OpenCode's incremental activity map with bounded, authoritative
+   * existence reads for entries the activity map omits.
+   *
+   * A short-lived session-list snapshot is the cheap common path. OpenCode's
+   * `start` query is a timestamp lower bound, not an offset, so a full page
+   * cannot be paginated. Targets unresolved by that page are probed directly
+   * with session.get instead; only a direct 404 may manufacture `missing`.
+   */
+  private async readSessionLifecycle(
+    sessionIds: readonly string[],
+    tolerateExistenceFailure = false,
+    strongExistenceRead = false,
+  ): Promise<Map<string, OpenCodeSessionLifecycleState>> {
+    const uniqueSessionIds = [...new Set(sessionIds)];
+    for (const sessionId of uniqueSessionIds) {
+      if (
+        sessionId.length === 0
+        || sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength
+      ) {
+        throw new ProviderUnavailableError(
+          "OpenCode lifecycle read contains a malformed identity",
+        );
+      }
+    }
+    const lifecycle = new Map<string, OpenCodeSessionLifecycleState>();
+    if (uniqueSessionIds.length === 0) return lifecycle;
+
+    const statusResponse = await this.client.session.status(
+      { directory: this.connection.directory },
+      this.requestOptions(),
+    );
+    assertSdkResponse(statusResponse, "OpenCode status read");
+    const statusSnapshot = boundedOpenCodeStatusSnapshot(
+      statusResponse.data,
+      new Set(uniqueSessionIds),
+    );
+    const omittedSessionIds: string[] = [];
+    for (const sessionId of uniqueSessionIds) {
+      const status = statusSnapshot[sessionId];
+      if (!status) {
+        omittedSessionIds.push(sessionId);
+      } else if (status.type === "busy" || status.type === "retry") {
+        lifecycle.set(sessionId, "running");
+      } else if (status.type === "idle") {
+        lifecycle.set(sessionId, "idle");
+      } else {
+        lifecycle.set(sessionId, "unknown");
+      }
+    }
+    if (omittedSessionIds.length === 0) return lifecycle;
+
+    const existence = await this.resolveSessionExistence(
+      omittedSessionIds,
+      strongExistenceRead,
+    );
+    for (const sessionId of omittedSessionIds) {
+      const probe = existence.get(sessionId);
+      if (probe?.state === "exists") {
+        lifecycle.set(sessionId, "idle");
+      } else if (probe?.state === "missing") {
+        lifecycle.set(sessionId, "missing");
+      } else if (tolerateExistenceFailure) {
+        // An omitted status-map entry is not running. When existence cannot be
+        // confirmed, retaining the durable mapping as idle is safer than
+        // dropping it or withholding already-resolved busy sessions.
+        lifecycle.set(sessionId, "unknown");
+      } else {
+        throw new ProviderUnavailableError(
+          `OpenCode session existence is unavailable for ${sessionId}`,
+          { cause: probe?.error },
+        );
+      }
+    }
+    return lifecycle;
+  }
+
+  private async resolveSessionExistence(
+    sessionIds: readonly string[],
+    strong: boolean,
+  ): Promise<Map<string, OpenCodeExistenceProbe>> {
+    const result = new Map<string, OpenCodeExistenceProbe>();
+    const unresolved: string[] = [];
+    const now = this.now();
+    for (const sessionId of sessionIds) {
+      if (strong) {
+        unresolved.push(sessionId);
+        continue;
+      }
+      const cached = this.sessionExistenceCache.get(sessionId);
+      if (cached !== undefined && cached > now) {
+        result.set(sessionId, { state: "exists" });
+      } else if ((this.sessionExistenceRetryAt.get(sessionId) ?? 0) > now) {
+        result.set(sessionId, { state: "unknown" });
+      } else {
+        if (cached !== undefined) this.sessionExistenceCache.delete(sessionId);
+        this.sessionExistenceRetryAt.delete(sessionId);
+        unresolved.push(sessionId);
+      }
+    }
+    if (unresolved.length === 0) return result;
+
+    let directlyProbed = unresolved;
+    if (!strong) {
+      try {
+        const snapshot = await this.readCachedSessionList();
+        directlyProbed = [];
+        for (const sessionId of unresolved) {
+          if (snapshot.sessionIds.has(sessionId)) {
+            this.rememberExistingSession(sessionId);
+            result.set(sessionId, { state: "exists" });
+          } else {
+            directlyProbed.push(sessionId);
+          }
+        }
+      } catch {
+        // A directory-wide optimization failing says nothing about any one
+        // target. Exact reads below remain authoritative and isolated.
+      }
+    }
+
+    const probeCount = strong
+      ? directlyProbed.length
+      : Math.min(OPENCODE_EXISTENCE_PROBE_CONCURRENCY, directlyProbed.length);
+    const probeStart = directlyProbed.length === 0
+      ? 0
+      : this.existenceProbeCursor % directlyProbed.length;
+    const scheduledProbes = Array.from(
+      { length: probeCount },
+      (_, index) => directlyProbed[(probeStart + index) % directlyProbed.length]!,
+    );
+    if (!strong && directlyProbed.length > 0) {
+      this.existenceProbeCursor = (probeStart + probeCount) % directlyProbed.length;
+      const scheduled = new Set(scheduledProbes);
+      for (const sessionId of directlyProbed) {
+        if (!scheduled.has(sessionId)) result.set(sessionId, { state: "unknown" });
+      }
+    }
+
+    let nextSession = 0;
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const sessionId = scheduledProbes[nextSession++];
+        if (!sessionId) return;
+        const probe = await this.probeSessionExistence(sessionId);
+        if (!strong && probe.state === "unknown") {
+          setBoundedMapEntry(
+            this.sessionExistenceRetryAt,
+            sessionId,
+            this.now() + this.existenceCacheTtlMs,
+            MAX_TRACKED_PROVIDER_INTERACTIONS,
+          );
+        }
+        result.set(sessionId, probe);
+      }
+    };
+    await Promise.all(Array.from(
+      {
+        length: Math.min(
+          OPENCODE_EXISTENCE_PROBE_CONCURRENCY,
+          scheduledProbes.length,
+        ),
+      },
+      () => worker(),
+    ));
+    return result;
+  }
+
+  private async readCachedSessionList(): Promise<OpenCodeExistenceSnapshot> {
+    const now = this.now();
+    if (this.sessionListCache && this.sessionListCache.expiresAt > now) {
+      return this.sessionListCache.snapshot;
+    }
+    if (this.sessionListFailure && this.sessionListFailure.expiresAt > now) {
+      throw this.sessionListFailure.error;
+    }
+    if (this.sessionListRead) return this.sessionListRead;
+
+    const read = (async () => {
+      try {
+        const response = await this.client.session.list(
+          {
+            directory: this.connection.directory,
+            limit: MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS,
+          },
+          this.requestOptions(),
+        );
+        assertSdkResponse(response, "OpenCode session list");
+        const snapshot = boundedOpenCodeExistenceSnapshot(response.data);
+        this.sessionListCache = {
+          snapshot,
+          expiresAt: this.now() + this.existenceCacheTtlMs,
+        };
+        this.sessionListFailure = null;
+        return snapshot;
+      } catch (error) {
+        this.sessionListFailure = {
+          error,
+          expiresAt: this.now() + this.existenceCacheTtlMs,
+        };
+        throw error;
+      }
+    })().finally(() => {
+      if (this.sessionListRead === read) this.sessionListRead = null;
+    });
+    this.sessionListRead = read;
+    return read;
+  }
+
+  private async probeSessionExistence(
+    sessionId: string,
+  ): Promise<OpenCodeExistenceProbe> {
+    try {
+      const response = await this.client.session.get(
+        { sessionID: sessionId, directory: this.connection.directory },
+        this.requestOptions(),
+      );
+      if (response.error) {
+        if (response.response?.status === 404) {
+          this.sessionExistenceCache.delete(sessionId);
+          this.sessionExistenceRetryAt.delete(sessionId);
+          this.sessionListCache?.snapshot.sessionIds.delete(sessionId);
+          return { state: "missing" };
+        }
+        assertSdkResponse(response, "OpenCode session existence read");
+      }
+      const session = asRecord(response.data);
+      if (
+        nonEmptyString(session?.id) !== sessionId
+        || (
+          this.connection.directory !== undefined
+          && nonEmptyString(session?.directory) !== this.connection.directory
+        )
+        || serializedByteLength(response.data) > MAX_OPENCODE_EXISTENCE_SNAPSHOT_BYTES
+      ) {
+        throw new ProviderUnavailableError(
+          "OpenCode session existence read is malformed or oversized",
+        );
+      }
+      this.rememberExistingSession(sessionId);
+      return { state: "exists" };
+    } catch (error) {
+      return { state: "unknown", error };
+    }
+  }
+
+  private rememberExistingSession(sessionId: string): void {
+    setBoundedMapEntry(
+      this.sessionExistenceCache,
+      sessionId,
+      this.now() + this.existenceCacheTtlMs,
+      MAX_TRACKED_PROVIDER_INTERACTIONS,
+    );
+    this.sessionExistenceRetryAt.delete(sessionId);
   }
 
   private openCodeInteractionId(
@@ -2568,6 +2928,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
     this.failedQuestionSessions.clear();
     this.answeringRequestIds.clear();
     this.requestTasks.clear();
+    this.sessionExistenceCache.clear();
+    this.sessionExistenceRetryAt.clear();
+    this.sessionListCache = null;
+    this.sessionListFailure = null;
   }
 
   private requestOptions(): { signal: AbortSignal } {

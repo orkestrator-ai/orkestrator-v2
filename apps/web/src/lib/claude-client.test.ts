@@ -320,6 +320,10 @@ describe("claude-client", () => {
         [{ planMode: "yes" }, "planMode"],
         [{ turnStartedAt: "yesterday-ish" }, "turnStartedAt"],
         [{ backgroundTasks: "none" }, "backgroundTasks"],
+        [
+          { completionBlockedByBackgroundTasks: "yes" },
+          "completionBlockedByBackgroundTasks",
+        ],
       ] as const) {
         mockFetchJson({ ...base, ...malformed });
         const result = await lookupSession(client, "s-1");
@@ -330,6 +334,7 @@ describe("claude-client", () => {
           expect(result.session.promptSuggestion).toBeUndefined();
           expect(result.session.planMode).toBeUndefined();
           expect(result.session.backgroundTasks).toBeUndefined();
+          expect(result.session.completionBlockedByBackgroundTasks).toBeUndefined();
           expect(result.session.invalidMetadataFields).toEqual([expectedField]);
         }
       }
@@ -352,6 +357,7 @@ describe("claude-client", () => {
           build: { id: "build", status: "running" },
           broken: { id: "mismatch", status: "running" },
         },
+        completionBlockedByBackgroundTasks: true,
       });
 
       const result = await lookupSession(client, "s-1");
@@ -365,10 +371,28 @@ describe("claude-client", () => {
         expect(result.session.backgroundTasks).toEqual({
           build: { id: "build", status: "running" },
         });
+        expect(result.session.completionBlockedByBackgroundTasks).toBe(true);
         expect(result.session.invalidMetadataFields).toEqual([
           "contextUsage.rateLimits",
           "backgroundTasks.broken",
         ]);
+      }
+    });
+
+    test("preserves an explicit false completion hold", async () => {
+      mockFetchJson({
+        id: "s-1",
+        status: "idle",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+        completionBlockedByBackgroundTasks: false,
+      });
+
+      const result = await lookupSession(client, "s-1");
+      expect(result.kind).toBe("found");
+      if (result.kind === "found") {
+        expect(result.session.completionBlockedByBackgroundTasks).toBe(false);
+        expect(result.session.invalidMetadataFields).toBeUndefined();
       }
     });
 

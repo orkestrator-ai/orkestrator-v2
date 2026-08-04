@@ -1466,7 +1466,11 @@ describe("sendPrompt", () => {
       expect(events).toContainEqual({
         type: "session.updated",
         sessionId: session.id,
-        data: { status: "running", turnStartedAt },
+        data: {
+          status: "running",
+          turnStartedAt,
+          completionBlockedByBackgroundTasks: false,
+        },
       });
 
       // System init - sdkSessionId should be captured
@@ -4194,6 +4198,108 @@ describe("sendPrompt", () => {
     } finally {
       stop();
     }
+  });
+
+  test("records an abort while the final usage snapshot is pending", async () => {
+    let resolveUsage!: (value: unknown) => void;
+    let usageRequestStarted = false;
+    queryControlOverrides.getContextUsage = mock(() => {
+      usageRequestStarted = true;
+      return new Promise<unknown>((resolve) => {
+        resolveUsage = resolve;
+      });
+    });
+
+    const session = createSession("structured usage abort");
+    track(session.id);
+    const { events, stop } = captureEvents();
+    try {
+      const prompt = sendPrompt(session.id, "review", {
+        outputSchema: { type: "object" },
+        requestId: "structured-usage-abort",
+      });
+      const call = await nextQueryCall();
+      call.push({
+        type: "result",
+        subtype: "success",
+        structured_output: { summary: "provider completed" },
+        modelUsage: {
+          "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
+        },
+      });
+      await waitFor(() => usageRequestStarted);
+
+      expect(abortSession(session.id)).toBe(true);
+      resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
+      await prompt;
+
+      expect(session.structuredOutput).toMatchObject({
+        ok: false,
+        requestId: "structured-usage-abort",
+        error: { code: "interrupted", retryable: true },
+      });
+      expect(events.filter((event) =>
+        event.type === "session.structured-output"
+        && event.sessionId === session.id
+      )).toHaveLength(1);
+    } finally {
+      stop();
+    }
+  });
+
+  test("does not let an aborted structured result overwrite a restarted request", async () => {
+    let resolveUsage!: (value: unknown) => void;
+    let usageRequestStarted = false;
+    queryControlOverrides.getContextUsage = mock(() => {
+      usageRequestStarted = true;
+      return new Promise<unknown>((resolve) => {
+        resolveUsage = resolve;
+      });
+    });
+
+    const session = createSession("structured usage restart");
+    track(session.id);
+    const firstPrompt = sendPrompt(session.id, "first review", {
+      outputSchema: { type: "object" },
+      requestId: "structured-before-restart",
+    });
+    const firstCall = await nextQueryCall();
+    firstCall.push({
+      type: "result",
+      subtype: "success",
+      structured_output: { summary: "stale result" },
+      modelUsage: {
+        "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
+      },
+    });
+    await waitFor(() => usageRequestStarted);
+
+    expect(abortSession(session.id)).toBe(true);
+    delete queryControlOverrides.getContextUsage;
+    const secondPrompt = sendPrompt(session.id, "second review", {
+      outputSchema: { type: "object" },
+      requestId: "structured-after-restart",
+    });
+    const secondCall = await nextQueryCall();
+
+    resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
+    await firstPrompt;
+    expect(session.structuredOutputRequestId).toBe("structured-after-restart");
+    expect(session.structuredOutput).toBeUndefined();
+
+    secondCall.push({
+      type: "result",
+      subtype: "success",
+      structured_output: { summary: "current result" },
+    });
+    secondCall.finish();
+    await secondPrompt;
+    expect(session.structuredOutput).toEqual({
+      ok: true,
+      provider: "claude",
+      requestId: "structured-after-restart",
+      value: { summary: "current result" },
+    });
   });
 
   test("a repeated structured request id attaches instead of launching another query", async () => {
@@ -7881,6 +7987,7 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
   test("restores the stopped session when durable deletion fails", async () => {
     const state = await materializePersistedSession();
     state.turnStartedAt = "2026-01-01T00:00:00.000Z";
+    state.completionBlockedByBackgroundTasks = true;
     state.queryControl = {
       close: async () => {
         throw new Error("close failed");
@@ -7894,6 +8001,7 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
     expect(getSession(state.id)).toBe(state);
     expect(state).toMatchObject({ deleting: false, status: "idle" });
     expect(state.turnStartedAt).toBeUndefined();
+    expect(state.completionBlockedByBackgroundTasks).toBe(false);
     expect(state.queryControl).toBeUndefined();
 
     const prompt = sendPrompt(state.id, "try again");
@@ -8172,66 +8280,260 @@ describe("background task reducer", () => {
   test("keeps streaming input and running status open until background agents settle", async () => {
     const created = createSession("held input");
     track(created.id);
+    const { events, stop } = captureEvents();
     const promptPromise = sendPrompt(created.id, "delegate the review");
     const call = await nextQueryCall();
+    try {
+      expect(typeof call.prompt).not.toBe("string");
+      const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+      const firstInput = await input.next();
+      expect(firstInput.done).toBe(false);
+      if (firstInput.done) throw new Error("Held prompt closed before sending its user message");
+      expect(firstInput.value.message.content).toEqual([
+        { type: "text", text: "delegate the review" },
+      ]);
 
-    expect(typeof call.prompt).not.toBe("string");
-    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
-    const firstInput = await input.next();
-    expect(firstInput.done).toBe(false);
-    if (firstInput.done) throw new Error("Held prompt closed before sending its user message");
-    expect(firstInput.value.message.content).toEqual([
-      { type: "text", text: "delegate the review" },
-    ]);
+      let inputClosed = false;
+      const inputCompletion = input.next().then((result) => {
+        inputClosed = result.done === true;
+        return result;
+      });
 
-    let inputClosed = false;
-    const inputCompletion = input.next().then((result) => {
-      inputClosed = result.done === true;
-      return result;
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "agent-1",
+        description: "Review the bridge",
+      });
+      call.push({
+        type: "result",
+        subtype: "success",
+        usage: { input_tokens: 1, output_tokens: 1 },
+        modelUsage: {
+          "claude-mock": {
+            inputTokens: 1,
+            outputTokens: 1,
+            contextWindow: 200_000,
+          },
+        },
+      });
+      await waitFor(
+        () =>
+          getSession(created.id)?.backgroundTasks?.["agent-1"]?.status === "running"
+          && getSession(created.id)?.usage !== undefined,
+      );
+
+      expect(inputClosed).toBe(false);
+      expect(getSession(created.id)?.status).toBe("running");
+      expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(true);
+
+      call.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "agent-1",
+        status: "completed",
+        summary: "Review complete",
+      });
+      await waitFor(() => inputClosed);
+      expect(await inputCompletion).toEqual({ done: true, value: undefined });
+      expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
+      expect(events.flatMap((event) => {
+        const data = event.data as { completionBlockedByBackgroundTasks?: boolean };
+        return typeof data.completionBlockedByBackgroundTasks === "boolean"
+          ? [data.completionBlockedByBackgroundTasks]
+          : [];
+      })).toEqual([false, true, false]);
+      // The bridge remains authoritative until the provider stream itself ends.
+      expect(getSession(created.id)?.status).toBe("running");
+
+      call.finish();
+      await promptPromise;
+      expect(getSession(created.id)?.status).toBe("idle");
+    } finally {
+      stop();
+    }
+  });
+
+  test("does not let an aborted result handler reassert a hold or clobber a restart", async () => {
+    let resolveUsage!: (value: unknown) => void;
+    let usageRequestStarted = false;
+    queryControlOverrides.getContextUsage = mock(() => {
+      usageRequestStarted = true;
+      return new Promise<unknown>((resolve) => {
+        resolveUsage = resolve;
+      });
     });
+
+    const created = createSession("abort held result");
+    track(created.id);
+    const { events, stop } = captureEvents();
+    const firstPrompt = sendPrompt(created.id, "delegate then abort");
+    const firstCall = await nextQueryCall();
+    try {
+      firstCall.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "agent-aborted",
+        description: "Wait for usage",
+      });
+      firstCall.push({
+        type: "result",
+        subtype: "success",
+        modelUsage: {
+          "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
+        },
+      });
+      await waitFor(() => usageRequestStarted);
+
+      expect(abortSession(created.id)).toBe(true);
+      delete queryControlOverrides.getContextUsage;
+      const secondPrompt = sendPrompt(created.id, "restart immediately");
+      const secondCall = await nextQueryCall();
+
+      resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
+      await firstPrompt;
+
+      expect(getSession(created.id)?.status).toBe("running");
+      expect(getSession(created.id)?.abortController).toBe(secondCall.options.abortController);
+      expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
+      const abortedIdleIndex = events.findIndex((event) =>
+        event.type === "session.idle"
+        && (event.data as { aborted?: boolean }).aborted === true
+      );
+      expect(abortedIdleIndex).toBeGreaterThanOrEqual(0);
+      expect(events.slice(abortedIdleIndex + 1).some((event) =>
+        (event.data as { completionBlockedByBackgroundTasks?: boolean })
+          .completionBlockedByBackgroundTasks === true
+      )).toBe(false);
+
+      secondCall.push({ type: "result", subtype: "success" });
+      secondCall.finish();
+      await secondPrompt;
+      expect(getSession(created.id)?.status).toBe("idle");
+      expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
+    } finally {
+      stop();
+    }
+  });
+
+  test("closes the old held input when turn ownership changes before task settlement", async () => {
+    let resolveUsage!: (value: unknown) => void;
+    let usageRequestStarted = false;
+    queryControlOverrides.getContextUsage = mock(() => {
+      usageRequestStarted = true;
+      return new Promise<unknown>((resolve) => {
+        resolveUsage = resolve;
+      });
+    });
+
+    const created = createSession("superseded held input");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate then supersede");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    const inputCompletion = input.next();
 
     call.push({
       type: "system",
       subtype: "task_started",
-      task_id: "agent-1",
-      description: "Review the bridge",
+      task_id: "agent-superseded",
+      description: "Wait for usage",
+    });
+    call.push({
+      type: "result",
+      subtype: "success",
+      modelUsage: {
+        "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
+      },
+    });
+    await waitFor(() => usageRequestStarted);
+
+    const staleSettlement = created.finishTurnInputIfSettled;
+    expect(staleSettlement).toBeFunction();
+    const replacementController = new AbortController();
+    created.abortController = replacementController;
+    staleSettlement!();
+
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    expect(created.completionBlockedByBackgroundTasks).toBe(false);
+    resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
+    await promptPromise;
+    expect(created.abortController).toBe(replacementController);
+
+    // Restore the artificial replacement ownership used to exercise the stale
+    // callback branch; normal restart cleanup belongs to the replacement turn.
+    created.abortController = undefined;
+    created.status = "idle";
+  });
+
+  test("aborting an established hold publishes the cleared hold on the idle edge", async () => {
+    const created = createSession("abort established hold");
+    track(created.id);
+    const { events, stop } = captureEvents();
+    const promptPromise = sendPrompt(created.id, "delegate then abort");
+    const call = await nextQueryCall();
+    try {
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "agent-abort-held",
+        description: "Keep the turn open",
+      });
+      call.push({
+        type: "result",
+        subtype: "success",
+        usage: { input_tokens: 1, output_tokens: 1 },
+        modelUsage: {
+          "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
+        },
+      });
+      await waitFor(() => created.completionBlockedByBackgroundTasks === true);
+
+      expect(abortSession(created.id)).toBe(true);
+      expect(created.completionBlockedByBackgroundTasks).toBe(false);
+      expect(events).toContainEqual({
+        type: "session.idle",
+        sessionId: created.id,
+        data: {
+          aborted: true,
+          completionBlockedByBackgroundTasks: false,
+        },
+      });
+      await promptPromise;
+    } finally {
+      stop();
+    }
+  });
+
+  test("clears an established completion hold when the provider stream fails", async () => {
+    const created = createSession("failed held result");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate then fail");
+    const call = await nextQueryCall();
+
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "agent-failed",
+      description: "Fail after result",
     });
     call.push({
       type: "result",
       subtype: "success",
       usage: { input_tokens: 1, output_tokens: 1 },
       modelUsage: {
-        "claude-mock": {
-          inputTokens: 1,
-          outputTokens: 1,
-          contextWindow: 200_000,
-        },
+        "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
       },
     });
-    await waitFor(
-      () =>
-        getSession(created.id)?.backgroundTasks?.["agent-1"]?.status === "running"
-        && getSession(created.id)?.usage !== undefined,
+    await waitFor(() =>
+      getSession(created.id)?.completionBlockedByBackgroundTasks === true
     );
 
-    expect(inputClosed).toBe(false);
-    expect(getSession(created.id)?.status).toBe("running");
-
-    call.push({
-      type: "system",
-      subtype: "task_notification",
-      task_id: "agent-1",
-      status: "completed",
-      summary: "Review complete",
-    });
-    await waitFor(() => inputClosed);
-    expect(await inputCompletion).toEqual({ done: true, value: undefined });
-    // The bridge remains authoritative until the provider stream itself ends.
-    expect(getSession(created.id)?.status).toBe("running");
-
-    call.finish();
-    await promptPromise;
-    expect(getSession(created.id)?.status).toBe("idle");
+    call.fail(new Error("provider stream disconnected"));
+    await expect(promptPromise).rejects.toThrow("provider stream disconnected");
+    expect(getSession(created.id)?.status).toBe("error");
+    expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
   });
 
   test("keeps streaming input open when a Bash launch precedes delayed lifecycle events", async () => {
@@ -9097,6 +9399,59 @@ describe("stopBackgroundTask", () => {
     // rather than left to a message that may never be consumed.
     expect(session.backgroundTasks?.["task-1"]).toMatchObject({ status: "killed" });
     await finish();
+  });
+
+  test("stopping the last task of a held turn clears the hold and lets the turn finish", async () => {
+    const stopTask = mock(async (_taskId: string) => {});
+    queryControlOverrides.stopTask = stopTask;
+
+    const session = createSession("stop held task");
+    track(session.id);
+    const { events, stop } = captureEvents();
+    const promptPromise = sendPrompt(session.id, "delegate then stop");
+    const call = await nextQueryCall();
+    try {
+      const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+      expect((await input.next()).done).toBe(false);
+      const inputCompletion = input.next();
+
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-held",
+        description: "Long review",
+      });
+      call.push({
+        type: "result",
+        subtype: "success",
+        usage: { input_tokens: 1, output_tokens: 1 },
+        modelUsage: {
+          "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
+        },
+      });
+      await waitFor(() => session.completionBlockedByBackgroundTasks === true);
+
+      expect(await stopBackgroundTask(session.id, "task-held")).toEqual({ ok: true });
+      expect(stopTask).toHaveBeenCalledWith("task-held");
+      expect(session.backgroundTasks?.["task-held"]?.status).toBe("killed");
+      expect(session.completionBlockedByBackgroundTasks).toBe(false);
+      expect(await inputCompletion).toEqual({ done: true, value: undefined });
+      expect(events.flatMap((event) => {
+        const data = event.data as { completionBlockedByBackgroundTasks?: boolean };
+        return typeof data.completionBlockedByBackgroundTasks === "boolean"
+          ? [data.completionBlockedByBackgroundTasks]
+          : [];
+      })).toEqual([false, true, false]);
+
+      // Closing held input allows Claude to end its stream; the bridge remains
+      // running until that authoritative provider edge arrives.
+      expect(session.status).toBe("running");
+      call.finish();
+      await promptPromise;
+      expect(session.status).toBe("idle");
+    } finally {
+      stop();
+    }
   });
 
   test("reports no control channel once the turn that owned the task has ended", async () => {

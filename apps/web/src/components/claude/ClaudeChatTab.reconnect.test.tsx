@@ -167,7 +167,9 @@ function seedStores() {
     includeLocalSettings: new Map(),
     selectedAgent: new Map(),
     backgroundTasks: new Map(),
+    completionBlockedByBackgroundTasks: new Map(),
     backgroundTaskRevisions: new Map(),
+    completionHoldRevisions: new Map(),
   });
 
   useEnvironmentStore.setState({

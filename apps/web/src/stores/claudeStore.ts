@@ -160,15 +160,24 @@ interface ClaudeState
    */
   dismissedPromptSuggestions: Map<ClaudeSessionKey, string>;
   backgroundTasks: Map<ClaudeSessionKey, Record<string, ClaudeBackgroundTask>>;
+  /** Sessions whose response is ready but whose background work remains live. */
+  completionBlockedByBackgroundTasks: Map<ClaudeSessionKey, boolean>;
   /**
-   * Monotonic lifecycle revision for each tab's authoritative task snapshots.
+   * Monotonic revision for each tab's authoritative background-task snapshots.
    *
    * The task map deliberately deletes empty records, so comparing its value
    * cannot detect an absent → present → absent sequence while a REST refresh
-   * is in flight. This revision changes for every task snapshot, including an
-   * explicit empty snapshot, and lets refresh reconciliation detect that ABA.
+   * is in flight.
    */
   backgroundTaskRevisions: Map<ClaudeSessionKey, number>;
+  /**
+   * Monotonic revision for the independently-emitted completion hold.
+   *
+   * Keeping this separate from task snapshots lets a REST refresh retain the
+   * newer half of the pair without discarding an authoritative value for the
+   * other half that no later SSE frame may repeat.
+   */
+  completionHoldRevisions: Map<ClaudeSessionKey, number>;
   pendingQuestions: Map<string, ClaudeQuestionRequest>;
   pendingPlanApprovals: Map<string, ClaudePlanApprovalRequest>;
 
@@ -218,6 +227,10 @@ interface ClaudeState
   setBackgroundTasks: (
     sessionKey: ClaudeSessionKey,
     tasks: Record<string, ClaudeBackgroundTask>,
+  ) => void;
+  setCompletionBlockedByBackgroundTasks: (
+    sessionKey: ClaudeSessionKey,
+    blocked: boolean,
   ) => void;
   /**
    * Bind a tab to a different provider session and discard metadata that belongs
@@ -303,7 +316,9 @@ const CLAUDE_SESSION_KEYED_MAPS = [
   "promptSuggestions",
   "dismissedPromptSuggestions",
   "backgroundTasks",
+  "completionBlockedByBackgroundTasks",
   "backgroundTaskRevisions",
+  "completionHoldRevisions",
 ] as const satisfies ReadonlyArray<keyof ClaudeState>;
 
 export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
@@ -333,7 +348,9 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   promptSuggestions: new Map(),
   dismissedPromptSuggestions: new Map(),
   backgroundTasks: new Map(),
+  completionBlockedByBackgroundTasks: new Map(),
   backgroundTaskRevisions: new Map(),
+  completionHoldRevisions: new Map(),
   pendingQuestions: new Map(),
   pendingPlanApprovals: new Map(),
 
@@ -523,6 +540,26 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       };
     }),
 
+  setCompletionBlockedByBackgroundTasks: (sessionKey, blocked) =>
+    set((state) => {
+      const wasBlocked =
+        state.completionBlockedByBackgroundTasks.get(sessionKey) === true;
+      if (wasBlocked === blocked) return state;
+
+      const next = new Map(state.completionBlockedByBackgroundTasks);
+      const revisions = new Map(state.completionHoldRevisions);
+      if (blocked) next.set(sessionKey, true);
+      else next.delete(sessionKey);
+      revisions.set(
+        sessionKey,
+        (state.completionHoldRevisions.get(sessionKey) ?? 0) + 1,
+      );
+      return {
+        completionBlockedByBackgroundTasks: next,
+        completionHoldRevisions: revisions,
+      };
+    }),
+
   replaceSessionIdentity: (sessionKey, session) => {
     const sweptDraftKeys: string[] = [];
     set((state) => {
@@ -574,8 +611,14 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
           state.dismissedPromptSuggestions,
         ),
         backgroundTasks: withoutSessionKey(state.backgroundTasks),
+        completionBlockedByBackgroundTasks: withoutSessionKey(
+          state.completionBlockedByBackgroundTasks,
+        ),
         backgroundTaskRevisions: withoutSessionKey(
           state.backgroundTaskRevisions,
+        ),
+        completionHoldRevisions: withoutSessionKey(
+          state.completionHoldRevisions,
         ),
         pendingQuestions,
         pendingPlanApprovals,

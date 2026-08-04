@@ -275,6 +275,15 @@ export interface SessionState {
   /** Live background/subagent tasks keyed by provider task id. */
   backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
   /**
+   * Claude has returned the turn result, but its SDK input must remain open
+   * because at least one background task is still live.
+   *
+   * This is authoritative bridge state rather than a renderer inference: a
+   * tab can be unmounted when the result arrives and must rehydrate the same
+   * explanation and controls from GET /session/:id later.
+   */
+  completionBlockedByBackgroundTasks?: boolean;
+  /**
    * Provider rate-limit windows, held independently of {@link usage}.
    *
    * `rate_limit_event` arrives mid-turn, long before the first `result` builds

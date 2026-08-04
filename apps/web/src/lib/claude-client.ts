@@ -548,12 +548,15 @@ export interface ClaudeSession {
   promptSuggestion?: string;
   planMode?: boolean;
   backgroundTasks?: Record<string, ClaudeBackgroundTask>;
+  /** The response is ready, but live background tasks keep the turn open. */
+  completionBlockedByBackgroundTasks?: boolean;
   /**
    * Optional fields omitted because their wire values failed validation.
    *
    * A whole-field rejection is reported as the bare field name
    * (`"contextUsage"`, `"rateLimits"`, `"promptSuggestion"`,
-   * `"backgroundTasks"`); a dropped optional decoration or task inside an
+   * `"backgroundTasks"`, `"completionBlockedByBackgroundTasks"`); a dropped
+   * optional decoration or task inside an
    * otherwise-valid field is reported as a dotted path
    * (`"contextUsage.rateLimits"`, `"backgroundTasks.<taskId>"`). A top-level
    * rate-limit array can also retain its valid windows while reporting
@@ -901,6 +904,12 @@ export async function lookupSession(
     if (session.planMode !== undefined && typeof session.planMode !== "boolean") {
       invalidMetadataFields.push("planMode");
     }
+    if (
+      session.completionBlockedByBackgroundTasks !== undefined
+      && typeof session.completionBlockedByBackgroundTasks !== "boolean"
+    ) {
+      invalidMetadataFields.push("completionBlockedByBackgroundTasks");
+    }
     if (session.backgroundTasks !== undefined && backgroundTasks === undefined) {
       invalidMetadataFields.push("backgroundTasks");
     } else {
@@ -930,6 +939,10 @@ export async function lookupSession(
             ? session.planMode
             : undefined,
         backgroundTasks,
+        completionBlockedByBackgroundTasks:
+          typeof session.completionBlockedByBackgroundTasks === "boolean"
+            ? session.completionBlockedByBackgroundTasks
+            : undefined,
         ...(invalidMetadataFields.length > 0 ? { invalidMetadataFields } : {}),
       },
     };

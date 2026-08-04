@@ -72,6 +72,31 @@ describe("Codex collaboration payload normalization", () => {
       expect(normalizeCodexCollabToolCallItem(value)).toBeNull();
       expect(applyCodexCollabStateToSubagentParts(transcript, [value])).toBe(transcript);
     }
+
+    expect(isCodexCollabToolCallItem(null)).toBe(false);
+    expect(isCodexCollabToolCallItem({
+      id: "spawn",
+      type: "collab_tool_call",
+      tool: "spawn_agent",
+      agents_states: [],
+    })).toBe(false);
+    expect(isCodexCollabToolCallItem({
+      id: "spawn",
+      type: "collab_tool_call",
+      tool: "spawn_agent",
+      agents_states: { child: null },
+    })).toBe(false);
+  });
+
+  test("ignores malformed subagent activity items", () => {
+    const transcript = [makeAgent("existing")];
+    for (const value of [
+      { id: "", type: "subagent_activity", activity: "started", agent_thread_id: "child" },
+      { id: "activity", type: "subagent_activity", activity: "started" },
+      { id: "activity", type: "subagent_activity", activity: "future", agent_thread_id: "child" },
+    ]) {
+      expect(applyCodexCollabStateToSubagentParts(transcript, [value])).toBe(transcript);
+    }
   });
 
   test("normalizes identifiers and ignores malformed optional state", () => {
@@ -232,6 +257,139 @@ describe("Codex collaboration state", () => {
     }
   });
 
+  test("lets the transcript resolve an interaction after a stale terminal snapshot", () => {
+    const items = [
+      {
+        id: "wait-complete",
+        type: "collab_tool_call",
+        tool: "wait",
+        receiver_thread_ids: ["agent-1"],
+        agents_states: {
+          "agent-1": { status: "completed", message: "First task done" },
+        },
+        status: "completed",
+      },
+      {
+        id: "activity-followup",
+        type: "subagent_activity",
+        activity: "interacted",
+        agent_thread_id: "agent-1",
+      },
+    ];
+
+    const [active] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1")],
+      items,
+    );
+    expect(active?.toolState).toBe("pending");
+
+    // `send_message` emits the same interacted item but does not wake a
+    // completed child. Its terminal transcript therefore remains terminal.
+    const [stillFinished] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1", { toolState: "success" })],
+      items,
+    );
+    expect(stillFinished?.toolState).toBe("success");
+
+    const [finishedAgain] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1", { toolState: "success" })],
+      [
+        ...items,
+        {
+          id: "wait-followup-complete",
+          type: "collab_tool_call",
+          tool: "wait",
+          receiver_thread_ids: ["agent-1"],
+          agents_states: {
+            "agent-1": { status: "completed", message: "Follow-up done" },
+          },
+          status: "completed",
+        },
+      ],
+    );
+    expect(finishedAgain?.toolState).toBe("success");
+  });
+
+  test("uses activity as a hint without overriding terminal transcripts", () => {
+    const [started] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1", { toolState: "success" })],
+      [{
+        id: "started",
+        type: "subagent_activity",
+        activity: "started",
+        agent_thread_id: "agent-1",
+      }],
+    );
+    expect(started?.toolState).toBe("success");
+
+    const [failed] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1", { toolState: "failure" })],
+      [{
+        id: "started",
+        type: "subagent_activity",
+        activity: "started",
+        agent_thread_id: "agent-1",
+      }],
+    );
+    expect(failed?.toolState).toBe("failure");
+
+    const [orphan] = applyCodexCollabStateToSubagentParts([], [{
+      id: "started",
+      type: "subagent_activity",
+      activity: "started",
+      agent_thread_id: "agent-1",
+    }]);
+    expect(orphan).toMatchObject({ subagentId: "agent-1", toolState: "pending" });
+
+    const [interrupted] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1", { toolState: "success" })],
+      [{
+        id: "interrupted",
+        type: "subagent_activity",
+        activity: "interrupted",
+        agent_thread_id: "agent-1",
+      }],
+    );
+    expect(interrupted?.toolState).toBe("success");
+
+    const [interruptedFailure] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1", { toolState: "failure" })],
+      [{
+        id: "interrupted",
+        type: "subagent_activity",
+        activity: "interrupted",
+        agent_thread_id: "agent-1",
+      }],
+    );
+    expect(interruptedFailure?.toolState).toBe("failure");
+  });
+
+  test("preserves an earlier-turn final message when an interaction invalidates its status", () => {
+    const [part] = applyCodexCollabStateToSubagentParts([], [
+      {
+        id: "wait-complete",
+        type: "collab_tool_call",
+        tool: "wait",
+        receiver_thread_ids: ["agent-1"],
+        agents_states: {
+          "agent-1": { status: "completed", message: "First task done" },
+        },
+      },
+      {
+        id: "interaction",
+        type: "subagent_activity",
+        activity: "interacted",
+        agent_thread_id: "agent-1",
+      },
+    ]);
+
+    expect(part).toMatchObject({
+      subagentId: "agent-1",
+      toolState: "pending",
+      subagentActions: [{ type: "text", content: "First task done" }],
+    });
+  });
+
   test("preserves the original spawn prompt over follow-up messages", () => {
     const [part] = applyCodexCollabStateToSubagentParts([], [
       {
@@ -278,7 +436,7 @@ describe("Codex collaboration state", () => {
         tool: "spawn_agent",
         prompt: "Runtime task",
         receiver_thread_ids: ["agent-1"],
-        agents_states: { "agent-1": { status: "running" } },
+        agents_states: { "agent-1": { status: "completed" } },
         status: "failed",
       }],
     );
@@ -337,6 +495,25 @@ describe("Codex collaboration state", () => {
     );
 
     expect(part).toEqual(source);
+  });
+
+  test("falls back to an unclaimed anonymous row when the preferred index is occupied", () => {
+    const parts = applyCodexCollabStateToSubagentParts(
+      [makeAgent("existing"), makeAgent(undefined)],
+      [{
+        id: "spawn",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        prompt: "New task",
+        receiver_thread_ids: ["new-agent"],
+      }],
+    );
+
+    expect(parts[0]?.subagentId).toBe("existing");
+    expect(parts[1]).toMatchObject({
+      subagentId: "new-agent",
+      subagentPrompt: "New task",
+    });
   });
 
   test("matches known agents and appends an unmatched earlier-turn agent", () => {
@@ -477,6 +654,21 @@ describe("Codex subagent timeline reconciliation", () => {
       fingerprints,
     );
     expect(timeline).toEqual(["subagent:anonymous:0", "subagent:anonymous:1"]);
+  });
+
+  test("reconciles shifted anonymous rows by their current positional identity", () => {
+    const timeline: string[] = [];
+    const currentParts = new Map<string, TranscriptSubagentPart>();
+    const fingerprints = new Map<string, string>();
+    const first = makeAgent(undefined, { subagentPrompt: "First" });
+    const second = makeAgent(undefined, { subagentPrompt: "Second" });
+
+    reconcileCodexSubagentTimeline([first, second], timeline, currentParts, fingerprints);
+    reconcileCodexSubagentTimeline([second], timeline, currentParts, fingerprints);
+
+    expect(timeline).toEqual(["subagent:anonymous:0"]);
+    expect(currentParts.get("subagent:anonymous:0")?.subagentPrompt).toBe("Second");
+    expect(currentParts.has("subagent:anonymous:1")).toBe(false);
   });
 
   test("keeps duplicate identified rows distinct", () => {

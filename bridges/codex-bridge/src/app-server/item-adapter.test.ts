@@ -172,6 +172,27 @@ describe("item adapter edge cases", () => {
       type: "subAgentActivity",
       agentThreadId: "",
     })).toEqual({ item: null, unsupportedType: "subAgentActivity" });
+    expect(adaptAppServerItem({
+      id: "sub",
+      type: "subAgentActivity",
+      kind: "futureKind",
+      agentThreadId: "child-1",
+    })).toEqual({ item: null, unsupportedType: "subAgentActivity" });
+  });
+
+  test("maps every known subagent activity kind exactly", () => {
+    for (const kind of ["started", "interacted", "interrupted"] as const) {
+      expect(adaptAppServerItem({
+        id: `sub-${kind}`,
+        type: "subAgentActivity",
+        kind,
+        agentThreadId: "child-1",
+      }).item).toMatchObject({
+        type: "subagent_activity",
+        activity: kind,
+        agent_thread_id: "child-1",
+      });
+    }
   });
 
   test("explicitly classifies every understood non-rendered item", () => {

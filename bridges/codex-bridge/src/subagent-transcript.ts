@@ -602,7 +602,17 @@ function isExplicitSubagentFailureEvent(eventType: string | undefined): boolean 
 function resolveSubagentOutcome(
   childOutcome: SubagentOutcome,
   parentOutcome?: SubagentOutcome,
+  childReopenedAfterTerminal = false,
 ): SubagentOutcome {
+  // A parent wait/list snapshot can describe an earlier task on a reusable
+  // child thread. Once the child transcript has moved from a terminal event
+  // back to active work, that newer lifecycle evidence must win until the
+  // follow-up reaches its own terminal event.
+  if (childReopenedAfterTerminal) {
+    if (childOutcome !== "pending") return childOutcome;
+    if (parentOutcome === "success") return "pending";
+  }
+
   if (parentOutcome === "success" || childOutcome === "success") {
     return "success";
   }
@@ -617,7 +627,7 @@ function resolveSubagentOutcome(
 function parseChildTranscript(
   records: TranscriptRecord[],
   base: SpawnedSubagent,
-): TranscriptSubagentPart {
+): TranscriptSubagentPart & { reopenedAfterTerminal: boolean } {
   const actions: TranscriptActionPart[] = [];
   const actionIndexByCallId = new Map<string, number>();
 
@@ -625,10 +635,36 @@ function parseChildTranscript(
   let role = base.role;
   let prompt = base.prompt;
   let state: ToolState = "pending";
+  let sawTerminalState = false;
+  let reopenedAfterTerminal = false;
+
+  const markPending = (): void => {
+    if (sawTerminalState) reopenedAfterTerminal = true;
+    state = "pending";
+  };
+  const markTerminal = (terminalState: "success" | "failure"): void => {
+    state = terminalState;
+    sawTerminalState = true;
+  };
 
   for (const record of records) {
     const payload = record.payload;
     if (!payload) {
+      continue;
+    }
+
+    // A Codex child thread is reusable. Its rollout therefore contains all of
+    // its turns, including an earlier final_answer followed by a later
+    // follow-up. Starting a new turn must reopen the row; otherwise the old
+    // terminal marker remains sticky while new actions stream underneath it.
+    if (
+      record.type === "turn_context"
+      || (
+        record.type === "event_msg"
+        && (payload.type === "task_started" || payload.type === "user_message")
+      )
+    ) {
+      markPending();
       continue;
     }
 
@@ -639,25 +675,26 @@ function parseChildTranscript(
     }
 
     if (record.type === "event_msg" && payload.type === "task_complete") {
-      state = "success";
+      markTerminal("success");
       continue;
     }
 
     if (record.type === "event_msg" && isExplicitSubagentFailureEvent(asString(payload.type))) {
-      state = "failure";
+      markTerminal("failure");
       continue;
     }
 
     if (record.type === "event_msg" && payload.type === "agent_message") {
       const phase = asString(payload.phase);
       if (phase === "commentary") {
+        markPending();
         const content = asString(payload.message);
         if (content) actions.push({ type: "text", content });
       } else if (phase === "final_answer") {
         appendTextAction(actions, payload.message);
       }
       if (phase === "final_answer") {
-        state = "success";
+        markTerminal("success");
       }
       continue;
     }
@@ -668,6 +705,7 @@ function parseChildTranscript(
 
     const payloadType = asString(payload.type);
     if (payloadType === "function_call" || payloadType === "custom_tool_call") {
+      markPending();
       const toolName = asString(payload.name) ?? "tool";
       const callId = asString(payload.call_id);
       const input = payloadType === "custom_tool_call" ? payload.input : payload.arguments;
@@ -725,7 +763,7 @@ function parseChildTranscript(
 
     if (payloadType === "message" && asString(payload.phase) === "final_answer") {
       appendTextAction(actions, messageContentText(payload.content));
-      state = "success";
+      markTerminal("success");
     }
   }
 
@@ -742,6 +780,7 @@ function parseChildTranscript(
     subagentActions: actions,
     subagentActionCount: actionCount,
     toolState: state,
+    reopenedAfterTerminal,
   };
 }
 
@@ -833,6 +872,10 @@ function outcomeFromAgentStatus(status: unknown): SubagentOutcome | undefined {
   return undefined;
 }
 
+function isActiveAgentStatus(status: unknown): boolean {
+  return status === "pending_init" || status === "pendingInit" || status === "running";
+}
+
 function parseCollabOutcomeByAgentId(
   parentRecords: TranscriptRecord[],
   agentIdByPath: ReadonlyMap<string, string>,
@@ -842,11 +885,16 @@ function parseCollabOutcomeByAgentId(
   const listAgentsCallIds = new Set<string>();
 
   const recordOutcome = (agentKey: string, status: unknown): void => {
+    const agentId = agentIdByPath.get(agentKey) ?? agentKey;
     const outcome = outcomeFromAgentStatus(status);
-    if (!outcome) {
+    if (outcome) {
+      outcomeByAgentId.set(agentId, outcome);
       return;
     }
-    outcomeByAgentId.set(agentIdByPath.get(agentKey) ?? agentKey, outcome);
+    // A later active observation supersedes an earlier terminal snapshot for
+    // the same reusable child. Unknown future shapes leave the last known
+    // outcome intact instead of being guessed.
+    if (isActiveAgentStatus(status)) outcomeByAgentId.delete(agentId);
   };
 
   for (const record of parentRecords) {
@@ -990,9 +1038,14 @@ export function deriveSubagentPartsFromTranscriptRecords(
       ? collabOutcomeByAgentId.get(spawned.agentId)
       : undefined;
 
+    const { reopenedAfterTerminal, ...transcriptPart } = part;
     return {
-      ...part,
-      toolState: resolveSubagentOutcome(part.toolState, parentOutcome),
+      ...transcriptPart,
+      toolState: resolveSubagentOutcome(
+        part.toolState,
+        parentOutcome,
+        reopenedAfterTerminal,
+      ),
     };
   });
 }

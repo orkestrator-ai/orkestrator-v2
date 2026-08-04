@@ -5,6 +5,7 @@ import type { TabInfo } from "@/types/paneLayout";
 const closeLocalTerminalSession = mock(async (_sessionId: string) => {});
 const detachTerminal = mock(async (_sessionId: string) => {});
 const updateSessionStatus = mock(async (_sessionId: string, _status: string) => ({}));
+const teardownTab = mock(async (_input: unknown) => ({ completed: true }));
 const stopTmuxSession = mock(async (_tabId: string, _environmentId?: string) => {});
 const deleteClaudeSession = mock(async (_client: unknown, _sessionId: string) => true);
 const deleteCodexSession = mock(async (_client: unknown, _sessionId: string) => true);
@@ -37,6 +38,7 @@ mock.module("@/lib/backend", () => ({
   detachTerminal,
   createSession: mock(async () => ({})),
   updateSessionStatus,
+  teardownTab,
   updateSessionActivity: mock(async () => ({})),
   deleteSession: mock(async () => {}),
   deleteSessionsByEnvironment: mock(async () => []),
@@ -136,7 +138,6 @@ function resetStores() {
     messageQueue: new Map(),
   });
   useEnvironmentStore.setState({
-    setupScriptsRunning: new Set(),
   });
   useTerminalPortalStore.setState({
     paneHosts: new Map(),
@@ -155,6 +156,8 @@ function resetStores() {
   closeLocalTerminalSession.mockClear();
   detachTerminal.mockClear();
   updateSessionStatus.mockClear();
+  teardownTab.mockClear();
+  teardownTab.mockImplementation(async () => ({ completed: true }));
   stopTmuxSession.mockClear();
   deleteClaudeSession.mockClear();
   deleteCodexSession.mockClear();
@@ -213,19 +216,24 @@ describe("paneLayoutStore tab cleanup", () => {
     resetStores();
   });
 
-  test("closing a local terminal tab calls the local PTY close command", () => {
+  test("closing a local terminal tab records backend teardown intent", () => {
     seedSingleTabEnvironment("env-local", null, { id: "tab-terminal", type: "plain" });
     const sessionKey = createTerminalSessionKey(null, "tab-terminal", "env-local");
     useTerminalSessionStore.getState().setSession(sessionKey, { sessionId: "pty-local" });
 
     usePaneLayoutStore.getState().removeTab("default", "tab-terminal");
 
-    expect(closeLocalTerminalSession).toHaveBeenCalledWith("pty-local");
-    expect(detachTerminal).not.toHaveBeenCalled();
+    expect(teardownTab).toHaveBeenCalledWith({
+      environmentId: "env-local",
+      tabId: "tab-terminal",
+      kind: "terminal",
+      sessionId: "pty-local",
+      persistentSessionId: undefined,
+    });
     expect(useTerminalSessionStore.getState().sessions.has(sessionKey)).toBe(false);
   });
 
-  test("closing a terminal tab marks its persistent session disconnected", () => {
+  test("closing a terminal tab includes its persistent session in teardown intent", () => {
     seedSingleTabEnvironment("env-local", null, { id: "tab-terminal", type: "plain" });
     const sessionKey = createTerminalSessionKey(null, "tab-terminal", "env-local");
     useTerminalSessionStore.getState().setSession(sessionKey, {
@@ -235,26 +243,36 @@ describe("paneLayoutStore tab cleanup", () => {
 
     usePaneLayoutStore.getState().removeTab("default", "tab-terminal");
 
-    expect(updateSessionStatus).toHaveBeenCalledWith("persistent-1", "disconnected");
+    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "pty-local",
+      persistentSessionId: "persistent-1",
+    }));
   });
 
-  test("closing a container terminal tab calls the Docker detach command", () => {
+  test("closing a container terminal tab delegates detachment to the backend", () => {
     seedSingleTabEnvironment("env-container", "container-1", { id: "tab-terminal", type: "plain" });
     const sessionKey = createTerminalSessionKey("container-1", "tab-terminal", "env-container");
     useTerminalSessionStore.getState().setSession(sessionKey, { sessionId: "pty-container" });
 
     usePaneLayoutStore.getState().removeTab("default", "tab-terminal");
 
-    expect(detachTerminal).toHaveBeenCalledWith("pty-container");
-    expect(closeLocalTerminalSession).not.toHaveBeenCalled();
+    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
+      environmentId: "env-container",
+      sessionId: "pty-container",
+      kind: "terminal",
+    }));
   });
 
-  test("closing a Claude tmux tab stops its tmux session", () => {
+  test("closing a Claude tmux tab records backend teardown intent", () => {
     seedSingleTabEnvironment("env-local", null, { id: "tab-tmux", type: "claude-tmux" });
 
     usePaneLayoutStore.getState().removeTab("default", "tab-tmux");
 
-    expect(stopTmuxSession).toHaveBeenCalledWith("tab-tmux", "env-local");
+    expect(teardownTab).toHaveBeenCalledWith({
+      environmentId: "env-local",
+      tabId: "tab-tmux",
+      kind: "claude-tmux",
+    });
   });
 
   test("closing a browser tab destroys its main-process preview", () => {
@@ -393,7 +411,7 @@ describe("paneLayoutStore tab cleanup", () => {
     );
   });
 
-  test("closing native agent tabs deletes their backend sessions", () => {
+  test("closing native agent tabs delegates provider cleanup to the backend", () => {
     const tabs = [
       { id: "claude-tab", type: "claude-native" },
       { id: "codex-tab", type: "codex-native" },
@@ -446,9 +464,15 @@ describe("paneLayoutStore tab cleanup", () => {
     usePaneLayoutStore.getState().removeTab("default", "codex-tab");
     usePaneLayoutStore.getState().removeTab("default", "opencode-tab");
 
-    expect(deleteClaudeSession).toHaveBeenCalledWith(expect.anything(), "claude-session");
-    expect(deleteCodexSession).toHaveBeenCalledWith(expect.anything(), "codex-session");
-    expect(deleteOpenCodeSession).toHaveBeenCalledWith(expect.anything(), "opencode-session");
+    expect(teardownTab).toHaveBeenCalledWith({
+      environmentId: "env-native", tabId: "claude-tab", kind: "claude-native", sessionId: "claude-session",
+    });
+    expect(teardownTab).toHaveBeenCalledWith({
+      environmentId: "env-native", tabId: "codex-tab", kind: "codex-native", sessionId: "codex-session",
+    });
+    expect(teardownTab).toHaveBeenCalledWith({
+      environmentId: "env-native", tabId: "opencode-tab", kind: "opencode-native", sessionId: "opencode-session",
+    });
     expect(useClaudeStore.getState().sessions.has(claudeKey)).toBe(false);
     expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
     expect(useOpenCodeStore.getState().sessions.has(openCodeKey)).toBe(false);
@@ -492,9 +516,16 @@ describe("paneLayoutStore tab cleanup", () => {
 
     usePaneLayoutStore.getState().reset("env-reset");
 
-    expect(closeLocalTerminalSession).toHaveBeenCalledWith("pty-reset");
-    expect(stopTmuxSession).toHaveBeenCalledWith("tmux-tab", "env-reset");
-    expect(deleteCodexSession).toHaveBeenCalledWith(expect.anything(), "codex-session");
+    expect(teardownTab).toHaveBeenCalledTimes(3);
+    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
+      environmentId: "env-reset", tabId: "terminal-tab", sessionId: "pty-reset",
+    }));
+    expect(teardownTab).toHaveBeenCalledWith({
+      environmentId: "env-reset", tabId: "tmux-tab", kind: "claude-tmux",
+    });
+    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
+      environmentId: "env-reset", tabId: "codex-tab", sessionId: "codex-session",
+    }));
     expect(destroy).toHaveBeenCalledWith("browser-tab");
     expect(usePaneLayoutStore.getState().getAllTabs("env-reset")).toEqual([]);
   });
@@ -544,7 +575,9 @@ describe("paneLayoutStore tab cleanup", () => {
     usePaneLayoutStore.getState().closePane("closing-pane", "env-close-pane");
 
     expect(destroy).toHaveBeenCalledWith("browser-tab");
-    expect(closeLocalTerminalSession).toHaveBeenCalledWith("pty-close-pane");
+    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
+      environmentId: "env-close-pane", tabId: "terminal-tab", sessionId: "pty-close-pane",
+    }));
     expect(useTerminalSessionStore.getState().sessions.has(terminalKey)).toBe(false);
     expect(terminalDispose).toHaveBeenCalledTimes(1);
     expect(
@@ -618,12 +651,7 @@ describe("paneLayoutStore tab cleanup", () => {
       isLoading: true,
     });
 
-    closeLocalTerminalSession.mockRejectedValueOnce(new Error("local close failed"));
-    updateSessionStatus.mockRejectedValueOnce(new Error("status update failed"));
-    stopTmuxSession.mockRejectedValueOnce(new Error("tmux stop failed"));
-    deleteClaudeSession.mockRejectedValueOnce(new Error("Claude delete failed"));
-    deleteCodexSession.mockRejectedValueOnce(new Error("Codex delete failed"));
-    deleteOpenCodeSession.mockRejectedValueOnce(new Error("OpenCode delete failed"));
+    teardownTab.mockRejectedValue(new Error("backend teardown unavailable"));
 
     const store = usePaneLayoutStore.getState();
     for (const tab of tabs) {
@@ -637,7 +665,6 @@ describe("paneLayoutStore tab cleanup", () => {
     expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
     expect(useOpenCodeStore.getState().sessions.has(openCodeKey)).toBe(false);
     expect(consoleDebugSpy).toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalled();
   });
 
   test("closing a native tab drops its drafts and selections, not just its session", () => {
@@ -703,11 +730,9 @@ describe("paneLayoutStore tab cleanup", () => {
         },
       ],
     }, "setup-pane", "env-setup-close");
-    useEnvironmentStore.getState().setSetupScriptsRunning("env-setup-close", true);
 
     usePaneLayoutStore.getState().removeTab("setup-pane", "setup-tab", "env-setup-close");
 
-    expect(useEnvironmentStore.getState().setupScriptsRunning.has("env-setup-close")).toBe(false);
     expect(usePaneLayoutStore.getState().getRoot("env-setup-close")).toMatchObject({
       kind: "leaf",
       id: "remaining-pane",
@@ -723,7 +748,6 @@ describe("paneLayoutStore tab cleanup", () => {
       type: "plain",
       isSetupTab: true,
     });
-    useEnvironmentStore.getState().setSetupScriptsRunning("env-setup-root", true);
     useTerminalPortalStore.setState({
       terminals: new Map([[
         createTerminalKey("env-setup-root", "setup-tab"),
@@ -738,8 +762,6 @@ describe("paneLayoutStore tab cleanup", () => {
 
     usePaneLayoutStore.getState().removeTab("default", "setup-tab", "env-setup-root");
 
-    expect(useEnvironmentStore.getState().setupScriptsRunning.has("env-setup-root"))
-      .toBe(false);
     expect(terminalDispose).toHaveBeenCalledTimes(1);
     expect(
       useTerminalPortalStore.getState().hasTerminal("env-setup-root", "setup-tab"),
@@ -763,7 +785,6 @@ describe("paneLayoutStore tab cleanup", () => {
       ],
       activeTabId: "setup-tab",
     }, "default", "env-setup-siblings");
-    useEnvironmentStore.getState().setSetupScriptsRunning("env-setup-siblings", true);
     useTerminalPortalStore.setState({
       terminals: new Map([[
         createTerminalKey("env-setup-siblings", "setup-tab"),
@@ -782,8 +803,6 @@ describe("paneLayoutStore tab cleanup", () => {
       "env-setup-siblings",
     );
 
-    expect(useEnvironmentStore.getState().setupScriptsRunning.has("env-setup-siblings"))
-      .toBe(false);
     expect(terminalDispose).toHaveBeenCalledTimes(1);
     expect(
       useTerminalPortalStore.getState().hasTerminal("env-setup-siblings", "setup-tab"),
@@ -821,12 +840,9 @@ describe("paneLayoutStore tab cleanup", () => {
         },
       ],
     }, "closing", "env-close-last-setup");
-    useEnvironmentStore.getState().setSetupScriptsRunning("env-close-last-setup", true);
 
     usePaneLayoutStore.getState().closePane("closing", "env-close-last-setup");
 
-    expect(useEnvironmentStore.getState().setupScriptsRunning.has("env-close-last-setup"))
-      .toBe(false);
   });
 
   test("closing a pane keeps setup state while another pane still runs setup", () => {
@@ -853,12 +869,9 @@ describe("paneLayoutStore tab cleanup", () => {
         },
       ],
     }, "closing", "env-close-other-setup");
-    useEnvironmentStore.getState().setSetupScriptsRunning("env-close-other-setup", true);
 
     usePaneLayoutStore.getState().closePane("closing", "env-close-other-setup");
 
-    expect(useEnvironmentStore.getState().setupScriptsRunning.has("env-close-other-setup"))
-      .toBe(true);
     expect(usePaneLayoutStore.getState().getRoot("env-close-other-setup")).toMatchObject({
       kind: "leaf",
       id: "remaining",
@@ -900,7 +913,7 @@ describe("paneLayoutStore tab cleanup", () => {
     expect(destroy).toHaveBeenCalledWith("browser");
   });
 
-  test("stops a sole child tmux session only once", () => {
+  test("records a sole child tmux teardown only once", () => {
     seedPaneTree({
       kind: "split",
       id: "root-split",
@@ -929,8 +942,10 @@ describe("paneLayoutStore tab cleanup", () => {
       "env-tmux-once",
     );
 
-    expect(stopTmuxSession).toHaveBeenCalledTimes(1);
-    expect(stopTmuxSession).toHaveBeenCalledWith("tmux", "env-tmux-once");
+    expect(teardownTab).toHaveBeenCalledTimes(1);
+    expect(teardownTab).toHaveBeenCalledWith({
+      environmentId: "env-tmux-once", tabId: "tmux", kind: "claude-tmux",
+    });
   });
 });
 
@@ -1059,7 +1074,6 @@ describe("paneLayoutStore authoritative cleanup", () => {
 
     const destroy = mock(async () => {});
     window.orkestrator = { browserPreview: { destroy } } as never;
-    useEnvironmentStore.getState().setSetupScriptsRunning(environmentId, true);
 
     usePaneLayoutStore.getState().applyAuthoritativeLayout(environmentId, {
       containerId,
@@ -1098,14 +1112,13 @@ describe("paneLayoutStore authoritative cleanup", () => {
     expect(useClaudeTmuxStore.getState().getTab(scopedTmuxKey).running).toBe(false);
     expect(useClaudeTmuxStore.getState().getDraftText(scopedTmuxKey)).toBe("");
     expect(useClaudeTmuxStore.getState().getTab("removed-tmux").running).toBe(false);
-    expect(useEnvironmentStore.getState().setupScriptsRunning.has(environmentId)).toBe(false);
 
-    expect(closeLocalTerminalSession).not.toHaveBeenCalled();
-    expect(detachTerminal).toHaveBeenCalledWith("pty-removed");
-    expect(updateSessionStatus).toHaveBeenCalledWith(
-      "persistent-removed",
-      "disconnected",
-    );
+    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
+      environmentId,
+      tabId: "removed-terminal",
+      sessionId: "pty-removed",
+      persistentSessionId: "persistent-removed",
+    }));
     expect(stopTmuxSession).not.toHaveBeenCalled();
     expect(deleteClaudeSession).not.toHaveBeenCalled();
     expect(deleteCodexSession).not.toHaveBeenCalled();
@@ -1113,7 +1126,7 @@ describe("paneLayoutStore authoritative cleanup", () => {
     expect(deleteAgentHandoff).not.toHaveBeenCalled();
   });
 
-  test("closes a locally owned PTY after authoritative tab removal", () => {
+  test("records a locally owned PTY teardown after authoritative tab removal", () => {
     const environmentId = "env-authoritative-local-pty";
     seedSingleTabEnvironment(environmentId, null, {
       id: "terminal",
@@ -1137,14 +1150,12 @@ describe("paneLayoutStore authoritative cleanup", () => {
       },
     });
 
-    expect(closeLocalTerminalSession).toHaveBeenCalledWith(
-      "pty-local-authoritative",
-    );
-    expect(detachTerminal).not.toHaveBeenCalled();
-    expect(updateSessionStatus).toHaveBeenCalledWith(
-      "persistent-local-authoritative",
-      "disconnected",
-    );
+    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
+      environmentId,
+      tabId: "terminal",
+      sessionId: "pty-local-authoritative",
+      persistentSessionId: "persistent-local-authoritative",
+    }));
     expect(useTerminalSessionStore.getState().sessions.has(sessionKey)).toBe(false);
   });
 
@@ -1318,7 +1329,6 @@ describe("paneLayoutStore authoritative cleanup", () => {
       activeTabId: "setup-removed",
     }, "default", environmentId);
     usePaneLayoutStore.setState({ hydration: new Map([[environmentId, "done"]]) });
-    useEnvironmentStore.getState().setSetupScriptsRunning(environmentId, true);
 
     usePaneLayoutStore.getState().applyAuthoritativeLayout(environmentId, {
       containerId: null,
@@ -1331,8 +1341,6 @@ describe("paneLayoutStore authoritative cleanup", () => {
       },
     });
 
-    expect(useEnvironmentStore.getState().setupScriptsRunning.has(environmentId))
-      .toBe(true);
     expect(
       usePaneLayoutStore.getState().getAllTabs(environmentId).map((tab) => tab.id),
     ).toEqual(["setup-retained"]);

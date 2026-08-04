@@ -231,16 +231,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       ? state.environments.find((environment) => environment.id === selectedEnvironmentId)
       : undefined
   );
-  const workspaceReady = useEnvironmentStore((state) =>
-    selectedEnvironmentId
-      ? state.workspaceReadyEnvironments.has(selectedEnvironmentId)
-      : false
-  );
-  const setupRunning = useEnvironmentStore((state) =>
-    selectedEnvironmentId
-      ? state.setupScriptsRunning.has(selectedEnvironmentId)
-      : false
-  );
+  const workspaceReady = selectedEnvironment?.setupPhase === "ready";
+  const setupRunning = selectedEnvironment?.setupPhase === "running";
   const getProjectById = useProjectStore((state) => state.getProjectById);
   const { updateProject } = useProjects();
   const config = useConfigStore((state) => state.config);

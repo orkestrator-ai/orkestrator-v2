@@ -465,24 +465,11 @@ export function CodexChatTab({
   );
 
   // Setup completion awareness - block initialization until setup scripts finish
-  const setupScriptsRunning = useEnvironmentStore(
-    (state) => state.setupScriptsRunning.has(environmentId)
-  );
-  const setupCommandsResolved = useEnvironmentStore(
-    (state) => state.setupCommandsResolved.has(environmentId)
-  );
-  const hasPendingSetupCommands = useEnvironmentStore(
-    (state) => state.pendingSetupCommands.has(environmentId)
-  );
-  const workspaceReady = useEnvironmentStore(
-    (state) => state.workspaceReadyEnvironments.has(environmentId)
+  const setupPhase = useEnvironmentStore((state) =>
+    state.environments.find((environment) => environment.id === environmentId)?.setupPhase
   );
   const setupPending = isSetupPending({
-    isLocal: !!isLocal,
-    setupCommandsResolved,
-    hasPendingSetupCommands,
-    setupScriptsRunning,
-    workspaceReady,
+    setupPhase,
   });
 
   /** `sessionPhase` is undefined until the bridge reports one for this session. */
@@ -1006,8 +993,8 @@ export function CodexChatTab({
         }
         return "unknown";
       }
-      if (sent.turnStartedAt !== undefined) {
-        setSessionLoading(sessionKey, true, sent.turnStartedAt);
+      if (sent.turnStartedAt !== undefined || sent.turnId !== undefined) {
+        setSessionLoading(sessionKey, true, sent.turnStartedAt, sent.turnId);
       }
       /**
        * Any accepted dispatch spends the stored key.
@@ -2337,7 +2324,7 @@ export function CodexChatTab({
       return "applied";
     }
 
-    setSessionLoading(sessionKey, true, status.turnStartedAt);
+    setSessionLoading(sessionKey, true, status.turnStartedAt, status.turnId);
     setSessionError(sessionKey, undefined);
     finishBackendStartupTracking();
     if (options?.forceRefreshMessages) {
@@ -2711,6 +2698,9 @@ export function CodexChatTab({
               const turnStartedAt = parseCodexTurnStartedAt(
                 event.data?.turnStartedAt,
               );
+              const turnId = typeof event.data?.turnId === "string"
+                ? event.data.turnId
+                : undefined;
               if (isCodexSessionPhase(phase)) {
                 const terminal = phase === "idle" || phase === "failed";
                 if (!terminal || !backendStartupIsStillPreDispatch()) {
@@ -2726,7 +2716,7 @@ export function CodexChatTab({
                  * `session.error` remain authoritative for unlocking.
                  */
                 if (!terminal || dispatchInFlightRef.current === 0) {
-                  setSessionLoading(sessionKey, !terminal, turnStartedAt);
+                  setSessionLoading(sessionKey, !terminal, turnStartedAt, turnId);
                 }
                 if (!terminal) {
                   setSessionError(sessionKey, undefined);

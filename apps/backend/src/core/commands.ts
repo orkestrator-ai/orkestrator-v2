@@ -152,7 +152,11 @@ import {
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
-import type { NativeAgentService } from "./native-agent-service.js";
+import { isTabTeardownKind } from "@orkestrator/protocol/tab-teardown";
+import {
+  nativeAgentSessionStorageKey,
+  type NativeAgentService,
+} from "./native-agent-service.js";
 import type { LoopedReviewService } from "./looped-review-service.js";
 import type { FeaturePlanningService } from "./feature-planning.js";
 import {
@@ -240,6 +244,7 @@ const terminalOutputRetentionTimers = new Map<
 >();
 const terminalSessionIdsByStableKey = new Map<string, string>();
 const terminalStableKeysBySessionId = new Map<string, string>();
+const orphanedTerminalMissingSince = new Map<string, number>();
 const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalActivityArmed = new Set<string>();
 const terminalActivityGenerations = new Map<string, number>();
@@ -498,8 +503,6 @@ type EnvironmentSetupSession = {
 };
 
 type EnvironmentSetupStartResult = {
-  setupCommands: string[];
-  setupManagedByBackend: true;
   setupStarted: boolean;
   setupSessionId?: string;
   environment: Environment;
@@ -3612,6 +3615,7 @@ function cleanupTerminalSession(
   id: string,
   options: { explicit?: boolean } = {},
 ): void {
+  orphanedTerminalMissingSince.delete(id);
   const activityTimer = terminalActivityTimers.get(id);
   if (activityTimer) clearTimeout(activityTimer);
   terminalActivityTimers.delete(id);
@@ -4257,6 +4261,9 @@ async function completeEnvironmentSetup(
   }
   let updated = await context.storage.updateEnvironment(environment.id, {
     setupScriptsComplete: true,
+    setupPhase: "ready",
+    setupOverride: false,
+    setupCompletedAt: new Date().toISOString(),
   });
   if (updated.pendingAgentLaunch && context.nativeAgents) {
     await context.nativeAgents.reconcileInitialLaunch(updated.id).catch(() => {
@@ -4327,6 +4334,8 @@ async function failEnvironmentSetup(environmentId: string, error: unknown, conte
       environmentId,
       {
         status: "error",
+        setupPhase: "failed",
+        setupCompletedAt: new Date().toISOString(),
         lifecycleError,
         ...clearPendingAgentLaunchUpdates(),
       },
@@ -4350,15 +4359,17 @@ async function startEnvironmentSetupOnce(
   context: CommandContext,
 ): Promise<EnvironmentSetupStartResult> {
   const current = await context.storage.getEnvironment(environment.id) ?? environment;
-  if (current.setupScriptsComplete) {
+  if (
+    current.setupScriptsComplete
+    || current.setupPhase === "ready"
+    || current.setupOverride === true
+  ) {
     logSetupTerminal("setup already complete", {
       environmentId: current.id,
       environmentName: current.name,
       environmentType: current.environmentType,
     });
     return {
-      setupCommands: [],
-      setupManagedByBackend: true,
       setupStarted: false,
       environment: current,
     };
@@ -4368,11 +4379,20 @@ async function startEnvironmentSetupOnce(
   // and its output streamed there. Nothing else can move that session out of
   // "running" until a PTY exists, so every failure between here and the spawn has
   // to close it explicitly or it reports a setup that is running forever.
-  const preparationSessionId = current.createdFromCommit
+  const setupSessionId = setupTerminalSessionId(current.id);
+  const running = await context.storage.updateEnvironment(current.id, {
+    setupScriptsComplete: false,
+    setupPhase: "running",
+    setupOverride: false,
+    setupSessionId,
+    setupStartedAt: new Date().toISOString(),
+    setupCompletedAt: undefined,
+  });
+  const preparationSessionId = running.createdFromCommit
     ? undefined
-    : beginSetupPreparationSession(current, context);
+    : beginSetupPreparationSession(running, context);
   try {
-    return await startEnvironmentSetupAfterPreparation(current, context, preparationSessionId);
+    return await startEnvironmentSetupAfterPreparation(running, context, preparationSessionId);
   } catch (error) {
     // Both a preparation continuation and a retry with an existing baseline can
     // publish a logical setup session before the PTY is available. Any startup
@@ -4380,9 +4400,7 @@ async function startEnvironmentSetupOnce(
     // get_terminal_session keeps reporting an attachable terminal that has no
     // process behind it. Avoid manufacturing a failure session for errors that
     // happened before an attempt published one.
-    if (environmentSetupSessions.get(current.id)?.running) {
-      await failEnvironmentSetup(current.id, error, context);
-    }
+    await failEnvironmentSetup(running.id, error, context);
     throw error;
   }
 }
@@ -4409,8 +4427,6 @@ async function startEnvironmentSetupAfterPreparation(
     });
     const updated = await completeEnvironmentSetup(current, context);
     return {
-      setupCommands: [],
-      setupManagedByBackend: true,
       setupStarted: false,
       environment: updated,
     };
@@ -4426,8 +4442,6 @@ async function startEnvironmentSetupAfterPreparation(
       bufferChars: terminalOutputBufferLength(existingSession.sessionId),
     });
     return {
-      setupCommands: [],
-      setupManagedByBackend: true,
       setupStarted: true,
       setupSessionId: existingSession.sessionId,
       environment: current,
@@ -4456,8 +4470,6 @@ async function startEnvironmentSetupAfterPreparation(
   void task.catch(() => undefined);
 
   return {
-    setupCommands: [],
-    setupManagedByBackend: true,
     setupStarted: true,
     setupSessionId: sessionId,
     environment: current,
@@ -8356,7 +8368,11 @@ export function createCommandRegistry(
     const shouldComplete = asBoolean(complete);
     if (!shouldComplete) {
       return toClientEnvironment(
-        await context.storage.updateEnvironment(id, { setupScriptsComplete: false }),
+        await context.storage.updateEnvironment(id, {
+          setupScriptsComplete: false,
+          setupPhase: "pending",
+          setupOverride: false,
+        }),
       );
     }
     const environment = await context.storage.getEnvironment(id);
@@ -8374,8 +8390,28 @@ export function createCommandRegistry(
       );
     }
     return toClientEnvironment(
-      await context.storage.updateEnvironment(id, { setupScriptsComplete: true }),
+      await context.storage.updateEnvironment(id, {
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+        setupOverride: false,
+        setupCompletedAt: new Date().toISOString(),
+      }),
     );
+  });
+  register("override_environment_setup", async ({ environmentId }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await context.storage.updateEnvironment(id, {
+      setupPhase: "ready",
+      setupOverride: true,
+      setupCompletedAt: new Date().toISOString(),
+    });
+    context.emit("environment-setup-complete", {
+      environment_id: id,
+      success: true,
+      overridden: true,
+      environment: toClientEnvironment(environment),
+    });
+    return toClientEnvironment(environment);
   });
   register("run_environment_setup", async ({ environmentId }, context) => {
     return toClientEnvironment(
@@ -8395,10 +8431,26 @@ export function createCommandRegistry(
       await startEnvironmentSetup(environment, context),
     );
   });
-  register("get_environment_setup_session", ({ environmentId }) => {
+  register("get_environment_setup_session", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
     const session = environmentSetupSessions.get(id);
     if (!session) {
+      const environment = await context.storage.getEnvironment(id);
+      if (environment?.setupSessionId && environment.setupStartedAt) {
+        return {
+          environmentId: id,
+          sessionId: environment.setupSessionId,
+          running: environment.setupPhase === "running",
+          startedAt: environment.setupStartedAt,
+          completedAt: environment.setupCompletedAt,
+          success: environment.setupPhase === "ready"
+            ? true
+            : environment.setupPhase === "failed"
+              ? false
+              : undefined,
+          terminalRunning: terminalProcesses.has(environment.setupSessionId),
+        };
+      }
       logSetupTerminal("renderer requested setup session: none", {
         environmentId: id,
       });
@@ -9511,6 +9563,30 @@ export function createCommandRegistry(
       ? context.buildPipelines.remove(id)
       : context.storage.deleteBuildPipeline(id);
   });
+  register("clear_task_build_status", async ({ taskId }, context) => {
+    const id = asNonBlankString(taskId, "taskId");
+    const task = await context.storage.getKanbanTask(id);
+    if (!task) throw new Error(`Kanban task not found: ${id}`);
+    const records = await context.storage.listBuildPipelines(task.projectId);
+    const pipelineIds = new Set(records
+      .filter((record) => {
+        const snapshot = record.snapshot as { taskId?: unknown };
+        return snapshot.taskId === id;
+      })
+      .map((record) => record.id));
+    if (task.buildPipelineId) pipelineIds.add(task.buildPipelineId);
+    for (const pipelineId of pipelineIds) {
+      if (context.buildPipelines) await context.buildPipelines.remove(pipelineId);
+      else await context.storage.deleteBuildPipeline(pipelineId);
+    }
+    const updated = await context.storage.updateKanbanTask(id, {
+      environmentId: undefined,
+      buildPipelineId: undefined,
+      prUrl: "",
+      prState: undefined,
+    });
+    return { task: updated, removedPipelineIds: [...pipelineIds] };
+  });
 
   register(
     "set_environment_unread",
@@ -10612,6 +10688,236 @@ export function createCommandRegistry(
 
   registerTmuxBackendCommands(register, {
     claudeStatePolls: options.claudeStatePolls,
+  });
+
+  type TabTeardownIntent = NonNullable<Environment["tabTeardownIntents"]>[string];
+  const executeTabTeardown = async (
+    environment: Environment,
+    intent: TabTeardownIntent,
+    context: CommandContext,
+  ): Promise<void> => {
+    if (intent.kind === "terminal") {
+      const sessionIds = new Set<string>();
+      if (intent.sessionId) sessionIds.add(intent.sessionId);
+      for (const kind of ["container", "local"] as const) {
+        const stableId = terminalSessionIdsByStableKey.get(
+          stableTerminalKey(kind, environment.id, intent.tabId) ?? "",
+        );
+        if (stableId) sessionIds.add(stableId);
+      }
+      for (const sessionId of sessionIds) explicitlyCloseTerminalSession(sessionId);
+      if (intent.persistentSessionId) {
+        const session = await context.storage.getSession(intent.persistentSessionId);
+        if (session) {
+          await context.storage.updateSession(intent.persistentSessionId, {
+            status: "disconnected",
+          });
+        }
+      }
+      return;
+    }
+    if (intent.kind === "claude-tmux") {
+      const stopTmux = commands.get("claude_tmux_stop");
+      if (stopTmux) {
+        await stopTmux({ environmentId: environment.id, tabId: intent.tabId }, context);
+      }
+      return;
+    }
+    const agent = intent.kind === "claude-native"
+      ? "claude"
+      : intent.kind === "codex-native"
+        ? "codex"
+        : intent.kind === "opencode-native"
+          ? "opencode"
+          : null;
+    if (!agent) return;
+    const logicalSessionKey = `env-${environment.id}:${intent.tabId}`;
+    const storageKey = nativeAgentSessionStorageKey(
+      environment.id,
+      agent,
+      logicalSessionKey,
+    );
+    const persistedSession = await context.storage.getNativeAgentSession(storageKey);
+    const providerSessionId = persistedSession?.providerSessionId ?? intent.sessionId;
+    if (!providerSessionId) return;
+    const bridge = environment.environmentType === "local"
+      ? await peekLocalAgentBridge(environment.id, context, agent)
+      : environment.containerId
+        ? await peekContainerAgentBridge(environment.containerId, agent)
+        : null;
+    if (bridge) {
+      const port = "port" in bridge ? bridge.port : bridge.hostPort;
+      const url = new URL(`http://127.0.0.1:${port}/session/${encodeURIComponent(providerSessionId)}`);
+      if (agent === "opencode") {
+        url.searchParams.set(
+          "directory",
+          environment.environmentType === "local"
+            ? environment.worktreePath ?? ""
+            : "/workspace",
+        );
+      }
+      const response = await fetch(url, {
+        method: "DELETE",
+        headers: agent === "opencode"
+          ? openCodeHealthHeaders(bridge.authToken)
+          : { Authorization: `Bearer ${bridge.authToken}` },
+      });
+      if (!response.ok && response.status !== 404) {
+        throw new Error(`Tab teardown failed with HTTP ${response.status}`);
+      }
+    }
+    // The provider transcript may already be gone, but the durable logical-tab
+    // mapping must be retired as part of the same idempotent intent.
+    await context.storage.invalidateNativeAgentSession(
+      storageKey,
+      providerSessionId,
+    );
+  };
+
+  const finishTabTeardown = async (
+    environmentId: string,
+    tabId: string,
+    context: CommandContext,
+  ): Promise<void> => {
+    const latest = await context.storage.getEnvironment(environmentId);
+    if (!latest?.tabTeardownIntents?.[tabId]) return;
+    const intents = { ...latest.tabTeardownIntents };
+    delete intents[tabId];
+    await context.storage.updateEnvironment(environmentId, {
+      tabTeardownIntents: Object.keys(intents).length > 0 ? intents : undefined,
+    });
+  };
+
+  register("teardown_tab", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      ["environmentId", "tabId", "kind", "sessionId", "persistentSessionId"],
+      "arguments",
+    );
+    const environmentId = asNonBlankString(args.environmentId, "environmentId");
+    const tabId = asNonBlankString(args.tabId, "tabId");
+    const environment = await context.storage.getEnvironment(environmentId);
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    if (!isTabTeardownKind(args.kind)) throw new Error("kind is not a supported tab teardown kind");
+    const intent: TabTeardownIntent = {
+      tabId,
+      kind: args.kind,
+      ...(args.sessionId === undefined
+        ? {}
+        : { sessionId: asNonBlankString(args.sessionId, "sessionId") }),
+      ...(args.persistentSessionId === undefined
+        ? {}
+        : { persistentSessionId: asNonBlankString(args.persistentSessionId, "persistentSessionId") }),
+      createdAt: new Date().toISOString(),
+    };
+    await context.storage.updateEnvironment(environmentId, {
+      tabTeardownIntents: {
+        ...environment.tabTeardownIntents,
+        [tabId]: intent,
+      },
+    });
+    await executeTabTeardown(environment, intent, context);
+    await finishTabTeardown(environmentId, tabId, context);
+    return { completed: true };
+  });
+
+  register("reconcile_tab_teardowns", async (_args, context) => {
+    const environments = await context.storage.loadEnvironments();
+    let completed = 0;
+    for (const environment of environments) {
+      for (const intent of Object.values(environment.tabTeardownIntents ?? {})) {
+        try {
+          await executeTabTeardown(environment, intent, context);
+          await finishTabTeardown(environment.id, intent.tabId, context);
+          completed += 1;
+        } catch (error) {
+          console.warn(`[backend] Tab teardown remains pending for ${environment.id}/${intent.tabId}:`, conciseError(error));
+        }
+      }
+    }
+    return { completed };
+  });
+
+  register("reconcile_orphaned_tab_resources", async (_args, context) => {
+    const graceMs = 60 * 60 * 1_000;
+    const now = Date.now();
+    const environments = await context.storage.loadEnvironments();
+    const referencedTabs = new Map<string, Set<string>>();
+    const collectTabs = (node: unknown, result: Set<string>): void => {
+      if (!node || typeof node !== "object" || Array.isArray(node)) return;
+      const record = node as Record<string, unknown>;
+      if (record.kind === "leaf" && Array.isArray(record.tabs)) {
+        for (const tab of record.tabs) {
+          if (!tab || typeof tab !== "object" || Array.isArray(tab)) continue;
+          const id = (tab as Record<string, unknown>).id;
+          if (typeof id === "string" && id.length > 0) result.add(id);
+        }
+        return;
+      }
+      if (record.kind === "split" && Array.isArray(record.children)) {
+        for (const child of record.children) collectTabs(child, result);
+      }
+    };
+    for (const environment of environments) {
+      const tabs = new Set<string>();
+      const layout = await context.storage.getPaneLayout(environment.id);
+      if (layout) collectTabs(layout.root, tabs);
+      referencedTabs.set(environment.id, tabs);
+    }
+
+    let terminals = 0;
+    for (const [sessionId, stableKey] of terminalStableKeysBySessionId) {
+      const [, environmentId, tabId] = stableKey.split("\0");
+      if (!environmentId || !tabId) continue;
+      if (referencedTabs.get(environmentId)?.has(tabId)) {
+        orphanedTerminalMissingSince.delete(sessionId);
+        continue;
+      }
+      const missingSince = orphanedTerminalMissingSince.get(sessionId);
+      if (missingSince === undefined) {
+        orphanedTerminalMissingSince.set(sessionId, now);
+        continue;
+      }
+      if (now - missingSince < graceMs) continue;
+      console.warn(`[backend] Reaping orphaned terminal ${environmentId}/${tabId}`);
+      explicitlyCloseTerminalSession(sessionId);
+      orphanedTerminalMissingSince.delete(sessionId);
+      terminals += 1;
+    }
+
+    const teardownTab = commands.get("teardown_tab");
+    let nativeSessions = 0;
+    if (teardownTab) {
+      for (const session of await context.storage.listNativeAgentSessions()) {
+        if (session.origin !== "interactive-native") continue;
+        const prefix = `env-${session.environmentId}:`;
+        if (!session.logicalSessionKey.startsWith(prefix)) continue;
+        const tabId = session.logicalSessionKey.slice(prefix.length);
+        if (!tabId || referencedTabs.get(session.environmentId)?.has(tabId)) continue;
+        const environment = environments.find((candidate) => candidate.id === session.environmentId);
+        if (!environment || environment.tabTeardownIntents?.[tabId]) continue;
+        const updatedAt = Date.parse(session.updatedAt);
+        if (!Number.isFinite(updatedAt) || now - updatedAt < graceMs) continue;
+        const kind = session.agent === "claude"
+          ? "claude-native"
+          : session.agent === "codex"
+            ? "codex-native"
+            : "opencode-native";
+        console.warn(`[backend] Reaping orphaned native session ${session.environmentId}/${tabId}`);
+        await teardownTab({
+          environmentId: session.environmentId,
+          tabId,
+          kind,
+          sessionId: session.providerSessionId,
+        }, context);
+        nativeSessions += 1;
+      }
+    }
+    const reconcileTmux = commands.get("claude_tmux_reconcile_orphans");
+    const tmux = reconcileTmux
+      ? await reconcileTmux({}, context) as { reaped?: number }
+      : undefined;
+    return { terminals, nativeSessions, tmuxSessions: tmux?.reaped ?? 0 };
   });
 
   return commands;

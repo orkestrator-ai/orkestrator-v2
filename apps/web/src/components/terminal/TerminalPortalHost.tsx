@@ -1,7 +1,7 @@
-import { memo, useCallback, useLayoutEffect, useMemo } from "react";
+import { memo, useLayoutEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
-import { useConfigStore, useEnvironmentStore } from "@/stores";
+import { useConfigStore } from "@/stores";
 import {
   createPortalTargetKey,
   useTerminalPortalStore,
@@ -14,7 +14,6 @@ import {
   DEFAULT_TERMINAL_SCROLLBACK,
   resolveTerminalBackgroundColor,
 } from "@/constants/terminal";
-import { markSetupScriptsComplete } from "@/lib/setup-commands";
 
 // Terminal tab types that need PersistentTerminal instances.
 // Using an allowlist ensures new non-terminal TabType variants don't accidentally spawn PTY sessions.
@@ -65,13 +64,6 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
   const terminals = useTerminalPortalStore((state) => state.terminals);
   const paneHosts = useTerminalPortalStore((state) => state.paneHosts);
 
-  // Get workspace ready and setup scripts running setters from environment store
-  const setWorkspaceReady = useEnvironmentStore((state) => state.setWorkspaceReady);
-  const setSetupScriptsRunning = useEnvironmentStore((state) => state.setSetupScriptsRunning);
-  const isLocalEnvironment = useEnvironmentStore(
-    (state) => state.getEnvironmentById(environmentId)?.environmentType === "local"
-  );
-
   const terminalAppearance = useConfigStore(
     (state) => state.config.global.terminalAppearance
   ) || DEFAULT_TERMINAL_APPEARANCE;
@@ -87,31 +79,6 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
     }),
     [terminalAppearance]
   );
-
-  // Handle workspace ready callback - fires when any terminal becomes ready
-  // Always set the state to true - this ensures the state is updated even if it was
-  // reset to false by TerminalContainer for a new container startup
-  const handleWorkspaceReady = useCallback((payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {
-    if (payload.workspaceReady === false) {
-      return;
-    }
-
-    setWorkspaceReady(environmentId, true);
-    if (!isLocalEnvironment) {
-      setSetupScriptsRunning(environmentId, false);
-      if (payload.persistSetupComplete) {
-        markSetupScriptsComplete(environmentId);
-      }
-    }
-  }, [environmentId, isLocalEnvironment, setSetupScriptsRunning, setWorkspaceReady]);
-
-  // Handle setup scripts completion - fires when setup tab's marker is detected
-  const handleSetupComplete = useCallback((payload: { persistSetupComplete: boolean }) => {
-    setSetupScriptsRunning(environmentId, false);
-    if (payload.persistSetupComplete) {
-      markSetupScriptsComplete(environmentId);
-    }
-  }, [environmentId, setSetupScriptsRunning]);
 
   // Build a map of tabId -> paneId for all terminal tabs
   // Memoize to prevent new Map on every render. getAllLeaves must be memoized
@@ -232,8 +199,6 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
             initialReasoningEffort={tab.initialReasoningEffort}
             paneId={paneId}
             isSetupTab={tab.isSetupTab}
-            onReady={handleWorkspaceReady}
-            onSetupComplete={tab.isSetupTab ? handleSetupComplete : undefined}
           />
         </div>,
         portalTarget,

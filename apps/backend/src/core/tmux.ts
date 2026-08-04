@@ -15,6 +15,10 @@ import { runCommand } from "./shell.js";
 import { TranscriptTaskTracker } from "./claude-transcript-tasks.js";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
+import {
+  parseTmuxAgentObservation,
+  type TmuxAgentObservation,
+} from "@orkestrator/protocol/tmux-observation";
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
 type RegisterCommand = (name: string, handler: CommandHandler) => void;
@@ -29,6 +33,9 @@ type BackendKind = "local" | "container";
 
 const CLAUDE_TMUX_EVENT = "claude-tmux:event";
 const POLL_INTERVAL_MS = 250;
+/** Hidden tabs still need selection prompts, but pane capture is comparatively expensive. */
+export const TMUX_OBSERVATION_INTERVAL_MS = 3_000;
+export const TMUX_BUSY_OBSERVATION_INTERVAL_MS = 500;
 /**
  * How many poll ticks pass between `tmux has-session` checks. Hooks and
  * transcript appends still arrive every tick; only the liveness probe — which
@@ -1595,8 +1602,10 @@ type TmuxStatus = {
   transcript_path: string | null;
   resumed: boolean;
   busy: boolean;
+  busy_started_at: number | null;
   permission_mode: string;
   fast_mode: boolean | null;
+  observation: TmuxAgentObservation;
 };
 
 function permissionModeFromTranscriptLine(line: unknown): string | undefined {
@@ -1720,6 +1729,7 @@ class TmuxSession {
    */
   private taskTracker = new TranscriptTaskTracker();
   private busy = false;
+  private busyStartedAt: number | null = null;
   /**
    * A Stop hook is a turn boundary even when this backend did not observe the
    * matching UserPromptSubmit (for example, after a backend restart). The
@@ -1733,6 +1743,14 @@ class TmuxSession {
   private fastMode: boolean | null = null;
   private paneCache: { text: string; hash: string; capturedAt: number } | undefined;
   private paneCaptureInFlight: Promise<{ text: string; hash: string; capturedAt: number }> | undefined;
+  private observation: TmuxAgentObservation = {
+    revision: 0,
+    observedAt: new Date(0).toISOString(),
+    usage: [],
+    prompt: null,
+  };
+  private nextObservationAt = 0;
+  private observationInFlight: Promise<void> | undefined;
   private readonly inputMutex = new AsyncMutex();
 
   constructor(
@@ -1767,9 +1785,16 @@ class TmuxSession {
       transcript_path: this.transcriptPath ?? null,
       resumed: this.resumed,
       busy: this.busy,
+      busy_started_at: this.busyStartedAt,
       permission_mode: this.permissionMode,
       fast_mode: this.fastMode,
+      observation: this.observation,
     };
+  }
+
+  activityState(): "idle" | "working" | "waiting" {
+    if (this.busy) return "working";
+    return this.observation.prompt ? "waiting" : "idle";
   }
 
   async discoverTranscriptPath(): Promise<string | undefined> {
@@ -2036,7 +2061,13 @@ class TmuxSession {
     await this.waitForTuiInputReady();
     await this.submit(prompt);
     // Hooks fire asynchronously; set busy immediately so status() is accurate before the hook lands.
-    this.busy = true;
+    this.setBusyState(true);
+  }
+
+  private setBusyState(busy: boolean): void {
+    if (this.busy === busy) return;
+    this.busy = busy;
+    this.busyStartedAt = busy ? Date.now() : null;
   }
 
   private async waitForTuiInputReady(): Promise<void> {
@@ -2137,6 +2168,26 @@ class TmuxSession {
             }
           }
 
+          if (Date.now() >= this.nextObservationAt && !this.observationInFlight) {
+            this.nextObservationAt = Date.now() + (
+              this.busy
+                ? TMUX_BUSY_OBSERVATION_INTERVAL_MS
+                : TMUX_OBSERVATION_INTERVAL_MS
+            );
+            const observation = this.refreshObservation(context).catch((error) => {
+              // Pane contents are sensitive. Report only the error class.
+              console.warn(
+                "[tmux] pane observation failed",
+                error instanceof Error ? error.name : "unknown error",
+              );
+            }).finally(() => {
+              if (this.observationInFlight === observation) {
+                this.observationInFlight = undefined;
+              }
+            });
+            this.observationInFlight = observation;
+          }
+
           // Liveness is a whole extra process spawn (a `docker exec` in
           // container mode) and a session that ends stays ended, so it is
           // checked on a slower cadence than the hook and transcript reads.
@@ -2156,8 +2207,51 @@ class TmuxSession {
     })();
   }
 
+  private async refreshObservation(context: CommandContext): Promise<void> {
+    const pane = await this.capturePane();
+    const next = parseTmuxAgentObservation(
+      pane,
+      this.observation.revision + 1,
+      new Date().toISOString(),
+    );
+    const promptChanged = JSON.stringify(next.prompt) !== JSON.stringify(this.observation.prompt);
+    const usageChanged = JSON.stringify(next.usage) !== JSON.stringify(this.observation.usage);
+    if (!promptChanged && !usageChanged) return;
+
+    const previousPrompt = this.observation.prompt;
+    this.observation = next;
+    context.emit(CLAUDE_TMUX_EVENT, {
+      kind: "observation",
+      tab_id: this.tabId,
+      environment_id: this.environmentId,
+      session_id: this.sessionId,
+      observation: next,
+    });
+    if (usageChanged) {
+      context.emit("tmux-agent-usage", {
+        tab_id: this.tabId,
+        environment_id: this.environmentId,
+        session_id: this.sessionId,
+        revision: next.revision,
+        observed_at: next.observedAt,
+        usage: next.usage,
+      });
+    }
+    if (promptChanged) {
+      context.emit(next.prompt ? "tmux-prompt-detected" : "tmux-prompt-cleared", {
+        tab_id: this.tabId,
+        environment_id: this.environmentId,
+        session_id: this.sessionId,
+        revision: next.revision,
+        observed_at: next.observedAt,
+        ...(next.prompt ? { prompt: next.prompt } : { previous_prompt: previousPrompt }),
+      });
+    }
+    await persistTmuxEnvironmentActivity(context, this.environmentId);
+  }
+
   private emitHook(context: CommandContext, event: PendingHookEvent): void {
-    this.updateBusyFromHookKind(event.kind);
+    this.updateBusyFromHookKind(event.kind, context);
     if (event.kind === "Stop") this.scheduleCompletionNotification(context);
     context.emit(CLAUDE_TMUX_EVENT, {
       kind: "hook",
@@ -2172,13 +2266,19 @@ class TmuxSession {
     });
   }
 
-  private updateBusyFromHookKind(kind: string): void {
+  private updateBusyFromHookKind(kind: string, context: CommandContext): void {
+    const previous = this.busy;
     if (kind === "UserPromptSubmit") {
-      this.busy = true;
+      this.setBusyState(true);
       this.completionGeneration += 1;
       this.stopCompletionObserved = false;
     }
-    if (kind === "Stop") this.busy = false;
+    if (kind === "Stop") this.setBusyState(false);
+    if (previous !== this.busy) {
+      // Do not make the stdout/hook loop wait for storage; the next observation
+      // also reconciles this source if the write fails.
+      void persistTmuxEnvironmentActivity(context, this.environmentId);
+    }
   }
 
   private scheduleCompletionNotification(context: CommandContext): void {
@@ -2270,7 +2370,7 @@ class TmuxSession {
         // Hooks arrive asynchronously. Mark a submitted user turn busy before
         // releasing the input lock so a queued mode switch cannot run in the
         // gap between Enter and the UserPromptSubmit hook.
-        this.busy = true;
+        this.setBusyState(true);
       }
     });
   }
@@ -2487,7 +2587,7 @@ class TmuxSession {
   async interrupt(): Promise<void> {
     await this.inputMutex.runExclusive(async () => {
       await this.sendKeysUnlocked(["Escape"]);
-      this.busy = false;
+      this.setBusyState(false);
     });
   }
 
@@ -2718,6 +2818,27 @@ class TmuxSessionManager {
     return count;
   }
 
+  findByTmuxName(environmentId: string, name: string): TmuxSession | undefined {
+    for (const session of this.sessions.values()) {
+      if (
+        session.environmentId === environmentId
+        && tmuxSessionName(session.environmentId, session.tabId) === name
+      ) return session;
+    }
+    return undefined;
+  }
+
+  activityState(environmentId: string): "idle" | "working" | "waiting" {
+    let aggregate: "idle" | "working" | "waiting" = "idle";
+    for (const session of this.sessions.values()) {
+      if (session.environmentId !== environmentId) continue;
+      const state = session.activityState();
+      if (state === "working") return state;
+      if (state === "waiting") aggregate = state;
+    }
+    return aggregate;
+  }
+
   installLock(environmentId: string): AsyncMutex {
     let mutex = this.installLocks.get(environmentId);
     if (!mutex) {
@@ -2729,6 +2850,50 @@ class TmuxSessionManager {
 }
 
 const tmuxManager = new TmuxSessionManager();
+const tmuxActivityWrites = new Map<string, Promise<void>>();
+const orphanedTmuxMissingSince = new Map<string, number>();
+let lastTmuxOrphanSweepAt = 0;
+
+/** Serialize aggregate writes so an older pane observation cannot land last. */
+function persistTmuxEnvironmentActivity(
+  context: CommandContext,
+  environmentId: string,
+): Promise<void> {
+  const storage = context.storage as unknown as {
+    getEnvironment?: CommandContext["storage"]["getEnvironment"];
+    setEnvironmentAgentActivity?: CommandContext["storage"]["setEnvironmentAgentActivity"];
+  };
+  // Several command-unit harnesses intentionally provide only the storage
+  // methods exercised by that test. Activity persistence is orthogonal there.
+  if (!storage.getEnvironment || !storage.setEnvironmentAgentActivity) {
+    return Promise.resolve();
+  }
+  const previous = tmuxActivityWrites.get(environmentId) ?? Promise.resolve();
+  const operation = previous.catch(() => undefined).then(async () => {
+    const state = tmuxManager.activityState(environmentId);
+    const environment = await storage.getEnvironment!(environmentId);
+    const persisted = environment?.agentActivitySources?.["claude-tmux"];
+    if (persisted?.state === state) return;
+    await storage.setEnvironmentAgentActivity!(
+      environmentId,
+      state,
+      new Date().toISOString(),
+      "claude-tmux",
+    );
+  });
+  const settled = operation.catch((error) => {
+    console.warn(
+      `[tmux] failed to persist activity for ${environmentId}:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  }).finally(() => {
+    if (tmuxActivityWrites.get(environmentId) === settled) {
+      tmuxActivityWrites.delete(environmentId);
+    }
+  });
+  tmuxActivityWrites.set(environmentId, settled);
+  return settled;
+}
 
 function workspaceAndClaudeHome(backend: TmuxBackend): { workspace: string; claudeHome: string } {
   return {
@@ -3298,6 +3463,8 @@ async function sendInteractiveData(
 type ClaudeStatePoll = {
   timer: unknown;
   lastState: string;
+  failedReads: number;
+  stale: boolean;
   subscribers: Set<string>;
   active: boolean;
   pollRequested: boolean;
@@ -3381,6 +3548,8 @@ export class ClaudeStatePollManager {
     const poll: ClaudeStatePoll = {
       timer: undefined,
       lastState: "",
+      failedReads: 0,
+      stale: false,
       subscribers: new Set([subscriptionId]),
       active: true,
       pollRequested: false,
@@ -3389,6 +3558,20 @@ export class ClaudeStatePollManager {
     poll.timer = this.schedule(() => this.requestPoll(containerId, poll));
     this.polls.set(containerId, poll);
     this.requestPoll(containerId, poll);
+  }
+
+  /** Adopt every running container without waiting for a renderer lease. */
+  async reconcile(context: CommandContext): Promise<void> {
+    const environments = await context.storage.loadEnvironments();
+    const running = new Set<string>();
+    for (const environment of environments) {
+      if (environment.status !== "running" || !environment.containerId) continue;
+      running.add(environment.containerId);
+      this.start(environment.containerId, context, "backend");
+    }
+    for (const containerId of this.polls.keys()) {
+      if (!running.has(containerId)) this.shutdown(containerId);
+    }
   }
 
   async stop(containerId: string, subscriptionId = "legacy"): Promise<void> {
@@ -3473,7 +3656,9 @@ export class ClaudeStatePollManager {
     if (!this.isCurrent(containerId, poll)) return;
 
     const known = state === "working" || state === "waiting" || state === "idle";
-    const changed = known && state !== poll.lastState;
+    if (known) poll.failedReads = 0;
+    else poll.failedReads += 1;
+    const changed = known && (state !== poll.lastState || poll.stale);
     // A tick that observed nothing new must cost nothing beyond the state read.
     // Loading environments here parses the whole environments file, once per
     // second per running container, to answer a question whose answer has not
@@ -3488,6 +3673,25 @@ export class ClaudeStatePollManager {
     poll.lastRetirementCheckAt = this.nowMs();
     if (!environment || environment.status !== "running") {
       this.deactivate(containerId, poll);
+      return;
+    }
+    if (!known && poll.failedReads >= 3 && !poll.stale) {
+      const previous = poll.lastState === "working"
+        || poll.lastState === "waiting"
+        || poll.lastState === "idle"
+        ? poll.lastState
+        : environment.agentActivitySources?.["claude-terminal"]?.state ?? "idle";
+      await poll.context.storage.setEnvironmentAgentActivity(
+        environment.id,
+        previous,
+        this.now(),
+        "claude-terminal",
+        undefined,
+        true,
+      );
+      if (!this.isCurrent(containerId, poll)) return;
+      poll.lastState = previous;
+      poll.stale = true;
       return;
     }
     if (!changed) return;
@@ -3517,6 +3721,7 @@ export class ClaudeStatePollManager {
       || poll.lastState === ""
     );
     poll.lastState = state;
+    poll.stale = false;
     if (completedTurn) {
       void poll.context.notifyAgentTurnCompleted?.(environment.id).catch((error) => {
         console.warn(
@@ -3571,6 +3776,9 @@ export function registerTmuxBackendCommands(
       asString(subscriptionId, "subscriptionId"),
     );
   });
+  register("reconcile_claude_state_polling", (_args, context) =>
+    claudeStatePolls.reconcile(context),
+  );
 
   register("claude_tmux_start", async ({
     tabId,
@@ -3606,11 +3814,12 @@ export function registerTmuxBackendCommands(
         asOptionalString(effort),
         typeof fastMode === "boolean" ? fastMode : undefined,
       );
+      await persistTmuxEnvironmentActivity(context, envId);
       return session.status(await session.tmuxAlive().catch(() => false));
     });
   });
 
-  register("claude_tmux_stop", async ({ tabId, environmentId }) => {
+  register("claude_tmux_stop", async ({ tabId, environmentId }, context) => {
     const envId = asString(environmentId, "environmentId");
     const tab = asString(tabId, "tabId");
     await tmuxManager.installLock(envId).runExclusive(async () => {
@@ -3619,19 +3828,25 @@ export function registerTmuxBackendCommands(
       // that start is paused, after which start can launch an untracked tmux
       // process. Serialize the complete stop transition with start/replace.
       const session = tmuxManager.remove(envId, tab);
-      if (!session) return;
-      await session.stop();
-      if (tmuxManager.sessionsInEnvironment(envId) === 0) {
+      if (!session) {
+        await killOrphanSession(context, envId, tab);
+      } else {
+        await session.stop();
+      }
+      if (session && tmuxManager.sessionsInEnvironment(envId) === 0) {
         await uninstallWorkspaceHooks(session.backend, session.workspaceHookPaths).catch((error) => {
           console.warn("[tmux] uninstallWorkspaceHooks failed", error);
         });
       }
+      await persistTmuxEnvironmentActivity(context, envId);
     });
   });
 
-  register("claude_tmux_interrupt", ({ tabId, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).interrupt(),
-  );
+  register("claude_tmux_interrupt", async ({ tabId, environmentId }, context) => {
+    const envId = asString(environmentId, "environmentId");
+    await requireSession(envId, asString(tabId, "tabId")).interrupt();
+    await persistTmuxEnvironmentActivity(context, envId);
+  });
   register("claude_tmux_status", async ({ tabId, environmentId }) => {
     const session = tmuxManager.get(asString(environmentId, "environmentId"), asString(tabId, "tabId"));
     return session ? session.status(await session.tmuxAlive().catch(() => false)) : null;
@@ -3653,10 +3868,11 @@ export function registerTmuxBackendCommands(
   register("claude_tmux_send_keys", ({ tabId, keys, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).sendKeys(asStringArray(keys)),
   );
-  register("claude_tmux_submit", ({ tabId, text, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId"))
-      .submit(asString(text, "text")),
-  );
+  register("claude_tmux_submit", async ({ tabId, text, environmentId }, context) => {
+    const envId = asString(environmentId, "environmentId");
+    await requireSession(envId, asString(tabId, "tabId")).submit(asString(text, "text"));
+    await persistTmuxEnvironmentActivity(context, envId);
+  });
   register("claude_tmux_submit_queued", async ({ tabId, text, environmentId }, context) => {
     const envId = asString(environmentId, "environmentId");
     const tab = asString(tabId, "tabId");
@@ -3670,6 +3886,7 @@ export function registerTmuxBackendCommands(
         throw new Error(`environment ${envId} is being deleted`);
       }
       await requireSession(envId, tab).submit(prompt);
+      await persistTmuxEnvironmentActivity(context, envId);
     });
   });
   register("claude_tmux_switch_model", ({ tabId, model, environmentId }) =>
@@ -3720,6 +3937,94 @@ export function registerTmuxBackendCommands(
     const backend = await resolveBackend(asString(environmentId, "environmentId"), context);
     const paths = workspaceAndClaudeHome(backend);
     return listPreviousSessions(backend, paths.claudeHome, paths.workspace);
+  });
+  register("claude_tmux_reconcile_orphans", async (_args, context) => {
+    const now = Date.now();
+    if (now - lastTmuxOrphanSweepAt < 60_000) return { reaped: 0, skipped: true };
+    lastTmuxOrphanSweepAt = now;
+    const graceMs = 60 * 60 * 1_000;
+    const environments = await context.storage.loadEnvironments();
+    const survivingIds = environments.map((environment) => environment.id);
+    let reaped = 0;
+
+    const collectReferencedNames = (
+      environmentId: string,
+      node: unknown,
+      names: Set<string>,
+    ): void => {
+      if (!node || typeof node !== "object" || Array.isArray(node)) return;
+      const record = node as Record<string, unknown>;
+      if (record.kind === "leaf" && Array.isArray(record.tabs)) {
+        for (const tab of record.tabs) {
+          if (!tab || typeof tab !== "object" || Array.isArray(tab)) continue;
+          const candidate = tab as Record<string, unknown>;
+          if (candidate.type === "claude-tmux" && typeof candidate.id === "string") {
+            names.add(tmuxSessionName(environmentId, candidate.id));
+          }
+        }
+        return;
+      }
+      if (record.kind === "split" && Array.isArray(record.children)) {
+        for (const child of record.children) {
+          collectReferencedNames(environmentId, child, names);
+        }
+      }
+    };
+
+    for (const environment of environments) {
+      let backend: TmuxBackend;
+      try {
+        backend = await resolveBackend(environment.id, context);
+      } catch {
+        continue;
+      }
+      const listed = await backend.exec(["tmux", "list-sessions", "-F", "#{session_name}"])
+        .catch(() => null);
+      if (!listed || listed.status !== 0) continue;
+      const layout = await context.storage.getPaneLayout(environment.id);
+      const referenced = new Set<string>();
+      if (layout) collectReferencedNames(environment.id, layout.root, referenced);
+      const names = selectReapableTmuxSessions({
+        names: parseTmuxSessionNames(listed.stdout),
+        environmentId: environment.id,
+        survivingEnvironmentIds: survivingIds,
+      });
+      const remaining = new Set(names);
+      for (const name of names) {
+        const key = `${environment.id}\0${name}`;
+        if (referenced.has(name)) {
+          orphanedTmuxMissingSince.delete(key);
+          continue;
+        }
+        const missingSince = orphanedTmuxMissingSince.get(key);
+        if (missingSince === undefined) {
+          orphanedTmuxMissingSince.set(key, now);
+          continue;
+        }
+        if (now - missingSince < graceMs) continue;
+        const managed = tmuxManager.findByTmuxName(environment.id, name);
+        if (managed) {
+          tmuxManager.remove(environment.id, managed.tabId);
+          await managed.stop();
+        } else {
+          const killed = await backend.exec(["tmux", "kill-session", "-t", name]);
+          if (killed.status !== 0) continue;
+        }
+        remaining.delete(name);
+        orphanedTmuxMissingSince.delete(key);
+        console.warn(`[tmux] reaped orphaned session ${environment.id}/${name}`);
+        reaped += 1;
+      }
+      if (remaining.size === 0 && tmuxManager.sessionsInEnvironment(environment.id) === 0) {
+        const { workspace } = workspaceAndClaudeHome(backend);
+        const hookPaths = workspaceHookPaths(
+          path.join(runtimeRootPrefixForContext(context), environment.id),
+          workspace,
+        );
+        await uninstallWorkspaceHooks(backend, hookPaths).catch(() => undefined);
+      }
+    }
+    return { reaped, skipped: false };
   });
   register("claude_tmux_create_interactive_terminal", async ({ tabId, environmentId, cols, rows }, context) => {
     const envId = asString(environmentId, "environmentId");

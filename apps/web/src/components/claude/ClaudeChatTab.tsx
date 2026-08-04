@@ -981,24 +981,11 @@ export function ClaudeChatTab({
   );
 
   // Setup completion awareness - block initialization until setup scripts finish
-  const setupScriptsRunning = useEnvironmentStore(
-    (state) => state.setupScriptsRunning.has(environmentId)
-  );
-  const setupCommandsResolved = useEnvironmentStore(
-    (state) => state.setupCommandsResolved.has(environmentId)
-  );
-  const hasPendingSetupCommands = useEnvironmentStore(
-    (state) => state.pendingSetupCommands.has(environmentId)
-  );
-  const workspaceReady = useEnvironmentStore(
-    (state) => state.workspaceReadyEnvironments.has(environmentId)
+  const setupPhase = useEnvironmentStore((state) =>
+    state.environments.find((environment) => environment.id === environmentId)?.setupPhase
   );
   const setupPending = isSetupPending({
-    isLocal: !!isLocal,
-    setupCommandsResolved,
-    hasPendingSetupCommands,
-    setupScriptsRunning,
-    workspaceReady,
+    setupPhase,
   });
 
   const lastInitTimeRef = useRef<number>(0);

@@ -946,13 +946,18 @@ export const __testing = {
 };
 
 function startSseKeepalive(
-  writeSSE: (event: { event: string; data: string }) => Promise<void>,
-  intervalMs = 30_000,
+  writeSSE: (event: { event: string; data: string; id?: string }) => Promise<void>,
+  intervalMs = 5_000,
+  shouldSend: () => boolean = () => true,
 ): ReturnType<typeof setInterval> {
   return setInterval(() => {
+    if (!shouldSend()) return;
     void writeSSE({
       event: "keepalive",
-      data: JSON.stringify({ timestamp: new Date().toISOString() }),
+      // Echo the latest issued revision so an EventSource reconnect exposes a
+      // missed-frame gap through the same cursor path as ordinary events.
+      id: String(eventRing.latestRevision),
+      data: "{}",
     }).catch((error) => {
       console.error("[codex-bridge] Failed to write SSE keepalive:", error);
     });
@@ -1601,7 +1606,7 @@ app.get("/event/subscribe", (c) => {
     };
     subscribers.add(listener);
 
-    const keepalive = startSseKeepalive(writeWhileOpen);
+    let keepalive: ReturnType<typeof setInterval> | undefined;
 
     try {
       if (sseRouteTestHooks?.afterSubscriberRegistered) {
@@ -1686,6 +1691,18 @@ app.get("/event/subscribe", (c) => {
         );
       }
       buffered = null;
+      // Start only after replay and its buffered tail are flushed. A heartbeat
+      // carries the latest id, so sending one during replay would jump the
+      // EventSource cursor past frames it had not received yet.
+      keepalive = startSseKeepalive(
+        writeWhileOpen,
+        5_000,
+        () => {
+          if (!sessionFilter) return true;
+          const activity = appServerRuntime.getActivity(sessionFilter);
+          return activity === "working" || activity === "waiting";
+        },
+      );
 
       await Promise.race([
         connectionClosed,
@@ -1695,7 +1712,7 @@ app.get("/event/subscribe", (c) => {
       ]);
     } finally {
       open = false;
-      clearInterval(keepalive);
+      if (keepalive) clearInterval(keepalive);
       subscribers.delete(listener);
       releaseReplayRetention();
     }

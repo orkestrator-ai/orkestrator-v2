@@ -108,6 +108,15 @@ export class OrkestratorBackend {
         interactionMonitorMode,
         interactionMonitorAdoptionEnabled:
           process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
+        onActivityTransition: (event) => {
+          options.emit("native-agent-session-activity", {
+            environment_id: event.environmentId,
+            session_key: event.sessionKey,
+            provider_session_id: event.providerSessionId,
+            previous_state: event.previousState,
+            state: event.state,
+          });
+        },
       },
     );
     context.nativeAgents = this.nativeAgents;
@@ -229,6 +238,12 @@ export class OrkestratorBackend {
         );
       });
     }
+    const reconcileTabTeardowns = this.commands.get("reconcile_tab_teardowns");
+    if (reconcileTabTeardowns) {
+      await Promise.resolve(reconcileTabTeardowns({}, this.context)).catch((error: unknown) => {
+        console.warn("[backend] Failed to reconcile tab teardowns:", error);
+      });
+    }
 
     // Start durable pipelines only after stale bridge ownership and interrupted
     // environment deletion have been reconciled. A doomed pipeline is skipped
@@ -242,6 +257,36 @@ export class OrkestratorBackend {
     await this.nativeAgents.init().catch((error) => {
       console.warn("[backend] Failed to restore native agent launches:", error);
     });
+    const reconcileOrphanedTabResources = this.commands.get(
+      "reconcile_orphaned_tab_resources",
+    );
+    if (reconcileOrphanedTabResources) {
+      await Promise.resolve(reconcileOrphanedTabResources({}, this.context)).catch(
+        (error: unknown) => {
+          console.warn("[backend] Failed to reconcile orphaned tab resources:", error);
+        },
+      );
+    }
+    // Setup is backend-owned. Adopt incomplete running environments left by an
+    // older renderer or a backend restart; the command deduplicates live runs.
+    const ensureEnvironmentSetup = this.commands.get("ensure_environment_setup");
+    if (ensureEnvironmentSetup) {
+      const environments = await this.context.storage.loadEnvironments();
+      for (const environment of environments) {
+        if (
+          environment.status !== "running"
+          || environment.setupScriptsComplete
+          || environment.setupPhase === "ready"
+          || environment.setupOverride
+        ) continue;
+        void Promise.resolve(ensureEnvironmentSetup(
+          { environmentId: environment.id },
+          this.context,
+        )).catch((error: unknown) => {
+          console.warn(`[backend] Failed to adopt setup for ${environment.id}:`, error);
+        });
+      }
+    }
     // Adopts planning conversations the previous renderer-driven controller
     // left in flight, then advances every durable record on its own timer.
     await this.featurePlanning.init().catch((error) => {
@@ -253,6 +298,12 @@ export class OrkestratorBackend {
     await this.nativeAgents.reconcileAgentActivity().catch((error) => {
       console.warn("[backend] Failed to restore native agent activity:", error);
     });
+    const reconcileClaudeState = this.commands.get("reconcile_claude_state_polling");
+    if (reconcileClaudeState) {
+      await Promise.resolve(reconcileClaudeState({}, this.context)).catch((error: unknown) => {
+        console.warn("[backend] Failed to restore Claude terminal activity:", error);
+      });
+    }
     // Queued tmux prompts left behind by a quit or crash drain from here, with
     // no renderer involved. NativeAgentService drains its own queues on its own
     // sweep; this one shares the activity sweep rather than adding a third
@@ -264,6 +315,23 @@ export class OrkestratorBackend {
       void this.nativeAgents.reconcileAgentActivity().catch((error) => {
         console.warn("[backend] Failed to reconcile native agent activity:", error);
       });
+      if (reconcileClaudeState) {
+        void Promise.resolve(reconcileClaudeState({}, this.context)).catch((error: unknown) => {
+          console.warn("[backend] Failed to reconcile Claude terminal activity:", error);
+        });
+      }
+      if (reconcileTabTeardowns) {
+        void Promise.resolve(reconcileTabTeardowns({}, this.context)).catch((error: unknown) => {
+          console.warn("[backend] Failed to reconcile tab teardowns:", error);
+        });
+      }
+      if (reconcileOrphanedTabResources) {
+        void Promise.resolve(reconcileOrphanedTabResources({}, this.context)).catch(
+          (error: unknown) => {
+            console.warn("[backend] Failed to reconcile orphaned tab resources:", error);
+          },
+        );
+      }
       void this.promptQueues.drainAll().catch((error) => {
         console.warn("[backend] Failed to drain tmux prompt queues:", error);
       });

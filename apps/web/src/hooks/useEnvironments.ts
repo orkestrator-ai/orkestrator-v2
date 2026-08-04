@@ -8,7 +8,6 @@ import { useSessionStore } from "@/stores/sessionStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
 import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
-import { preserveCompletedSetupState } from "@/lib/setup-commands";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, PrState } from "@/types";
 
 /**
@@ -287,17 +286,6 @@ function reconcileEnvironmentLifecycleErrors(): void {
       continue;
     }
 
-    // A failed background start cannot produce a setup plan. Resolve every
-    // transient gate so an inactive/remounted terminal does not wait forever.
-    store.consumePendingSetupCommands(environment.id);
-    store.setSetupCommandsResolved(environment.id, true);
-    store.setSetupScriptsRunning(environment.id, false);
-    // Unlike the gates above, `setWorkspaceReady` has no no-op guard, and this
-    // runs on every list sync for as long as the failure is persisted.
-    if (store.isWorkspaceReady(environment.id)) {
-      store.setWorkspaceReady(environment.id, false);
-    }
-
     // The backend drops the durable launch intent when a start fails; mirror it
     // and the transient renderer-side one, or a launch that can never happen
     // auto-dispatches the original prompt the next time this env is started.
@@ -366,7 +354,7 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
     || (
       environment.status === "running"
       && (
-        environmentStore.isSetupScriptsRunning(environment.id)
+        environment.setupPhase === "running"
         || pendingLaunchEnvironmentIds.has(environment.id)
       )
     )
@@ -385,9 +373,7 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
         snapshot,
         attemptRevisions.get(environment.id),
       );
-      const safeSnapshot = withAuthoritativeLifecycleError(
-        preserveCompletedSetupState(environment.id, protectedSnapshot.environment),
-      );
+      const safeSnapshot = withAuthoritativeLifecycleError(protectedSnapshot.environment);
       store.updateEnvironment(environment.id, safeSnapshot);
       if (protectedSnapshot.stale) return;
 
@@ -397,22 +383,6 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
         return;
       }
 
-      if (safeSnapshot.setupScriptsComplete) {
-        store.setSetupCommandsResolved(environment.id, true);
-        store.setSetupScriptsRunning(environment.id, false);
-        store.setWorkspaceReady(environment.id, true);
-        return;
-      }
-
-      const setupSession = await backend.getEnvironmentSetupSession(environment.id);
-      if (!setupSession) return;
-      store.setSetupCommandsResolved(environment.id, true);
-      store.setSetupScriptsRunning(environment.id, setupSession.running);
-      if (setupSession.success === true) {
-        store.setWorkspaceReady(environment.id, true);
-      } else if (!setupSession.running) {
-        store.setWorkspaceReady(environment.id, false);
-      }
     } catch (error) {
       console.warn(
         `[useEnvironments] Failed to reconcile setup snapshot for ${environment.id}:`,
@@ -478,10 +448,6 @@ export function useEnvironmentLifecycleService(): void {
           reconcileEnvironmentLifecycleErrors();
           bindSetupTerminalSession(environment, session_id);
         }
-        store.consumePendingSetupCommands(environment_id);
-        store.setSetupCommandsResolved(environment_id, true);
-        store.setSetupScriptsRunning(environment_id, true);
-        store.setWorkspaceReady(environment_id, false);
       });
       if (disposed) stopStarted();
       else unlistenStarted = stopStarted;
@@ -499,18 +465,11 @@ export function useEnvironmentLifecycleService(): void {
         if (environment) {
           store.updateEnvironment(
             environment_id,
-            withAuthoritativeLifecycleError(
-              preserveCompletedSetupState(environment_id, environment),
-            ),
+            withAuthoritativeLifecycleError(environment),
           );
           reconcileEnvironmentLifecycleErrors();
         }
-        store.consumePendingSetupCommands(environment_id);
-        store.setSetupCommandsResolved(environment_id, true);
-        store.setSetupScriptsRunning(environment_id, false);
-        if (success) {
-          store.setWorkspaceReady(environment_id, true);
-        } else {
+        if (!success) {
           // The backend clears the durable launch intent on failure and sends the
           // updated environment above. Mirror it locally even when the payload
           // omitted the environment, so a failed setup cannot leave this renderer
@@ -590,11 +549,6 @@ export function useEnvironments(
     setError,
     getEnvironmentsByProjectId,
     setDeleting,
-    setPendingSetupCommands,
-    consumePendingSetupCommands,
-    setSetupCommandsResolved,
-    setWorkspaceReady,
-    setSetupScriptsRunning,
   } = useEnvironmentStore(
     useShallow((state) => ({
       mergeEnvironmentsForProject: state.mergeEnvironmentsForProject,
@@ -608,11 +562,6 @@ export function useEnvironments(
       setError: state.setError,
       getEnvironmentsByProjectId: state.getEnvironmentsByProjectId,
       setDeleting: state.setDeleting,
-      setPendingSetupCommands: state.setPendingSetupCommands,
-      consumePendingSetupCommands: state.consumePendingSetupCommands,
-      setSetupCommandsResolved: state.setSetupCommandsResolved,
-      setWorkspaceReady: state.setWorkspaceReady,
-      setSetupScriptsRunning: state.setSetupScriptsRunning,
     }))
   );
 
@@ -837,16 +786,6 @@ export function useEnvironments(
       // in-flight snapshot is guarded by the attempt revision above.
       updateEnvironmentInStore(environmentId, { lifecycleError: null });
 
-      // Block TerminalContainer init and prevent auto-resolve until the backend
-      // returns the authoritative setup command plan.
-      // by placing a placeholder in pendingSetupCommands BEFORE the async call.
-      // This prevents the race where updateEnvironmentInStore (which sets worktreePath)
-      // triggers isLocalEnvironmentReady=true and the auto-resolve fires before
-      // real setup commands are stored.
-      setWorkspaceReady(environmentId, false);
-      setPendingSetupCommands(environmentId, []);
-      setSetupCommandsResolved(environmentId, false);
-
       try {
         console.log("[useEnvironments] Setting status to creating...");
         updateStatusInStore(environmentId, "creating");
@@ -861,78 +800,33 @@ export function useEnvironments(
         const result = await backend.startEnvironment(environmentId);
         finishAttemptAdmission();
         console.log("[useEnvironments] backend.startEnvironment completed, refreshing environment...", {
-          setupCommands: result.setupCommands,
-          setupManagedByBackend: result.setupManagedByBackend,
           setupStarted: result.setupStarted,
           setupSessionId: result.setupSessionId,
         });
 
-        if (result.setupManagedByBackend) {
-          consumePendingSetupCommands(environmentId);
-        } else if (result.setupCommands && result.setupCommands.length > 0) {
-          setPendingSetupCommands(environmentId, result.setupCommands);
-        } else {
-          consumePendingSetupCommands(environmentId);
-        }
-
         // Refresh the full environment data (including containerId / worktreePath)
         const updatedEnv = await backend.getEnvironment(environmentId);
-        let refreshedEnv: Environment | null = null;
         if (updatedEnv) {
-          const safeUpdatedEnv = preserveCompletedSetupState(environmentId, updatedEnv);
-          refreshedEnv = safeUpdatedEnv;
-          console.log("[useEnvironments] Got updated environment:", safeUpdatedEnv);
-          if (safeUpdatedEnv.environmentType === "local" && !safeUpdatedEnv.worktreePath) {
+          console.log("[useEnvironments] Got updated environment:", updatedEnv);
+          if (updatedEnv.environmentType === "local" && !updatedEnv.worktreePath) {
             console.warn("[useEnvironments] Local environment started without worktreePath:", {
               environmentId,
-              status: safeUpdatedEnv.status,
-              branch: safeUpdatedEnv.branch,
+              status: updatedEnv.status,
+              branch: updatedEnv.branch,
             });
           }
-          updateEnvironmentInStore(environmentId, safeUpdatedEnv);
+          updateEnvironmentInStore(environmentId, updatedEnv);
           if (result.setupSessionId) {
-            bindSetupTerminalSession(safeUpdatedEnv, result.setupSessionId);
+            bindSetupTerminalSession(updatedEnv, result.setupSessionId);
           }
         }
-
-        if (result.setupManagedByBackend) {
-          const store = useEnvironmentStore.getState();
-          const setupComplete =
-            refreshedEnv?.setupScriptsComplete === true ||
-            store.getEnvironmentById(environmentId)?.setupScriptsComplete === true;
-          const completionEventAlreadyHandled =
-            !!result.setupStarted &&
-            store.isSetupCommandsResolved(environmentId) &&
-            !store.isSetupScriptsRunning(environmentId);
-
-          if (setupComplete || store.isWorkspaceReady(environmentId)) {
-            setSetupScriptsRunning(environmentId, false);
-            setWorkspaceReady(environmentId, true);
-          } else if (result.setupStarted && !completionEventAlreadyHandled) {
-            setSetupScriptsRunning(environmentId, true);
-            setWorkspaceReady(environmentId, false);
-          } else {
-            // Reached when either no setup ran (!setupStarted) or a completion
-            // event was already handled while we awaited
-            // (completionEventAlreadyHandled). Both mean setup is effectively
-            // done, so mark the workspace ready. Forcing readiness to false here
-            // (the old `!result.setupStarted`) stranded a just-completed env in a
-            // "not running, not ready" state.
-            setSetupScriptsRunning(environmentId, false);
-            setWorkspaceReady(environmentId, true);
-          }
-        }
-
-        setSetupCommandsResolved(environmentId, true);
 
         if (!options?.silent) {
           toast.success("Environment started");
         }
-        return result.setupCommands;
+        return [];
       } catch (err) {
         finishAttemptAdmission();
-        // Unblock TerminalContainer on error so it doesn't hang
-        setSetupCommandsResolved(environmentId, true);
         console.error("[useEnvironments] Error starting environment:", err);
         const message = getErrorMessage(err, "Failed to start environment");
         // Foreground provisioning failures are also persisted by the backend,
@@ -956,7 +850,7 @@ export function useEnvironments(
         throw new Error(message);
       }
     },
-    [updateStatusInStore, updateEnvironmentInStore, setError, showError, setPendingSetupCommands, consumePendingSetupCommands, setSetupCommandsResolved, setWorkspaceReady, setSetupScriptsRunning]
+    [updateStatusInStore, updateEnvironmentInStore, setError, showError]
   );
 
   const stopEnvironment = useCallback(

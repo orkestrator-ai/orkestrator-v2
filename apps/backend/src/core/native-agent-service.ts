@@ -133,6 +133,13 @@ export interface NativeAgentServiceOptions {
   onInteractionObservation?: (
     observation: AgentInteractionObservation,
   ) => void | Promise<void>;
+  onActivityTransition?: (event: {
+    environmentId: string;
+    sessionKey: string;
+    providerSessionId: string;
+    previousState?: AgentActivityState;
+    state: AgentActivityState;
+  }) => void;
 }
 
 export interface AgentInteractionObservation {
@@ -1388,6 +1395,15 @@ export class NativeAgentService {
       providerSessionId: session.providerSessionId,
       state,
     });
+    if (previous !== state) {
+      this.options.onActivityTransition?.({
+        environmentId: session.environmentId,
+        sessionKey: session.key,
+        providerSessionId: session.providerSessionId,
+        previousState: previous,
+        state,
+      });
+    }
     const sources = activityByEnvironment.get(session.environmentId) ?? {};
     sources[session.key] = {
       state,

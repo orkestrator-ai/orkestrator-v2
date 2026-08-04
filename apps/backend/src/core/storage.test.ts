@@ -14,6 +14,7 @@ import type {
   CodexModelCatalogEntry,
 } from "./models.js";
 import { MAX_CODEX_CONCURRENT_THREADS } from "./constants.js";
+import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
 async function withTemporaryStorage<T>(
   run: (storage: StorageService, dataDir: string) => Promise<T>,
@@ -85,6 +86,78 @@ describe("defaultConfig", () => {
     expect(defaultRepositoryConfig()).toEqual({
       defaultBranch: "main",
       prBaseBranch: "main",
+    });
+  });
+});
+
+describe("backend-owned setup and build surfaces", () => {
+  test("normalizes pre-setupPhase environment records on every read", async () => {
+    await withTemporaryStorage(async (_storage, dataDir) => {
+      const completed = createEnvironment("project-1");
+      completed.id = "ready-legacy";
+      completed.setupScriptsComplete = true;
+      const incomplete = createEnvironment("project-1");
+      incomplete.id = "pending-legacy";
+      const legacy = [completed, incomplete].map((environment) => {
+        const record = { ...environment };
+        delete record.setupPhase;
+        delete record.setupOverride;
+        return record;
+      });
+      await fs.writeFile(
+        path.join(dataDir, "environments.json"),
+        `${JSON.stringify(legacy)}\n`,
+      );
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.getEnvironment("ready-legacy"))?.setupPhase).toBe("ready");
+      expect((await restarted.getEnvironment("pending-legacy"))?.setupPhase).toBe("pending");
+    });
+  });
+
+  test("creates and refreshes the build tab in the authoritative pane layout", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-build-tab";
+      environment.containerId = "container-1";
+      await storage.addEnvironment(environment);
+
+      const first = await storage.ensureBuildPipelineTab({
+        pipelineId: "pipeline-1",
+        taskId: "task-1",
+        environmentId: environment.id,
+        isLocal: false,
+      });
+      expect(first.root).toMatchObject({
+        kind: "leaf",
+        activeTabId: "build-pipeline-1",
+        tabs: [{
+          type: "claude-build",
+          buildTabData: { pipelineId: "pipeline-1", taskId: "task-1" },
+        }],
+      });
+
+      const second = await storage.ensureBuildPipelineTab({
+        pipelineId: "pipeline-2",
+        taskId: "task-1",
+        environmentId: environment.id,
+        isLocal: false,
+      });
+      expect(second.version).toBe(PANE_LAYOUT_VERSION);
+      expect(second.revision).toBe(first.revision + 1);
+      const root = second.root as {
+        kind?: unknown;
+        tabs?: Array<Record<string, unknown>>;
+      };
+      if (root.kind !== "leaf" || !Array.isArray(root.tabs)) {
+        throw new Error("expected a leaf layout");
+      }
+      expect(root.tabs).toHaveLength(1);
+      expect(root.tabs[0]).toMatchObject({
+        id: "build-pipeline-1",
+        buildTabData: { pipelineId: "pipeline-2", taskId: "task-1" },
+      });
     });
   });
 });

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { useEffect, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import * as realPersistentTerminal from "./PersistentTerminal";
 import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
@@ -9,7 +9,6 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
 const persistentTerminalSnapshot = { ...realPersistentTerminal };
 const terminalPortalStoreSnapshot = { ...realTerminalPortalStore };
-const markSetupScriptsCompleteMock = mock(() => {});
 const createTerminalMock = mock(() => {});
 const disposeTerminalMock = mock(() => {});
 const clearTerminalsForEnvironmentMock = mock(() => {});
@@ -26,12 +25,6 @@ let terminalStoreTerminals: Map<string, {
   isOpened: boolean;
 }> = new Map();
 
-let terminalBehavior:
-  | ((props: {
-      onReady?: (payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => void;
-      onSetupComplete?: (payload: { persistSetupComplete: boolean }) => void;
-    }) => void)
-  | undefined;
 let lastPersistentTerminalProps:
   | {
       isReviewTab?: boolean;
@@ -41,11 +34,6 @@ let lastPersistentTerminalProps:
       initialReasoningEffort?: string;
     }
   | undefined;
-
-mock.module("@/lib/setup-commands", () => ({
-  shouldAutoResolveSetupCommands: () => false,
-  markSetupScriptsComplete: markSetupScriptsCompleteMock,
-}));
 
 mock.module("./PersistentTerminal", () => ({
   PersistentTerminal: (props: {
@@ -58,9 +46,6 @@ mock.module("./PersistentTerminal", () => ({
     initialReasoningEffort?: string;
   }) => {
     lastPersistentTerminalProps = props;
-    useEffect(() => {
-      terminalBehavior?.(props);
-    }, [props]);
     return null;
   },
 }));
@@ -120,9 +105,7 @@ afterAll(() => {
 
 describe("TerminalPortalHost", () => {
   beforeEach(() => {
-    terminalBehavior = undefined;
     lastPersistentTerminalProps = undefined;
-    markSetupScriptsCompleteMock.mockClear();
     createTerminalMock.mockClear();
     disposeTerminalMock.mockClear();
     clearTerminalsForEnvironmentMock.mockClear();
@@ -205,12 +188,7 @@ describe("TerminalPortalHost", () => {
           environmentType: "containerized",
         },
       ],
-      workspaceReadyEnvironments: new Set<string>(),
       deletingEnvironments: new Set<string>(),
-      pendingSetupCommands: new Map<string, string[]>(),
-      setupCommandsResolved: new Set<string>(),
-      setupScriptsRunning: new Set<string>(["env-1"]),
-      sessionActivated: new Set<string>(),
       isLoading: false,
       error: null,
     });
@@ -219,21 +197,6 @@ describe("TerminalPortalHost", () => {
   afterEach(() => {
     cleanup();
     paneHost.replaceChildren();
-  });
-
-  test("persists completion when a container terminal reports successful readiness", async () => {
-    terminalBehavior = ({ onReady }) => {
-      onReady?.({ persistSetupComplete: true });
-    };
-
-    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
-
-    await waitFor(() => {
-      expect(useEnvironmentStore.getState().isWorkspaceReady("env-1")).toBe(true);
-    });
-
-    expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-1")).toBe(false);
-    expect(markSetupScriptsCompleteMock).toHaveBeenCalledWith("env-1");
   });
 
   test("creates terminals even before the pane-layout active environment is set", async () => {
@@ -274,75 +237,6 @@ describe("TerminalPortalHost", () => {
       expect(lastPersistentTerminalProps).toBeDefined();
       expect(paneHost.childElementCount).toBe(1);
     });
-  });
-
-  test("does not persist completion when a local terminal only becomes shell-ready", async () => {
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((environment) => ({
-        ...environment,
-        environmentType: "local",
-        containerId: null,
-      })),
-    }));
-
-    terminalBehavior = ({ onReady }) => {
-      onReady?.({ persistSetupComplete: false });
-    };
-
-    render(<TerminalPortalHost environmentId="env-1" containerId={null} />);
-
-    await waitFor(() => {
-      expect(useEnvironmentStore.getState().isWorkspaceReady("env-1")).toBe(true);
-    });
-
-    expect(markSetupScriptsCompleteMock).not.toHaveBeenCalled();
-  });
-
-  test("does not mark a container workspace ready from a terminal reconnection", async () => {
-    let reconnected = false;
-    terminalBehavior = ({ onReady }) => {
-      reconnected = true;
-      onReady?.({ persistSetupComplete: false, workspaceReady: false });
-    };
-
-    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
-
-    await waitFor(() => {
-      expect(reconnected).toBe(true);
-    });
-
-    expect(useEnvironmentStore.getState().isWorkspaceReady("env-1")).toBe(false);
-    expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-1")).toBe(true);
-    expect(markSetupScriptsCompleteMock).not.toHaveBeenCalled();
-  });
-
-  test("keeps manual setup completion runtime-only", async () => {
-    terminalBehavior = ({ onSetupComplete }) => {
-      onSetupComplete?.({ persistSetupComplete: false });
-    };
-
-    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
-
-    await waitFor(() => {
-      expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-1")).toBe(false);
-    });
-
-    expect(markSetupScriptsCompleteMock).not.toHaveBeenCalled();
-  });
-
-  test("persists automatic setup completion", async () => {
-    terminalBehavior = ({ onSetupComplete }) => {
-      onSetupComplete?.({ persistSetupComplete: true });
-    };
-
-    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
-
-    await waitFor(() => {
-      expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-1")).toBe(false);
-    });
-
-    expect(markSetupScriptsCompleteMock).toHaveBeenCalledWith("env-1");
   });
 
   test("forwards review-tab state to persistent terminals", async () => {

@@ -707,11 +707,7 @@ function resetStores(name = "20260415-123456") {
     ],
     isLoading: false,
     error: null,
-    workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning: new Set(),
   });
 
   useConfigStore.setState((state) => ({
@@ -3087,7 +3083,6 @@ describe("OpenCodeChatTab", () => {
         createdAt: new Date().toISOString(),
       });
       useEnvironmentStore.setState({
-        setupCommandsResolved: new Set([ENVIRONMENT_ID]),
       });
       mockGetLocalOpencodeServerStatus.mockResolvedValue({
         running: false,
@@ -3291,7 +3286,7 @@ describe("OpenCodeChatTab", () => {
       useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
         createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
       });
-      useEnvironmentStore.setState({ workspaceReadyEnvironments: new Set() });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, { setupPhase: "pending" });
       mockGetOpenCodeServerStatus
         .mockRejectedValueOnce(new Error("bridge still starting after delayed setup"))
         .mockResolvedValueOnce({
@@ -3308,7 +3303,6 @@ describe("OpenCodeChatTab", () => {
 
       act(() => {
         useEnvironmentStore.setState({
-          workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
         });
       });
 
@@ -3372,7 +3366,7 @@ describe("OpenCodeChatTab", () => {
     });
 
     test("starts a stopped local server and connects to its port", async () => {
-      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, { setupPhase: "ready" });
       mockGetLocalOpencodeServerStatus.mockResolvedValue({ running: false, port: null, pid: null } as any);
       mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 5432, pid: 99, authToken: "opencode-secret" } as any);
 
@@ -3397,7 +3391,6 @@ describe("OpenCodeChatTab", () => {
 
     test("surfaces a rejected local status probe without touching the container bridge", async () => {
       useEnvironmentStore.setState({
-        setupCommandsResolved: new Set([ENVIRONMENT_ID]),
       });
       mockGetLocalOpencodeServerStatus.mockRejectedValue(
         new Error("local OpenCode status unavailable"),
@@ -3420,7 +3413,7 @@ describe("OpenCodeChatTab", () => {
     });
 
     test("reports a local server that starts without a port", async () => {
-      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, { setupPhase: "ready" });
       mockGetLocalOpencodeServerStatus.mockResolvedValue({ running: false, port: null, pid: null } as any);
       mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 0, pid: 99, authToken: "opencode-secret" } as any);
 

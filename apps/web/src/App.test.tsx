@@ -345,12 +345,10 @@ function resetStores({
   environments,
   selectedProjectId,
   selectedEnvironmentId,
-  setupScriptsRunning = new Set<string>(),
 }: {
   environments: Environment[];
   selectedProjectId: string | null;
   selectedEnvironmentId: string | null;
-  setupScriptsRunning?: Set<string>;
 }) {
   localStorage.clear();
 
@@ -358,11 +356,7 @@ function resetStores({
     environments,
     isLoading: false,
     error: null,
-    workspaceReadyEnvironments: new Set(),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning,
   });
 
   useUIStore.setState({
@@ -566,7 +560,6 @@ describe("App background processing mounts", () => {
       ],
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
-      setupScriptsRunning: new Set(["env-background"]),
     });
 
     render(<App />);
@@ -858,9 +851,9 @@ describe("App background processing mounts", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
     });
-    useEnvironmentStore.getState().setPendingSetupCommands("env-pending-setup", [
-      "/usr/local/bin/workspace-setup.sh",
-    ]);
+    useEnvironmentStore.getState().updateEnvironment("env-pending-setup", {
+      setupPhase: "running",
+    });
 
     render(<App />);
 
@@ -877,7 +870,6 @@ describe("App background processing mounts", () => {
       environments: [makeEnvironment("env-visible", "project-1")],
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
-      setupScriptsRunning: new Set(["env-visible"]),
     });
 
     render(<App />);

@@ -10,7 +10,6 @@ import type {
 } from "@/lib/codex-client";
 import { useCodexStore } from "@/stores/codexStore";
 import {
-  CODEX_BACKGROUND_SYNC_INTERVAL_MS,
   createCodexBackgroundSynchronizer,
   type CodexBackgroundSyncDependencies,
   useCodexBackgroundSync,
@@ -120,6 +119,7 @@ function seedLoadingSession(
         messages,
         isLoading: true,
         loadingStartedAt,
+        turnId: `turn-${loadingStartedAt}`,
       },
     ]]),
   });
@@ -249,6 +249,7 @@ describe("Codex background synchronization", () => {
         ...sessions.get(SESSION_KEY)!,
         isLoading: true,
         loadingStartedAt: 200,
+        turnId: "turn-200",
       });
       return { sessions };
     });
@@ -294,6 +295,7 @@ describe("Codex background synchronization", () => {
         messages: [toolMessage("pending")],
         isLoading: true,
         loadingStartedAt: 200,
+        turnId: "turn-200",
         title: "Newer turn",
         error: "newer error",
       });
@@ -1234,12 +1236,10 @@ describe("Codex background synchronization", () => {
     expect(useCodexStore.getState().sessions.get(malformedKey)?.isLoading).toBe(true);
   });
 
-  test("the hook reconciles immediately, polls repeatedly, and disposes on cleanup", async () => {
+  test("the hook reconciles immediately without installing a timer", async () => {
     seedLoadingSession();
     const originalSetInterval = window.setInterval;
-    const originalClearInterval = window.clearInterval;
-    let scheduled: TimerHandler | undefined;
-    let cleared: number | undefined;
+    let intervalCalls = 0;
     let statusCalls = 0;
     let approvalCalls = 0;
     let interactionCalls = 0;
@@ -1264,14 +1264,10 @@ describe("Codex background synchronization", () => {
         return [];
       },
     };
-    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
-      expect(timeout).toBe(CODEX_BACKGROUND_SYNC_INTERVAL_MS);
-      scheduled = handler;
+    window.setInterval = (() => {
+      intervalCalls += 1;
       return 73;
-    }) as typeof window.setInterval;
-    window.clearInterval = ((id: number) => {
-      cleared = id;
-    }) as typeof window.clearInterval;
+    }) as unknown as typeof window.setInterval;
 
     try {
       const hook = renderHook(() => useCodexBackgroundSync({
@@ -1279,20 +1275,13 @@ describe("Codex background synchronization", () => {
       }));
       expect([statusCalls, approvalCalls, interactionCalls]).toEqual([1, 1, 1]);
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-      expect(typeof scheduled).toBe("function");
-      if (typeof scheduled === "function") scheduled();
-      expect([statusCalls, approvalCalls, interactionCalls]).toEqual([2, 2, 2]);
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      expect(intervalCalls).toBe(0);
       hook.unmount();
-      expect(cleared).toBe(73);
-      if (typeof scheduled === "function") scheduled();
-      await Promise.resolve();
-      expect([statusCalls, approvalCalls, interactionCalls]).toEqual([2, 2, 2]);
+      expect([statusCalls, approvalCalls, interactionCalls]).toEqual([1, 1, 1]);
       expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
     } finally {
       cleanup();
       window.setInterval = originalSetInterval;
-      window.clearInterval = originalClearInterval;
     }
   });
 });

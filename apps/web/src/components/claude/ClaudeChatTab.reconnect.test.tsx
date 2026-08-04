@@ -190,11 +190,7 @@ function seedStores() {
     ],
     isLoading: false,
     error: null,
-    workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning: new Set(),
   });
 
   usePaneLayoutStore.setState({

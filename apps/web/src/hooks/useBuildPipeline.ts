@@ -155,69 +155,6 @@ function findBuildTabInTree(
   return null;
 }
 
-async function waitForPendingPaneHydration(
-  environmentId: string,
-): Promise<void> {
-  const initial = usePaneLayoutStore.getState();
-  if (initial.hydration.get(environmentId) !== "pending") return;
-
-  await new Promise<void>((resolve) => {
-    let unsubscribe = () => {};
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      unsubscribe();
-      resolve();
-    };
-    const timeout = setTimeout(finish, 5_000);
-    unsubscribe = usePaneLayoutStore.subscribe((state) => {
-      if (state.hydration.get(environmentId) !== "pending") finish();
-    });
-  });
-}
-
-async function ensureBuildTab(
-  pipeline: Pick<
-    BuildPipeline,
-    "id" | "environmentId" | "environmentType" | "taskId"
-  >,
-): Promise<void> {
-  if (!pipeline.environmentId) return;
-  // A backend-created environment can be selected before its TerminalContainer
-  // has mounted. addTab intentionally ignores unknown environments, so establish
-  // the pane state synchronously before attempting the handoff.
-  usePaneLayoutStore.getState().setActiveEnvironment(pipeline.environmentId);
-  // A pending restore replaces the environment layout as one authoritative
-  // snapshot. Wait for it before finding or adding the build tab.
-  await waitForPendingPaneHydration(pipeline.environmentId);
-  const store = usePaneLayoutStore.getState();
-  const existing = store.environments.get(pipeline.environmentId);
-  const existingTab = existing
-    ? findBuildTabInTree(existing.root, pipeline.taskId)
-    : null;
-  if (existingTab) {
-    store.setActiveTab(
-      existingTab.paneId,
-      existingTab.tabId,
-      pipeline.environmentId,
-    );
-    return;
-  }
-  const paneId = existing?.activePaneId ?? "default";
-  store.addTab(paneId, {
-    id: `build-${pipeline.id}`,
-    type: "claude-build",
-    buildTabData: {
-      environmentId: pipeline.environmentId,
-      pipelineId: pipeline.id,
-      taskId: pipeline.taskId,
-      isLocal: pipeline.environmentType === "local",
-    },
-  }, pipeline.environmentId);
-}
-
 export function useBuildPipeline() {
   const config = useConfigStore((state) => state.config);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
@@ -256,7 +193,6 @@ export function useBuildPipeline() {
       replacePipeline(pipeline);
       setProjectCollapsed(ticket.projectId, false);
       selectProjectAndEnvironment(ticket.projectId, pipeline.environmentId);
-      await ensureBuildTab(pipeline);
       toast.success("Build pipeline started");
       return pipeline.id;
     } catch (error) {
@@ -318,17 +254,8 @@ export function useBuildPipeline() {
     > & Partial<Pick<BuildPipeline, "id" | "environmentType">>,
   ) => {
     if (!pipeline.environmentId) return;
-    const navigable = {
-      ...pipeline,
-      id: pipeline.id ?? `task-${pipeline.taskId}`,
-      environmentType: pipeline.environmentType ?? "local",
-    } satisfies Pick<
-      BuildPipeline,
-      "id" | "environmentId" | "environmentType" | "projectId" | "taskId"
-    >;
     setProjectCollapsed(pipeline.projectId, false);
     selectProjectAndEnvironment(pipeline.projectId, pipeline.environmentId);
-    await ensureBuildTab(navigable);
     const state = usePaneLayoutStore.getState().environments.get(
       pipeline.environmentId,
     );

@@ -774,6 +774,12 @@ export class BuildPipelineService {
         throw new Error(started.error ?? "Failed to link build pipeline source");
       }
     }
+    await this.storage.ensureBuildPipelineTab({
+      pipelineId: started.id,
+      taskId: started.taskId,
+      environmentId: started.environmentId,
+      isLocal: started.environmentType === "local",
+    });
     if (this.options.autoAdvance !== false) void this.runLocked(pipeline.id);
     return started;
   }

@@ -3,7 +3,6 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
 import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
 import { useAgentState } from "../../../apps/web/src/hooks/useAgentState";
-import { useAgentStateCallbacks } from "../../../apps/web/src/hooks/useAgentStateCallbacks";
 
 const listenMock = listen as unknown as ReturnType<typeof mock>;
 
@@ -52,33 +51,5 @@ describe("useAgentState", () => {
       await Promise.resolve();
     });
     expect(unlisten).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("useAgentStateCallbacks", () => {
-  test("filters containers and dispatches generic and specific transitions", async () => {
-    const onStateChange = mock(() => undefined);
-    const onBecomeIdle = mock(() => undefined);
-    const onBecomeWorking = mock(() => undefined);
-    const { unmount } = renderHook(() => useAgentStateCallbacks({
-      containerId: "env-1",
-      onStateChange,
-      onBecomeIdle,
-      onBecomeWorking,
-    }));
-
-    act(() => {
-      useAgentActivityStore.getState().setContainerState("other", "working");
-      useAgentActivityStore.getState().setContainerState("env-1", "working");
-    });
-    await act(async () => Promise.resolve());
-    expect(onStateChange).toHaveBeenCalledTimes(1);
-    expect(onBecomeWorking).toHaveBeenCalledWith("env-1");
-
-    act(() => useAgentActivityStore.getState().setContainerState("env-1", "idle"));
-    await act(async () => Promise.resolve());
-    expect(onBecomeIdle).toHaveBeenCalledWith("env-1");
-    unmount();
-    expect(useAgentActivityStore.getState().stateChangeCallbacks.size).toBe(0);
   });
 });

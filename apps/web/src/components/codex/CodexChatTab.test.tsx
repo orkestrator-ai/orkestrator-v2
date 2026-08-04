@@ -852,11 +852,7 @@ function seedEnvironment(name = "20260415-123456") {
     ],
     isLoading: false,
     error: null,
-    workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning: new Set(),
   });
 }
 
@@ -2582,7 +2578,6 @@ describe("CodexChatTab", () => {
       createdAt: new Date().toISOString(),
     });
     useEnvironmentStore.setState({
-      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
     });
     mockGetLocalCodexServerStatus.mockResolvedValue({
       running: false,
@@ -2858,7 +2853,6 @@ describe("CodexChatTab", () => {
       createdAt: new Date(Date.now() - 61_000).toISOString(),
     });
     useEnvironmentStore.setState({
-      workspaceReadyEnvironments: new Set(),
     });
     mockGetCodexServerStatus
       .mockRejectedValueOnce(new Error("bridge delayed by setup"))
@@ -2876,7 +2870,6 @@ describe("CodexChatTab", () => {
 
       act(() => {
         useEnvironmentStore.setState({
-          workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
         });
       });
 
@@ -3017,7 +3010,6 @@ describe("CodexChatTab", () => {
       sessions: new Map(),
     }));
     useEnvironmentStore.setState({
-      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
     });
     mockGetLocalCodexServerStatus.mockRejectedValueOnce("local bridge offline");
 
@@ -3034,7 +3026,6 @@ describe("CodexChatTab", () => {
       sessions: new Map(),
     }));
     useEnvironmentStore.setState({
-      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
     });
     mockGetLocalCodexServerStatus.mockResolvedValueOnce({
       running: false,
@@ -3062,7 +3053,6 @@ describe("CodexChatTab", () => {
       sessions: new Map(),
     }));
     useEnvironmentStore.setState({
-      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
     });
 
     render(<CodexChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
@@ -3086,7 +3076,6 @@ describe("CodexChatTab", () => {
       sessions: new Map(),
     }));
     useEnvironmentStore.setState({
-      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
     });
     mockGetLocalCodexServerStatus.mockResolvedValueOnce({
       running: true,

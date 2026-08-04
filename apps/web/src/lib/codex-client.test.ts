@@ -1577,6 +1577,25 @@ describe("codex-client event cursor", () => {
     await iterator.return?.();
   });
 
+  test("turns a heartbeat revision jump into an explicit reconcile frame", async () => {
+    const iterator = subscribeToEvents(client, undefined, 20, "s1")[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    const source = instances[0] as unknown as CursorMockEventSource;
+
+    source.emit("keepalive", {}, "23");
+
+    await expect(pending).resolves.toEqual({
+      done: false,
+      value: {
+        type: "session.reconcile-required",
+        sessionId: "s1",
+        data: { reason: "revision-gap" },
+        revision: 23,
+      },
+    });
+    await iterator.return?.();
+  });
+
   test("omits the revision when the id is absent or unparseable", async () => {
     const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
     const first = iterator.next();

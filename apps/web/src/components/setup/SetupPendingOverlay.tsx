@@ -12,8 +12,8 @@ interface SetupPendingOverlayProps {
 /**
  * Shared waiting-for-setup UI with a manual "Skip setup wait" override.
  *
- * The override calls forceResolveSetupRuntime, which flips the runtime gates
- * without persisting completion. Use this when the normal detection path
+ * The override calls forceResolveSetupRuntime, which persists the backend
+ * setup override. Use this when the normal detection path
  * (OSC marker or workspace-ready text marker) fails to fire. The button shows
  * an inline confirmation before firing because clicking it while setup is
  * genuinely still running will connect the agent against a half-initialized

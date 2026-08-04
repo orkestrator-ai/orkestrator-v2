@@ -9,6 +9,7 @@
 // consumers don't need to thread it through separately.
 
 import { create } from "zustand";
+import type { TmuxAgentObservation } from "@orkestrator/protocol/tmux-observation";
 import type {
   HookEventKind,
   TranscriptLine,
@@ -184,6 +185,8 @@ interface TmuxTabState {
   busy: boolean;
   /** Wall-clock when busy flipped to true, for the elapsed counter. */
   busyStartedAt: number | null;
+  /** Backend-owned normalized pane facts; raw pane text never enters the store. */
+  observation: TmuxAgentObservation;
 }
 
 const emptyTabState = (): TmuxTabState => ({
@@ -200,6 +203,12 @@ const emptyTabState = (): TmuxTabState => ({
   resumed: false,
   busy: false,
   busyStartedAt: null,
+  observation: {
+    revision: 0,
+    observedAt: new Date(0).toISOString(),
+    usage: [],
+    prompt: null,
+  },
 });
 
 interface ClaudeTmuxState {
@@ -219,6 +228,9 @@ interface ClaudeTmuxState {
       environmentId?: string | null;
       sessionId?: string | null;
       resumed?: boolean;
+      busy?: boolean;
+      busyStartedAt?: number | null;
+      observation?: TmuxAgentObservation;
     },
   ) => void;
   resetTab: (tabId: string) => void;
@@ -246,7 +258,8 @@ interface ClaudeTmuxState {
   ) => void;
   pushInfoEvent: (tabId: string, event: TmuxInfoEvent) => void;
   dismissInfoEvent: (tabId: string, id: string) => void;
-  setBusy: (tabId: string, busy: boolean) => void;
+  setBusy: (tabId: string, busy: boolean, startedAt?: number | null) => void;
+  setObservation: (tabId: string, observation: TmuxAgentObservation) => void;
 
   addAttachment: (tabId: string, attachment: TmuxAttachment) => void;
   removeAttachment: (tabId: string, attachmentId: string) => void;
@@ -323,6 +336,13 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
         sessionId:
           info?.sessionId === undefined ? s.sessionId : info.sessionId,
         resumed: info?.resumed ?? s.resumed,
+        busy: info?.busy ?? s.busy,
+        busyStartedAt: info?.busy === undefined
+          ? s.busyStartedAt
+          : info.busy
+            ? info.busyStartedAt ?? s.busyStartedAt ?? Date.now()
+            : null,
+        observation: info?.observation ?? s.observation,
       })),
     ),
 
@@ -520,16 +540,25 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
       })),
     ),
 
-  setBusy: (tabId, busy) =>
+  setBusy: (tabId, busy, startedAt) =>
     set((state) =>
       patchTab(state, tabId, (s) => {
         if (s.busy === busy) return s;
         return {
           ...s,
           busy,
-          busyStartedAt: busy ? Date.now() : null,
+          busyStartedAt: busy ? startedAt ?? Date.now() : null,
         };
       }),
+    ),
+
+  setObservation: (tabId, observation) =>
+    set((state) =>
+      patchTab(state, tabId, (current) =>
+        observation.revision < current.observation.revision
+          ? current
+          : { ...current, observation },
+      ),
     ),
 
   addAttachment: (tabId, attachment) =>

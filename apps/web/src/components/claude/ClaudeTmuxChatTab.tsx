@@ -61,7 +61,6 @@ import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftP
 import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
 import {
   answerPreToolUse,
-  capturePane,
   getPendingHooks,
   getStatus,
   getTranscript,
@@ -105,7 +104,6 @@ import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import {
   applyTmuxAgentUsageSummaries,
-  parseTmuxAgentUsageSummaries,
 } from "@/lib/claude-tmux-usage";
 import type { ClaudeEffortLevel, ClaudeModel } from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
@@ -130,7 +128,6 @@ import {
   updateGlobalConfig,
 } from "@/lib/backend";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-import { getClaudeTmuxCapturePolling } from "@/lib/claude-tmux-polling";
 import { serializeClaudeQuestionAnswer } from "@orkestrator/protocol/agent-interactions";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 import type { FileCandidate, FileMention } from "@/types";
@@ -379,6 +376,7 @@ export function ClaudeTmuxChatTab({
   const removePendingElicitation = useClaudeTmuxStore((s) => s.removePendingElicitation);
   const replacePendingHooks = useClaudeTmuxStore((s) => s.replacePendingHooks);
   const setTabBusy = useClaudeTmuxStore((s) => s.setBusy);
+  const setObservation = useClaudeTmuxStore((s) => s.setObservation);
   const clearTabInitialPrompt = usePaneLayoutStore((s) => s.clearTabInitialPrompt);
   const clearTabInitialAgentOptions = usePaneLayoutStore((s) => s.clearTabInitialAgentOptions);
   const setConfig = useConfigStore((s) => s.setConfig);
@@ -386,9 +384,7 @@ export function ClaudeTmuxChatTab({
 
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showTui, setShowTui] = useState(false);
   const [interactiveMode, setInteractiveMode] = useState(false);
-  const [tuiSnapshot, setTuiSnapshot] = useState<string>("");
   const sdkModels = useClaudeStore(
     (s) => s.modelCatalogs.get(environmentId)?.models ?? s.models,
   );
@@ -448,10 +444,7 @@ export function ClaudeTmuxChatTab({
   const running = tabState?.running ?? false;
   const isThinking = tabState?.busy ?? false;
   const busyStartedAt = tabState?.busyStartedAt ?? null;
-  const selectionPrompt = useMemo(
-    () => parseTmuxSelectionPrompt(tuiSnapshot),
-    [tuiSnapshot],
-  );
+  const selectionPrompt = tabState?.observation.prompt ?? null;
   const resumedSession = tabState?.resumed ?? false;
   const hasStarted = startedRef.current || running;
   const showStartScreen = !hasStarted && (!hasInitialPrompt || autoStartAttemptedRef.current);
@@ -463,10 +456,7 @@ export function ClaudeTmuxChatTab({
       pendingElicitations.length >
     0;
   const visibleSelectionPrompt = hasPendingHookCards ? null : selectionPrompt;
-  const agentUsageSummaries = useMemo(
-    () => parseTmuxAgentUsageSummaries(tuiSnapshot),
-    [tuiSnapshot],
-  );
+  const agentUsageSummaries = tabState?.observation.usage ?? [];
   const transcriptMessages = useMemo(
     () =>
       applyTmuxAgentUsageSummaries(
@@ -482,7 +472,6 @@ export function ClaudeTmuxChatTab({
   const hasMessageHistory = displayMessages.length > 0;
   const centerCompose =
     showStartScreen &&
-    !showTui &&
     !hasPendingHookCards &&
     !hasMessageHistory &&
     !running &&
@@ -669,8 +658,10 @@ export function ClaudeTmuxChatTab({
               environmentId: status.environment_id,
               sessionId: status.session_id,
               resumed: status.resumed,
+              busy: status.busy,
+              busyStartedAt: status.busy_started_at,
+              observation: status.observation,
             });
-            setTabBusy(storeKey, status.busy);
             setPlanMode(status.permission_mode === "plan");
             setFastModeEnabled(status.fast_mode);
 
@@ -743,6 +734,7 @@ export function ClaudeTmuxChatTab({
     storeKey,
     setRunning,
     setTabBusy,
+    setObservation,
     addPendingPermission,
     refreshRequestId,
     replaceTranscript,
@@ -826,6 +818,9 @@ export function ClaudeTmuxChatTab({
           return;
         case "fast-mode-changed":
           applyFastMode(ev.fast_mode);
+          return;
+        case "observation":
+          setObservation(storeKey, ev.observation);
           return;
         case "stopped":
           startedRef.current = false;
@@ -927,6 +922,7 @@ export function ClaudeTmuxChatTab({
     addPendingElicitation,
     removePendingElicitation,
     setTabBusy,
+    setObservation,
     clearTabInitialPrompt,
     environmentId,
     applyFastMode,
@@ -978,36 +974,6 @@ export function ClaudeTmuxChatTab({
     launchSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendHydrated, hasInitialPrompt, tabId, running]);
-
-  // 3. Raw TUI snapshot polling. The snapshot powers both the optional debug
-  //    pane and the interactive controls for Claude Code's in-TUI prompts.
-  useEffect(() => {
-    const polling = getClaudeTmuxCapturePolling(showTui, running);
-    if (!polling.enabled) {
-      setTuiSnapshot("");
-      return;
-    }
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const snap = await capturePane(tabId, environmentId);
-        if (!cancelled) setTuiSnapshot(snap);
-      } catch (e) {
-        if (!cancelled) setTuiSnapshot(`(capture failed: ${String(e)})`);
-      }
-    };
-    void tick();
-    // 500ms keeps the visible TUI responsive; when the pane is hidden the
-    // capture only feeds prompt detection, which tolerates a slower 3s poll —
-    // per-second `tmux capture-pane` across every background environment adds
-    // up. The poll itself must stay: in-TUI prompts are still detected while
-    // the pane is hidden, just up to 3s later.
-    const id = setInterval(tick, polling.intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [showTui, running, tabId, environmentId]);
 
   const submitPrompt = async (
     text: string,
@@ -1257,8 +1223,6 @@ export function ClaudeTmuxChatTab({
     setError(null);
     try {
       await sendKeys(tabId, keys, environmentId);
-      const snap = await capturePane(tabId, environmentId);
-      setTuiSnapshot(snap);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -1484,20 +1448,6 @@ export function ClaudeTmuxChatTab({
           </button>
           <button
             type="button"
-            className={cn(
-              "px-1.5 py-0.5 rounded hover:bg-muted/50 transition-colors flex items-center gap-1",
-              showTui
-                ? "text-foreground bg-muted/40"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-            onClick={() => setShowTui((v) => !v)}
-            title="Toggle a live text snapshot of the underlying tmux pane"
-          >
-            <TerminalIcon className="w-3 h-3" />
-            {showTui ? "Hide TUI" : "Show TUI"}
-          </button>
-          <button
-            type="button"
             className="text-muted-foreground hover:text-foreground"
             onClick={handleInterrupt}
             disabled={!running || settingsSwitching}
@@ -1526,18 +1476,6 @@ export function ClaudeTmuxChatTab({
         />
       ) : (
         <div className="@container relative flex min-h-0 flex-1 flex-col overflow-hidden">
-          {/* Raw TUI panel (debug) */}
-          {showTui && (
-            <div className="border-b border-border bg-black p-2 shrink-0">
-              <div className="text-[10px] uppercase tracking-wide text-amber-400 mb-1">
-                Raw tmux pane (refreshing)
-              </div>
-              <pre className="text-[11px] font-mono whitespace-pre-wrap max-h-72 overflow-auto text-zinc-200">
-                {tuiSnapshot || "(empty)"}
-              </pre>
-            </div>
-          )}
-
           <div
             className={cn(
               "flex min-h-0 flex-1 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
@@ -2122,78 +2060,6 @@ function TmuxElicitationCard({
 
 // ─── In-TUI selection prompt controls ───────────────────────────────────────
 
-const SELECTION_PROMPT_HINT =
-  /Enter\s+to\s+(?:select|confirm)|Tab\/Arrow\s+keys\s+to\s+navigate|Esc\s+to\s+cancel/i;
-
-export function parseTmuxSelectionPrompt(
-  snapshot: string,
-): TmuxSelectionPrompt | null {
-  if (!SELECTION_PROMPT_HINT.test(snapshot)) return null;
-
-  const lines = snapshot.split(/\r?\n/).map((line) => stripAnsi(line).trimEnd());
-  const hintIndex = findLastIndex(lines, (line) =>
-    SELECTION_PROMPT_HINT.test(line),
-  );
-  if (hintIndex < 0) return null;
-
-  let blockEnd = hintIndex;
-  while (blockEnd > 0 && lines[blockEnd - 1]?.trim() === "") {
-    blockEnd -= 1;
-  }
-
-  let blockStart = blockEnd;
-  let sawOption = false;
-  while (blockStart > 0) {
-    const line = lines[blockStart - 1] ?? "";
-    if (parseTmuxSelectionOptionLine(line)) {
-      sawOption = true;
-      blockStart -= 1;
-      continue;
-    }
-    if (sawOption && /^\s+\S/.test(line)) {
-      blockStart -= 1;
-      continue;
-    }
-    break;
-  }
-
-  const options: TmuxSelectionOption[] = [];
-  let selectedOptionIndex = -1;
-
-  for (const line of lines.slice(blockStart, blockEnd)) {
-    const parsed = parseTmuxSelectionOptionLine(line);
-    if (!parsed) {
-      const continuation = line.trim();
-      const previous = options[options.length - 1];
-      if (continuation && previous) {
-        previous.label = `${previous.label} ${continuation}`;
-      }
-      continue;
-    }
-
-    const { prefix, number, label } = parsed;
-
-    const selected = /[>›❯▸➜→]/.test(prefix);
-    const optionIndex = options.length;
-    if (selected) selectedOptionIndex = optionIndex;
-    options.push({ number, label, optionIndex, selected });
-  }
-
-  if (options.length === 0) return null;
-  const hintLine = lines[hintIndex] ?? "";
-  const hasNavigationHint =
-    /(?:Tab\/Arrow|Arrow\s+keys?|[↑↓].*navigate|navigate)/i.test(hintLine);
-  return {
-    question: parseTmuxSelectionQuestion(lines, blockStart),
-    options,
-    selectedOptionIndex: selectedOptionIndex >= 0 ? selectedOptionIndex : 0,
-    inputMode:
-      /Enter\s+to\s+confirm/i.test(hintLine) && !hasNavigationHint
-        ? "number"
-        : "navigate",
-  };
-}
-
 function selectionPromptNavigationKeys(
   prompt: TmuxSelectionPrompt,
   optionIndex: number,
@@ -2216,125 +2082,6 @@ function selectionPromptSubmitKeys(
     return ["Enter"];
   }
   return selectionPromptNavigationKeys(prompt, optionIndex);
-}
-
-function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
-  for (let i = items.length - 1; i >= 0; i--) {
-    if (predicate(items[i]!)) return i;
-  }
-  return -1;
-}
-
-function parseTmuxSelectionOptionLine(
-  line: string,
-): { prefix: string; number: number; label: string } | null {
-  const match = line.match(/^(\s*(?:[>›❯▸➜→]\s*)?)(\d+)\.\s+(.+?)\s*$/);
-  if (!match) return null;
-
-  const prefix = match[1] ?? "";
-  const number = Number.parseInt(match[2] ?? "", 10);
-  const label = (match[3] ?? "").trim();
-  if (!Number.isFinite(number) || !label) return null;
-
-  return { prefix, number, label };
-}
-
-function parseTmuxSelectionQuestion(
-  lines: string[],
-  optionBlockStart: number,
-): string | null {
-  let questionEnd = optionBlockStart;
-  while (questionEnd > 0 && lines[questionEnd - 1]?.trim() === "") {
-    questionEnd -= 1;
-  }
-
-  let questionStart = questionEnd;
-  while (questionStart > 0 && lines[questionStart - 1]?.trim() !== "") {
-    questionStart -= 1;
-  }
-
-  if (isBareContextPointer(lines.slice(questionStart, questionEnd))) {
-    questionStart = expandTmuxSelectionQuestionStart(lines, questionStart);
-  }
-  while (
-    questionStart < questionEnd &&
-    isTmuxSelectionPromptBoundaryLine(lines[questionStart]?.trim() ?? "")
-  ) {
-    questionStart += 1;
-  }
-
-  const question = lines
-    .slice(questionStart, questionEnd)
-    .map((line) => line.trim())
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  return question.length > 0 ? question : null;
-}
-
-function isBareContextPointer(lines: string[]): boolean {
-  const text = lines.map((line) => line.trim()).filter(Boolean).join(" ");
-  return /^https?:\/\/\S+$/i.test(text);
-}
-
-function expandTmuxSelectionQuestionStart(
-  lines: string[],
-  questionStart: number,
-): number {
-  let expandedStart = questionStart;
-  let cursor = questionStart;
-
-  while (cursor > 0) {
-    let previousEnd = cursor;
-    while (previousEnd > 0 && lines[previousEnd - 1]?.trim() === "") {
-      previousEnd -= 1;
-    }
-    if (previousEnd <= 0) break;
-
-    let previousStart = previousEnd;
-    while (previousStart > 0 && lines[previousStart - 1]?.trim() !== "") {
-      previousStart -= 1;
-    }
-
-    const rawParagraph = lines
-      .slice(previousStart, previousEnd)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    const boundaryIndex = findLastIndex(
-      rawParagraph,
-      isTmuxSelectionPromptBoundaryLine,
-    );
-    const paragraph =
-      boundaryIndex >= 0 ? rawParagraph.slice(boundaryIndex + 1) : rawParagraph;
-    if (!isTmuxSelectionPromptContextParagraph(paragraph)) break;
-
-    expandedStart =
-      boundaryIndex >= 0 ? previousStart + boundaryIndex + 1 : previousStart;
-    cursor = expandedStart;
-    if (boundaryIndex >= 0) break;
-  }
-
-  return expandedStart;
-}
-
-function isTmuxSelectionPromptContextParagraph(lines: string[]): boolean {
-  if (lines.length === 0) return false;
-  const text = lines.join(" ");
-  if (lines.every(isTmuxSelectionPromptBoundaryLine)) return false;
-  if (/^\[[^\]]+\]/.test(text)) return false;
-  if (/^[^@\s]+@[^$#]+[$#]\s*$/.test(text)) return false;
-  if (lines.every((line) => /^\d+\.\s+/.test(line))) return false;
-  return true;
-}
-
-function isTmuxSelectionPromptBoundaryLine(line: string): boolean {
-  return /^-{6,}$/.test(line);
-}
-
-function stripAnsi(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
 }
 
 function pendingSnapshotFromHooks(hooks: TmuxPendingHook[]) {

@@ -25,6 +25,8 @@ export interface NativeSessionState<TMessage> {
   sessionId: string;
   messages: TMessage[];
   isLoading: boolean;
+  /** Bridge-issued generation for the active turn (Codex; absent elsewhere). */
+  turnId?: string;
   loadingStartedAt?: number;
   lastCompletedElapsedSeconds?: number | null;
   error?: string;
@@ -89,6 +91,8 @@ export interface NativeChatStoreSlice<TClient, TMessage, TAttachment, TQueued> {
     isLoading: boolean,
     /** Backend-authoritative epoch milliseconds for the active turn. */
     startedAt?: number,
+    /** Bridge-issued generation token for discard-late-response guards. */
+    turnId?: string,
   ) => void;
   setSessionError: (sessionKey: string, error: string | undefined) => void;
   setSessionTitle: (sessionKey: string, title: string | undefined) => void;
@@ -300,15 +304,19 @@ export function createNativeChatStoreSlice<
         return { sessions: next };
       }),
 
-    setSessionLoading: (sessionKey, isLoading, startedAt) =>
+    setSessionLoading: (sessionKey, isLoading, startedAt, turnId) =>
       set((state) => {
         const session = state.sessions.get(sessionKey);
         if (!session) return state;
         const next = new Map(state.sessions);
         const revisions = new Map(state.sessionLoadingRevisions);
+        const timed = updateTimedSessionLoading(session, isLoading, Date.now(), startedAt);
         next.set(
           sessionKey,
-          updateTimedSessionLoading(session, isLoading, Date.now(), startedAt),
+          {
+            ...timed,
+            turnId: isLoading ? turnId ?? session.turnId : undefined,
+          },
         );
         revisions.set(
           sessionKey,

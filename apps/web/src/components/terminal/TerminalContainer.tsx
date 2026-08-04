@@ -29,7 +29,6 @@ import {
 import { FilePlus2, Play, Terminal as TerminalIcon } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { markSetupScriptsComplete, preserveCompletedSetupState, shouldAutoResolveSetupCommands } from "@/lib/setup-commands";
 import * as backend from "@/lib/backend";
 import {
   buildInitialPromptWithAttachmentReferences,
@@ -443,120 +442,20 @@ export function TerminalContainer({
   const claudeMode = resolvedClaudeConfig.mode;
   const claudeNativeBackend = resolvedClaudeConfig.nativeBackend;
 
-  // Get workspace ready state - needed early for native OpenCode launch
-  const setWorkspaceReady = useEnvironmentStore((state) => state.setWorkspaceReady);
-  const consumePendingSetupCommands = useEnvironmentStore((state) => state.consumePendingSetupCommands);
-  const setSetupCommandsResolved = useEnvironmentStore((state) => state.setSetupCommandsResolved);
-  const setSetupScriptsRunning = useEnvironmentStore((state) => state.setSetupScriptsRunning);
-  const setupCommandsResolved = useEnvironmentStore(
-    (state) => state.setupCommandsResolved.has(environmentId)
-  );
-  const setupScriptsRunning = useEnvironmentStore(
-    (state) => state.setupScriptsRunning.has(environmentId)
-  );
-  const workspaceReady = useEnvironmentStore(
-    (state) => state.workspaceReadyEnvironments.has(environmentId)
-  );
-  const hasPendingSetupCommands = useEnvironmentStore(
-    (state) => state.pendingSetupCommands.has(environmentId)
-  );
-
   // Check if this is a local environment (no container)
   const environment = useEnvironmentStore(
     (state) => state.environments.find((env) => env.id === environmentId)
   );
   const isLocalEnvironment = environment?.environmentType === "local";
+  const setupPhase = environment?.setupPhase ?? "pending";
+  const backendSetupRunning = setupPhase === "running";
+  const setupReady = setupPhase === "ready";
   const createScriptPrompt = createOrkestratorScriptPrompt(isLocalEnvironment);
   // For local environments, worktreePath must be set before terminal can work
   const worktreePath = environment?.worktreePath;
   // Local environment is ready when it has a worktree path (created during start_environment)
   const isLocalEnvironmentReady = isLocalEnvironment && !!worktreePath;
   const isEnvironmentRunning = isContainerRunning || isLocalEnvironmentReady;
-
-  const startInactiveBackendSetup = useCallback(() => {
-    if (inactiveBackendSetupInFlightRef.current) {
-      return;
-    }
-
-    inactiveBackendSetupInFlightRef.current = true;
-    console.log("[TerminalContainer] Ensuring environment setup is running in backend:", environmentId);
-    setWorkspaceReady(environmentId, false);
-    void backend.ensureEnvironmentSetup(environmentId)
-      .then((result) => {
-        if (!result) {
-          console.warn("[setup-terminal] ensureEnvironmentSetup returned no result", {
-            environmentId,
-          });
-          rerunSetupFetchFailedRef.current = true;
-          const store = useEnvironmentStore.getState();
-          store.setSetupCommandsResolved(environmentId, true);
-          store.setSetupScriptsRunning(environmentId, false);
-          return;
-        }
-        console.info("[setup-terminal] ensureEnvironmentSetup result", {
-          environmentId,
-          setupStarted: result.setupStarted,
-          setupSessionId: result.setupSessionId ?? null,
-          setupScriptsComplete: result.environment.setupScriptsComplete ?? false,
-          environmentType: result.environment.environmentType,
-          containerId: result.environment.containerId ?? null,
-        });
-        const store = useEnvironmentStore.getState();
-        const safeEnvironment = preserveCompletedSetupState(environmentId, result.environment);
-        store.updateEnvironment(environmentId, safeEnvironment);
-        if (result.setupSessionId) {
-          const key = createSessionKey(safeEnvironment.containerId ?? null, "default", environmentId);
-          const terminalStore = useTerminalSessionStore.getState();
-          const existing = terminalStore.sessions.get(key);
-          console.info("[setup-terminal] binding setup session from ensure result", {
-            environmentId,
-            key,
-            previousSessionId: existing?.sessionId ?? null,
-            nextSessionId: result.setupSessionId,
-          });
-          terminalStore.setSession(key, {
-            ...existing,
-            sessionId: result.setupSessionId,
-          });
-          setSetupSessionBindNonce((value) => value + 1);
-        }
-        const latestStore = useEnvironmentStore.getState();
-        const setupComplete =
-          safeEnvironment.setupScriptsComplete === true ||
-          latestStore.getEnvironmentById(environmentId)?.setupScriptsComplete === true;
-        const completionEventAlreadyHandled =
-          result.setupStarted &&
-          latestStore.isSetupCommandsResolved(environmentId) &&
-          !latestStore.isSetupScriptsRunning(environmentId);
-        if (setupComplete || latestStore.isWorkspaceReady(environmentId)) {
-          latestStore.setSetupScriptsRunning(environmentId, false);
-          latestStore.setWorkspaceReady(environmentId, true);
-        } else if (result.setupStarted && !completionEventAlreadyHandled) {
-          latestStore.setSetupScriptsRunning(environmentId, true);
-          latestStore.setWorkspaceReady(environmentId, false);
-        } else {
-          // Reached when either no setup ran (!setupStarted) or a completion
-          // event was already handled while we awaited
-          // (completionEventAlreadyHandled). Both mean setup is effectively
-          // done, so mark the workspace ready. Forcing readiness to false here
-          // (the old `!result.setupStarted`) stranded a just-completed env in a
-          // "not running, not ready" state.
-          latestStore.setSetupScriptsRunning(environmentId, false);
-          latestStore.setWorkspaceReady(environmentId, true);
-        }
-        latestStore.setSetupCommandsResolved(environmentId, true);
-      })
-      .catch((error) => {
-        console.error("[TerminalContainer] Backend setup failed:", error);
-        rerunSetupFetchFailedRef.current = true;
-        const store = useEnvironmentStore.getState();
-        store.setSetupCommandsResolved(environmentId, true);
-        store.setSetupScriptsRunning(environmentId, false);
-      })
-      .finally(() => {
-        inactiveBackendSetupInFlightRef.current = false;
-      });
-  }, [environmentId, setSetupCommandsResolved, setSetupScriptsRunning, setWorkspaceReady]);
 
   // Pane layout store - use selectors for reactive state
   const hydrationStatus = usePaneLayoutStore((state) => state.hydration.get(environmentId));
@@ -618,10 +517,7 @@ export function TerminalContainer({
   // Track the initial prompt to pass to the first tab
   const initialPromptRef = useRef<string | undefined>(undefined);
   const previousContainerIdRef = useRef<string | null>(null);
-  const rerunSetupFetchFailedRef = useRef(false);
   const isSavingInitialPromptAttachmentsRef = useRef(false);
-  const setupPlanFetchInFlightRef = useRef(false);
-  const inactiveBackendSetupInFlightRef = useRef(false);
   const setupSessionBindInFlightRef = useRef(new Set<string>());
   const setupSessionBindSettledTabsRef = useRef(new Set<string>());
   const setupSessionBindAttemptsRef = useRef(new Map<string, number>());
@@ -760,29 +656,27 @@ export function TerminalContainer({
     console.info("[setup-terminal] found unbound backend-managed setup tabs; rebinding", {
       environmentId,
       tabIds: unboundSetupTabs.map((tab) => tab.id),
-      setupScriptsRunning,
-      setupScriptsComplete: environment?.setupScriptsComplete ?? false,
+      setupPhase,
       tabCount: setupTabs.length,
     });
     for (const tab of unboundSetupTabs) void bindBackendSetupSession(tab.id);
   }, [
     bindBackendSetupSession,
     currentEnvState,
-    environment?.setupScriptsComplete,
     environmentId,
     hasBoundSetupSession,
     // Re-runs this effect after a failed lookup's backoff elapses. Nothing else
     // changes when a lookup rejects, so without it a transient network failure
     // would strand the tab unbound forever.
     setupSessionBindRetryNonce,
-    setupScriptsRunning,
+    setupPhase,
   ]);
 
   useEffect(() => {
     if (
       !currentEnvState
       || environment?.pendingAgentLaunch
-      || setupScriptsRunning
+      || backendSetupRunning
     ) {
       return;
     }
@@ -820,11 +714,10 @@ export function TerminalContainer({
   }, [
     currentEnvState,
     environment?.pendingAgentLaunch,
-    environment?.setupScriptsComplete,
     environmentId,
     removeTab,
     setupSessionBindNonce,
-    setupScriptsRunning,
+    backendSetupRunning,
     setupSessionKeyForTab,
   ]);
 
@@ -922,10 +815,7 @@ export function TerminalContainer({
             : backend.setEnvironmentPendingAgentLaunch(environmentId, false)
         )
         .then((updatedEnvironment) => {
-          useEnvironmentStore.getState().updateEnvironment(
-            environmentId,
-            preserveCompletedSetupState(environmentId, updatedEnvironment),
-          );
+          useEnvironmentStore.getState().updateEnvironment(environmentId, updatedEnvironment);
         })
         .catch((error) => {
           console.warn(
@@ -1034,90 +924,6 @@ export function TerminalContainer({
     setPendingNativeLaunch,
   ]);
 
-  // Decide setup-resolution for a running local environment on first activation
-  // this app session. Handles three cases:
-  //   1. Setup was marked complete in a prior session -> auto-resolve, no re-run.
-  //   2. Setup was incomplete in a prior session -> fetch setup commands and
-  //      re-populate pendingSetupCommands so the init effect runs them. Guarded
-  //      by sessionActivated so re-selecting the env within the same session
-  //      does not re-trigger.
-  //   3. No pending commands and not first activation -> resolve (the normal
-  //      start-env flow already covered setup within this session).
-  useEffect(() => {
-    const store = useEnvironmentStore.getState();
-
-    if (
-      !shouldAutoResolveSetupCommands({
-        isLocalEnvironment,
-        isLocalEnvironmentReady,
-        setupCommandsResolved,
-        hasPendingCommands: hasPendingSetupCommands,
-      })
-    ) {
-      return;
-    }
-
-    const env = store.getEnvironmentById(environmentId);
-    const firstActivation = store.markSessionActivated(environmentId);
-    rerunSetupFetchFailedRef.current = false;
-
-    if (!firstActivation || env?.setupScriptsComplete) {
-      console.log(
-        "[TerminalContainer] Auto-resolving setup commands for local environment:",
-        environmentId,
-        { firstActivation, persistedComplete: env?.setupScriptsComplete },
-      );
-      setSetupCommandsResolved(environmentId, true);
-      return;
-    }
-
-    console.log(
-      "[TerminalContainer] Requesting backend setup for previously-incomplete local environment:",
-      environmentId,
-    );
-    startInactiveBackendSetup();
-  }, [
-    isLocalEnvironment,
-    isLocalEnvironmentReady,
-    setupCommandsResolved,
-    hasPendingSetupCommands,
-    environmentId,
-    setSetupCommandsResolved,
-    startInactiveBackendSetup,
-  ]);
-
-  // Running container environments can be rehydrated after app reload without
-  // going through `startEnvironment` in this React session. Ask Electron to
-  // ensure setup is running instead of fetching commands for React to execute.
-  useEffect(() => {
-    if (
-      isLocalEnvironment ||
-      !isEnvironmentRunning ||
-      setupCommandsResolved ||
-      hasPendingSetupCommands ||
-      environment?.setupScriptsComplete ||
-      setupPlanFetchInFlightRef.current
-    ) {
-      return;
-    }
-
-    setupPlanFetchInFlightRef.current = true;
-    console.log(
-      "[TerminalContainer] Requesting backend setup for container environment:",
-      environmentId,
-    );
-    startInactiveBackendSetup();
-    setupPlanFetchInFlightRef.current = false;
-  }, [
-    environment?.setupScriptsComplete,
-    environmentId,
-    hasPendingSetupCommands,
-    isEnvironmentRunning,
-    isLocalEnvironment,
-    setupCommandsResolved,
-    startInactiveBackendSetup,
-  ]);
-
   // DnD sensors
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -1130,18 +936,10 @@ export function TerminalContainer({
     })
   );
 
-  // Initialize pane layout when container starts running (or local environment starts)
-  // For local environments, wait for setupCommandsResolved to know if there are setup commands
+  // Initialize pane layout from the backend-owned setup phase.
   useEffect(() => {
     if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return;
-
-    // Wait until the backend setup command plan has been resolved. This is
-    // required for containers too because running environments can rehydrate
-    // without going through startEnvironment in this React session.
-    if (!setupCommandsResolved && !environment?.setupScriptsComplete) {
-      console.log("[TerminalContainer] Environment waiting for setup commands to be resolved");
-      return;
-    }
+    if (setupPhase === "pending" || setupPhase === "failed") return;
 
     // Check if we need to initialize (no tabs yet for THIS environment)
     const currentTabs = currentEnvState
@@ -1154,9 +952,6 @@ export function TerminalContainer({
     // default terminal, and initialize() — which records the containerId the
     // terminal session keys derive from — would never run.
     const seededTabs = currentTabs.filter((tab) => tab.type !== "claude-build");
-    const backendSetupRunning =
-      setupScriptsRunning && !environment?.setupScriptsComplete;
-
     // Hydration is authoritative even when another surface inserted a tab
     // before this container mounted (notably a backend-created build tab).
     // finishHydration reconciles tabs added during the request with the
@@ -1267,9 +1062,7 @@ export function TerminalContainer({
       console.info("[setup-terminal] initial terminal layout decision", {
         environmentId,
         backendSetupRunning,
-        setupScriptsRunning,
-        setupScriptsComplete: environment?.setupScriptsComplete ?? false,
-        setupCommandsResolved,
+        setupPhase,
         hasDefaultSetupSession: hasBoundSetupSession("default"),
         isLocalEnvironment,
         worktreePath: worktreePath ?? null,
@@ -1330,10 +1123,7 @@ export function TerminalContainer({
                     promptWithReferences,
                     [],
                   );
-                  useEnvironmentStore.getState().updateEnvironment(
-                    environmentId,
-                    preserveCompletedSetupState(environmentId, updatedEnvironment),
-                  );
+                  useEnvironmentStore.getState().updateEnvironment(environmentId, updatedEnvironment);
                 } catch (error) {
                   console.warn(
                     "[TerminalContainer] Failed to persist initial prompt attachment references:",
@@ -1396,7 +1186,6 @@ export function TerminalContainer({
           tabId: "default",
           hasDefaultSetupSession: hasBoundSetupSession("default"),
         });
-        setWorkspaceReady(environmentId, false);
         if (launchAgent && initialTabType !== "plain") {
           setPendingNativeLaunch(environmentId, {
             containerId: isLocalEnvironment ? null : containerId,
@@ -1420,10 +1209,6 @@ export function TerminalContainer({
         return;
       }
 
-      // Setup commands are supplied by the backend start/get-setup-commands flow.
-      const setupCommands = consumePendingSetupCommands(environmentId);
-      const hasSetupCommands = setupCommands && setupCommands.length > 0;
-
       console.log("[TerminalContainer] Initial tab decision:", {
         agentType: claudeOptions?.agentType,
         launchAgent,
@@ -1434,246 +1219,56 @@ export function TerminalContainer({
         useNativeClaude,
         useNativeCodex,
         isLocalEnvironment,
-        hasSetupCommands,
-        setupCommandsResolved,
+        setupPhase,
       });
-
-      // Handle local environments
-      if (isLocalEnvironment) {
-        if (hasSetupCommands && launchAgent) {
-          // Local + Claude ON + setup commands: create setup tab first, then agent tab (active)
-          console.log("[TerminalContainer] Local environment with setup commands and agent - creating setup tab then agent tab");
-          setSetupScriptsRunning(environmentId, true);
-
-          // Create setup tab first
-          const setupTab: TabInfo = {
-            id: createUniqueTabId("setup"),
-            type: "plain",
-            initialCommands: setupCommands,
-            isSetupTab: true,
-          };
-          addTab(initialPaneId, setupTab, environmentId);
-
-          // Then create agent tab (which becomes active)
-          if (useNativeClaude) {
-            const agentTab = createClaudeNativeLikeTab({
-              id: initialTabId,
-              nativeBackend: claudeNativeBackend,
-              environmentId,
-              isLocal: true,
-              initialPrompt: pendingInitialPrompt,
-              initialAgentModel,
-              initialReasoningEffort,
-            });
-            addTab(initialPaneId, agentTab, environmentId);
-          } else if (useNativeCodex) {
-            const agentTab: TabInfo = {
-              id: initialTabId,
-              type: "codex-native",
-              codexNativeData: { containerId: undefined, environmentId, isLocal: true },
-              initialPrompt: pendingInitialPrompt,
-              initialAgentModel,
-              initialReasoningEffort,
-            };
-            addTab(initialPaneId, agentTab, environmentId);
-          } else if (useNativeOpenCode) {
-            const agentTab: TabInfo = {
-              id: initialTabId,
-              type: "opencode-native",
-              openCodeNativeData: { containerId: undefined, environmentId, isLocal: true },
-              initialPrompt: pendingInitialPrompt,
-              initialAgentModel,
-              initialReasoningEffort,
-            };
-            addTab(initialPaneId, agentTab, environmentId);
-          } else {
-            // Terminal mode agent (claude or opencode)
-            const agentTab: TabInfo = {
-              id: initialTabId,
-              type: initialTabType,
-              initialPrompt: pendingInitialPrompt,
-              initialAgentModel,
-              initialReasoningEffort,
-            };
-            addTab(initialPaneId, agentTab, environmentId);
-          }
-        } else if (hasSetupCommands && !launchAgent) {
-          // Local + Claude OFF + setup commands: single terminal with setup commands
-          console.log("[TerminalContainer] Local environment with setup commands, no agent - creating terminal with setup commands");
-          setSetupScriptsRunning(environmentId, true);
-          const initialTab: TabInfo = {
-            id: "default",
-            type: "plain",
-            initialCommands: setupCommands,
-            isSetupTab: true,
-          };
-          addTab(initialPaneId, initialTab, environmentId);
-        } else if (useNativeOpenCode || useNativeClaude || useNativeCodex) {
-          // Local + native mode + no setup commands: directly create native tab.
-          // No setup to run means setup is trivially "complete" for this env.
-          if (!rerunSetupFetchFailedRef.current) {
-            markSetupScriptsComplete(environmentId);
-          }
-          console.log(
-            "[TerminalContainer] Local environment - directly creating native",
-            useNativeClaude ? "Claude" : useNativeCodex ? "Codex" : "OpenCode",
-            "tab",
-          );
-          if (useNativeClaude) {
-            const initialTab = createClaudeNativeLikeTab({
-              id: initialTabId,
-              nativeBackend: claudeNativeBackend,
-              environmentId,
-              isLocal: true,
-              initialPrompt: pendingInitialPrompt,
-              initialAgentModel,
-              initialReasoningEffort,
-            });
-            addTab(initialPaneId, initialTab, environmentId);
-          } else if (useNativeCodex) {
-            const initialTab: TabInfo = {
-              id: initialTabId,
-              type: "codex-native",
-              codexNativeData: { containerId: undefined, environmentId, isLocal: true },
-              initialPrompt: pendingInitialPrompt,
-              initialAgentModel,
-              initialReasoningEffort,
-            };
-            addTab(initialPaneId, initialTab, environmentId);
-          } else {
-            const initialTab: TabInfo = {
-              id: initialTabId,
-              type: "opencode-native",
-              openCodeNativeData: { containerId: undefined, environmentId, isLocal: true },
-              initialPrompt: pendingInitialPrompt,
-              initialAgentModel,
-              initialReasoningEffort,
-            };
-            addTab(initialPaneId, initialTab, environmentId);
-          }
-        } else {
-          // Local + terminal mode + no setup commands: create terminal tab.
-          // No setup to run means setup is trivially "complete" for this env.
-          if (!rerunSetupFetchFailedRef.current) {
-            markSetupScriptsComplete(environmentId);
-          }
-          console.log("[TerminalContainer] Local environment - creating terminal tab with initial type:", initialTabType);
-          const initialTab: TabInfo = {
-            id: initialTabId,
-            type: initialTabType,
-            initialPrompt: pendingInitialPrompt,
-            initialAgentModel,
-            initialReasoningEffort,
-          };
-          addTab(initialPaneId, initialTab, environmentId);
-        }
-      } else if (!hasSetupCommands && environment?.setupScriptsComplete) {
-        setWorkspaceReady(environmentId, true);
-        if (useNativeClaude) {
-          const initialTab = createClaudeNativeLikeTab({
-            id: initialTabId,
-            nativeBackend: claudeNativeBackend,
-            containerId: containerId ?? undefined,
+      if (useNativeClaude) {
+        addTab(initialPaneId, createClaudeNativeLikeTab({
+          id: initialTabId,
+          nativeBackend: claudeNativeBackend,
+          containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
+          environmentId,
+          isLocal: isLocalEnvironment,
+          initialPrompt: pendingInitialPrompt,
+          initialAgentModel,
+          initialReasoningEffort,
+        }), environmentId);
+      } else if (useNativeCodex) {
+        addTab(initialPaneId, {
+          id: initialTabId,
+          type: "codex-native",
+          codexNativeData: {
+            containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
             environmentId,
-            isLocal: false,
-            initialPrompt: pendingInitialPrompt,
-            initialAgentModel,
-            initialReasoningEffort,
-          });
-          addTab(initialPaneId, initialTab, environmentId);
-        } else if (useNativeCodex) {
-          const initialTab: TabInfo = {
-            id: initialTabId,
-            type: "codex-native",
-            codexNativeData: { containerId: containerId ?? undefined, environmentId, isLocal: false },
-            initialPrompt: pendingInitialPrompt,
-            initialAgentModel,
-            initialReasoningEffort,
-          };
-          addTab(initialPaneId, initialTab, environmentId);
-        } else if (useNativeOpenCode) {
-          const initialTab: TabInfo = {
-            id: initialTabId,
-            type: "opencode-native",
-            openCodeNativeData: { containerId: containerId ?? undefined, environmentId, isLocal: false },
-            initialPrompt: pendingInitialPrompt,
-            initialAgentModel,
-            initialReasoningEffort,
-          };
-          addTab(initialPaneId, initialTab, environmentId);
-        } else {
-          const initialTab: TabInfo = {
-            id: initialTabId,
-            type: initialTabType,
-            initialPrompt: pendingInitialPrompt,
-            initialAgentModel,
-            initialReasoningEffort,
-          };
-          addTab(initialPaneId, initialTab, environmentId);
-        }
-      } else if (!hasSetupCommands && rerunSetupFetchFailedRef.current) {
-        setSetupScriptsRunning(environmentId, false);
-        const initialTab: TabInfo = {
-          id: "default",
-          type: "plain",
+            isLocal: isLocalEnvironment,
+          },
           initialPrompt: pendingInitialPrompt,
-        };
-        addTab(initialPaneId, initialTab, environmentId);
-      } else if (useNativeOpenCode || useNativeClaude || useNativeCodex) {
-        // Container + native mode: start with plain terminal for setup scripts
-        setWorkspaceReady(environmentId, false);
-        setSetupScriptsRunning(environmentId, true);
-        setPendingNativeLaunch(environmentId, {
-          containerId,
-          environmentId,
+          initialAgentModel,
+          initialReasoningEffort,
+        }, environmentId);
+      } else if (useNativeOpenCode) {
+        addTab(initialPaneId, {
+          id: initialTabId,
+          type: "opencode-native",
+          openCodeNativeData: {
+            containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
+            environmentId,
+            isLocal: isLocalEnvironment,
+          },
           initialPrompt: pendingInitialPrompt,
-          targetPaneId: initialPaneId,
-          agentType: useNativeClaude ? "claude" : useNativeCodex ? "codex" : "opencode",
-          launchMode: "native",
-          claudeNativeBackend: useNativeClaude ? claudeNativeBackend : undefined,
-          model: initialAgentModel,
-          reasoningEffort: initialReasoningEffort,
-        });
-        console.log(
-          "[TerminalContainer] Pending native",
-          useNativeClaude ? "Claude" : useNativeCodex ? "Codex" : "OpenCode",
-          "launch stored for environment:",
-          environmentId,
-        );
-        const initialTab: TabInfo = {
-          id: "default",
-          type: "plain",
-          initialCommands: setupCommands ?? [],
-          isSetupTab: true,
-        };
-        addTab(initialPaneId, initialTab, environmentId);
+          initialAgentModel,
+          initialReasoningEffort,
+        }, environmentId);
       } else {
-        // Container + terminal mode: run workspace setup before opening an agent tab.
-        setWorkspaceReady(environmentId, false);
-        setSetupScriptsRunning(environmentId, true);
-
-        if (initialTabType !== "plain") {
-          setPendingNativeLaunch(environmentId, {
-            containerId,
-            environmentId,
-            initialPrompt: pendingInitialPrompt,
-            targetPaneId: initialPaneId,
-            agentType: initialTabType,
-            launchMode: "terminal",
-            model: initialAgentModel,
-            reasoningEffort: initialReasoningEffort,
-          });
-        }
-        const initialTab: TabInfo = {
-          id: "default",
-          type: "plain",
-          initialCommands: setupCommands ?? [],
-          isSetupTab: true,
-        };
-        addTab(initialPaneId, initialTab, environmentId);
+        addTab(initialPaneId, {
+          id: initialTabId,
+          type: initialTabType,
+          initialPrompt: pendingInitialPrompt,
+          initialAgentModel,
+          initialReasoningEffort,
+        }, environmentId);
       }
     }
-  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupCommandsResolved, setupScriptsRunning, environment?.setupScriptsComplete, claudeOptions, initialize, addTab, environmentId, currentEnvState, hydrationStatus, beginHydration, finishHydration, opencodeMode, claudeMode, claudeNativeBackend, codexMode, setWorkspaceReady, consumePendingSetupCommands, setSetupScriptsRunning, setPendingNativeLaunch, setOptions, worktreePath, startInactiveBackendSetup, hasBoundSetupSession, bindBackendSetupSession, setupSessionBindNonce]);
+  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupPhase, backendSetupRunning, claudeOptions, initialize, addTab, environmentId, currentEnvState, hydrationStatus, beginHydration, finishHydration, opencodeMode, claudeMode, claudeNativeBackend, codexMode, setPendingNativeLaunch, setOptions, worktreePath, hasBoundSetupSession, bindBackendSetupSession, setupSessionBindNonce]);
 
   // Reset pane layout when container changes within the same environment
   // (e.g., container was stopped and restarted with a new ID)
@@ -1687,26 +1282,24 @@ export function TerminalContainer({
     previousContainerIdRef.current = containerId;
   }, [containerId, environmentId, reset, clearPendingNativeLaunch]);
 
-  // Reset pane layout and workspace ready state when container stops
+  // Reset pane layout when the container stops.
   // This clears all terminals and tabs since their backend sessions are destroyed
   useEffect(() => {
     if (!isContainerRunning && containerId) {
       console.debug("[TerminalContainer] Container stopped, resetting panes for environment:", environmentId);
-      setWorkspaceReady(environmentId, false);
       reset(environmentId);
       // Clear pending native OpenCode launch on container stop
       clearPendingNativeLaunch(environmentId);
     }
-  }, [isContainerRunning, environmentId, containerId, setWorkspaceReady, reset, clearPendingNativeLaunch]);
+  }, [isContainerRunning, environmentId, containerId, reset, clearPendingNativeLaunch]);
 
   // Launch native tab after workspace setup completes
   useEffect(() => {
-    const setupComplete = environment?.setupScriptsComplete === true;
     const canLaunchPendingNative =
-      (workspaceReady || setupComplete)
+      setupReady
       && pendingNativeLaunch
       && (containerId || isLocalEnvironmentReady);
-    console.log("[TerminalContainer] Native tab effect check - workspaceReady:", workspaceReady, "setupComplete:", setupComplete, "hasPending:", !!pendingNativeLaunch, "containerId:", !!containerId, "isLocalEnvironmentReady:", isLocalEnvironmentReady);
+    console.log("[TerminalContainer] Native tab effect check - setupPhase:", setupPhase, "hasPending:", !!pendingNativeLaunch, "containerId:", !!containerId, "isLocalEnvironmentReady:", isLocalEnvironmentReady);
 
     // Simple logic: when workspace is ready and we have a pending launch, create the tab
     // For local environments, containerId is null so we check isLocalEnvironmentReady (worktreePath exists)
@@ -1720,13 +1313,9 @@ export function TerminalContainer({
         : (pending.containerId === containerId && pending.environmentId === environmentId);
 
       if (containerMatch) {
-        if (setupComplete && !workspaceReady) {
-          setWorkspaceReady(environmentId, true);
-        }
         const isClaudeNative = pending.agentType === "claude";
         const isCodexNative = pending.agentType === "codex";
         const launchMode = pending.launchMode ?? "native";
-        setSetupScriptsRunning(environmentId, false);
         console.log(
           "[TerminalContainer] Workspace ready, launching",
           launchMode,
@@ -1816,18 +1405,16 @@ export function TerminalContainer({
       }
     }
   }, [
-    workspaceReady,
+    setupReady,
+    setupPhase,
     pendingNativeLaunch,
     containerId,
     environmentId,
-    environment?.setupScriptsComplete,
     isLocalEnvironment,
     isLocalEnvironmentReady,
     addTab,
     clearPendingNativeLaunch,
     clearOptions,
-    setSetupScriptsRunning,
-    setWorkspaceReady,
     claudeNativeBackend,
   ]);
 

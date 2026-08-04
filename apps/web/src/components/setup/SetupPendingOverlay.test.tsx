@@ -30,15 +30,10 @@ describe("SetupPendingOverlay", () => {
 
   beforeEach(() => {
     useEnvironmentStore.setState({
-      environments: [createEnvironment()],
+      environments: [createEnvironment({ setupPhase: "running" })],
       isLoading: false,
       error: null,
-      workspaceReadyEnvironments: new Set<string>(),
       deletingEnvironments: new Set<string>(),
-      pendingSetupCommands: new Map<string, string[]>(),
-      setupCommandsResolved: new Set<string>(),
-      setupScriptsRunning: new Set<string>(["env-1"]),
-      sessionActivated: new Set<string>(),
     });
   });
 
@@ -53,16 +48,9 @@ describe("SetupPendingOverlay", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /skip setup wait/i }));
 
-    // Gates are untouched until the user confirms.
-    let state = useEnvironmentStore.getState();
-    expect(state.setupScriptsRunning.has("env-1")).toBe(true);
-    expect(state.setupCommandsResolved.has("env-1")).toBe(false);
-
-    // Confirm path actually flips the runtime gates.
-    fireEvent.click(screen.getByRole("button", { name: /skip anyway/i }));
-    state = useEnvironmentStore.getState();
-    expect(state.setupScriptsRunning.has("env-1")).toBe(false);
-    expect(state.setupCommandsResolved.has("env-1")).toBe(true);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
+      .toBe("running");
+    expect(screen.getByRole("button", { name: /skip anyway/i })).toBeTruthy();
   });
 
   test("Cancel returns to the plain wait state without flipping gates", () => {
@@ -70,9 +58,8 @@ describe("SetupPendingOverlay", () => {
     fireEvent.click(screen.getByRole("button", { name: /skip setup wait/i }));
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
 
-    const state = useEnvironmentStore.getState();
-    expect(state.setupScriptsRunning.has("env-1")).toBe(true);
-    expect(state.setupCommandsResolved.has("env-1")).toBe(false);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
+      .toBe("running");
     expect(screen.getByRole("button", { name: /skip setup wait/i })).toBeTruthy();
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import { __testing as commandTesting } from "./commands.js";
 import { OrkestratorBackend } from "./index.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
-import { StorageService } from "./storage.js";
+import { createEnvironment, StorageService } from "./storage.js";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 
 function fakeAgentTools(overrides: {
@@ -28,6 +29,43 @@ function fakeAgentTools(overrides: {
     revokeEnvironment: mock(() => undefined),
   };
 }
+
+test("activity transition events omit backend-only provider session identifiers", async () => {
+  const events: Array<{ event: string; payload: unknown }> = [];
+  const backend = new OrkestratorBackend({
+    dataDir: path.join(os.tmpdir(), `ork-backend-activity-event-${randomUUID()}`),
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: (event, payload) => events.push({ event, payload }),
+    agentTools: fakeAgentTools(),
+  });
+  const transition = (backend as unknown as {
+    nativeAgents: {
+      options: {
+        onActivityTransition?: (event: Record<string, unknown>) => void;
+      };
+    };
+  }).nativeAgents.options.onActivityTransition;
+
+  transition?.({
+    environmentId: "env-1",
+    sessionKey: "private-storage-key",
+    providerSessionId: "private-provider-id",
+    previousState: "working",
+    state: "idle",
+  });
+
+  expect(events).toEqual([{
+    event: "native-agent-session-activity",
+    payload: {
+      environment_id: "env-1",
+      previous_state: "working",
+      state: "idle",
+    },
+  }]);
+  await backend.shutdown();
+});
 
 test("wires observe-only monitoring and its adoption kill switch from the environment", async () => {
   const observeKey = "ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY";
@@ -602,6 +640,173 @@ function controlledIntervals() {
 }
 
 describe("native-agent activity reconciliation lifecycle", () => {
+  test("fences interrupted setup and adopts pending setup exactly once", async () => {
+    const dataDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ork-backend-interrupted-setup-"),
+    );
+    const backend = new OrkestratorBackend({
+      dataDir,
+      toolchainBinDir: "",
+      appRoot: "",
+      resourceRoot: "",
+      emit: () => undefined,
+      agentTools: fakeAgentTools(),
+      startupReapers: {
+        localServers: async () => [],
+        claudeTmuxRuntimes: async () => [],
+      },
+    });
+    const internals = backend as unknown as {
+      commands: Map<string, (args: Record<string, unknown>, context: unknown) => unknown>;
+      context: { storage: StorageService };
+    };
+    const ensureEnvironmentSetup = mock(async () => undefined);
+    internals.commands.set("ensure_environment_setup", ensureEnvironmentSetup);
+
+    const interrupted = {
+      ...createEnvironment("project-1"),
+      id: "env-setup-interrupted",
+      status: "running" as const,
+      setupPhase: "running" as const,
+      setupScriptsComplete: false,
+      setupSessionId: "setup-env-setup-interrupted",
+      setupStartedAt: "2026-08-04T10:00:00.000Z",
+      pendingAgentLaunch: true,
+    };
+    const pending = {
+      ...createEnvironment("project-1"),
+      id: "env-setup-pending",
+      status: "running" as const,
+      setupPhase: "pending" as const,
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    };
+    const failed = {
+      ...createEnvironment("project-1"),
+      id: "env-setup-failed",
+      status: "running" as const,
+      setupPhase: "failed" as const,
+      setupScriptsComplete: false,
+      lifecycleError: "Keep this failure",
+    };
+    await internals.context.storage.addEnvironment(interrupted);
+    await internals.context.storage.addEnvironment(pending);
+    await internals.context.storage.addEnvironment(failed);
+
+    try {
+      await backend.init();
+      await backend.init();
+
+      expect(ensureEnvironmentSetup).toHaveBeenCalledTimes(1);
+      expect(ensureEnvironmentSetup).toHaveBeenCalledWith(
+        { environmentId: pending.id },
+        expect.any(Object),
+      );
+      expect(await internals.context.storage.getEnvironment(interrupted.id))
+        .toMatchObject({
+          status: "running",
+          setupPhase: "failed",
+          setupScriptsComplete: false,
+          setupSessionId: interrupted.setupSessionId,
+          setupStartedAt: interrupted.setupStartedAt,
+          setupCompletedAt: expect.any(String),
+          lifecycleError: "Environment setup was interrupted. Retry setup to continue.",
+          pendingAgentLaunch: true,
+        });
+      expect(await internals.context.storage.getEnvironment(pending.id))
+        .toMatchObject({
+          setupPhase: "pending",
+          setupScriptsComplete: false,
+          pendingAgentLaunch: true,
+        });
+      expect(await internals.context.storage.getEnvironment(failed.id))
+        .toMatchObject({
+          setupPhase: "failed",
+          lifecycleError: "Keep this failure",
+        });
+    } finally {
+      await backend.shutdown().catch(() => undefined);
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("coalesces tab-resource sweeps on a one-minute cadence", async () => {
+    const dataDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ork-backend-tab-resource-sweep-"),
+    );
+    const backend = new OrkestratorBackend({
+      dataDir,
+      toolchainBinDir: "",
+      appRoot: "",
+      resourceRoot: "",
+      emit: () => undefined,
+      agentTools: fakeAgentTools(),
+      startupReapers: {
+        localServers: async () => [],
+        claudeTmuxRuntimes: async () => [],
+      },
+    });
+    const teardownGate = deferred<unknown>();
+    const orphanGate = deferred<unknown>();
+    const reconcileTabTeardowns = mock(() =>
+      reconcileTabTeardowns.mock.calls.length === 1
+        ? Promise.resolve({ completed: 0 })
+        : teardownGate.promise
+    );
+    const reconcileOrphans = mock(() =>
+      reconcileOrphans.mock.calls.length === 1
+        ? Promise.resolve({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 })
+        : orphanGate.promise
+    );
+    const internals = backend as unknown as {
+      commands: Map<string, (args: Record<string, unknown>, context: unknown) => unknown>;
+      buildPipelines: { init: () => Promise<void> };
+      nativeAgents: {
+        init: () => Promise<void>;
+        reconcileAgentActivity: () => Promise<void>;
+      };
+    };
+    internals.commands.set("reconcile_tab_teardowns", reconcileTabTeardowns);
+    internals.commands.set("reconcile_orphaned_tab_resources", reconcileOrphans);
+    internals.buildPipelines.init = mock(async () => undefined);
+    internals.nativeAgents.init = mock(async () => undefined);
+    internals.nativeAgents.reconcileAgentActivity = mock(async () => undefined);
+    const { intervals, clearIntervalSpy, tick, restore } = controlledIntervals();
+
+    try {
+      await backend.init();
+      expect(reconcileTabTeardowns).toHaveBeenCalledTimes(1);
+      expect(reconcileOrphans).toHaveBeenCalledTimes(1);
+      const resourceSweep = intervals.find((interval) => interval.delay === 60_000);
+      expect(resourceSweep).toBeDefined();
+
+      tick(60_000);
+      tick(60_000);
+      expect(reconcileTabTeardowns).toHaveBeenCalledTimes(2);
+      expect(reconcileOrphans).toHaveBeenCalledTimes(2);
+
+      teardownGate.resolve({ completed: 0 });
+      orphanGate.resolve({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
+      await waitForCondition(() => {
+        tick(60_000);
+        return reconcileTabTeardowns.mock.calls.length === 3
+          && reconcileOrphans.mock.calls.length === 3;
+      }, "completed tab-resource sweep to release its coalescing guard");
+      expect(reconcileTabTeardowns).toHaveBeenCalledTimes(3);
+      expect(reconcileOrphans).toHaveBeenCalledTimes(3);
+
+      await backend.shutdown();
+      expect(resourceSweep!.active).toBe(false);
+      expect(clearIntervalSpy).toHaveBeenCalledWith(resourceSweep!.handle);
+    } finally {
+      teardownGate.resolve({ completed: 0 });
+      orphanGate.resolve({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
+      await backend.shutdown().catch(() => undefined);
+      restore();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("awaits initial activity hydration before startup completes", async () => {
     const dataDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "ork-backend-native-activity-init-"),

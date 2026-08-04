@@ -125,7 +125,7 @@ describe("useBuildPipeline", () => {
     });
   });
 
-  test("starts from a Kanban snapshot and creates the build tab before the environment mounts", async () => {
+  test("starts from a Kanban snapshot and leaves build-tab creation to the backend", async () => {
     const { result } = renderHook(() => useBuildPipeline());
 
     let pipelineId: string | undefined;
@@ -146,12 +146,7 @@ describe("useBuildPipeline", () => {
     });
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-new");
     expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
-    expect(buildTabs("env-new")).toEqual([
-      expect.objectContaining({
-        id: "build-pipeline-new",
-        type: "claude-build",
-      }),
-    ]);
+    expect(buildTabs("env-new")).toEqual([]);
   });
 
   test("converts Linear and GitHub issues into backend-owned task snapshots", async () => {
@@ -486,7 +481,7 @@ describe("useBuildPipeline", () => {
     });
   });
 
-  test("navigation initializes, focuses, and reuses a task's existing build tab", async () => {
+  test("navigation does not synthesize a build tab before backend layout hydration", async () => {
     const pipeline = buildPipelineFixture({
       id: "pipeline-nav",
       taskId: "task-nav",
@@ -501,13 +496,7 @@ describe("useBuildPipeline", () => {
     });
 
     expect(useUIStore.getState().selectedProjectId).toBe("project-nav");
-    expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-nav");
-    expect(buildTabs("env-nav")).toHaveLength(1);
-    expect(buildTabs("env-nav")[0]?.id).toBe("build-pipeline-nav");
-    const env = usePaneLayoutStore.getState().environments.get("env-nav");
-    expect(env && getAllLeaves(env.root)[0]?.activeTabId).toBe(
-      "build-pipeline-nav",
-    );
+    expect(buildTabs("env-nav")).toHaveLength(0);
   });
 
   test("finds and focuses an existing build tab inside a nested split tree", async () => {
@@ -585,7 +574,7 @@ describe("useBuildPipeline", () => {
       .toBe("existing-build-tab");
   });
 
-  test("waits for pending pane hydration before adding and focusing the build tab", async () => {
+  test("does not race pending hydration with renderer-owned tab creation", async () => {
     const pipeline = buildPipelineFixture({
       id: "pipeline-hydrated",
       taskId: "task-hydrated",
@@ -621,14 +610,13 @@ describe("useBuildPipeline", () => {
 
     expect(buildTabs("env-hydrated").map((tab) => tab.id)).toEqual([
       "restored-terminal",
-      "build-pipeline-hydrated",
     ]);
     const environment = usePaneLayoutStore
       .getState()
       .environments.get("env-hydrated");
     expect(environment?.activePaneId).toBe("restored");
     expect(environment && getAllLeaves(environment.root)[0]?.activeTabId).toBe(
-      "build-pipeline-hydrated",
+      "restored-terminal",
     );
   });
 });
@@ -668,8 +656,7 @@ describe("useBuildPipeline navigation", () => {
     });
 
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-known");
-    expect(buildTabs("env-known").map((tab) => tab.id))
-      .toContain("build-pipeline-known");
+    expect(buildTabs("env-known")).toEqual([]);
   });
 
   test("does nothing when the task has no pipeline in the store", async () => {
@@ -698,7 +685,7 @@ describe("useBuildPipeline navigation", () => {
     expect(usePaneLayoutStore.getState().environments.size).toBe(0);
   });
 
-  test("marks a containerized pipeline's build tab as not local", async () => {
+  test("does not create a containerized pipeline tab in the renderer", async () => {
     const { result } = renderHook(() => useBuildPipeline());
 
     await act(async () => {
@@ -711,11 +698,10 @@ describe("useBuildPipeline navigation", () => {
       });
     });
 
-    const [tab] = buildTabs("env-container");
-    expect(tab?.buildTabData?.isLocal).toBe(false);
+    expect(buildTabs("env-container")).toEqual([]);
   });
 
-  test("uses stable local defaults when navigation receives a legacy pipeline reference", async () => {
+  test("navigates legacy pipeline references without inventing layout metadata", async () => {
     const { result } = renderHook(() => useBuildPipeline());
 
     await act(async () => {
@@ -726,60 +712,29 @@ describe("useBuildPipeline navigation", () => {
       });
     });
 
-    const [tab] = buildTabs("env-legacy");
-    expect(tab).toEqual(expect.objectContaining({
-      id: "build-task-legacy-42",
-      type: "claude-build",
-      buildTabData: expect.objectContaining({
-        environmentId: "env-legacy",
-        pipelineId: "task-legacy-42",
-        taskId: "legacy-42",
-        isLocal: true,
-      }),
-    }));
+    expect(buildTabs("env-legacy")).toEqual([]);
     expect(useUIStore.getState().selectedProjectId).toBe("project-legacy");
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-legacy");
   });
 
-  test("gives up waiting on a hydration that never finishes", async () => {
-    // The wait exists so a restore does not replace the tab we just added. It
-    // must not become an indefinite block when a restore stalls or is dropped.
+  test("navigation never waits on a stalled pane hydration", async () => {
     usePaneLayoutStore.setState({
       environments: new Map(),
       hydration: new Map([["env-stalled", "pending"]]),
       activeEnvironmentId: null,
     });
-    const timeouts: Array<() => void> = [];
-    const realSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = ((callback: () => void, delay?: number) => {
-      if (delay === 5_000) {
-        timeouts.push(callback);
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      }
-      return realSetTimeout(callback, delay);
-    }) as typeof setTimeout;
-
-    try {
-      const { result } = renderHook(() => useBuildPipeline());
-      let navigation!: Promise<void>;
-      await act(async () => {
-        navigation = result.current.navigateToPipeline({
-          id: "pipeline-stalled",
-          environmentId: "env-stalled",
-          environmentType: "local",
-          projectId: "project-1",
-          taskId: "task-1",
-        });
-        await Promise.resolve();
-        expect(timeouts).toHaveLength(1);
-        timeouts[0]!();
-        await navigation;
+    const { result } = renderHook(() => useBuildPipeline());
+    await act(async () => {
+      await result.current.navigateToPipeline({
+        id: "pipeline-stalled",
+        environmentId: "env-stalled",
+        environmentType: "local",
+        projectId: "project-1",
+        taskId: "task-1",
       });
+    });
 
-      expect(buildTabs("env-stalled").map((tab) => tab.id))
-        .toContain("build-pipeline-stalled");
-    } finally {
-      globalThis.setTimeout = realSetTimeout;
-    }
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-stalled");
+    expect(buildTabs("env-stalled")).toEqual([]);
   });
 });

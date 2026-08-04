@@ -25,6 +25,8 @@ export interface NativeSessionState<TMessage> {
   sessionId: string;
   messages: TMessage[];
   isLoading: boolean;
+  /** Bridge-issued generation for the active turn (Codex; absent elsewhere). */
+  turnId?: string;
   loadingStartedAt?: number;
   lastCompletedElapsedSeconds?: number | null;
   error?: string;
@@ -89,6 +91,8 @@ export interface NativeChatStoreSlice<TClient, TMessage, TAttachment, TQueued> {
     isLoading: boolean,
     /** Backend-authoritative epoch milliseconds for the active turn. */
     startedAt?: number,
+    /** Bridge-issued generation token for discard-late-response guards. */
+    turnId?: string,
   ) => void;
   setSessionError: (sessionKey: string, error: string | undefined) => void;
   setSessionTitle: (sessionKey: string, title: string | undefined) => void;
@@ -300,15 +304,38 @@ export function createNativeChatStoreSlice<
         return { sessions: next };
       }),
 
-    setSessionLoading: (sessionKey, isLoading, startedAt) =>
+    setSessionLoading: (sessionKey, isLoading, startedAt, turnId) =>
       set((state) => {
         const session = state.sessions.get(sessionKey);
         if (!session) return state;
         const next = new Map(state.sessions);
+        const timed = updateTimedSessionLoading(session, isLoading, Date.now(), startedAt);
+        const nextTurnId = isLoading ? turnId ?? session.turnId : undefined;
+        if (
+          timed.isLoading === session.isLoading
+          && timed.loadingStartedAt === session.loadingStartedAt
+          && timed.lastCompletedElapsedSeconds
+            === session.lastCompletedElapsedSeconds
+          && nextTurnId === session.turnId
+        ) {
+          // A repeated lifecycle edge is still an ordering event even when it
+          // carries no new session fields. Preserve the session/map identity
+          // used by render guards, but advance the dedicated generation token
+          // so an older in-flight snapshot cannot land after this edge.
+          const revisions = new Map(state.sessionLoadingRevisions);
+          revisions.set(
+            sessionKey,
+            (state.sessionLoadingRevisions.get(sessionKey) ?? 0) + 1,
+          );
+          return { sessionLoadingRevisions: revisions };
+        }
         const revisions = new Map(state.sessionLoadingRevisions);
         next.set(
           sessionKey,
-          updateTimedSessionLoading(session, isLoading, Date.now(), startedAt),
+          {
+            ...timed,
+            turnId: nextTurnId,
+          },
         );
         revisions.set(
           sessionKey,

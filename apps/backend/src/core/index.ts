@@ -41,6 +41,8 @@ export class OrkestratorBackend {
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
+  private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
+  private setupStartupReconciled = false;
   private readonly reapPidServers: typeof reapOrphanedLocalServers;
   private readonly reapTmuxRuntimes: typeof reapOrphanedClaudeTmuxRuntimes;
   private readonly agentTools: Pick<
@@ -108,6 +110,13 @@ export class OrkestratorBackend {
         interactionMonitorMode,
         interactionMonitorAdoptionEnabled:
           process.env.ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH !== "1",
+        onActivityTransition: (event) => {
+          options.emit("native-agent-session-activity", {
+            environment_id: event.environmentId,
+            previous_state: event.previousState,
+            state: event.state,
+          });
+        },
       },
     );
     context.nativeAgents = this.nativeAgents;
@@ -229,6 +238,12 @@ export class OrkestratorBackend {
         );
       });
     }
+    const reconcileTabTeardowns = this.commands.get("reconcile_tab_teardowns");
+    if (reconcileTabTeardowns) {
+      await Promise.resolve(reconcileTabTeardowns({}, this.context)).catch((error: unknown) => {
+        console.warn("[backend] Failed to reconcile tab teardowns:", error);
+      });
+    }
 
     // Start durable pipelines only after stale bridge ownership and interrupted
     // environment deletion have been reconciled. A doomed pipeline is skipped
@@ -242,6 +257,54 @@ export class OrkestratorBackend {
     await this.nativeAgents.init().catch((error) => {
       console.warn("[backend] Failed to restore native agent launches:", error);
     });
+    const reconcileOrphanedTabResources = this.commands.get(
+      "reconcile_orphaned_tab_resources",
+    );
+    if (reconcileOrphanedTabResources) {
+      await Promise.resolve(reconcileOrphanedTabResources({}, this.context)).catch(
+        (error: unknown) => {
+          console.warn("[backend] Failed to reconcile orphaned tab resources:", error);
+        },
+      );
+    }
+    if (!this.setupStartupReconciled) {
+      const environments = await this.context.storage.loadEnvironments();
+      // Mark before starting any pending setup. If init is retried on this same
+      // backend instance, a live setup task must not be mistaken for work left
+      // by a dead process or admitted a second time.
+      this.setupStartupReconciled = true;
+      const ensureEnvironmentSetup = this.commands.get("ensure_environment_setup");
+      for (const environment of environments) {
+        if (
+          environment.status !== "running"
+          || environment.setupScriptsComplete
+          || environment.setupOverride
+        ) continue;
+        if (environment.setupPhase === "running") {
+          // A persisted `running` phase belongs to the process that owned its
+          // PTY. Repository-controlled setup may not be idempotent, so fence
+          // that interrupted attempt and require an explicit retry or override.
+          await this.context.storage.updateEnvironment(environment.id, {
+            setupPhase: "failed",
+            setupCompletedAt: new Date().toISOString(),
+            lifecycleError: "Environment setup was interrupted. Retry setup to continue.",
+          }).catch((error: unknown) => {
+            console.warn(`[backend] Failed to fence interrupted setup for ${environment.id}:`, error);
+          });
+          continue;
+        }
+        if (environment.setupPhase !== "pending" || !ensureEnvironmentSetup) continue;
+        // Pending means no setup attempt was published, so there is no side
+        // effect to replay. Adopt it once now that setup no longer depends on a
+        // mounted terminal component.
+        void Promise.resolve(ensureEnvironmentSetup(
+          { environmentId: environment.id },
+          this.context,
+        )).catch((error: unknown) => {
+          console.warn(`[backend] Failed to adopt pending setup for ${environment.id}:`, error);
+        });
+      }
+    }
     // Adopts planning conversations the previous renderer-driven controller
     // left in flight, then advances every durable record on its own timer.
     await this.featurePlanning.init().catch((error) => {
@@ -253,6 +316,12 @@ export class OrkestratorBackend {
     await this.nativeAgents.reconcileAgentActivity().catch((error) => {
       console.warn("[backend] Failed to restore native agent activity:", error);
     });
+    const reconcileClaudeState = this.commands.get("reconcile_claude_state_polling");
+    if (reconcileClaudeState) {
+      await Promise.resolve(reconcileClaudeState({}, this.context)).catch((error: unknown) => {
+        console.warn("[backend] Failed to restore Claude terminal activity:", error);
+      });
+    }
     // Queued tmux prompts left behind by a quit or crash drain from here, with
     // no renderer involved. NativeAgentService drains its own queues on its own
     // sweep; this one shares the activity sweep rather than adding a third
@@ -260,15 +329,50 @@ export class OrkestratorBackend {
     await this.promptQueues.drainAll().catch((error) => {
       console.warn("[backend] Failed to drain tmux prompt queues:", error);
     });
+    let tabTeardownReconcileInFlight: Promise<void> | null = null;
+    const reconcileTabTeardownsOnce = (): void => {
+      if (!reconcileTabTeardowns || tabTeardownReconcileInFlight) return;
+      tabTeardownReconcileInFlight = Promise.resolve(
+        reconcileTabTeardowns({}, this.context),
+      ).then(() => undefined).catch((error: unknown) => {
+        console.warn("[backend] Failed to reconcile tab teardowns:", error);
+      }).finally(() => {
+        tabTeardownReconcileInFlight = null;
+      });
+    };
+    let orphanReconcileInFlight: Promise<void> | null = null;
+    const reconcileOrphanedTabResourcesOnce = (): void => {
+      if (!reconcileOrphanedTabResources || orphanReconcileInFlight) return;
+      orphanReconcileInFlight = Promise.resolve(
+        reconcileOrphanedTabResources({}, this.context),
+      ).then(() => undefined).catch((error: unknown) => {
+        console.warn("[backend] Failed to reconcile orphaned tab resources:", error);
+      }).finally(() => {
+        orphanReconcileInFlight = null;
+      });
+    };
     this.nativeActivitySweep ??= setInterval(() => {
       void this.nativeAgents.reconcileAgentActivity().catch((error) => {
         console.warn("[backend] Failed to reconcile native agent activity:", error);
       });
+      if (reconcileClaudeState) {
+        void Promise.resolve(reconcileClaudeState({}, this.context)).catch((error: unknown) => {
+          console.warn("[backend] Failed to reconcile Claude terminal activity:", error);
+        });
+      }
       void this.promptQueues.drainAll().catch((error) => {
         console.warn("[backend] Failed to drain tmux prompt queues:", error);
       });
     }, 2_000);
     this.nativeActivitySweep.unref?.();
+    // Interrupted tab cleanup is durable and orphan reaping has a one-hour
+    // grace period. A one-minute, coalesced sweep is responsive enough without
+    // repeatedly parsing layouts or overlapping destructive work.
+    this.tabResourceSweep ??= setInterval(() => {
+      reconcileTabTeardownsOnce();
+      reconcileOrphanedTabResourcesOnce();
+    }, 60_000);
+    this.tabResourceSweep.unref?.();
   }
 
   /**
@@ -299,6 +403,10 @@ export class OrkestratorBackend {
     if (this.nativeActivitySweep) {
       clearInterval(this.nativeActivitySweep);
       this.nativeActivitySweep = null;
+    }
+    if (this.tabResourceSweep) {
+      clearInterval(this.tabResourceSweep);
+      this.tabResourceSweep = null;
     }
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.

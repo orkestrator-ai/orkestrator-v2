@@ -10,6 +10,10 @@
 
 import { create } from "zustand";
 import type {
+  TmuxAgentObservation,
+  TmuxSelectionPrompt,
+} from "@orkestrator/protocol/tmux-observation";
+import type {
   HookEventKind,
   TranscriptLine,
   TranscriptContent,
@@ -184,6 +188,8 @@ interface TmuxTabState {
   busy: boolean;
   /** Wall-clock when busy flipped to true, for the elapsed counter. */
   busyStartedAt: number | null;
+  /** Backend-owned normalized pane facts; raw pane text never enters the store. */
+  observation: TmuxAgentObservation;
 }
 
 const emptyTabState = (): TmuxTabState => ({
@@ -200,6 +206,12 @@ const emptyTabState = (): TmuxTabState => ({
   resumed: false,
   busy: false,
   busyStartedAt: null,
+  observation: {
+    revision: 0,
+    observedAt: new Date(0).toISOString(),
+    usage: [],
+    prompt: null,
+  },
 });
 
 interface ClaudeTmuxState {
@@ -219,6 +231,10 @@ interface ClaudeTmuxState {
       environmentId?: string | null;
       sessionId?: string | null;
       resumed?: boolean;
+      busy?: boolean;
+      busyStartedAt?: number | null;
+      observation?: TmuxAgentObservation;
+      observationGeneration?: string;
     },
   ) => void;
   resetTab: (tabId: string) => void;
@@ -246,7 +262,9 @@ interface ClaudeTmuxState {
   ) => void;
   pushInfoEvent: (tabId: string, event: TmuxInfoEvent) => void;
   dismissInfoEvent: (tabId: string, id: string) => void;
-  setBusy: (tabId: string, busy: boolean) => void;
+  setBusy: (tabId: string, busy: boolean, startedAt?: number | null) => void;
+  setObservation: (tabId: string, observation: TmuxAgentObservation) => void;
+  clearSelectionPrompt: (tabId: string, expectedPrompt: TmuxSelectionPrompt) => void;
 
   addAttachment: (tabId: string, attachment: TmuxAttachment) => void;
   removeAttachment: (tabId: string, attachmentId: string) => void;
@@ -316,14 +334,33 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
 
   setRunning: (tabId, running, info) =>
     set((state) =>
-      patchTab(state, tabId, (s) => ({
+      patchTab(state, tabId, (s) => {
+        const generationChanged = info?.observationGeneration !== undefined
+          && info.observationGeneration !== s.observation.generation;
+        const stopped = !running && info?.observation === undefined;
+        return ({
         ...s,
         running,
         environmentId: info?.environmentId ?? s.environmentId,
         sessionId:
           info?.sessionId === undefined ? s.sessionId : info.sessionId,
         resumed: info?.resumed ?? s.resumed,
-      })),
+        busy: info?.busy ?? s.busy,
+        busyStartedAt: info?.busy === undefined
+          ? s.busyStartedAt
+          : info.busy
+            ? info.busyStartedAt ?? s.busyStartedAt ?? Date.now()
+            : null,
+        observation: info?.observation ?? (generationChanged || stopped
+          ? {
+              ...emptyTabState().observation,
+              ...(info?.observationGeneration
+                ? { generation: info.observationGeneration }
+                : {}),
+            }
+          : s.observation),
+        });
+      }),
     ),
 
   resetTab: (tabId) => {
@@ -520,16 +557,40 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
       })),
     ),
 
-  setBusy: (tabId, busy) =>
+  setBusy: (tabId, busy, startedAt) =>
     set((state) =>
       patchTab(state, tabId, (s) => {
         if (s.busy === busy) return s;
         return {
           ...s,
           busy,
-          busyStartedAt: busy ? Date.now() : null,
+          busyStartedAt: busy ? startedAt ?? Date.now() : null,
         };
       }),
+    ),
+
+  setObservation: (tabId, observation) =>
+    set((state) =>
+      patchTab(state, tabId, (current) => {
+        const currentGeneration = current.observation.generation;
+        const incomingGeneration = observation.generation;
+        if (currentGeneration && currentGeneration !== incomingGeneration) return current;
+        return observation.revision < current.observation.revision
+          ? current
+          : { ...current, observation };
+      }),
+    ),
+
+  clearSelectionPrompt: (tabId, expectedPrompt) =>
+    set((state) =>
+      patchTab(state, tabId, (current) =>
+        current.observation.prompt !== expectedPrompt
+          ? current
+          : {
+              ...current,
+              observation: { ...current.observation, prompt: null },
+            },
+      ),
     ),
 
   addAttachment: (tabId, attachment) =>

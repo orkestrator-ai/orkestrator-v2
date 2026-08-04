@@ -5,6 +5,7 @@
 import { invoke } from "@/lib/native/backend";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
+import type { TmuxAgentObservation } from "@orkestrator/protocol/tmux-observation";
 
 /** Channel emitted by the Rust `claude_tmux` module. */
 export const CLAUDE_TMUX_EVENT = "claude-tmux:event";
@@ -12,10 +13,18 @@ export const CLAUDE_TMUX_EVENT = "claude-tmux:event";
 /** Envelope discriminated by `kind`. Matches `claude_tmux::session::TmuxEvent`. */
 export type TmuxEvent =
   | {
+      kind: "observation";
+      tab_id: string;
+      environment_id: string;
+      session_id: string;
+      observation: TmuxAgentObservation;
+    }
+  | {
       kind: "started";
       tab_id: string;
       environment_id: string;
       session_id: string;
+      observation_generation?: string;
       resumed: boolean;
       fast_mode: boolean | null;
     }
@@ -157,8 +166,10 @@ export interface TmuxStatus {
   transcript_path: string | null;
   resumed: boolean;
   busy: boolean;
+  busy_started_at: number | null;
   permission_mode: string;
   fast_mode: boolean | null;
+  observation: TmuxAgentObservation;
 }
 
 /** Metadata about a previously-recorded session the user could resume. */
@@ -274,6 +285,23 @@ export async function sendText(tabId: string, text: string, environmentId: strin
 
 export async function sendKeys(tabId: string, keys: string[], environmentId: string): Promise<void> {
   await invoke("claude_tmux_send_keys", { tabId, environmentId, keys });
+}
+
+export async function answerSelectionPrompt(
+  tabId: string,
+  environmentId: string,
+  input: {
+    expectedGeneration: string;
+    expectedRevision: number;
+    expectedPromptFingerprint: string;
+    optionIndex: number;
+  },
+): Promise<void> {
+  await invoke("claude_tmux_answer_selection_prompt", {
+    tabId,
+    environmentId,
+    ...input,
+  });
 }
 
 export async function capturePane(tabId: string, environmentId: string): Promise<string> {

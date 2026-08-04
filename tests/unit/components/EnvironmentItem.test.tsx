@@ -391,7 +391,11 @@ function contextMenuLabels(container: HTMLElement) {
 
 describe("EnvironmentItem activity icon", () => {
   test("shows a pulsing blue container icon while tmux activity is working", () => {
-    useAgentActivityStore.getState().setContainerState("env-1", "working");
+    useAgentActivityStore.getState().replaceActivitySnapshot([{
+      id: "env-1",
+      agentActivityState: "working",
+      agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+    }]);
 
     const { container } = renderItem(makeEnvironment());
 
@@ -411,11 +415,11 @@ describe("EnvironmentItem activity icon", () => {
   });
 
   test("keeps a newer runtime observation over an older backend snapshot", () => {
-    useAgentActivityStore.getState().setContainerState(
-      "env-1",
-      "waiting",
-      "2026-07-27T12:00:01.000Z",
-    );
+    useAgentActivityStore.getState().replaceActivitySnapshot([{
+      id: "env-1",
+      agentActivityState: "waiting",
+      agentActivityUpdatedAt: "2026-07-27T12:00:01.000Z",
+    }]);
     const { container } = renderItem(makeEnvironment({
       agentActivityState: "working",
       agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
@@ -565,11 +569,11 @@ describe("EnvironmentItem activity icon", () => {
     // This is the case the whole feature exists for: another window finished
     // the turn, so the persisted idle must win over this window's last-seen
     // working and turn the icon green rather than leaving it pulsing blue.
-    useAgentActivityStore.getState().setContainerState(
-      "env-1",
-      "working",
-      "2026-07-27T12:00:00.000Z",
-    );
+    useAgentActivityStore.getState().replaceActivitySnapshot([{
+      id: "env-1",
+      agentActivityState: "working",
+      agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+    }]);
 
     const { container } = renderItem(makeEnvironment({
       agentActivityState: "idle",

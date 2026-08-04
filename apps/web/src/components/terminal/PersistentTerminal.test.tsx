@@ -444,11 +444,7 @@ describe("PersistentTerminal", () => {
       ],
       isLoading: false,
       error: null,
-      workspaceReadyEnvironments: new Set<string>(),
       deletingEnvironments: new Set<string>(),
-      pendingSetupCommands: new Map<string, string[]>(),
-      setupCommandsResolved: new Set<string>(),
-      setupScriptsRunning: new Set<string>(),
     });
 
     usePaneLayoutStore.setState({

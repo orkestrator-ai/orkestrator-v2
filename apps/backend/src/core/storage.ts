@@ -35,7 +35,11 @@ import {
   getReviewInstructionValidationError,
   parseReviewInstruction,
 } from "@orkestrator/protocol/review-instruction";
-import { paneLayoutRevisionConflictMessage } from "@orkestrator/protocol/pane-layout";
+import {
+  PANE_LAYOUT_VERSION,
+  paneLayoutRevisionConflictMessage,
+} from "@orkestrator/protocol/pane-layout";
+import { isTabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import {
   RESOURCE_MANIFEST_KINDS,
   type ConditionalResourceSnapshot,
@@ -87,6 +91,7 @@ import type {
 export type JsonRecord = Record<string, unknown>;
 
 const MAX_FRONTEND_AGENT_ACTIVITY_OBSERVERS = 32;
+const MAX_PANE_LAYOUT_ROOT_BYTES = 256 * 1024;
 const PROMPT_QUEUE_CLAIM_LEASE_MS = 5 * 60 * 1000;
 const MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES = 4 * 1024;
 const MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES = 1024;
@@ -104,6 +109,21 @@ export type KanbanImage = {
 };
 
 export type KanbanStatus = "backlog" | "in-progress" | "review" | "done";
+
+function assertPaneLayoutRootWithinBounds(root: unknown): void {
+  let serializedRoot: string | undefined;
+  try {
+    serializedRoot = JSON.stringify(root);
+  } catch {
+    throw new Error("Pane layout root must be JSON serializable");
+  }
+  if (serializedRoot === undefined) {
+    throw new Error("Pane layout root must be JSON serializable");
+  }
+  if (Buffer.byteLength(serializedRoot, "utf8") > MAX_PANE_LAYOUT_ROOT_BYTES) {
+    throw new Error("Pane layout root exceeds the 256 KB limit");
+  }
+}
 
 export type KanbanTask = {
   id: string;
@@ -317,6 +337,7 @@ function readAgentActivitySources(
     sources[candidateSource] = {
       state: snapshot.state,
       updatedAt: new Date(snapshotTime).toISOString(),
+      ...(snapshot.stale === true ? { stale: true } : {}),
     };
   }
   return sources;
@@ -339,7 +360,10 @@ function agentActivityStructureFingerprint(environment: Environment): string {
     record: Partial<Record<string, { state?: unknown } | undefined>> | undefined,
   ): Array<[string, unknown]> =>
     Object.entries(record ?? {})
-      .map(([key, snapshot]): [string, unknown] => [key, snapshot?.state])
+      .map(([key, snapshot]): [string, unknown] => [
+        key,
+        snapshot ? [snapshot.state, "stale" in snapshot ? snapshot.stale === true : false] : undefined,
+      ])
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return JSON.stringify({
     state: environment.agentActivityState ?? null,
@@ -1282,6 +1306,8 @@ export function createEnvironment(
     opencodeMode: undefined,
     codexMode: undefined,
     setupScriptsComplete: false,
+    setupPhase: "pending",
+    setupOverride: false,
     pendingAgentLaunch: false,
     initialPrompt: options.initialPrompt,
     pendingRenamePrompt: options.pendingRenamePrompt,
@@ -2291,6 +2317,13 @@ export class StorageService {
 
   async loadEnvironments(): Promise<Environment[]> {
     const environments = await this.loadJsonCached<Environment[]>(this.environmentsFile(), () => []);
+    // One-release migration for records written before setupPhase existed.
+    // The backend remains authoritative even before the next mutation persists
+    // the normalized fields.
+    for (const environment of environments) {
+      environment.setupPhase ??= environment.setupScriptsComplete ? "ready" : "pending";
+      environment.setupOverride ??= false;
+    }
     return environments.sort((a, b) => a.order - b.order);
   }
 
@@ -2430,6 +2463,9 @@ export class StorageService {
         "cleanupAfterMergeRequestedAt",
         "cleanupAfterMergeError",
         "lifecycleOperationStartedAt",
+        "setupSessionId",
+        "setupStartedAt",
+        "setupCompletedAt",
       ] as const;
       for (const field of optionalStringFields) {
         if (field in updates) {
@@ -2508,6 +2544,29 @@ export class StorageService {
         if (updates.setupScriptsComplete == null) environment.setupScriptsComplete = false;
         else if (typeof updates.setupScriptsComplete === "boolean") {
           environment.setupScriptsComplete = updates.setupScriptsComplete;
+        }
+      }
+      if ("setupPhase" in updates && isOneOf(updates.setupPhase, ["pending", "running", "ready", "failed"])) {
+        environment.setupPhase = updates.setupPhase;
+      }
+      if ("setupOverride" in updates && typeof updates.setupOverride === "boolean") {
+        environment.setupOverride = updates.setupOverride;
+      }
+      if ("tabTeardownIntents" in updates) {
+        const intents = updates.tabTeardownIntents;
+        if (intents === undefined || intents === null) {
+          environment.tabTeardownIntents = undefined;
+        } else if (isRecord(intents) && Object.values(intents).every((intent) =>
+          isRecord(intent)
+          && isNonBlankString(intent.tabId)
+          && isTabTeardownKind(intent.kind)
+          && isNonBlankString(intent.createdAt)
+          && (intent.sessionId === undefined || typeof intent.sessionId === "string")
+          && (intent.persistentSessionId === undefined || typeof intent.persistentSessionId === "string")
+        )) {
+          environment.tabTeardownIntents = intents as Environment["tabTeardownIntents"];
+        } else {
+          throw new Error("Tab teardown intents are malformed");
         }
       }
       if ("pendingAgentLaunch" in updates && typeof updates.pendingAgentLaunch === "boolean") {
@@ -2589,6 +2648,64 @@ export class StorageService {
       if ("initialPromptAttachments" in updates) {
         await this.scrubEnvironmentBackups(environmentId, false);
       }
+      this.announce("environment", environmentId, environment.projectId);
+      return environment;
+    });
+  }
+
+  /**
+   * Journals one teardown against the latest environment snapshot while the
+   * environment mutation lock is held. Whole-map updates from command callers
+   * can otherwise overwrite a sibling teardown that was added concurrently.
+   */
+  async setTabTeardownIntent(
+    environmentId: string,
+    intent: NonNullable<Environment["tabTeardownIntents"]>[string],
+  ): Promise<Environment> {
+    if (
+      !isNonBlankString(intent.tabId)
+      || !isTabTeardownKind(intent.kind)
+      || !isNonBlankString(intent.createdAt)
+      || (intent.sessionId !== undefined && !isNonBlankString(intent.sessionId))
+      || (
+        intent.persistentSessionId !== undefined
+        && !isNonBlankString(intent.persistentSessionId)
+      )
+    ) {
+      throw new Error("Tab teardown intent is malformed");
+    }
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      environment.tabTeardownIntents = {
+        ...environment.tabTeardownIntents,
+        [intent.tabId]: intent,
+      };
+      await this.saveEnvironments(environments);
+      this.announce("environment", environmentId, environment.projectId);
+      return environment;
+    });
+  }
+
+  /** Clears only the intent this caller completed, preserving newer retries. */
+  async clearTabTeardownIntent(
+    environmentId: string,
+    tabId: string,
+    expectedCreatedAt: string,
+  ): Promise<Environment> {
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const current = environment.tabTeardownIntents?.[tabId];
+      if (!current || current.createdAt !== expectedCreatedAt) return environment;
+      const intents = { ...environment.tabTeardownIntents };
+      delete intents[tabId];
+      environment.tabTeardownIntents = Object.keys(intents).length > 0
+        ? intents
+        : undefined;
+      await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);
       return environment;
     });
@@ -2718,6 +2835,7 @@ export class StorageService {
     occurredAt: string,
     source: AgentActivitySource = "frontend",
     observerId?: string,
+    stale = false,
   ): Promise<Environment> {
     if (!isOneOf(state, AGENT_ACTIVITY_STATES)) {
       throw new Error("state must be idle, working, or waiting");
@@ -2730,7 +2848,7 @@ export class StorageService {
       throw new Error("occurredAt must not be more than 5 minutes in the future");
     }
     if (!isOneOf(source, AGENT_ACTIVITY_SOURCES)) {
-      throw new Error("source must be frontend, claude-terminal, or native-agent");
+      throw new Error("source must be frontend, claude-terminal, claude-tmux, or native-agent");
     }
     if (
       observerId !== undefined
@@ -2750,6 +2868,7 @@ export class StorageService {
       const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
       const structureBefore = agentActivityStructureFingerprint(environment);
+      const previousAggregate = environment.agentActivityState ?? "idle";
 
       const referenceTime = Date.now();
       const sources = readAgentActivitySources(environment, referenceTime);
@@ -2804,6 +2923,7 @@ export class StorageService {
         sources[source] = {
           state,
           updatedAt: normalizedOccurredAt,
+          ...(stale ? { stale: true } : {}),
         };
       }
 
@@ -2813,6 +2933,7 @@ export class StorageService {
         sources,
         observers,
       );
+      const nextAggregate = environment.agentActivityState;
       const aggregateTime = parseUsableAgentActivityTime(
         environment.agentActivityUpdatedAt,
         referenceTime,
@@ -2823,9 +2944,26 @@ export class StorageService {
           ? aggregateTime
           : Number.NEGATIVE_INFINITY,
       )).toISOString();
+      const activityTransition = previousAggregate !== nextAggregate && (
+        nextAggregate === "working"
+        || nextAggregate === "waiting"
+        || (previousAggregate === "working" && nextAggregate === "idle")
+      );
+      const completionTransition = previousAggregate === "working"
+        && (nextAggregate === "idle" || nextAggregate === "waiting");
+      if (activityTransition) {
+        const previousLastActivityAt = Date.parse(environment.lastActivityAt ?? "");
+        environment.lastActivityAt = new Date(Math.max(
+          acceptedOccurredTime,
+          Number.isFinite(previousLastActivityAt)
+            ? previousLastActivityAt
+            : Number.NEGATIVE_INFINITY,
+        )).toISOString();
+      }
+      if (completionTransition) environment.hasUnreadWork = true;
       // The lease itself must persist (its expiry is enforced from disk), but
       // the backup rotation is skipped: only volatile activity fields changed.
-      await this.saveEnvironments(environments, { backup: false });
+      await this.saveEnvironments(environments, { backup: completionTransition });
       // A pure lease renewal — same aggregate, same per-source and observer
       // states, only timestamps refreshed — is not announced. Announcing it
       // made every connected client refetch every project on each renewal
@@ -2963,6 +3101,43 @@ export class StorageService {
       }
 
       environment.lastActivityAt = normalizedActivityAt;
+      environment.hasUnreadWork = true;
+      await this.saveEnvironments(environments);
+      this.announce("environment", environmentId, environment.projectId);
+      return environment;
+    });
+  }
+
+  /**
+   * Persist one backend-observed session completion independently of the
+   * environment-wide activity aggregate. Several native tabs can share the
+   * `native-agent` source, so one tab may complete while a sibling keeps that
+   * aggregate `working`.
+   *
+   * Backend observations are serialized but may share a millisecond with the
+   * preceding working edge. Advance the durable token on a collision rather
+   * than dropping a real completion as stale. Callers must invoke this exactly
+   * once per observed per-session transition.
+   */
+  async recordEnvironmentSessionCompletion(
+    environmentId: string,
+    occurredAt: string,
+  ): Promise<Environment> {
+    if (!isAgentActivityTimestamp(occurredAt)) {
+      throw new Error("occurredAt must be a valid ISO timestamp");
+    }
+    const occurredTime = Date.parse(occurredAt);
+
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+
+      const previousTime = Date.parse(environment.lastActivityAt ?? "");
+      const acceptedTime = Number.isFinite(previousTime) && previousTime >= occurredTime
+        ? previousTime + 1
+        : occurredTime;
+      environment.lastActivityAt = new Date(acceptedTime).toISOString();
       environment.hasUnreadWork = true;
       await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);
@@ -3268,11 +3443,44 @@ export class StorageService {
   }
 
   async getPaneLayout(environmentId: string): Promise<PersistedPaneLayout | null> {
-    const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+    const layouts = await this.loadJsonCached<Record<string, PersistedPaneLayout>>(
       this.paneLayoutsFile(),
       () => ({}),
     );
     return layouts[environmentId] ?? null;
+  }
+
+  /**
+   * Loads the layout store once for destructive reconciliation. An absent file
+   * is a valid empty store; a present file that cannot be parsed (including
+   * from a retained backup) is unavailable, never evidence that every tab was
+   * deleted.
+   */
+  async loadPaneLayoutsForReconciliation(): Promise<{
+    available: boolean;
+    layouts: Record<string, PersistedPaneLayout>;
+  }> {
+    const filePath = this.paneLayoutsFile();
+    if (!await exists(filePath)) return { available: true, layouts: {} };
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      if (!raw.trim()) throw new Error("Pane layout store is empty");
+      const layouts = JSON.parse(raw) as unknown;
+      if (!isRecord(layouts)) throw new Error("Pane layout store is not a record");
+      return {
+        available: true,
+        layouts: layouts as Record<string, PersistedPaneLayout>,
+      };
+    } catch {
+      const recovered = await this.recoverJsonFromBackups<unknown>(filePath);
+      if (!recovered || !isRecord(recovered.value)) {
+        return { available: false, layouts: {} };
+      }
+      return {
+        available: true,
+        layouts: recovered.value as Record<string, PersistedPaneLayout>,
+      };
+    }
   }
 
   async savePaneLayout(
@@ -3283,18 +3491,7 @@ export class StorageService {
     if (!isNonNegativeInteger(expectedRevision)) {
       throw new Error("Pane layout expected revision must be a non-negative integer");
     }
-    let serializedRoot: string | undefined;
-    try {
-      serializedRoot = JSON.stringify(layout.root);
-    } catch {
-      throw new Error("Pane layout root must be JSON serializable");
-    }
-    if (serializedRoot === undefined) {
-      throw new Error("Pane layout root must be JSON serializable");
-    }
-    if (Buffer.byteLength(serializedRoot, "utf8") > 256 * 1024) {
-      throw new Error("Pane layout root exceeds the 256 KB limit");
-    }
+    assertPaneLayoutRootWithinBounds(layout.root);
 
     return this.enqueuePaneLayoutMutation(async () => {
       if (!await this.getEnvironment(environmentId)) {
@@ -3327,6 +3524,92 @@ export class StorageService {
       // backups for every focus change.
       await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
       this.announce("pane-layout", environmentId);
+      return saved;
+    });
+  }
+
+  /** Add the backend-owned build surface before start_build_pipeline returns. */
+  async ensureBuildPipelineTab(input: {
+    pipelineId: string;
+    taskId: string;
+    environmentId: string;
+    isLocal: boolean;
+  }): Promise<PersistedPaneLayout> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.getEnvironment(input.environmentId);
+      if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
+      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+        this.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[input.environmentId];
+      const root = previous
+        ? JSON.parse(JSON.stringify(previous.root)) as unknown
+        : { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+
+      type Leaf = { kind: "leaf"; id: string; tabs: Array<Record<string, unknown>>; activeTabId: string | null };
+      const leaves: Leaf[] = [];
+      const visit = (node: unknown): void => {
+        if (!node || typeof node !== "object" || Array.isArray(node)) return;
+        const record = node as Record<string, unknown>;
+        if (record.kind === "leaf" && typeof record.id === "string" && Array.isArray(record.tabs)) {
+          leaves.push(record as unknown as Leaf);
+          return;
+        }
+        if (record.kind === "split" && Array.isArray(record.children)) {
+          for (const child of record.children) visit(child);
+        }
+      };
+      visit(root);
+      if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
+      const existing = leaves.find((leaf) => leaf.tabs.some((tab) => {
+        const build = tab.buildTabData;
+        return tab.type === "claude-build"
+          && build !== null
+          && typeof build === "object"
+          && !Array.isArray(build)
+          && (build as Record<string, unknown>).taskId === input.taskId;
+      }));
+      const target = existing
+        ?? leaves.find((leaf) => leaf.id === previous?.activePaneId)
+        ?? leaves[0]!;
+      const existingTab = existing?.tabs.find((tab) => {
+        const build = tab.buildTabData as Record<string, unknown> | undefined;
+        return tab.type === "claude-build" && build?.taskId === input.taskId;
+      });
+      const tabId = typeof existingTab?.id === "string" && existingTab.id.length > 0
+        ? existingTab.id
+        : `build-${input.pipelineId}`;
+      const buildTabData = {
+        environmentId: input.environmentId,
+        pipelineId: input.pipelineId,
+        taskId: input.taskId,
+        isLocal: input.isLocal,
+      };
+      if (existingTab) {
+        existingTab.id = tabId;
+        existingTab.buildTabData = buildTabData;
+      } else {
+        target.tabs.push({
+          id: tabId,
+          type: "claude-build",
+          buildTabData,
+        });
+      }
+      target.activeTabId = tabId;
+      const saved: PersistedPaneLayout = {
+        version: PANE_LAYOUT_VERSION,
+        environmentId: input.environmentId,
+        containerId: environment.containerId,
+        activePaneId: target.id,
+        root,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[input.environmentId] = saved;
+      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
+      this.announce("pane-layout", input.environmentId);
       return saved;
     });
   }
@@ -5984,6 +6267,11 @@ export class StorageService {
   async getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
     const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
     return tasks.filter((task) => task.projectId === projectId);
+  }
+
+  async getKanbanTask(taskId: string): Promise<KanbanTask | null> {
+    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+    return tasks.find((task) => task.id === taskId) ?? null;
   }
 
   /**

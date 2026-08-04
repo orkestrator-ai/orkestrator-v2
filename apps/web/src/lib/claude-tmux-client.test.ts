@@ -43,6 +43,7 @@ beforeEach(() => {
 
 import {
   CLAUDE_TMUX_EVENT,
+  answerSelectionPrompt,
   answerPreToolUse,
   capturePane,
   createInteractiveTerminal,
@@ -232,6 +233,26 @@ describe("claude-tmux-client invoke wrappers", () => {
       tabId: "tab-1",
       environmentId: "env-1",
       keys: ["C-c", "Enter"],
+    });
+  });
+
+  test("answerSelectionPrompt forwards the complete observation binding", async () => {
+    await answerSelectionPrompt("tab-1", "env-1", {
+      expectedGeneration: "generation-1",
+      expectedRevision: 7,
+      expectedPromptFingerprint: "prompt-fingerprint",
+      optionIndex: 2,
+    });
+    expect(calls[0]).toEqual({
+      cmd: "claude_tmux_answer_selection_prompt",
+      args: {
+        tabId: "tab-1",
+        environmentId: "env-1",
+        expectedGeneration: "generation-1",
+        expectedRevision: 7,
+        expectedPromptFingerprint: "prompt-fingerprint",
+        optionIndex: 2,
+      },
     });
   });
 

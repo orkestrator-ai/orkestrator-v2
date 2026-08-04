@@ -151,6 +151,13 @@ export interface Environment {
    * and so incomplete setup can be re-run on the next app session.
    */
   setupScriptsComplete?: boolean;
+  /** Single backend-owned setup lifecycle projection. */
+  setupPhase?: "pending" | "running" | "ready" | "failed";
+  /** Persisted user acknowledgement that setup may be bypassed. */
+  setupOverride?: boolean;
+  setupSessionId?: string;
+  setupStartedAt?: string;
+  setupCompletedAt?: string;
   /**
    * Agent work finished here and no client has opened it since. Backend-owned
    * so the badge is consistent across every connected client rather than being
@@ -211,10 +218,6 @@ export interface DomainTestResult {
 
 /** Result from starting an environment */
 export interface StartEnvironmentResult {
-  /** Legacy setup command plan. New Electron starts run setup in backend-owned terminal sessions. */
-  setupCommands?: string[];
-  /** True when Electron owns setup execution instead of handing commands to React. */
-  setupManagedByBackend?: boolean;
   /** True when setup is currently running in a backend-owned terminal session. */
   setupStarted?: boolean;
   /** Backend PTY session id for the setup terminal, when setup started. */

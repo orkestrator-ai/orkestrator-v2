@@ -99,7 +99,7 @@ import {
 } from "./codex-preferences";
 import { requireCodexForkPlanEntry } from "./codex-message-fork";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { isSetupPending } from "@/lib/setup-commands";
+import { isSetupBlocked } from "@/lib/setup-commands";
 import {
   enqueueAgentPrompt,
   transferAgentPromptToComposeDraft,
@@ -465,24 +465,11 @@ export function CodexChatTab({
   );
 
   // Setup completion awareness - block initialization until setup scripts finish
-  const setupScriptsRunning = useEnvironmentStore(
-    (state) => state.setupScriptsRunning.has(environmentId)
+  const setupPhase = useEnvironmentStore((state) =>
+    state.environments.find((environment) => environment.id === environmentId)?.setupPhase
   );
-  const setupCommandsResolved = useEnvironmentStore(
-    (state) => state.setupCommandsResolved.has(environmentId)
-  );
-  const hasPendingSetupCommands = useEnvironmentStore(
-    (state) => state.pendingSetupCommands.has(environmentId)
-  );
-  const workspaceReady = useEnvironmentStore(
-    (state) => state.workspaceReadyEnvironments.has(environmentId)
-  );
-  const setupPending = isSetupPending({
-    isLocal: !!isLocal,
-    setupCommandsResolved,
-    hasPendingSetupCommands,
-    setupScriptsRunning,
-    workspaceReady,
+  const setupPending = isSetupBlocked({
+    setupPhase,
   });
 
   /** `sessionPhase` is undefined until the bridge reports one for this session. */
@@ -1006,8 +993,8 @@ export function CodexChatTab({
         }
         return "unknown";
       }
-      if (sent.turnStartedAt !== undefined) {
-        setSessionLoading(sessionKey, true, sent.turnStartedAt);
+      if (sent.turnStartedAt !== undefined || sent.turnId !== undefined) {
+        setSessionLoading(sessionKey, true, sent.turnStartedAt, sent.turnId);
       }
       /**
        * Any accepted dispatch spends the stored key.
@@ -1575,6 +1562,8 @@ export function CodexChatTab({
                 sessionId: projectedSessionId,
                 messages: restoredMessages,
                 isLoading: restoredStatus.status === "running",
+                turnId: restoredStatus.turnId,
+                loadingStartedAt: restoredStatus.turnStartedAt,
                 title: restoredStatus.title,
                 error: restoredStatus.status === "error" ? restoredStatus.error : undefined,
               });
@@ -1750,6 +1739,17 @@ export function CodexChatTab({
             // Preserve client-only transcript parts when reconnecting the same
             // identity; setMessages performs the store's normal merge.
             setMessages(sessionKey, messages);
+            setSessionLoading(
+              sessionKey,
+              existingStatus.status === "running",
+              existingStatus.turnStartedAt,
+              existingStatus.turnId,
+            );
+            setSessionTitle(sessionKey, existingStatus.title);
+            setSessionError(
+              sessionKey,
+              existingStatus.status === "error" ? existingStatus.error : undefined,
+            );
           } else {
             // A projected backend session can supersede a short-lived cached
             // session. Replace the whole identity and its authoritative metadata;
@@ -1759,6 +1759,8 @@ export function CodexChatTab({
               sessionId: existingSessionId,
               messages,
               isLoading: existingStatus.status === "running",
+              turnId: existingStatus.turnId,
+              loadingStartedAt: existingStatus.turnStartedAt,
               title: existingStatus.title,
               error: existingStatus.status === "error" ? existingStatus.error : undefined,
             });
@@ -1883,6 +1885,9 @@ export function CodexChatTab({
     setSelectedModel,
     setServerStatus,
     setSession,
+    setSessionError,
+    setSessionLoading,
+    setSessionTitle,
     seedInitialFastMode,
     setupPending,
     tabId,
@@ -2337,7 +2342,7 @@ export function CodexChatTab({
       return "applied";
     }
 
-    setSessionLoading(sessionKey, true, status.turnStartedAt);
+    setSessionLoading(sessionKey, true, status.turnStartedAt, status.turnId);
     setSessionError(sessionKey, undefined);
     finishBackendStartupTracking();
     if (options?.forceRefreshMessages) {
@@ -2711,6 +2716,9 @@ export function CodexChatTab({
               const turnStartedAt = parseCodexTurnStartedAt(
                 event.data?.turnStartedAt,
               );
+              const turnId = typeof event.data?.turnId === "string"
+                ? event.data.turnId
+                : undefined;
               if (isCodexSessionPhase(phase)) {
                 const terminal = phase === "idle" || phase === "failed";
                 if (!terminal || !backendStartupIsStillPreDispatch()) {
@@ -2726,7 +2734,7 @@ export function CodexChatTab({
                  * `session.error` remain authoritative for unlocking.
                  */
                 if (!terminal || dispatchInFlightRef.current === 0) {
-                  setSessionLoading(sessionKey, !terminal, turnStartedAt);
+                  setSessionLoading(sessionKey, !terminal, turnStartedAt, turnId);
                 }
                 if (!terminal) {
                   setSessionError(sessionKey, undefined);
@@ -2981,6 +2989,7 @@ export function CodexChatTab({
     return (
       <SetupPendingOverlay
         environmentId={environmentId}
+        setupPhase={setupPhase}
         subtext="Codex will connect automatically once setup finishes"
       />
     );

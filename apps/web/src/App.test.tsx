@@ -117,17 +117,20 @@ mock.module("@/components/terminal", () => ({
   TerminalContainer: ({
     environmentId,
     isActive,
+    isContainerRunning,
     onStartContainer,
     onCreateScript,
   }: {
     environmentId: string;
     isActive: boolean;
+    isContainerRunning?: boolean;
     onStartContainer?: (initialPrompt?: string) => void;
     onCreateScript?: (initialPrompt: string) => void;
   }) => (
     <div
       data-testid={`terminal-${environmentId}`}
       data-active={String(isActive)}
+      data-container-running={String(isContainerRunning)}
     >
       {environmentId}
       <button
@@ -345,12 +348,10 @@ function resetStores({
   environments,
   selectedProjectId,
   selectedEnvironmentId,
-  setupScriptsRunning = new Set<string>(),
 }: {
   environments: Environment[];
   selectedProjectId: string | null;
   selectedEnvironmentId: string | null;
-  setupScriptsRunning?: Set<string>;
 }) {
   localStorage.clear();
 
@@ -358,11 +359,7 @@ function resetStores({
     environments,
     isLoading: false,
     error: null,
-    workspaceReadyEnvironments: new Set(),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning,
   });
 
   useUIStore.setState({
@@ -558,32 +555,60 @@ describe("App background processing mounts", () => {
     expect(mockUseCodexBackgroundSync).toHaveBeenCalledTimes(1);
   });
 
-  test("keeps off-screen setup-running environments mounted in hidden background terminals", async () => {
+  test("keeps a live container available when its setup phase failed", async () => {
     resetStores({
-      environments: [
-        makeEnvironment("env-visible", "project-1"),
-        makeEnvironment("env-background", "project-2"),
-      ],
+      environments: [{
+        ...makeEnvironment("env-failed-setup", "project-1"),
+        status: "error",
+        setupPhase: "failed",
+      }],
       selectedProjectId: "project-1",
-      selectedEnvironmentId: "env-visible",
-      setupScriptsRunning: new Set(["env-background"]),
+      selectedEnvironmentId: "env-failed-setup",
     });
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
-      expect(screen.getByTestId("terminal-env-background")).toBeTruthy();
+    const terminal = await screen.findByTestId("terminal-env-failed-setup");
+    expect(terminal.getAttribute("data-container-running")).toBe("true");
+  });
+
+  test("does not treat a stopped container with failed setup as available", async () => {
+    resetStores({
+      environments: [{
+        ...makeEnvironment("env-stopped-setup", "project-1"),
+        status: "stopped",
+        setupPhase: "failed",
+      }],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-stopped-setup",
     });
 
-    const backgroundHostClasses = screen
-      .getByTestId("background-terminal-host")
-      .className
-      .split(/\s+/);
-    expect(backgroundHostClasses).toContain("invisible");
-    expect(backgroundHostClasses).not.toContain("hidden");
+    render(<App />);
+
+    const terminal = await screen.findByTestId("terminal-env-stopped-setup");
+    expect(terminal.getAttribute("data-container-running")).toBe("false");
+  });
+
+  test("does not mount off-screen environments solely for backend-owned setup work", async () => {
+    resetStores({
+      environments: [
+        makeEnvironment("env-visible", "project-1"),
+        {
+          ...makeEnvironment("env-background", "project-2"),
+          setupPhase: "running",
+        },
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
+
     expect(screen.getByTestId("terminal-env-visible").getAttribute("data-active")).toBe("true");
-    expect(screen.getByTestId("terminal-env-background").getAttribute("data-active")).toBe("false");
+    expect(screen.queryByTestId("terminal-env-background")).toBeNull();
+    expect(screen.queryByTestId("background-terminal-host")).toBeNull();
   });
 
   test("hydrates looped reviews exactly once per environment, starting from an empty store", async () => {
@@ -849,7 +874,7 @@ describe("App background processing mounts", () => {
     );
   });
 
-  test("keeps off-screen environments with pending setup commands mounted before setup starts", async () => {
+  test("does not mount off-screen environments solely for pending backend setup", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
@@ -858,18 +883,15 @@ describe("App background processing mounts", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
     });
-    useEnvironmentStore.getState().setPendingSetupCommands("env-pending-setup", [
-      "/usr/local/bin/workspace-setup.sh",
-    ]);
+    useEnvironmentStore.getState().updateEnvironment("env-pending-setup", {
+      setupPhase: "pending",
+    });
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
-      expect(screen.getByTestId("terminal-env-pending-setup")).toBeTruthy();
-    });
-
-    expect(screen.getByTestId("terminal-env-pending-setup").getAttribute("data-active")).toBe("false");
+    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
+    expect(screen.queryByTestId("terminal-env-pending-setup")).toBeNull();
+    expect(screen.queryByTestId("background-terminal-host")).toBeNull();
   });
 
   test("does not duplicate setup-running environments that are already visible", async () => {
@@ -877,7 +899,6 @@ describe("App background processing mounts", () => {
       environments: [makeEnvironment("env-visible", "project-1")],
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
-      setupScriptsRunning: new Set(["env-visible"]),
     });
 
     render(<App />);

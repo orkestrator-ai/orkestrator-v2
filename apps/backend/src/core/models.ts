@@ -6,6 +6,7 @@ import type {
   AgentActivityState,
   FrontendAgentActivityObserverSnapshot,
 } from "@orkestrator/protocol/agent-activity";
+import type { TabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import type {
   AgentInteractionOrigin,
   AgentInteractionPolicy,
@@ -34,6 +35,7 @@ export type PrState = "open" | "merged" | "closed";
 export type NetworkAccessMode = "full" | "restricted";
 export type EnvironmentType = "containerized" | "local";
 export type EnvironmentLifecycleOperation = "deleting" | "merging";
+export type EnvironmentSetupPhase = "pending" | "running" | "ready" | "failed";
 export type PortProtocol = "tcp" | "udp";
 
 export interface PortMapping {
@@ -250,6 +252,21 @@ export interface Environment {
   opencodeMode?: OpenCodeMode;
   codexMode?: CodexMode;
   setupScriptsComplete?: boolean;
+  /** Single backend-owned setup lifecycle projection. */
+  setupPhase?: EnvironmentSetupPhase;
+  /** Persisted acknowledgement that lets the user proceed after a setup failure. */
+  setupOverride?: boolean;
+  setupSessionId?: string;
+  setupStartedAt?: string;
+  setupCompletedAt?: string;
+  /** Durable cleanup work written before a tab's external resources are closed. */
+  tabTeardownIntents?: Record<string, {
+    tabId: string;
+    kind: TabTeardownKind;
+    sessionId?: string;
+    persistentSessionId?: string;
+    createdAt: string;
+  }>;
   /**
    * Agent work finished here and no client has opened it since.
    *
@@ -284,6 +301,7 @@ export type ClientEnvironment = Omit<
   | "claudeBridgePid"
   | "codexBridgePid"
   | "pendingRenamePrompt"
+  | "tabTeardownIntents"
 > & {
   /**
    * Whether the stripped `initialPromptAttachments` array holds anything.

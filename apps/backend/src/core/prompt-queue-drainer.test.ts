@@ -32,6 +32,7 @@ interface Harness {
 async function harness(options: {
   environmentName?: string;
   setupScriptsComplete?: boolean;
+  setupPhase?: "pending" | "running" | "ready" | "failed";
   status?: "running" | "stopped";
   containerId?: string | null;
   maxDispatchAttempts?: number;
@@ -55,6 +56,7 @@ async function harness(options: {
     environmentType: "local",
     worktreePath: "/tmp/tmux",
     setupScriptsComplete: options.setupScriptsComplete ?? true,
+    ...(options.setupPhase === undefined ? {} : { setupPhase: options.setupPhase }),
   });
 
   const context: Harness = {
@@ -278,6 +280,23 @@ describe("PromptQueueDrainer", () => {
       expect(context.submits()).toHaveLength(0);
       expect(context.calls.some((call) => call.command === "claude_tmux_status")).toBe(false);
       expect((await context.queue())?.messages).toHaveLength(1);
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("treats the authoritative ready phase as ready during legacy flag convergence", async () => {
+    const context = await harness({
+      setupScriptsComplete: false,
+      setupPhase: "ready",
+    });
+    try {
+      await enqueue(context.storage, [{ id: "m-1", text: "Queued", attachments: [] }]);
+
+      await context.drainer.drainAll();
+
+      expect(context.submits()).toHaveLength(1);
+      expect((await context.queue())?.messages).toHaveLength(0);
     } finally {
       await context.dispose();
     }

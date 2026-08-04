@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createSessionKey } from "@/lib/utils";
+import { listen } from "@/lib/native/events";
 import type {
   CodexApproval,
   CodexClient,
@@ -10,7 +11,6 @@ import type {
 } from "@/lib/codex-client";
 import { useCodexStore } from "@/stores/codexStore";
 import {
-  CODEX_BACKGROUND_SYNC_INTERVAL_MS,
   createCodexBackgroundSynchronizer,
   type CodexBackgroundSyncDependencies,
   useCodexBackgroundSync,
@@ -120,6 +120,7 @@ function seedLoadingSession(
         messages,
         isLoading: true,
         loadingStartedAt,
+        turnId: `turn-${loadingStartedAt}`,
       },
     ]]),
   });
@@ -129,6 +130,7 @@ beforeEach(() => {
   useCodexStore.setState({
     clients: new Map(),
     sessions: new Map(),
+    sessionLoadingRevisions: new Map(),
     pendingApprovals: new Map(),
     pendingInteractions: new Map(),
     sessionPhase: new Map(),
@@ -165,6 +167,58 @@ describe("Codex background synchronization", () => {
     expect(session?.lastCompletedElapsedSeconds).toBeGreaterThanOrEqual(5);
     expect(session?.messages[0]?.parts[0]?.toolState).toBe("success");
     expect(useCodexStore.getState().sessionPhase.has(SESSION_KEY)).toBe(false);
+  });
+
+  test("falls back to status when the non-touching activity route is unsupported", async () => {
+    seedLoadingSession();
+    let statusCalls = 0;
+    const synchronizer = createCodexBackgroundSynchronizer({
+      dependencies: {
+        ...dependencies({
+          kind: "found",
+          session: { status: "running", phase: "running" },
+        }),
+        lookupSessionActivity: async () => ({ kind: "unsupported" }),
+        lookupSessionStatus: async () => {
+          statusCalls += 1;
+          return {
+            kind: "found",
+            session: { status: "running", phase: "running" },
+          };
+        },
+      },
+    });
+
+    await synchronizer.reconcileNow();
+
+    expect(statusCalls).toBe(1);
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+  });
+
+  test("leaves state untouched when the activity probe is temporarily unavailable", async () => {
+    seedLoadingSession();
+    let statusCalls = 0;
+    const synchronizer = createCodexBackgroundSynchronizer({
+      dependencies: {
+        ...dependencies({
+          kind: "found",
+          session: { status: "idle", phase: "idle" },
+        }),
+        lookupSessionActivity: async () => ({
+          kind: "unavailable",
+          error: new Error("offline"),
+        }),
+        lookupSessionStatus: async () => {
+          statusCalls += 1;
+          return { kind: "missing" };
+        },
+      },
+    });
+
+    await synchronizer.reconcileNow();
+
+    expect(statusCalls).toBe(0);
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
   });
 
   test("rehydrates pending input while a background turn is running", async () => {
@@ -249,6 +303,7 @@ describe("Codex background synchronization", () => {
         ...sessions.get(SESSION_KEY)!,
         isLoading: true,
         loadingStartedAt: 200,
+        turnId: "turn-200",
       });
       return { sessions };
     });
@@ -262,6 +317,83 @@ describe("Codex background synchronization", () => {
     expect(session?.isLoading).toBe(true);
     expect(session?.loadingStartedAt).toBe(200);
     expect(session?.messages[0]?.parts[0]?.toolState).toBe("pending");
+  });
+
+  test("does not apply an old response after an undefined-id turn rolls over", async () => {
+    seedLoadingSession(100);
+    useCodexStore.setState((state) => {
+      const sessions = new Map(state.sessions);
+      sessions.set(SESSION_KEY, {
+        ...sessions.get(SESSION_KEY)!,
+        turnId: undefined,
+      });
+      return {
+        sessions,
+        sessionLoadingRevisions: new Map([[SESSION_KEY, 1]]),
+      };
+    });
+    const lookup = deferred<CodexSessionStatusLookupResult>();
+    let messageReads = 0;
+    const synchronizer = createCodexBackgroundSynchronizer({
+      dependencies: {
+        ...dependencies({ kind: "unavailable", error: new Error("unused") }),
+        lookupSessionStatus: async () => lookup.promise,
+        getSessionMessages: async () => {
+          messageReads += 1;
+          return [toolMessage("success")];
+        },
+      },
+    });
+
+    const pending = synchronizer.reconcileNow();
+    // A live idle frame unlocks the old turn, and the user starts a new prompt
+    // before its POST has returned a provider turn id.
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, false);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+    lookup.resolve({
+      kind: "found",
+      session: { status: "idle", phase: "idle" },
+    });
+    await pending;
+
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+      isLoading: true,
+      turnId: undefined,
+      messages: [toolMessage("pending")],
+    });
+    expect(messageReads).toBe(0);
+  });
+
+  test("adopts a running status turn id even when its start time is absent", async () => {
+    seedLoadingSession(100);
+    useCodexStore.setState((state) => {
+      const sessions = new Map(state.sessions);
+      sessions.set(SESSION_KEY, {
+        ...sessions.get(SESSION_KEY)!,
+        turnId: undefined,
+      });
+      return {
+        sessions,
+        sessionLoadingRevisions: new Map([[SESSION_KEY, 1]]),
+      };
+    });
+    const synchronizer = createCodexBackgroundSynchronizer({
+      dependencies: dependencies({
+        kind: "found",
+        session: {
+          status: "running",
+          phase: "running",
+          turnId: "turn-authoritative",
+        },
+      }),
+    });
+
+    await synchronizer.reconcileNow();
+
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+      isLoading: true,
+      turnId: "turn-authoritative",
+    });
   });
 
   test("does not apply a delayed terminal transcript to a newer turn", async () => {
@@ -294,6 +426,7 @@ describe("Codex background synchronization", () => {
         messages: [toolMessage("pending")],
         isLoading: true,
         loadingStartedAt: 200,
+        turnId: "turn-200",
         title: "Newer turn",
         error: "newer error",
       });
@@ -1234,12 +1367,16 @@ describe("Codex background synchronization", () => {
     expect(useCodexStore.getState().sessions.get(malformedKey)?.isLoading).toBe(true);
   });
 
-  test("the hook reconciles immediately, polls repeatedly, and disposes on cleanup", async () => {
+  test("the hook subscribes before its initial snapshot and installs a safety retry", async () => {
     seedLoadingSession();
     const originalSetInterval = window.setInterval;
-    const originalClearInterval = window.clearInterval;
-    let scheduled: TimerHandler | undefined;
-    let cleared: number | undefined;
+    const listenMock = listen as unknown as {
+      mockClear: () => void;
+      mock: { calls: unknown[][] };
+    };
+    listenMock.mockClear();
+    let intervalCalls = 0;
+    let intervalCallback: (() => void) | undefined;
     let statusCalls = 0;
     let approvalCalls = 0;
     let interactionCalls = 0;
@@ -1249,6 +1386,9 @@ describe("Codex background synchronization", () => {
         session: { status: "running", phase: "running" },
       }),
       lookupSessionStatus: async () => {
+        // Both async subscriptions must have been requested before the first
+        // authoritative snapshot begins.
+        expect(listenMock.mock.calls).toHaveLength(2);
         statusCalls += 1;
         return {
           kind: "found",
@@ -1264,35 +1404,31 @@ describe("Codex background synchronization", () => {
         return [];
       },
     };
-    window.setInterval = ((handler: TimerHandler, timeout?: number) => {
-      expect(timeout).toBe(CODEX_BACKGROUND_SYNC_INTERVAL_MS);
-      scheduled = handler;
+    window.setInterval = ((callback: TimerHandler) => {
+      intervalCalls += 1;
+      intervalCallback = callback as () => void;
       return 73;
-    }) as typeof window.setInterval;
-    window.clearInterval = ((id: number) => {
-      cleared = id;
-    }) as typeof window.clearInterval;
+    }) as unknown as typeof window.setInterval;
 
     try {
       const hook = renderHook(() => useCodexBackgroundSync({
         dependencies: hookDependencies,
       }));
+      expect(listenMock.mock.calls).toHaveLength(2);
       expect([statusCalls, approvalCalls, interactionCalls]).toEqual([1, 1, 1]);
+      expect(intervalCalls).toBe(1);
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-      expect(typeof scheduled).toBe("function");
-      if (typeof scheduled === "function") scheduled();
-      expect([statusCalls, approvalCalls, interactionCalls]).toEqual([2, 2, 2]);
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      intervalCallback?.();
+      await waitFor(() => {
+        expect([statusCalls, approvalCalls, interactionCalls]).toEqual([2, 2, 2]);
+      });
       hook.unmount();
-      expect(cleared).toBe(73);
-      if (typeof scheduled === "function") scheduled();
-      await Promise.resolve();
       expect([statusCalls, approvalCalls, interactionCalls]).toEqual([2, 2, 2]);
       expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
     } finally {
       cleanup();
       window.setInterval = originalSetInterval;
-      window.clearInterval = originalClearInterval;
+      listenMock.mockClear();
     }
   });
 });

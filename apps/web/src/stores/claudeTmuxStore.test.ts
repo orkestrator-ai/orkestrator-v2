@@ -1444,6 +1444,114 @@ describe("drafts, attachments, and queue helpers", () => {
 });
 
 describe("session lifecycle", () => {
+  test("accepts restarted-session observations from revision one and rejects the retired generation", () => {
+    const store = useClaudeTmuxStore.getState();
+    const oldPrompt = {
+      question: "Old prompt",
+      options: [{ number: 1, label: "Continue", optionIndex: 0, selected: true }],
+      selectedOptionIndex: 0,
+      inputMode: "navigate" as const,
+    };
+    store.setRunning("e", true, {
+      sessionId: "sess-1",
+      observationGeneration: "generation-a",
+    });
+    store.setObservation("e", {
+      generation: "generation-a",
+      revision: 47,
+      observedAt: "2026-08-04T12:00:00.000Z",
+      usage: [],
+      prompt: oldPrompt,
+    });
+
+    // Replacing a tmux process may resume the same provider session id. The
+    // backend generation, not that id, scopes the revision counter.
+    store.setRunning("e", true, {
+      sessionId: "sess-1",
+      observationGeneration: "generation-b",
+    });
+    expect(useClaudeTmuxStore.getState().getTab("e").observation).toMatchObject({
+      generation: "generation-b",
+      revision: 0,
+      prompt: null,
+    });
+
+    store.setObservation("e", {
+      generation: "generation-a",
+      revision: 48,
+      observedAt: "2026-08-04T12:00:01.000Z",
+      usage: [],
+      prompt: oldPrompt,
+    });
+    store.setObservation("e", {
+      generation: "generation-b",
+      revision: 1,
+      observedAt: "2026-08-04T12:00:02.000Z",
+      usage: [],
+      prompt: null,
+    });
+
+    expect(useClaudeTmuxStore.getState().getTab("e").observation).toMatchObject({
+      generation: "generation-b",
+      revision: 1,
+      prompt: null,
+    });
+  });
+
+  test("a stopped transition drops the dead session prompt", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.setRunning("e", true, { sessionId: "sess-1" });
+    store.setObservation("e", {
+      revision: 4,
+      observedAt: "2026-08-04T12:00:00.000Z",
+      usage: [],
+      prompt: {
+        question: "Still there?",
+        options: [{ number: 1, label: "Yes", optionIndex: 0, selected: true }],
+        selectedOptionIndex: 0,
+        inputMode: "navigate",
+      },
+    });
+
+    store.setRunning("e", false, { sessionId: null });
+
+    expect(useClaudeTmuxStore.getState().getTab("e").observation).toMatchObject({
+      revision: 0,
+      prompt: null,
+    });
+  });
+
+  test("optimistic prompt clearing does not erase a newer authoritative prompt", () => {
+    const store = useClaudeTmuxStore.getState();
+    const first = {
+      question: "First",
+      options: [{ number: 1, label: "One", optionIndex: 0, selected: true }],
+      selectedOptionIndex: 0,
+      inputMode: "navigate" as const,
+    };
+    const second = {
+      ...first,
+      question: "Second",
+    };
+    store.setObservation("e", {
+      revision: 1,
+      observedAt: "2026-08-04T12:00:00.000Z",
+      usage: [],
+      prompt: first,
+    });
+    store.clearSelectionPrompt("e", first);
+    expect(useClaudeTmuxStore.getState().getTab("e").observation.prompt).toBeNull();
+
+    store.setObservation("e", {
+      revision: 2,
+      observedAt: "2026-08-04T12:00:01.000Z",
+      usage: [],
+      prompt: second,
+    });
+    store.clearSelectionPrompt("e", first);
+    expect(useClaudeTmuxStore.getState().getTab("e").observation.prompt).toBe(second);
+  });
+
   test("setRunning preserves prior sessionId when called without sessionId", () => {
     useClaudeTmuxStore
       .getState()

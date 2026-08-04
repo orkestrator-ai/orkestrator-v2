@@ -425,12 +425,8 @@ mock.module("@/stores", () => ({
     ),
   useEnvironmentStore: <T,>(selector?: (state: {
     environments: Environment[];
-    workspaceReadyEnvironments: Set<string>;
-    setupScriptsRunning: Set<string>;
     getEnvironmentById: (environmentId: string) => Environment | undefined;
     updateEnvironment: (environmentId: string, environment: Environment) => void;
-    isWorkspaceReady: () => boolean;
-    isSetupScriptsRunning: () => boolean;
     setEnvironmentPR: () => void;
   }) => T) =>
     selectState(
@@ -438,18 +434,28 @@ mock.module("@/stores", () => ({
         environments: [
           ...(currentSelectedEnvironmentId ? [currentEnvironment] : []),
           ...currentOtherEnvironments,
-        ],
-        workspaceReadyEnvironments: currentWorkspaceReady
-          ? new Set([currentEnvironment.id])
-          : new Set<string>(),
-        setupScriptsRunning: currentSetupScriptsRunning
-          ? new Set([currentEnvironment.id])
-          : new Set<string>(),
+        ].map((environment) => environment.id === currentEnvironment.id
+          ? {
+              ...environment,
+              setupPhase: (currentSetupScriptsRunning
+                ? "running"
+                : currentWorkspaceReady
+                  ? "ready"
+                  : "pending") as Environment["setupPhase"],
+            }
+          : environment),
         getEnvironmentById: (environmentId: string) =>
-          environmentId === currentEnvironment.id ? currentEnvironment : undefined,
+          environmentId === currentEnvironment.id
+            ? {
+                ...currentEnvironment,
+                setupPhase: (currentSetupScriptsRunning
+                  ? "running"
+                  : currentWorkspaceReady
+                    ? "ready"
+                    : "pending") as Environment["setupPhase"],
+              }
+            : undefined,
         updateEnvironment: updateEnvironmentMock,
-        isWorkspaceReady: () => currentWorkspaceReady,
-        isSetupScriptsRunning: () => currentSetupScriptsRunning,
         setEnvironmentPR: setEnvironmentPRStoreMock,
       },
       selector,
@@ -3056,7 +3062,10 @@ describe("ActionBar run commands", () => {
     currentSetupScriptsRunning = true;
     readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
     rerender(<ActionBar />);
-    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(3));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(readContainerFileMock).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Run commands" }));
     expect(createTabMock).not.toHaveBeenCalled();

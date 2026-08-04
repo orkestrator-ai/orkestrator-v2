@@ -157,6 +157,7 @@ const mockGetSessionStatus = mock<
     title?: string;
     error?: string;
     turnStartedAt?: number;
+    turnId?: string;
   } | null>
 >(async () => ({ status: "idle" }));
 const mockLookupSessionStatus = mock<
@@ -841,6 +842,7 @@ function seedEnvironment(name = "20260415-123456") {
         branch: "main",
         containerId: CONTAINER_ID,
         status: "running",
+        setupPhase: "ready",
         prUrl: null,
         prState: null,
         hasMergeConflicts: null,
@@ -852,11 +854,7 @@ function seedEnvironment(name = "20260415-123456") {
     ],
     isLoading: false,
     error: null,
-    workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning: new Set(),
   });
 }
 
@@ -1931,6 +1929,11 @@ describe("CodexChatTab", () => {
 
   test("rehydrates the session id saved in a restored pane tab", async () => {
     const restoredSessionId = "restored-codex-session";
+    mockGetSessionStatus.mockResolvedValueOnce({
+      status: "running",
+      turnStartedAt: 4_000,
+      turnId: "restored-turn",
+    });
     useCodexStore.setState({ sessions: new Map() });
     usePaneLayoutStore
       .getState()
@@ -1949,6 +1952,11 @@ describe("CodexChatTab", () => {
       expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
         restoredSessionId,
       );
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        isLoading: true,
+        loadingStartedAt: 4_000,
+        turnId: "restored-turn",
+      });
     });
     expect(mockCreateSession).not.toHaveBeenCalled();
     const restoredRoot = usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)?.root;
@@ -2143,6 +2151,7 @@ describe("CodexChatTab", () => {
     mockGetSessionStatus.mockResolvedValue({
       status: "running",
       title: "Backend startup",
+      turnId: "backend-startup-turn",
     });
     mockGetSessionMessages.mockResolvedValue([restoredMessage]);
 
@@ -2159,6 +2168,7 @@ describe("CodexChatTab", () => {
         sessionId: projectedSessionId,
         messages: [restoredMessage],
         isLoading: true,
+        turnId: "backend-startup-turn",
         title: "Backend startup",
       });
     });
@@ -2581,8 +2591,8 @@ describe("CodexChatTab", () => {
     useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
       createdAt: new Date().toISOString(),
     });
-    useEnvironmentStore.setState({
-      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "ready",
     });
     mockGetLocalCodexServerStatus.mockResolvedValue({
       running: false,
@@ -2857,8 +2867,8 @@ describe("CodexChatTab", () => {
     useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
       createdAt: new Date(Date.now() - 61_000).toISOString(),
     });
-    useEnvironmentStore.setState({
-      workspaceReadyEnvironments: new Set(),
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "pending",
     });
     mockGetCodexServerStatus
       .mockRejectedValueOnce(new Error("bridge delayed by setup"))
@@ -2875,8 +2885,8 @@ describe("CodexChatTab", () => {
       expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
 
       act(() => {
-        useEnvironmentStore.setState({
-          workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
+        useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+          setupPhase: "ready",
         });
       });
 
@@ -3016,8 +3026,8 @@ describe("CodexChatTab", () => {
       clients: new Map(),
       sessions: new Map(),
     }));
-    useEnvironmentStore.setState({
-      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "ready",
     });
     mockGetLocalCodexServerStatus.mockRejectedValueOnce("local bridge offline");
 
@@ -3033,8 +3043,8 @@ describe("CodexChatTab", () => {
       clients: new Map(),
       sessions: new Map(),
     }));
-    useEnvironmentStore.setState({
-      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "ready",
     });
     mockGetLocalCodexServerStatus.mockResolvedValueOnce({
       running: false,
@@ -3061,8 +3071,8 @@ describe("CodexChatTab", () => {
       clients: new Map(),
       sessions: new Map(),
     }));
-    useEnvironmentStore.setState({
-      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "ready",
     });
 
     render(<CodexChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
@@ -3085,8 +3095,8 @@ describe("CodexChatTab", () => {
       clients: new Map(),
       sessions: new Map(),
     }));
-    useEnvironmentStore.setState({
-      setupCommandsResolved: new Set([ENVIRONMENT_ID]),
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "ready",
     });
     mockGetLocalCodexServerStatus.mockResolvedValueOnce({
       running: true,

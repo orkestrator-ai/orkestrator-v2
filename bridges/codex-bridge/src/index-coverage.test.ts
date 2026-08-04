@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -397,6 +397,74 @@ describe("codex bridge private boundary coverage", () => {
       "[codex-bridge] Failed to write SSE keepalive:",
       expect.any(Error),
     ]);
+  });
+
+  test("writes keepalives with the latest replay cursor and an empty payload", async () => {
+    jest.useFakeTimers();
+    __testing.emitForTesting({
+      type: "session.updated",
+      sessionId: "keepalive-cursor",
+    });
+    const revision = __testing.eventRingForTesting().latestRevision;
+    const writes: Array<{ event: string; data: string; id?: string }> = [];
+    const timer = __testing.startSseKeepaliveForTesting(
+      async (frame) => {
+        writes.push(frame);
+      },
+      5,
+    );
+
+    try {
+      jest.advanceTimersByTime(5);
+      await Promise.resolve();
+    } finally {
+      clearInterval(timer);
+      jest.useRealTimers();
+    }
+
+    expect(writes).toEqual([{
+      event: "keepalive",
+      id: String(revision),
+      data: "{}",
+    }]);
+  });
+
+  test("keeps an idle heartbeat floor while using the faster active cadence", async () => {
+    jest.useFakeTimers();
+    const idleWrites: number[] = [];
+    const idleTimer = __testing.startSseKeepaliveForTesting(
+      async () => {
+        idleWrites.push(Date.now());
+      },
+      2,
+      () => false,
+      14,
+    );
+    try {
+      jest.advanceTimersByTime(8);
+      expect(idleWrites).toHaveLength(0);
+      jest.advanceTimersByTime(6);
+    } finally {
+      clearInterval(idleTimer);
+    }
+    expect(idleWrites.length).toBeGreaterThanOrEqual(1);
+
+    const activeWrites: number[] = [];
+    const activeTimer = __testing.startSseKeepaliveForTesting(
+      async () => {
+        activeWrites.push(Date.now());
+      },
+      2,
+      () => true,
+      100,
+    );
+    try {
+      jest.advanceTimersByTime(4);
+    } finally {
+      clearInterval(activeTimer);
+      jest.useRealTimers();
+    }
+    expect(activeWrites.length).toBeGreaterThanOrEqual(2);
   });
 
   test("round-trips the bridge model cache and rejects stale or malformed caches", async () => {

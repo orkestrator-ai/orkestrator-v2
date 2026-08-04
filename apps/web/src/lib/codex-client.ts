@@ -1136,6 +1136,38 @@ export async function lookupSessionStatus(
   }
 }
 
+export type CodexSessionActivityLookupResult =
+  | { kind: "found"; activity: "idle" | "working" | "waiting" }
+  | { kind: "missing" }
+  | { kind: "unsupported" }
+  | { kind: "unavailable"; error: Error };
+
+/** Cheap, non-touching probe used by background reconciliation. */
+export async function lookupSessionActivity(
+  client: CodexClient,
+  sessionId: string,
+): Promise<CodexSessionActivityLookupResult> {
+  try {
+    const response = await fetchCodex(client, `/session/${sessionId}/activity`);
+    // Older bridges predate this non-touching route. A 404 cannot mean the
+    // session is missing because current bridges report that in-band; let the
+    // caller fall back to the legacy status endpoint instead.
+    if (response.status === 404) return { kind: "unsupported" };
+    if (!response.ok) throw new Error(`Failed to get Codex session activity: HTTP ${response.status}`);
+    const body = await response.json() as { activity?: unknown };
+    if (body.activity === "missing") return { kind: "missing" };
+    if (body.activity === "idle" || body.activity === "working" || body.activity === "waiting") {
+      return { kind: "found", activity: body.activity };
+    }
+    throw new Error("Codex session activity response was malformed");
+  } catch (error) {
+    return {
+      kind: "unavailable",
+      error: error instanceof Error ? error : new Error("Failed to get Codex session activity"),
+    };
+  }
+}
+
 export async function getSessionStatus(
   client: CodexClient,
   sessionId: string,
@@ -1664,7 +1696,7 @@ export function subscribeToEvents(
        * bound carried no `id:`. Without one the caller's cursor would not
        * advance and the reconnect would replay from before the drop.
        */
-      let lastSeenRevision: number | undefined;
+      let lastSeenRevision: number | undefined = since;
 
       const handleEvent = (event: MessageEvent) => {
         if (done || endAfterQueue) return;
@@ -1673,12 +1705,27 @@ export function subscribeToEvents(
           // `lastEventId` is the SSE `id:` field. Parsed here so consumers get a
           // number and never have to know the wire format.
           const revision = Number.parseInt(event.lastEventId ?? "", 10);
-          const codexEvent: CodexEvent = {
+          let codexEvent: CodexEvent = {
             type: event.type as CodexEvent["type"],
             sessionId: data.sessionId,
             data,
             ...(Number.isSafeInteger(revision) && revision >= 0 ? { revision } : {}),
           };
+          if (
+            codexEvent.revision !== undefined
+            && lastSeenRevision !== undefined
+            && codexEvent.revision > lastSeenRevision + 1
+          ) {
+            // Filtered streams still carry a bridge.cursor frame for every
+            // other session, so a jump is always a missed frame. Heartbeats
+            // intentionally expose this condition while a turn is active.
+            codexEvent = {
+              type: "session.reconcile-required",
+              sessionId: sessionId ?? codexEvent.sessionId,
+              data: { reason: "revision-gap" },
+              revision: codexEvent.revision,
+            };
+          }
           if (codexEvent.revision !== undefined) lastSeenRevision = codexEvent.revision;
 
           if (resolver) {

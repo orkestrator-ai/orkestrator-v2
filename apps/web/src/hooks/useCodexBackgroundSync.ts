@@ -3,20 +3,26 @@ import {
   fetchPendingApprovals,
   fetchPendingInteractions,
   getSessionMessages,
+  lookupSessionActivity,
   lookupSessionStatus,
   type CodexClient,
   type CodexMessage,
   type CodexSessionStatusLookupResult,
+  type CodexSessionActivityLookupResult,
 } from "@/lib/codex-client";
+import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import {
   CODEX_UNCONFIRMED_DISPATCH_ERROR,
   useCodexStore,
 } from "@/stores/codexStore";
 
-export const CODEX_BACKGROUND_SYNC_INTERVAL_MS = 2_000;
-
 export interface CodexBackgroundSyncDependencies {
+  lookupSessionActivity?: (
+    client: CodexClient,
+    sessionId: string,
+  ) => Promise<CodexSessionActivityLookupResult>;
   lookupSessionStatus: (
     client: CodexClient,
     sessionId: string,
@@ -31,16 +37,21 @@ export interface CodexBackgroundSynchronizerOptions {
 }
 
 const DEFAULT_DEPENDENCIES: CodexBackgroundSyncDependencies = {
+  lookupSessionActivity,
   lookupSessionStatus,
   getSessionMessages,
   fetchPendingApprovals,
   fetchPendingInteractions,
 };
 
+const SAFETY_RECONCILE_INTERVAL_MS = 30_000;
+
 interface SessionTarget {
   sessionKey: string;
   sessionId: string;
-  loadingStartedAt: number | undefined;
+  turnId: string | undefined;
+  /** Renderer lifecycle generation used until the bridge supplies turnId. */
+  loadingRevision: number;
   client: CodexClient;
 }
 
@@ -48,7 +59,7 @@ function targetId(target: SessionTarget): string {
   return [
     target.sessionKey,
     target.sessionId,
-    target.loadingStartedAt ?? "",
+    target.turnId ?? `local:${target.loadingRevision}`,
   ].join("\u0000");
 }
 
@@ -56,14 +67,17 @@ function targetId(target: SessionTarget): string {
  * True only while this is still the turn the request was started for.
  *
  * Session ids survive across turns, so checking only the id lets a delayed
- * `idle` response from the previous turn unlock a newly started one. The
- * loading timestamp is the renderer's per-turn generation token.
+ * `idle` response from the previous turn unlock a newly started one. The turn
+ * id is issued by the bridge and survives renderer reloads.
  */
 function isCurrentTurn(target: SessionTarget): boolean {
-  const current = useCodexStore.getState().sessions.get(target.sessionKey);
-  return current?.sessionId === target.sessionId
-    && current.isLoading
-    && current.loadingStartedAt === target.loadingStartedAt;
+  const state = useCodexStore.getState();
+  const current = state.sessions.get(target.sessionKey);
+  if (current?.sessionId !== target.sessionId || !current.isLoading) return false;
+  if (target.turnId !== undefined) return current.turnId === target.turnId;
+  return current.turnId === undefined
+    && (state.sessionLoadingRevisions.get(target.sessionKey) ?? 0)
+      === target.loadingRevision;
 }
 
 function clearPendingInput(sessionKey: string): void {
@@ -92,7 +106,8 @@ function currentTargets(): SessionTarget[] {
     targets.push({
       sessionKey,
       sessionId: session.sessionId,
-      loadingStartedAt: session.loadingStartedAt,
+      turnId: session.turnId,
+      loadingRevision: state.sessionLoadingRevisions.get(sessionKey) ?? 0,
       client,
     });
   }
@@ -179,6 +194,26 @@ export function createCodexBackgroundSynchronizer(
     if (existing) return existing;
 
     const request: Promise<void> = (async () => {
+      const activity = dependencies.lookupSessionActivity
+        ? await dependencies.lookupSessionActivity(target.client, target.sessionId)
+        : undefined;
+      if (activity?.kind === "missing") {
+        if (!disposed && isCurrentTurn(target)) finishMissingSession(target, id);
+        return;
+      }
+      // Working and waiting are non-terminal. Pending cards are refreshed by
+      // the parallel request; a full transcript/status read waits for idle.
+      if (activity?.kind === "found" && activity.activity !== "idle") return;
+      if (activity?.kind === "unavailable") {
+        // A transport failure is not evidence that a session is terminal or
+        // missing. Leave state untouched; the safety timer retries this probe.
+        console.debug(
+          "[CodexBackgroundSync] Activity probe unavailable:",
+          activity.error,
+        );
+        return;
+      }
+      // `unsupported` deliberately falls through to the legacy status route.
       const lookup = await dependencies.lookupSessionStatus(
         target.client,
         target.sessionId,
@@ -195,19 +230,23 @@ export function createCodexBackgroundSynchronizer(
       let status = lookup.session;
       if (status.status === "running") {
         terminalTargets.delete(id);
-        if (status.turnStartedAt !== undefined) {
+        if (status.turnStartedAt !== undefined || status.turnId !== undefined) {
           // Keep inactive tabs synchronized even when no mounted SSE consumer
           // was present to observe the turn-start frame.
           state.setSessionLoading(
             target.sessionKey,
             true,
             status.turnStartedAt,
+            status.turnId,
           );
           // The pending-input requests run alongside this status lookup and use
           // the same target as their generation guard. Advance that guard with
           // the authoritative correction so their valid snapshots are not
           // mistaken for results from an older turn.
-          target.loadingStartedAt = status.turnStartedAt;
+          if (status.turnId !== undefined) target.turnId = status.turnId;
+          target.loadingRevision =
+            useCodexStore.getState().sessionLoadingRevisions.get(target.sessionKey)
+            ?? target.loadingRevision;
         }
         // The foreground SSE stream owns within-turn phase and usage updates.
         // Applying an HTTP running snapshot here could roll those values back
@@ -380,12 +419,64 @@ export function useCodexBackgroundSync(
   const dependencies = options?.dependencies;
   useEffect(() => {
     const synchronizer = createCodexBackgroundSynchronizer({ dependencies });
-    void synchronizer.reconcileNow();
-    const intervalId = window.setInterval(() => {
+    const unsubscribeEnvironment = useEnvironmentStore.subscribe((current, previous) => {
+      const before = new Map(previous.environments.map((environment) => [
+        environment.id,
+        environment.agentActivityState,
+      ]));
+      if (current.environments.some((environment) =>
+        before.get(environment.id) === "working"
+        && environment.agentActivityState !== "working"
+      )) {
+        void synchronizer.reconcileNow();
+      }
+    });
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    let unlistenActivity: (() => void) | undefined;
+    let safetyInterval: number | undefined;
+
+    // `listen` registers its handler synchronously before its returned promise
+    // waits for stream readiness. Invoke both first, then take the snapshot, so
+    // a terminal transition cannot land in the old snapshot-before-subscribe
+    // gap. Listener readiness must not delay authoritative catch-up.
+    void listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
       void synchronizer.reconcileNow();
-    }, CODEX_BACKGROUND_SYNC_INTERVAL_MS);
+    }).then((release) => {
+      if (cancelled) release();
+      else unlisten = release;
+    }).catch((error) => {
+      console.debug(
+        "[CodexBackgroundSync] Failed to install stream listener:",
+        error,
+      );
+    });
+    void listen<{ state?: unknown }>("native-agent-session-activity", (event) => {
+      if (event.payload.state === "idle" || event.payload.state === "waiting") {
+        void synchronizer.reconcileNow();
+      }
+    }).then((release) => {
+      if (cancelled) release();
+      else unlistenActivity = release;
+    }).catch((error) => {
+      console.debug(
+        "[CodexBackgroundSync] Failed to install activity listener:",
+        error,
+      );
+    });
+    void synchronizer.reconcileNow();
+    // Events are the low-latency path, but this bounded retry ensures a
+    // listener setup race, half-open stream, or transient probe failure can
+    // never strand a loading session indefinitely.
+    safetyInterval = window.setInterval(() => {
+      void synchronizer.reconcileNow();
+    }, SAFETY_RECONCILE_INTERVAL_MS);
     return () => {
-      window.clearInterval(intervalId);
+      cancelled = true;
+      unlisten?.();
+      unlistenActivity?.();
+      if (safetyInterval !== undefined) window.clearInterval(safetyInterval);
+      unsubscribeEnvironment();
       synchronizer.dispose();
     };
   }, [dependencies]);

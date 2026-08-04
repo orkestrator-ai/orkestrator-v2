@@ -271,6 +271,7 @@ const stopSessionMock = mock(async () => {});
 const interruptSessionMock = mock(async () => {});
 const capturePaneMock = mock(async () => "");
 const sendKeysMock = mock(async () => {});
+const answerSelectionPromptMock = mock(async () => {});
 const replyHookMock = mock(async () => {});
 const submitMock = mock(async () => {});
 const switchModelMock = mock(async () => {});
@@ -327,6 +328,8 @@ mock.module("@/lib/claude-tmux-client", () => ({
     capturePaneMock(tabId, environmentId),
   sendKeys: (tabId: string, keys: string[], environmentId?: string) =>
     sendKeysMock(tabId, keys, environmentId),
+  answerSelectionPrompt: (tabId: string, environmentId: string, input: unknown) =>
+    answerSelectionPromptMock(tabId, environmentId, input),
   switchModel: (tabId: string, model: string, environmentId?: string) =>
     switchModelMock(tabId, model, environmentId),
   switchEffort: (tabId: string, effort: string, environmentId?: string) =>
@@ -438,8 +441,14 @@ mock.module("react-virtuoso", () => ({
   }),
 }));
 
-const { ClaudeTmuxChatTab, parseTmuxSelectionPrompt } = await import(
+const { ClaudeTmuxChatTab } = await import(
   "@/components/claude/ClaudeTmuxChatTab"
+);
+const {
+  parseTmuxAgentObservation,
+  parseTmuxSelectionPrompt,
+} = await import(
+  "@orkestrator/protocol/tmux-observation"
 );
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -471,7 +480,7 @@ function setActiveElement(element: Element) {
   });
 }
 
-function mockRunningTmuxStatus() {
+function mockRunningTmuxStatus(pane = "") {
   getStatusMock.mockImplementation(async () => ({
     tab_id: "tab-1",
     environment_id: "env-1",
@@ -483,7 +492,19 @@ function mockRunningTmuxStatus() {
     busy: false,
     permission_mode: "bypassPermissions",
     fast_mode: false,
+    observation_generation: "generation-1",
+    observation: generatedObservation(
+      pane,
+      1,
+    ),
   }));
+}
+
+function generatedObservation(pane: string, revision: number) {
+  return {
+    ...parseTmuxAgentObservation(pane, revision, "2026-08-04T12:00:00.000Z"),
+    generation: "generation-1",
+  };
 }
 
 function deferred<T>() {
@@ -494,6 +515,23 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+async function adoptMockedPaneObservation(revision = 1) {
+  const pane = await capturePaneMock();
+  useClaudeTmuxStore.getState().setObservation(
+    "tab-1",
+    generatedObservation(pane, revision),
+  );
+}
+
+function expectSelectionAnswer(optionIndex: number) {
+  expect(answerSelectionPromptMock).toHaveBeenCalledWith("tab-1", "env-1", {
+    expectedGeneration: "generation-1",
+    expectedRevision: 1,
+    expectedPromptFingerprint: expect.any(String),
+    optionIndex,
+  });
 }
 
 function seedPane(
@@ -791,6 +829,7 @@ describe("ClaudeTmuxChatTab", () => {
     interruptSessionMock.mockClear();
     capturePaneMock.mockClear();
     sendKeysMock.mockClear();
+    answerSelectionPromptMock.mockClear();
     replyHookMock.mockClear();
     submitMock.mockClear();
     switchModelMock.mockClear();
@@ -1141,15 +1180,11 @@ describe("ClaudeTmuxChatTab", () => {
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
 
-  test("renders capture polling failures in the raw TUI snapshot", async () => {
+  test("does not poll or expose raw pane text in native chat mode", async () => {
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    capturePaneMock.mockImplementation(async () => {
-      throw new Error("capture unavailable");
-    });
-
     render(
       <ClaudeTmuxChatTab
         tabId="tab-1"
@@ -1158,12 +1193,9 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Show TUI" }));
-
-    expect(
-      await screen.findByText("(capture failed: Error: capture unavailable)"),
-    ).toBeTruthy();
-    expect(screen.queryByText("Error: capture unavailable")).toBeNull();
+    await waitFor(() => expect(subscribeMock).toHaveBeenCalledTimes(1));
+    expect(capturePaneMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Show TUI" })).toBeNull();
   });
 
   test("applies lifecycle events and preserves fast mode for a fresh restart", async () => {
@@ -1420,7 +1452,6 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("surfaces Claude tmux agent tokens in native rows", async () => {
-    mockRunningTmuxStatus();
     getTranscriptMock.mockImplementation(async () => [
       {
         type: "assistant",
@@ -1443,10 +1474,11 @@ describe("ClaudeTmuxChatTab", () => {
         },
       },
     ]);
-    capturePaneMock.mockImplementation(async () => `
+    const pane = `
 Running 1 Explore agent...
 └ Review API-client source modules group 1 · 8 tool uses · 20.4k tokens
-`);
+`;
+    mockRunningTmuxStatus(pane);
 
     render(
       <ClaudeTmuxChatTab
@@ -1462,7 +1494,6 @@ Running 1 Explore agent...
   });
 
   test("keeps successful background launches active while they remain in the tmux roster", async () => {
-    mockRunningTmuxStatus();
     getTranscriptMock.mockImplementation(async () => [
       {
         type: "assistant",
@@ -1500,10 +1531,11 @@ Running 1 Explore agent...
         },
       },
     ]);
-    capturePaneMock.mockImplementation(async () => `
+    const pane = `
 ● main
 ○ Explore  Review db-api test correctness                 1m 6s · ↓ 45.7k tokens
-`);
+`;
+    mockRunningTmuxStatus(pane);
 
     render(
       <ClaudeTmuxChatTab
@@ -6398,19 +6430,23 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
   });
 
   test("shows controls for Claude Code selection prompts and answers through tmux keys on submit", async () => {
-    capturePaneMock.mockImplementation(async () => `
+    const pane = `
   1. Kill stale tmux before launch (Recommended)
 › 2. Always kill before launch
   3. Randomize tmux session name
 
 Enter to select · Tab/Arrow keys to navigate · Esc to cancel
-`);
+`;
     useClaudeTmuxStore
       .getState()
       .setRunning("tab-1", true, {
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    useClaudeTmuxStore.getState().setObservation(
+      "tab-1",
+      generatedObservation(pane, 1),
+    );
 
     render(
       <ClaudeTmuxChatTab
@@ -6425,12 +6461,12 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel
     fireEvent.click(
       screen.getByRole("button", { name: /Randomize tmux session name/ }),
     );
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["Down", "Enter"], "env-1");
+      expectSelectionAnswer(2);
     });
   });
 
@@ -6502,6 +6538,7 @@ Enter to confirm · Esc to cancel
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    await adoptMockedPaneObservation();
 
     render(
       <ClaudeTmuxChatTab
@@ -6514,12 +6551,12 @@ Enter to confirm · Esc to cancel
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Yes, I accept/ }));
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["2"], "env-1");
+      expectSelectionAnswer(1);
     });
   });
 
@@ -6540,6 +6577,7 @@ Enter to confirm · Esc to cancel
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    await adoptMockedPaneObservation();
 
     render(
       <ClaudeTmuxChatTab
@@ -6554,7 +6592,7 @@ Enter to confirm · Esc to cancel
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["1"], "env-1");
+      expectSelectionAnswer(0);
     });
   });
 
@@ -6577,6 +6615,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    await adoptMockedPaneObservation();
 
     render(
       <ClaudeTmuxChatTab
@@ -6655,6 +6694,7 @@ Enter to confirm · Esc to cancel
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    await adoptMockedPaneObservation();
 
     render(
       <ClaudeTmuxChatTab
@@ -6667,11 +6707,11 @@ Enter to confirm · Esc to cancel
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Yes, I accept/ }));
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenLastCalledWith("tab-1", ["2"], "env-1");
+      expectSelectionAnswer(1);
     });
   });
 
@@ -6690,6 +6730,7 @@ Enter to confirm · Esc to cancel
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    await adoptMockedPaneObservation();
 
     render(
       <ClaudeTmuxChatTab
@@ -6703,12 +6744,12 @@ Enter to confirm · Esc to cancel
 
     const retryButtons = screen.getAllByRole("button", { name: "Retry" });
     fireEvent.click(retryButtons[1]!);
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["2"], "env-1");
+      expectSelectionAnswer(1);
     });
   });
 
@@ -6728,6 +6769,7 @@ Enter to confirm · ↑/↓ to navigate · Esc to cancel
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    await adoptMockedPaneObservation();
 
     render(
       <ClaudeTmuxChatTab
@@ -6739,16 +6781,12 @@ Enter to confirm · ↑/↓ to navigate · Esc to cancel
 
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Allow once/ }));
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", [
-        "Up",
-        "Up",
-        "Enter",
-      ], "env-1");
+      expectSelectionAnswer(0);
     });
   });
 
@@ -6765,6 +6803,7 @@ Enter to confirm · Esc to cancel
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    await adoptMockedPaneObservation();
 
     render(
       <ClaudeTmuxChatTab
@@ -6780,24 +6819,28 @@ Enter to confirm · Esc to cancel
 
   test("keeps selection prompt controls disabled while tmux keys are pending", async () => {
     let resolveSendKeys: (() => void) | null = null;
-    sendKeysMock.mockImplementationOnce(
+    answerSelectionPromptMock.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           resolveSendKeys = resolve;
         }),
     );
-    capturePaneMock.mockImplementation(async () => `
+    const pane = `
 › 1. No, exit
   2. Yes, I accept
 
 Enter to confirm · Esc to cancel
-`);
+`;
     useClaudeTmuxStore
       .getState()
       .setRunning("tab-1", true, {
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    useClaudeTmuxStore.getState().setObservation(
+      "tab-1",
+      generatedObservation(pane, 1),
+    );
 
     render(
       <ClaudeTmuxChatTab
@@ -6812,25 +6855,66 @@ Enter to confirm · Esc to cancel
     const noButton = screen.getByRole("button", { name: /No, exit/ }) as HTMLButtonElement;
     const yesButton = screen.getByRole("button", { name: /Yes, I accept/ }) as HTMLButtonElement;
     fireEvent.click(yesButton);
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    const submitButton = screen.getByRole("button", { name: "Submit" });
+    fireEvent.click(submitButton);
+    // React has not committed the disabled state yet. The synchronous latch in
+    // the handler must still reject a same-tick second submission.
+    fireEvent.click(submitButton);
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledTimes(1);
+      expect(answerSelectionPromptMock).toHaveBeenCalledTimes(1);
       expect(yesButton.disabled).toBe(true);
     });
 
     fireEvent.click(noButton);
-    expect(sendKeysMock).toHaveBeenCalledTimes(1);
+    expect(answerSelectionPromptMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       resolveSendKeys?.();
     });
+    await waitFor(() => {
+      expect(screen.queryByText("Claude is asking for a choice")).toBeNull();
+    });
+  });
+
+  test("uses absolute navigation when the pane does not expose its highlight", async () => {
+    const pane = `
+  1. Allow once
+  2. Allow this session
+  3. Deny
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+`;
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    useClaudeTmuxStore.getState().setObservation(
+      "tab-1",
+      generatedObservation(pane, 1),
+    );
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => {
+      expectSelectionAnswer(2);
+    });
   });
 
   test("shows an error and re-enables selection controls when tmux key submission fails", async () => {
-    sendKeysMock.mockImplementationOnce(async () => {
+    answerSelectionPromptMock.mockImplementationOnce(async () => {
       throw new Error("tmux unavailable");
     });
     capturePaneMock.mockImplementation(async () => `
@@ -6845,6 +6929,7 @@ Enter to confirm · Esc to cancel
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    await adoptMockedPaneObservation();
 
     render(
       <ClaudeTmuxChatTab
@@ -6867,7 +6952,7 @@ Enter to confirm · Esc to cancel
     });
   });
 
-  test("shows an error when refreshing the TUI snapshot after tmux key submission fails", async () => {
+  test("restores a prompt when the backend re-observes it after key submission", async () => {
     capturePaneMock.mockImplementation(async () => `
 › 1. No, exit
   2. Yes, I accept
@@ -6880,6 +6965,7 @@ Enter to confirm · Esc to cancel
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    await adoptMockedPaneObservation();
 
     render(
       <ClaudeTmuxChatTab
@@ -6890,17 +6976,23 @@ Enter to confirm · Esc to cancel
     );
 
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
-    capturePaneMock.mockImplementationOnce(async () => {
-      throw new Error("capture failed");
-    });
-
     fireEvent.click(screen.getByRole("button", { name: /Yes, I accept/ }));
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["2"], "env-1");
+      expectSelectionAnswer(1);
+      expect(screen.queryByText("Claude is asking for a choice")).toBeNull();
     });
-    expect(await screen.findByText("Error: capture failed")).toBeTruthy();
+    await act(async () => {
+      subscribedHandler?.({
+        kind: "observation",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        observation: generatedObservation(await capturePaneMock(), 2),
+      });
+    });
+    expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
   });
 
   test("sends each digit for multi-digit numbered confirmation options", async () => {
@@ -6916,6 +7008,7 @@ Enter to confirm · Esc to cancel
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    await adoptMockedPaneObservation();
 
     render(
       <ClaudeTmuxChatTab
@@ -6927,12 +7020,12 @@ Enter to confirm · Esc to cancel
 
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Option 10/ }));
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["1", "0"], "env-1");
+      expectSelectionAnswer(9);
     });
   });
 
@@ -6949,6 +7042,7 @@ Enter to select · Esc to cancel
         environmentId: "env-1",
         sessionId: "session-1",
       });
+    await adoptMockedPaneObservation();
 
     render(
       <ClaudeTmuxChatTab
@@ -6964,12 +7058,12 @@ Enter to select · Esc to cancel
     fireEvent.click(
       screen.getByRole("button", { name: /Always kill before launch/ }),
     );
-    expect(sendKeysMock).not.toHaveBeenCalled();
+    expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["Enter"], "env-1");
+      expectSelectionAnswer(1);
     });
   });
 

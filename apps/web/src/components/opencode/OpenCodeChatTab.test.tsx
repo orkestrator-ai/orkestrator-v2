@@ -696,6 +696,7 @@ function resetStores(name = "20260415-123456") {
         branch: "main",
         containerId: "container-1",
         status: "running",
+        setupPhase: "ready",
         prUrl: null,
         prState: null,
         hasMergeConflicts: null,
@@ -707,11 +708,7 @@ function resetStores(name = "20260415-123456") {
     ],
     isLoading: false,
     error: null,
-    workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning: new Set(),
   });
 
   useConfigStore.setState((state) => ({
@@ -3086,8 +3083,8 @@ describe("OpenCodeChatTab", () => {
       useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
         createdAt: new Date().toISOString(),
       });
-      useEnvironmentStore.setState({
-        setupCommandsResolved: new Set([ENVIRONMENT_ID]),
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        setupPhase: "ready",
       });
       mockGetLocalOpencodeServerStatus.mockResolvedValue({
         running: false,
@@ -3291,7 +3288,7 @@ describe("OpenCodeChatTab", () => {
       useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
         createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
       });
-      useEnvironmentStore.setState({ workspaceReadyEnvironments: new Set() });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, { setupPhase: "pending" });
       mockGetOpenCodeServerStatus
         .mockRejectedValueOnce(new Error("bridge still starting after delayed setup"))
         .mockResolvedValueOnce({
@@ -3307,8 +3304,8 @@ describe("OpenCodeChatTab", () => {
       expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
 
       act(() => {
-        useEnvironmentStore.setState({
-          workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
+        useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+          setupPhase: "ready",
         });
       });
 
@@ -3372,7 +3369,7 @@ describe("OpenCodeChatTab", () => {
     });
 
     test("starts a stopped local server and connects to its port", async () => {
-      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, { setupPhase: "ready" });
       mockGetLocalOpencodeServerStatus.mockResolvedValue({ running: false, port: null, pid: null } as any);
       mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 5432, pid: 99, authToken: "opencode-secret" } as any);
 
@@ -3396,8 +3393,8 @@ describe("OpenCodeChatTab", () => {
     });
 
     test("surfaces a rejected local status probe without touching the container bridge", async () => {
-      useEnvironmentStore.setState({
-        setupCommandsResolved: new Set([ENVIRONMENT_ID]),
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        setupPhase: "ready",
       });
       mockGetLocalOpencodeServerStatus.mockRejectedValue(
         new Error("local OpenCode status unavailable"),
@@ -3420,7 +3417,7 @@ describe("OpenCodeChatTab", () => {
     });
 
     test("reports a local server that starts without a port", async () => {
-      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, { setupPhase: "ready" });
       mockGetLocalOpencodeServerStatus.mockResolvedValue({ running: false, port: null, pid: null } as any);
       mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 0, pid: 99, authToken: "opencode-secret" } as any);
 
@@ -8014,7 +8011,10 @@ describe("OpenCodeChatTab", () => {
     });
 
     test("skips cache IO when the environment has no project", async () => {
-      useEnvironmentStore.setState({ environments: [] });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        projectId: "",
+        setupPhase: "ready",
+      });
       mockGetModelsWithDefaults.mockResolvedValue({
         models: [{ id: "openai/live", name: "Live", provider: "openai" }],
         defaults: {},

@@ -501,6 +501,50 @@ describe("BuildPipelineService", () => {
     }
   });
 
+  test("repairs build-tab publication when an admitted start is retried", async () => {
+    await withService(async (service, storage) => {
+      const ensureBuildPipelineTab = storage.ensureBuildPipelineTab.bind(storage);
+      let attempts = 0;
+      storage.ensureBuildPipelineTab = mock(async (input) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("pane layout temporarily unavailable");
+        return ensureBuildPipelineTab(input);
+      });
+
+      const input = startInput();
+      await expect(service.start(input)).rejects.toThrow(
+        "pane layout temporarily unavailable",
+      );
+
+      const [persisted] = await storage.listBuildPipelines(input.projectId);
+      expect(persisted).toBeDefined();
+      expect(persisted!.snapshot).toMatchObject({
+        id: persisted!.id,
+        environmentId: "env-1",
+        sourceLinkedAt: expect.any(String),
+      });
+      expect(await storage.getPaneLayout("env-1")).toBeNull();
+
+      const retried = await service.start(input);
+      expect(retried.id).toBe(persisted!.id);
+      expect(attempts).toBe(2);
+      expect(await storage.getPaneLayout("env-1")).toMatchObject({
+        root: {
+          kind: "leaf",
+          activeTabId: `build-${persisted!.id}`,
+          tabs: [{
+            id: `build-${persisted!.id}`,
+            type: "claude-build",
+            buildTabData: {
+              pipelineId: persisted!.id,
+              taskId: input.taskId,
+            },
+          }],
+        },
+      });
+    });
+  });
+
   test("canonicalizes immutable admission identity and ignores mutable source metadata", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-canonical-"));
     const firstStorage = new StorageService(dataDir);

@@ -210,7 +210,7 @@ describe("createNativeChatStoreSlice", () => {
     expect(store.getSession("env-env-1:tab-2")?.sessionId).toBe("session-2");
   });
 
-  test("advances loading revisions for repeated lifecycle writes but not transcript writes", () => {
+  test("preserves session identity while advancing repeated lifecycle edges", () => {
     const store = useTestStore.getState();
     const sessionKey = "env-env-1:tab-1";
 
@@ -227,10 +227,12 @@ describe("createNativeChatStoreSlice", () => {
     const afterRunning = useTestStore
       .getState()
       .sessionLoadingRevisions.get(sessionKey);
+    const runningSession = store.getSession(sessionKey);
     store.setSessionLoading(sessionKey, true);
     const afterRepeatedRunning = useTestStore
       .getState()
       .sessionLoadingRevisions.get(sessionKey);
+    expect(store.getSession(sessionKey)).toBe(runningSession);
     store.upsertMessage(sessionKey, { id: "m-1", content: "streaming" });
     const afterTranscript = useTestStore
       .getState()
@@ -239,16 +241,25 @@ describe("createNativeChatStoreSlice", () => {
     const afterIdle = useTestStore
       .getState()
       .sessionLoadingRevisions.get(sessionKey);
+    const idleSession = store.getSession(sessionKey);
     store.setSessionLoading(sessionKey, false);
 
     expect(afterSession).toBe(1);
     expect(afterRunning).toBe(2);
     expect(afterRepeatedRunning).toBe(3);
+    expect(store.getSession(sessionKey)).toBe(idleSession);
     expect(afterTranscript).toBe(afterRepeatedRunning);
     expect(afterIdle).toBe(4);
     expect(
       useTestStore.getState().sessionLoadingRevisions.get(sessionKey),
     ).toBe(5);
+
+    // Check the running reference before the transcript and idle mutations.
+    store.setSessionLoading(sessionKey, true, 123, "turn-2");
+    const authoritativeRunning = store.getSession(sessionKey);
+    store.setSessionLoading(sessionKey, true, 123, "turn-2");
+    expect(store.getSession(sessionKey)).toBe(authoritativeRunning);
+    expect(runningSession).not.toBe(authoritativeRunning);
   });
 
   test("advances the loading revision across a session delete and its replacement", () => {

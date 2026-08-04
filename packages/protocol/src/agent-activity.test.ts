@@ -14,6 +14,7 @@ describe("agent activity vocabulary", () => {
     expect(AGENT_ACTIVITY_SOURCES).toEqual([
       "frontend",
       "claude-terminal",
+      "claude-tmux",
       "native-agent",
     ]);
   });

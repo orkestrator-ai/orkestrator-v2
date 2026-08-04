@@ -1504,8 +1504,11 @@ exit 42
         { environmentId: environment.id },
         context,
       )).resolves.toEqual(expect.objectContaining({
-        setupManagedByBackend: true,
         setupStarted: false,
+        environment: expect.objectContaining({
+          id: environment.id,
+          status: "running",
+        }),
       }));
 
       // The caller does not issue a separate rename command. The backend-owned
@@ -2756,6 +2759,41 @@ exit 0
     });
   }, ASYNC_TEST_BUDGET_MS);
 
+  test("preserves a running environment and pending launch when setup fails before publishing an attempt", async () => {
+    const worktreePath = await createTempDir("ork-electron-setup-invalid-config-");
+    await fs.writeFile(path.join(worktreePath, "orkestrator-ai.json"), "{ invalid json");
+    const environment = createEnvironment({
+      id: "env-local-invalid-setup-config",
+      environmentType: "local",
+      setupScriptsComplete: false,
+      setupPhase: "pending",
+      createdFromCommit: "7878787878787878787878787878787878787878",
+      worktreePath,
+      containerId: null,
+      status: "running",
+      pendingAgentLaunch: true,
+      initialAgentModel: "model-1",
+      initialReasoningEffort: "high",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("run_environment_setup")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow();
+
+    expect(ptySpawn).not.toHaveBeenCalled();
+    expect(environment).toMatchObject({
+      status: "running",
+      setupScriptsComplete: false,
+      setupPhase: "failed",
+      pendingAgentLaunch: true,
+      initialAgentModel: "model-1",
+      initialReasoningEffort: "high",
+    });
+  });
+
   test("closes a retry session when its container is stopped, then allows a healthy retry", async () => {
     const environment = createEnvironment({
       id: "env-container-stopped-retry",
@@ -2801,6 +2839,10 @@ exit 0
         commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
       ).toEqual({ id: setupSessionId, running: false });
       expect(ptySpawn).not.toHaveBeenCalled();
+      expect(environment).toMatchObject({
+        status: "error",
+        setupPhase: "failed",
+      });
 
       await fs.writeFile(`${logs.all}.healthy`, "");
       const retry = commands.get("run_environment_setup")?.(
@@ -2811,8 +2853,18 @@ exit 0
       expect(
         commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
       ).toEqual({ id: setupSessionId, running: true });
+      expect(environment).toMatchObject({
+        status: "running",
+        setupPhase: "running",
+        lifecycleError: null,
+      });
       ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
-      await expect(retry).resolves.toMatchObject({ setupScriptsComplete: true });
+      await expect(retry).resolves.toMatchObject({
+        status: "running",
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+        lifecycleError: null,
+      });
     });
   }, ASYNC_TEST_BUDGET_MS);
 
@@ -3076,8 +3128,6 @@ exit 1
     const result = await commands.get("ensure_environment_setup")?.({ environmentId: environment.id }, context);
 
     expect(result).toEqual(expect.objectContaining({
-      setupCommands: [],
-      setupManagedByBackend: true,
       setupStarted: false,
       environment: expect.objectContaining({
         id: environment.id,
@@ -4027,10 +4077,12 @@ exit 0
           throw new Error(`${error instanceof Error ? error.message : String(error)}\nDocker calls:\n${dockerCalls}\nGH calls:\n${ghCalls}`);
         }
         expect(result).toEqual(expect.objectContaining({
-          setupCommands: [],
-          setupManagedByBackend: true,
           setupStarted: true,
           setupSessionId: `${environment.id}:setup`,
+          environment: expect.objectContaining({
+            id: environment.id,
+            status: "running",
+          }),
         }));
         await waitForPtyProcessCount(1);
         expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain("/usr/local/bin/workspace-setup.sh");
@@ -4228,7 +4280,10 @@ esac
             { environmentId: environment.id },
             context,
           )).resolves.toEqual(expect.objectContaining({
-            setupManagedByBackend: true,
+            environment: expect.objectContaining({
+              id: environment.id,
+              status: "running",
+            }),
           }));
         });
       });
@@ -4526,7 +4581,10 @@ esac
         );
         await fs.writeFile(releasePath, "");
         await expect(recreate).resolves.toEqual(expect.objectContaining({
-          setupManagedByBackend: true,
+          environment: expect.objectContaining({
+            id: environment.id,
+            containerId: "container-replacement",
+          }),
         }));
         await expect(stop).resolves.toBeUndefined();
         expect(environment.containerId).toBe("container-replacement");
@@ -4952,7 +5010,11 @@ esac
         );
         await fs.writeFile(releasePath, "");
         await expect(recreate).resolves.toEqual(expect.objectContaining({
-          setupManagedByBackend: true,
+          environment: expect.objectContaining({
+            id: environment.id,
+            containerId: "container-recreated",
+            status: "running",
+          }),
         }));
 
         expect(environment.containerId).toBe("container-recreated");
@@ -5016,7 +5078,10 @@ esac
 
         await expect(stop).resolves.toBeUndefined();
         await expect(restart).resolves.toEqual(expect.objectContaining({
-          setupManagedByBackend: true,
+          environment: expect.objectContaining({
+            id: environment.id,
+            status: "running",
+          }),
         }));
         expect(environment.status).toBe("running");
       });
@@ -5107,7 +5172,11 @@ esac
             { environmentId: environment.id },
             context,
           )).resolves.toEqual(expect.objectContaining({
-            setupManagedByBackend: true,
+            environment: expect.objectContaining({
+              id: environment.id,
+              containerId: "container-after-recreate",
+              status: "running",
+            }),
           }));
         });
       });
@@ -5368,9 +5437,13 @@ exit 0
         throw new Error(`${error instanceof Error ? error.message : String(error)}\nDocker calls:\n${dockerCalls}\nCopied root:\n${copiedRoot}`);
       }
       expect(result).toEqual(expect.objectContaining({
-        setupCommands: [],
-        setupManagedByBackend: true,
         setupStarted: true,
+        setupSessionId: `${environment.id}:setup`,
+        environment: expect.objectContaining({
+          id: environment.id,
+          containerId: "container-copy-created",
+          status: "running",
+        }),
       }));
       await waitForPtyProcessCount(1);
       ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
@@ -5533,9 +5606,11 @@ exit 0
 
     try {
       await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
-        setupCommands: [],
-        setupManagedByBackend: true,
         setupStarted: false,
+        environment: expect.objectContaining({
+          id: environment.id,
+          status: "running",
+        }),
       }));
 
       expect(environment.worktreePath).toBeDefined();
@@ -5584,9 +5659,11 @@ exit 0
 
     try {
       await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
-        setupCommands: [],
-        setupManagedByBackend: true,
         setupStarted: false,
+        environment: expect.objectContaining({
+          id: environment.id,
+          status: "running",
+        }),
       }));
 
       expect(environment.worktreePath).toBeDefined();
@@ -5621,9 +5698,11 @@ exit 0
 
     try {
       await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
-        setupCommands: [],
-        setupManagedByBackend: true,
         setupStarted: false,
+        environment: expect.objectContaining({
+          id: environment.id,
+          status: "running",
+        }),
       }));
 
       expect(environment.worktreePath).toBeDefined();
@@ -5784,9 +5863,11 @@ exit 0
 
     try {
       await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
-        setupCommands: [],
-        setupManagedByBackend: true,
         setupStarted: false,
+        environment: expect.objectContaining({
+          id: environment.id,
+          status: "running",
+        }),
       }));
 
       expect(environment.worktreePath).toBeDefined();
@@ -5827,9 +5908,11 @@ exit 0
 
     try {
       await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
-        setupCommands: [],
-        setupManagedByBackend: true,
         setupStarted: false,
+        environment: expect.objectContaining({
+          id: environment.id,
+          status: "running",
+        }),
       }));
 
       expect(environment.worktreePath).toBeDefined();
@@ -16108,6 +16191,45 @@ describe("storage-backed command delegation", () => {
       prUrl: undefined,
       prState: "merged",
       prMergeCommented: false,
+    });
+  });
+
+  test("unlinks a task even when one build-pipeline cleanup fails", async () => {
+    const task = {
+      id: "task-1",
+      projectId: "project-1",
+      buildPipelineId: "pipeline-linked",
+    };
+    const updated = { ...task, environmentId: undefined, buildPipelineId: undefined };
+    const storage = {
+      getKanbanTask: mock(async () => task),
+      listBuildPipelines: mock(async () => [
+        { id: "pipeline-linked", snapshot: { taskId: "task-1" } },
+        { id: "pipeline-stale", snapshot: { taskId: "task-1" } },
+      ]),
+      updateKanbanTask: mock(async () => updated),
+    };
+    const remove = mock(async (pipelineId: string) => {
+      if (pipelineId === "pipeline-stale") throw new Error("cleanup failed");
+    });
+    const context = {
+      storage,
+      buildPipelines: { remove },
+    } as unknown as CommandContext;
+
+    await expect(createCommandRegistry().get("clear_task_build_status")?.(
+      { taskId: "task-1" },
+      context,
+    )).resolves.toEqual({
+      task: updated,
+      removedPipelineIds: ["pipeline-linked"],
+      failedPipelineIds: ["pipeline-stale"],
+    });
+    expect(storage.updateKanbanTask).toHaveBeenCalledWith("task-1", {
+      environmentId: undefined,
+      buildPipelineId: undefined,
+      prUrl: "",
+      prState: undefined,
     });
   });
 

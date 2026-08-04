@@ -3,8 +3,6 @@ export { useEnvironments, useEnvironmentLifecycleService } from "./useEnvironmen
 export { useTerminal } from "./useTerminal";
 export { usePullRequest } from "./usePullRequest";
 export { useFilesPanel } from "./useFilesPanel";
-export { useAgentStateCallbacks } from "./useAgentStateCallbacks";
-export type { AgentStateCallback } from "./useAgentStateCallbacks";
 export { useClipboardImagePaste } from "./useClipboardImagePaste";
 export { useTerminalClipboard } from "./useTerminalClipboard";
 export type { UseTerminalClipboardOptions, UseTerminalClipboardReturn } from "./useTerminalClipboard";

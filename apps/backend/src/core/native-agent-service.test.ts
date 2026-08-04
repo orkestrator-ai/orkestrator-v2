@@ -186,6 +186,7 @@ async function withService(
     interactionMonitorMaxSessionsPerEnvironment?: number;
     interactionMonitorRetryBaseMs?: number;
     interactionMonitorMaxRetries?: number;
+    onActivityTransition?: NativeAgentServiceOptions["onActivityTransition"];
     onInteractionObservation?: NativeAgentServiceOptions["onInteractionObservation"];
   },
   run: (context: {
@@ -226,6 +227,9 @@ async function withService(
       ...(setup.interactionMonitorMaxRetries === undefined
         ? {}
         : { interactionMonitorMaxRetries: setup.interactionMonitorMaxRetries }),
+      ...(setup.onActivityTransition
+        ? { onActivityTransition: setup.onActivityTransition }
+        : {}),
       ...(setup.onInteractionObservation
         ? { onInteractionObservation: setup.onInteractionObservation }
         : {}),
@@ -981,10 +985,16 @@ describe("NativeAgentService", () => {
       expect(listPendingInteractions).toHaveBeenCalledTimes(2);
       expect(internals(service).monitoredInteractionSessionKeys.has(session.key)).toBe(true);
 
-      await storage.updateEnvironment("env-1", { setupScriptsComplete: false });
+      await storage.updateEnvironment("env-1", {
+        setupScriptsComplete: false,
+        setupPhase: "pending",
+      });
       await service.reconcileAgentInteractions();
       expect(internals(service).monitoredInteractionSessionKeys.size).toBe(0);
-      await storage.updateEnvironment("env-1", { setupScriptsComplete: true });
+      await storage.updateEnvironment("env-1", {
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+      });
       await service.reconcileAgentInteractions();
       expect(listPendingInteractions).toHaveBeenCalledTimes(3);
 
@@ -1906,7 +1916,60 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("emits each provider session activity transition once", async () => {
+    let activityState: ProviderActivityState = "working";
+    const { provider } = createProviderStub("codex", {
+      activity: async () => activityState,
+    });
+    const transitions: Array<Parameters<
+      NonNullable<NativeAgentServiceOptions["onActivityTransition"]>
+    >[0]> = [];
+    const onActivityTransition: NonNullable<
+      NativeAgentServiceOptions["onActivityTransition"]
+    > = (event) => {
+      transitions.push(event);
+    };
+
+    await withService({
+      prefix: "orkestrator-native-activity-transition-event-",
+      provider: async () => provider,
+      onActivityTransition,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-1",
+      });
+
+      await service.reconcileAgentActivity();
+      await service.reconcileAgentActivity();
+      activityState = "waiting";
+      await service.reconcileAgentActivity();
+
+      expect(transitions).toEqual([
+        {
+          environmentId: "env-1",
+          sessionKey: key,
+          providerSessionId: "provider-1",
+          previousState: undefined,
+          state: "working",
+        },
+        {
+          environmentId: "env-1",
+          sessionKey: key,
+          providerSessionId: "provider-1",
+          previousState: "working",
+          state: "waiting",
+        },
+      ]);
+    });
+  });
+
   test("reports one session completion while another same-provider tab stays working", async () => {
+    let clock = Date.now();
     const sessionActivity = new Map<string, ProviderActivityState>([
       ["provider-resolve", "working"],
       ["provider-other", "working"],
@@ -1932,6 +1995,7 @@ describe("NativeAgentService", () => {
       },
       provider: async () => provider,
       invoke,
+      now: () => clock,
     }, async ({ storage, service }) => {
       for (const [logicalSessionKey, providerSessionId] of [
         ["env-env-1:resolve", "provider-resolve"],
@@ -1948,19 +2012,77 @@ describe("NativeAgentService", () => {
 
       await service.reconcileAgentActivity();
       expect(invoked).toEqual([]);
+      const beforeCompletion = (await storage.getEnvironment("env-1"))!;
+      expect(beforeCompletion.agentActivityState).toBe("working");
+      expect(beforeCompletion.hasUnreadWork).not.toBe(true);
 
+      clock += 1_000;
       sessionActivity.set("provider-resolve", "idle");
       await service.reconcileAgentActivity();
 
       expect(invoked).toHaveLength(1);
-      expect(await storage.getEnvironment("env-1")).toMatchObject({
+      const completed = (await storage.getEnvironment("env-1"))!;
+      expect(completed).toMatchObject({
         agentActivityState: "working",
+        hasUnreadWork: true,
+      });
+      expect(Date.parse(completed.lastActivityAt!))
+        .toBeGreaterThan(Date.parse(beforeCompletion.lastActivityAt!));
+    });
+  });
+
+  test("retries durable session completion before accepting the terminal observation", async () => {
+    let clock = Date.now();
+    let activityState: ProviderActivityState = "working";
+    const { provider } = createProviderStub("codex", {
+      activity: async () => activityState,
+    });
+
+    await withService({
+      prefix: "orkestrator-native-completion-persistence-retry-",
+      provider: async () => provider,
+      now: () => clock,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey("env-1", "codex", "tab-1");
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-1",
+      });
+      await service.reconcileAgentActivity();
+
+      const originalRecord = storage.recordEnvironmentSessionCompletion.bind(storage);
+      let attempts = 0;
+      storage.recordEnvironmentSessionCompletion = (async (...args) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("disk unavailable");
+        return originalRecord(...args);
+      }) as typeof storage.recordEnvironmentSessionCompletion;
+      const warnings = await captureWarnings(async () => {
+        clock += 1_000;
+        activityState = "idle";
+        await service.reconcileAgentActivity();
+        expect(internals(service).observedSessionActivity.get(key)?.state).toBe("working");
+
+        clock += 2_000;
+        await service.reconcileAgentActivity();
+      });
+      storage.recordEnvironmentSessionCompletion = originalRecord;
+
+      expect(attempts).toBe(2);
+      expect(warnings.some((warning) => warning.includes("Activity reconciliation"))).toBe(true);
+      expect(internals(service).observedSessionActivity.get(key)?.state).toBe("idle");
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivityState: "idle",
+        hasUnreadWork: true,
       });
     });
   });
 
-  test("does not report a parked waiting turn as completed when it becomes idle", async () => {
-    let activityState: ProviderActivityState = "waiting";
+  test("does not report a parked waiting turn as completed or complete it when it becomes idle", async () => {
+    let activityState: ProviderActivityState = "working";
     const { provider } = createProviderStub("codex", {
       activity: async () => activityState,
     });
@@ -1987,6 +2109,14 @@ describe("NativeAgentService", () => {
 
       await service.reconcileAgentActivity();
       expect(invoke).not.toHaveBeenCalled();
+
+      activityState = "waiting";
+      await service.reconcileAgentActivity();
+      expect(invoke).not.toHaveBeenCalled();
+      expect(await storage.getEnvironment("env-1")).toMatchObject({
+        agentActivityState: "waiting",
+        hasUnreadWork: true,
+      });
 
       activityState = "idle";
       await service.reconcileAgentActivity();

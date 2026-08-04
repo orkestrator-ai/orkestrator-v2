@@ -4,7 +4,7 @@ import * as realBackend from "@/lib/backend";
 const realBackendSnapshot = { ...realBackend };
 
 // Mock backend before importing the store
-const mockUpdateKanbanTask = mock(() => Promise.resolve({
+const mockUpdateKanbanTask = mock((..._args: unknown[]) => Promise.resolve({
   id: "task-1",
   projectId: "proj-1",
   title: "Test",
@@ -18,6 +18,19 @@ const mockUpdateKanbanTask = mock(() => Promise.resolve({
 }));
 
 const mockGetKanbanTasks = mock(() => Promise.resolve([]));
+const mockClearTaskBuildStatus = mock(async (taskId: string) => ({
+  task: await mockUpdateKanbanTask(
+    taskId,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "",
+    "",
+  ),
+  removedPipelineIds: [] as string[],
+  failedPipelineIds: [] as string[],
+}));
 const mockAddKanbanTask = mock(() => Promise.resolve({
   id: "new-task",
   projectId: "proj-1",
@@ -48,6 +61,7 @@ mock.module("@/lib/backend", () => ({
   getKanbanTasks: mockGetKanbanTasks,
   addKanbanTask: mockAddKanbanTask,
   updateKanbanTask: mockUpdateKanbanTask,
+  clearTaskBuildStatus: mockClearTaskBuildStatus,
   deleteKanbanTask: mock(() => Promise.resolve()),
   addKanbanComment: mockAddKanbanComment,
   deleteKanbanComment: mock(() => Promise.resolve()),
@@ -97,6 +111,7 @@ describe("kanbanStore", () => {
       buildEnvironmentIds: new Set(),
     });
     mockUpdateKanbanTask.mockClear();
+    mockClearTaskBuildStatus.mockClear();
     mockAddKanbanComment.mockClear();
   });
 

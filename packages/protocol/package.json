@@ -25,8 +25,10 @@
     "./structured-review": "./src/structured-review.ts",
     "./structured-output": "./src/structured-output.ts",
     "./task-list": "./src/task-list.ts",
+    "./tab-teardown": "./src/tab-teardown.ts",
     "./terminal-websocket": "./src/terminal-websocket.ts",
     "./tmux-prompt": "./src/tmux-prompt.ts",
+    "./tmux-observation": "./src/tmux-observation.ts",
     "./web-client": "./src/web-client.ts"
   },
   "scripts": {

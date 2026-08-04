@@ -605,10 +605,8 @@ export function HierarchicalSidebar() {
             console.error("[HierarchicalSidebar] Failed to auto-start local environment:", err);
           });
       }
-      // Already-started local environments: TerminalContainer's effect decides
-      // whether to auto-resolve (setup previously complete) or re-run setup
-      // (previously incomplete). Persisted `setupScriptsComplete` also seeds
-      // `setupCommandsResolved` during env hydration in the store.
+      // Already-started local environments resume their backend-owned setup
+      // phase from the persisted environment snapshot.
     }
   }, [
     getOrderedEnvironmentIds,

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import {
   applyTmuxAgentUsageSummaries,
-  parseTmuxAgentUsageSummaries,
 } from "./claude-tmux-usage";
+import { parseTmuxAgentUsageSummaries } from "@orkestrator/protocol/tmux-observation";
 
 describe("Claude tmux agent usage summaries", () => {
   test("parses tool-use and token counts from Claude's tmux pane", () => {

@@ -646,6 +646,7 @@ function resetStores(environmentName = "review-table") {
         branch: "main",
         containerId: "container-1",
         status: "running",
+        setupPhase: "ready",
         prUrl: null,
         prState: null,
         hasMergeConflicts: null,
@@ -657,11 +658,7 @@ function resetStores(environmentName = "review-table") {
     ],
     isLoading: false,
     error: null,
-    workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
     deletingEnvironments: new Set(),
-    pendingSetupCommands: new Map(),
-    setupCommandsResolved: new Set(),
-    setupScriptsRunning: new Set(),
   });
   seedPaneLayout();
 }
@@ -5850,8 +5847,8 @@ describe("ClaudeChatTab", () => {
         createdAt: new Date().toISOString(),
         environmentType: "local",
       });
-      useEnvironmentStore.setState({
-        setupCommandsResolved: new Set([ENVIRONMENT_ID]),
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        setupPhase: "ready",
       });
       mockGetLocalClaudeServerStatus.mockResolvedValue({
         running: false,
@@ -5985,7 +5982,7 @@ describe("ClaudeChatTab", () => {
 
     test("retries after slow setup using a window that starts at the first connection failure", async () => {
       const retryTimers = installRetryTimeoutQueue();
-      useEnvironmentStore.setState({ workspaceReadyEnvironments: new Set() });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, { setupPhase: "pending" });
       mockGetClaudeServerStatus
         .mockRejectedValueOnce(new Error("bridge is still starting"))
         .mockResolvedValueOnce({
@@ -5999,8 +5996,8 @@ describe("ClaudeChatTab", () => {
       expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
 
       act(() => {
-        useEnvironmentStore.setState({
-          workspaceReadyEnvironments: new Set([ENVIRONMENT_ID]),
+        useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+          setupPhase: "ready",
         });
       });
       await flushMicrotaskWork();
@@ -6012,7 +6009,7 @@ describe("ClaudeChatTab", () => {
     });
 
     test("starts a stopped local server and connects to its port", async () => {
-      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, { setupPhase: "ready" });
       mockGetLocalClaudeServerStatus.mockResolvedValue({
         running: false,
         port: null,
@@ -6046,7 +6043,7 @@ describe("ClaudeChatTab", () => {
     });
 
     test("reuses an already running local server without restarting it", async () => {
-      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, { setupPhase: "ready" });
       mockGetLocalClaudeServerStatus.mockResolvedValue({
         running: true,
         port: 6543,
@@ -6072,7 +6069,7 @@ describe("ClaudeChatTab", () => {
     });
 
     test("reports a local server that starts without a port", async () => {
-      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, { setupPhase: "ready" });
       mockGetLocalClaudeServerStatus.mockResolvedValue({
         running: false,
         port: null,
@@ -6208,7 +6205,7 @@ describe("ClaudeChatTab", () => {
     });
 
     test("does not read a container log for a local timeout failure", async () => {
-      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, { setupPhase: "ready" });
       mockGetLocalClaudeServerStatus.mockRejectedValue(
         new Error("timeout waiting for the local Claude server"),
       );

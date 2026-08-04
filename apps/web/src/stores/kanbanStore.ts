@@ -11,7 +11,7 @@ import {
   deleteKanbanImage,
   getProjectNotes,
   saveProjectNotes,
-  deleteBuildPipeline,
+  clearTaskBuildStatus,
   type KanbanTask,
   type KanbanStatus,
   type KanbanComment,
@@ -124,44 +124,17 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
 
   clearTaskBuildStatus: async (taskId) => {
     try {
-      const task = get().tasks.find((candidate) => candidate.id === taskId);
-      const pipelineIds = new Set(Array.from(
-        useBuildPipelineStore.getState().pipelines.values(),
-      ).filter((pipeline) => pipeline.taskId === taskId)
-        .map((pipeline) => pipeline.id));
-      // The task link is persisted by the backend and remains authoritative
-      // when this renderer missed or has not yet hydrated the pipeline snapshot.
-      if (task?.buildPipelineId) pipelineIds.add(task.buildPipelineId);
-      // Deleting a pipeline cancels it first, and cancelling rethrows when the
-      // agent abort cannot be confirmed — which is exactly the state a task with
-      // a dead environment is in. Unlinking the task is what the user asked for,
-      // so a failed cleanup reports itself and does not block that.
-      const failures = (await Promise.allSettled(
-        Array.from(pipelineIds, (pipelineId) => deleteBuildPipeline(pipelineId)),
-      )).filter((result) => result.status === "rejected");
-      if (failures.length > 0) {
-        console.warn(
-          "[KanbanStore] Some build pipelines could not be deleted:",
-          failures.map((failure) => failure.reason),
-        );
+      const { task: updated, failedPipelineIds } = await clearTaskBuildStatus(taskId);
+      useBuildPipelineStore.getState().removePipelinesForTask(taskId);
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
+      }));
+      if (failedPipelineIds.length > 0) {
         toast.warning("Some build pipeline data could not be removed", {
           description:
             "The task was unlinked, but its build environment may need clearing manually.",
         });
       }
-      const updated = await updateKanbanTask(
-        taskId,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        "",
-        "",
-      );
-      useBuildPipelineStore.getState().removePipelinesForTask(taskId);
-      set((state) => ({
-        tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
-      }));
     } catch (error) {
       console.error("[KanbanStore] Failed to clear task build status:", error);
     }

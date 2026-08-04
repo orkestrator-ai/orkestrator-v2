@@ -34,7 +34,7 @@ function nonBlank(value: unknown): value is string {
  */
 function isEnvironmentReadyForAgents(environment: Environment): boolean {
   return environment.status === "running"
-    && environment.setupScriptsComplete === true;
+    && (environment.setupPhase === "ready" || environment.setupScriptsComplete === true);
 }
 
 /**

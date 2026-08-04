@@ -60,6 +60,23 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
+import type { Environment } from "@/types";
+
+const NO_BACKGROUND_SETUP = new Set<string>();
+
+/**
+ * Setup can fail after Docker has successfully created and started the
+ * container. The backend reports that lifecycle outcome as `status: "error"`,
+ * but the existing container is still the workspace in which retry/override
+ * must run. Keep that surface live until setup is resolved.
+ */
+export function isEnvironmentContainerAvailable(
+  environment: Pick<Environment, "containerId" | "environmentType" | "setupPhase" | "status">,
+): boolean {
+  if (environment.environmentType === "local" || !environment.containerId) return false;
+  return environment.status === "running"
+    || (environment.status === "error" && environment.setupPhase === "failed");
+}
 
 function App() {
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
@@ -166,12 +183,6 @@ function App() {
   const selectedEnvironment = selectedEnvironmentId
     ? environments.find((env) => env.id === selectedEnvironmentId) ?? null
     : null;
-  const setupScriptsRunning = useEnvironmentStore((state) => state.setupScriptsRunning);
-  const pendingSetupCommands = useEnvironmentStore((state) => state.pendingSetupCommands);
-  const pendingSetupEnvironmentIds = useMemo(
-    () => Array.from(pendingSetupCommands.keys()),
-    [pendingSetupCommands],
-  );
   const pendingNativeLaunches = useClaudeOptionsStore((state) => state.pendingNativeLaunches);
   // Only a running environment can act on a durable launch, so only a running
   // one earns a background mount. This matches the target selection in
@@ -248,11 +259,11 @@ function App() {
       pipelines,
       environments,
       selectedEnvironmentId,
-      setupScriptsRunning,
+      NO_BACKGROUND_SETUP,
       Object.keys(pendingNativeLaunches),
       pendingInitialPromptEnvironmentIds,
       loadingNativeSessionEnvironmentIds,
-      pendingSetupEnvironmentIds,
+      [],
       loopedReviews.values(),
       durablePendingAgentLaunchEnvironmentIds,
     ),
@@ -260,8 +271,6 @@ function App() {
       pipelines,
       environments,
       selectedEnvironmentId,
-      setupScriptsRunning,
-      pendingSetupEnvironmentIds,
       pendingNativeLaunches,
       pendingInitialPromptEnvironmentIds,
       loadingNativeSessionEnvironmentIds,
@@ -665,7 +674,7 @@ function App() {
                 <TerminalContainer
                   environmentId={selectedEnvironment.id}
                   containerId={selectedEnvironment.containerId ?? null}
-                  isContainerRunning={selectedEnvironment.status === "running"}
+                  isContainerRunning={isEnvironmentContainerAvailable(selectedEnvironment)}
                   isContainerCreating={selectedEnvironment.status === "creating"}
                   isActive
                   className="h-full"
@@ -708,7 +717,7 @@ function App() {
                   key={`bg-pipeline-${environment.id}`}
                   environmentId={environment.id}
                   containerId={environment.containerId ?? null}
-                  isContainerRunning={environment.status === "running"}
+                  isContainerRunning={isEnvironmentContainerAvailable(environment)}
                   isContainerCreating={environment.status === "creating"}
                   isActive={false}
                   className="h-full"

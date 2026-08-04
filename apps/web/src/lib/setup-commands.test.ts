@@ -1,289 +1,97 @@
-import { beforeEach, describe, expect, test } from "bun:test";
-import { invoke } from "@/lib/native/backend";
-import { waitFor } from "@testing-library/react";
-import { useEnvironmentStore } from "@/stores/environmentStore";
+import { beforeEach, expect, mock, test } from "bun:test";
 import type { Environment } from "@/types";
-import {
+
+const overrideEnvironmentSetup = mock(async (environmentId: string) => ({
+  id: environmentId,
+  setupPhase: "ready",
+  setupOverride: true,
+} as Environment));
+const runEnvironmentSetup = mock(async (environmentId: string) => ({
+  id: environmentId,
+  setupPhase: "ready",
+  setupScriptsComplete: true,
+} as Environment));
+
+mock.module("@/lib/backend", () => ({ overrideEnvironmentSetup, runEnvironmentSetup }));
+
+const { useEnvironmentStore } = await import("@/stores/environmentStore");
+const {
   forceResolveSetupRuntime,
+  isSetupBlocked,
   isSetupPending,
-  markSetupScriptsComplete,
-  preserveCompletedSetupState,
-  shouldAutoResolveSetupCommands,
-} from "./setup-commands";
+  retrySetupRuntime,
+} = await import("./setup-commands");
 
-const invokeMock = invoke as unknown as {
-  mockReset: () => void;
-  mockResolvedValue: (value: unknown) => void;
-  mockRejectedValue: (value: unknown) => void;
-  mockImplementation: (implementation: (...args: unknown[]) => unknown) => void;
-  mock: { calls: unknown[][] };
-};
+beforeEach(() => {
+  overrideEnvironmentSetup.mockClear();
+  runEnvironmentSetup.mockClear();
+  useEnvironmentStore.setState({ environments: [] });
+});
 
-function createEnvironment(overrides: Partial<Environment> = {}): Environment {
-  return {
-    id: "env-1",
-    projectId: "project-1",
-    name: "test-env",
-    branch: "main",
-    containerId: null,
-    status: "stopped",
-    prUrl: null,
-    prState: null,
-    hasMergeConflicts: null,
-    createdAt: new Date().toISOString(),
-    networkAccessMode: "restricted",
-    order: 0,
-    environmentType: "local",
-    ...overrides,
-  };
-}
+test("setup readiness comes only from the authoritative setup phase", () => {
+  expect(isSetupPending({ setupPhase: "pending" })).toBe(true);
+  expect(isSetupPending({ setupPhase: "running" })).toBe(true);
+  expect(isSetupPending({ setupPhase: "failed" })).toBe(false);
+  expect(isSetupPending({ setupPhase: "ready" })).toBe(false);
+  expect(isSetupPending({})).toBe(true);
+  expect(isSetupBlocked({ setupPhase: "failed" })).toBe(true);
+  expect(isSetupBlocked({ setupPhase: "ready" })).toBe(false);
+});
 
-describe("setup-commands", () => {
-  beforeEach(() => {
-    invokeMock.mockReset();
-    invokeMock.mockResolvedValue(undefined);
-
-    useEnvironmentStore.setState({
-      environments: [createEnvironment()],
-      isLoading: false,
-      error: null,
-      workspaceReadyEnvironments: new Set<string>(),
-      deletingEnvironments: new Set<string>(),
-      pendingSetupCommands: new Map<string, string[]>(),
-      setupCommandsResolved: new Set<string>(),
-      setupScriptsRunning: new Set<string>(),
-      sessionActivated: new Set<string>(),
-    });
+test("forceResolveSetupRuntime persists and projects the backend override", async () => {
+  useEnvironmentStore.setState({
+    environments: [{ id: "env-1", setupPhase: "running" } as Environment],
   });
 
-  test("auto-resolves only when a ready local environment has no pending commands", () => {
-    expect(
-      shouldAutoResolveSetupCommands({
-        isLocalEnvironment: true,
-        isLocalEnvironmentReady: true,
-        setupCommandsResolved: false,
-        hasPendingCommands: false,
-      })
-    ).toBe(true);
+  await forceResolveSetupRuntime("env-1");
 
-    expect(
-      shouldAutoResolveSetupCommands({
-        isLocalEnvironment: true,
-        isLocalEnvironmentReady: true,
-        setupCommandsResolved: false,
-        hasPendingCommands: true,
-      })
-    ).toBe(false);
+  expect(overrideEnvironmentSetup).toHaveBeenCalledWith("env-1");
+  expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toEqual(
+    expect.objectContaining({ setupPhase: "ready", setupOverride: true }),
+  );
+});
 
-    expect(
-      shouldAutoResolveSetupCommands({
-        isLocalEnvironment: false,
-        isLocalEnvironmentReady: true,
-        setupCommandsResolved: false,
-        hasPendingCommands: false,
-      })
-    ).toBe(false);
+test("forceResolveSetupRuntime ignores unknown environments", async () => {
+  await forceResolveSetupRuntime("missing");
+  expect(overrideEnvironmentSetup).not.toHaveBeenCalled();
+});
+
+test("forceResolveSetupRuntime rejects when the backend override fails", async () => {
+  useEnvironmentStore.setState({
+    environments: [{ id: "env-1", setupPhase: "failed" } as Environment],
+  });
+  overrideEnvironmentSetup.mockRejectedValueOnce(new Error("backend unavailable"));
+
+  await expect(forceResolveSetupRuntime("env-1")).rejects.toThrow("backend unavailable");
+  expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
+    .toBe("failed");
+});
+
+test("retrySetupRuntime runs setup and projects the authoritative result", async () => {
+  useEnvironmentStore.setState({
+    environments: [{ id: "env-1", setupPhase: "failed" } as Environment],
   });
 
-  test("treats local setup as pending until commands are resolved and no setup is running", () => {
-    expect(
-      isSetupPending({
-        isLocal: true,
-        setupCommandsResolved: false,
-        hasPendingSetupCommands: false,
-        setupScriptsRunning: false,
-        workspaceReady: true,
-      })
-    ).toBe(true);
+  await retrySetupRuntime("env-1");
 
-    expect(
-      isSetupPending({
-        isLocal: true,
-        setupCommandsResolved: true,
-        hasPendingSetupCommands: true,
-        setupScriptsRunning: false,
-        workspaceReady: true,
-      })
-    ).toBe(true);
+  expect(runEnvironmentSetup).toHaveBeenCalledWith("env-1");
+  expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toEqual(
+    expect.objectContaining({ setupPhase: "ready", setupScriptsComplete: true }),
+  );
+});
 
-    expect(
-      isSetupPending({
-        isLocal: true,
-        setupCommandsResolved: true,
-        hasPendingSetupCommands: false,
-        setupScriptsRunning: false,
-        workspaceReady: false,
-      })
-    ).toBe(false);
+test("retrySetupRuntime ignores unknown environments", async () => {
+  await retrySetupRuntime("missing");
+  expect(runEnvironmentSetup).not.toHaveBeenCalled();
+});
+
+test("retrySetupRuntime leaves the failed phase intact when retry rejects", async () => {
+  useEnvironmentStore.setState({
+    environments: [{ id: "env-1", setupPhase: "failed" } as Environment],
   });
+  runEnvironmentSetup.mockRejectedValueOnce(new Error("retry unavailable"));
 
-  test("uses workspace readiness for containerized environments", () => {
-    expect(
-      isSetupPending({
-        isLocal: false,
-        setupCommandsResolved: true,
-        hasPendingSetupCommands: false,
-        setupScriptsRunning: false,
-        workspaceReady: false,
-      })
-    ).toBe(true);
-
-    expect(
-      isSetupPending({
-        isLocal: false,
-        setupCommandsResolved: false,
-        hasPendingSetupCommands: true,
-        setupScriptsRunning: true,
-        workspaceReady: true,
-      })
-    ).toBe(false);
-  });
-
-  test("persists setup completion before updating store state", async () => {
-    const updatedEnvironment = createEnvironment({ setupScriptsComplete: true });
-    invokeMock.mockResolvedValue(updatedEnvironment);
-
-    markSetupScriptsComplete("env-1");
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(invokeMock.mock.calls).toEqual([
-      ["set_environment_setup_complete", { environmentId: "env-1", complete: true }],
-    ]);
-    await waitFor(() => {
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupScriptsComplete).toBe(true);
-    });
-  });
-
-  test("keeps setup incomplete in memory when persistence fails", async () => {
-    invokeMock.mockRejectedValue(new Error("disk full"));
-
-    markSetupScriptsComplete("env-1");
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupScriptsComplete).toBeUndefined();
-  });
-
-  test("forceResolveSetupRuntime flips local gates without draining pending commands", () => {
-    useEnvironmentStore.setState({
-      environments: [createEnvironment({ id: "env-1", environmentType: "local" })],
-      setupScriptsRunning: new Set<string>(["env-1"]),
-      setupCommandsResolved: new Set<string>(),
-      pendingSetupCommands: new Map([["env-1", ["echo hi"]]]),
-      workspaceReadyEnvironments: new Set<string>(),
-    });
-
-    forceResolveSetupRuntime("env-1");
-
-    const state = useEnvironmentStore.getState();
-    expect(state.setupScriptsRunning.has("env-1")).toBe(false);
-    expect(state.setupCommandsResolved.has("env-1")).toBe(true);
-    // Pending commands are preserved so a retry path exists when setup was
-    // merely slow rather than genuinely stuck.
-    expect(state.pendingSetupCommands.get("env-1")).toEqual(["echo hi"]);
-    // Local override does not touch workspace-ready (that's the container gate).
-    expect(state.workspaceReadyEnvironments.has("env-1")).toBe(false);
-  });
-
-  test("forceResolveSetupRuntime flips workspaceReady for containerized envs", () => {
-    useEnvironmentStore.setState({
-      environments: [createEnvironment({ id: "env-1", environmentType: "containerized" })],
-      setupScriptsRunning: new Set<string>(),
-      setupCommandsResolved: new Set<string>(),
-      pendingSetupCommands: new Map(),
-      workspaceReadyEnvironments: new Set<string>(),
-    });
-
-    forceResolveSetupRuntime("env-1");
-
-    const state = useEnvironmentStore.getState();
-    expect(state.workspaceReadyEnvironments.has("env-1")).toBe(true);
-    // Container override does NOT touch the local gates.
-    expect(state.setupCommandsResolved.has("env-1")).toBe(false);
-  });
-
-  test("forceResolveSetupRuntime no-ops for unknown environment", () => {
-    useEnvironmentStore.setState({
-      environments: [],
-      setupScriptsRunning: new Set<string>(),
-      setupCommandsResolved: new Set<string>(),
-      pendingSetupCommands: new Map(),
-      workspaceReadyEnvironments: new Set<string>(),
-    });
-
-    forceResolveSetupRuntime("missing-env");
-
-    const state = useEnvironmentStore.getState();
-    expect(state.workspaceReadyEnvironments.has("missing-env")).toBe(false);
-    expect(state.setupCommandsResolved.has("missing-env")).toBe(false);
-  });
-
-  test("deduplicates concurrent completion writes", async () => {
-    let resolveInvoke: ((value: unknown) => void) | undefined;
-    const pendingInvoke = new Promise((resolve) => {
-      resolveInvoke = resolve;
-    });
-    invokeMock.mockImplementation(() => pendingInvoke);
-
-    markSetupScriptsComplete("env-1");
-    markSetupScriptsComplete("env-1");
-
-    expect(invokeMock.mock.calls).toHaveLength(1);
-
-    resolveInvoke?.(createEnvironment({ setupScriptsComplete: true }));
-    await pendingInvoke;
-
-    await waitFor(() => {
-      expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupScriptsComplete).toBe(true);
-    });
-  });
-
-  describe("preserveCompletedSetupState", () => {
-    test("rewrites a snapshot that would regress a locally-completed setup", () => {
-      useEnvironmentStore.setState({
-        environments: [createEnvironment({ setupScriptsComplete: true })],
-      });
-
-      const snapshot = createEnvironment({ setupScriptsComplete: false, branch: "from-backend" });
-      const guarded = preserveCompletedSetupState("env-1", snapshot);
-
-      // Backend responses are not ordered, so an older snapshot must not reopen
-      // the setup gate on a workspace that is already ready.
-      expect(guarded.setupScriptsComplete).toBe(true);
-      expect(guarded.branch).toBe("from-backend");
-      // The input is not mutated.
-      expect(snapshot.setupScriptsComplete).toBe(false);
-    });
-
-    test("passes a snapshot through untouched when nothing would regress", () => {
-      useEnvironmentStore.setState({
-        environments: [createEnvironment({ setupScriptsComplete: true })],
-      });
-
-      const completed = createEnvironment({ setupScriptsComplete: true });
-      expect(preserveCompletedSetupState("env-1", completed)).toBe(completed);
-
-      const undefinedFlag = createEnvironment({ setupScriptsComplete: undefined });
-      expect(preserveCompletedSetupState("env-1", undefinedFlag)).toBe(undefinedFlag);
-    });
-
-    test("does not invent completion for an environment that never completed setup", () => {
-      useEnvironmentStore.setState({
-        environments: [createEnvironment({ setupScriptsComplete: false })],
-      });
-
-      const snapshot = createEnvironment({ setupScriptsComplete: false });
-      expect(preserveCompletedSetupState("env-1", snapshot).setupScriptsComplete).toBe(false);
-    });
-
-    test("passes through for an environment the store does not know", () => {
-      useEnvironmentStore.setState({ environments: [] });
-
-      const snapshot = createEnvironment({ setupScriptsComplete: false });
-      expect(preserveCompletedSetupState("env-unknown", snapshot)).toBe(snapshot);
-    });
-  });
+  await expect(retrySetupRuntime("env-1")).rejects.toThrow("retry unavailable");
+  expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
+    .toBe("failed");
 });

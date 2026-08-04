@@ -744,6 +744,21 @@ export class BuildPipelineService {
         if (!isBuildPipeline(existing)) {
           throw new Error("Existing build pipeline admission is invalid");
         }
+        // Admission is intentionally idempotent, including after a previous
+        // caller completed provisioning but failed while publishing the pane
+        // layout. Repair that last step before reporting success again. A
+        // concurrent winner that has only persisted its initial reservation
+        // does not have an environment to attach yet; that winner still owns
+        // the provisioning pass and will materialize the tab before it returns.
+        if (existing.environmentId && existing.sourceLinkedAt) {
+          await this.storage.ensureBuildPipelineTab({
+            pipelineId: existing.id,
+            taskId: existing.taskId,
+            environmentId: existing.environmentId,
+            isLocal: existing.environmentType === "local",
+          });
+          if (this.options.autoAdvance !== false) void this.runLocked(existing.id);
+        }
         return existing;
       }
     } catch (error) {
@@ -774,6 +789,12 @@ export class BuildPipelineService {
         throw new Error(started.error ?? "Failed to link build pipeline source");
       }
     }
+    await this.storage.ensureBuildPipelineTab({
+      pipelineId: started.id,
+      taskId: started.taskId,
+      environmentId: started.environmentId,
+      isLocal: started.environmentType === "local",
+    });
     if (this.options.autoAdvance !== false) void this.runLocked(pipeline.id);
     return started;
   }

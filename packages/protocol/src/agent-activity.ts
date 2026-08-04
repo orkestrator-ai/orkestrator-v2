@@ -15,11 +15,14 @@ export type AgentActivityState = "idle" | "working" | "waiting";
 export type AgentActivitySource =
   | "frontend"
   | "claude-terminal"
+  | "claude-tmux"
   | "native-agent";
 
 export interface AgentActivitySourceSnapshot {
   state: AgentActivityState;
   updatedAt: string;
+  /** The observer is still retrying, but its last read did not answer. */
+  stale?: boolean;
 }
 
 /**
@@ -43,6 +46,7 @@ export const AGENT_ACTIVITY_STATES: readonly AgentActivityState[] = [
 export const AGENT_ACTIVITY_SOURCES: readonly AgentActivitySource[] = [
   "frontend",
   "claude-terminal",
+  "claude-tmux",
   "native-agent",
 ];
 

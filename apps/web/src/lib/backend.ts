@@ -14,6 +14,7 @@ import type {
   BuildPipeline as BackendBuildPipeline,
   StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
+import type { TabTeardownInput } from "@orkestrator/protocol/tab-teardown";
 import type {
   LoopedReviewWorkflow as BackendLoopedReviewWorkflow,
   StartLoopedReviewInput,
@@ -408,6 +409,10 @@ export async function detachTerminal(sessionId: string): Promise<void> {
   return invoke("detach_terminal", { sessionId });
 }
 
+export async function teardownTab(input: TabTeardownInput): Promise<{ completed: boolean }> {
+  return invoke("teardown_tab", { ...input });
+}
+
 export async function writeTerminal(
   sessionId: string,
   data: string
@@ -713,6 +718,10 @@ export async function setEnvironmentSetupComplete(
   complete: boolean
 ): Promise<Environment> {
   return invoke<Environment>("set_environment_setup_complete", { environmentId, complete });
+}
+
+export async function overrideEnvironmentSetup(environmentId: string): Promise<Environment> {
+  return invoke<Environment>("override_environment_setup", { environmentId });
 }
 
 export async function runEnvironmentSetup(environmentId: string): Promise<Environment> {
@@ -2225,6 +2234,14 @@ export async function listBuildPipelinesConditional<T = unknown>(
 
 export async function deleteBuildPipeline(pipelineId: string): Promise<void> {
   return invoke("delete_build_pipeline", { pipelineId });
+}
+
+export async function clearTaskBuildStatus(taskId: string): Promise<{
+  task: KanbanTask;
+  removedPipelineIds: string[];
+  failedPipelineIds: string[];
+}> {
+  return invoke("clear_task_build_status", { taskId });
 }
 
 /**

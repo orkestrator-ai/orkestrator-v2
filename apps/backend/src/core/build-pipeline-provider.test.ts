@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import type { TaskSnapshotImage } from "@orkestrator/protocol/build-pipeline";
 import {
+  OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+  OpenCodeMessageIdCoordinator,
+} from "@orkestrator/protocol/opencode-message-id";
+import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   AGENT_INTERACTION_LIMITS,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
@@ -1893,6 +1897,7 @@ type OpenCodeFake = {
   messageCalls: Array<Record<string, unknown> | undefined>;
   promptCalls: Array<Record<string, unknown>>;
   setPromptError(error: unknown): void;
+  setPromptGate(gate: Promise<void> | null): void;
   client: OpencodeClient;
   readonly permissionListCallCount: number;
   permissionListCalls: Array<Record<string, unknown> | undefined>;
@@ -1925,6 +1930,9 @@ type OpenCodeFake = {
   setQuestionReplyFailure(error: unknown, applied: boolean): void;
   setSubscribeFailures(failures: Array<"throw" | "missing-stream">): void;
   setMessagesResponse(response: Record<string, unknown>): void;
+  setMessagesHandler(
+    handler: ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>) | null,
+  ): void;
   setAbortResponse(response: Record<string, unknown>): void;
   setCreateResponse(response: Record<string, unknown>): void;
   setPromptResponse(response: Record<string, unknown>): void;
@@ -1939,6 +1947,7 @@ function openCodeFake(): OpenCodeFake {
   const permissionReplies: Array<Record<string, unknown>> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
   let promptError: unknown = null;
+  let promptGate: Promise<void> | null = null;
   const questionRejections: Array<Record<string, unknown>> = [];
   const questionReplies: Array<Record<string, unknown>> = [];
   const subscriptions: EventHarness[] = [];
@@ -1961,6 +1970,9 @@ function openCodeFake(): OpenCodeFake {
   let questionReplyGate: Promise<void> = Promise.resolve();
   let questionReplyFailure: { error: unknown; applied: boolean } | null = null;
   let messagesResponse: Record<string, unknown> = { data: [] };
+  let messagesHandler:
+    ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>)
+    | null = null;
   let abortResponse: Record<string, unknown> = { data: true };
   let createResponse: Record<string, unknown> = { data: { id: "owned-session" } };
   let promptResponse: Record<string, unknown> = { data: true };
@@ -2046,6 +2058,7 @@ function openCodeFake(): OpenCodeFake {
       },
       async promptAsync(parameters: Record<string, unknown>) {
         promptCalls.push(parameters);
+        await promptGate;
         if (promptError) throw promptError;
         return promptResponse;
       },
@@ -2056,6 +2069,7 @@ function openCodeFake(): OpenCodeFake {
       },
       async messages(parameters?: Record<string, unknown>) {
         messageCalls.push(parameters);
+        if (messagesHandler) return messagesHandler(parameters);
         return messagesResponse;
       },
       async abort(parameters?: Record<string, unknown>) {
@@ -2093,6 +2107,9 @@ function openCodeFake(): OpenCodeFake {
     setPromptError(error: unknown) {
       promptError = error;
     },
+    setPromptGate(gate) {
+      promptGate = gate;
+    },
     setPending(permissions, questions) {
       pendingPermissions = permissions;
       pendingQuestions = questions;
@@ -2129,6 +2146,9 @@ function openCodeFake(): OpenCodeFake {
     setMessagesResponse(response) {
       messagesResponse = response;
     },
+    setMessagesHandler(handler) {
+      messagesHandler = handler;
+    },
     setAbortResponse(response) {
       abortResponse = response;
     },
@@ -2147,7 +2167,11 @@ function openCodeFake(): OpenCodeFake {
   };
 }
 
-function openCodeProvider(fake: OpenCodeFake, monitorRetryMs = 1) {
+function openCodeProvider(
+  fake: OpenCodeFake,
+  monitorRetryMs = 1,
+  messageIds = new OpenCodeMessageIdCoordinator(),
+) {
   return createBuildPipelineProvider(
     {
       agent: "opencode",
@@ -2157,6 +2181,7 @@ function openCodeProvider(fake: OpenCodeFake, monitorRetryMs = 1) {
     },
     {
       openCodeClient: fake.client,
+      openCodeMessageIdCoordinator: messageIds,
       monitorRetryMs,
       // Exercises the isolated compatibility responder. Production providers
       // default this off and build pipelines use the common journaled resolver.
@@ -2173,7 +2198,11 @@ function openCodeActivityProvider(fake: OpenCodeFake) {
       authToken: "test-token",
       directory: "/workspace",
     },
-    { openCodeClient: fake.client, autoAnswerRequests: false },
+    {
+      openCodeClient: fake.client,
+      openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
+      autoAnswerRequests: false,
+    },
   );
 }
 
@@ -3327,7 +3356,10 @@ describe("OpenCode build pipeline provider", () => {
 
       await expect(provider.structured("owned-session", "request-1")).resolves
         .toMatchObject({ ok: true, value: { complete: true } });
-      expect(fake.messageCalls.at(-1)).toEqual({ sessionID: "owned-session" });
+      expect(fake.messageCalls.at(-1)).toEqual({
+        sessionID: "owned-session",
+        limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+      });
     } finally {
       await provider.dispose?.();
     }
@@ -3865,6 +3897,12 @@ describe("OpenCode build pipeline provider dispatch", () => {
     for (const response of [
       { error: { message: "history unavailable" } },
       { data: { messages: [] } },
+      {
+        data: Array.from(
+          { length: OPEN_CODE_MESSAGE_HISTORY_LIMIT + 1 },
+          () => null,
+        ),
+      },
     ]) {
       const fake = openCodeFake();
       fake.setMessagesResponse(response);
@@ -3874,6 +3912,10 @@ describe("OpenCode build pipeline provider dispatch", () => {
           requestId: "request-1",
         })).rejects.toBeInstanceOf(ProviderUnavailableError);
         expect(fake.promptCalls).toHaveLength(0);
+        expect(fake.messageCalls).toEqual([{
+          sessionID: "owned-session",
+          limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+        }]);
       } finally {
         await provider.dispose?.();
       }
@@ -3912,7 +3954,11 @@ describe("OpenCode build pipeline provider dispatch", () => {
       if (typeof first !== "string") {
         throw new Error("OpenCode prompt omitted its message ID");
       }
-      const assistant = "msg_fcd9281c2001hsJUIHGDARuWRB";
+      const firstTime = BigInt(`0x${first.slice(4, 16)}`);
+      const assistantTime = ((firstTime + 0x1000n) & 0xffffffffffffn)
+        .toString(16)
+        .padStart(12, "0");
+      const assistant = `msg_${assistantTime}hsJUIHGDARuWRB`;
       fake.setMessagesResponse({
         data: [
           { info: { id: first, role: "user" } },
@@ -3934,8 +3980,53 @@ describe("OpenCode build pipeline provider dispatch", () => {
         directory: "/workspace",
         parts: [{ type: "text", text: "Second" }],
       });
+      expect(fake.messageCalls).toEqual([
+        { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+        { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+      ]);
     } finally {
       await provider.dispose?.();
+    }
+  });
+
+  test("serializes same-session allocation and dispatch across provider instances", async () => {
+    const coordinator = new OpenCodeMessageIdCoordinator();
+    const firstFake = openCodeFake();
+    const secondFake = openCodeFake();
+    const gate = deferred();
+    firstFake.setPromptGate(gate.promise);
+    const firstProvider = openCodeProvider(firstFake, 1, coordinator);
+    const secondProvider = openCodeProvider(secondFake, 1, coordinator);
+    try {
+      const first = firstProvider.send("shared-session", "First", { requestId: "zz" });
+      await waitUntil(() => firstFake.promptCalls.length === 1);
+      const second = secondProvider.send("shared-session", "Second", { requestId: "aa" });
+      await Promise.resolve();
+
+      expect(secondFake.messageCalls).toHaveLength(0);
+      gate.resolve();
+      await Promise.all([first, second]);
+
+      const firstId = firstFake.promptCalls[0]?.messageID;
+      const secondId = secondFake.promptCalls[0]?.messageID;
+      expect(typeof firstId).toBe("string");
+      expect(typeof secondId).toBe("string");
+      expect((firstId as string) < (secondId as string)).toBe(true);
+      expect(firstFake.messageCalls[0]).toEqual({
+        sessionID: "shared-session",
+        limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+      });
+      expect(secondFake.messageCalls[0]).toEqual({
+        sessionID: "shared-session",
+        limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+      });
+
+      await secondProvider.send("shared-session", "Retry", { requestId: "aa" });
+      expect(secondFake.promptCalls[1]?.messageID).toBe(secondId);
+    } finally {
+      gate.resolve();
+      await firstProvider.dispose?.();
+      await secondProvider.dispose?.();
     }
   });
 

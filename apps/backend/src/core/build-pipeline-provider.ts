@@ -6,9 +6,11 @@ import type {
 } from "@orkestrator/protocol/build-pipeline";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
+  boundedOpenCodeMessageHistory,
   findOpenCodeMessageId,
+  OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+  OpenCodeMessageIdCoordinator,
   openCodeRequestMarker,
-  resolveOpenCodeMessageId,
 } from "@orkestrator/protocol/opencode-message-id";
 import {
   AGENT_ACTIVITY_STATES,
@@ -84,6 +86,18 @@ const PROVIDER_ACTIVITY_STATES: readonly ProviderActivityState[] = [
   ...AGENT_ACTIVITY_STATES,
   "missing",
 ];
+
+// Shared by every backend workflow/provider instance. The scope includes the
+// server and workspace identity so equal session IDs on different OpenCode
+// runtimes never block or influence each other.
+const defaultOpenCodeMessageIds = new OpenCodeMessageIdCoordinator();
+
+function openCodeMessageIdScope(
+  connection: BridgeConnection,
+  sessionId: string,
+): string {
+  return JSON.stringify([connection.baseUrl, connection.directory, sessionId]);
+}
 
 /**
  * Validate a bridge-supplied activity token before it can reach the durable
@@ -241,6 +255,8 @@ export type ProviderDependencies = {
   openCodeClient?: OpencodeClient;
   /** Injectable factory for testing the production OpenCode client wiring. */
   openCodeClientFactory?: typeof createOpencodeClient;
+  /** Shared by production providers; injectable to isolate deterministic tests. */
+  openCodeMessageIdCoordinator?: OpenCodeMessageIdCoordinator;
   monitorRetryMs?: number;
   /**
    * Stage base64 images into the workspace so they can be attached by path.
@@ -1624,6 +1640,7 @@ class HttpBridgeProvider implements BuildPipelineProvider {
 class OpenCodeProvider implements BuildPipelineProvider {
   readonly agent = "opencode" as const;
   private readonly client: OpencodeClient;
+  private readonly messageIds: OpenCodeMessageIdCoordinator;
   private readonly interactionTracker = new InteractionSnapshotTracker();
   private readonly providerInteractionIds = new Map<
     string,
@@ -1665,6 +1682,8 @@ class OpenCodeProvider implements BuildPipelineProvider {
         "X-Orkestrator-OpenCode-Token": connection.authToken,
       },
     });
+    this.messageIds = dependencies.openCodeMessageIdCoordinator
+      ?? defaultOpenCodeMessageIds;
     this.monitorRetryMs = Math.max(
       1,
       dependencies.monitorRetryMs ?? DEFAULT_MONITOR_RETRY_MS,
@@ -1956,67 +1975,69 @@ class OpenCodeProvider implements BuildPipelineProvider {
     // Validate before any provider I/O. A local failure is definitive and must
     // not be retried as though the prompt might have reached OpenCode.
     openCodeRequestMarker(options.requestId);
-    // The authoritative transcript doubles as the durable request-to-message-ID
-    // journal. This recovers an accepted ambiguous dispatch after a restart and
-    // otherwise mints an ID between the latest user/assistant pair.
-    let historyResponse;
-    try {
-      historyResponse = await this.client.session.messages(
-        { sessionID: sessionId },
-        this.requestOptions(),
-      );
-      assertSdkResponse(historyResponse, "OpenCode pre-dispatch transcript read");
-      if (!Array.isArray(historyResponse.data)) {
-        throw new TypeError("OpenCode returned malformed message history before dispatch");
-      }
-    } catch (error) {
-      throw new ProviderUnavailableError(
-        "OpenCode pre-dispatch transcript is unavailable",
-        { cause: error },
-      );
-    }
-    const messageID = resolveOpenCodeMessageId(
-      sessionId,
-      historyResponse.data,
-      options.requestId,
-    );
-    let response;
-    try {
-      response = await this.client.session.promptAsync({
-        sessionID: sessionId,
-        directory: this.connection.directory,
-        messageID,
-        parts: parts as never,
-        model: modelParts && modelParts.length > 1
-          ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
-          : undefined,
-        agent: options.mode ?? "build",
-        variant: options.effort ?? this.connection.effort,
-        format: options.schema
-          ? { type: "json_schema", schema: options.schema, retryCount: 2 }
-          : undefined,
-      }, this.requestOptions());
-    } catch (error) {
-      // The request may have reached OpenCode before the response was lost.
-      // The durable message ID lets the supervisor reconcile and safely retry.
-      throw new AmbiguousPromptDispatchError(
-        "OpenCode prompt dispatch outcome is unknown",
-        { cause: error },
-      );
-    }
-    if ("error" in response && response.error) {
-      const status = response.response?.status;
-      if (
-        status === 404
-        || status === 409
-        || (status !== undefined && isTransientHttpStatus(status))
-      ) {
+    const scope = openCodeMessageIdScope(this.connection, sessionId);
+    await this.messageIds.runExclusive(scope, async () => {
+      // The bounded newest transcript recovers an accepted ambiguous dispatch
+      // after a restart. In-memory reservations cover the gap before OpenCode
+      // materializes a just-accepted user message.
+      let history: readonly unknown[];
+      try {
+        const historyResponse = await this.client.session.messages(
+          { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+          this.requestOptions(),
+        );
+        assertSdkResponse(historyResponse, "OpenCode pre-dispatch transcript read");
+        history = boundedOpenCodeMessageHistory(historyResponse.data);
+      } catch (error) {
         throw new ProviderUnavailableError(
-          `OpenCode prompt dispatch is temporarily unavailable (HTTP ${status})`,
+          "OpenCode pre-dispatch transcript is unavailable",
+          { cause: error },
         );
       }
-      throw new PromptRejectedError("OpenCode rejected the prompt");
-    }
+      const messageID = this.messageIds.resolve(
+        scope,
+        history,
+        options.requestId,
+      );
+      let response;
+      try {
+        response = await this.client.session.promptAsync({
+          sessionID: sessionId,
+          directory: this.connection.directory,
+          messageID,
+          parts: parts as never,
+          model: modelParts && modelParts.length > 1
+            ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
+            : undefined,
+          agent: options.mode ?? "build",
+          variant: options.effort ?? this.connection.effort,
+          format: options.schema
+            ? { type: "json_schema", schema: options.schema, retryCount: 2 }
+            : undefined,
+        }, this.requestOptions());
+      } catch (error) {
+        // The request may have reached OpenCode before the response was lost.
+        // The reservation keeps the same ID until transcript reconciliation.
+        throw new AmbiguousPromptDispatchError(
+          "OpenCode prompt dispatch outcome is unknown",
+          { cause: error },
+        );
+      }
+      if ("error" in response && response.error) {
+        const status = response.response?.status;
+        if (
+          status === 404
+          || status === 409
+          || (status !== undefined && isTransientHttpStatus(status))
+        ) {
+          throw new ProviderUnavailableError(
+            `OpenCode prompt dispatch is temporarily unavailable (HTTP ${status})`,
+          );
+        }
+        throw new PromptRejectedError("OpenCode rejected the prompt");
+      }
+      this.messageIds.markAccepted(scope, options.requestId);
+    });
   }
 
   async status(sessionId: string): Promise<ProviderStatus> {
@@ -2462,7 +2483,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     let response;
     try {
       response = await this.client.session.messages(
-        { sessionID: sessionId },
+        { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
         this.requestOptions(),
       );
       assertSdkResponse(response, "OpenCode structured-output read");
@@ -2473,9 +2494,18 @@ class OpenCodeProvider implements BuildPipelineProvider {
       );
     }
     if (!Array.isArray(response.data)) return null;
-    const providerMessageId = findOpenCodeMessageId(response.data, requestId);
+    let entries: readonly unknown[];
+    try {
+      entries = boundedOpenCodeMessageHistory(response.data);
+    } catch (error) {
+      throw new ProviderUnavailableError(
+        "OpenCode structured output history is invalid",
+        { cause: error },
+      );
+    }
+    const providerMessageId = findOpenCodeMessageId(entries, requestId);
     if (!providerMessageId) return null;
-    const assistant = [...response.data].reverse().find((entry) => {
+    const assistant = [...entries].reverse().find((entry) => {
       if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
       const candidate = (entry as { info?: unknown }).info;
       if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {

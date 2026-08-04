@@ -17,9 +17,11 @@ import {
   StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
 import {
+  boundedOpenCodeMessageHistory,
   findOpenCodeMessageId,
+  OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+  OpenCodeMessageIdCoordinator,
   openCodeRequestMarker,
-  resolveOpenCodeMessageId,
 } from "@orkestrator/protocol/opencode-message-id";
 import type { ContextUsageSnapshot } from "./context-usage";
 
@@ -1990,29 +1992,42 @@ function toOpenCodeModelRef(model: string): { providerID: string; modelID: strin
   };
 }
 
-async function callerOwnedOpenCodeMessageId(
+const openCodeMessageIdsByClient = new WeakMap<object, OpenCodeMessageIdCoordinator>();
+
+function openCodeMessageIds(client: OpencodeClient): OpenCodeMessageIdCoordinator {
+  const key = client as object;
+  const existing = openCodeMessageIdsByClient.get(key);
+  if (existing) return existing;
+  const created = new OpenCodeMessageIdCoordinator();
+  openCodeMessageIdsByClient.set(key, created);
+  return created;
+}
+
+async function withCallerOwnedOpenCodeMessageId<T>(
   client: OpencodeClient,
   sessionId: string,
   requestId: string | undefined,
-): Promise<string | undefined> {
-  if (requestId === undefined) return undefined;
+  operation: (messageId: string | undefined) => Promise<T>,
+): Promise<T> {
+  if (requestId === undefined) return operation(undefined);
   // Validate before provider I/O so a malformed local ID cannot be mistaken for
   // an ambiguous dispatch.
   openCodeRequestMarker(requestId);
-  const response = await client.session.messages(
-    { sessionID: sessionId },
-    { throwOnError: false },
-  );
-  if (response.error) {
-    throw new Error(formatOpenCodeError(response.error));
-  }
-  if (!Array.isArray(response.data)) {
-    throw new TypeError("OpenCode returned malformed message history before dispatch");
-  }
-  // Message history is authoritative across renderer reloads. Reuse a matching
-  // ID after an accepted retry; otherwise mint one immediately after the latest
-  // materialized server ID.
-  return resolveOpenCodeMessageId(sessionId, response.data, requestId);
+  const coordinator = openCodeMessageIds(client);
+  return coordinator.runExclusive(sessionId, async () => {
+    const response = await client.session.messages(
+      { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+      { throwOnError: false },
+    );
+    if (response.error) {
+      throw new Error(formatOpenCodeError(response.error));
+    }
+    const history = boundedOpenCodeMessageHistory(response.data);
+    // History is authoritative across renderer reloads. The bounded in-memory
+    // reservation closes the interval before a just-accepted message appears.
+    const messageId = coordinator.resolve(sessionId, history, requestId);
+    return operation(messageId);
+  });
 }
 
 /**
@@ -2088,13 +2103,12 @@ export async function sendPrompt(
     const requestId = options?.outputSchema
       ? (options.requestId ?? createUuid())
       : options?.requestId;
-    const messageID = await callerOwnedOpenCodeMessageId(
+    const response = await withCallerOwnedOpenCodeMessageId(
       client,
       sessionId,
       requestId,
-    );
-    const response = options?.command
-      ? await client.session.command({
+      async (messageID) => options?.command
+        ? client.session.command({
           sessionID: sessionId,
           directory: options.directory,
           messageID,
@@ -2110,7 +2124,7 @@ export async function sendPrompt(
           variant: options.variant,
           parts: parts.filter((part) => part.type === "file"),
         })
-      : await client.session.promptAsync({
+        : client.session.promptAsync({
           sessionID: sessionId,
           directory: options?.directory,
           messageID,
@@ -2125,7 +2139,8 @@ export async function sendPrompt(
                 retryCount: options.structuredOutputRetryCount,
               }
             : undefined,
-        });
+        }),
+    );
 
     if (response && "error" in response && response.error) {
       return {
@@ -2133,6 +2148,10 @@ export async function sendPrompt(
         requestId,
         error: formatOpenCodeError(response.error),
       };
+    }
+
+    if (requestId !== undefined) {
+      openCodeMessageIds(client).markAccepted(sessionId, requestId);
     }
 
     return { success: true, requestId };
@@ -2514,7 +2533,7 @@ export async function getStructuredOutput<T = unknown>(
   let response: { data?: unknown; error?: unknown };
   try {
     response = await client.session.messages(
-      { sessionID: sessionId },
+      { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
       { throwOnError: false },
     );
   } catch (error) {
@@ -2532,10 +2551,18 @@ export async function getStructuredOutput<T = unknown>(
       ? openCodeStructuredFailure(response.error, requestId)
       : null;
   }
-  if (
-    !Array.isArray(response.data)
-    || response.data.some((entry) => !isRecord(entry) || !isRecord(entry.info))
-  ) {
+  let boundedEntries: readonly unknown[];
+  try {
+    boundedEntries = boundedOpenCodeMessageHistory(response.data);
+  } catch {
+    return structuredOutputFailure(
+      "opencode",
+      "malformed_output",
+      "OpenCode returned malformed or oversized message history for structured output.",
+      { requestId },
+    );
+  }
+  if (boundedEntries.some((entry) => !isRecord(entry) || !isRecord(entry.info))) {
     return structuredOutputFailure(
       "opencode",
       "malformed_output",
@@ -2544,7 +2571,7 @@ export async function getStructuredOutput<T = unknown>(
     );
   }
 
-  const entries = response.data as Array<{ info: Record<string, unknown> }>;
+  const entries = boundedEntries as Array<{ info: Record<string, unknown> }>;
   const latestStructuredUserId = entries
     .filter((entry) => {
       const format = isRecord(entry.info.format) ? entry.info.format : {};

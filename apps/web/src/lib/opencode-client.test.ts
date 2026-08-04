@@ -47,6 +47,7 @@ import {
   type OpenCodeModel,
 } from "./opencode-client";
 import { StructuredOutputReadUnavailableError } from "@orkestrator/protocol/structured-output";
+import { OPEN_CODE_MESSAGE_HISTORY_LIMIT } from "@orkestrator/protocol/opencode-message-id";
 
 const originalFetch = globalThis.fetch;
 
@@ -1360,6 +1361,19 @@ describe("opencode-client getSessionStatus", () => {
       expect(unavailableResponse.error.message).toContain("status unavailable");
     }
 
+    const emptyEnvelope = {
+      session: {
+        status: async () => ({ data: undefined, error: undefined }),
+      },
+    } as unknown as OpencodeClient;
+    const unavailableEmpty = await lookupSessionStatus(emptyEnvelope, "session-1");
+    expect(unavailableEmpty.kind).toBe("unavailable");
+    if (unavailableEmpty.kind === "unavailable") {
+      expect(unavailableEmpty.error.message).toBe("Failed to get OpenCode session status");
+    }
+    await expect(getSessionStatus(emptyEnvelope, "session-1", { throwOnError: true }))
+      .rejects.toThrow("Failed to get OpenCode session status");
+
     const thrownFailure = {
       session: {
         status: async () => {
@@ -1417,12 +1431,18 @@ describe("opencode-client sendPrompt", () => {
   /** Captures the request handed to `promptAsync` and answers with success. */
   function capturePromptAsync() {
     const captured: Record<string, unknown>[] = [];
+    const historyCalls: Record<string, unknown>[] = [];
     let history: unknown[] = [];
+    let promptGate: Promise<void> | null = null;
     const client = {
       session: {
-        messages: async () => ({ data: history }),
+        messages: async (parameters: Record<string, unknown>) => {
+          historyCalls.push(parameters);
+          return { data: history };
+        },
         promptAsync: async (request: Record<string, unknown>) => {
           captured.push(request);
+          await promptGate;
           return { data: null };
         },
       },
@@ -1430,6 +1450,10 @@ describe("opencode-client sendPrompt", () => {
     return {
       client,
       captured,
+      historyCalls,
+      setPromptGate(gate: Promise<void> | null) {
+        promptGate = gate;
+      },
       setHistory(entries: unknown[]) {
         history = entries;
       },
@@ -1549,13 +1573,17 @@ describe("opencode-client sendPrompt", () => {
   });
 
   test("orders consecutive caller-owned messages by send order and reuses retries", async () => {
-    const { client, captured, setHistory } = capturePromptAsync();
+    const { client, captured, historyCalls, setHistory } = capturePromptAsync();
     const sessionId = "ses_fcd9281c1001abcdefghijklmn";
 
     await sendPrompt(client, sessionId, "First", { requestId: "zz" });
     const first = captured[0]?.messageID;
     if (typeof first !== "string") throw new Error("first message ID missing");
-    const assistant = "msg_fcd9281c2001hsJUIHGDARuWRB";
+    const firstTime = BigInt(`0x${first.slice(4, 16)}`);
+    const assistantTime = ((firstTime + 0x1000n) & 0xffffffffffffn)
+      .toString(16)
+      .padStart(12, "0");
+    const assistant = `msg_${assistantTime}hsJUIHGDARuWRB`;
     setHistory([
       { info: { id: first, role: "user" } },
       { info: { id: assistant, role: "assistant", parentID: first } },
@@ -1573,6 +1601,49 @@ describe("opencode-client sendPrompt", () => {
     expect(first < assistant).toBe(true);
     expect(assistant < second).toBe(true);
     expect(captured[2]?.messageID).toBe(second);
+    expect(historyCalls).toEqual([
+      { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+      { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+      { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+    ]);
+  });
+
+  test("serializes concurrent same-snapshot sends and keeps retry reservations", async () => {
+    const {
+      client,
+      captured,
+      historyCalls,
+      setPromptGate,
+    } = capturePromptAsync();
+    let releaseFirst: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    setPromptGate(gate);
+
+    const firstResult = sendPrompt(client, "session-1", "First", { requestId: "zz" });
+    for (let index = 0; index < 20 && captured.length === 0; index += 1) {
+      await Promise.resolve();
+    }
+    expect(captured).toHaveLength(1);
+    const secondResult = sendPrompt(client, "session-1", "Second", { requestId: "aa" });
+    await Promise.resolve();
+    expect(historyCalls).toHaveLength(1);
+
+    releaseFirst();
+    setPromptGate(null);
+    await expect(Promise.all([firstResult, secondResult])).resolves.toEqual([
+      { success: true, requestId: "zz" },
+      { success: true, requestId: "aa" },
+    ]);
+    const first = captured[0]?.messageID;
+    const second = captured[1]?.messageID;
+    expect(typeof first).toBe("string");
+    expect(typeof second).toBe("string");
+    expect((first as string) < (second as string)).toBe(true);
+
+    await sendPrompt(client, "session-1", "Retry", { requestId: "aa" });
+    expect(captured[2]?.messageID).toBe(second);
   });
 
   test.each(["", "   "])(
@@ -1588,22 +1659,46 @@ describe("opencode-client sendPrompt", () => {
     },
   );
 
-  test("does not dispatch when caller-owned ID history is unavailable", async () => {
+  test.each([
+    ["error envelope", { error: { message: "history unavailable" } }],
+    ["empty envelope", { data: undefined, error: undefined }],
+    ["null data", { data: null }],
+    ["string data", { data: "invalid" }],
+    ["wrapped data", { data: { messages: [] } }],
+    [
+      "too many messages",
+      {
+        data: Array.from(
+          { length: OPEN_CODE_MESSAGE_HISTORY_LIMIT + 1 },
+          () => null,
+        ),
+      },
+    ],
+  ] as const)("does not dispatch from unavailable or malformed history: %s", async (_label, response) => {
     const promptAsync = mock(async () => ({ data: null }));
+    const command = mock(async () => ({ data: null }));
     const client = {
       session: {
-        messages: async () => ({ error: { message: "history unavailable" } }),
+        messages: async () => response,
         promptAsync,
+        command,
       },
     } as unknown as OpencodeClient;
 
-    const result = await sendPrompt(client, "session-1", "Hello", {
+    const promptResult = await sendPrompt(client, "session-1", "Hello", {
       requestId: "request-1",
     });
+    const commandResult = await sendPrompt(client, "session-1", "/init", {
+      requestId: "request-2",
+      command: { name: "init" },
+    });
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain("history unavailable");
+    expect(promptResult.success).toBe(false);
+    expect(commandResult.success).toBe(false);
+    expect(promptResult.error).toMatch(/history unavailable|malformed|too many|oversized/i);
+    expect(commandResult.error).toMatch(/history unavailable|malformed|too many|oversized/i);
     expect(promptAsync).not.toHaveBeenCalled();
+    expect(command).not.toHaveBeenCalled();
   });
 
   describe("command branch", () => {

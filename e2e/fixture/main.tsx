@@ -10,6 +10,7 @@ import { CodexComposeBar } from "../../apps/web/src/components/codex/CodexCompos
 import { AgentThinkingIndicator } from "../../apps/web/src/components/chat/AgentThinkingIndicator";
 import { MessageShell } from "../../apps/web/src/components/chat/MessageShell";
 import { MentionableInput } from "../../apps/web/src/components/chat/MentionableInput";
+import { NativeModelPicker } from "../../apps/web/src/components/chat/NativeModelPicker";
 import {
   COMPOSE_MAX_INPUT_HEIGHT,
   COMPOSE_MIN_INPUT_HEIGHT,
@@ -121,6 +122,44 @@ function CodexComposeFixture() {
         />
         <output data-testid="codex-send-count">{sentCount}</output>
       </section>
+    </main>
+  );
+}
+
+const nativePickerModels = Array.from({ length: 8 }, (_, index) => ({
+  id: `fixture-model-${index + 1}`,
+  label: `Fixture model ${index + 1}`,
+  description: `Description for fixture model ${index + 1}`,
+}));
+
+const nativePickerReasoningOptions = Array.from({ length: 12 }, (_, index) => ({
+  id: `fixture-effort-${index + 1}`,
+  label: `Fixture effort ${index + 1}`,
+  description: `A detailed explanation for fixture reasoning effort ${index + 1}`,
+}));
+
+function NativeModelPickerFixture() {
+  const [modelId, setModelId] = useState(nativePickerModels[0]!.id);
+  const [reasoningId, setReasoningId] = useState(nativePickerReasoningOptions[0]!.id);
+  const [fastMode, setFastMode] = useState(false);
+  const model = nativePickerModels.find((entry) => entry.id === modelId)!;
+  const reasoning = nativePickerReasoningOptions.find((entry) => entry.id === reasoningId)!;
+
+  return (
+    <main className="h-screen overflow-hidden bg-background p-4 text-foreground">
+      <NativeModelPicker
+        models={nativePickerModels}
+        selectedModelId={modelId}
+        selectedModelLabel={model.label}
+        onModelChange={setModelId}
+        reasoningOptions={nativePickerReasoningOptions}
+        selectedReasoningId={reasoningId}
+        selectedReasoningLabel={reasoning.label}
+        onReasoningChange={setReasoningId}
+        fastModeEnabled={fastMode}
+        fastModeAvailable
+        onFastModeChange={setFastMode}
+      />
     </main>
   );
 }
@@ -474,6 +513,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
   if (window.location.pathname === "/codex-compose") return <CodexComposeFixture />;
+  if (window.location.pathname === "/native-model-picker") return <NativeModelPickerFixture />;
   if (window.location.pathname === "/mobile-shell") return <MobileAppShellFixture />;
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;

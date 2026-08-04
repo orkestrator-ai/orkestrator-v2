@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { NativeModelPicker } from "./NativeModelPicker";
 
@@ -51,6 +51,16 @@ function renderPicker(overrides: Partial<Parameters<typeof NativeModelPicker>[0]
   return { ...result, onModelChange, onReasoningChange, onFastModeChange };
 }
 
+function openPicker(title = "Choose model, reasoning, and speed") {
+  const trigger = screen.getByTitle(title);
+  fireEvent.pointerDown(trigger);
+  return trigger;
+}
+
+function getMobileTrigger(kind: "reasoning" | "speed") {
+  return document.querySelector<HTMLElement>(`[data-native-mobile-${kind}-trigger]`)!;
+}
+
 describe("NativeModelPicker", () => {
   afterEach(() => cleanup());
 
@@ -66,11 +76,16 @@ describe("NativeModelPicker", () => {
 
     const picker = document.querySelector<HTMLElement>("[data-native-model-picker]");
     expect(picker?.className).toContain("w-[calc(100vw-1rem)]");
+    expect(picker?.className)
+      .toContain("max-h-(--radix-dropdown-menu-content-available-height)");
     expect(document.querySelector("[data-native-model-list]")?.className).toContain("max-h-70");
     expect(screen.getByText("Scroll for 2 more models")).toBeTruthy();
     expect(document.querySelector("[data-native-mobile-reasoning-trigger]")).toBeTruthy();
     expect(document.querySelector("[data-native-mobile-speed-trigger]")?.textContent)
       .toContain("On");
+    expect(getMobileTrigger("reasoning").getAttribute("aria-haspopup")).toBe("menu");
+    expect(getMobileTrigger("reasoning").getAttribute("aria-expanded")).toBe("false");
+    expect(getMobileTrigger("reasoning").getAttribute("aria-controls")).toBeTruthy();
     expect(document.querySelectorAll("[data-native-mobile-reasoning-trigger], [data-native-mobile-speed-trigger]"))
       .toHaveLength(2);
     expect(container.querySelectorAll("button[title='Choose model, reasoning, and speed']")).toHaveLength(1);
@@ -107,6 +122,94 @@ describe("NativeModelPicker", () => {
     expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
 
+  test.each(["reasoning", "speed"] as const)(
+    "returns from the mobile %s view with Back and restores focus",
+    async (kind) => {
+      setMobileViewport(true);
+      renderPicker();
+      openPicker();
+
+      const sectionTrigger = getMobileTrigger(kind);
+      fireEvent.click(sectionTrigger);
+      const view = document.querySelector<HTMLElement>(`[data-native-mobile-${kind}-view]`)!;
+      expect(view.getAttribute("role")).toBe("group");
+      expect(sectionTrigger.getAttribute("aria-controls")).toBe(view.id);
+      expect(screen.queryByPlaceholderText("Search models...")).toBeNull();
+
+      const back = screen.getByRole("menuitem", { name: "Back to model choices" });
+      await waitFor(() => expect(document.activeElement).toBe(back));
+      fireEvent.click(back);
+
+      await waitFor(() => expect(document.activeElement).toBe(getMobileTrigger(kind)));
+      expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
+      expect(getMobileTrigger("reasoning")).toBeTruthy();
+      expect(getMobileTrigger("speed")).toBeTruthy();
+      expect(document.querySelector("[data-native-mobile-back]")).toBeNull();
+    },
+  );
+
+  test("supports directional keyboard navigation for mobile drill-in views", async () => {
+    setMobileViewport(true);
+    renderPicker();
+    openPicker();
+
+    const reasoning = getMobileTrigger("reasoning");
+    reasoning.focus();
+    fireEvent.keyDown(reasoning, { key: "ArrowRight" });
+    const back = await screen.findByRole("menuitem", { name: "Back to model choices" });
+    await waitFor(() => expect(document.activeElement).toBe(back));
+
+    const selectedReasoning = screen.getByRole("menuitemradio", { name: /High/ });
+    selectedReasoning.focus();
+    fireEvent.keyDown(selectedReasoning, { key: "ArrowLeft" });
+    await waitFor(() => expect(document.activeElement).toBe(getMobileTrigger("reasoning")));
+
+    const speed = getMobileTrigger("speed");
+    speed.focus();
+    fireEvent.keyDown(speed, { key: "ArrowRight" });
+    await waitFor(() => expect(document.activeElement)
+      .toBe(screen.getByRole("menuitem", { name: "Back to model choices" })));
+    fireEvent.keyDown(screen.getByRole("menuitemradio", { name: /Fast/ }), {
+      key: "ArrowLeft",
+    });
+    await waitFor(() => expect(document.activeElement).toBe(getMobileTrigger("speed")));
+  });
+
+  test("opens mobile drill-in views with Enter and Space", async () => {
+    setMobileViewport(true);
+    renderPicker();
+    openPicker();
+
+    const reasoning = getMobileTrigger("reasoning");
+    reasoning.focus();
+    fireEvent.keyDown(reasoning, { key: "Enter" });
+    await screen.findByRole("group", { name: "Reasoning choices" });
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Back to model choices" }));
+    const speed = getMobileTrigger("speed");
+    speed.focus();
+    fireEvent.keyDown(speed, { key: " " });
+    await screen.findByRole("group", { name: "Speed choices" });
+  });
+
+  test("resets an active mobile drill-in and search after the menu closes", async () => {
+    setMobileViewport(true);
+    renderPicker();
+    const trigger = openPicker();
+    fireEvent.change(screen.getByPlaceholderText("Search models..."), {
+      target: { value: "model 7" },
+    });
+    fireEvent.click(getMobileTrigger("reasoning"));
+    const view = screen.getByRole("group", { name: "Reasoning choices" });
+    fireEvent.keyDown(view, { key: "Escape" });
+    await waitFor(() => expect(document.querySelector("[data-native-model-picker]")).toBeNull());
+
+    fireEvent.pointerDown(trigger);
+    expect((screen.getByPlaceholderText("Search models...") as HTMLInputElement).value).toBe("");
+    expect(getMobileTrigger("reasoning")).toBeTruthy();
+    expect(document.querySelector("[data-native-mobile-back]")).toBeNull();
+  });
+
   test("uses three desktop columns and routes each selection", () => {
     setMobileViewport(false);
     const { onModelChange, onReasoningChange, onFastModeChange } = renderPicker({
@@ -121,6 +224,12 @@ describe("NativeModelPicker", () => {
     expect(screen.getByRole("group", { name: "Models" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "Reasoning" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "Speed mode" })).toBeTruthy();
+    expect(document.querySelector("[data-native-model-list]")?.className)
+      .toContain("overflow-y-auto");
+    expect(document.querySelector("[data-native-reasoning-list]")?.className)
+      .toContain("overflow-y-auto");
+    expect(document.querySelector("[data-native-speed-list]")?.className)
+      .toContain("overflow-y-auto");
     expect(screen.getByText("Scroll for 2 more models")).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /Model 7/ })).toBeTruthy();
     fireEvent.click(screen.getByText("Model 2"));
@@ -133,6 +242,29 @@ describe("NativeModelPicker", () => {
     fireEvent.pointerDown(trigger);
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Fast/ }));
     expect(onFastModeChange).toHaveBeenCalledWith(true);
+  });
+
+  test("keeps long desktop reasoning ladders inside their own scroll region", () => {
+    setMobileViewport(false);
+    const reasoningOptions = Array.from({ length: 12 }, (_, index) => ({
+      id: `effort-${index + 1}`,
+      label: `Effort ${index + 1}`,
+      description: `A detailed description for reasoning effort ${index + 1}`,
+    }));
+    renderPicker({
+      reasoningOptions,
+      selectedReasoningId: "effort-1",
+      selectedReasoningLabel: "Effort 1",
+    });
+    openPicker();
+
+    const reasoningGroup = screen.getByRole("group", { name: "Reasoning" });
+    const reasoningList = document.querySelector<HTMLElement>("[data-native-reasoning-list]")!;
+    expect(reasoningGroup.className).toContain("min-h-0");
+    expect(reasoningGroup.className).toContain("flex-col");
+    expect(reasoningList.className).toContain("min-h-0");
+    expect(reasoningList.className).toContain("overflow-y-auto");
+    expect(screen.getByRole("menuitemradio", { name: /Effort 12/ })).toBeTruthy();
   });
 
   test("uses radio semantics for the selected desktop choices", () => {
@@ -177,14 +309,16 @@ describe("NativeModelPicker", () => {
     expect(screen.queryByText("Fast")).toBeNull();
   });
 
-  test("filters searchable metadata, orders favorites first, and refreshes in place", () => {
+  test("filters searchable metadata with normalized queries, orders favorites, and refreshes", () => {
     setMobileViewport(false);
     const onRefreshModels = mock(() => {});
     renderPicker({
       models: [
         { id: "plain", label: "Plain" },
         { id: "fav", label: "Favorite model", favorite: true },
-        { id: "alias", label: "Other", searchText: "hidden alias" },
+        { id: "provider/SPECIAL-ID", label: "By id" },
+        { id: "description", label: "By description", description: "Deep Reasoning" },
+        { id: "alias", label: "By alias", searchText: "Hidden Alias" },
       ],
       selectedModelId: "plain",
       onRefreshModels,
@@ -194,15 +328,35 @@ describe("NativeModelPicker", () => {
     const items = screen.getAllByRole("menuitemradio");
     expect(items[0]?.textContent).toContain("Favorite model");
     fireEvent.change(screen.getByPlaceholderText("Search models..."), {
-      target: { value: "hidden" },
+      target: { value: "  special-id  " },
     });
     expect(screen.getByText("1 model found")).toBeTruthy();
-    expect(screen.getByRole("menuitemradio", { name: /Other/ })).toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: /By id/ })).toBeTruthy();
     expect(screen.queryByText("Plain")).toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText("Search models..."), {
+      target: { value: "  dEeP rEaSoNiNg  " },
+    });
+    expect(screen.getByRole("menuitemradio", { name: /By description/ })).toBeTruthy();
+    expect(screen.queryByText("By id")).toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText("Search models..."), {
+      target: { value: " HIDDEN ALIAS " },
+    });
+    expect(screen.getByRole("menuitemradio", { name: /By alias/ })).toBeTruthy();
+    expect(screen.queryByText("By description")).toBeNull();
 
     fireEvent.click(screen.getByTitle("Refresh models"));
     expect(onRefreshModels).toHaveBeenCalledTimes(1);
     expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
+  });
+
+  test("uses singular overflow copy for exactly one hidden model", () => {
+    setMobileViewport(true);
+    renderPicker({ models: models.slice(0, 6) });
+    openPicker();
+    expect(screen.getByText("Scroll for 1 more model")).toBeTruthy();
+    expect(screen.queryByText("Scroll for 1 more models")).toBeNull();
   });
 
   test("shows empty and unmatched states without offering phantom choices", () => {
@@ -247,6 +401,23 @@ describe("NativeModelPicker", () => {
       name: "A model name that can become very long (⚡)",
     });
     expect(trigger.textContent).toContain("(⚡)");
+  });
+
+  test("uses the model-only generated title and honors a custom title", () => {
+    setMobileViewport(false);
+    renderPicker({
+      reasoningOptions: [],
+      selectedReasoningId: undefined,
+      selectedReasoningLabel: undefined,
+      onReasoningChange: undefined,
+      onFastModeChange: undefined,
+    });
+    expect(screen.getByTitle("Choose model")).toBeTruthy();
+    cleanup();
+
+    renderPicker({ title: "Select runtime" });
+    expect(screen.getByTitle("Select runtime")).toBeTruthy();
+    expect(screen.queryByTitle("Choose model, reasoning, and speed")).toBeNull();
   });
 
   test("disables the trigger and unavailable fast selection", () => {
@@ -313,6 +484,25 @@ describe("NativeModelPicker", () => {
     expect(screen.getByRole("menuitemradio", { name: /Fast.*Not available/ })
       .hasAttribute("data-disabled")).toBe(true);
   });
+
+  test.each([
+    { enabled: null, summary: "Unknown", normalChecked: "false", fastChecked: "false" },
+    { enabled: false, summary: "Off", normalChecked: "true", fastChecked: "false" },
+  ] as const)(
+    "shows the mobile $summary speed summary and radio state",
+    ({ enabled, summary, normalChecked, fastChecked }) => {
+      setMobileViewport(true);
+      renderPicker({ fastModeEnabled: enabled, fastModeAvailable: true });
+      openPicker();
+      const speed = getMobileTrigger("speed");
+      expect(speed.textContent).toContain(summary);
+      fireEvent.click(speed);
+      expect(screen.getByRole("menuitemradio", { name: /Normal/ }).getAttribute("aria-checked"))
+        .toBe(normalChecked);
+      expect(screen.getByRole("menuitemradio", { name: /Fast/ }).getAttribute("aria-checked"))
+        .toBe(fastChecked);
+    },
+  );
 
   test("disables every open choice when settings become locked", () => {
     setMobileViewport(false);

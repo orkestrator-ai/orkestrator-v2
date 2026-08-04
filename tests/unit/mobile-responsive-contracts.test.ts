@@ -14,7 +14,6 @@ describe("mobile responsive layout contracts", () => {
       "apps/web/src/components/chat/NativeModelPicker.tsx",
       "w-[calc(100vw-1rem)]",
       "collisionPadding={{ top: 52, right: 8, bottom: 8, left: 8 }}",
-      "max-h-(--radix-dropdown-menu-content-available-height)",
       "overflow-y-auto",
     ],
     ["apps/web/src/components/chat/VirtualizedMessageList.tsx", "min-w-0"],
@@ -41,6 +40,19 @@ describe("mobile responsive layout contracts", () => {
   ])("keeps %s usable at narrow widths", (file, ...contracts) => {
     const source = read(file);
     for (const contract of contracts) expect(source).toContain(contract);
+  });
+
+  test("native model picker inherits viewport bounds and owns per-column scrolling", () => {
+    const picker = read("apps/web/src/components/chat/NativeModelPicker.tsx");
+    const dropdown = read("apps/web/src/components/ui/dropdown-menu.tsx");
+
+    expect(picker).toContain("<DropdownMenuContent");
+    expect(dropdown).toContain("max-h-(--radix-dropdown-menu-content-available-height)");
+    expect(dropdown).toContain("overflow-y-auto");
+    expect(picker).toContain("md:overflow-hidden");
+    expect(picker).toContain("data-native-model-list");
+    expect(picker).toContain("data-native-reasoning-list");
+    expect(picker).toContain("data-native-speed-list");
   });
 
   test("global touch rules prevent viewport zoom and oversized menus", () => {

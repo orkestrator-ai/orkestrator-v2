@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Zap } from "lucide-react";
 import {
   DropdownMenu,
@@ -47,6 +47,7 @@ interface NativeModelPickerProps {
 
 const MODEL_ROW_HEIGHT_CLASS = "h-14";
 const VISIBLE_MODEL_ROWS = 5;
+type MobileSubmenu = "reasoning" | "speed";
 
 function ModelItems({
   models,
@@ -104,10 +105,6 @@ function ReasoningItems({
   NativeModelPickerProps,
   "reasoningOptions" | "selectedReasoningId" | "disabled" | "onReasoningChange"
 >) {
-  if (reasoningOptions.length === 0) {
-    return <DropdownMenuItem disabled>No reasoning options</DropdownMenuItem>;
-  }
-
   return (
     <DropdownMenuRadioGroup
       value={selectedReasoningId ?? ""}
@@ -196,7 +193,13 @@ export function NativeModelPicker({
   onRefreshModels,
 }: NativeModelPickerProps) {
   const [search, setSearch] = useState("");
-  const [mobileSubmenu, setMobileSubmenu] = useState<"reasoning" | "speed" | null>(null);
+  const [mobileSubmenu, setMobileSubmenu] = useState<MobileSubmenu | null>(null);
+  const mobileViewId = useId();
+  const mobileReasoningTriggerRef = useRef<HTMLDivElement>(null);
+  const mobileSpeedTriggerRef = useRef<HTMLDivElement>(null);
+  const mobileReasoningBackRef = useRef<HTMLDivElement>(null);
+  const mobileSpeedBackRef = useRef<HTMLDivElement>(null);
+  const mobileReturnFocusRef = useRef<MobileSubmenu | null>(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const normalizedSearch = search.trim().toLowerCase();
   const visibleModels = useMemo(() => {
@@ -227,12 +230,43 @@ export function NativeModelPicker({
     : `${choiceLabels.slice(0, -1).join(", ")}${choiceLabels.length > 2 ? "," : ""} and ${choiceLabels.at(-1)}`;
   const effectiveTitle = title ?? `Choose ${choiceLabel}`;
 
+  const openMobileSubmenu = (submenu: MobileSubmenu) => {
+    mobileReturnFocusRef.current = null;
+    setMobileSubmenu(submenu);
+  };
+  const closeMobileSubmenu = (submenu: MobileSubmenu) => {
+    mobileReturnFocusRef.current = submenu;
+    setMobileSubmenu(null);
+  };
+
+  useLayoutEffect(() => {
+    if (!isMobile) return;
+
+    if (mobileSubmenu === "reasoning") {
+      mobileReasoningBackRef.current?.focus();
+      return;
+    }
+    if (mobileSubmenu === "speed") {
+      mobileSpeedBackRef.current?.focus();
+      return;
+    }
+
+    const returnTarget = mobileReturnFocusRef.current;
+    mobileReturnFocusRef.current = null;
+    if (returnTarget === "reasoning") {
+      mobileReasoningTriggerRef.current?.focus();
+    } else if (returnTarget === "speed") {
+      mobileSpeedTriggerRef.current?.focus();
+    }
+  }, [isMobile, mobileSubmenu]);
+
   return (
     <DropdownMenu
       onOpenChange={(open) => {
         if (!open) {
           setSearch("");
           setMobileSubmenu(null);
+          mobileReturnFocusRef.current = null;
         }
       }}
     >
@@ -305,12 +339,26 @@ export function NativeModelPicker({
         {/* Mobile uses touch-friendly pop-out choices. Desktop keeps all three
             choices visible while the model list fills the fixed-height menu. */}
         {isMobile && mobileSubmenu === "reasoning" ? (
-          <div className="animate-in slide-in-from-right-2 fade-in-0 duration-150">
+          <div
+            id={`${mobileViewId}-reasoning`}
+            role="group"
+            aria-label="Reasoning choices"
+            className="animate-in slide-in-from-right-2 fade-in-0 duration-150"
+            data-native-mobile-reasoning-view
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft") return;
+              event.preventDefault();
+              event.stopPropagation();
+              closeMobileSubmenu("reasoning");
+            }}
+          >
             <DropdownMenuItem
+              ref={mobileReasoningBackRef}
               onSelect={(event) => {
                 event.preventDefault();
-                setMobileSubmenu(null);
+                closeMobileSubmenu("reasoning");
               }}
+              aria-label="Back to model choices"
               className="h-11"
               data-native-mobile-back
             >
@@ -329,12 +377,26 @@ export function NativeModelPicker({
             />
           </div>
         ) : isMobile && mobileSubmenu === "speed" ? (
-          <div className="animate-in slide-in-from-right-2 fade-in-0 duration-150">
+          <div
+            id={`${mobileViewId}-speed`}
+            role="group"
+            aria-label="Speed choices"
+            className="animate-in slide-in-from-right-2 fade-in-0 duration-150"
+            data-native-mobile-speed-view
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowLeft") return;
+              event.preventDefault();
+              event.stopPropagation();
+              closeMobileSubmenu("speed");
+            }}
+          >
             <DropdownMenuItem
+              ref={mobileSpeedBackRef}
               onSelect={(event) => {
                 event.preventDefault();
-                setMobileSubmenu(null);
+                closeMobileSubmenu("speed");
               }}
+              aria-label="Back to model choices"
               className="h-11"
               data-native-mobile-back
             >
@@ -375,11 +437,21 @@ export function NativeModelPicker({
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
+                  ref={mobileReasoningTriggerRef}
                   disabled={disabled}
                   onSelect={(event) => {
                     event.preventDefault();
-                    setMobileSubmenu("reasoning");
+                    openMobileSubmenu("reasoning");
                   }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "ArrowRight") return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openMobileSubmenu("reasoning");
+                  }}
+                  aria-haspopup="menu"
+                  aria-expanded={mobileSubmenu === "reasoning"}
+                  aria-controls={`${mobileViewId}-reasoning`}
                   className="h-11"
                   data-native-mobile-reasoning-trigger
                 >
@@ -398,11 +470,21 @@ export function NativeModelPicker({
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
+                  ref={mobileSpeedTriggerRef}
                   disabled={disabled}
                   onSelect={(event) => {
                     event.preventDefault();
-                    setMobileSubmenu("speed");
+                    openMobileSubmenu("speed");
                   }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "ArrowRight") return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openMobileSubmenu("speed");
+                  }}
+                  aria-haspopup="menu"
+                  aria-expanded={mobileSubmenu === "speed"}
+                  aria-controls={`${mobileViewId}-speed`}
                   className="h-11"
                   data-native-mobile-speed-trigger
                 >
@@ -428,7 +510,7 @@ export function NativeModelPicker({
         ) : (
           <div
             className={cn(
-              "grid min-h-0 flex-1 divide-x divide-zinc-700/60",
+              "grid min-h-0 flex-1 overflow-hidden divide-x divide-zinc-700/60",
               showReasoningControls && showSpeedControls
                 ? "grid-cols-3"
                 : showReasoningControls || showSpeedControls
@@ -456,29 +538,47 @@ export function NativeModelPicker({
               ) : null}
             </div>
             {showReasoningControls ? (
-              <div className="min-w-0 px-1" role="group" aria-label="Reasoning">
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              <div
+                className="flex min-h-0 min-w-0 flex-col px-1"
+                role="group"
+                aria-label="Reasoning"
+              >
+                <DropdownMenuLabel className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
                   Reasoning
                 </DropdownMenuLabel>
-                <ReasoningItems
-                  reasoningOptions={reasoningOptions}
-                  selectedReasoningId={selectedReasoningId}
-                  disabled={disabled}
-                  onReasoningChange={onReasoningChange}
-                />
+                <div
+                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+                  data-native-reasoning-list
+                >
+                  <ReasoningItems
+                    reasoningOptions={reasoningOptions}
+                    selectedReasoningId={selectedReasoningId}
+                    disabled={disabled}
+                    onReasoningChange={onReasoningChange}
+                  />
+                </div>
               </div>
             ) : null}
             {showSpeedControls ? (
-              <div className="min-w-0 pl-1" role="group" aria-label="Speed mode">
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              <div
+                className="flex min-h-0 min-w-0 flex-col pl-1"
+                role="group"
+                aria-label="Speed mode"
+              >
+                <DropdownMenuLabel className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
                   Mode
                 </DropdownMenuLabel>
-                <SpeedItems
-                  fastModeEnabled={fastModeEnabled}
-                  fastModeAvailable={fastModeAvailable}
-                  disabled={disabled}
-                  onFastModeChange={onFastModeChange}
-                />
+                <div
+                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+                  data-native-speed-list
+                >
+                  <SpeedItems
+                    fastModeEnabled={fastModeEnabled}
+                    fastModeAvailable={fastModeAvailable}
+                    disabled={disabled}
+                    onFastModeChange={onFastModeChange}
+                  />
+                </div>
               </div>
             ) : null}
           </div>

@@ -248,6 +248,57 @@ function deriveSingleSubagent(
   ], new Map([["agent", childRecords]]), new Map([["spawn", "agent"]]))[0];
 }
 
+describe("reused child thread status", () => {
+  const firstFinal: TranscriptRecord = {
+    type: "event_msg",
+    payload: {
+      type: "agent_message",
+      phase: "final_answer",
+      message: "The first task is complete.",
+    },
+  };
+  const followupRecords: TranscriptRecord[] = [
+    firstFinal,
+    { type: "turn_context", payload: { turn_id: "turn-2" } },
+    {
+      type: "event_msg",
+      payload: { type: "user_message", message: "Please check one more thing." },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "exec",
+        call_id: "followup-exec",
+        arguments: JSON.stringify({ cmd: "git diff --check" }),
+      },
+    },
+  ];
+
+  test("reopens after an earlier final answer while follow-up work is active", () => {
+    const part = deriveSingleSubagent(followupRecords);
+
+    expect(part?.toolState).toBe("pending");
+    expect(part?.subagentActionCount).toBe(1);
+  });
+
+  test("finishes again only after the follow-up emits its terminal answer", () => {
+    const part = deriveSingleSubagent([
+      ...followupRecords,
+      {
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          phase: "final_answer",
+          message: "The follow-up is complete.",
+        },
+      },
+    ]);
+
+    expect(part?.toolState).toBe("success");
+  });
+});
+
 describe("parseTranscriptRecords", () => {
   test("skips invalid lines and non-object payloads", () => {
     const records = parseTranscriptRecords([

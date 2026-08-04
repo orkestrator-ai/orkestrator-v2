@@ -632,6 +632,21 @@ function parseChildTranscript(
       continue;
     }
 
+    // A Codex child thread is reusable. Its rollout therefore contains all of
+    // its turns, including an earlier final_answer followed by a later
+    // follow-up. Starting a new turn must reopen the row; otherwise the old
+    // terminal marker remains sticky while new actions stream underneath it.
+    if (
+      record.type === "turn_context"
+      || (
+        record.type === "event_msg"
+        && (payload.type === "task_started" || payload.type === "user_message")
+      )
+    ) {
+      state = "pending";
+      continue;
+    }
+
     if (record.type === "session_meta") {
       name = asString(payload.agent_nickname) ?? name;
       role = asString(payload.agent_role) ?? role;
@@ -651,6 +666,7 @@ function parseChildTranscript(
     if (record.type === "event_msg" && payload.type === "agent_message") {
       const phase = asString(payload.phase);
       if (phase === "commentary") {
+        state = "pending";
         const content = asString(payload.message);
         if (content) actions.push({ type: "text", content });
       } else if (phase === "final_answer") {
@@ -668,6 +684,7 @@ function parseChildTranscript(
 
     const payloadType = asString(payload.type);
     if (payloadType === "function_call" || payloadType === "custom_tool_call") {
+      state = "pending";
       const toolName = asString(payload.name) ?? "tool";
       const callId = asString(payload.call_id);
       const input = payloadType === "custom_tool_call" ? payload.input : payload.arguments;

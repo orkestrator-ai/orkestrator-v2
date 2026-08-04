@@ -232,6 +232,59 @@ describe("Codex collaboration state", () => {
     }
   });
 
+  test("lets the transcript resolve an interaction after a stale terminal snapshot", () => {
+    const items = [
+      {
+        id: "wait-complete",
+        type: "collab_tool_call",
+        tool: "wait",
+        receiver_thread_ids: ["agent-1"],
+        agents_states: {
+          "agent-1": { status: "completed", message: "First task done" },
+        },
+        status: "completed",
+      },
+      {
+        id: "activity-followup",
+        type: "subagent_activity",
+        activity: "interacted",
+        agent_thread_id: "agent-1",
+      },
+    ];
+
+    const [active] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1")],
+      items,
+    );
+    expect(active?.toolState).toBe("pending");
+
+    // `send_message` emits the same interacted item but does not wake a
+    // completed child. Its terminal transcript therefore remains terminal.
+    const [stillFinished] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1", { toolState: "success" })],
+      items,
+    );
+    expect(stillFinished?.toolState).toBe("success");
+
+    const [finishedAgain] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1", { toolState: "success" })],
+      [
+        ...items,
+        {
+          id: "wait-followup-complete",
+          type: "collab_tool_call",
+          tool: "wait",
+          receiver_thread_ids: ["agent-1"],
+          agents_states: {
+            "agent-1": { status: "completed", message: "Follow-up done" },
+          },
+          status: "completed",
+        },
+      ],
+    );
+    expect(finishedAgain?.toolState).toBe("success");
+  });
+
   test("preserves the original spawn prompt over follow-up messages", () => {
     const [part] = applyCodexCollabStateToSubagentParts([], [
       {

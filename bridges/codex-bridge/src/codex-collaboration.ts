@@ -33,6 +33,13 @@ interface LatestCollabAgentState {
   spawnPrompt?: string;
 }
 
+interface CodexSubagentActivityItem {
+  id: string;
+  type: "subagent_activity";
+  activity: "started" | "interacted" | "interrupted";
+  agent_thread_id: string;
+}
+
 export const CODEX_TIMELINE_ITEM_PREFIX = "item:";
 export const CODEX_TIMELINE_SUBAGENT_PREFIX = "subagent:";
 
@@ -80,6 +87,28 @@ function normalizeAgentState(value: unknown): CodexCollabAgentState | undefined 
   return {
     ...(status ? { status } : {}),
     ...(message !== undefined || value.message === null ? { message } : {}),
+  };
+}
+
+function normalizeSubagentActivityItem(
+  value: unknown,
+): CodexSubagentActivityItem | null {
+  if (!isRecord(value) || value.type !== "subagent_activity") return null;
+  const id = normalizeNonEmptyString(value.id);
+  const agentThreadId = normalizeNonEmptyString(value.agent_thread_id);
+  const activity = value.activity;
+  if (
+    !id
+    || !agentThreadId
+    || (activity !== "started" && activity !== "interacted" && activity !== "interrupted")
+  ) {
+    return null;
+  }
+  return {
+    id,
+    type: "subagent_activity",
+    activity,
+    agent_thread_id: agentThreadId,
   };
 }
 
@@ -239,16 +268,49 @@ export function applyCodexCollabStateToSubagentParts(
   transcriptParts: TranscriptSubagentPart[],
   items: unknown[],
 ): TranscriptSubagentPart[] {
-  const collabItems = items
-    .map(normalizeCodexCollabToolCallItem)
-    .filter((item): item is CodexCollabToolCallItem => item !== null);
-  if (collabItems.length === 0) return transcriptParts;
+  const collabItems: CodexCollabToolCallItem[] = [];
+  const lifecycleItems: Array<CodexCollabToolCallItem | CodexSubagentActivityItem> = [];
+  for (const rawItem of items) {
+    const collabItem = normalizeCodexCollabToolCallItem(rawItem);
+    if (collabItem) {
+      collabItems.push(collabItem);
+      lifecycleItems.push(collabItem);
+      continue;
+    }
+    const activityItem = normalizeSubagentActivityItem(rawItem);
+    if (activityItem) lifecycleItems.push(activityItem);
+  }
+  if (lifecycleItems.length === 0) return transcriptParts;
 
   const latestByAgentId = new Map<string, LatestCollabAgentState>();
   const spawnItems = collabItems.filter((item) => isSpawnTool(item.tool));
   const failedSpawnAgentIds = new Set<string>();
 
-  for (const item of collabItems) {
+  // Preserve the engine's item order. A child can finish one task and then be
+  // reactivated by followup_task; app-server emits `interacted` for both that
+  // and queue-only send_message calls. The interaction therefore invalidates a
+  // stale collab snapshot but leaves the transcript to decide whether the child
+  // actually started another turn.
+  for (const item of lifecycleItems) {
+    if (item.type === "subagent_activity") {
+      const previous = latestByAgentId.get(item.agent_thread_id);
+      if (item.activity === "interacted") {
+        if (previous) {
+          latestByAgentId.set(item.agent_thread_id, {
+            ...previous,
+            state: undefined,
+          });
+        }
+        continue;
+      }
+      latestByAgentId.set(item.agent_thread_id, {
+        ...previous,
+        state: {
+          status: item.activity === "interrupted" ? "interrupted" : "running",
+        },
+      });
+      continue;
+    }
     const spawnPrompt = isSpawnTool(item.tool) && typeof item.prompt === "string"
       ? item.prompt
       : undefined;

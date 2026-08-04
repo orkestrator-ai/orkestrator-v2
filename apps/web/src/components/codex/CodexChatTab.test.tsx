@@ -118,6 +118,14 @@ const mockUpdateSessionConfig = mock<
 const mockAbortSession = mock<
   (_client: unknown, _sessionId: string) => Promise<CodexAbortOutcome>
 >(async () => ({ status: "accepted" }));
+const mockSteerCodexSession = mock(
+  async (
+    _client: unknown,
+    _sessionId: string,
+    _input: string,
+    _requestId: string,
+  ) => true,
+);
 const mockFetchPendingApprovals = mock<
   (_client: unknown, _sessionId: string) => Promise<CodexApproval[]>
 >(async () => []);
@@ -400,6 +408,7 @@ mock.module("@/lib/codex-client", () => ({
   respondToInteraction: mockRespondToInteraction,
   resumeSession: mockResumeSession,
   sendPrompt: mockSendPrompt,
+  steerCodexSession: mockSteerCodexSession,
   subscribeToEvents: mockSubscribeToEvents,
   updateSessionConfig: mockUpdateSessionConfig,
 }));
@@ -1015,6 +1024,8 @@ describe("CodexChatTab", () => {
     mockToastWarning.mockClear();
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => ({ status: "accepted" as const }));
+    mockSteerCodexSession.mockClear();
+    mockSteerCodexSession.mockImplementation(async () => true);
     mockRemovePromptQueueMessage.mockReset();
     mockRemovePromptQueueMessage.mockImplementation(
       async (queueKey, environmentId, messageId) => {
@@ -3514,6 +3525,53 @@ describe("CodexChatTab", () => {
       expect(queued?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
       expect(queued?.requestId).toBe(queued?.id);
     });
+  });
+
+  test("sends /steer instructions to the active turn instead of the prompt queue", async () => {
+    composeText = "  /STEER   focus on the failing tests  ";
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-queue"));
+
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(1));
+    const [client, sessionId, input, requestId] = mockSteerCodexSession.mock.calls[0]!;
+    expect(client).toBe(MOCK_CLIENT);
+    expect(sessionId).toBe(SESSION_ID);
+    expect(input).toBe("focus on the failing tests");
+    expect(requestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(useCodexStore.getState().messageQueue.get(SESSION_KEY)).toBeUndefined();
+  });
+
+  test("routes /steer through the active turn even when the local busy flag is stale", async () => {
+    composeText = "/steer re-check the bridge";
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(1));
+    expect(mockSteerCodexSession.mock.calls[0]?.slice(1, 3)).toEqual([
+      SESSION_ID,
+      "re-check the bridge",
+    ]);
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+  });
+
+  test("keeps a failed /steer available when the active turn has moved on", async () => {
+    composeText = "/steer wait before editing";
+    mockSteerCodexSession.mockResolvedValue(false);
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      expect(lastComposeSendError).toEqual(
+        new Error("The active turn changed; your steering message was not sent."),
+      );
+    });
+    expect(mockSendPrompt).not.toHaveBeenCalled();
   });
 
   test("centers the compose bar with the ready title until message history exists", async () => {

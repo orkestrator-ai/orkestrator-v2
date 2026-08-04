@@ -55,6 +55,12 @@ export const BUILTIN_SLASH_COMMANDS: BuiltinSlashCommand[] = [
     description: "List available Codex models and current selection.",
     source: "builtin",
   },
+  {
+    name: "/steer",
+    description: "Send additional instructions to the active Codex turn.",
+    argumentHint: "<instructions>",
+    source: "builtin",
+  },
 ];
 
 export function normalizeSlashCommandName(value: string): string {
@@ -325,4 +331,3 @@ export function buildPromptInput(
 
   return input;
 }
-

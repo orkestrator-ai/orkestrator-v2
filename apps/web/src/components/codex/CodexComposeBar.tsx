@@ -42,6 +42,7 @@ import {
   transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
 import { composerOccupiedError } from "@/lib/prompt-queue-errors";
+import { parseCodexSteerCommand } from "./codex-steer-command";
 
 const EMPTY_ATTACHMENTS: CodexAttachment[] = [];
 const EMPTY_MENTIONS: FileMention[] = [];
@@ -383,6 +384,7 @@ export function CodexComposeBar({
     (isLoading && !onQueue) ||
     (text.trim().length === 0 && attachments.length === 0);
   const showSendButton = !isLoading || !sendDisabled;
+  const isSteering = isLoading && parseCodexSteerCommand(text).matched;
 
   return (
     <div
@@ -637,7 +639,13 @@ export function CodexComposeBar({
             onClick={() => {
               void handleSubmit();
             }}
-            title={isLoading ? "Add to queue" : "Send message"}
+            title={
+              isSteering
+                ? "Send to current turn"
+                : isLoading
+                  ? "Add to queue"
+                  : "Send message"
+            }
           >
             <ArrowUp className="h-4 w-4" />
           </Button>

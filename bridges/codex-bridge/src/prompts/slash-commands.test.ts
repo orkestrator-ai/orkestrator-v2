@@ -67,6 +67,7 @@ describe("slash command parsing and metadata", () => {
       "/help",
       "/goal",
       "/models",
+      "/steer",
     ]);
   });
 
@@ -188,6 +189,7 @@ describe("prompt command discovery", () => {
       "/home-only",
       "/models",
       "/shared",
+      "/steer",
     ]);
     expect(definitions.find((definition) => definition.name === "/help")?.source)
       .toBe("prompt");

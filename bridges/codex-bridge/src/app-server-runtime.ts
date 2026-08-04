@@ -3890,6 +3890,18 @@ export class AppServerRuntime {
       };
     }
 
+    // The renderer routes this command to `/session/:id/steer` while a turn is
+    // active. If an idle or stale client submits it as a regular prompt, answer
+    // locally instead of leaking the command text into a brand-new model turn.
+    if (parsed.name.toLowerCase() === "/steer") {
+      return {
+        kind: "builtin",
+        response: parsed.args
+          ? "There is no active Codex turn to steer. Start a turn, then use /steer while it is running."
+          : "Usage: /steer <instructions>. Run it while a Codex turn is active.",
+      };
+    }
+
     // `/goal` is handled by the Codex CLI itself, so it must reach the model.
     if (isCodexCliNativeSlashCommand(parsed.name)) return null;
 

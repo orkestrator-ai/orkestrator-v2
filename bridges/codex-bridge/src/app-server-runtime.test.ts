@@ -6007,6 +6007,23 @@ describe("slash commands", () => {
     expect(h.runtime.getStatus(sessionId)?.messageRevision).toBe(1);
   });
 
+  test("an idle /steer is answered locally instead of starting a model turn", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "/STEER check the failing test",
+      requestId: "req-idle-steer",
+      attachments: [],
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(messages?.[0]?.content).toBe("/STEER check the failing test");
+    expect(messages?.[1]?.content).toContain("no active Codex turn to steer");
+  });
+
   /**
    * Local replies have no rollout item, so their timestamp is the only ordering
    * key they share with the model's transcript. Concatenating would show them

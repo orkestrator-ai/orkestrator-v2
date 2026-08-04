@@ -608,6 +608,16 @@ describe("CodexComposeBar", () => {
     expect(screen.getByTitle("Add to queue")).toBeTruthy();
   });
 
+  test("labels /steer as an active-turn send while Codex is loading", () => {
+    renderComposeBar({ isLoading: true });
+    fireEvent.change(screen.getByTestId("mentionable-input"), {
+      target: { value: "/steer focus on the failing test" },
+    });
+
+    expect(screen.getByTitle("Send to current turn")).toBeTruthy();
+    expect(screen.queryByTitle("Add to queue")).toBeNull();
+  });
+
   test("shows queue indicator when queueLength > 0", () => {
     renderComposeBar({ queueLength: 2 });
     expect(screen.getByText("+2 queued")).toBeTruthy();

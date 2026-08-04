@@ -58,6 +58,7 @@ import {
   preferNewerCodexRevisions,
   resumeSession,
   sendPrompt,
+  steerCodexSession,
   subscribeToEvents,
   updateSessionConfig as updateCodexSessionConfig,
 } from "@/lib/codex-client";
@@ -85,6 +86,7 @@ import {
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { CodexComposeBar } from "./CodexComposeBar";
+import { parseCodexSteerCommand } from "./codex-steer-command";
 import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexInteractionCard } from "./CodexInteractionCard";
 import { CodexPlanModeCard } from "./CodexPlanModeCard";
@@ -815,6 +817,34 @@ export function CodexChatTab({
     tabId,
   ]);
 
+  const handleSteer = useCallback(
+    async (text: string, attachments: CodexAttachment[]): Promise<boolean> => {
+      const steer = parseCodexSteerCommand(text);
+      if (!steer.matched) return false;
+      if (!steer.input) {
+        throw new Error("Add instructions after /steer.");
+      }
+      if (attachments.length > 0) {
+        throw new Error("/steer currently supports text only. Remove the attachments and retry.");
+      }
+      if (!client || !session?.sessionId) {
+        throw new Error("The Codex session is not connected.");
+      }
+      const sent = await steerCodexSession(
+        client,
+        session.sessionId,
+        steer.input,
+        createUuid(),
+      );
+      if (!sent) {
+        throw new Error("The active turn changed; your steering message was not sent.");
+      }
+      toast.success("Sent to the active Codex turn");
+      return true;
+    },
+    [client, session?.sessionId],
+  );
+
   const handleSend = useCallback(
     async (
       text: string,
@@ -837,6 +867,8 @@ export function CodexChatTab({
           "Slash commands cannot be the first message after a handoff. Send a regular message first, then run the slash command.",
         );
       }
+
+      if (await handleSteer(text, attachments)) return "accepted";
 
       const promptText = prependAgentHandoffHistory(handoff.pendingHistory, text);
 
@@ -1070,6 +1102,7 @@ export function CodexChatTab({
       addMessage,
       environmentId,
       handoff.pendingHistory,
+      handleSteer,
       slashCommands,
       refreshMessages,
       removeMessage,
@@ -1087,6 +1120,8 @@ export function CodexChatTab({
 
   const handleQueue = useCallback(
     async (text: string, attachments: CodexAttachment[]) => {
+      if (await handleSteer(text, attachments)) return;
+
       const requestId = createUuid();
       await enqueueAgentPrompt<CodexQueuedMessage>("codex", sessionKey, {
         id: requestId,
@@ -1099,7 +1134,14 @@ export function CodexChatTab({
         fastMode: fastModeEnabled,
       });
     },
-    [fastModeEnabled, selectedMode, selectedModel, selectedReasoningEffort, sessionKey],
+    [
+      fastModeEnabled,
+      handleSteer,
+      selectedMode,
+      selectedModel,
+      selectedReasoningEffort,
+      sessionKey,
+    ],
   );
 
   const promoteNextQueuedPromptToDraft = useCallback(async () => {

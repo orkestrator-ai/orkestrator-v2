@@ -137,6 +137,12 @@ export type OpenCodeMessagePart = NativeMessagePart;
 export type OpenCodeMessage = NativeMessage & {
   /** Whether the SDK marked this assistant message as failed. Raw error data is intentionally not retained. */
   hasError?: boolean;
+  /**
+   * The error's discriminator (`MessageAbortedError`, …) when the SDK reported
+   * one. Kept alongside {@link hasError} so an intentional interrupt can be
+   * told apart from a real failure; the error payload itself is still dropped.
+   */
+  errorName?: string;
   providerUsage?: {
     cost: number;
     inputTokens: number;
@@ -457,9 +463,19 @@ export function formatOpenCodeError(error: unknown): string {
   return `${headline}\n\n${detailLines.join("\n")}`;
 }
 
-/** True when OpenCode is reporting an intentionally interrupted turn. */
+/** The SDK's `NamedError` discriminator for an intentionally interrupted turn. */
+const OPENCODE_MESSAGE_ABORTED_ERROR = "MessageAbortedError";
+
+/**
+ * True when OpenCode is reporting an intentionally interrupted turn.
+ *
+ * Matches the `name` discriminator only. The abort is also reported as an
+ * `Error` instance on some paths, so `name` is read through the prototype
+ * chain rather than requiring an own property. A payload that merely quotes
+ * the string in its message is a real failure and must not match.
+ */
 export function isOpenCodeMessageAbortedError(error: unknown): boolean {
-  return isRecord(error) && error.name === "MessageAbortedError";
+  return isRecord(error) && error.name === OPENCODE_MESSAGE_ABORTED_ERROR;
 }
 
 function openCodeResponseError(operation: string, error: unknown): Error {
@@ -710,6 +726,7 @@ export function mergeOpenCodeMessageInfo(
     // authoritative in both directions: a message the server no longer reports
     // as errored (a retried turn) must lose the badge, not keep it forever.
     ...(normalized.hasError ? { hasError: true } : {}),
+    ...(normalized.errorName ? { errorName: normalized.errorName } : {}),
     // Model and usage are only present once the backend has resolved them.
     // An early streaming `info` legitimately omits them, so absence means
     // "not known yet" rather than "cleared" — blanking would drop the
@@ -720,6 +737,7 @@ export function mergeOpenCodeMessageInfo(
       : {}),
   };
   if (!normalized.hasError) delete merged.hasError;
+  if (!normalized.errorName) delete merged.errorName;
   return merged;
 }
 
@@ -1039,7 +1057,14 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
     createdAt,
     ...(info?.role === "assistant" && modelId ? { modelId } : {}),
     ...(info?.error !== undefined && info?.error !== null
-      ? { hasError: true }
+      ? {
+          hasError: true,
+          // The discriminator only — enough to tell an intentional interrupt
+          // from a real failure without retaining the error payload.
+          ...(isRecord(info.error) && typeof info.error.name === "string"
+            ? { errorName: info.error.name }
+            : {}),
+        }
       : {}),
     ...(info?.role === "assistant" && info?.tokens
       ? {
@@ -1711,8 +1736,21 @@ async function getOpenCodeSessionStatusMap(
   }
 }
 
+/**
+ * Whether a child transcript ended in a genuine failure.
+ *
+ * An intentionally interrupted turn also carries an error, but stopping a turn
+ * is not a subagent failure — and the "failure" state latches in
+ * {@link mergeOpenCodeSubagentTranscript}, so treating one as such would leave
+ * the Agent row red permanently.
+ */
 function hasOpenCodeAssistantError(messages: OpenCodeMessage[]): boolean {
-  return messages.some((message) => message.role === "assistant" && message.hasError === true);
+  return messages.some(
+    (message) =>
+      message.role === "assistant"
+      && message.hasError === true
+      && message.errorName !== OPENCODE_MESSAGE_ABORTED_ERROR,
+  );
 }
 
 async function hydrateOpenCodeSubagentTranscripts(
@@ -2433,7 +2471,7 @@ function openCodeStructuredFailure(
     "opencode",
     name === "StructuredOutputError"
       ? "schema_retry_exhausted"
-      : name === "MessageAbortedError"
+      : name === OPENCODE_MESSAGE_ABORTED_ERROR
         ? "interrupted"
         : "provider_error",
     message,
@@ -2651,9 +2689,14 @@ export async function listSessions(client: OpencodeClient): Promise<OpenCodeSess
  */
 export async function deleteSession(client: OpencodeClient, sessionId: string): Promise<boolean> {
   try {
-    await client.session.delete({
-      sessionID: sessionId,
-    });
+    const response = await client.session.delete(
+      { sessionID: sessionId },
+      { throwOnError: false },
+    );
+    if (response?.error) {
+      console.error("[opencode-client] Failed to delete session:", response.error);
+      return false;
+    }
     return true;
   } catch (error) {
     console.error("[opencode-client] Failed to delete session:", error);
@@ -2662,13 +2705,24 @@ export async function deleteSession(client: OpencodeClient, sessionId: string): 
 }
 
 /**
- * Abort a running session/prompt
+ * Abort a running session/prompt.
+ *
+ * The SDK only throws on a non-2xx response or a transport failure when the
+ * caller passes `throwOnError`; otherwise both are handed back as
+ * `response.error`. Returning `true` on the strength of "it did not throw"
+ * would report a failed abort as a successful one, and the caller writes a
+ * "stopped" marker and promotes the queued prompt on that answer.
  */
 export async function abortSession(client: OpencodeClient, sessionId: string): Promise<boolean> {
   try {
-    await client.session.abort({
-      sessionID: sessionId,
-    });
+    const response = await client.session.abort(
+      { sessionID: sessionId },
+      { throwOnError: false },
+    );
+    if (response?.error) {
+      console.error("[opencode-client] Failed to abort session:", response.error);
+      return false;
+    }
     return true;
   } catch (error) {
     console.error("[opencode-client] Failed to abort session:", error);

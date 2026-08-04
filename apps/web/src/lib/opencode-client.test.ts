@@ -1211,6 +1211,63 @@ describe("opencode-client getSessionMessages", () => {
     expect(part?.toolError).toBe("[object Object]");
   });
 
+  /*
+   * Stopping a parent turn aborts its subagents, and each aborted child message
+   * carries an error. Deriving "failure" from that would paint the Agent row red
+   * for a cancellation the user performed deliberately — and the state latches,
+   * so nothing later can clear it.
+   */
+  test("does not mark an intentionally aborted subagent transcript as failed", async () => {
+    const buildClient = (childError: unknown) => ({
+      session: {
+        messages: async ({ sessionID }: { sessionID: string }) =>
+          sessionID === "parent"
+            ? {
+                data: [{
+                  info: { id: "msg-parent", role: "assistant", time: { created: 1 } },
+                  parts: [{
+                    type: "tool",
+                    tool: "task",
+                    state: {
+                      status: "running",
+                      input: { agent: "explore", prompt: "Look" },
+                      metadata: { sessionID: "child" },
+                    },
+                  }],
+                }],
+              }
+            : {
+                data: [{
+                  info: {
+                    id: "msg-child",
+                    role: "assistant",
+                    time: { created: 2 },
+                    error: childError,
+                  },
+                  parts: [{ type: "text", text: "partial work" }],
+                }],
+              },
+        status: async () => ({ data: { child: { type: "idle" } } }),
+      },
+    } as unknown as OpencodeClient);
+
+    const findSubagent = (messages: Awaited<ReturnType<typeof getSessionMessages>>) =>
+      messages[0]?.parts.find((part) => part.type === "subagent");
+
+    const aborted = await getSessionMessages(
+      buildClient({ name: "MessageAbortedError", data: { message: "Aborted" } }),
+      "parent",
+    );
+    expect(findSubagent(aborted)?.toolState).not.toBe("failure");
+
+    // A genuine child failure must still surface as one.
+    const failed = await getSessionMessages(
+      buildClient({ name: "ProviderError", data: { message: "boom" } }),
+      "parent",
+    );
+    expect(findSubagent(failed)?.toolState).toBe("failure");
+  });
+
   test("wraps a non-Error strict message failure without exposing the thrown value", async () => {
     const client = {
       session: {
@@ -2395,6 +2452,36 @@ describe("opencode-client normalizeOpenCodeMessage", () => {
     expect(JSON.stringify(message)).not.toContain("secret failure detail");
   });
 
+  test("retains the error discriminator but no other error payload", () => {
+    const aborted = normalizeOpenCodeMessage({
+      info: {
+        id: "aborted-message",
+        role: "assistant",
+        error: { name: "MessageAbortedError", data: { message: "secret detail" } },
+      },
+      parts: [],
+    });
+
+    expect(aborted?.hasError).toBe(true);
+    expect(aborted?.errorName).toBe("MessageAbortedError");
+    expect(JSON.stringify(aborted)).not.toContain("secret detail");
+
+    // A non-record or unnamed error still marks the message, with no name to keep.
+    const unnamed = normalizeOpenCodeMessage({
+      info: { id: "unnamed", role: "assistant", error: { data: { message: "boom" } } },
+      parts: [],
+    });
+    expect(unnamed?.hasError).toBe(true);
+    expect(unnamed?.errorName).toBeUndefined();
+
+    const primitive = normalizeOpenCodeMessage({
+      info: { id: "primitive", role: "assistant", error: "boom" },
+      parts: [],
+    });
+    expect(primitive?.hasError).toBe(true);
+    expect(primitive?.errorName).toBeUndefined();
+  });
+
   test("returns null for non-object input", () => {
     expect(normalizeOpenCodeMessage(null)).toBeNull();
     expect(normalizeOpenCodeMessage(42)).toBeNull();
@@ -3242,6 +3329,38 @@ describe("opencode-client incremental message helpers", () => {
     expect(mergeOpenCodeMessageInfo(existing, {})).toBeNull();
   });
 
+  test("carries the error discriminator in both directions", () => {
+    const existing: OpenCodeMessage = {
+      id: "message-1",
+      role: "assistant",
+      content: "streamed",
+      parts: [{ type: "text", content: "streamed" }],
+      createdAt: "2026-04-15T00:00:00.000Z",
+    };
+
+    expect(mergeOpenCodeMessageInfo(existing, {
+      id: "message-1",
+      role: "assistant",
+      error: { name: "MessageAbortedError" },
+    })).toMatchObject({ hasError: true, errorName: "MessageAbortedError" });
+
+    // `info` is the whole record, so a retried turn that no longer reports an
+    // error must lose the stale discriminator along with the flag.
+    const cleared = mergeOpenCodeMessageInfo(
+      { ...existing, hasError: true, errorName: "MessageAbortedError" },
+      { id: "message-1", role: "assistant" },
+    );
+    expect(cleared?.hasError).toBeUndefined();
+    expect(cleared?.errorName).toBeUndefined();
+
+    // A later, differently-named failure replaces the previous discriminator.
+    const replaced = mergeOpenCodeMessageInfo(
+      { ...existing, hasError: true, errorName: "MessageAbortedError" },
+      { id: "message-1", role: "assistant", error: { name: "ProviderError" } },
+    );
+    expect(replaced?.errorName).toBe("ProviderError");
+  });
+
   test("keeps the existing createdAt rather than adopting the incoming clock", () => {
     // Consequence worth pinning: when a part streamed in before its info frame
     // and seeded createdAt from the optimistic bubble, the later info frame
@@ -3412,6 +3531,25 @@ describe("opencode-client formatOpenCodeError", () => {
 
     expect(formatOpenCodeError(unserializable)).toBe("serialization failed");
   });
+
+  test("emits the code detail line and does not repeat an error type already in the summary", () => {
+    const withCode = formatOpenCodeError({
+      data: { message: "Quota exhausted", code: "insufficient_quota", status: 429 },
+      name: "RateLimitError",
+    });
+    expect(withCode).toStartWith("RateLimitError: Quota exhausted");
+    expect(withCode).toContain("Code: insufficient_quota");
+    expect(withCode).toContain("Status: 429");
+
+    // The type is already spelled out in the summary, so prefixing it again
+    // would render "TimeoutError: TimeoutError: ...".
+    const deduped = formatOpenCodeError({
+      name: "TimeoutError",
+      data: { message: "TimeoutError while contacting the provider" },
+    });
+    expect(deduped).toStartWith("TimeoutError while contacting the provider");
+    expect(deduped).not.toContain("TimeoutError: TimeoutError");
+  });
 });
 
 describe("opencode-client isOpenCodeMessageAbortedError", () => {
@@ -3426,6 +3564,34 @@ describe("opencode-client isOpenCodeMessageAbortedError", () => {
     })).toBe(false);
     expect(isOpenCodeMessageAbortedError("MessageAbortedError: Aborted")).toBe(false);
     expect(isOpenCodeMessageAbortedError(null)).toBe(false);
+    expect(isOpenCodeMessageAbortedError(undefined)).toBe(false);
+  });
+
+  test("matches an Error instance carrying the discriminator on its prototype", () => {
+    // The SDK's error interceptor wraps some failures into real Errors, so the
+    // name is not always an own property of a plain object.
+    class MessageAbortedError extends Error {
+      override readonly name = "MessageAbortedError";
+    }
+    expect(isOpenCodeMessageAbortedError(new MessageAbortedError("Aborted"))).toBe(true);
+
+    const tagged = new Error("Aborted");
+    tagged.name = "MessageAbortedError";
+    expect(isOpenCodeMessageAbortedError(tagged)).toBe(true);
+
+    expect(isOpenCodeMessageAbortedError(new Error("MessageAbortedError"))).toBe(false);
+  });
+
+  test("does not match a nested or differently-cased discriminator", () => {
+    // Only the top-level `name` is the SDK's NamedError discriminator; a nested
+    // copy is a real failure whose payload happens to mention the abort.
+    expect(isOpenCodeMessageAbortedError({
+      name: "ProviderError",
+      data: { name: "MessageAbortedError" },
+    })).toBe(false);
+    expect(isOpenCodeMessageAbortedError({ name: "messageabortederror" })).toBe(false);
+    expect(isOpenCodeMessageAbortedError({ data: { message: "Aborted" } })).toBe(false);
+    expect(isOpenCodeMessageAbortedError([])).toBe(false);
   });
 });
 
@@ -3465,8 +3631,14 @@ describe("opencode-client session lifecycle", () => {
 
     expect(await deleteSession(client, "session-1")).toBe(true);
     expect(await abortSession(client, "session-1")).toBe(true);
-    expect(deleteCall).toHaveBeenCalledWith({ sessionID: "session-1" });
-    expect(abortCall).toHaveBeenCalledWith({ sessionID: "session-1" });
+    expect(deleteCall).toHaveBeenCalledWith(
+      { sessionID: "session-1" },
+      { throwOnError: false },
+    );
+    expect(abortCall).toHaveBeenCalledWith(
+      { sessionID: "session-1" },
+      { throwOnError: false },
+    );
 
     const failed = {
       session: {
@@ -3476,6 +3648,47 @@ describe("opencode-client session lifecycle", () => {
     } as unknown as OpencodeClient;
     expect(await deleteSession(failed, "session-1")).toBe(false);
     expect(await abortSession(failed, "session-1")).toBe(false);
+  });
+
+  /*
+   * The SDK only throws on a non-2xx response or a transport failure when the
+   * caller opts in with `throwOnError`; the default hands both back as
+   * `response.error`. A `return true` that only rules out a thrown exception
+   * therefore reports every real abort failure as a success.
+   */
+  test("reports a rejected delete or abort that resolves with an error payload", async () => {
+    const errored = {
+      session: {
+        delete: async () => ({ error: { name: "NotFound", data: { message: "no such session" } } }),
+        abort: async () => ({ error: { name: "ProviderError", data: { message: "boom" } } }),
+      },
+    } as unknown as OpencodeClient;
+
+    expect(await deleteSession(errored, "session-1")).toBe(false);
+    expect(await abortSession(errored, "session-1")).toBe(false);
+
+    // A transport failure takes the same non-throwing path: `{ error }`, no data.
+    const offline = {
+      session: {
+        delete: async () => ({ error: new TypeError("Failed to fetch") }),
+        abort: async () => ({ error: new TypeError("Failed to fetch") }),
+      },
+    } as unknown as OpencodeClient;
+    expect(await deleteSession(offline, "session-1")).toBe(false);
+    expect(await abortSession(offline, "session-1")).toBe(false);
+  });
+
+  test("treats an absent response body as a successful delete or abort", async () => {
+    // `responseStyle: "data"` resolves to undefined on 2xx-with-no-body.
+    const bodyless = {
+      session: {
+        delete: async () => undefined,
+        abort: async () => undefined,
+      },
+    } as unknown as OpencodeClient;
+
+    expect(await deleteSession(bodyless, "session-1")).toBe(true);
+    expect(await abortSession(bodyless, "session-1")).toBe(true);
   });
 
   test("lists empty sessions and normalizes string and missing timestamps", async () => {

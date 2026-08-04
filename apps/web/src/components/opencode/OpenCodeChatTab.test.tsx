@@ -543,7 +543,10 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
   },
 }));
 
-import { OpenCodeChatTab } from "./OpenCodeChatTab";
+import {
+  OpenCodeChatTab,
+  __resetOpenCodeLocalStopsForTest,
+} from "./OpenCodeChatTab";
 import type { OpenCodeNativeData } from "@/types/paneLayout";
 
 const ENVIRONMENT_ID = "env-1";
@@ -844,6 +847,10 @@ afterAll(() => {
 describe("OpenCodeChatTab", () => {
   beforeEach(() => {
     cleanup();
+    // Claimed stops live at module scope so the shared, environment-wide SSE
+    // subscription can see them; they outlive `cleanup()` and would otherwise
+    // let one test's stop suppress the next test's marker.
+    __resetOpenCodeLocalStopsForTest();
     mockOutstandingQueueClaims.clear();
     // Other OpenCode component suites restore this broadly mocked module in
     // afterAll. Re-register it per test so parallel files cannot leave this
@@ -5096,6 +5103,13 @@ describe("OpenCodeChatTab", () => {
         expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
         expect(consoleError).toHaveBeenCalledWith("[OpenCodeChatTab] Failed to abort session");
       });
+      // The turn is still running, so claiming it was stopped would be a lie.
+      expect(
+        useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+          (message) => message.content === TURN_STOPPED_BY_USER,
+        ),
+      ).toBe(false);
+      expect(mockTransferPromptQueueMessageToComposeDraft).not.toHaveBeenCalled();
     } finally {
       console.error = originalError;
     }
@@ -5501,6 +5515,75 @@ describe("OpenCodeChatTab", () => {
           useOpenCodeStore.getState().getSession(SESSION_KEY)?.loadingStartedAt,
         ).toBe(observedBusyAt);
       });
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    /*
+     * A backend-dispatched prompt records a pending clock while the tab is idle,
+     * to be adopted by the busy edge that follows. A session.error ends that
+     * turn, so the clock is stale — a later busy edge belongs to a different
+     * turn and must not inherit it, or the footer would time from the wrong
+     * prompt.
+     */
+    test("discards the pending backend turn clock when the turn errors", async () => {
+      const backendStartedAt = Date.parse("2026-07-16T12:04:57.000Z");
+      const laterBusyAt = Date.parse("2026-07-16T12:30:00.000Z");
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      // Idle tab: the backend user message only parks a clock, it does not load.
+      channel.push({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "server-queued-user",
+            sessionID: "session-1",
+            role: "user",
+            time: { created: backendStartedAt },
+          },
+        },
+      });
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages.some(
+            (message) => message.id === "server-queued-user",
+          ),
+        ).toBe(true);
+      });
+
+      channel.push({
+        type: "session.error",
+        properties: {
+          sessionID: "session-1",
+          error: { name: "ProviderError", data: { message: "boom" } },
+        },
+      });
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages.some(
+            (message) => message.id.startsWith(ERROR_MESSAGE_PREFIX),
+          ),
+        ).toBe(true);
+      });
+
+      Date.now = () => laterBusyAt;
+      channel.push({
+        type: "session.status",
+        properties: { sessionID: "session-1", status: { type: "busy" } },
+      });
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().getSession(SESSION_KEY)).toMatchObject({
+          isLoading: true,
+          loadingStartedAt: laterBusyAt,
+        });
+      });
+      expect(
+        useOpenCodeStore.getState().getSession(SESSION_KEY)?.loadingStartedAt,
+      ).not.toBe(backendStartedAt);
 
       useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
       channel.close();
@@ -6548,6 +6631,106 @@ describe("OpenCodeChatTab", () => {
     });
 
     test("shows only the stopped marker when OpenCode reports MessageAbortedError", async () => {
+      const originalError = console.error;
+      const consoleError = mock((..._args: unknown[]) => {});
+      console.error = consoleError as unknown as typeof console.error;
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      try {
+        render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+        act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true));
+        fireEvent.click(await screen.findByTestId("opencode-stop"));
+        await waitFor(() => {
+          expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+          expect(
+            useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+              (message) => message.content === TURN_STOPPED_BY_USER,
+            ),
+          ).toBe(true);
+        });
+
+        channel.push({
+          type: "session.error",
+          properties: {
+            sessionID: "session-1",
+            error: {
+              name: "MessageAbortedError",
+              data: { message: "Aborted" },
+            },
+          },
+        });
+
+        await waitFor(() => {
+          const state = useOpenCodeStore.getState().sessions.get(SESSION_KEY);
+          expect(state?.isLoading).toBe(false);
+        });
+        const messages =
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
+        expect(
+          messages.some((message) => message.id.startsWith(ERROR_MESSAGE_PREFIX)),
+        ).toBe(false);
+        // Exactly one marker: the event must defer to the stop path rather than
+        // adding a second one of its own.
+        expect(
+          messages.filter((message) => message.content === TURN_STOPPED_BY_USER),
+        ).toHaveLength(1);
+        // The other half of the fix — an expected interrupt is not console noise.
+        expect(consoleError.mock.calls.some(
+          (call) => call[0] === "[OpenCodeChatTab] Session error:",
+        )).toBe(false);
+      } finally {
+        console.error = originalError;
+      }
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    /*
+     * The stop marker is written by this renderer's stop path, so an abort that
+     * originated anywhere else (another client on the same server, a
+     * backend-issued abort) has no marker to defer to. Suppressing the card
+     * unconditionally would end the turn with nothing in the transcript at all.
+     */
+    test("writes a stopped marker for an abort this renderer did not initiate", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true));
+      channel.push({
+        type: "session.error",
+        properties: {
+          sessionID: "session-1",
+          error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+        },
+      });
+
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+            (message) => message.content === TURN_STOPPED_BY_USER,
+          ),
+        ).toBe(true);
+      });
+      expect(mockAbortSession).not.toHaveBeenCalled();
+      expect(
+        useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading,
+      ).toBe(false);
+      expect(
+        useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+          (message) => message.id.startsWith(ERROR_MESSAGE_PREFIX),
+        ),
+      ).toBe(false);
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("claims only one abort per stop, so a later external abort is still marked", async () => {
       const channel = eventChannel();
       mockSubscribeToEvents.mockResolvedValue(channel.stream);
       render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
@@ -6555,29 +6738,219 @@ describe("OpenCodeChatTab", () => {
 
       act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true));
       fireEvent.click(await screen.findByTestId("opencode-stop"));
+      await waitFor(() => expect(mockAbortSession).toHaveBeenCalled());
+
+      const abortEvent = {
+        type: "session.error",
+        properties: {
+          sessionID: "session-1",
+          error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+        },
+      };
+      channel.push(abortEvent);
       await waitFor(() => {
-        expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
         expect(
-          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading,
+        ).toBe(false);
+      });
+
+      // The claim is spent. A second abort is a new, unattributed interrupt.
+      channel.push(abortEvent);
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.filter(
             (message) => message.content === TURN_STOPPED_BY_USER,
           ),
-        ).toBe(true);
+        ).toHaveLength(2);
+      });
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("keeps the stop claim across a remount while the abort is in flight", async () => {
+      let releaseAbort: (() => void) | undefined;
+      mockAbortSession.mockImplementation(async () => {
+        await new Promise<void>((resolve) => { releaseAbort = resolve; });
+        return true;
+      });
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      const first = render(
+        <OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />,
+      );
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true));
+      fireEvent.click(await screen.findByTestId("opencode-stop"));
+      await waitFor(() => expect(mockAbortSession).toHaveBeenCalled());
+
+      // Switching away and back must not release a stop that is still settling.
+      first.unmount();
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await act(async () => {
+        releaseAbort?.();
+        await Promise.resolve();
       });
 
       channel.push({
         type: "session.error",
         properties: {
           sessionID: "session-1",
-          error: {
-            name: "MessageAbortedError",
-            data: { message: "Aborted" },
-          },
+          error: { name: "MessageAbortedError", data: { message: "Aborted" } },
         },
+      });
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading,
+        ).toBe(false);
+      });
+      expect(
+        useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.filter(
+          (message) => message.content === TURN_STOPPED_BY_USER,
+        ),
+      ).toHaveLength(1);
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("releases the stop claim when the abort request fails", async () => {
+      mockAbortSession.mockImplementation(async () => false);
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true));
+      fireEvent.click(await screen.findByTestId("opencode-stop"));
+      await waitFor(() => expect(mockAbortSession).toHaveBeenCalled());
+
+      // A failed abort leaves the turn running and writes no marker...
+      expect(
+        useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+          (message) => message.content === TURN_STOPPED_BY_USER,
+        ),
+      ).toBe(false);
+      expect(
+        useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading,
+      ).toBe(true);
+
+      // ...so it must not swallow the marker for an abort that does land.
+      channel.push({
+        type: "session.error",
+        properties: {
+          sessionID: "session-1",
+          error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+        },
+      });
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.filter(
+            (message) => message.content === TURN_STOPPED_BY_USER,
+          ),
+        ).toHaveLength(1);
+      });
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("still renders an error card and clears loading for a non-abort session error", async () => {
+      const originalError = console.error;
+      const consoleError = mock((..._args: unknown[]) => {});
+      console.error = consoleError as unknown as typeof console.error;
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      try {
+        render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+        act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true));
+        channel.push({
+          type: "session.error",
+          properties: {
+            sessionID: "session-1",
+            error: { name: "ProviderError", data: { message: "provider exploded" } },
+          },
+        });
+
+        await waitFor(() => {
+          expect(
+            useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+              (message) => message.id.startsWith(ERROR_MESSAGE_PREFIX),
+            ),
+          ).toBe(true);
+        });
+        // A real failure clears the busy state too, and is worth logging.
+        expect(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading,
+        ).toBe(false);
+        expect(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+            (message) => message.content === TURN_STOPPED_BY_USER,
+          ),
+        ).toBe(false);
+        expect(consoleError.mock.calls.some(
+          (call) => call[0] === "[OpenCodeChatTab] Session error:",
+        )).toBe(true);
+      } finally {
+        console.error = originalError;
+      }
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("renders a string session error payload as an error card", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true));
+      channel.push({
+        type: "session.error",
+        properties: { sessionID: "session-1", error: "upstream refused the connection" },
       });
 
       await waitFor(() => {
-        const state = useOpenCodeStore.getState().sessions.get(SESSION_KEY);
-        expect(state?.isLoading).toBe(false);
+        expect(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+            (message) =>
+              message.id.startsWith(ERROR_MESSAGE_PREFIX)
+              && message.content.includes("upstream refused the connection"),
+          ),
+        ).toBe(true);
+      });
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("treats an Error-shaped abort as an interrupt rather than a failure", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      // The SDK's interceptor wraps some failures into real Errors, so the
+      // discriminator arrives on the prototype rather than as an own property.
+      const abortError = new Error("Aborted");
+      abortError.name = "MessageAbortedError";
+
+      act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true));
+      channel.push({
+        type: "session.error",
+        properties: { sessionID: "session-1", error: abortError },
+      });
+
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+            (message) => message.content === TURN_STOPPED_BY_USER,
+          ),
+        ).toBe(true);
       });
       expect(
         useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
@@ -6833,6 +7206,57 @@ describe("OpenCodeChatTab", () => {
           toolState: "failure",
         });
       });
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    /*
+     * Stopping a turn aborts its subagents, and each reports that through
+     * session.error. Recording it as a failure would paint the Agent row red
+     * for a deliberate cancellation — and `mergeOpenCodeSubagentTranscript`
+     * latches "failure", so nothing later could clear it.
+     */
+    test("does not fail a Task child that was intentionally aborted", async () => {
+      seedSubagent();
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+        sessionId === "child-session" ? [childMessage("child action")] : []
+      );
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      channel.push({
+        type: "message.updated",
+        properties: { info: { sessionID: "child-session" } },
+      });
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages[0]?.parts[0],
+        ).toMatchObject({ type: "subagent", toolState: "pending" });
+      });
+
+      channel.push({
+        type: "session.error",
+        properties: {
+          sessionID: "child-session",
+          error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+        },
+      });
+
+      // The child transcript still reconciles — an abort is terminal — but the
+      // row must not latch to "failure".
+      await waitFor(() => {
+        expect(mockGetSessionMessages).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          "child-session",
+          expect.anything(),
+        );
+      });
+      expect(
+        useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages[0]?.parts[0],
+      ).not.toMatchObject({ toolState: "failure" });
+
       useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
       channel.close();
     });

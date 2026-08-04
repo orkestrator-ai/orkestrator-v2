@@ -210,6 +210,32 @@ function isOpenCodeTurnActive(status: string | null): boolean {
 }
 
 /**
+ * Sessions whose stop was initiated by this renderer and has not yet been
+ * settled by the matching abort event.
+ *
+ * Module scope, not a ref: the SSE subscription is shared per environment and
+ * owned by whichever tab started it, which is not necessarily the tab whose
+ * stop button was pressed. A per-component ref would be invisible to the
+ * handler that has to consume the flag.
+ */
+const locallyStoppedSessions = new Set<string>();
+
+/** Test seam — the module-level set outlives any one component instance. */
+export function __resetOpenCodeLocalStopsForTest(): void {
+  locallyStoppedSessions.clear();
+}
+
+function createTurnStoppedMarker(): OpenCodeMessage {
+  return {
+    id: `${SYSTEM_MESSAGE_PREFIX}${createUuid()}`,
+    role: "system",
+    content: TURN_STOPPED_BY_USER,
+    parts: [{ type: "text", content: TURN_STOPPED_BY_USER }],
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/**
  * Translate the opencode server's raw "model cannot read the image" rejection
  * into an actionable message.
  *
@@ -2337,11 +2363,24 @@ export function OpenCodeChatTab({
             if (eventType === "session.error") {
               pendingBackendTurnClockBySession.delete(sessionTabId);
               setSessionLoading(sessionTabId, false);
-              // OpenCode reports a user-requested stop through the same
-              // session.error channel as real failures. The stop path adds a
-              // dedicated transcript marker, so rendering this expected event
-              // would show the cancellation twice, once as a red error card.
-              if (!isOpenCodeMessageAbortedError(props?.error)) {
+              /*
+               * OpenCode reports an intentionally interrupted turn through the
+               * same session.error channel as real failures.
+               *
+               * Suppressing it outright would be wrong: the "Query stopped by
+               * user." marker is written by this renderer's stop path, so an
+               * abort that came from anywhere else (another client attached to
+               * the same server, a backend-issued abort) has no marker to
+               * defer to and would end the turn with nothing in the transcript
+               * at all — indistinguishable from a turn that simply produced
+               * nothing. So defer only to a stop we know we started, and write
+               * the marker ourselves otherwise.
+               */
+              if (isOpenCodeMessageAbortedError(props?.error)) {
+                if (!locallyStoppedSessions.delete(sessionTabId)) {
+                  addMessage(sessionTabId, createTurnStoppedMarker());
+                }
+              } else {
                 console.error("[OpenCodeChatTab] Session error:", props?.error);
                 const errorMsg = formatOpenCodeError(props?.error);
                 // Add error as a message with special ID prefix so it persists
@@ -2374,6 +2413,17 @@ export function OpenCodeChatTab({
                 eventType === "session.idle" ||
                 (eventType === "session.status" && props?.status?.type === "idle");
               const isChildError = eventType === "session.error";
+              /*
+               * Stopping a turn aborts its subagents too, and each one reports
+               * that through session.error. It is terminal, so it still forces
+               * a full reconcile — but it is not a failure, and
+               * `mergeOpenCodeSubagentTranscript` latches "failure"
+               * permanently, so claiming one here would leave the Agent row
+               * red for the rest of the transcript's life. Pass no state and
+               * let the authoritative child status resolve the row.
+               */
+              const isChildAbort =
+                isChildError && isOpenCodeMessageAbortedError(props?.error);
               const isChildRemoval =
                 eventType === "message.removed" ||
                 eventType === "message.part.removed";
@@ -2388,7 +2438,11 @@ export function OpenCodeChatTab({
                 fetchSubagentMessagesDebounced(
                   eventSessionId,
                   isChildIdle || isChildError || isChildRemoval,
-                  isChildError ? "failure" : isChildIdle ? "success" : undefined,
+                  isChildError && !isChildAbort
+                    ? "failure"
+                    : isChildIdle
+                      ? "success"
+                      : undefined,
                 );
               }
             }
@@ -2620,6 +2674,12 @@ export function OpenCodeChatTab({
       );
       addMessage(sessionKey, userMessage);
       setSessionLoading(sessionKey, true);
+      /*
+       * A stop whose abort event never arrived (the turn had already finished)
+       * would otherwise leave the claim set forever and silently swallow the
+       * marker for a genuinely external abort of this new turn.
+       */
+      locallyStoppedSessions.delete(sessionKey);
 
       // If this is the first message and the environment still has a default timestamp name,
       // rename the environment (including git branch) BEFORE sending the prompt to the agent.
@@ -2842,25 +2902,46 @@ export function OpenCodeChatTab({
     store.setSelectedMode(sessionKey, nextMessage.mode);
   }, [environmentId, sessionKey]);
 
+  /*
+   * The claim belongs to the session that was interrupted. If this tab adopts a
+   * different session before the interrupt settles, deferring to it would
+   * swallow the stop marker for a transcript this renderer never stopped.
+   *
+   * Only an actual identity change releases it. Firing on mount as well would
+   * drop a claim made by a stop that is still in flight — a tab remounted
+   * mid-abort would then write the marker twice, once from each path.
+   */
+  const stopClaimIdentityRef = useRef(`${sessionKey}:${session?.sessionId ?? ""}`);
+  useEffect(() => {
+    const identity = `${sessionKey}:${session?.sessionId ?? ""}`;
+    if (stopClaimIdentityRef.current === identity) return;
+    stopClaimIdentityRef.current = identity;
+    locallyStoppedSessions.delete(sessionKey);
+  }, [sessionKey, session?.sessionId]);
+
   // Handle stopping the current query
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
+    /*
+     * Claim the abort event before the request goes out, not after it settles.
+     * OpenCode can deliver session.error while this await is still pending, and
+     * the event handler has to know the stop was ours by the time it arrives or
+     * it will write a second marker of its own.
+     */
+    locallyStoppedSessions.add(sessionKey);
     const success = await abortSession(client, session.sessionId);
     if (success) {
       // Leave a marker in the transcript. Without it an interrupted turn is
       // indistinguishable from one that simply produced nothing.
-      addMessage(sessionKey, {
-        id: `${SYSTEM_MESSAGE_PREFIX}${createUuid()}`,
-        role: "system",
-        content: TURN_STOPPED_BY_USER,
-        parts: [{ type: "text", content: TURN_STOPPED_BY_USER }],
-        createdAt: new Date().toISOString(),
-      });
+      addMessage(sessionKey, createTurnStoppedMarker());
       await promoteNextQueuedPromptToDraft().catch((error) => {
         console.error("[OpenCodeChatTab] Failed to promote queued prompt:", error);
       });
     } else {
+      // The turn is still running, so release the claim: a later abort from
+      // anywhere else is not the stop this renderer failed to perform.
+      locallyStoppedSessions.delete(sessionKey);
       console.error("[OpenCodeChatTab] Failed to abort session");
     }
   }, [

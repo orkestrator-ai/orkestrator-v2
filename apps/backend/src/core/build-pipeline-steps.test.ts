@@ -7,6 +7,7 @@ import type {
   BuildPipelineAgent,
   PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
+import { OPEN_CODE_MESSAGE_HISTORY_LIMIT } from "@orkestrator/protocol/opencode-message-id";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { AppConfig, RepositoryConfig } from "./models.js";
@@ -434,6 +435,7 @@ async function withBridgeService(
     }
     if (url.endsWith("/prompt")) return new Response(null, { status: 204 });
     if (url.includes("/prompt_async")) return new Response(null, { status: 204 });
+    if (pathname.endsWith("/message")) return Response.json([]);
     if (url.endsWith("/messages")) return Response.json({ messages: [] });
     if (url.includes("/structured-output")) {
       return Response.json({ structuredOutput: null });
@@ -1055,6 +1057,11 @@ describe("per-step bridge connections", () => {
       await service.advanceNow(started.id);
 
       expect(invocations).toContain("start_local_opencode_server_cmd");
+      const history = requests.find((request) =>
+        new URL(request.url).pathname.endsWith("/message")
+      );
+      expect(new URL(history!.url).searchParams.get("limit"))
+        .toBe(String(OPEN_CODE_MESSAGE_HISTORY_LIMIT));
       const prompt = requests.find((request) =>
         new URL(request.url).pathname.endsWith("/prompt_async")
       );

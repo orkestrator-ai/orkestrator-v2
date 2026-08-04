@@ -16,6 +16,13 @@ import {
   type StructuredOutputResult,
   StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
+import {
+  boundedOpenCodeMessageHistory,
+  findOpenCodeMessageId,
+  OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+  OpenCodeMessageIdCoordinator,
+  openCodeRequestMarker,
+} from "@orkestrator/protocol/opencode-message-id";
 import type { ContextUsageSnapshot } from "./context-usage";
 
 export { type OpencodeClient };
@@ -1985,23 +1992,42 @@ function toOpenCodeModelRef(model: string): { providerID: string; modelID: strin
   };
 }
 
-/**
- * OpenCode treats caller-supplied message IDs as durable idempotency keys. UI
- * request IDs are provider-neutral, so encode every supplied value into a
- * reserved namespace rather than guessing that an ID beginning with `msg` is
- * already native. Fixed-width UTF-16 hex makes the mapping injective for every
- * JavaScript string while satisfying OpenCode's `msg` prefix schema.
- */
-function toOpenCodeMessageId(requestId: string | undefined): string | undefined {
-  if (requestId === undefined) return undefined;
-  if (requestId.trim().length === 0) {
-    throw new TypeError("OpenCode request ID must be a non-empty string");
-  }
-  let encoded = "";
-  for (let index = 0; index < requestId.length; index += 1) {
-    encoded += requestId.charCodeAt(index).toString(16).padStart(4, "0");
-  }
-  return `msg_ork_${encoded}`;
+const openCodeMessageIdsByClient = new WeakMap<object, OpenCodeMessageIdCoordinator>();
+
+function openCodeMessageIds(client: OpencodeClient): OpenCodeMessageIdCoordinator {
+  const key = client as object;
+  const existing = openCodeMessageIdsByClient.get(key);
+  if (existing) return existing;
+  const created = new OpenCodeMessageIdCoordinator();
+  openCodeMessageIdsByClient.set(key, created);
+  return created;
+}
+
+async function withCallerOwnedOpenCodeMessageId<T>(
+  client: OpencodeClient,
+  sessionId: string,
+  requestId: string | undefined,
+  operation: (messageId: string | undefined) => Promise<T>,
+): Promise<T> {
+  if (requestId === undefined) return operation(undefined);
+  // Validate before provider I/O so a malformed local ID cannot be mistaken for
+  // an ambiguous dispatch.
+  openCodeRequestMarker(requestId);
+  const coordinator = openCodeMessageIds(client);
+  return coordinator.runExclusive(sessionId, async () => {
+    const response = await client.session.messages(
+      { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
+      { throwOnError: false },
+    );
+    if (response.error) {
+      throw new Error(formatOpenCodeError(response.error));
+    }
+    const history = boundedOpenCodeMessageHistory(response.data);
+    // History is authoritative across renderer reloads. The bounded in-memory
+    // reservation closes the interval before a just-accepted message appears.
+    const messageId = coordinator.resolve(sessionId, history, requestId);
+    return operation(messageId);
+  });
 }
 
 /**
@@ -2077,9 +2103,12 @@ export async function sendPrompt(
     const requestId = options?.outputSchema
       ? (options.requestId ?? createUuid())
       : options?.requestId;
-    const messageID = toOpenCodeMessageId(requestId);
-    const response = options?.command
-      ? await client.session.command({
+    const response = await withCallerOwnedOpenCodeMessageId(
+      client,
+      sessionId,
+      requestId,
+      async (messageID) => options?.command
+        ? client.session.command({
           sessionID: sessionId,
           directory: options.directory,
           messageID,
@@ -2095,7 +2124,7 @@ export async function sendPrompt(
           variant: options.variant,
           parts: parts.filter((part) => part.type === "file"),
         })
-      : await client.session.promptAsync({
+        : client.session.promptAsync({
           sessionID: sessionId,
           directory: options?.directory,
           messageID,
@@ -2110,7 +2139,8 @@ export async function sendPrompt(
                 retryCount: options.structuredOutputRetryCount,
               }
             : undefined,
-        });
+        }),
+    );
 
     if (response && "error" in response && response.error) {
       return {
@@ -2118,6 +2148,10 @@ export async function sendPrompt(
         requestId,
         error: formatOpenCodeError(response.error),
       };
+    }
+
+    if (requestId !== undefined) {
+      openCodeMessageIds(client).markAccepted(sessionId, requestId);
     }
 
     return { success: true, requestId };
@@ -2495,11 +2529,11 @@ export async function getStructuredOutput<T = unknown>(
   // Reject malformed correlation IDs before touching the authoritative
   // transcript. Falling back to the latest turn for an explicit blank ID could
   // associate an unrelated result with the caller's request.
-  const providerMessageId = toOpenCodeMessageId(requestId);
+  if (requestId !== undefined) openCodeRequestMarker(requestId);
   let response: { data?: unknown; error?: unknown };
   try {
     response = await client.session.messages(
-      { sessionID: sessionId },
+      { sessionID: sessionId, limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
       { throwOnError: false },
     );
   } catch (error) {
@@ -2517,10 +2551,18 @@ export async function getStructuredOutput<T = unknown>(
       ? openCodeStructuredFailure(response.error, requestId)
       : null;
   }
-  if (
-    !Array.isArray(response.data)
-    || response.data.some((entry) => !isRecord(entry) || !isRecord(entry.info))
-  ) {
+  let boundedEntries: readonly unknown[];
+  try {
+    boundedEntries = boundedOpenCodeMessageHistory(response.data);
+  } catch {
+    return structuredOutputFailure(
+      "opencode",
+      "malformed_output",
+      "OpenCode returned malformed or oversized message history for structured output.",
+      { requestId },
+    );
+  }
+  if (boundedEntries.some((entry) => !isRecord(entry) || !isRecord(entry.info))) {
     return structuredOutputFailure(
       "opencode",
       "malformed_output",
@@ -2529,15 +2571,19 @@ export async function getStructuredOutput<T = unknown>(
     );
   }
 
-  const entries = response.data as Array<{ info: Record<string, unknown> }>;
+  const entries = boundedEntries as Array<{ info: Record<string, unknown> }>;
   const latestStructuredUserId = entries
     .filter((entry) => {
       const format = isRecord(entry.info.format) ? entry.info.format : {};
       return entry.info.role === "user" && format.type === "json_schema";
     })
     .at(-1)?.info.id;
-  const expectedParentId = providerMessageId
-    ?? (typeof latestStructuredUserId === "string" ? latestStructuredUserId : undefined);
+  const providerMessageId = requestId === undefined
+    ? undefined
+    : findOpenCodeMessageId(entries, requestId);
+  const expectedParentId = requestId === undefined
+    ? (typeof latestStructuredUserId === "string" ? latestStructuredUserId : undefined)
+    : providerMessageId;
   if (!expectedParentId) return null;
   // Keep the provider-neutral correlation ID on the public result. Only the
   // transcript lookup uses OpenCode's provider-qualified message ID.

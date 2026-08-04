@@ -13,6 +13,7 @@
     "./feature-planning": "./src/feature-planning.ts",
     "./gateway-token": "./src/gateway-token.ts",
     "./model-id": "./src/model-id.ts",
+    "./opencode-message-id": "./src/opencode-message-id.ts",
     "./pane-layout": "./src/pane-layout.ts",
     "./parent-watchdog": "./src/parent-watchdog.ts",
     "./pr-monitor": "./src/pr-monitor.ts",

@@ -68,8 +68,11 @@ describe("NativeModelPicker", () => {
     expect(picker?.className).toContain("w-[calc(100vw-1rem)]");
     expect(document.querySelector("[data-native-model-list]")?.className).toContain("max-h-70");
     expect(screen.getByText("Scroll for 2 more models")).toBeTruthy();
-    expect(screen.getByText("Reasoning").closest("[data-slot=dropdown-menu-sub-trigger]")).toBeTruthy();
-    expect(screen.getByRole("menuitemcheckbox", { name: /Fast/ }).getAttribute("aria-checked")).toBe("true");
+    expect(document.querySelector("[data-native-mobile-reasoning-trigger]")).toBeTruthy();
+    expect(document.querySelector("[data-native-mobile-speed-trigger]")?.textContent)
+      .toContain("On");
+    expect(document.querySelectorAll("[data-native-mobile-reasoning-trigger], [data-native-mobile-speed-trigger]"))
+      .toHaveLength(2);
     expect(container.querySelectorAll("button[title='Choose model, reasoning, and speed']")).toHaveLength(1);
   });
 
@@ -86,11 +89,10 @@ describe("NativeModelPicker", () => {
     const { onReasoningChange } = renderPicker();
     trigger = screen.getByTitle("Choose model, reasoning, and speed");
     fireEvent.pointerDown(trigger);
-    const reasoning = screen.getByText("Reasoning").closest(
-      "[data-slot=dropdown-menu-sub-trigger]",
+    const reasoning = document.querySelector<HTMLElement>(
+      "[data-native-mobile-reasoning-trigger]",
     )!;
-    (reasoning as HTMLElement).focus();
-    fireEvent.keyDown(reasoning, { key: "ArrowRight" });
+    fireEvent.click(reasoning);
     const low = await screen.findByRole("menuitemradio", { name: /Low/ });
     fireEvent.click(low);
     expect(onReasoningChange).toHaveBeenCalledWith("low");
@@ -99,7 +101,9 @@ describe("NativeModelPicker", () => {
     const { onFastModeChange } = renderPicker();
     trigger = screen.getByTitle("Choose model, reasoning, and speed");
     fireEvent.pointerDown(trigger);
-    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /^Fast/ }));
+    const speed = document.querySelector<HTMLElement>("[data-native-mobile-speed-trigger]")!;
+    fireEvent.click(speed);
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Normal/ }));
     expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
 
@@ -112,9 +116,13 @@ describe("NativeModelPicker", () => {
 
     fireEvent.pointerDown(trigger);
     expect(document.querySelector("[data-native-model-picker] .grid-cols-3")).toBeTruthy();
+    expect(document.querySelector("[data-native-model-picker]")?.className)
+      .toContain("md:h-[23.5rem]");
     expect(screen.getByRole("group", { name: "Models" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "Reasoning" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "Speed mode" })).toBeTruthy();
+    expect(screen.getByText("Scroll for 2 more models")).toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: /Model 7/ })).toBeTruthy();
     fireEvent.click(screen.getByText("Model 2"));
     expect(onModelChange).toHaveBeenCalledWith("model-2");
 
@@ -298,9 +306,12 @@ describe("NativeModelPicker", () => {
     fireEvent.pointerDown(trigger);
     expect(screen.getByText("No models available")).toBeTruthy();
     expect(screen.queryByText("Reasoning")).toBeNull();
-    const fast = screen.getByRole("menuitemcheckbox", { name: /Fast.*Unavailable/ });
-    expect(fast.hasAttribute("data-disabled")).toBe(true);
-    expect(fast.getAttribute("aria-checked")).toBe("false");
+    const speed = document.querySelector<HTMLElement>("[data-native-mobile-speed-trigger]")!;
+    expect(speed.textContent).toContain("Unavailable");
+    expect(speed.hasAttribute("data-disabled")).toBe(false);
+    fireEvent.click(speed);
+    expect(screen.getByRole("menuitemradio", { name: /Fast.*Not available/ })
+      .hasAttribute("data-disabled")).toBe(true);
   });
 
   test("disables every open choice when settings become locked", () => {

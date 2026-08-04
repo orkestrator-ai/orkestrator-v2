@@ -1,18 +1,13 @@
 import { useMemo, useState } from "react";
-import { ChevronDown, RefreshCw, Zap } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Zap } from "lucide-react";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuPortal,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -51,6 +46,7 @@ interface NativeModelPickerProps {
 }
 
 const MODEL_ROW_HEIGHT_CLASS = "h-14";
+const VISIBLE_MODEL_ROWS = 5;
 
 function ModelItems({
   models,
@@ -200,6 +196,7 @@ export function NativeModelPicker({
   onRefreshModels,
 }: NativeModelPickerProps) {
   const [search, setSearch] = useState("");
+  const [mobileSubmenu, setMobileSubmenu] = useState<"reasoning" | "speed" | null>(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const normalizedSearch = search.trim().toLowerCase();
   const visibleModels = useMemo(() => {
@@ -218,7 +215,7 @@ export function NativeModelPicker({
   const displayLabel = selectedReasoningLabel
     ? `${selectedModelLabel} (${selectedReasoningLabel}${fastModeEnabled ? " ⚡" : ""}${fastModeUnknown ? "; speed unknown" : ""})`
     : `${selectedModelLabel}${fastModeEnabled ? " (⚡)" : fastModeUnknown ? " (speed unknown)" : ""}`;
-  const moreModelCount = Math.max(0, visibleModels.length - 5);
+  const moreModelCount = Math.max(0, visibleModels.length - VISIBLE_MODEL_ROWS);
   const showSpeedControls = Boolean(onFastModeChange);
   const choiceLabels = [
     "model",
@@ -233,7 +230,10 @@ export function NativeModelPicker({
   return (
     <DropdownMenu
       onOpenChange={(open) => {
-        if (!open) setSearch("");
+        if (!open) {
+          setSearch("");
+          setMobileSubmenu(null);
+        }
       }}
     >
       <DropdownMenuTrigger asChild>
@@ -264,45 +264,94 @@ export function NativeModelPicker({
       <DropdownMenuContent
         align="start"
         collisionPadding={{ top: 52, right: 8, bottom: 8, left: 8 }}
-        className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] md:w-[min(46rem,calc(100vw-2rem))] md:max-w-[calc(100vw-2rem)]"
+        className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] md:flex md:h-[23.5rem] md:w-[min(46rem,calc(100vw-2rem))] md:max-w-[calc(100vw-2rem)] md:flex-col md:overflow-hidden"
         data-native-model-picker
       >
-        <div className="flex items-center gap-1 p-1 pb-2">
-          <input
-            type="text"
-            placeholder="Search models..."
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => {
-              if (event.key !== "Escape") event.stopPropagation();
-            }}
-            className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-background px-2 text-xs placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-ring"
-          />
-          {onRefreshModels ? (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onRefreshModels();
+        {!isMobile || mobileSubmenu === null ? (
+          <div className="flex items-center gap-1 p-1 pb-2">
+            <input
+              type="text"
+              placeholder="Search models..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") event.stopPropagation();
               }}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              title="Refresh models"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-        </div>
+              className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-background px-2 text-xs placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            {onRefreshModels ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRefreshModels();
+                }}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                title="Refresh models"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
-        {normalizedSearch ? (
+        {normalizedSearch && (!isMobile || mobileSubmenu === null) ? (
           <div className="px-2 pb-1 text-[10px] text-muted-foreground">
             {visibleModels.length} model{visibleModels.length === 1 ? "" : "s"} found
           </div>
         ) : null}
 
-        {/* Mobile uses one compact hierarchy; desktop keeps all three choices
-            visible together. Fixed-height rows show exactly five models. */}
-        {isMobile ? (
+        {/* Mobile uses touch-friendly pop-out choices. Desktop keeps all three
+            choices visible while the model list fills the fixed-height menu. */}
+        {isMobile && mobileSubmenu === "reasoning" ? (
+          <div className="animate-in slide-in-from-right-2 fade-in-0 duration-150">
+            <DropdownMenuItem
+              onSelect={(event) => {
+                event.preventDefault();
+                setMobileSubmenu(null);
+              }}
+              className="h-11"
+              data-native-mobile-back
+            >
+              <ChevronLeft className="h-4 w-4" />
+              <span className="font-medium">Reasoning</span>
+              <span className="ml-auto truncate text-xs text-muted-foreground">
+                {selectedReasoningLabel}
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <ReasoningItems
+              reasoningOptions={reasoningOptions}
+              selectedReasoningId={selectedReasoningId}
+              disabled={disabled}
+              onReasoningChange={onReasoningChange}
+            />
+          </div>
+        ) : isMobile && mobileSubmenu === "speed" ? (
+          <div className="animate-in slide-in-from-right-2 fade-in-0 duration-150">
+            <DropdownMenuItem
+              onSelect={(event) => {
+                event.preventDefault();
+                setMobileSubmenu(null);
+              }}
+              className="h-11"
+              data-native-mobile-back
+            >
+              <ChevronLeft className="h-4 w-4" />
+              <span className="flex items-center gap-1 font-medium">
+                Fast mode <Zap className="h-3 w-3 text-amber-500" />
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <SpeedItems
+              fastModeEnabled={fastModeEnabled}
+              fastModeAvailable={fastModeAvailable}
+              disabled={disabled}
+              onFastModeChange={onFastModeChange}
+            />
+          </div>
+        ) : isMobile ? (
           <div>
             <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Model
@@ -325,68 +374,73 @@ export function NativeModelPicker({
             {showReasoningControls ? (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger disabled={disabled}>
-                    <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                      <span>Reasoning</span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {selectedReasoningLabel}
-                      </span>
+                <DropdownMenuItem
+                  disabled={disabled}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    setMobileSubmenu("reasoning");
+                  }}
+                  className="h-11"
+                  data-native-mobile-reasoning-trigger
+                >
+                  <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                    <span>Reasoning</span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {selectedReasoningLabel}
                     </span>
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuPortal>
-                    <DropdownMenuSubContent
-                      collisionPadding={{ top: 52, right: 8, bottom: 8, left: 8 }}
-                      className="max-h-(--radix-dropdown-menu-content-available-height) w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] overflow-x-hidden overflow-y-auto"
-                    >
-                      <ReasoningItems
-                        reasoningOptions={reasoningOptions}
-                        selectedReasoningId={selectedReasoningId}
-                        disabled={disabled}
-                        onReasoningChange={onReasoningChange}
-                      />
-                    </DropdownMenuSubContent>
-                  </DropdownMenuPortal>
-                </DropdownMenuSub>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                </DropdownMenuItem>
               </>
             ) : null}
 
             {showSpeedControls ? (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuCheckboxItem
-                  disabled={disabled || !fastModeAvailable}
-                  checked={fastModeEnabled === true}
-                  onCheckedChange={(checked) => onFastModeChange?.(checked === true)}
+                <DropdownMenuItem
+                  disabled={disabled}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    setMobileSubmenu("speed");
+                  }}
+                  className="h-11"
+                  data-native-mobile-speed-trigger
                 >
                   <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
                     <span className="flex items-center gap-1">
                       Fast <Zap className="h-3 w-3 text-amber-500" />
                     </span>
-                    {!fastModeAvailable ? (
-                      <span className="truncate text-xs text-muted-foreground">Unavailable</span>
-                    ) : fastModeEnabled === null ? (
-                      <span className="truncate text-xs text-muted-foreground">Unknown</span>
-                    ) : null}
+                    <span className="truncate text-xs text-muted-foreground">
+                      {!fastModeAvailable
+                        ? "Unavailable"
+                        : fastModeEnabled === null
+                          ? "Unknown"
+                          : fastModeEnabled
+                            ? "On"
+                            : "Off"}
+                    </span>
                   </span>
-                </DropdownMenuCheckboxItem>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                </DropdownMenuItem>
               </>
             ) : null}
           </div>
         ) : (
-          <div className={cn(
-            "grid divide-x divide-zinc-700/60",
-            showReasoningControls && showSpeedControls
-              ? "grid-cols-3"
-              : showReasoningControls || showSpeedControls
-                ? "grid-cols-2"
-                : "grid-cols-1",
-          )}>
-            <div className="min-w-0 pr-1" role="group" aria-label="Models">
+          <div
+            className={cn(
+              "grid min-h-0 flex-1 divide-x divide-zinc-700/60",
+              showReasoningControls && showSpeedControls
+                ? "grid-cols-3"
+                : showReasoningControls || showSpeedControls
+                  ? "grid-cols-2"
+                  : "grid-cols-1",
+            )}
+          >
+            <div className="flex min-h-0 min-w-0 flex-col pr-1" role="group" aria-label="Models">
               <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 Model
               </DropdownMenuLabel>
-              <div className="max-h-70 overflow-y-auto overscroll-contain" data-native-model-list>
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-native-model-list>
                 <ModelItems
                   models={visibleModels}
                   selectedModelId={selectedModelId}
@@ -397,7 +451,7 @@ export function NativeModelPicker({
               </div>
               {moreModelCount > 0 ? (
                 <div className="border-t border-zinc-700/50 px-2 py-1 text-center text-[10px] text-muted-foreground">
-                  {moreModelCount} more below
+                  Scroll for {moreModelCount} more model{moreModelCount === 1 ? "" : "s"}
                 </div>
               ) : null}
             </div>

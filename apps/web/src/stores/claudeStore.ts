@@ -163,12 +163,13 @@ interface ClaudeState
   /** Sessions whose response is ready but whose background work remains live. */
   completionBlockedByBackgroundTasks: Map<ClaudeSessionKey, boolean>;
   /**
-   * Monotonic lifecycle revision for each tab's authoritative task snapshots.
+   * Monotonic lifecycle revision for each tab's authoritative background state.
    *
    * The task map deliberately deletes empty records, so comparing its value
    * cannot detect an absent → present → absent sequence while a REST refresh
-   * is in flight. This revision changes for every task snapshot, including an
-   * explicit empty snapshot, and lets refresh reconciliation detect that ABA.
+   * is in flight. The completion hold can also change without the task map
+   * changing. This revision advances for every task or hold snapshot so stale
+   * REST responses cannot overwrite either half of that lifecycle.
    */
   backgroundTaskRevisions: Map<ClaudeSessionKey, number>;
   pendingQuestions: Map<string, ClaudeQuestionRequest>;
@@ -534,9 +535,17 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   setCompletionBlockedByBackgroundTasks: (sessionKey, blocked) =>
     set((state) => {
       const next = new Map(state.completionBlockedByBackgroundTasks);
+      const revisions = new Map(state.backgroundTaskRevisions);
       if (blocked) next.set(sessionKey, true);
       else next.delete(sessionKey);
-      return { completionBlockedByBackgroundTasks: next };
+      revisions.set(
+        sessionKey,
+        (state.backgroundTaskRevisions.get(sessionKey) ?? 0) + 1,
+      );
+      return {
+        completionBlockedByBackgroundTasks: next,
+        backgroundTaskRevisions: revisions,
+      };
     }),
 
   replaceSessionIdentity: (sessionKey, session) => {

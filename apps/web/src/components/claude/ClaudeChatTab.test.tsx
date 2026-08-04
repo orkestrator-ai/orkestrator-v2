@@ -2245,6 +2245,65 @@ describe("ClaudeChatTab", () => {
     }
   });
 
+  test("does not overwrite a newer completion hold with an older manual refresh", async () => {
+    const channel = eventChannel();
+    mockSubscribeToEvents.mockImplementation(() => channel.stream);
+    const { rerender } = render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+    );
+    try {
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      const staleMessages = deferred<ClaudeMessageType[]>();
+      mockGetSession.mockReset();
+      mockGetSession.mockResolvedValue({
+        status: "running",
+        backgroundTasks: {
+          waiter: { id: "waiter", status: "running" },
+        },
+        completionBlockedByBackgroundTasks: false,
+      });
+      mockGetSessionMessages.mockReset();
+      mockGetSessionMessages.mockImplementation(() => staleMessages.promise);
+      mockToastError.mockClear();
+
+      rerender(
+        <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+      );
+      await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+      channel.push({
+        type: "session.updated",
+        sessionId: "session-1",
+        data: { completionBlockedByBackgroundTasks: true },
+      } as any);
+      await waitFor(() =>
+        expect(
+          useClaudeStore.getState().completionBlockedByBackgroundTasks.get(SESSION_KEY),
+        ).toBe(true),
+      );
+
+      await act(async () => {
+        staleMessages.resolve([]);
+        await staleMessages.promise;
+      });
+
+      expect(
+        useClaudeStore.getState().completionBlockedByBackgroundTasks.get(SESSION_KEY),
+      ).toBe(true);
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith(
+          "Failed to refresh Claude tab",
+          {
+            description: "Claude background tasks changed while refreshing; try again",
+          },
+        ),
+      );
+    } finally {
+      channel.close();
+    }
+  });
+
   test("does not let a repeated running edge slip an older idle refresh through", async () => {
     const channel = eventChannel();
     mockSubscribeToEvents.mockImplementation(() => channel.stream);
@@ -3449,6 +3508,62 @@ describe("ClaudeChatTab", () => {
     channel.close();
   });
 
+  test("keeps newer settled task and hold state when a stale fast reconnect finishes", async () => {
+    const channel = eventChannel();
+    const messagesGate = deferred<ClaudeMessageType[]>();
+    mockSubscribeToEvents.mockImplementation(() => channel.stream);
+    mockGetSession.mockResolvedValueOnce({
+      status: "running",
+      backgroundTasks: {
+        waiter: { id: "waiter", status: "running" },
+      },
+      completionBlockedByBackgroundTasks: true,
+    });
+    mockGetSessionMessages.mockImplementationOnce(() => messagesGate.promise);
+    act(() => {
+      useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
+      useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+        waiter: { id: "waiter", status: "running" },
+      });
+      useClaudeStore.getState().setCompletionBlockedByBackgroundTasks(SESSION_KEY, true);
+    });
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+    channel.push({
+      type: "session.updated",
+      sessionId: "session-1",
+      data: {
+        backgroundTasks: {
+          waiter: { id: "waiter", status: "completed" },
+        },
+        completionBlockedByBackgroundTasks: false,
+      },
+    } as any);
+    channel.push({ type: "session.idle", sessionId: "session-1", data: {} } as any);
+    await waitFor(() => {
+      const state = useClaudeStore.getState();
+      expect(state.backgroundTasks.get(SESSION_KEY)?.waiter?.status).toBe("completed");
+      expect(state.completionBlockedByBackgroundTasks.has(SESSION_KEY)).toBe(false);
+      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      messagesGate.resolve([]);
+      await messagesGate.promise;
+    });
+    await flushAsyncWork();
+
+    const state = useClaudeStore.getState();
+    expect(state.backgroundTasks.get(SESSION_KEY)?.waiter?.status).toBe("completed");
+    expect(state.completionBlockedByBackgroundTasks.has(SESSION_KEY)).toBe(false);
+    expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+    expect(screen.queryByTestId("claude-background-task-hold")).toBeNull();
+    useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+    channel.close();
+  });
+
   test("keeps a repeated live running edge that preserves the session object", async () => {
     const channel = eventChannel();
     const messagesGate = deferred<ClaudeMessageType[]>();
@@ -4117,6 +4232,7 @@ describe("ClaudeChatTab", () => {
     useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
       old: { id: "old", status: "running" },
     });
+    useClaudeStore.getState().setCompletionBlockedByBackgroundTasks(SESSION_KEY, true);
     mockGetSession.mockImplementation(async (_client, sessionId) =>
       sessionId === "resumed-claude"
         ? {
@@ -4142,6 +4258,7 @@ describe("ClaudeChatTab", () => {
     expect(state.rateLimits.has(SESSION_KEY)).toBe(false);
     expect(state.promptSuggestions.has(SESSION_KEY)).toBe(false);
     expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
+    expect(state.completionBlockedByBackgroundTasks.has(SESSION_KEY)).toBe(false);
   });
 
   test("hydrates rate limits, suggestions, and background tasks from a resumed session", async () => {
@@ -4161,6 +4278,7 @@ describe("ClaudeChatTab", () => {
                 status: "running",
               },
             },
+            completionBlockedByBackgroundTasks: true,
             createdAt: "2026-04-15T10:00:00.000Z",
             lastActivity: "2026-04-15T10:00:00.000Z",
           }
@@ -4191,7 +4309,9 @@ describe("ClaudeChatTab", () => {
           status: "running",
         },
       });
+      expect(state.completionBlockedByBackgroundTasks.get(SESSION_KEY)).toBe(true);
     });
+    expect(await screen.findByTestId("claude-background-task-hold")).toBeTruthy();
   });
 
   test("replaces an optimistic plan preference with the resumed session mode", async () => {
@@ -5623,6 +5743,67 @@ describe("ClaudeChatTab", () => {
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
+  test("a background watchdog refresh silently preserves a newer SSE completion hold", async () => {
+    installTimerHarness(2_750_000);
+    const channel = eventChannel();
+    mockSubscribeToEvents.mockImplementation(() => channel.stream);
+    mockGetSession.mockResolvedValue({ status: "running" });
+    act(() => useClaudeStore.getState().setSessionLoading(SESSION_KEY, true));
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await flushAsyncWork();
+    act(() => {
+      useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+        waiter: { id: "waiter", status: "running" },
+      });
+    });
+
+    const transcriptGate = deferred<ClaudeMessageType[]>();
+    mockGetSession.mockClear();
+    mockGetSession.mockResolvedValue({
+      status: "running",
+      backgroundTasks: {
+        waiter: { id: "waiter", status: "running" },
+      },
+      completionBlockedByBackgroundTasks: false,
+    });
+    mockGetSessionMessages.mockReset();
+    mockGetSessionMessages.mockImplementation(() => transcriptGate.promise);
+    mockToastError.mockClear();
+
+    mockedNow += 20_000;
+    await act(async () => {
+      intervalCallback?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+    channel.push({
+      type: "session.updated",
+      sessionId: "session-1",
+      data: { completionBlockedByBackgroundTasks: true },
+    } as any);
+    await waitFor(() =>
+      expect(
+        useClaudeStore.getState().completionBlockedByBackgroundTasks.get(SESSION_KEY),
+      ).toBe(true),
+    );
+
+    await act(async () => {
+      transcriptGate.resolve([]);
+      await transcriptGate.promise;
+    });
+    await flushAsyncWork();
+
+    expect(
+      useClaudeStore.getState().completionBlockedByBackgroundTasks.get(SESSION_KEY),
+    ).toBe(true);
+    expect(screen.getByTestId("claude-background-task-hold")).toBeTruthy();
+    expect(mockToastError).not.toHaveBeenCalled();
+    useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+    channel.close();
+  });
+
   test("keeps reconnecting when adopting a restored session fails and preserves client-only errors", async () => {
     const originalWarn = console.warn;
     const consoleWarn = mock(() => {});
@@ -6334,6 +6515,37 @@ describe("ClaudeChatTab", () => {
       expect(mockStopClaudeBackgroundTask).toHaveBeenCalledTimes(1);
     });
 
+    test("does not show a hold card when only terminal tasks remain", async () => {
+      mockGetSession.mockResolvedValue(serverSession({
+        completionBlockedByBackgroundTasks: true,
+        backgroundTasks: {
+          done: { id: "done", status: "completed" },
+          failed: { id: "failed", status: "failed" },
+          killed: { id: "killed", status: "killed" },
+        },
+      }) as any);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() =>
+        expect(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)?.done?.status)
+          .toBe("completed"),
+      );
+      expect(screen.queryByTestId("claude-background-task-hold")).toBeNull();
+    });
+
+    test("does not show a hold card for live tasks unless the response is ready", async () => {
+      mockGetSession.mockResolvedValue(serverSession({
+        completionBlockedByBackgroundTasks: false,
+      }) as any);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() =>
+        expect(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)?.["task-1"]?.status)
+          .toBe("running"),
+      );
+      expect(screen.queryByTestId("claude-background-task-hold")).toBeNull();
+    });
+
     test("rehydrates a named terminal TaskStop row after the tab remounts", async () => {
       const stopMessage: ClaudeMessageType = {
         id: "assistant-stop-background-task",
@@ -6583,12 +6795,14 @@ describe("ClaudeChatTab", () => {
       useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
         keep: { id: "keep", status: "running" },
       });
+      useClaudeStore.getState().setCompletionBlockedByBackgroundTasks(SESSION_KEY, true);
       mockGetSession.mockResolvedValue({
         status: "idle",
         invalidMetadataFields: [
           "contextUsage",
           "promptSuggestion",
           "backgroundTasks",
+          "completionBlockedByBackgroundTasks",
         ],
       });
 
@@ -6599,6 +6813,7 @@ describe("ClaudeChatTab", () => {
       expect(state.contextUsage.get(SESSION_KEY)?.usedTokens).toBe(1);
       expect(state.promptSuggestions.get(SESSION_KEY)).toBe("keep suggestion");
       expect(Object.keys(state.backgroundTasks.get(SESSION_KEY) ?? {})).toEqual(["keep"]);
+      expect(state.completionBlockedByBackgroundTasks.get(SESSION_KEY)).toBe(true);
     });
 
     test("adopts a snapshot whose invalid fields are only dotted sub-paths", async () => {

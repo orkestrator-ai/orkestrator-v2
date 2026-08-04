@@ -4581,7 +4581,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal);
     closeSdkInput = heldSdkPrompt.close;
     let receivedResult = false;
+    const ownsActiveTurn = () =>
+      !abortController.signal.aborted
+      && sessions.get(sessionId) === session
+      && session.abortController === abortController;
     const setCompletionBlockedByBackgroundTasks = (blocked: boolean) => {
+      if (!ownsActiveTurn()) return;
       if (session.completionBlockedByBackgroundTasks === blocked) return;
       session.completionBlockedByBackgroundTasks = blocked;
       eventEmitter.emit({
@@ -4592,6 +4597,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     };
     const finishTurnInputIfSettled = () => {
       if (!receivedResult) return;
+      if (!ownsActiveTurn()) {
+        heldSdkPrompt.close();
+        return;
+      }
       const hasLiveTask = Object.values(session.backgroundTasks ?? {}).some((task) =>
         LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
       );
@@ -5910,6 +5919,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           session.queryControl,
           options?.model,
         );
+        if (!ownsActiveTurn()) {
+          heldSdkPrompt.close();
+          return;
+        }
         if (exactUsage) {
           session.usage = exactUsage;
         }
@@ -6072,6 +6085,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         return Promise.reject(repromptError);
       }
     }
+
+    // An abort or immediate restart can take ownership while an awaited control
+    // request above is still resolving. The old turn must not publish a second
+    // idle edge or clear the new turn's controller.
+    if (!ownsActiveTurn()) return;
 
     // Generate a session title from the first user message if title is still the default
     const isDefaultTitle = session.title === `Session ${session.id.slice(-6)}`;

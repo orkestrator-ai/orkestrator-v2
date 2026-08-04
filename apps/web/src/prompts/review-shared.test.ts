@@ -31,13 +31,13 @@ describe("buildReviewBody", () => {
         "Use subagents / threads to complete the work in parallel where possible.",
       );
       expect(body).toContain(
-        "Do not create background shell loops, marker files, polling sentinels, or sleep commands to wait for subagents.",
+        "Use the provider's native subagent lifecycle and completion notifications to wait for delegated work. Do not create background shell loops, marker files, polling sentinels, or sleep commands to wait for subagents.",
       );
       expect(body).toContain(
         "Wait until all sub agents have resolved before delivering the report.",
       );
       expect(body).toContain(
-        "stop any temporary background task created only for coordination or waiting",
+        "Before delivering the report, stop any temporary background task created only for coordination or waiting. Do not stop substantive builds, tests, servers, or other user-requested work.",
       );
       expect(body).toContain("## User review instruction");
       expect(body).toContain("provider-enforced output schema");

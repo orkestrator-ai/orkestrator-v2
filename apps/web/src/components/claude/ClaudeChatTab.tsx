@@ -472,6 +472,7 @@ export function ClaudeChatTab({
     (
       key: string,
       serverSession: Awaited<ReturnType<typeof getSession>>,
+      { applyBackgroundLifecycle = true }: { applyBackgroundLifecycle?: boolean } = {},
     ) => {
       if (!serverSession) return;
       const invalidFields = new Set(serverSession.invalidMetadataFields ?? []);
@@ -510,7 +511,11 @@ export function ClaudeChatTab({
           setPlanMode(key, serverSession.planMode);
         }
       }
-      if (invalidFields.has("backgroundTasks")) {
+      if (!applyBackgroundLifecycle) {
+        // A newer SSE background lifecycle frame landed while this REST
+        // snapshot was in flight. Apply unrelated metadata, but do not let the
+        // stale task/hold pair overwrite the live state.
+      } else if (invalidFields.has("backgroundTasks")) {
         // Preserve the last valid snapshot when only this optional wire field
         // was malformed.
       } else if (serverSession.backgroundTasks === undefined) {
@@ -534,7 +539,10 @@ export function ClaudeChatTab({
           setBackgroundTasks(key, backgroundTasks);
         }
       }
-      if (!invalidFields.has("completionBlockedByBackgroundTasks")) {
+      if (
+        applyBackgroundLifecycle
+        && !invalidFields.has("completionBlockedByBackgroundTasks")
+      ) {
         setCompletionBlockedByBackgroundTasks(
           key,
           serverSession.completionBlockedByBackgroundTasks === true,
@@ -1165,6 +1173,8 @@ export function ClaudeChatTab({
             // state can be stale.
             const loadingRevisionBeforeSnapshot =
               useClaudeStore.getState().sessionLoadingRevisions.get(sessionKey) ?? 0;
+            const backgroundRevisionBeforeSnapshot =
+              useClaudeStore.getState().backgroundTaskRevisions.get(sessionKey) ?? 0;
             const serverSession = await getSession(existingClient, existingSessionId);
             if (!isCurrentFastReconnect() || !serverSession) return;
             const messages = await getSessionMessages(existingClient, existingSessionId);
@@ -1179,7 +1189,12 @@ export function ClaudeChatTab({
              */
             // Only apply fetched messages if they are more complete than what
             // the store currently has (SSE may have already delivered newer data).
-            applyServerSessionMetadata(sessionKey, serverSession);
+            const backgroundLifecycleUnchanged =
+              (useClaudeStore.getState().backgroundTaskRevisions.get(sessionKey) ?? 0)
+                === backgroundRevisionBeforeSnapshot;
+            applyServerSessionMetadata(sessionKey, serverSession, {
+              applyBackgroundLifecycle: backgroundLifecycleUnchanged,
+            });
             const currentMessages = useClaudeStore.getState().sessions.get(sessionKey)?.messages ?? [];
             if (messages.length >= currentMessages.length) {
               setMessages(sessionKey, messages);

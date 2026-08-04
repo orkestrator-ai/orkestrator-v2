@@ -1466,7 +1466,11 @@ describe("sendPrompt", () => {
       expect(events).toContainEqual({
         type: "session.updated",
         sessionId: session.id,
-        data: { status: "running", turnStartedAt },
+        data: {
+          status: "running",
+          turnStartedAt,
+          completionBlockedByBackgroundTasks: false,
+        },
       });
 
       // System init - sdkSessionId should be captured
@@ -8172,68 +8176,170 @@ describe("background task reducer", () => {
   test("keeps streaming input and running status open until background agents settle", async () => {
     const created = createSession("held input");
     track(created.id);
+    const { events, stop } = captureEvents();
     const promptPromise = sendPrompt(created.id, "delegate the review");
     const call = await nextQueryCall();
+    try {
+      expect(typeof call.prompt).not.toBe("string");
+      const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+      const firstInput = await input.next();
+      expect(firstInput.done).toBe(false);
+      if (firstInput.done) throw new Error("Held prompt closed before sending its user message");
+      expect(firstInput.value.message.content).toEqual([
+        { type: "text", text: "delegate the review" },
+      ]);
 
-    expect(typeof call.prompt).not.toBe("string");
-    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
-    const firstInput = await input.next();
-    expect(firstInput.done).toBe(false);
-    if (firstInput.done) throw new Error("Held prompt closed before sending its user message");
-    expect(firstInput.value.message.content).toEqual([
-      { type: "text", text: "delegate the review" },
-    ]);
+      let inputClosed = false;
+      const inputCompletion = input.next().then((result) => {
+        inputClosed = result.done === true;
+        return result;
+      });
 
-    let inputClosed = false;
-    const inputCompletion = input.next().then((result) => {
-      inputClosed = result.done === true;
-      return result;
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "agent-1",
+        description: "Review the bridge",
+      });
+      call.push({
+        type: "result",
+        subtype: "success",
+        usage: { input_tokens: 1, output_tokens: 1 },
+        modelUsage: {
+          "claude-mock": {
+            inputTokens: 1,
+            outputTokens: 1,
+            contextWindow: 200_000,
+          },
+        },
+      });
+      await waitFor(
+        () =>
+          getSession(created.id)?.backgroundTasks?.["agent-1"]?.status === "running"
+          && getSession(created.id)?.usage !== undefined,
+      );
+
+      expect(inputClosed).toBe(false);
+      expect(getSession(created.id)?.status).toBe("running");
+      expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(true);
+
+      call.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "agent-1",
+        status: "completed",
+        summary: "Review complete",
+      });
+      await waitFor(() => inputClosed);
+      expect(await inputCompletion).toEqual({ done: true, value: undefined });
+      expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
+      expect(events.flatMap((event) => {
+        const data = event.data as { completionBlockedByBackgroundTasks?: boolean };
+        return typeof data.completionBlockedByBackgroundTasks === "boolean"
+          ? [data.completionBlockedByBackgroundTasks]
+          : [];
+      })).toEqual([false, true, false]);
+      // The bridge remains authoritative until the provider stream itself ends.
+      expect(getSession(created.id)?.status).toBe("running");
+
+      call.finish();
+      await promptPromise;
+      expect(getSession(created.id)?.status).toBe("idle");
+    } finally {
+      stop();
+    }
+  });
+
+  test("does not let an aborted result handler reassert a hold or clobber a restart", async () => {
+    let resolveUsage!: (value: unknown) => void;
+    let usageRequestStarted = false;
+    queryControlOverrides.getContextUsage = mock(() => {
+      usageRequestStarted = true;
+      return new Promise<unknown>((resolve) => {
+        resolveUsage = resolve;
+      });
     });
+
+    const created = createSession("abort held result");
+    track(created.id);
+    const { events, stop } = captureEvents();
+    const firstPrompt = sendPrompt(created.id, "delegate then abort");
+    const firstCall = await nextQueryCall();
+    try {
+      firstCall.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "agent-aborted",
+        description: "Wait for usage",
+      });
+      firstCall.push({
+        type: "result",
+        subtype: "success",
+        modelUsage: {
+          "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
+        },
+      });
+      await waitFor(() => usageRequestStarted);
+
+      expect(abortSession(created.id)).toBe(true);
+      delete queryControlOverrides.getContextUsage;
+      const secondPrompt = sendPrompt(created.id, "restart immediately");
+      const secondCall = await nextQueryCall();
+
+      resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
+      await firstPrompt;
+
+      expect(getSession(created.id)?.status).toBe("running");
+      expect(getSession(created.id)?.abortController).toBe(secondCall.options.abortController);
+      expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
+      const abortedIdleIndex = events.findIndex((event) =>
+        event.type === "session.idle"
+        && (event.data as { aborted?: boolean }).aborted === true
+      );
+      expect(abortedIdleIndex).toBeGreaterThanOrEqual(0);
+      expect(events.slice(abortedIdleIndex + 1).some((event) =>
+        (event.data as { completionBlockedByBackgroundTasks?: boolean })
+          .completionBlockedByBackgroundTasks === true
+      )).toBe(false);
+
+      secondCall.push({ type: "result", subtype: "success" });
+      secondCall.finish();
+      await secondPrompt;
+      expect(getSession(created.id)?.status).toBe("idle");
+      expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
+    } finally {
+      stop();
+    }
+  });
+
+  test("clears an established completion hold when the provider stream fails", async () => {
+    const created = createSession("failed held result");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "delegate then fail");
+    const call = await nextQueryCall();
 
     call.push({
       type: "system",
       subtype: "task_started",
-      task_id: "agent-1",
-      description: "Review the bridge",
+      task_id: "agent-failed",
+      description: "Fail after result",
     });
     call.push({
       type: "result",
       subtype: "success",
       usage: { input_tokens: 1, output_tokens: 1 },
       modelUsage: {
-        "claude-mock": {
-          inputTokens: 1,
-          outputTokens: 1,
-          contextWindow: 200_000,
-        },
+        "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
       },
     });
-    await waitFor(
-      () =>
-        getSession(created.id)?.backgroundTasks?.["agent-1"]?.status === "running"
-        && getSession(created.id)?.usage !== undefined,
+    await waitFor(() =>
+      getSession(created.id)?.completionBlockedByBackgroundTasks === true
     );
 
-    expect(inputClosed).toBe(false);
-    expect(getSession(created.id)?.status).toBe("running");
-    expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(true);
-
-    call.push({
-      type: "system",
-      subtype: "task_notification",
-      task_id: "agent-1",
-      status: "completed",
-      summary: "Review complete",
-    });
-    await waitFor(() => inputClosed);
-    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.fail(new Error("provider stream disconnected"));
+    await expect(promptPromise).rejects.toThrow("provider stream disconnected");
+    expect(getSession(created.id)?.status).toBe("error");
     expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
-    // The bridge remains authoritative until the provider stream itself ends.
-    expect(getSession(created.id)?.status).toBe("running");
-
-    call.finish();
-    await promptPromise;
-    expect(getSession(created.id)?.status).toBe("idle");
   });
 
   test("keeps streaming input open when a Bash launch precedes delayed lifecycle events", async () => {

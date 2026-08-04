@@ -251,12 +251,14 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
       const agentThreadId = str(raw.agentThreadId);
       if (!agentThreadId) return { item: null, unsupportedType: type };
       const kind = raw.kind;
+      if (kind !== "started" && kind !== "interacted" && kind !== "interrupted") {
+        return { item: null, unsupportedType: type };
+      }
       return {
         item: {
           id,
           type: "subagent_activity",
-          activity:
-            kind === "interacted" ? "interacted" : kind === "interrupted" ? "interrupted" : "started",
+          activity: kind,
           agent_thread_id: agentThreadId,
           ...(str(raw.agentPath) ? { agent_path: str(raw.agentPath)! } : {}),
         },

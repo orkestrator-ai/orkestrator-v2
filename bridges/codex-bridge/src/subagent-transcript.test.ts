@@ -163,6 +163,17 @@ describe("exec transcript previews", () => {
     const source = `tools.write_file({content: "${"x".repeat(300_000)}{cmd: 'rm -rf /'}"});`;
     expect(extractExecCommandPreview(source)).toBeUndefined();
   });
+
+  test("truncates long literal bodies without leaving a dangling escape", () => {
+    const oddTrailingEscape = `${"a".repeat(2047)}\\q-tail`;
+    const evenTrailingEscapes = `${"a".repeat(2046)}\\\\tail`;
+
+    for (const body of [oddTrailingEscape, evenTrailingEscapes]) {
+      const preview = extractExecCommandPreview(`{cmd:'${body}'}`);
+      expect(preview).toHaveLength(200);
+      expect(preview?.endsWith("…")).toBe(true);
+    }
+  });
 });
 
 describe("normalizeTranscriptToolArgs exec previews", () => {
@@ -280,6 +291,121 @@ describe("reused child thread status", () => {
 
     expect(part?.toolState).toBe("pending");
     expect(part?.subagentActionCount).toBe(1);
+  });
+
+  test("keeps a reopened follow-up pending over a stale parent completion", () => {
+    const parentRecords: TranscriptRecord[] = [
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          call_id: "spawn",
+          arguments: "{}",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "wait_agent",
+          call_id: "wait",
+          arguments: "{}",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "wait",
+          output: JSON.stringify({ status: { agent: { completed: "First task done" } } }),
+        },
+      },
+    ];
+
+    const [part] = deriveSubagentPartsFromTranscriptRecords(
+      parentRecords,
+      new Map([["agent", followupRecords]]),
+      new Map([["spawn", "agent"]]),
+    );
+
+    expect(part?.toolState).toBe("pending");
+    expect(part?.subagentActionCount).toBe(1);
+
+    const failedParentRecords = [
+      ...parentRecords.slice(0, -1),
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "wait",
+          output: JSON.stringify({ status: { agent: { failed: "Follow-up failed" } } }),
+        },
+      } satisfies TranscriptRecord,
+    ];
+    const [failed] = deriveSubagentPartsFromTranscriptRecords(
+      failedParentRecords,
+      new Map([["agent", followupRecords]]),
+      new Map([["spawn", "agent"]]),
+    );
+    expect(failed?.toolState).toBe("failure");
+
+    const [childFailed] = deriveSubagentPartsFromTranscriptRecords(
+      parentRecords,
+      new Map([["agent", [
+        ...followupRecords,
+        { type: "event_msg", payload: { type: "task_failed" } },
+      ]]]),
+      new Map([["spawn", "agent"]]),
+    );
+    expect(childFailed?.toolState).toBe("failure");
+
+    const [childSucceeded] = deriveSubagentPartsFromTranscriptRecords(
+      failedParentRecords,
+      new Map([["agent", [
+        ...followupRecords,
+        {
+          type: "event_msg",
+          payload: { type: "agent_message", phase: "final_answer", message: "Done" },
+        },
+      ]]]),
+      new Map([["spawn", "agent"]]),
+    );
+    expect(childSucceeded?.toolState).toBe("success");
+  });
+
+  test("reopens independently for every active child-record shape", () => {
+    const activeRecords: TranscriptRecord[] = [
+      { type: "turn_context", payload: { turn_id: "turn-2" } },
+      { type: "event_msg", payload: { type: "task_started" } },
+      { type: "event_msg", payload: { type: "user_message", message: "More work" } },
+      {
+        type: "event_msg",
+        payload: { type: "agent_message", phase: "commentary", message: "Working" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "exec", call_id: "call", arguments: "{}" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "custom_tool_call", name: "exec", call_id: "call", input: "{}" },
+      },
+    ];
+
+    for (const activeRecord of activeRecords) {
+      expect(deriveSingleSubagent([firstFinal, activeRecord])?.toolState).toBe("pending");
+    }
+  });
+
+  test("reopens after task completion and explicit task failure", () => {
+    for (const terminalType of ["task_complete", "task_failed"] as const) {
+      const part = deriveSingleSubagent([
+        { type: "event_msg", payload: { type: terminalType } },
+        { type: "event_msg", payload: { type: "task_started" } },
+      ]);
+      expect(part?.toolState).toBe("pending");
+    }
   });
 
   test("finishes again only after the follow-up emits its terminal answer", () => {
@@ -488,6 +614,11 @@ describe("transcript tool output helpers", () => {
     expect(applyTranscriptToolOutput(part, "ambiguous", null)).toEqual({
       toolState: undefined,
       toolOutput: "ambiguous",
+      toolError: undefined,
+    });
+    expect(applyTranscriptToolOutput(part, "default unknown")).toEqual({
+      toolState: undefined,
+      toolOutput: "default unknown",
       toolError: undefined,
     });
   });
@@ -1722,6 +1853,14 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
       })),
       {
         type: "response_item",
+        payload: { type: "function_call", name: "wait_agent", arguments: "{}" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "list_agents", arguments: "{}" },
+      },
+      {
+        type: "response_item",
         payload: {
           type: "function_call_output",
           call_id: "not-a-wait-call",
@@ -1968,7 +2107,7 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
     ]);
   });
 
-  test("lets the latest terminal wait and list status win while ignoring later nonterminal refreshes", () => {
+  test("lets the latest wait and list observation supersede earlier status", () => {
     const spawn = (callId: string, agentId: string, agentPath?: string): TranscriptRecord[] => [
       {
         type: "response_item",
@@ -2051,7 +2190,7 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
       "wait-failure": "failure",
       "list-failure": "failure",
       "list-success": "success",
-      "list-sticky": "success",
+      "list-sticky": "pending",
     });
   });
 

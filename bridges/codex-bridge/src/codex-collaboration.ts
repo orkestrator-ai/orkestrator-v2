@@ -294,20 +294,18 @@ export function applyCodexCollabStateToSubagentParts(
   for (const item of lifecycleItems) {
     if (item.type === "subagent_activity") {
       const previous = latestByAgentId.get(item.agent_thread_id);
-      if (item.activity === "interacted") {
-        if (previous) {
-          latestByAgentId.set(item.agent_thread_id, {
-            ...previous,
-            state: undefined,
-          });
-        }
-        continue;
-      }
+      // Activity beats are lifecycle hints, not authoritative outcomes. A
+      // started beat can create a pending orphan row, but must not repaint a
+      // newer terminal transcript. Interactions without prior state are also
+      // ignored because send_message may not wake a completed child.
+      if (item.activity !== "started" && !previous) continue;
       latestByAgentId.set(item.agent_thread_id, {
         ...previous,
-        state: {
-          status: item.activity === "interrupted" ? "interrupted" : "running",
-        },
+        // Keep any final message so an earlier-turn agent does not lose its
+        // only transcript text when the old terminal status is invalidated.
+        state: previous?.state?.message !== undefined
+          ? { message: previous.state.message }
+          : undefined,
       });
       continue;
     }

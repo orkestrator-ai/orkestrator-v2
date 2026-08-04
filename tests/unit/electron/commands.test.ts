@@ -9974,8 +9974,11 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         },
       ],
       limitations: [],
-      context: null,
     });
+    // The context key is deliberately absent rather than null. The workflow
+    // supplies it, and a null is not a valid ReviewPackageContext — persisting
+    // one made the snapshot fail validation on its very next read.
+    expect(first).not.toHaveProperty("context");
     expect(first.completeDiff).toContain("diff --git a/review.txt b/review.txt");
     expect(first.completeDiff).toContain("GIT binary patch");
     expect(first.completeDiff).toMatch(/index [a-f0-9]{40}\.\.[a-f0-9]{40}/);

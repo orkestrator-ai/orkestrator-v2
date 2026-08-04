@@ -10,6 +10,8 @@ import {
   hashExecutable,
   parseArguments,
   parseFilters,
+  run,
+  selectArtifacts,
   validateDownloadUrl,
   verifyArtifact,
 } from "../../scripts/verify-toolchain-artifacts";
@@ -402,5 +404,164 @@ describe("verify-toolchain-artifacts", () => {
     expect(exitCode).not.toBe(0);
     expect(stdout).toBe("");
     expect(stderr).toContain("RUN_LIVE_TOOLCHAIN_ARTIFACTS=1");
+  });
+
+  describe("run", () => {
+    const liveEnv = { RUN_LIVE_TOOLCHAIN_ARTIFACTS: "1" };
+
+    function fixtureArtifacts(): ToolchainArtifact[] {
+      return [
+        testArtifact({ name: "codex", platform: "darwin", architecture: "arm64" }),
+        testArtifact({ name: "codex", platform: "linux", architecture: "x64" }),
+        testArtifact({ name: "opencode", platform: "darwin", architecture: "arm64" }),
+      ];
+    }
+
+    test("selects by each filter dimension and by all of them together", () => {
+      const artifacts = fixtureArtifacts();
+
+      expect(selectArtifacts({}, artifacts)).toHaveLength(3);
+      expect(selectArtifacts({ tool: "opencode" }, artifacts)).toHaveLength(1);
+      expect(selectArtifacts({ platform: "darwin" }, artifacts)).toHaveLength(2);
+      expect(selectArtifacts({ architecture: "x64" }, artifacts)).toHaveLength(1);
+      expect(
+        selectArtifacts(
+          { tool: "codex", platform: "darwin", architecture: "arm64" },
+          artifacts,
+        ),
+      ).toHaveLength(1);
+      expect(
+        selectArtifacts({ tool: "opencode", architecture: "x64" }, artifacts),
+      ).toHaveLength(0);
+    });
+
+    test("verifies every selected artifact into one scratch root and cleans it up", async () => {
+      const seen: Array<{ name: string; emit: boolean }> = [];
+      const roots = new Set<string>();
+      const logged: string[] = [];
+
+      await run({
+        argv: [],
+        env: liveEnv,
+        artifacts: fixtureArtifacts(),
+        verify: async (artifact, temporaryRoot, options) => {
+          seen.push({ name: artifact.name, emit: options.emit });
+          roots.add(temporaryRoot);
+        },
+        log: (message) => logged.push(message),
+      });
+
+      expect(seen).toHaveLength(3);
+      expect(seen.every((entry) => entry.emit === false)).toBe(true);
+      expect(roots.size).toBe(1);
+      expect(logged).toEqual(["Verified 3 pinned toolchain artifact(s)"]);
+      // The scratch root holds full release archives; leaving it behind would
+      // silently fill the disk across repeated runs.
+      expect(await Bun.file(join([...roots][0], "unused")).exists()).toBe(false);
+    });
+
+    test("passes --emit through and reports the paste-the-values summary", async () => {
+      const logged: string[] = [];
+      const emitFlags: boolean[] = [];
+
+      await run({
+        argv: ["--emit", "--tool=codex"],
+        env: liveEnv,
+        artifacts: fixtureArtifacts(),
+        verify: async (_artifact, _root, options) => {
+          emitFlags.push(options.emit);
+        },
+        log: (message) => logged.push(message),
+      });
+
+      expect(emitFlags).toEqual([true, true]);
+      expect(logged).toEqual([
+        "Hashed 2 artifact(s); paste the values into toolchain-manifest.ts",
+      ]);
+    });
+
+    test("removes the scratch root even when an artifact fails mid-run", async () => {
+      let capturedRoot = "";
+      const attempted: string[] = [];
+
+      await expect(
+        run({
+          argv: [],
+          env: liveEnv,
+          artifacts: fixtureArtifacts(),
+          verify: async (artifact, temporaryRoot) => {
+            capturedRoot = temporaryRoot;
+            attempted.push(artifact.platform);
+            if (attempted.length === 2) throw new Error("codex executable digest mismatch");
+          },
+          log: () => {},
+        }),
+      ).rejects.toThrow("codex executable digest mismatch");
+
+      // Aborted before the third artifact, and the scratch root is still gone.
+      expect(attempted).toHaveLength(2);
+      expect(await Bun.file(join(capturedRoot, "unused")).exists()).toBe(false);
+    });
+
+    test("refuses to run without the explicit live guard, before any download", async () => {
+      let verified = 0;
+
+      await expect(
+        run({
+          argv: [],
+          env: {},
+          artifacts: fixtureArtifacts(),
+          verify: async () => {
+            verified += 1;
+          },
+        }),
+      ).rejects.toThrow("RUN_LIVE_TOOLCHAIN_ARTIFACTS=1");
+
+      expect(verified).toBe(0);
+    });
+
+    test("rejects an unknown filter instead of silently verifying everything", async () => {
+      let verified = 0;
+
+      await expect(
+        run({
+          argv: ["--tool=rust-analyzer"],
+          env: liveEnv,
+          artifacts: fixtureArtifacts(),
+          verify: async () => {
+            verified += 1;
+          },
+        }),
+      ).rejects.toThrow("Unknown filter --tool=rust-analyzer");
+
+      expect(verified).toBe(0);
+    });
+
+    test("fails loudly when a filter combination matches nothing", async () => {
+      await expect(
+        run({
+          argv: ["--tool=claude"],
+          env: liveEnv,
+          artifacts: fixtureArtifacts(),
+          verify: async () => {},
+        }),
+      ).rejects.toThrow("No artifacts matched the filters");
+    });
+
+    test("the real manifest exposes every filter combination the CLI accepts", () => {
+      // Guards the pairing between parseFilters' accepted values and the shipped
+      // manifest: a tool/platform/arch the CLI accepts but the manifest lacks
+      // would only surface as "No artifacts matched the filters" at upgrade time.
+      for (const tool of ["claude", "codex", "opencode"] as const) {
+        for (const platform of ["darwin", "linux"] as const) {
+          for (const architecture of ["arm64", "x64"] as const) {
+            expect(
+              selectArtifacts({ tool, platform, architecture }),
+              `${tool}:${platform}:${architecture} is missing from the manifest`,
+            ).toHaveLength(1);
+          }
+        }
+      }
+    });
   });
 });

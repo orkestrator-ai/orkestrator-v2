@@ -337,6 +337,66 @@ export function dropEmptyThinkingParts(
 }
 
 /**
+ * Whether a normalized message renders any visible content.
+ *
+ * A provider can materialize an assistant message from message-level metadata
+ * alone (OpenCode's `message.updated` info payload) before any parts stream in.
+ * Such a block has nothing to attribute, so the model label would flicker or
+ * duplicate once the real content lands in a sibling message. Attribution
+ * therefore only applies to messages this helper says carry content.
+ */
+export function messageHasVisibleContent(message: NativeMessage): boolean {
+  if (message.content.trim().length > 0) return true;
+  return message.parts.some((part) => {
+    switch (part.type) {
+      case "text":
+      case "thinking":
+        return part.content.trim().length > 0;
+      // Tool results are rendered inline with their invocation, never on their
+      // own, so a message holding only results is still an empty block.
+      case "tool-result":
+        return false;
+      // Both group renderers bail out on an empty child list, so an empty group
+      // is as invisible as no part at all. `groupNativeToolActivity` leaves an
+      // existing `tool-group` untouched, so normalization cannot be relied on to
+      // remove one first.
+      case "tool-group":
+      case "agent-group":
+        return part.parts.length > 0;
+      default:
+        return true;
+    }
+  });
+}
+
+/**
+ * The effective predecessor for block-level continuity.
+ *
+ * Empty assistant messages (an info-only `message.updated` before any parts
+ * stream) contribute nothing to attribution, duration, or continuation, so
+ * they are skipped when picking the message a row should compare itself
+ * against. Without this a `user → empty → content` sequence would lose the
+ * response duration (the content row would think it follows an assistant, not
+ * the user), and a `content → empty → content` block would repeat the model
+ * label because the immediate predecessor appears content-less. Non-assistant
+ * predecessors and content-bearing assistants are returned as-is.
+ */
+export function findPreviousNativeMessage<TMessage extends NativeMessage>(
+  messages: readonly TMessage[],
+  index: number,
+): TMessage | null {
+  for (let i = index - 1; i >= 0; i--) {
+    const candidate = messages[i];
+    if (!candidate) continue;
+    if (candidate.role === "assistant" && !messageHasVisibleContent(candidate)) {
+      continue;
+    }
+    return candidate;
+  }
+  return null;
+}
+
+/**
  * Identity cache for normalized messages.
  *
  * `normalizeNativeMessage` is pure in its input object, but the transcript

@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AgentRadioGroup } from "@/components/agents/AgentRadioGroup";
+import { OpenCodeModelSelect } from "@/components/opencode/OpenCodeModelSelect";
 import {
   defaultEffortFor,
   effortLabel,
@@ -124,7 +125,13 @@ interface ReviewLaunchDialogProps {
   catalog: ReviewModelCatalog;
   preferredModels?: Partial<Record<ReviewAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<ReviewAgent, string>>;
+  /**
+   * OpenCode `provider/model` ids pinned as favorites in the OpenCode TUI.
+   * Rendered first in the searchable OpenCode model list.
+   */
+  opencodeFavoriteModelIds?: string[];
   kind?: "review" | "looped";
+  busy?: boolean;
   onConfirm: (selection: ReviewLaunchSelection) => void;
 }
 
@@ -135,7 +142,9 @@ export function ReviewLaunchDialog({
   catalog,
   preferredModels,
   preferredReasoningEfforts,
+  opencodeFavoriteModelIds,
   kind = "review",
+  busy = false,
   onConfirm,
 }: ReviewLaunchDialogProps) {
   const initialModel = firstModelFor(
@@ -242,7 +251,12 @@ export function ReviewLaunchDialog({
     : "Configure code review";
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!busy) onOpenChange(nextOpen);
+      }}
+    >
       <DialogContent className="flex w-[min(calc(100%-1rem),38rem)] flex-col gap-0 overflow-hidden border-zinc-700/80 bg-[#111113] p-0 sm:max-w-[38rem]">
         <DialogHeader className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-cyan-500/[0.08] via-transparent to-transparent px-5 pb-4 pt-5 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-base">
@@ -262,8 +276,10 @@ export function ReviewLaunchDialog({
 
         <form
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          aria-busy={busy}
           onSubmit={(event) => {
             event.preventDefault();
+            if (busy) return;
             onConfirm({
               tabType,
               model: selectedModel?.id ?? model,
@@ -275,12 +291,16 @@ export function ReviewLaunchDialog({
             });
           }}
         >
-          <div
-            role="region"
-            aria-label="Review configuration"
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6"
+          <fieldset
+            disabled={busy}
+            className="flex min-h-0 flex-1 flex-col border-0 p-0"
           >
-            <Step number={1} icon={<Bot className="size-4" />}>
+            <div
+              role="region"
+              aria-label="Review configuration"
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6"
+            >
+              <Step number={1} icon={<Bot className="size-4" />}>
               <Label className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
                 Native agent
               </Label>
@@ -290,48 +310,61 @@ export function ReviewLaunchDialog({
                 label="Review provider"
                 descriptions={REVIEW_AGENT_DESCRIPTIONS}
               />
-            </Step>
+              </Step>
 
-            <Step number={2} icon={<Bot className="size-4" />}>
+              <Step number={2} icon={<Bot className="size-4" />}>
               <Label htmlFor="review-model" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
                 Model
               </Label>
-              <Select value={selectedModel?.id ?? model} onValueChange={handleModelChange}>
-                <SelectTrigger
+              {agent === "opencode" ? (
+                <OpenCodeModelSelect
                   id="review-model"
-                  className="min-h-11 w-full border-zinc-700/80 bg-zinc-900 py-2.5 data-[size=default]:h-auto"
-                >
-                  <span className="flex min-w-0 flex-1 flex-col text-left">
-                    <span className="truncate text-sm">{selectedModel?.name ?? "Choose a model"}</span>
-                    {selectedModel?.description && (
-                      <span className="truncate text-[11px] font-normal text-zinc-500">
-                        {selectedModel.description}
-                      </span>
-                    )}
-                  </span>
-                </SelectTrigger>
-                <SelectContent position="popper" className="max-h-72">
-                  {models.map((option) => (
-                    <SelectItem key={option.id} value={option.id} className="py-2">
-                      <span>
-                        <span className="block">{option.name}</span>
-                        {option.description && (
-                          <span className="block max-w-[28rem] truncate text-[11px] text-zinc-500">
-                            {option.description}
-                          </span>
-                        )}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  value={selectedModel?.id ?? model}
+                  options={models}
+                  favoriteModelIds={opencodeFavoriteModelIds ?? []}
+                  onValueChange={handleModelChange}
+                  showDescriptionInTrigger
+                  emptyLabel="Choose a model"
+                  className="min-h-11"
+                />
+              ) : (
+                <Select value={selectedModel?.id ?? model} onValueChange={handleModelChange}>
+                  <SelectTrigger
+                    id="review-model"
+                    className="min-h-11 w-full border-zinc-700/80 bg-zinc-900 py-2.5 data-[size=default]:h-auto"
+                  >
+                    <span className="flex min-w-0 flex-1 flex-col text-left">
+                      <span className="truncate text-sm">{selectedModel?.name ?? "Choose a model"}</span>
+                      {selectedModel?.description && (
+                        <span className="truncate text-[11px] font-normal text-zinc-500">
+                          {selectedModel.description}
+                        </span>
+                      )}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent position="popper" className="max-h-72">
+                    {models.map((option) => (
+                      <SelectItem key={option.id} value={option.id} className="py-2">
+                        <span>
+                          <span className="block">{option.name}</span>
+                          {option.description && (
+                            <span className="block max-w-[28rem] truncate text-[11px] text-zinc-500">
+                              {option.description}
+                            </span>
+                          )}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </Step>
 
-            <Step
-              number={3}
-              icon={<BrainCircuit className="size-4" />}
-              last={kind !== "looped"}
-            >
+              <Step
+                number={3}
+                icon={<BrainCircuit className="size-4" />}
+                last={kind !== "looped"}
+              >
               <Label htmlFor="review-effort" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
                 Reasoning effort
               </Label>
@@ -357,10 +390,10 @@ export function ReviewLaunchDialog({
                   This model uses its default reasoning setting.
                 </p>
               )}
-            </Step>
+              </Step>
 
-            {kind === "looped" && (
-              <Step number={4} icon={<Layers3 className="size-4" />} last>
+              {kind === "looped" && (
+                <Step number={4} icon={<Layers3 className="size-4" />} last>
                 <Label htmlFor="review-pass-allowance" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
                   Initial review-pass allowance
                 </Label>
@@ -380,22 +413,30 @@ export function ReviewLaunchDialog({
                 <p className="mt-1.5 text-xs leading-relaxed text-zinc-500">
                   A round stops early when reconciliation changes nothing. After fixes, the next allowance is halved and rounded up.
                 </p>
-              </Step>
-            )}
+                </Step>
+              )}
 
-            <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
-              <span className="text-zinc-500">Launch:</span> {summary}
+              <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
+                <span className="text-zinc-500">Launch:</span> {summary}
+              </div>
             </div>
-          </div>
 
-          <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit">
-              {kind === "looped" ? "Start looped review" : "Start review"}
-            </Button>
-          </DialogFooter>
+            <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => onOpenChange(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={busy}>
+                {busy
+                  ? kind === "looped" ? "Starting looped review…" : "Starting review…"
+                  : kind === "looped" ? "Start looped review" : "Start review"}
+              </Button>
+            </DialogFooter>
+          </fieldset>
         </form>
       </DialogContent>
     </Dialog>

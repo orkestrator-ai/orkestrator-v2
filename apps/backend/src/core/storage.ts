@@ -3301,6 +3301,18 @@ export class StorageService {
       .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
   }
 
+  /** Backend supervisors must restore work even when no renderer is mounted. */
+  async listAllLoopedReviewWorkflows(): Promise<PersistedLoopedReviewWorkflow[]> {
+    const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+      this.loopedReviewsFile(),
+      () => ({}),
+    );
+    return Object.entries(workflows)
+      .filter(([workflowId, workflow]) => isPersistedLoopedReviewWorkflow(workflow, workflowId))
+      .map(([, workflow]) => workflow)
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  }
+
   async saveLoopedReviewWorkflow(
     workflowId: string,
     environmentId: string,
@@ -3308,6 +3320,15 @@ export class StorageService {
     snapshot: unknown,
     expectedRevision?: number,
     controllerFence?: { ownerId: string; token: string },
+    options?: {
+      /**
+       * Rejects the write when the *stored* record has already reached this
+       * version. Evaluated inside the mutation queue so it cannot be overtaken
+       * by a concurrent backend adoption between the caller's read and its
+       * write, which a caller-side check inevitably can be.
+       */
+      rejectStoredVersionAtLeast?: number;
+    },
   ): Promise<PersistedLoopedReviewWorkflow> {
     if (!isNonBlankString(workflowId)) {
       throw new Error("Looped review workflow ID must not be blank");
@@ -3364,6 +3385,10 @@ export class StorageService {
       const previous = workflows[workflowId];
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Looped review workflow belongs to another environment");
+      }
+      if (options?.rejectStoredVersionAtLeast !== undefined
+        && (previous?.version ?? 0) >= options.rejectStoredVersionAtLeast) {
+        throw new Error("Backend-owned looped reviews can only be changed through workflow commands");
       }
       if (controllerFence) {
         const lease = previous?.controllerLease;
@@ -3433,12 +3458,23 @@ export class StorageService {
           expiresAt: workflow.controllerLease.expiresAt,
         };
       }
-      const token =
+      const heldLease =
         workflow.controllerLease?.ownerId === ownerId
         && currentExpiry > now
         && isNonBlankString(workflow.controllerLease.token)
-          ? workflow.controllerLease.token
-          : randomUUID();
+          ? workflow.controllerLease
+          : null;
+      // Re-granting an unexpired lease to its own holder is the overwhelmingly
+      // common path: every advance claims before it reads, and the poll runs
+      // once a second for every non-terminal workflow — including ones merely
+      // paused or failed. Writing here would rewrite the whole looped-review
+      // file (and rotate five backups of it) each time, and these snapshots
+      // legitimately hold complete diffs and file contents. Only pay for the
+      // write once the lease is actually close to expiring.
+      if (heldLease && currentExpiry - now >= leaseMs / 2) {
+        return { granted: true, token: heldLease.token, expiresAt: heldLease.expiresAt };
+      }
+      const token = heldLease ? heldLease.token : randomUUID();
       const expiresAt = new Date(now + leaseMs).toISOString();
       workflows[workflowId] = {
         ...workflow,

@@ -8,7 +8,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BINARIES_DIR="$PROJECT_ROOT/binaries"
 
 # Codex CLI version to bundle — must match config/codex-version.json.
-CODEX_VERSION="0.145.0"
+CODEX_VERSION="0.146.0"
 
 # Detect architecture
 ARCH=$(uname -m)

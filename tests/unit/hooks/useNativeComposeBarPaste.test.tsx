@@ -78,6 +78,8 @@ function HookHarness(props: {
   containerId: string | null;
   worktreePath?: string | null;
   onAttach?: typeof onAttach;
+  canAttachImage?: (attachment: { type: "image"; name: string }) => boolean;
+  onImageRejected?: () => void;
   logLabel?: string;
   contentEditable?: boolean;
 }) {
@@ -87,6 +89,8 @@ function HookHarness(props: {
     containerId: props.containerId,
     worktreePath: props.worktreePath,
     onAttach: props.onAttach ?? onAttach,
+    canAttachImage: props.canAttachImage,
+    onImageRejected: props.onImageRejected,
     logLabel: props.logLabel ?? "HookHarness",
   });
 
@@ -723,5 +727,271 @@ describe("useNativeComposeBarPaste", () => {
     expect(mockWriteContainerFile).not.toHaveBeenCalled();
     expect(onAttach).not.toHaveBeenCalled();
     expect(toastError).not.toHaveBeenCalled();
+  });
+
+  describe("canAttachImage gate", () => {
+    /**
+     * An Electron paste whose DOM event carries text but no image item, so the
+     * hook claims the paste, reads the image from the native clipboard, and
+     * holds a text fallback it must hand back if it bails out.
+     */
+    function electronPasteWithText(text = " pasted "): Event {
+      window.orkestratorGateway = { enabled: true, desktop: true };
+      const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(pasteEvent, "clipboardData", {
+        value: {
+          items: [],
+          files: [],
+          getData: (type: string) => (type === "text/plain" ? text : ""),
+        },
+      });
+      return pasteEvent;
+    }
+
+    test("refuses the paste before writing the file", async () => {
+      const canAttachImage = mock(() => false);
+      const onImageRejected = mock(() => {});
+
+      const { getByTestId } = render(
+        <HookHarness
+          containerId="container-1"
+          canAttachImage={canAttachImage}
+          onImageRejected={onImageRejected}
+        />,
+      );
+      setActiveElement(getByTestId("compose-input"));
+
+      document.dispatchEvent(
+        new Event("paste", { bubbles: true, cancelable: true }),
+      );
+
+      await waitFor(() => expect(onImageRejected).toHaveBeenCalledTimes(1));
+      expect(mockWriteContainerFile).not.toHaveBeenCalled();
+      expect(mockWriteLocalFile).not.toHaveBeenCalled();
+      expect(onAttach).not.toHaveBeenCalled();
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    test("refuses a local-worktree paste without writing the file", async () => {
+      const onImageRejected = mock(() => {});
+
+      const { getByTestId } = render(
+        <HookHarness
+          containerId={null}
+          worktreePath="/tmp/worktrees/env"
+          canAttachImage={() => false}
+          onImageRejected={onImageRejected}
+        />,
+      );
+      setActiveElement(getByTestId("compose-input"));
+
+      document.dispatchEvent(
+        new Event("paste", { bubbles: true, cancelable: true }),
+      );
+
+      await waitFor(() => expect(onImageRejected).toHaveBeenCalledTimes(1));
+      expect(mockWriteLocalFile).not.toHaveBeenCalled();
+      expect(onAttach).not.toHaveBeenCalled();
+    });
+
+    test("writes and attaches when the gate allows the image", async () => {
+      const onImageRejected = mock(() => {});
+
+      const { getByTestId } = render(
+        <HookHarness
+          containerId="container-1"
+          canAttachImage={() => true}
+          onImageRejected={onImageRejected}
+        />,
+      );
+      setActiveElement(getByTestId("compose-input"));
+
+      document.dispatchEvent(
+        new Event("paste", { bubbles: true, cancelable: true }),
+      );
+
+      await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
+      expect(mockWriteContainerFile).toHaveBeenCalledTimes(1);
+      expect(onImageRejected).not.toHaveBeenCalled();
+      expect(onAttach.mock.calls[0]?.[0]).toMatchObject({
+        path: expect.stringContaining("/workspace/.orkestrator/clipboard/"),
+      });
+    });
+
+    test("shows the gate the generated filename and nothing that needs the write", async () => {
+      const canAttachImage = mock(() => true);
+
+      const { getByTestId } = render(
+        <HookHarness containerId="container-1" canAttachImage={canAttachImage} />,
+      );
+      setActiveElement(getByTestId("compose-input"));
+
+      document.dispatchEvent(
+        new Event("paste", { bubbles: true, cancelable: true }),
+      );
+
+      await waitFor(() => expect(canAttachImage).toHaveBeenCalledTimes(1));
+      const seen = canAttachImage.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+      // No `path` or `id`: neither exists yet at gate time, so the descriptor
+      // must not tempt callers into reading a value the attachment won't carry.
+      expect(seen).toEqual({
+        type: "image",
+        name: expect.stringMatching(/^clipboard-.*\.png$/),
+      });
+      // The name the gate saw is the name the attachment ends up with.
+      await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
+      expect(onAttach.mock.calls[0]?.[0].name).toBe(seen.name);
+    });
+
+    test("is not consulted when the caller provides no gate", async () => {
+      const { getByTestId } = render(<HookHarness containerId="container-1" />);
+      setActiveElement(getByTestId("compose-input"));
+
+      document.dispatchEvent(
+        new Event("paste", { bubbles: true, cancelable: true }),
+      );
+
+      await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
+      expect(mockWriteContainerFile).toHaveBeenCalledTimes(1);
+    });
+
+    test("refuses without an onImageRejected callback", async () => {
+      const { getByTestId } = render(
+        <HookHarness containerId="container-1" canAttachImage={() => false} />,
+      );
+      setActiveElement(getByTestId("compose-input"));
+
+      document.dispatchEvent(
+        new Event("paste", { bubbles: true, cancelable: true }),
+      );
+
+      await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(mockWriteContainerFile).not.toHaveBeenCalled();
+      expect(onAttach).not.toHaveBeenCalled();
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    test("restores the Electron text fallback when the gate refuses", async () => {
+      const onImageRejected = mock(() => {});
+      const pasteEvent = electronPasteWithText();
+
+      const { getByTestId } = render(
+        <HookHarness
+          containerId="container-1"
+          canAttachImage={() => false}
+          onImageRejected={onImageRejected}
+        />,
+      );
+      const input = getByTestId("compose-input") as HTMLTextAreaElement;
+      input.value = "helloworld";
+      input.setSelectionRange(5, 5);
+      const inputEvent = mock(() => {});
+      input.addEventListener("input", inputEvent);
+      setActiveElement(input);
+
+      document.dispatchEvent(pasteEvent);
+
+      // The hook claimed the paste, so refusing the image must not also
+      // swallow the text the user pasted alongside it.
+      expect(pasteEvent.defaultPrevented).toBe(true);
+      await waitFor(() => expect(input.value).toBe("hello pasted world"));
+      // Restored exactly once — a second restore would duplicate the text.
+      expect(inputEvent).toHaveBeenCalledTimes(1);
+      expect(onImageRejected).toHaveBeenCalledTimes(1);
+      expect(mockWriteContainerFile).not.toHaveBeenCalled();
+      expect(onAttach).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("restores the Electron text fallback on every claimed bail-out", () => {
+    function renderElectronPaste(
+      props: Parameters<typeof HookHarness>[0],
+    ): { input: HTMLTextAreaElement; pasteEvent: Event } {
+      window.orkestratorGateway = { enabled: true, desktop: true };
+      const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(pasteEvent, "clipboardData", {
+        value: {
+          items: [],
+          files: [],
+          getData: (type: string) => (type === "text/plain" ? " pasted " : ""),
+        },
+      });
+
+      const { getByTestId } = render(<HookHarness {...props} />);
+      const input = getByTestId("compose-input") as HTMLTextAreaElement;
+      input.value = "helloworld";
+      input.setSelectionRange(5, 5);
+      setActiveElement(input);
+      return { input, pasteEvent };
+    }
+
+    test("when the canvas context is unavailable", async () => {
+      HTMLCanvasElement.prototype.getContext = (() =>
+        null) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+      const { input, pasteEvent } = renderElectronPaste({ containerId: "container-1" });
+
+      document.dispatchEvent(pasteEvent);
+
+      await waitFor(() => expect(input.value).toBe("hello pasted world"));
+      expect(mockWriteContainerFile).not.toHaveBeenCalled();
+      expect(onAttach).not.toHaveBeenCalled();
+    });
+
+    test("when the encoded image exceeds the size limit", async () => {
+      HTMLCanvasElement.prototype.toDataURL = (() =>
+        `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`) as typeof HTMLCanvasElement.prototype.toDataURL;
+      const { input, pasteEvent } = renderElectronPaste({ containerId: "container-1" });
+
+      document.dispatchEvent(pasteEvent);
+
+      await waitFor(() => expect(input.value).toBe("hello pasted world"));
+      await waitFor(() =>
+        expect(toastError).toHaveBeenCalledWith(
+          "Image too large",
+          expect.objectContaining({
+            description: expect.stringContaining("could not be resized below the 8MB"),
+          }),
+        ),
+      );
+      expect(onAttach).not.toHaveBeenCalled();
+    });
+
+    test("when the environment has no save target", async () => {
+      const { input, pasteEvent } = renderElectronPaste({
+        containerId: null,
+        worktreePath: null,
+      });
+
+      document.dispatchEvent(pasteEvent);
+
+      await waitFor(() => expect(input.value).toBe("hello pasted world"));
+      await waitFor(() =>
+        expect(toastError).toHaveBeenCalledWith(
+          "Cannot save image",
+          expect.objectContaining({
+            description: "Environment not properly configured for attachments",
+          }),
+        ),
+      );
+      expect(onAttach).not.toHaveBeenCalled();
+    });
+
+    test("when the write throws", async () => {
+      const writeError = new Error("disk full");
+      mockWriteContainerFile.mockImplementation(async () => {
+        throw writeError;
+      });
+      const { input, pasteEvent } = renderElectronPaste({ containerId: "container-1" });
+
+      document.dispatchEvent(pasteEvent);
+
+      await waitFor(() => expect(input.value).toBe("hello pasted world"));
+      expect(consoleError).toHaveBeenCalledWith(
+        "[HookHarness] Unexpected paste error:",
+        writeError,
+      );
+      expect(onAttach).not.toHaveBeenCalled();
+    });
   });
 });

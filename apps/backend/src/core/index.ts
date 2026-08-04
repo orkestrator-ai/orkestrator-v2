@@ -18,6 +18,7 @@ import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import { NativeAgentService } from "./native-agent-service.js";
+import { LoopedReviewService } from "./looped-review-service.js";
 import {
   ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS,
   EnvironmentLifecycleTaskTracker,
@@ -29,6 +30,7 @@ export class OrkestratorBackend {
   private readonly context: CommandContext;
   private readonly buildPipelines: BuildPipelineService;
   private readonly nativeAgents: NativeAgentService;
+  private readonly loopedReviews: LoopedReviewService;
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private shuttingDown = false;
@@ -119,6 +121,20 @@ export class OrkestratorBackend {
       },
     );
     context.buildPipelines = this.buildPipelines;
+    this.loopedReviews = new LoopedReviewService(
+      storage,
+      async <T>(command: string, args: Record<string, unknown> = {}) => {
+        const handler = this.commands.get(command);
+        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        return await handler(args, context) as T;
+      },
+      {
+        onInteractionObservation: (event) => {
+          this.nativeAgents.recordProviderInteractionObservation(event);
+        },
+      },
+    );
+    context.loopedReviews = this.loopedReviews;
     this.reapPidServers =
       options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =
@@ -196,6 +212,9 @@ export class OrkestratorBackend {
     await this.buildPipelines.init().catch((error) => {
       console.warn("[backend] Failed to restore build pipelines:", error);
     });
+    await this.loopedReviews.init().catch((error) => {
+      console.warn("[backend] Failed to restore looped reviews:", error);
+    });
     await this.nativeAgents.init().catch((error) => {
       console.warn("[backend] Failed to restore native agent launches:", error);
     });
@@ -270,6 +289,11 @@ export class OrkestratorBackend {
           await this.buildPipelines.shutdown();
         } catch (error) {
           console.warn("[backend] Failed to drain build pipelines:", error);
+        }
+        try {
+          await this.loopedReviews.shutdown();
+        } catch (error) {
+          console.warn("[backend] Failed to drain looped reviews:", error);
         }
         await lifecycleDrain;
         await shutdownLocalServers({

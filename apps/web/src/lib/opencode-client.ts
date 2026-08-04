@@ -47,6 +47,12 @@ export interface OpenCodeModel {
   /** Output cost per token (0 means free) */
   outputCost?: number;
   contextWindow?: number;
+  /**
+   * Whether the model accepts image input. Mirrors the SDK's
+   * `capabilities.input.image`; `undefined` means the catalog did not report
+   * it (assume the model may read images rather than blocking the attach).
+   */
+  supportsImageInput?: boolean;
 }
 
 export interface OpenCodeModelDefaults {
@@ -1092,10 +1098,13 @@ export function getOpenCodePartKey(part: OpenCodeMessagePart): string | null {
  * no content but a text `delta`, the delta is appended to the existing part's
  * content (incremental text streaming). The aggregate `content` is recomputed
  * from all text parts. Role/createdAt are preserved from the existing message,
- * defaulting to an assistant message created now.
+ * defaulting to an assistant message created now. `existing` is partial so a
+ * caller that only knows the echo's role/createdAt (e.g. a streamed part that
+ * arrived before its `message.updated`) can seed the message without supplying
+ * the parts it will be built from.
  */
 export function buildOpenCodeMessageFromPart(
-  existing: OpenCodeMessage | undefined,
+  existing: Partial<OpenCodeMessage> | undefined,
   messageId: string,
   part: OpenCodeMessagePart,
   delta?: string,
@@ -1320,6 +1329,15 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
           const outputCost = m.cost?.output ?? m.outputCost ?? m.output_cost;
           const contextWindow = m.limit?.context ?? m.contextWindow ?? m.context_window;
 
+          // Image input support lives under capabilities.input.image on the
+          // provider catalog. The server rejects image attachments to models
+          // without it, so surface it on the model so the compose bar can warn
+          // before the send instead of surfacing the server's raw error.
+          const supportsImageInput =
+            typeof m.capabilities?.input?.image === "boolean"
+              ? m.capabilities.input.image
+              : undefined;
+
           // Variants are provider/model specific (e.g. low/high/xhigh)
           // Response shape: variants: { [variantName]: { disabled?: boolean, ... } }
           const variantEntries = m.variants && typeof m.variants === "object"
@@ -1358,6 +1376,7 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
               && contextWindow > 0
                 ? contextWindow
                 : undefined,
+            supportsImageInput,
           });
         }
       }

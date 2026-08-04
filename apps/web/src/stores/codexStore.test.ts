@@ -269,6 +269,63 @@ describe("codexStore message helpers", () => {
     expect(messages[0]?.id).toBe("server-2");
   });
 
+  test("setMessages drops an optimistic prompt whose attachment url the bridge rewrote", () => {
+    // The client percent-encodes the optimistic url with encodeURI while the
+    // Codex bridge emits `file://${path}` raw, so any path needing escaping
+    // never matched while fileUrl was part of the fingerprint. The filename
+    // carries the match now.
+    const store = useCodexStore.getState();
+    const optimistic = createOptimisticNativeMessage("optimistic-rewritten", "Check it", [
+      { path: "/work space/a b.png", name: "a b.png" },
+    ]);
+
+    store.addMessage(SESSION_KEY, optimistic);
+    expect(optimistic.parts[1]?.fileUrl).toBe("file:///work%20space/a%20b.png");
+
+    store.setMessages(SESSION_KEY, [
+      {
+        id: "server-rewritten",
+        role: "user",
+        content: "Check it",
+        parts: [
+          { type: "text", content: "Check it" },
+          { type: "file", content: "a b.png", fileUrl: "file:///work space/a b.png" },
+        ],
+        createdAt: "2026-04-15T10:00:02.000Z",
+      },
+    ]);
+
+    const messages = useCodexStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
+    expect(messages.map((message) => message.id)).toEqual(["server-rewritten"]);
+  });
+
+  test("setMessages drops an optimistic prompt against a same-named file in another directory", () => {
+    // Known collision from excluding fileUrl — Codex shares the fingerprint,
+    // and surfaces attachments by bare basename, so pin it here too.
+    const store = useCodexStore.getState();
+    const optimistic = createOptimisticNativeMessage("optimistic-basename", "Check it", [
+      { path: "/one/logo.png", name: "logo.png" },
+    ]);
+
+    store.addMessage(SESSION_KEY, optimistic);
+
+    store.setMessages(SESSION_KEY, [
+      {
+        id: "server-basename",
+        role: "user",
+        content: "Check it",
+        parts: [
+          { type: "text", content: "Check it" },
+          { type: "file", content: "logo.png", fileUrl: "file:///two/logo.png" },
+        ],
+        createdAt: "2026-04-15T10:00:02.000Z",
+      },
+    ]);
+
+    const messages = useCodexStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
+    expect(messages.map((message) => message.id)).toEqual(["server-basename"]);
+  });
+
   test("settles an unconfirmed dispatch as confirmed when the transcript echoes it", () => {
     const store = useCodexStore.getState();
     const optimistic = createOptimisticNativeMessage(

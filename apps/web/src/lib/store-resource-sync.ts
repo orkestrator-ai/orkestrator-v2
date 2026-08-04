@@ -18,8 +18,8 @@ import {
   reconcileAuthoritativePaneLayout,
 } from "@/lib/pane-layout-authoritative";
 import {
-  hydrateLoopedReviewWorkflow,
   hydrateLoopedReviewWorkflowsForEnvironment,
+  resolveLoopedReviewWorkflow,
 } from "@/lib/looped-review-persistence";
 import {
   hydrateBuildPipeline,
@@ -512,12 +512,28 @@ export function startStoreResourceSync(
   unsubscribes.push(onResourceChanged("looped-review", ({ id: workflowId }) => {
     // hydrate compares backend revisions against the local snapshot, so a
     // workflow this client is actively driving is not clobbered by its own echo.
-    void hydrateLoopedReviewWorkflow(workflowId).catch((error) => {
-      console.warn(
-        `[store-resource-sync] Failed to refresh looped review ${workflowId}:`,
-        error,
-      );
-    });
+    void resolveLoopedReviewWorkflow(workflowId)
+      .then((result) => {
+        // Only an authoritative "no such record" removes the projection. A
+        // snapshot this bundle cannot read still exists and is very likely
+        // still being advanced, so dropping it would delete the user's tab
+        // over a version skew.
+        if (result.status === "missing") {
+          useLoopedReviewStore.getState().removeWorkflow(workflowId);
+          return;
+        }
+        if (result.status === "unreadable") {
+          console.warn(
+            `[store-resource-sync] Keeping looped review ${workflowId}: its snapshot could not be read`,
+          );
+        }
+      })
+      .catch((error) => {
+        console.warn(
+          `[store-resource-sync] Failed to refresh looped review ${workflowId}:`,
+          error,
+        );
+      });
   }));
 
   return () => {

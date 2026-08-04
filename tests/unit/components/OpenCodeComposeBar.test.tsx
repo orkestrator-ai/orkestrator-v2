@@ -299,6 +299,39 @@ const defaultModels: OpenCodeModel[] = [
   { id: "gpt-5", name: "GPT-5", provider: "openai", variants: ["low", "high"] },
 ];
 
+// `undefined` capability is the "catalog did not say" case and must stay
+// distinct from an explicit `false`.
+const VISION_MODEL: OpenCodeModel = {
+  id: "vision-model",
+  name: "Vision Model",
+  provider: "acme",
+  supportsImageInput: true,
+};
+const NON_VISION_MODEL: OpenCodeModel = {
+  id: "text-only-model",
+  name: "Text Only Model",
+  provider: "acme",
+  supportsImageInput: false,
+};
+const UNKNOWN_CAPABILITY_MODEL: OpenCodeModel = {
+  id: "unknown-capability-model",
+  name: "Unknown Capability Model",
+  provider: "acme",
+};
+const imageCapabilityModels: OpenCodeModel[] = [
+  VISION_MODEL,
+  NON_VISION_MODEL,
+  UNKNOWN_CAPABILITY_MODEL,
+];
+
+const IMAGE_ATTACHMENT = {
+  id: "image-attached",
+  type: "image" as const,
+  path: "/workspace/screenshot.png",
+  previewUrl: "data:image/png;base64,QUJD",
+  name: "screenshot.png",
+};
+
 function deferred() {
   let resolve!: () => void;
   let reject!: (error: Error) => void;
@@ -1907,6 +1940,262 @@ describe("OpenCodeComposeBar", () => {
       "QUJD",
     );
     expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(1);
+  });
+
+  describe("image-input gating", () => {
+    function pasteIntoComposeBar() {
+      const input = screen.getByTestId("mentionable-input") as HTMLTextAreaElement;
+      input.focus();
+      document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    }
+
+    function expectImageUnsupportedToast() {
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Model cannot read images",
+        expect.objectContaining({
+          description: expect.stringContaining("does not support image input"),
+        }),
+      );
+    }
+
+    test("blocks a pasted image before writing it when the model cannot read images", async () => {
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, NON_VISION_MODEL.id);
+      renderComposeBar({ containerId: "container-1", models: imageCapabilityModels });
+
+      pasteIntoComposeBar();
+
+      await waitFor(expectImageUnsupportedToast);
+      // The whole point of gating in the hook: no file is written, so a refused
+      // paste cannot orphan a PNG in the environment.
+      expect(mockWriteContainerFile).not.toHaveBeenCalled();
+      expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(0);
+    });
+
+    test("blocks a pasted image before writing it into a local worktree", async () => {
+      useEnvironmentStore.setState({ environments: [createLocalEnvironment()] });
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, NON_VISION_MODEL.id);
+      renderComposeBar({ models: imageCapabilityModels });
+
+      pasteIntoComposeBar();
+
+      await waitFor(expectImageUnsupportedToast);
+      expect(mockWriteLocalFile).not.toHaveBeenCalled();
+      expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(0);
+    });
+
+    // Only an explicit "no image input" blocks; every ambiguous case lets the
+    // attach through rather than blocking on data the server never reported.
+    for (const [description, modelId] of [
+      ["a vision-capable model", VISION_MODEL.id],
+      ["a model whose capability the catalog omitted", UNKNOWN_CAPABILITY_MODEL.id],
+      ["a model id that is not in the catalog", "acme/not-in-catalog"],
+      ["the server default sentinel", "default"],
+      ["no selected model", ""],
+    ] as const) {
+      test(`lets a pasted image through for ${description}`, async () => {
+        useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, modelId);
+        renderComposeBar({ containerId: "container-1", models: imageCapabilityModels });
+
+        pasteIntoComposeBar();
+
+        await waitFor(() =>
+          expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(1),
+        );
+        expect(mockWriteContainerFile).toHaveBeenCalledTimes(1);
+        expect(mockToastError).not.toHaveBeenCalled();
+      });
+    }
+
+    test("gates a pasted image on the model selected when the decode finishes", async () => {
+      let resolveImage!: (image: unknown) => void;
+      mockReadImage.mockImplementation(
+        () => new Promise((resolve) => {
+          resolveImage = resolve as (image: unknown) => void;
+        }),
+      );
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, VISION_MODEL.id);
+      renderComposeBar({ containerId: "container-1", models: imageCapabilityModels });
+
+      pasteIntoComposeBar();
+      await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+      // Switching mid-decode must be visible to the gate. Reading the model
+      // from the render closure would let the stale "vision" answer win and
+      // write a file the new model cannot use.
+      act(() => {
+        useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, NON_VISION_MODEL.id);
+      });
+      await act(async () => {
+        resolveImage({
+          rgba: async () => new Uint8Array([255, 0, 0, 255]),
+          size: async () => ({ width: 1, height: 1 }),
+        });
+        await Promise.resolve();
+      });
+
+      await waitFor(expectImageUnsupportedToast);
+      expect(mockWriteContainerFile).not.toHaveBeenCalled();
+      expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(0);
+    });
+
+    test("ignores a paste while the composer is disabled", async () => {
+      renderComposeBar({
+        containerId: "container-1",
+        disabled: true,
+        models: imageCapabilityModels,
+      });
+      const input = screen.getByTestId("mentionable-input") as HTMLTextAreaElement;
+      input.focus();
+
+      // The paste hook has no disabled guard of its own; the input being
+      // disabled is what keeps focus — and therefore the paste — out of the
+      // compose bar.
+      expect(document.activeElement).not.toBe(input);
+      document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(mockReadImage).not.toHaveBeenCalled();
+      expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(0);
+    });
+
+    test("blocks a workspace image pick before reading the file", async () => {
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, NON_VISION_MODEL.id);
+      mockSearchFiles.mockImplementation(() => [{
+        filename: "shot.png",
+        relativePath: "docs/shot.png",
+        isDirectory: false,
+      }]);
+      renderComposeBar({ containerId: "container-1", models: imageCapabilityModels });
+
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+      );
+      fireEvent.click(await screen.findByRole("button", { name: /shot\.png/ }));
+
+      await waitFor(expectImageUnsupportedToast);
+      expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+      expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(0);
+    });
+
+    test("attaches a workspace image when the model can read images", async () => {
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, VISION_MODEL.id);
+      mockSearchFiles.mockImplementation(() => [{
+        filename: "shot.png",
+        relativePath: "docs/shot.png",
+        isDirectory: false,
+      }]);
+      renderComposeBar({ containerId: "container-1", models: imageCapabilityModels });
+
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+      );
+      fireEvent.click(await screen.findByRole("button", { name: /shot\.png/ }));
+
+      await waitFor(() =>
+        expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toEqual([
+          expect.objectContaining({
+            type: "image",
+            path: "/workspace/docs/shot.png",
+            previewUrl: "data:image/png;base64,Q09OVEFJTkVS",
+          }),
+        ]),
+      );
+      expect(mockReadContainerFileBase64).toHaveBeenCalledWith("container-1", "docs/shot.png");
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
+
+    test("lets a non-image workspace file through on a model without image input", async () => {
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, NON_VISION_MODEL.id);
+      mockSearchFiles.mockImplementation(() => [{
+        filename: "notes.txt",
+        relativePath: "docs/notes.txt",
+        isDirectory: false,
+      }]);
+      renderComposeBar({ containerId: "container-1", models: imageCapabilityModels });
+
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+      );
+      fireEvent.click(await screen.findByRole("button", { name: /notes\.txt/ }));
+
+      await waitFor(() =>
+        expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toEqual([
+          expect.objectContaining({ type: "file", path: "/workspace/docs/notes.txt" }),
+        ]),
+      );
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
+
+    test("warns when switching to a model that cannot read an attached image", async () => {
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, VISION_MODEL.id);
+      useOpenCodeStore.getState().addAttachment(SESSION_KEY, IMAGE_ATTACHMENT);
+      renderComposeBar({
+        models: imageCapabilityModels,
+        favoriteModelIds: [NON_VISION_MODEL.id],
+      });
+
+      fireEvent.pointerDown(screen.getByRole("button", { name: /Vision Model/i }));
+      fireEvent.click(screen.getByText(NON_VISION_MODEL.name));
+
+      await waitFor(() =>
+        expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe(
+          NON_VISION_MODEL.id,
+        ),
+      );
+      expectImageUnsupportedToast();
+      // A warning, not a mutation: dropping the user's attachment for them
+      // would be worse than letting them decide.
+      expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(1);
+    });
+
+    test("does not warn when switching models with no image attached", async () => {
+      useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, VISION_MODEL.id);
+      useOpenCodeStore.getState().addAttachment(SESSION_KEY, {
+        id: "file-attached",
+        type: "file",
+        path: "/workspace/notes.txt",
+        name: "notes.txt",
+      });
+      renderComposeBar({
+        models: imageCapabilityModels,
+        favoriteModelIds: [NON_VISION_MODEL.id],
+      });
+
+      fireEvent.pointerDown(screen.getByRole("button", { name: /Vision Model/i }));
+      fireEvent.click(screen.getByText(NON_VISION_MODEL.name));
+
+      await waitFor(() =>
+        expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe(
+          NON_VISION_MODEL.id,
+        ),
+      );
+      expect(mockToastError).not.toHaveBeenCalled();
+    });
+
+    for (const [description, target] of [
+      ["a vision-capable model", VISION_MODEL],
+      ["a model whose capability the catalog omitted", UNKNOWN_CAPABILITY_MODEL],
+    ] as const) {
+      test(`does not warn when switching to ${description} with an image attached`, async () => {
+        useOpenCodeStore.getState().setSelectedModel(SESSION_KEY, NON_VISION_MODEL.id);
+        useOpenCodeStore.getState().addAttachment(SESSION_KEY, IMAGE_ATTACHMENT);
+        renderComposeBar({
+          models: imageCapabilityModels,
+          favoriteModelIds: [target.id],
+        });
+
+        fireEvent.pointerDown(screen.getByRole("button", { name: /Text Only Model/i }));
+        fireEvent.click(screen.getByText(target.name));
+
+        await waitFor(() =>
+          expect(useOpenCodeStore.getState().getSelectedModel(SESSION_KEY)).toBe(target.id),
+        );
+        expect(mockToastError).not.toHaveBeenCalled();
+      });
+    }
   });
 
   test("selects Planning and Build from the mode menu", async () => {

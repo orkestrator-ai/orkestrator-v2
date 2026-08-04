@@ -24,6 +24,13 @@ interface VirtualizedMessageListProps<TMessage> {
   messages: TMessage[];
   computeItemKey: (index: number, message: TMessage) => string;
   renderMessage: (index: number, message: TMessage, previousMessage: TMessage | null) => ReactNode;
+  /**
+   * Optionally computes the predecessor handed to `renderMessage`. Defaults to
+   * the immediately preceding message. Message lists that want block-level
+   * continuity (e.g. skipping empty assistant placeholders so attribution and
+   * duration anchor on real content) provide a resolver here.
+   */
+  resolvePreviousMessage?: (messages: readonly TMessage[], index: number) => TMessage | null;
   footer?: ReactNode;
   emptyState?: ReactNode;
   scrollProps: {
@@ -117,6 +124,7 @@ export function VirtualizedMessageList<TMessage>({
   messages,
   computeItemKey,
   renderMessage,
+  resolvePreviousMessage,
   footer,
   emptyState,
   scrollProps,
@@ -311,7 +319,9 @@ export function VirtualizedMessageList<TMessage>({
               {renderMessage(
                 index,
                 data,
-                index > 0 ? messages[index - 1] ?? null : null,
+                resolvePreviousMessage
+                  ? resolvePreviousMessage(messages, index)
+                  : index > 0 ? messages[index - 1] ?? null : null,
               )}
             </div>
           );

@@ -15,6 +15,18 @@ interface MessageShellProps {
   timestampLabel: string;
   durationLabel?: string | null;
   showHeader?: boolean;
+  /**
+   * Whether the footer (metadata + actions) row renders at all. Empty
+   * assistant blocks have nothing to attribute, so callers hide it to avoid a
+   * dangling model label.
+   */
+  showFooter?: boolean;
+  /**
+   * Whether the author label (e.g. the confirmed model name) appears in the
+   * footer. A transcript block may span several messages; attribution is shown
+   * once, on the first content-bearing message, so continuations omit it.
+   */
+  showAuthorLabel?: boolean;
   className?: string;
   contentClassName?: string;
   actions?: ReactNode;
@@ -31,6 +43,8 @@ export function MessageShell({
   timestampLabel,
   durationLabel,
   showHeader = true,
+  showFooter = true,
+  showAuthorLabel = true,
   className,
   contentClassName,
   actions,
@@ -38,8 +52,8 @@ export function MessageShell({
   children,
 }: MessageShellProps) {
   const metadata = [timestampLabel, durationLabel].filter(Boolean).join(" · ");
-  const showUserActionRow = isUser && (metadata || actions);
-  const showAssistantActionRow = !isUser && (metadata || actions);
+  const showUserActionRow = isUser && showFooter && (metadata || actions);
+  const showAssistantActionRow = !isUser && showFooter && (metadata || actions);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
   const longPressPointerIdRef = useRef<number | null>(null);
@@ -172,13 +186,17 @@ export function MessageShell({
               <div className="mt-1 flex min-h-6 items-center justify-between gap-3 text-[10px] leading-none text-muted-foreground/55">
                 {metadata ? (
                   <div className="flex min-w-0 items-center text-left">
-                    <span
-                      className="min-w-0 truncate font-medium text-muted-foreground/70"
-                      title={authorLabel}
-                    >
-                      {authorLabel}
-                    </span>
-                    <span className="mx-1.5 shrink-0">·</span>
+                    {showAuthorLabel ? (
+                      <>
+                        <span
+                          className="min-w-0 truncate font-medium text-muted-foreground/70"
+                          title={authorLabel}
+                        >
+                          {authorLabel}
+                        </span>
+                        <span className="mx-1.5 shrink-0">·</span>
+                      </>
+                    ) : null}
                     <span className="shrink-0 whitespace-nowrap">{metadata}</span>
                   </div>
                 ) : <span />}

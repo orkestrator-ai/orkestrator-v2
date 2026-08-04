@@ -139,6 +139,35 @@ function dataUrlByteLength(dataUrl: string | undefined): number {
   return base64DecodedByteLength(dataUrl.slice(separatorIndex + 1));
 }
 
+/**
+ * Whether the currently selected model can read image attachments.
+ *
+ * OpenCode's server rejects prompts that carry an image when the model has no
+ * vision support (`Cannot read "..." (this model does not support image
+ * input)`). The catalog reports `capabilities.input.image`; `undefined` means
+ * it did not say, in which case the attach is allowed through.
+ */
+function imageSupportedBySelectedModel(
+  attachment: { type: string },
+  models: OpenCodeModel[],
+  selectedModel: string | undefined,
+): boolean {
+  if (attachment.type !== "image") return true;
+  if (!selectedModel || selectedModel === "default") return true;
+  const model = models.find((candidate) => candidate.id === selectedModel);
+  // An unknown catalog entry or a missing capability report lets the attach
+  // through; only an explicit "no image input" blocks it.
+  if (!model || model.supportsImageInput === undefined) return true;
+  return model.supportsImageInput;
+}
+
+function showImageUnsupportedToast(): void {
+  toast.error("Model cannot read images", {
+    description:
+      "The selected model does not support image input. Switch to a vision-capable model or remove the image.",
+  });
+}
+
 export function OpenCodeComposeBar({
   environmentId,
   tabId,
@@ -362,6 +391,10 @@ export function OpenCodeComposeBar({
         });
         return;
       }
+      if (!imageSupportedBySelectedModel(attachment, models, selectedModel)) {
+        showImageUnsupportedToast();
+        return;
+      }
       pendingAttachmentSnapshotsRef.current += 1;
       setPendingAttachmentSnapshots((count) => count + 1);
       try {
@@ -412,13 +445,31 @@ export function OpenCodeComposeBar({
         }
       }
     },
-    [addAttachment, containerId, disabled, isSending, sessionKey, worktreePath],
+    [addAttachment, containerId, disabled, isSending, models, selectedModel, sessionKey, worktreePath],
   );
 
   useNativeComposeBarPaste({
     inputContainerRef,
     containerId: containerId ?? null,
     worktreePath,
+    // The gate runs in the hook before the pasted image is written to disk, so
+    // a refused image cannot orphan a file in the environment. `onAttach` is
+    // then free to add unconditionally.
+    //
+    // The model is read from the store rather than the render closure: the gate
+    // fires after an async decode, so a model switch during that window would
+    // otherwise be invisible to it. Depending only on `sessionKey` also stops
+    // the document paste listener re-registering on every model change.
+    canAttachImage: useCallback(
+      (attachment: { type: string }) =>
+        imageSupportedBySelectedModel(
+          attachment,
+          models,
+          useOpenCodeStore.getState().getSelectedModel(sessionKey),
+        ),
+      [models, sessionKey],
+    ),
+    onImageRejected: showImageUnsupportedToast,
     onAttach: useCallback(
       (attachment) => addAttachment(sessionKey, attachment),
       [addAttachment, sessionKey],
@@ -517,6 +568,16 @@ export function OpenCodeComposeBar({
   const handleModelChange = (modelId: string) => {
     setSelectedModel(sessionKey, modelId);
     void persistAgentModelDefault("opencodeModel", modelId, "OpenCode");
+
+    // The attach-time gate cannot see a later model switch, so an image
+    // attached under a vision model would otherwise sit in the composer until
+    // the server rejected the send. Warn while the user can still act on it.
+    if (
+      attachments.some((attachment) => attachment.type === "image")
+      && !imageSupportedBySelectedModel({ type: "image" }, models, modelId)
+    ) {
+      showImageUnsupportedToast();
+    }
 
     // Clear variant if the newly selected model doesn't support it
     const nextModel = models.find((m) => m.id === modelId);

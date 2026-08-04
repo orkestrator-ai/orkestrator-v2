@@ -17,6 +17,7 @@ import { NativeMessage } from "@/components/chat/NativeMessage";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
 import { formatElapsed } from "@/lib/format-elapsed";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
+import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 
 export type NativeConnectionState = "connecting" | "connected" | "error";
 
@@ -247,6 +248,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         <VirtualizedMessageList
           messages={messages}
           computeItemKey={(_index, message) => message.id}
+          resolvePreviousMessage={findPreviousNativeMessage}
           renderMessage={(_index, message, previous) => (
             <NativeMessage
               message={message}

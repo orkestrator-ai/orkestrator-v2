@@ -30,9 +30,22 @@ interface UseNativeComposeSubmitOptions<TAttachment extends { id: string }> {
   /** Expands @mentions to full relative paths before dispatch. */
   serializeForLLM: (text: string, mentions: FileMention[]) => string;
 
-  onSend: (text: string, attachments: TAttachment[]) => Promise<void> | void;
+  /** Returning false preserves the submitted draft after a successful no-op. */
+  onSend: (
+    text: string,
+    attachments: TAttachment[],
+  ) => Promise<boolean | void> | boolean | void;
   /** When absent, submitting mid-turn is a no-op rather than a queue. */
-  onQueue?: (text: string, attachments: TAttachment[]) => Promise<void> | void;
+  onQueue?: (
+    text: string,
+    attachments: TAttachment[],
+  ) => Promise<boolean | void> | boolean | void;
+
+  /** Overrides send/queue wording for actions routed through those callbacks. */
+  resolveSubmitOperation?: (
+    serializedText: string,
+    isQueueing: boolean,
+  ) => "send" | "queue" | "steer";
 
   isLoading: boolean;
   disabled?: boolean;
@@ -83,6 +96,7 @@ export function useNativeComposeSubmit<TAttachment extends { id: string }>({
   disabled = false,
   canSubmit,
   refuseWhenBusyWithoutQueue = false,
+  resolveSubmitOperation,
 }: UseNativeComposeSubmitOptions<TAttachment>): UseNativeComposeSubmitResult {
   const [isSending, setIsSending] = useState(false);
 
@@ -99,15 +113,23 @@ export function useNativeComposeSubmit<TAttachment extends { id: string }>({
     const submittedText = text;
     const submittedMentions = mentions;
     const submittedAttachments = attachments;
+    let operation: "send" | "queue" | "steer" = isQueueing ? "queue" : "send";
 
     setIsSending(true);
     try {
       const serializedText = serializeForLLM(trimmed, mentions);
+      operation = resolveSubmitOperation?.(serializedText, isQueueing) ?? operation;
+      let shouldClearDraft: boolean | void;
       if (isQueueing) {
-        await onQueue!(serializedText, attachments);
+        shouldClearDraft = await onQueue!(serializedText, attachments);
       } else {
-        await onSend(serializedText, attachments);
+        shouldClearDraft = await onSend(serializedText, attachments);
       }
+
+      // A callback may complete successfully for an action owned by a session
+      // that has since been replaced in the same tab. Preserve the current
+      // draft in that case instead of applying stale completion-side cleanup.
+      if (shouldClearDraft === false) return;
 
       const state = store.getState();
       if (
@@ -122,12 +144,19 @@ export function useNativeComposeSubmit<TAttachment extends { id: string }>({
       }
     } catch (error) {
       console.error(
-        `[${agentLabel}ComposeBar] Failed to ${isQueueing ? "queue" : "send"} prompt:`,
+        `[${agentLabel}ComposeBar] Failed to ${operation}${operation === "steer" ? "" : " prompt"}:`,
         error,
       );
-      toast.error(isQueueing ? "Failed to queue prompt" : "Failed to send prompt", {
-        description: error instanceof Error ? error.message : undefined,
-      });
+      toast.error(
+        operation === "steer"
+          ? `Failed to steer ${agentLabel}`
+          : operation === "queue"
+            ? "Failed to queue prompt"
+            : "Failed to send prompt",
+        {
+          description: error instanceof Error ? error.message : undefined,
+        },
+      );
     } finally {
       setIsSending(false);
     }
@@ -141,6 +170,7 @@ export function useNativeComposeSubmit<TAttachment extends { id: string }>({
     mentions,
     onQueue,
     onSend,
+    resolveSubmitOperation,
     serializeForLLM,
     sessionKey,
     store,

@@ -152,6 +152,70 @@ describe("useNativeComposeSubmit", () => {
     }
   });
 
+  test("labels a routed steering failure without losing generic queue errors", async () => {
+    const steerError = new Error("turn changed");
+    const onQueue = mock(async () => {
+      throw steerError;
+    });
+    const setup = makeOptions({
+      text: "/steer keep checking",
+      mentions: [],
+      isLoading: true,
+      onQueue,
+      serializeForLLM: (text: string) => text,
+      resolveSubmitOperation: () => "steer",
+    });
+    const consoleError = mock(() => {});
+    const originalConsoleError = console.error;
+    console.error = consoleError;
+
+    try {
+      const { result } = renderHook(() =>
+        useNativeComposeSubmit<Attachment>(setup.options),
+      );
+      await act(async () => {
+        await result.current.submit();
+      });
+
+      expect(mockToastError).toHaveBeenCalledWith("Failed to steer Test", {
+        description: "turn changed",
+      });
+      expect(consoleError).toHaveBeenCalledWith(
+        "[TestComposeBar] Failed to steer:",
+        steerError,
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("preserves the draft and attachments when a stale completion returns false", async () => {
+    const attachment = { id: "attachment-1", name: "image.png" };
+    const draft = createDraftStore("same-tab draft", [MENTION]);
+    const onSend = mock(async () => false);
+    const { result } = renderHook(() =>
+      useNativeComposeSubmit<Attachment>({
+        agentLabel: "Test",
+        sessionKey: SESSION_KEY,
+        store: draft.store,
+        text: "same-tab draft",
+        mentions: [MENTION],
+        attachments: [attachment],
+        serializeForLLM: (text) => text,
+        onSend,
+        isLoading: false,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.submit();
+    });
+
+    expect(draft.getDraftText()).toBe("same-tab draft");
+    expect(draft.getDraftMentions()).toEqual([MENTION]);
+    expect(draft.removedAttachmentIds).toEqual([]);
+  });
+
   test("reports a send failure and leaves the draft intact", async () => {
     const sendError = new Error("send unavailable");
     const onSend = mock(async () => {

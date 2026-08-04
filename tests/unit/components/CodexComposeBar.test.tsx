@@ -84,6 +84,7 @@ import * as realHooks from "@/hooks";
 import * as realUseFileMentions from "@/hooks/useFileMentions";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
+import { mockToastError } from "../../mocks/sonner";
 const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
 const realHooksSnapshot = { ...realHooks };
 const realUseFileMentionsSnapshot = { ...realUseFileMentions };
@@ -1082,6 +1083,9 @@ describe("CodexComposeBar", () => {
     expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe(
       "/steer keep checking",
     );
+    expect(mockToastError).toHaveBeenCalledWith("Failed to steer Codex", {
+      description: "steer unavailable",
+    });
   });
 
   test("clicking a queued prompt restores it into the draft and removes it from the queue", async () => {

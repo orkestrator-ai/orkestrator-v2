@@ -2481,17 +2481,31 @@ describe("codex-client session operations", () => {
   });
 
   describe("steerCodexSession", () => {
-    test("posts the input alongside its idempotency key", async () => {
-      const call = captureFetch(() => new Response(null, { status: 200 }));
+    test("binds the steer request to the authoritative active turn", async () => {
+      const calls: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
+      globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push([input, init]);
+        if (String(input).endsWith("/status")) {
+          return new Response(JSON.stringify({ status: "running", turnId: "turn-1" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(null, { status: 200 });
+      }) as unknown as typeof fetch;
 
       expect(
         await steerCodexSession(client, "session-1", "use bun", "req-1"),
       ).toEqual({ outcome: "accepted" });
-      const [url, init] = call();
+      expect(calls).toHaveLength(2);
+      expect(String(calls[0]?.[0]))
+        .toBe("http://127.0.0.1:4000/session/session-1/status");
+      const [url, init] = calls[1]!;
       expect(url).toBe("http://127.0.0.1:4000/session/session-1/steer");
       expect(JSON.parse(init?.body as string)).toEqual({
         input: "use bun",
         requestId: "req-1",
+        expectedTurnId: "turn-1",
       });
     });
 
@@ -2509,34 +2523,115 @@ describe("codex-client session operations", () => {
       [404, { error: "Session not found" }, { outcome: "not-found" }],
       [503, { error: "Bridge unavailable" }, { outcome: "rejected", httpStatus: 503 }],
     ] as const)("classifies an HTTP %i steer response", async (status, body, expected) => {
-      mockFetch(() => new Response(JSON.stringify(body), {
-        status,
-        headers: { "Content-Type": "application/json" },
-      }));
+      let call = 0;
+      mockFetch(() => {
+        call += 1;
+        return call === 1
+          ? new Response(JSON.stringify({ status: "running", turnId: "turn-1" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            })
+          : new Response(JSON.stringify(body), {
+              status,
+              headers: { "Content-Type": "application/json" },
+            });
+      });
       expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
         .toEqual(expected);
     });
 
     test("recognizes the idle response from an older bridge", async () => {
-      mockFetch(() => new Response(JSON.stringify({ error: "There is no active turn" }), {
-        status: 409,
-        headers: { "Content-Type": "application/json" },
-      }));
+      let call = 0;
+      mockFetch(() => {
+        call += 1;
+        return call === 1
+          ? new Response(JSON.stringify({ status: "running", turnId: "turn-1" }))
+          : new Response(JSON.stringify({ error: "There is no active turn" }), {
+              status: 409,
+              headers: { "Content-Type": "application/json" },
+            });
+      });
       expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
         .toEqual({ outcome: "idle" });
     });
 
     test("treats an unrecognized conflict conservatively as a turn mismatch", async () => {
-      mockFetch(() => new Response("not-json", { status: 409 }));
+      let call = 0;
+      mockFetch(() => {
+        call += 1;
+        return call === 1
+          ? new Response(JSON.stringify({ status: "running", turnId: "turn-1" }))
+          : new Response("not-json", { status: 409 });
+      });
       expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
         .toEqual({ outcome: "mismatch" });
     });
 
-    test("keeps a transport failure distinct because delivery is ambiguous", async () => {
-      mockFetchError(new Error("bridge offline"));
+    test("does not post when authoritative status reports no active turn", async () => {
+      const fetchMock = mock(() => new Response(JSON.stringify({ status: "idle" })));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
+        .toEqual({ outcome: "idle" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    test("does not call a running session idle when its status omits the turn id", async () => {
+      const fetchMock = mock(() => new Response(JSON.stringify({ status: "running" })));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
+        .toEqual({ outcome: "unknown", requestId: "req-1" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    test.each([
+      [404, {}, { outcome: "not-found" }],
+      [503, {}, { outcome: "unknown", requestId: "req-1" }],
+    ] as const)("classifies an HTTP %i status response before posting", async (
+      status,
+      body,
+      expected,
+    ) => {
+      const fetchMock = mock(() => new Response(JSON.stringify(body), { status }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
+        .toEqual(expected);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    test("keeps a POST transport failure distinct because delivery is ambiguous", async () => {
+      let call = 0;
+      globalThis.fetch = mock(async () => {
+        call += 1;
+        if (call === 1) {
+          return new Response(JSON.stringify({ status: "running", turnId: "turn-1" }));
+        }
+        throw new Error("bridge offline");
+      }) as unknown as typeof fetch;
       expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
         .toEqual({ outcome: "unknown", requestId: "req-1" });
     });
+
+    test.each([200, 503])(
+      "classifies an explicit bridge unknown outcome on HTTP %i as ambiguous",
+      async (status) => {
+        let call = 0;
+        mockFetch(() => {
+          call += 1;
+          return call === 1
+            ? new Response(JSON.stringify({ status: "running", turnId: "turn-1" }))
+            : new Response(JSON.stringify({ outcome: "unknown", requestId: "req-1" }), {
+                status,
+                headers: { "Content-Type": "application/json" },
+              });
+        });
+
+        expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
+          .toEqual({ outcome: "unknown", requestId: "req-1" });
+      },
+    );
 
     test("describes each steer failure without claiming an unknown request failed", () => {
       expect(describeCodexSteerFailure({ outcome: "accepted" })).toBeNull();

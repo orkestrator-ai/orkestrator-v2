@@ -95,6 +95,12 @@ interface SessionValueState<T> {
   value: T;
 }
 
+interface CodexSteerRetry {
+  sessionIdentity: string;
+  text: string;
+  requestId: string;
+}
+
 const EMPTY_CLAUDE_TASKS: Record<string, never> = {};
 
 interface ActiveNativeSession {
@@ -639,6 +645,7 @@ export function AgentInfoButton({
   const restoreFocusRef = useRef(false);
   const actionIdRef = useRef(0);
   const shareVersionRef = useRef(0);
+  const codexSteerRetryRef = useRef<CodexSteerRetry | null>(null);
   const activeSession = useMemo(
     () => resolveActiveNativeSession(activeTab),
     [activeTab],
@@ -1220,6 +1227,7 @@ export function AgentInfoButton({
     setOpen(false);
     setHandoffOpen(false);
     shareVersionRef.current += 1;
+    codexSteerRetryRef.current = null;
     setShareState({ sessionIdentity, value: false });
     setSteerState({ sessionIdentity, value: "" });
   }, [sessionIdentity]);
@@ -1760,10 +1768,21 @@ export function AgentInfoButton({
                     <div className="flex gap-2">
                       <Input
                         value={steerText}
-                        onChange={(event) => setSteerState({
-                          sessionIdentity,
-                          value: event.target.value,
-                        })}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          const retry = codexSteerRetryRef.current;
+                          if (
+                            retry
+                            && (retry.sessionIdentity !== sessionIdentity
+                              || retry.text !== value.trim())
+                          ) {
+                            codexSteerRetryRef.current = null;
+                          }
+                          setSteerState({
+                            sessionIdentity,
+                            value,
+                          });
+                        }}
                         placeholder="Correct or redirect Codex"
                         className="h-8 text-xs"
                       />
@@ -1775,12 +1794,37 @@ export function AgentInfoButton({
                           "steer",
                           async ({ isCurrent, sessionIdentity: actionIdentity }) => {
                             const text = steerText.trim();
+                            const pendingRetry = codexSteerRetryRef.current;
+                            const reusesAmbiguousRequest = pendingRetry?.sessionIdentity
+                                === actionIdentity
+                              && pendingRetry.text === text;
+                            const requestId = reusesAmbiguousRequest
+                              ? pendingRetry.requestId
+                              : createUuid();
+                            if (!reusesAmbiguousRequest) {
+                              codexSteerRetryRef.current = null;
+                            }
                             const outcome = await steerCodexSession(
                               codexClient,
                               currentSessionId,
                               text,
-                              createUuid(),
+                              requestId,
                             );
+                            if (
+                              outcome.outcome === "unknown"
+                              && isCurrent()
+                            ) {
+                              codexSteerRetryRef.current = {
+                                sessionIdentity: actionIdentity,
+                                text,
+                                requestId: outcome.requestId,
+                              };
+                            } else if (
+                              outcome.outcome !== "unknown"
+                              && codexSteerRetryRef.current?.requestId === requestId
+                            ) {
+                              codexSteerRetryRef.current = null;
+                            }
                             const failure = describeCodexSteerFailure(outcome);
                             if (failure) {
                               throw new Error(failure);

@@ -81,8 +81,14 @@ interface CodexComposeBarProps {
   disabled?: boolean;
   isLoading?: boolean;
   queueLength?: number;
-  onSend: (text: string, attachments: CodexAttachment[]) => Promise<void>;
-  onQueue?: (text: string, attachments: CodexAttachment[]) => void | Promise<void>;
+  onSend: (
+    text: string,
+    attachments: CodexAttachment[],
+  ) => Promise<boolean | void>;
+  onQueue?: (
+    text: string,
+    attachments: CodexAttachment[],
+  ) => boolean | void | Promise<boolean | void>;
   onStop?: () => Promise<void>;
   onModeChange: (mode: CodexConversationMode) => Promise<void> | void;
   onModelChange: (modelId: string) => Promise<void> | void;
@@ -225,6 +231,12 @@ export function CodexComposeBar({
     onQueue,
     isLoading,
     disabled,
+    resolveSubmitOperation: (serializedText, isQueueing) =>
+      parseCodexSteerCommand(serializedText).matched
+        ? "steer"
+        : isQueueing
+          ? "queue"
+          : "send",
     // app-server rejects a second concurrent prompt with a 409.
     refuseWhenBusyWithoutQueue: true,
   });

@@ -239,6 +239,35 @@ describe("prompt expansion and shaping", () => {
         cwd,
       ),
     ).toBe("preferred-stdout");
+    expect(
+      await runInlinePromptCommand("printf failed-stderr >&2; exit 4", cwd),
+    ).toBe("failed-stderr");
+  });
+
+  test("uses the error message when a failed inline command has no output streams", async () => {
+    const cwd = await temporaryDirectory();
+    const missingShell = join(cwd, "missing-shell");
+    process.env.SHELL = missingShell;
+    process.env.ORKESTRATOR_RUNTIME_ENV_SCRIPT = join(cwd, "missing-runtime-env.sh");
+
+    expect(await runInlinePromptCommand(":", cwd)).toContain(missingShell);
+  });
+
+  test("uses the generic fallback when an inline command throws a non-Error value", async () => {
+    const cwd = await temporaryDirectory();
+    process.env.SHELL = join(cwd, "missing-shell");
+    process.env.ORKESTRATOR_RUNTIME_ENV_SCRIPT = join(cwd, "missing-runtime-env.sh");
+
+    // A native process failure supplies the caught value. Temporarily replacing
+    // the global constructor makes that value exercise the non-Error branch
+    // without mocking node:child_process process-wide.
+    const nativeError = globalThis.Error;
+    try {
+      globalThis.Error = class TestError extends nativeError {} as ErrorConstructor;
+      expect(await runInlinePromptCommand(":", cwd)).toBe("Command failed");
+    } finally {
+      globalThis.Error = nativeError;
+    }
   });
 
   test("expands arguments and every inline command in template order", async () => {

@@ -634,7 +634,7 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
   },
 }));
 
-import { CodexChatTab } from "./CodexChatTab";
+import { CodexChatTab, waitForCodexReconnectDelay } from "./CodexChatTab";
 import type { CodexNativeData } from "@/types/paneLayout";
 
 const ENVIRONMENT_ID = "env-1";
@@ -1008,6 +1008,21 @@ afterAll(() => {
 });
 
 describe("CodexChatTab", () => {
+  test("an already-aborted reconnect delay resolves without installing a timer", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const originalSetTimeout = globalThis.setTimeout;
+    const setTimeoutSpy = mock(originalSetTimeout);
+    globalThis.setTimeout = setTimeoutSpy as unknown as typeof setTimeout;
+
+    try {
+      await waitForCodexReconnectDelay(controller.signal, 60_000);
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+  });
+
   beforeEach(() => {
     cleanup();
     claimedPromptHeads.clear();
@@ -3607,7 +3622,7 @@ describe("CodexChatTab", () => {
     ],
     [
       { outcome: "unknown", requestId: "req-unknown" } as const,
-      "Could not confirm whether Codex received your steering message. Refresh the session before retrying.",
+      "Could not confirm whether Codex received your steering message. Retry the unchanged steering message to check safely.",
     ],
   ])("surfaces the %s /steer outcome without dispatching a prompt", async (outcome, message) => {
     composeText = "/steer keep checking";
@@ -3619,6 +3634,81 @@ describe("CodexChatTab", () => {
     await waitFor(() => expect(lastComposeSendError).toEqual(new Error(message)));
     expect(mockSendPrompt).not.toHaveBeenCalled();
     expect(useCodexStore.getState().messageQueue.get(SESSION_KEY)).toBeUndefined();
+  });
+
+  test("reuses an ambiguous steering request id until a definitive outcome", async () => {
+    composeText = "/steer keep checking";
+    mockSteerCodexSession
+      .mockResolvedValueOnce({ outcome: "unknown", requestId: "ambiguous-steer" })
+      .mockResolvedValueOnce({ outcome: "unknown", requestId: "ambiguous-steer" })
+      .mockResolvedValueOnce({ outcome: "accepted" });
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(lastComposeSendError).toBeInstanceOf(Error));
+
+    lastComposeSendError = undefined;
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(lastComposeSendError).toBeInstanceOf(Error));
+
+    lastComposeSendError = undefined;
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(3));
+
+    const originalRequestId = mockSteerCodexSession.mock.calls[0]?.[3];
+    expect(originalRequestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(mockSteerCodexSession.mock.calls[1]?.[3]).toBe(originalRequestId);
+    expect(mockSteerCodexSession.mock.calls[2]?.[3]).toBe(originalRequestId);
+    expect(lastComposeSendError).toBeUndefined();
+  });
+
+  test("replaces the single ambiguous steering retry when the input changes", async () => {
+    composeText = "/steer keep checking";
+    mockSteerCodexSession.mockImplementation(async (
+      _client,
+      _sessionId,
+      _input,
+      requestId,
+    ) => ({ outcome: "unknown", requestId }));
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(1));
+    const firstRequestId = mockSteerCodexSession.mock.calls[0]?.[3];
+
+    composeText = "/steer inspect the other branch";
+    lastComposeSendError = undefined;
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(2));
+
+    expect(mockSteerCodexSession.mock.calls[1]?.[3]).not.toBe(firstRequestId);
+  });
+
+  test("suppresses stale steer completion feedback after same-tab session replacement", async () => {
+    const steer = deferred<{ outcome: "accepted" }>();
+    composeText = "/steer keep checking";
+    mockSteerCodexSession.mockImplementationOnce(() => steer.promise);
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(1));
+    act(() => {
+      useCodexStore.getState().setSession(SESSION_KEY, {
+        sessionId: "replacement-session",
+        messages: [],
+        isLoading: false,
+      });
+    });
+    await act(async () => {
+      steer.resolve({ outcome: "accepted" });
+      await steer.promise;
+    });
+
+    expect(mockToastSuccess).not.toHaveBeenCalled();
+    expect(lastComposeSendError).toBeUndefined();
   });
 
   test("rejects a bodyless /steer before calling the client", async () => {

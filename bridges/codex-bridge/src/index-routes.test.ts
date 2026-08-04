@@ -898,7 +898,24 @@ describe("compact route outcomes", () => {
 });
 
 describe("steer route outcomes", () => {
-  test("rejects an empty or non-string input before reaching the runtime", async () => {
+  test("rejects malformed JSON before reaching the runtime", async () => {
+    let called = false;
+    await withRuntimeMethod("steerSession", async () => {
+      called = true;
+      return "accepted";
+    }, async () => {
+      const response = await app.request("/session/session-1/steer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{not-json",
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "Request body must be valid JSON" });
+    });
+    expect(called).toBe(false);
+  });
+
+  test("validates every required steer field before reaching the runtime", async () => {
     let called = false;
     await withRuntimeMethod("steerSession", async () => {
       called = true;
@@ -909,17 +926,37 @@ describe("steer route outcomes", () => {
         expect(response.status).toBe(400);
         expect(await response.json()).toEqual({ error: "input is required" });
       }
+
+      for (const requestId of [undefined, "", "   ", 7, null]) {
+        const response = await jsonRequest("/session/session-1/steer", "POST", {
+          input: "check",
+          requestId,
+          expectedTurnId: "turn-1",
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ error: "requestId is required" });
+      }
+
+      for (const expectedTurnId of [undefined, "", "   ", 7, null]) {
+        const response = await jsonRequest("/session/session-1/steer", "POST", {
+          input: "check",
+          requestId: "req-steer",
+          expectedTurnId,
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ error: "expectedTurnId is required" });
+      }
     });
     expect(called).toBe(false);
   });
 
-  test("maps every steer outcome and trims the input", async () => {
+  test("maps every steer outcome and trims the request fields", async () => {
     const calls: unknown[] = [];
-    let outcome: "accepted" | "not-found" | "idle" | "mismatch" = "accepted";
+    let outcome: "accepted" | "not-found" | "idle" | "mismatch" | "unknown" = "accepted";
     await withRuntimeMethod(
       "steerSession",
-      async (sessionId: string, input: string, requestId?: string) => {
-        calls.push({ sessionId, input, requestId });
+      async (sessionId: string, input: string, expectedTurnId: string, requestId: string) => {
+        calls.push({ sessionId, input, expectedTurnId, requestId });
         return outcome;
       },
       async () => {
@@ -934,6 +971,15 @@ describe("steer route outcomes", () => {
               outcome: "mismatch",
             },
           ],
+          [
+            "unknown",
+            503,
+            {
+              error: "Could not confirm whether Codex received the steering text",
+              outcome: "unknown",
+              requestId: "req-steer",
+            },
+          ],
           ["accepted", 202, { status: "accepted" }],
         ] as const;
 
@@ -941,7 +987,8 @@ describe("steer route outcomes", () => {
           outcome = nextOutcome;
           const response = await jsonRequest("/session/session-1/steer", "POST", {
             input: "  also check the tests  ",
-            requestId: "req-steer",
+            requestId: "  req-steer  ",
+            expectedTurnId: "  turn-1  ",
           });
           expect(response.status).toBe(status);
           expect(await response.json()).toEqual(body);
@@ -952,6 +999,7 @@ describe("steer route outcomes", () => {
     expect(calls[0]).toEqual({
       sessionId: "session-1",
       input: "also check the tests",
+      expectedTurnId: "turn-1",
       requestId: "req-steer",
     });
   });

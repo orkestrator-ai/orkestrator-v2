@@ -167,6 +167,25 @@ const AUTHORITATIVE_HYDRATION_RETRY_MS = 1_000;
 const AUTHORITATIVE_HYDRATION_ERROR =
   "Could not refresh the complete Codex transcript. Live updates will continue; refresh to try again.";
 
+export function waitForCodexReconnectDelay(
+  signal: AbortSignal,
+  delayMs = AUTHORITATIVE_HYDRATION_RETRY_MS,
+): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timeout = setTimeout(finish, delayMs);
+    function finish() {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    }
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
 /**
  * Bun component tests historically stubbed these clients with their old
  * boolean/nullable return values. Normalize those shapes at the UI boundary so
@@ -696,6 +715,11 @@ export function CodexChatTab({
     ),
   );
   const handleSendRef = useRef<CodexSendHandler | null>(null);
+  const ambiguousSteerRef = useRef<{
+    sessionId: string;
+    input: string;
+    requestId: string;
+  } | null>(null);
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
     session?.isLoading,
     session?.sessionId,
@@ -773,6 +797,7 @@ export function CodexChatTab({
     interactionSnapshotSequenceRef.current += 1;
     interactionActivitySequenceRef.current += 1;
     retryablePromptRef.current = null;
+    ambiguousSteerRef.current = null;
     // The pending "stopped" marker belongs to the session that was interrupted.
     // If the identity changed before the interrupt settled, writing it now would
     // append TURN_STOPPED_BY_USER to a transcript the user never stopped.
@@ -837,12 +862,36 @@ export function CodexChatTab({
       if (!activeClient || !activeSessionId) {
         throw new Error("The Codex session is not connected.");
       }
+      const retryable = ambiguousSteerRef.current;
+      const requestId = retryable?.sessionId === activeSessionId
+        && retryable.input === steer.input
+        ? retryable.requestId
+        : createUuid();
       const outcome = await steerCodexSession(
         activeClient,
         activeSessionId,
         steer.input,
-        createUuid(),
+        requestId,
       );
+      const sessionUnchanged = useCodexStore
+        .getState()
+        .sessions.get(sessionKey)?.sessionId === activeSessionId;
+      if (!sessionUnchanged) {
+        // The completion belongs to the session that was replaced. Suppress its
+        // toast/error; the compose callback also preserves the new draft.
+        return true;
+      }
+      if (outcome.outcome === "unknown") {
+        // Keep at most one ambiguous attempt. An unchanged retry reuses the
+        // same idempotency key, while different text replaces this slot.
+        ambiguousSteerRef.current = {
+          sessionId: activeSessionId,
+          input: steer.input,
+          requestId,
+        };
+      } else if (ambiguousSteerRef.current?.requestId === requestId) {
+        ambiguousSteerRef.current = null;
+      }
       const failure = describeCodexSteerFailure(outcome);
       if (failure) {
         throw new Error(failure);
@@ -1132,7 +1181,13 @@ export function CodexChatTab({
 
   const handleQueue = useCallback(
     async (text: string, attachments: CodexAttachment[]) => {
-      if (await handleSteer(text, attachments)) return;
+      const submittedSessionId = useCodexStore
+        .getState()
+        .sessions.get(sessionKey)?.sessionId;
+      if (await handleSteer(text, attachments)) {
+        return useCodexStore.getState().sessions.get(sessionKey)?.sessionId
+          === submittedSessionId;
+      }
 
       const requestId = createUuid();
       await enqueueAgentPrompt<CodexQueuedMessage>("codex", sessionKey, {
@@ -1145,6 +1200,8 @@ export function CodexChatTab({
         reasoningEffort: selectedReasoningEffort,
         fastMode: fastModeEnabled,
       });
+      return useCodexStore.getState().sessions.get(sessionKey)?.sessionId
+        === submittedSessionId;
     },
     [
       fastModeEnabled,
@@ -2519,22 +2576,6 @@ export function CodexChatTab({
     (async () => {
       let patchRecovery: Promise<boolean> | null = null;
       let consecutiveHydrationFailures = 0;
-      const waitForReconnectDelay = () => new Promise<void>((resolve) => {
-        if (abortController.signal.aborted) {
-          resolve();
-          return;
-        }
-        const timeout = setTimeout(
-          finish,
-          AUTHORITATIVE_HYDRATION_RETRY_MS,
-        );
-        function finish() {
-          clearTimeout(timeout);
-          abortController.signal.removeEventListener("abort", finish);
-          resolve();
-        }
-        abortController.signal.addEventListener("abort", finish, { once: true });
-      });
       const recoverMessagePatchGap = (): Promise<boolean> => {
         if (patchRecovery) return patchRecovery;
         const recovery = refreshMessages(client, session.sessionId, {
@@ -2883,7 +2924,7 @@ export function CodexChatTab({
         }
 
         if (retryHydration) {
-          await waitForReconnectDelay();
+          await waitForCodexReconnectDelay(abortController.signal);
           continue;
         }
 
@@ -2905,7 +2946,7 @@ export function CodexChatTab({
           break;
         }
 
-        await waitForReconnectDelay();
+        await waitForCodexReconnectDelay(abortController.signal);
       }
     })();
 
@@ -3138,12 +3179,17 @@ export function CodexChatTab({
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}
           onSend={async (text, attachments) => {
+            const submittedSessionId = useCodexStore
+              .getState()
+              .sessions.get(sessionKey)?.sessionId;
             const outcome = await handleSend(text, attachments);
             if (outcome === "rejected") {
               throw new Error(
                 "Codex did not accept the prompt. Your draft was preserved so you can edit or retry it.",
               );
             }
+            return useCodexStore.getState().sessions.get(sessionKey)?.sessionId
+              === submittedSessionId;
           }}
           onQueue={handleQueue}
           onStop={handleStop}

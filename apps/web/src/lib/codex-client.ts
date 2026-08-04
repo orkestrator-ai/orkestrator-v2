@@ -1567,7 +1567,7 @@ export function describeCodexSteerFailure(outcome: CodexSteerOutcome): string | 
     case "rejected":
       return `Codex rejected the steering message (HTTP ${outcome.httpStatus}).`;
     case "unknown":
-      return "Could not confirm whether Codex received your steering message. Refresh the session before retrying.";
+      return "Could not confirm whether Codex received your steering message. Retry the unchanged steering message to check safely.";
   }
 }
 
@@ -1577,6 +1577,17 @@ export async function steerCodexSession(
   input: string,
   requestId: string,
 ): Promise<CodexSteerOutcome> {
+  // Steering must be bound to the turn the user meant to redirect. Reading the
+  // bridge-owned status first gives us an authoritative turn id; the bridge
+  // rejects the POST if that turn finishes or is replaced before it arrives.
+  const status = await lookupSessionStatus(client, sessionId);
+  if (status.kind === "missing") return { outcome: "not-found" };
+  if (status.kind === "unavailable") return { outcome: "unknown", requestId };
+  if (status.session.status !== "running") return { outcome: "idle" };
+  // A running status without a turn id cannot be bound safely. This can happen
+  // with an older bridge; it is not evidence that the active turn is idle.
+  if (!status.session.turnId) return { outcome: "unknown", requestId };
+
   try {
     const response = await fetchCodex(
       client,
@@ -1584,15 +1595,19 @@ export async function steerCodexSession(
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input, requestId }),
+        body: JSON.stringify({
+          input,
+          requestId,
+          expectedTurnId: status.session.turnId,
+        }),
       },
     );
-    if (response.ok) return { outcome: "accepted" };
-
     const body = (await response.json().catch(() => ({}))) as {
       error?: unknown;
       outcome?: unknown;
     };
+    if (body.outcome === "unknown") return { outcome: "unknown", requestId };
+    if (response.ok) return { outcome: "accepted" };
     if (response.status === 404) return { outcome: "not-found" };
     if (response.status === 409) {
       if (body.outcome === "idle" || body.error === "There is no active turn") {

@@ -620,6 +620,32 @@ describe("reconciliation", () => {
     });
   });
 
+  test("finds a steering request after the turn's original user message", async () => {
+    const h = harness({
+      "thread/read": () => ({
+        thread: thread("t1", {
+          turns: [
+            {
+              id: "turn-1",
+              status: "inProgress",
+              items: [
+                { type: "userMessage", clientId: "req-original" },
+                { type: "agentMessage", text: "working" },
+                { type: "userMessage", clientId: "req-steer" },
+              ],
+            },
+          ],
+        }),
+      }),
+    });
+    await h.engine.start();
+
+    expect(await h.engine.reconcileRequest("t1", "req-steer")).toEqual({
+      result: "attach",
+      turnId: "turn-1",
+    });
+  });
+
   test("reports a still-running turn as attach", async () => {
     const h = harness({
       "thread/read": () => ({

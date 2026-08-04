@@ -1943,6 +1943,25 @@ function toOpenCodeModelRef(model: string): { providerID: string; modelID: strin
 }
 
 /**
+ * OpenCode treats caller-supplied message IDs as durable idempotency keys. UI
+ * request IDs are provider-neutral, so encode every supplied value into a
+ * reserved namespace rather than guessing that an ID beginning with `msg` is
+ * already native. Fixed-width UTF-16 hex makes the mapping injective for every
+ * JavaScript string while satisfying OpenCode's `msg` prefix schema.
+ */
+function toOpenCodeMessageId(requestId: string | undefined): string | undefined {
+  if (requestId === undefined) return undefined;
+  if (requestId.trim().length === 0) {
+    throw new TypeError("OpenCode request ID must be a non-empty string");
+  }
+  let encoded = "";
+  for (let index = 0; index < requestId.length; index += 1) {
+    encoded += requestId.charCodeAt(index).toString(16).padStart(4, "0");
+  }
+  return `msg_ork_${encoded}`;
+}
+
+/**
  * Send a prompt to a session
  */
 export async function sendPrompt(
@@ -2015,11 +2034,12 @@ export async function sendPrompt(
     const requestId = options?.outputSchema
       ? (options.requestId ?? createUuid())
       : options?.requestId;
+    const messageID = toOpenCodeMessageId(requestId);
     const response = options?.command
       ? await client.session.command({
           sessionID: sessionId,
           directory: options.directory,
-          messageID: requestId,
+          messageID,
           command: options.command.name.replace(/^\//, ""),
           // `arguments` is a *required* field on the server's command request
           // body, so a bare `/init` must still send an empty string. Passing
@@ -2035,7 +2055,7 @@ export async function sendPrompt(
       : await client.session.promptAsync({
           sessionID: sessionId,
           directory: options?.directory,
-          messageID: requestId,
+          messageID,
           parts,
           model: options?.model ? toOpenCodeModelRef(options.model) : undefined,
           agent: options?.agent ?? options?.mode,
@@ -2429,6 +2449,10 @@ export async function getStructuredOutput<T = unknown>(
   sessionId: string,
   requestId?: string,
 ): Promise<StructuredOutputResult<T> | null> {
+  // Reject malformed correlation IDs before touching the authoritative
+  // transcript. Falling back to the latest turn for an explicit blank ID could
+  // associate an unrelated result with the caller's request.
+  const providerMessageId = toOpenCodeMessageId(requestId);
   let response: { data?: unknown; error?: unknown };
   try {
     response = await client.session.messages(
@@ -2469,9 +2493,12 @@ export async function getStructuredOutput<T = unknown>(
       return entry.info.role === "user" && format.type === "json_schema";
     })
     .at(-1)?.info.id;
-  const expectedParentId = requestId
+  const expectedParentId = providerMessageId
     ?? (typeof latestStructuredUserId === "string" ? latestStructuredUserId : undefined);
   if (!expectedParentId) return null;
+  // Keep the provider-neutral correlation ID on the public result. Only the
+  // transcript lookup uses OpenCode's provider-qualified message ID.
+  const resultRequestId = requestId ?? expectedParentId;
 
   const assistant = entries
     .filter((entry) =>
@@ -2483,7 +2510,7 @@ export async function getStructuredOutput<T = unknown>(
   if (assistant.info.error) {
     return openCodeStructuredFailure(
       assistant.info.error,
-      expectedParentId,
+      resultRequestId,
     );
   }
   if (!isRecord(assistant.info.time)) {
@@ -2491,7 +2518,7 @@ export async function getStructuredOutput<T = unknown>(
       "opencode",
       "malformed_output",
       "OpenCode returned malformed assistant timing data.",
-      { requestId: expectedParentId },
+      { requestId: resultRequestId },
     );
   }
   if (!assistant.info.time.completed) return null;
@@ -2500,13 +2527,13 @@ export async function getStructuredOutput<T = unknown>(
       "opencode",
       "malformed_output",
       "OpenCode completed the turn without a structured result.",
-      { requestId: expectedParentId },
+      { requestId: resultRequestId },
     );
   }
   return {
     ok: true,
     provider: "opencode",
-    requestId: expectedParentId,
+    requestId: resultRequestId,
     value: assistant.info.structured as T,
   };
 }

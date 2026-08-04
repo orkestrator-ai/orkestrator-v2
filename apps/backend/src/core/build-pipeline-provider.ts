@@ -121,6 +121,24 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
   }
 }
 
+/**
+ * OpenCode's optional caller-supplied message ID is both a MessageID and a
+ * durable idempotency key. Our request IDs are provider-neutral, so encode every
+ * one into a reserved namespace instead of inferring that an ID beginning with
+ * `msg` is already native. Fixed-width UTF-16 hex keeps the mapping injective
+ * for every JavaScript string while satisfying OpenCode's `msg` prefix schema.
+ */
+function openCodeMessageId(requestId: string): string {
+  if (requestId.trim().length === 0) {
+    throw new TypeError("OpenCode request ID must be a non-empty string");
+  }
+  let encoded = "";
+  for (let index = 0; index < requestId.length; index += 1) {
+    encoded += requestId.charCodeAt(index).toString(16).padStart(4, "0");
+  }
+  return `msg_ork_${encoded}`;
+}
+
 export interface ProviderCreateSessionOptions {
   /** Second layer of idempotency: bridges derive a stable session id from it. */
   clientSessionKey?: string;
@@ -1948,12 +1966,16 @@ class OpenCodeProvider implements BuildPipelineProvider {
       });
     }
     const modelParts = (options.model ?? this.connection.model)?.split("/");
+    // Validate and encode before entering the ambiguous-dispatch catch. A local
+    // validation failure is definitive and must not be retried as though the
+    // prompt might have reached OpenCode.
+    const messageID = openCodeMessageId(options.requestId);
     let response;
     try {
       response = await this.client.session.promptAsync({
         sessionID: sessionId,
         directory: this.connection.directory,
-        messageID: options.requestId,
+        messageID,
         parts: parts as never,
         model: modelParts && modelParts.length > 1
           ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
@@ -2426,6 +2448,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     sessionId: string,
     requestId: string,
   ): Promise<StructuredOutputResult<T> | null> {
+    const providerMessageId = openCodeMessageId(requestId);
     let response;
     try {
       response = await this.client.session.messages(
@@ -2442,7 +2465,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     if (!Array.isArray(response.data)) return null;
     const assistant = [...response.data].reverse().find((entry) => {
       const info = entry.info as { role?: unknown; parentID?: unknown };
-      return info.role === "assistant" && info.parentID === requestId;
+      return info.role === "assistant" && info.parentID === providerMessageId;
     });
     if (!assistant) return null;
     const info = assistant.info as {

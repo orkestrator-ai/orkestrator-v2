@@ -50,6 +50,7 @@ function resetClaudeStore() {
     backgroundTasks: new Map(),
     completionBlockedByBackgroundTasks: new Map(),
     backgroundTaskRevisions: new Map(),
+    completionHoldRevisions: new Map(),
   });
 }
 
@@ -308,6 +309,7 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
     expect(state.completionBlockedByBackgroundTasks.has(SESSION_KEY)).toBe(false);
     expect(state.backgroundTaskRevisions.has(SESSION_KEY)).toBe(false);
+    expect(state.completionHoldRevisions.has(SESSION_KEY)).toBe(false);
     expect(state.pendingQuestions.has("old-question")).toBe(false);
     expect(state.pendingPlanApprovals.has("old-approval")).toBe(false);
     expect(state.selectedModel.get(SESSION_KEY)).toBe("claude-sonnet");
@@ -396,6 +398,10 @@ describe("claudeStore cleanup and queue helpers", () => {
         [targetKey, 3],
         [otherKey, 7],
       ]),
+      completionHoldRevisions: new Map([
+        [targetKey, 4],
+        [otherKey, 8],
+      ]),
       completionBlockedByBackgroundTasks: new Map([
         [targetKey, true],
         [otherKey, true],
@@ -444,6 +450,7 @@ describe("claudeStore cleanup and queue helpers", () => {
       "rateLimits",
       "completionBlockedByBackgroundTasks",
       "backgroundTaskRevisions",
+      "completionHoldRevisions",
     ] as const;
     for (const field of sessionKeyedMaps) {
       expect(state[field].has(targetKey), `${field} should remove target`).toBe(false);
@@ -1303,16 +1310,40 @@ describe("claudeStore per-session turn options", () => {
         useClaudeStore.getState().completionBlockedByBackgroundTasks.get(SESSION_KEY),
       ).toBe(true);
       expect(
-        useClaudeStore.getState().backgroundTaskRevisions.get(SESSION_KEY),
+        useClaudeStore.getState().completionHoldRevisions.get(SESSION_KEY),
       ).toBe(1);
+      expect(
+        useClaudeStore.getState().backgroundTaskRevisions.has(SESSION_KEY),
+      ).toBe(false);
 
       store.setCompletionBlockedByBackgroundTasks(SESSION_KEY, false);
       expect(
         useClaudeStore.getState().completionBlockedByBackgroundTasks.has(SESSION_KEY),
       ).toBe(false);
       expect(
-        useClaudeStore.getState().backgroundTaskRevisions.get(SESSION_KEY),
+        useClaudeStore.getState().completionHoldRevisions.get(SESSION_KEY),
       ).toBe(2);
+    });
+
+    test("does not advance the hold revision for an unchanged boolean", () => {
+      const store = useClaudeStore.getState();
+
+      store.setCompletionBlockedByBackgroundTasks(SESSION_KEY, false);
+      expect(
+        useClaudeStore.getState().completionHoldRevisions.has(SESSION_KEY),
+      ).toBe(false);
+
+      store.setCompletionBlockedByBackgroundTasks(SESSION_KEY, true);
+      const stateAfterChange = useClaudeStore.getState();
+      const holdMapAfterChange = stateAfterChange.completionBlockedByBackgroundTasks;
+      expect(stateAfterChange.completionHoldRevisions.get(SESSION_KEY)).toBe(1);
+
+      store.setCompletionBlockedByBackgroundTasks(SESSION_KEY, true);
+      const stateAfterNoop = useClaudeStore.getState();
+      expect(stateAfterNoop.completionBlockedByBackgroundTasks).toBe(
+        holdMapAfterChange,
+      );
+      expect(stateAfterNoop.completionHoldRevisions.get(SESSION_KEY)).toBe(1);
     });
   });
 
@@ -1442,6 +1473,7 @@ describe("claudeStore per-session turn options", () => {
     expect(state.backgroundTasks.has(SESSION_KEY)).toBe(false);
     expect(state.completionBlockedByBackgroundTasks.has(SESSION_KEY)).toBe(false);
     expect(state.backgroundTaskRevisions.has(SESSION_KEY)).toBe(false);
+    expect(state.completionHoldRevisions.has(SESSION_KEY)).toBe(false);
     expect(state.fastMode.has(SESSION_KEY)).toBe(false);
     expect(state.contextUsage.has(SESSION_KEY)).toBe(false);
     expect(state.rateLimits.has(SESSION_KEY)).toBe(false);
@@ -1464,7 +1496,8 @@ describe("claudeStore per-session turn options", () => {
     expect(state.dismissedPromptSuggestions.get(otherEnvKey)).toBe("Already used this one");
     expect(state.backgroundTasks.has(otherEnvKey)).toBe(true);
     expect(state.completionBlockedByBackgroundTasks.get(otherEnvKey)).toBe(true);
-    expect(state.backgroundTaskRevisions.get(otherEnvKey)).toBe(2);
+    expect(state.backgroundTaskRevisions.get(otherEnvKey)).toBe(1);
+    expect(state.completionHoldRevisions.get(otherEnvKey)).toBe(1);
     expect(state.fastMode.get(otherEnvKey)).toBe(true);
     expect(state.contextUsage.has(otherEnvKey)).toBe(true);
     expect(state.rateLimits.has(otherEnvKey)).toBe(true);

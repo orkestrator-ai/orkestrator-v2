@@ -379,6 +379,23 @@ describe("claude-client", () => {
       }
     });
 
+    test("preserves an explicit false completion hold", async () => {
+      mockFetchJson({
+        id: "s-1",
+        status: "idle",
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+        completionBlockedByBackgroundTasks: false,
+      });
+
+      const result = await lookupSession(client, "s-1");
+      expect(result.kind).toBe("found");
+      if (result.kind === "found") {
+        expect(result.session.completionBlockedByBackgroundTasks).toBe(false);
+        expect(result.session.invalidMetadataFields).toBeUndefined();
+      }
+    });
+
     test("rehydrates authoritative top-level rate limits into context usage", async () => {
       mockFetchJson({
         id: "s-1",

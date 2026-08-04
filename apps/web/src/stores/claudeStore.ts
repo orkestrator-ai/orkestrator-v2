@@ -163,15 +163,21 @@ interface ClaudeState
   /** Sessions whose response is ready but whose background work remains live. */
   completionBlockedByBackgroundTasks: Map<ClaudeSessionKey, boolean>;
   /**
-   * Monotonic lifecycle revision for each tab's authoritative background state.
+   * Monotonic revision for each tab's authoritative background-task snapshots.
    *
    * The task map deliberately deletes empty records, so comparing its value
    * cannot detect an absent → present → absent sequence while a REST refresh
-   * is in flight. The completion hold can also change without the task map
-   * changing. This revision advances for every task or hold snapshot so stale
-   * REST responses cannot overwrite either half of that lifecycle.
+   * is in flight.
    */
   backgroundTaskRevisions: Map<ClaudeSessionKey, number>;
+  /**
+   * Monotonic revision for the independently-emitted completion hold.
+   *
+   * Keeping this separate from task snapshots lets a REST refresh retain the
+   * newer half of the pair without discarding an authoritative value for the
+   * other half that no later SSE frame may repeat.
+   */
+  completionHoldRevisions: Map<ClaudeSessionKey, number>;
   pendingQuestions: Map<string, ClaudeQuestionRequest>;
   pendingPlanApprovals: Map<string, ClaudePlanApprovalRequest>;
 
@@ -312,6 +318,7 @@ const CLAUDE_SESSION_KEYED_MAPS = [
   "backgroundTasks",
   "completionBlockedByBackgroundTasks",
   "backgroundTaskRevisions",
+  "completionHoldRevisions",
 ] as const satisfies ReadonlyArray<keyof ClaudeState>;
 
 export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
@@ -343,6 +350,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   backgroundTasks: new Map(),
   completionBlockedByBackgroundTasks: new Map(),
   backgroundTaskRevisions: new Map(),
+  completionHoldRevisions: new Map(),
   pendingQuestions: new Map(),
   pendingPlanApprovals: new Map(),
 
@@ -534,17 +542,21 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
 
   setCompletionBlockedByBackgroundTasks: (sessionKey, blocked) =>
     set((state) => {
+      const wasBlocked =
+        state.completionBlockedByBackgroundTasks.get(sessionKey) === true;
+      if (wasBlocked === blocked) return state;
+
       const next = new Map(state.completionBlockedByBackgroundTasks);
-      const revisions = new Map(state.backgroundTaskRevisions);
+      const revisions = new Map(state.completionHoldRevisions);
       if (blocked) next.set(sessionKey, true);
       else next.delete(sessionKey);
       revisions.set(
         sessionKey,
-        (state.backgroundTaskRevisions.get(sessionKey) ?? 0) + 1,
+        (state.completionHoldRevisions.get(sessionKey) ?? 0) + 1,
       );
       return {
         completionBlockedByBackgroundTasks: next,
-        backgroundTaskRevisions: revisions,
+        completionHoldRevisions: revisions,
       };
     }),
 
@@ -604,6 +616,9 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
         ),
         backgroundTaskRevisions: withoutSessionKey(
           state.backgroundTaskRevisions,
+        ),
+        completionHoldRevisions: withoutSessionKey(
+          state.completionHoldRevisions,
         ),
         pendingQuestions,
         pendingPlanApprovals,

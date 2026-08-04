@@ -1920,7 +1920,10 @@ export function abortSession(sessionId: string): boolean {
     eventEmitter.emit({
       type: "session.idle",
       sessionId,
-      data: { aborted: true },
+      data: {
+        aborted: true,
+        completionBlockedByBackgroundTasks: false,
+      },
     });
 
     return true;
@@ -3293,6 +3296,7 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
     session.deleting = false;
     session.status = "idle";
     session.turnStartedAt = undefined;
+    session.completionBlockedByBackgroundTasks = false;
     throw error;
   }
 }
@@ -4528,6 +4532,25 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   // coalescing window was holding. Null until the streaming state it closes
   // over exists, which is everything before the SDK query is created.
   let flushPendingStreamedDeltas: (() => void) | null = null;
+  const recordInterruptedStructuredOutputIfCurrent = () => {
+    if (
+      !options?.outputSchema
+      || !structuredRequestId
+      || session.structuredOutputRequestId !== structuredRequestId
+      || session.structuredOutput
+    ) {
+      return;
+    }
+    recordStructuredOutput(
+      session,
+      structuredOutputFailure(
+        "claude",
+        "interrupted",
+        "Claude structured-output turn was interrupted.",
+        { requestId: structuredRequestId, retryable: true },
+      ),
+    );
+  };
 
   try {
     // Create the query with Claude Agent SDK
@@ -5920,6 +5943,13 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           options?.model,
         );
         if (!ownsActiveTurn()) {
+          if (abortController.signal.aborted) {
+            // The provider accepted this request, so the caller needs a
+            // terminal outcome even though abort won the race with the final
+            // usage snapshot. A newer structured turn replaces the request id
+            // before taking ownership; never let this old turn overwrite it.
+            recordInterruptedStructuredOutputIfCurrent();
+          }
           heldSdkPrompt.close();
           return;
         }
@@ -5993,15 +6023,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
     if (abortController.signal.aborted) {
       if (options?.outputSchema && structuredRequestId) {
-        recordStructuredOutput(
-          session,
-          structuredOutputFailure(
-            "claude",
-            "interrupted",
-            "Claude structured-output turn was interrupted.",
-            { requestId: structuredRequestId, retryable: true },
-          ),
-        );
+        recordInterruptedStructuredOutputIfCurrent();
       }
       return;
     }
@@ -6124,17 +6146,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     flushPendingStreamedDeltas?.();
 
     if (abortController.signal.aborted) {
-      if (options?.outputSchema && structuredRequestId && !session.structuredOutput) {
-        recordStructuredOutput(
-          session,
-          structuredOutputFailure(
-            "claude",
-            "interrupted",
-            "Claude structured-output turn was interrupted.",
-            { requestId: structuredRequestId, retryable: true },
-          ),
-        );
-      }
+      recordInterruptedStructuredOutputIfCurrent();
       return;
     }
     console.error("[session-manager] Error processing prompt:", error);

@@ -9,6 +9,11 @@ interface ClaudeBackgroundTaskHoldCardProps {
   onStopTask: (taskId: string) => Promise<boolean>;
 }
 
+interface StopError {
+  taskId: string;
+  message: string;
+}
+
 function taskLabel(task: ClaudeBackgroundTask): string {
   return task.description?.trim() || `Background task ${task.id}`;
 }
@@ -24,7 +29,7 @@ export function ClaudeBackgroundTaskHoldCard({
   const [stoppingTaskIds, setStoppingTaskIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [error, setError] = useState<string | null>(null);
+  const [stopError, setStopError] = useState<StopError | null>(null);
 
   useEffect(() => {
     const liveTaskIds = new Set(tasks.map((task) => task.id));
@@ -34,12 +39,15 @@ export function ClaudeBackgroundTaskHoldCard({
       );
       return next.size === current.size ? current : next;
     });
+    setStopError((current) => (
+      current && !liveTaskIds.has(current.taskId) ? null : current
+    ));
   }, [tasks]);
 
   const stopTask = useCallback(
     async (task: ClaudeBackgroundTask) => {
       if (stoppingTaskIds.has(task.id)) return;
-      setError(null);
+      setStopError(null);
       setStoppingTaskIds((current) => new Set(current).add(task.id));
       let stopped = false;
       try {
@@ -53,7 +61,10 @@ export function ClaudeBackgroundTaskHoldCard({
           next.delete(task.id);
           return next;
         });
-        setError(`Could not stop “${taskLabel(task)}”. Try again or use the main Stop control.`);
+        setStopError({
+          taskId: task.id,
+          message: `Could not stop “${taskLabel(task)}”. Try again or use the main Stop control.`,
+        });
       }
       // On success the button remains disabled until the authoritative task
       // snapshot removes it from this live list. That prevents duplicate stop
@@ -70,8 +81,8 @@ export function ClaudeBackgroundTaskHoldCard({
       title={`Response ready · ${count} background ${noun} still running`}
       description="Claude will finish this turn when these tasks stop. Stop only tasks that were created for waiting."
       icon={<Clock3 className="h-4 w-4" />}
-      error={error}
-      arrivalAnnouncement={`Claude's response is ready, but ${count} background ${noun} remain.`}
+      error={stopError?.message ?? null}
+      arrivalAnnouncement="Claude's response is ready, but background tasks are still running."
       aria-label="Claude background tasks keeping the turn open"
       data-testid="claude-background-task-hold"
     >

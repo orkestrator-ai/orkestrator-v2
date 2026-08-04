@@ -1912,6 +1912,7 @@ export function abortSession(sessionId: string): boolean {
     session.status = "idle";
     session.turnStartedAt = undefined;
     session.abortController = undefined;
+    session.completionBlockedByBackgroundTasks = false;
     releaseQueryControl(session);
 
     cleanupPendingInteractions(sessionId);
@@ -4358,6 +4359,7 @@ export async function sendPrompt(
   const abortController = new AbortController();
   session.abortController = abortController;
   session.status = "running";
+  session.completionBlockedByBackgroundTasks = false;
   // Preserve the original user-turn clock across bridge-internal re-prompts.
   session.turnStartedAt ??= new Date().toISOString();
 
@@ -4504,7 +4506,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   eventEmitter.emit({
     type: "session.updated",
     sessionId,
-    data: { status: "running", turnStartedAt: session.turnStartedAt },
+    data: {
+      status: "running",
+      turnStartedAt: session.turnStartedAt,
+      completionBlockedByBackgroundTasks: false,
+    },
   });
 
   const startedAt = Date.now();
@@ -4575,11 +4581,21 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal);
     closeSdkInput = heldSdkPrompt.close;
     let receivedResult = false;
+    const setCompletionBlockedByBackgroundTasks = (blocked: boolean) => {
+      if (session.completionBlockedByBackgroundTasks === blocked) return;
+      session.completionBlockedByBackgroundTasks = blocked;
+      eventEmitter.emit({
+        type: "session.updated",
+        sessionId,
+        data: { completionBlockedByBackgroundTasks: blocked },
+      });
+    };
     const finishTurnInputIfSettled = () => {
       if (!receivedResult) return;
       const hasLiveTask = Object.values(session.backgroundTasks ?? {}).some((task) =>
         LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
       );
+      setCompletionBlockedByBackgroundTasks(hasLiveTask);
       if (!hasLiveTask) heldSdkPrompt.close();
     };
     finishTurnInputForThisTurn = finishTurnInputIfSettled;
@@ -6067,6 +6083,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     session.status = "idle";
     session.turnStartedAt = undefined;
     session.abortController = undefined;
+    session.completionBlockedByBackgroundTasks = false;
 
     eventEmitter.emit({
       type: "session.idle",
@@ -6124,6 +6141,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       session.turnStartedAt = undefined;
       session.error = error instanceof Error ? error.message : String(error);
       session.abortController = undefined;
+      session.completionBlockedByBackgroundTasks = false;
       cleanupPendingInteractions(sessionId);
 
       eventEmitter.emit({

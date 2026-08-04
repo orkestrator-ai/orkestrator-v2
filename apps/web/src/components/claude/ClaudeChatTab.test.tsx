@@ -89,6 +89,7 @@ const mockGetStructuredOutput = mock<
   ) => Promise<any>
 >(async () => null);
 const mockAbortSession = mock(async () => true);
+const mockStopClaudeBackgroundTask = mock(async () => true);
 const mockUpdateSessionPreferences = mock(
   async (
     _client: unknown,
@@ -251,6 +252,7 @@ mock.module("@/lib/claude-client", () => ({
   sendPrompt: mockSendPrompt,
   getStructuredOutput: mockGetStructuredOutput,
   abortSession: mockAbortSession,
+  stopClaudeBackgroundTask: mockStopClaudeBackgroundTask,
   updateSessionPreferences: mockUpdateSessionPreferences,
   subscribeToEvents: mockSubscribeToEvents,
   checkHealth: mockCheckHealth,
@@ -634,6 +636,7 @@ function resetStores(environmentName = "review-table") {
     includeLocalSettings: new Map(),
     selectedAgent: new Map(),
     backgroundTasks: new Map(),
+    completionBlockedByBackgroundTasks: new Map(),
     backgroundTaskRevisions: new Map(),
   });
 
@@ -828,6 +831,8 @@ describe("ClaudeChatTab", () => {
     mockGetStructuredOutput.mockResolvedValue(null);
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => true);
+    mockStopClaudeBackgroundTask.mockClear();
+    mockStopClaudeBackgroundTask.mockImplementation(async () => true);
     mockRemovePromptQueueMessage.mockReset();
     mockRemovePromptQueueMessage.mockImplementation(
       async (queueKey, environmentId, messageId) => {
@@ -6294,6 +6299,41 @@ describe("ClaudeChatTab", () => {
       ).toEqual(["task-1"]);
     });
 
+    test("rehydrates a completed-response hold and stops only the selected task", async () => {
+      mockGetSession.mockResolvedValue(serverSession({
+        completionBlockedByBackgroundTasks: true,
+        backgroundTasks: {
+          "wait-loop": {
+            id: "wait-loop",
+            description: "Wait for final review agent",
+            status: "running",
+          },
+          build: {
+            id: "build",
+            description: "Run the test suite",
+            status: "paused",
+          },
+        },
+      }) as any);
+
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      const stopWait = await screen.findByRole("button", {
+        name: "Stop Wait for final review agent",
+      });
+      expect(screen.getByText("Response ready · 2 background tasks still running")).toBeTruthy();
+      fireEvent.click(stopWait);
+
+      await waitFor(() => {
+        expect(mockStopClaudeBackgroundTask).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          "session-1",
+          "wait-loop",
+        );
+      });
+      expect(mockStopClaudeBackgroundTask).toHaveBeenCalledTimes(1);
+    });
+
     test("rehydrates a named terminal TaskStop row after the tab remounts", async () => {
       const stopMessage: ClaudeMessageType = {
         id: "assistant-stop-background-task",
@@ -6697,6 +6737,7 @@ describe("ClaudeChatTab", () => {
             backgroundTasks: {
               "bg-1": { id: "bg-1", status: "running", description: "Long build" },
             },
+            completionBlockedByBackgroundTasks: true,
           },
         } as any);
 
@@ -6709,6 +6750,22 @@ describe("ClaudeChatTab", () => {
         expect(
           useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)?.["bg-1"]?.description,
         ).toBe("Long build");
+        expect(
+          useClaudeStore.getState().completionBlockedByBackgroundTasks.get(SESSION_KEY),
+        ).toBe(true);
+        expect(screen.getByText("Response ready · 1 background task still running")).toBeTruthy();
+
+        channel.push({
+          type: "session.idle",
+          sessionId: "session-1",
+          data: { success: true },
+        } as any);
+        await waitFor(() => {
+          expect(
+            useClaudeStore.getState().completionBlockedByBackgroundTasks.has(SESSION_KEY),
+          ).toBe(false);
+        });
+        expect(screen.queryByTestId("claude-background-task-hold")).toBeNull();
       });
     });
 

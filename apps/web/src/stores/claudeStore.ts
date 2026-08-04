@@ -160,6 +160,8 @@ interface ClaudeState
    */
   dismissedPromptSuggestions: Map<ClaudeSessionKey, string>;
   backgroundTasks: Map<ClaudeSessionKey, Record<string, ClaudeBackgroundTask>>;
+  /** Sessions whose response is ready but whose background work remains live. */
+  completionBlockedByBackgroundTasks: Map<ClaudeSessionKey, boolean>;
   /**
    * Monotonic lifecycle revision for each tab's authoritative task snapshots.
    *
@@ -218,6 +220,10 @@ interface ClaudeState
   setBackgroundTasks: (
     sessionKey: ClaudeSessionKey,
     tasks: Record<string, ClaudeBackgroundTask>,
+  ) => void;
+  setCompletionBlockedByBackgroundTasks: (
+    sessionKey: ClaudeSessionKey,
+    blocked: boolean,
   ) => void;
   /**
    * Bind a tab to a different provider session and discard metadata that belongs
@@ -303,6 +309,7 @@ const CLAUDE_SESSION_KEYED_MAPS = [
   "promptSuggestions",
   "dismissedPromptSuggestions",
   "backgroundTasks",
+  "completionBlockedByBackgroundTasks",
   "backgroundTaskRevisions",
 ] as const satisfies ReadonlyArray<keyof ClaudeState>;
 
@@ -333,6 +340,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   promptSuggestions: new Map(),
   dismissedPromptSuggestions: new Map(),
   backgroundTasks: new Map(),
+  completionBlockedByBackgroundTasks: new Map(),
   backgroundTaskRevisions: new Map(),
   pendingQuestions: new Map(),
   pendingPlanApprovals: new Map(),
@@ -523,6 +531,14 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       };
     }),
 
+  setCompletionBlockedByBackgroundTasks: (sessionKey, blocked) =>
+    set((state) => {
+      const next = new Map(state.completionBlockedByBackgroundTasks);
+      if (blocked) next.set(sessionKey, true);
+      else next.delete(sessionKey);
+      return { completionBlockedByBackgroundTasks: next };
+    }),
+
   replaceSessionIdentity: (sessionKey, session) => {
     const sweptDraftKeys: string[] = [];
     set((state) => {
@@ -574,6 +590,9 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
           state.dismissedPromptSuggestions,
         ),
         backgroundTasks: withoutSessionKey(state.backgroundTasks),
+        completionBlockedByBackgroundTasks: withoutSessionKey(
+          state.completionBlockedByBackgroundTasks,
+        ),
         backgroundTaskRevisions: withoutSessionKey(
           state.backgroundTaskRevisions,
         ),

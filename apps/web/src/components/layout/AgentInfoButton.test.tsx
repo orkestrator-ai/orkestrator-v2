@@ -442,6 +442,7 @@ afterEach(() => {
     includeLocalSettings: new Map(),
     promptSuggestionOptIn: new Map(),
     backgroundTasks: new Map(),
+    completionBlockedByBackgroundTasks: new Map(),
   });
   useCodexStore.setState({
     clients: new Map(),

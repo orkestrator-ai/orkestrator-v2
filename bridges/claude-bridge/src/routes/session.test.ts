@@ -1992,6 +1992,7 @@ describe("persisted session routes", () => {
           },
         },
         rateLimits: [{ label: "Five Hour", usedPercent: 42 }],
+        completionBlockedByBackgroundTasks: true,
         rewindInProgress: true,
       } as ReturnType<typeof mockGetSession>);
 
@@ -2009,12 +2010,14 @@ describe("persisted session routes", () => {
         },
       });
       expect(data.rateLimits).toEqual([{ label: "Five Hour", usedPercent: 42 }]);
+      expect(data.completionBlockedByBackgroundTasks).toBe(true);
       expect(data.rewindInProgress).toBe(true);
     });
 
     test("reports an empty task set and no rewind for a fresh session", async () => {
       const data = await jsonBody(await app.request("/session/s-1"));
       expect(data.backgroundTasks).toEqual({});
+      expect(data.completionBlockedByBackgroundTasks).toBe(false);
       expect(data.rewindInProgress).toBe(false);
     });
   });

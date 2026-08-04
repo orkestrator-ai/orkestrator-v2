@@ -51,7 +51,9 @@ import {
   type PlanApprovalRespondedEventData,
   type SystemMessageEventData,
   type ClaudeEffortLevel,
+  type ClaudeBackgroundTask,
   dismissPromptSuggestion,
+  stopClaudeBackgroundTask,
   updateSessionPreferences,
 } from "@/lib/claude-client";
 import {
@@ -79,6 +81,7 @@ import {
 import { ClaudeComposeBar } from "./ClaudeComposeBar";
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
 import { ClaudePlanApprovalCard } from "./ClaudePlanApprovalCard";
+import { ClaudeBackgroundTaskHoldCard } from "./ClaudeBackgroundTaskHoldCard";
 import { ResumeSessionDialog } from "./ResumeSessionDialog";
 import type { ClaudeNativeData } from "@/types/paneLayout";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -123,7 +126,7 @@ const UNMATCHED_EVENT_WARNING_EXEMPT = new Set([
   "system.compact",
   "system.message",
 ]);
-const EMPTY_BACKGROUND_TASKS = {};
+const EMPTY_BACKGROUND_TASKS: Record<string, ClaudeBackgroundTask> = {};
 const EMPTY_CLAUDE_SLASH_COMMANDS: string[] = [];
 const DEFAULT_CLAUDE_SLASH_COMMAND_NAMES = new Set([
   "/clear",
@@ -297,6 +300,9 @@ export function ClaudeChatTab({
   const setRateLimits = useClaudeStore((state) => state.setRateLimits);
   const setPromptSuggestion = useClaudeStore((state) => state.setPromptSuggestion);
   const setBackgroundTasks = useClaudeStore((state) => state.setBackgroundTasks);
+  const setCompletionBlockedByBackgroundTasks = useClaudeStore(
+    (state) => state.setCompletionBlockedByBackgroundTasks,
+  );
   const addPendingPlanApproval = useClaudeStore(
     (state) => state.addPendingPlanApproval,
   );
@@ -528,11 +534,18 @@ export function ClaudeChatTab({
           setBackgroundTasks(key, backgroundTasks);
         }
       }
+      if (!invalidFields.has("completionBlockedByBackgroundTasks")) {
+        setCompletionBlockedByBackgroundTasks(
+          key,
+          serverSession.completionBlockedByBackgroundTasks === true,
+        );
+      }
     },
     [
       applyPromptSuggestion,
       setBackgroundTasks,
       setContextUsage,
+      setCompletionBlockedByBackgroundTasks,
       setPlanMode,
       setRateLimits,
     ],
@@ -886,6 +899,18 @@ export function ClaudeChatTab({
       (state) => state.backgroundTasks.get(sessionKey) ?? EMPTY_BACKGROUND_TASKS,
       [sessionKey],
     ),
+  );
+  const completionBlockedByBackgroundTasks = useClaudeStore(
+    useCallback(
+      (state) => state.completionBlockedByBackgroundTasks.get(sessionKey) === true,
+      [sessionKey],
+    ),
+  );
+  const liveBackgroundTasks = useMemo(
+    () => Object.values(backgroundTasks).filter(
+      (task) => task.status === "pending" || task.status === "running" || task.status === "paused",
+    ),
+    [backgroundTasks],
   );
   const lifecycleMessages = useMemo(
     () => applyClaudeBackgroundTaskStates(sessionMessages, backgroundTasks),
@@ -2054,10 +2079,21 @@ export function ClaudeChatTab({
                   setBackgroundTasks(sessionTabId, tasks);
                 }
               }
+              if (
+                sessionUpdate
+                && "completionBlockedByBackgroundTasks" in sessionUpdate
+                && typeof sessionUpdate.completionBlockedByBackgroundTasks === "boolean"
+              ) {
+                setCompletionBlockedByBackgroundTasks(
+                  sessionTabId,
+                  sessionUpdate.completionBlockedByBackgroundTasks,
+                );
+              }
             }
 
             if (isFinalEvent) {
               setSessionLoading(sessionTabId, false);
+              setCompletionBlockedByBackgroundTasks(sessionTabId, false);
             }
 
             if (eventType === "session.title-updated") {
@@ -2073,6 +2109,7 @@ export function ClaudeChatTab({
               const rawError = (event.data as any)?.error;
               console.error("[ClaudeChatTab] Session error:", rawError);
               setSessionLoading(sessionTabId, false);
+              setCompletionBlockedByBackgroundTasks(sessionTabId, false);
               let errorMsg: string;
               if (typeof rawError === "string") {
                 errorMsg = rawError;
@@ -2287,7 +2324,7 @@ export function ClaudeChatTab({
         }
       }
     },
-    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setSessionError, setSessionTitle, setContextUsage, setPromptSuggestion, setBackgroundTasks, applyServerSessionMetadata, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, setPlanMode, getSessionKeyBySdkSessionId]
+    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setSessionError, setSessionTitle, setContextUsage, setPromptSuggestion, setBackgroundTasks, setCompletionBlockedByBackgroundTasks, applyServerSessionMetadata, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, setPlanMode, getSessionKeyBySdkSessionId]
   );
   startSharedEventSubscriptionRef.current = startSharedEventSubscription;
 
@@ -2517,6 +2554,14 @@ export function ClaudeChatTab({
     }
   }, [client, session, sessionKey, promoteNextQueuedPromptToDraft, addMessage]);
 
+  const handleStopBackgroundTask = useCallback(
+    async (taskId: string) => {
+      if (!client || !session?.sessionId) return false;
+      return stopClaudeBackgroundTask(client, session.sessionId, taskId);
+    },
+    [client, session?.sessionId],
+  );
+
   const handlePlanModeChange = useCallback((enabled: boolean) => {
     if (!client || !session) return;
     const sdkSessionId = session.sessionId;
@@ -2621,9 +2666,10 @@ export function ClaudeChatTab({
     setSession(sessionKey, null);
     setContextUsage(sessionKey, null);
     setRateLimits(sessionKey, null);
+    setCompletionBlockedByBackgroundTasks(sessionKey, false);
     setServerStatus(environmentId, { running: false, hostPort: null });
     setInitAttempt((value) => value + 1);
-  }, [sessionKey, environmentId, tabId, setClient, setSession, setContextUsage, setRateLimits, setServerStatus, updateTabNativeSessionId]);
+  }, [sessionKey, environmentId, tabId, setClient, setSession, setContextUsage, setRateLimits, setCompletionBlockedByBackgroundTasks, setServerStatus, updateTabNativeSessionId]);
 
   const handleResumeSession = useCallback(
     async (sessionId: string) => {
@@ -2718,6 +2764,18 @@ export function ClaudeChatTab({
           // the previous session must not become the new session's baseline.
           backgroundTaskRevisions.delete(sessionKey);
 
+          const completionHolds = new Map(
+            state.completionBlockedByBackgroundTasks,
+          );
+          if (
+            !invalidMetadataFields.has("completionBlockedByBackgroundTasks")
+            && serverSession.completionBlockedByBackgroundTasks === true
+          ) {
+            completionHolds.set(sessionKey, true);
+          } else {
+            completionHolds.delete(sessionKey);
+          }
+
           const planMode = new Map(state.planMode);
           planMode.set(
             sessionKey,
@@ -2733,6 +2791,7 @@ export function ClaudeChatTab({
             promptSuggestions,
             dismissedPromptSuggestions,
             backgroundTasks: tasksBySession,
+            completionBlockedByBackgroundTasks: completionHolds,
             backgroundTaskRevisions,
             planMode,
           };
@@ -2927,6 +2986,16 @@ export function ClaudeChatTab({
           >
             Suggested: {promptSuggestion}
           </button>
+        ) : null
+      }
+      pinnedAccessory={
+        session
+        && completionBlockedByBackgroundTasks
+        && liveBackgroundTasks.length > 0 ? (
+          <ClaudeBackgroundTaskHoldCard
+            tasks={liveBackgroundTasks}
+            onStopTask={handleStopBackgroundTask}
+          />
         ) : null
       }
       blockingCards={

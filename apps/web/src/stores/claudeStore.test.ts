@@ -48,6 +48,7 @@ function resetClaudeStore() {
     promptSuggestions: new Map(),
     dismissedPromptSuggestions: new Map(),
     backgroundTasks: new Map(),
+    completionBlockedByBackgroundTasks: new Map(),
     backgroundTaskRevisions: new Map(),
   });
 }
@@ -1285,6 +1286,20 @@ describe("claudeStore per-session turn options", () => {
       store.setBackgroundTasks(SESSION_KEY, { "task-1": task });
 
       expect(useClaudeStore.getState().backgroundTasks.has(otherKey)).toBe(false);
+    });
+
+    test("stores and authoritatively clears the completed-response hold", () => {
+      const store = useClaudeStore.getState();
+
+      store.setCompletionBlockedByBackgroundTasks(SESSION_KEY, true);
+      expect(
+        useClaudeStore.getState().completionBlockedByBackgroundTasks.get(SESSION_KEY),
+      ).toBe(true);
+
+      store.setCompletionBlockedByBackgroundTasks(SESSION_KEY, false);
+      expect(
+        useClaudeStore.getState().completionBlockedByBackgroundTasks.has(SESSION_KEY),
+      ).toBe(false);
     });
   });
 

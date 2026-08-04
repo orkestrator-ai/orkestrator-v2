@@ -244,6 +244,8 @@ session.get("/:id", async (c) => {
     promptSuggestion: sessionData.promptSuggestion,
     planMode: sessionData.planMode,
     backgroundTasks: sessionData.backgroundTasks ?? {},
+    completionBlockedByBackgroundTasks:
+      sessionData.completionBlockedByBackgroundTasks === true,
     rewindInProgress: sessionData.rewindInProgress === true,
   });
 });

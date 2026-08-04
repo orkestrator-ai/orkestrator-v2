@@ -8216,6 +8216,7 @@ describe("background task reducer", () => {
 
     expect(inputClosed).toBe(false);
     expect(getSession(created.id)?.status).toBe("running");
+    expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(true);
 
     call.push({
       type: "system",
@@ -8226,6 +8227,7 @@ describe("background task reducer", () => {
     });
     await waitFor(() => inputClosed);
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
     // The bridge remains authoritative until the provider stream itself ends.
     expect(getSession(created.id)?.status).toBe("running");
 

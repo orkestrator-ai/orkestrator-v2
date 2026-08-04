@@ -747,12 +747,26 @@ describe("FeaturePlanningService", () => {
       await Bun.sleep(2);
       await context.storage.appendFeaturePlanMessage(context.featureId, "user", "Left in flight");
       const pending = (await context.storage.getFeaturePlan(context.featureId))?.messages.at(-1);
-      context.provider.transcript = [{
-        id: "historical-assistant",
-        role: "assistant",
-        content: PLANNER_REPLY,
-        createdAt: new Date(Date.parse(pending!.createdAt) - 1_000).toISOString(),
-      }];
+      context.provider.transcript = [
+        {
+          id: "historical-assistant",
+          role: "assistant",
+          content: PLANNER_REPLY,
+          createdAt: new Date(Date.parse(pending!.createdAt) - 1_000).toISOString(),
+        },
+        {
+          id: "assistant-without-a-clock",
+          role: "assistant",
+          content: PLANNER_REPLY.replace("Bulk export", "Undated export"),
+          createdAt: "",
+        },
+        {
+          id: "assistant-with-an-invalid-clock",
+          role: "assistant",
+          content: PLANNER_REPLY.replace("Bulk export", "Invalid date export"),
+          createdAt: "not-an-iso-date",
+        },
+      ];
       context.provider.activityState = "idle";
 
       await context.service.init();

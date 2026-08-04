@@ -14,6 +14,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   createClaudeTmuxStateKey,
   useClaudeTmuxStore,
+  type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -38,6 +39,11 @@ import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import type { Environment, FileCandidate } from "@/types";
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
+import {
+  applyPromptQueueSnapshot,
+  promptQueueKey,
+  resetPromptQueueRevisions,
+} from "@/lib/prompt-queue-persistence";
 
 const realTmuxClientSnapshot = { ...realTmuxClient };
 const realBackendSnapshot = { ...realBackend };
@@ -196,6 +202,48 @@ const promptQueueSnapshot = (
   updatedAt: "2026-01-01T00:00:00.000Z",
   revision: promptQueueRevision++,
 });
+const retryPromptQueueDispatchMock = mock(async (queueKey: string) => {
+  const sessionKey = promptQueueSessionKey(queueKey);
+  return promptQueueSnapshot(
+    queueKey,
+    "env-1",
+    useClaudeTmuxStore.getState().getQueuedMessages(sessionKey),
+  );
+});
+
+function publishTmuxQueueSnapshot(
+  sessionKey: string,
+  dispatchError?: {
+    requestId: string;
+    messageId: string;
+    messageFingerprint: string;
+    message: string;
+    failedAt: string;
+  },
+): void {
+  const store = useClaudeTmuxStore.getState();
+  const messages = store.getQueuedMessages(sessionKey);
+  applyPromptQueueSnapshot<TmuxQueuedMessage>(
+    {
+      agent: "claude-tmux",
+      getQueues: () => useClaudeTmuxStore.getState().messageQueue,
+      setQueue: (key, nextMessages) => {
+        const next = new Map(useClaudeTmuxStore.getState().messageQueue);
+        next.set(key, nextMessages);
+        useClaudeTmuxStore.setState({ messageQueue: next });
+      },
+      environmentIdFor: () => "env-1",
+    },
+    {
+      queueKey: promptQueueKey("claude-tmux", sessionKey),
+      environmentId: "env-1",
+      messages,
+      ...(dispatchError ? { dispatchError } : {}),
+      updatedAt: "2026-08-04T10:00:00.000Z",
+      revision: promptQueueRevision++,
+    },
+  );
+}
 
 const startSessionMock = mock(async () => ({
   tab_id: "tab-1",
@@ -318,6 +366,7 @@ mock.module("@/lib/backend", () => ({
   requeuePromptQueueMessage: requeuePromptQueueMessageMock,
   removePromptQueueMessage: removePromptQueueMessageMock,
   movePromptQueueMessage: movePromptQueueMessageMock,
+  retryPromptQueueDispatch: retryPromptQueueDispatchMock,
   getFileTree: getFileTreeMock,
   getLocalFileTree: getLocalFileTreeMock,
   writeContainerFile: writeContainerFileMock,
@@ -508,6 +557,7 @@ describe("ClaudeTmuxChatTab", () => {
   afterEach(() => {
     dateNowSpy?.mockRestore();
     dateNowSpy = undefined;
+    resetPromptQueueRevisions();
   });
 
   afterAll(() => {
@@ -532,6 +582,7 @@ describe("ClaudeTmuxChatTab", () => {
   beforeEach(() => {
     setMobileViewport(false);
     cleanup();
+    resetPromptQueueRevisions();
     getFileTreeMock.mockReset();
     getFileTreeMock.mockResolvedValue([]);
     getLocalFileTreeMock.mockReset();
@@ -662,6 +713,15 @@ describe("ClaudeTmuxChatTab", () => {
         return promptQueueSnapshot(queueKey, environmentId, messages);
       },
     );
+    retryPromptQueueDispatchMock.mockReset();
+    retryPromptQueueDispatchMock.mockImplementation(async (queueKey: string) => {
+      const sessionKey = promptQueueSessionKey(queueKey);
+      return promptQueueSnapshot(
+        queueKey,
+        "env-1",
+        useClaudeTmuxStore.getState().getQueuedMessages(sessionKey),
+      );
+    });
     claimedPromptMessages.clear();
     acknowledgePromptQueueClaimMock.mockReset();
     acknowledgePromptQueueClaimMock.mockImplementation(
@@ -5502,6 +5562,52 @@ Running 1 Explore agent...
       ).toEqual(["second queued", "third queued"]);
     });
     expect(screen.queryByText("first queued")).toBeNull();
+  });
+
+  test("surfaces a parked tmux dispatch error and retries it explicitly", async () => {
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    const store = useClaudeTmuxStore.getState();
+    store.setRunning(stateKey, true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    store.setBusy(stateKey, true);
+    seedQueuedPrompt(store, stateKey, {
+      id: "queue-1",
+      text: "review the ambiguous submit",
+      attachments: [],
+    });
+    publishTmuxQueueSnapshot(stateKey, {
+      requestId: "request-1",
+      messageId: "queue-1",
+      messageFingerprint: "a".repeat(64),
+      message: "Submission may have partially completed. Review the pane before retrying.",
+      failedAt: "2026-08-04T10:00:00.000Z",
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    const blockedIndicator = await screen.findByRole("button", {
+      name: /1 queued prompts blocked: Submission may have partially completed/,
+    });
+    fireEvent.click(blockedIndicator);
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Review the pane before retrying.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(retryPromptQueueDispatchMock).toHaveBeenCalledWith(
+        promptQueueKey("claude-tmux", stateKey),
+      );
+      expect(screen.getByText("+1 queued").closest("button")?.getAttribute("aria-label"))
+        .toBeNull();
+    });
   });
 
   test("reports queue dialog mutation failures and keeps the projected queue intact", async () => {

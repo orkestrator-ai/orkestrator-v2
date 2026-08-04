@@ -383,16 +383,13 @@ export class PromptQueueDrainer {
   }
 
   /**
-   * Back off a queue and, once the attempts are clearly not transient, park it
-   * with a durable error the renderer can render from the snapshot.
-   *
-   * An unbounded 2s retry is invisible: nothing is logged, no `dispatchError`
-   * is latched, and the user sees a queue that simply never drains.
+   * Back off failures that happen before a prompt has a dispatch reservation.
+   * Once a reservation exists, failures are handled at their call sites and
+   * parked with a durable error carrying that request identity.
    */
   private async defer(
     queueKey: string,
     reason: string,
-    requestId?: string,
   ): Promise<void> {
     const attempts = (this.queueAttempts.get(queueKey) ?? 0) + 1;
     this.queueAttempts.set(queueKey, attempts);
@@ -401,11 +398,6 @@ export class PromptQueueDrainer {
       console.warn(
         `[prompt-queue] tmux queue ${queueKey} has failed ${attempts} times: ${reason}`,
       );
-      if (requestId !== undefined) {
-        this.clearBackoff(queueKey);
-        await this.storage.failPromptQueueDispatch(queueKey, requestId, reason);
-        return;
-      }
     }
     const backoff = Math.min(
       this.options.retryCeilingMs ?? QUEUE_RETRY_CEILING_MS,

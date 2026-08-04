@@ -9,11 +9,11 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertCircle,
   ArrowDown,
   ArrowUp,
   Check,
   ChevronDown,
-  ChevronUp,
   History,
   Plus,
   Sparkles,
@@ -24,21 +24,14 @@ import {
 import { cn } from "@/lib/utils";
 import { useMediaQuery, useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { NativeModelPicker } from "@/components/chat/NativeModelPicker";
+import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -65,6 +58,7 @@ import {
   type PastedImageAttachment,
 } from "@/hooks/useNativeComposeBarPaste";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
+import { usePromptQueueDispatchRecovery } from "@/hooks/usePromptQueueDispatchRecovery";
 import {
   answerPreToolUse,
   capturePane,
@@ -2698,6 +2692,7 @@ function TmuxComposeBar({
       [sessionKey],
     ),
   );
+  const queueRecovery = usePromptQueueDispatchRecovery("claude-tmux", sessionKey);
   const setValue = useClaudeTmuxStore((state) => state.setDraftText);
   const setFileMentions = useClaudeTmuxStore((state) => state.setDraftMentions);
   const addAttachmentToStore = useClaudeTmuxStore((state) => state.addAttachment);
@@ -3228,9 +3223,26 @@ function TmuxComposeBar({
           <button
             type="button"
             onClick={() => setQueueDialogOpen(true)}
-            className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground bg-muted/50 hover:bg-muted transition-colors"
-            title="View queued prompts"
+            className={cn(
+              "flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors",
+              queueRecovery.dispatchError
+                ? "bg-destructive/10 text-destructive hover:bg-destructive/20"
+                : "text-muted-foreground bg-muted/50 hover:bg-muted",
+            )}
+            aria-label={
+              queueRecovery.dispatchError
+                ? `${queueLength} queued prompts blocked: ${queueRecovery.dispatchError.message}`
+                : undefined
+            }
+            title={
+              queueRecovery.dispatchError
+                ? `Queued prompt was not sent: ${queueRecovery.dispatchError.message}`
+                : "View queued prompts"
+            }
           >
+            {queueRecovery.dispatchError && (
+              <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
+            )}
             <span>+{queueLength} queued</span>
           </button>
         )}
@@ -3262,84 +3274,24 @@ function TmuxComposeBar({
         </Button>
       </div>
 
-      <Dialog open={queueDialogOpen} onOpenChange={setQueueDialogOpen}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Queued Prompts</DialogTitle>
-            <DialogDescription>
-              Review pending prompts. Click one to edit it, or reorder and remove items.
-            </DialogDescription>
-          </DialogHeader>
-
-          {queuedMessages.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              Queue is empty.
-            </div>
-          ) : (
-            <ScrollArea className="max-h-[380px] pr-3">
-              <div className="space-y-2">
-                {queuedMessages.map((message, index) => (
-                  <div
-                    key={message.id}
-                    className="rounded-md border border-border bg-muted/20 p-3"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 shrink-0 text-xs font-medium text-muted-foreground">
-                        #{index + 1}
-                      </div>
-
-                      <div className="min-w-0 flex-1">
-                        <p
-                          className="-mx-1 cursor-pointer rounded px-1 text-sm whitespace-pre-wrap break-words line-clamp-4 transition-colors hover:bg-muted/50"
-                          onClick={() => handleQueuedMessageClick(message)}
-                          title="Click to edit this message"
-                        >
-                          {message.text}
-                        </p>
-                        {message.attachments.length > 0 && (
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {message.attachments.length} attachment
-                            {message.attachments.length === 1 ? "" : "s"}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex shrink-0 flex-col gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleMoveQueuedMessage(index, index - 1)}
-                          disabled={index === 0}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-                          title="Move up"
-                        >
-                          <ChevronUp className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleMoveQueuedMessage(index, index + 1)}
-                          disabled={index === queuedMessages.length - 1}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
-                          title="Move down"
-                        >
-                          <ChevronDown className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveQueuedMessage(message.id)}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-destructive"
-                          title="Remove queued prompt"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
-          )}
-        </DialogContent>
-      </Dialog>
+      <QueuedPromptsDialog
+        open={queueDialogOpen}
+        onOpenChange={setQueueDialogOpen}
+        messages={queuedMessages}
+        onEdit={handleQueuedMessageClick}
+        onMove={handleMoveQueuedMessage}
+        onRemove={handleRemoveQueuedMessage}
+        dispatchError={queueRecovery.dispatchError}
+        onRetryDispatch={queueRecovery.retry}
+        renderMeta={(message) => (
+          message.attachments.length > 0 ? (
+            <span>
+              {message.attachments.length} attachment
+              {message.attachments.length === 1 ? "" : "s"}
+            </span>
+          ) : null
+        )}
+      />
     </div>
   );
 }

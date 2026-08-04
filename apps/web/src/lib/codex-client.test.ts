@@ -12,6 +12,7 @@ import {
   createClient,
   createSession,
   deleteSession,
+  describeCodexSteerFailure,
   fetchPendingApprovals,
   fetchPendingInteractions,
   forkCodexSession,
@@ -2485,7 +2486,7 @@ describe("codex-client session operations", () => {
 
       expect(
         await steerCodexSession(client, "session-1", "use bun", "req-1"),
-      ).toBe(true);
+      ).toEqual({ outcome: "accepted" });
       const [url, init] = call();
       expect(url).toBe("http://127.0.0.1:4000/session/session-1/steer");
       expect(JSON.parse(init?.body as string)).toEqual({
@@ -2494,16 +2495,58 @@ describe("codex-client session operations", () => {
       });
     });
 
-    test("reports failure without throwing", async () => {
-      mockFetch(() => new Response(null, { status: 409 }));
-      expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toBe(
-        false,
-      );
+    test.each([
+      [
+        409,
+        { error: "There is no active turn", outcome: "idle" },
+        { outcome: "idle" },
+      ],
+      [
+        409,
+        { error: "The active turn changed; the text was not sent", outcome: "mismatch" },
+        { outcome: "mismatch" },
+      ],
+      [404, { error: "Session not found" }, { outcome: "not-found" }],
+      [503, { error: "Bridge unavailable" }, { outcome: "rejected", httpStatus: 503 }],
+    ] as const)("classifies an HTTP %i steer response", async (status, body, expected) => {
+      mockFetch(() => new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      }));
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
+        .toEqual(expected);
+    });
 
+    test("recognizes the idle response from an older bridge", async () => {
+      mockFetch(() => new Response(JSON.stringify({ error: "There is no active turn" }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      }));
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
+        .toEqual({ outcome: "idle" });
+    });
+
+    test("treats an unrecognized conflict conservatively as a turn mismatch", async () => {
+      mockFetch(() => new Response("not-json", { status: 409 }));
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
+        .toEqual({ outcome: "mismatch" });
+    });
+
+    test("keeps a transport failure distinct because delivery is ambiguous", async () => {
       mockFetchError(new Error("bridge offline"));
-      expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toBe(
-        false,
-      );
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
+        .toEqual({ outcome: "unknown", requestId: "req-1" });
+    });
+
+    test("describes each steer failure without claiming an unknown request failed", () => {
+      expect(describeCodexSteerFailure({ outcome: "accepted" })).toBeNull();
+      expect(describeCodexSteerFailure({ outcome: "idle" })).toContain("no active Codex turn");
+      expect(describeCodexSteerFailure({ outcome: "mismatch" })).toContain("active turn changed");
+      expect(describeCodexSteerFailure({ outcome: "not-found" })).toContain("no longer available");
+      expect(describeCodexSteerFailure({ outcome: "rejected", httpStatus: 503 }))
+        .toContain("HTTP 503");
+      expect(describeCodexSteerFailure({ outcome: "unknown", requestId: "req-1" }))
+        .toContain("Could not confirm whether Codex received");
     });
   });
 

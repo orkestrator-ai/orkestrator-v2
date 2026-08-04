@@ -42,6 +42,7 @@ import {
   checkHealth,
   createClient,
   createSession,
+  describeCodexSteerFailure,
   fetchPendingApprovals,
   fetchPendingInteractions,
   forkCodexSession,
@@ -827,22 +828,29 @@ export function CodexChatTab({
       if (attachments.length > 0) {
         throw new Error("/steer currently supports text only. Remove the attachments and retry.");
       }
-      if (!client || !session?.sessionId) {
+      // Resolve connectivity at click time. The tab can disconnect or resume a
+      // different session between the render that created this callback and the
+      // user action that invokes it.
+      const store = useCodexStore.getState();
+      const activeClient = store.clients.get(environmentId);
+      const activeSessionId = store.sessions.get(sessionKey)?.sessionId;
+      if (!activeClient || !activeSessionId) {
         throw new Error("The Codex session is not connected.");
       }
-      const sent = await steerCodexSession(
-        client,
-        session.sessionId,
+      const outcome = await steerCodexSession(
+        activeClient,
+        activeSessionId,
         steer.input,
         createUuid(),
       );
-      if (!sent) {
-        throw new Error("The active turn changed; your steering message was not sent.");
+      const failure = describeCodexSteerFailure(outcome);
+      if (failure) {
+        throw new Error(failure);
       }
       toast.success("Sent to the active Codex turn");
       return true;
     },
-    [client, session?.sessionId],
+    [environmentId, sessionKey],
   );
 
   const handleSend = useCallback(
@@ -851,11 +859,12 @@ export function CodexChatTab({
       attachments: CodexAttachment[],
       logicalRequestId?: string,
     ): Promise<CodexDispatchResult> => {
+      // Steering is a client-side action on the current turn. It neither starts
+      // a new turn nor carries handoff history, so route it before prompt-only
+      // guards and before invalidating an authoritative status reconcile.
+      if (await handleSteer(text, attachments)) return "accepted";
+
       if (!client || !session?.sessionId) return "rejected";
-      // A user dispatch is newer than any pending mount reconcile. Invalidate
-      // that snapshot before it can reapply idle/running state over the turn
-      // this interaction is about to start.
-      reconcileSequenceRef.current += 1;
 
       if (
         handoff.pendingHistory
@@ -868,7 +877,10 @@ export function CodexChatTab({
         );
       }
 
-      if (await handleSteer(text, attachments)) return "accepted";
+      // A prompt dispatch is newer than any pending mount reconcile. Invalidate
+      // that snapshot before it can reapply idle/running state over the turn
+      // this interaction is about to start.
+      reconcileSequenceRef.current += 1;
 
       const promptText = prependAgentHandoffHistory(handoff.pendingHistory, text);
 

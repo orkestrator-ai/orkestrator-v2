@@ -83,6 +83,16 @@ export function parseSlashCommandPrompt(prompt: string): { name: string; args: s
   return name ? { name, args } : null;
 }
 
+/**
+ * `/steer` accepts free-form text, including newlines, unlike prompt-template
+ * slash commands. Parse it separately so an idle/stale client cannot leak a
+ * multiline steering command into a newly started model turn.
+ */
+export function parseCodexSteerCommand(prompt: string): { args: string } | null {
+  const match = /^\/steer(?:\s+([\s\S]*))?$/i.exec(prompt.trim());
+  return match ? { args: (match[1] ?? "").trim() } : null;
+}
+
 export function isCodexCliNativeSlashCommand(name: string): boolean {
   return name.toLowerCase() === "/goal";
 }
@@ -200,7 +210,11 @@ export async function getAvailableSlashCommandDefinitions(
 
   for (const command of BUILTIN_SLASH_COMMANDS) {
     const key = command.name.toLowerCase();
-    if (!commandMap.has(key)) {
+    // `/steer` is routed to `turn/steer` before prompt-template expansion, so a
+    // same-named prompt could be advertised but never executed. Keep this one
+    // command reserved while retaining the existing prompt override behaviour
+    // for other builtins such as `/help`.
+    if (key === "/steer" || !commandMap.has(key)) {
       commandMap.set(key, command);
     }
   }

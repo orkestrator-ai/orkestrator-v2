@@ -1411,9 +1411,14 @@ app.post("/session/:id/steer", async (c) => {
     typeof body.requestId === "string" ? body.requestId : undefined,
   );
   if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
-  if (outcome === "idle") return c.json({ error: "There is no active turn" }, 409);
+  if (outcome === "idle") {
+    return c.json({ error: "There is no active turn", outcome: "idle" }, 409);
+  }
   if (outcome === "mismatch") {
-    return c.json({ error: "The active turn changed; the text was not sent" }, 409);
+    return c.json(
+      { error: "The active turn changed; the text was not sent", outcome: "mismatch" },
+      409,
+    );
   }
   return c.json({ status: "accepted" }, 202);
 });

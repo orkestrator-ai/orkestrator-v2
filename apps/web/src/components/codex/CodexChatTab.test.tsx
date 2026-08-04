@@ -22,8 +22,13 @@ import type {
   CodexSessionConfigUpdateOutcome,
   CodexSessionPhase,
   CodexSessionStatusLookupResult,
+  CodexSteerOutcome,
 } from "@/lib/codex-client";
-import { mockToastError, mockToastWarning } from "../../../../../tests/mocks/sonner";
+import {
+  mockToastError,
+  mockToastSuccess,
+  mockToastWarning,
+} from "../../../../../tests/mocks/sonner";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
@@ -118,14 +123,14 @@ const mockUpdateSessionConfig = mock<
 const mockAbortSession = mock<
   (_client: unknown, _sessionId: string) => Promise<CodexAbortOutcome>
 >(async () => ({ status: "accepted" }));
-const mockSteerCodexSession = mock(
-  async (
+const mockSteerCodexSession = mock<
+  (
     _client: unknown,
     _sessionId: string,
     _input: string,
     _requestId: string,
-  ) => true,
-);
+  ) => Promise<CodexSteerOutcome>
+>(async () => ({ outcome: "accepted" }));
 const mockFetchPendingApprovals = mock<
   (_client: unknown, _sessionId: string) => Promise<CodexApproval[]>
 >(async () => []);
@@ -422,6 +427,7 @@ let composeAttachments: Array<{
   name: string;
 }> = [];
 let lastComposeSendError: unknown;
+let beforeComposeQueue: (() => void) | undefined;
 
 mock.module("./CodexComposeBar", () => ({
   CodexComposeBar: ({
@@ -443,7 +449,7 @@ mock.module("./CodexComposeBar", () => ({
     onFastModeChange?: (enabled: boolean) => void;
     onModelChange?: (model: string) => Promise<void>;
     onReasoningEffortChange?: (effort: "low" | "medium" | "high") => Promise<void>;
-    onQueue?: (text: string, attachments: typeof composeAttachments) => void;
+    onQueue?: (text: string, attachments: typeof composeAttachments) => void | Promise<void>;
     disabled?: boolean;
     isLoading?: boolean;
     showAddressAll?: boolean;
@@ -484,7 +490,16 @@ mock.module("./CodexComposeBar", () => ({
       >
         Change effort
       </button>
-      <button type="button" data-testid="codex-queue" onClick={() => onQueue?.(composeText, composeAttachments)}>
+      <button
+        type="button"
+        data-testid="codex-queue"
+        onClick={() => {
+          beforeComposeQueue?.();
+          void onQueue?.(composeText, composeAttachments)?.catch((error) => {
+            lastComposeSendError = error;
+          });
+        }}
+      >
         Queue
       </button>
       {isLoading ? (
@@ -1001,6 +1016,7 @@ describe("CodexChatTab", () => {
     composeText = "Rename the environment";
     composeAttachments = [];
     lastComposeSendError = undefined;
+    beforeComposeQueue = undefined;
 
     mockRenameEnvironmentFromPrompt.mockClear();
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
@@ -1021,11 +1037,12 @@ describe("CodexChatTab", () => {
     mockScrollToBottom.mockClear();
     mockUpdateSessionConfig.mockClear();
     mockUpdateSessionConfig.mockImplementation(async () => true);
+    mockToastSuccess.mockClear();
     mockToastWarning.mockClear();
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => ({ status: "accepted" as const }));
     mockSteerCodexSession.mockClear();
-    mockSteerCodexSession.mockImplementation(async () => true);
+    mockSteerCodexSession.mockImplementation(async () => ({ outcome: "accepted" }));
     mockRemovePromptQueueMessage.mockReset();
     mockRemovePromptQueueMessage.mockImplementation(
       async (queueKey, environmentId, messageId) => {
@@ -3542,6 +3559,7 @@ describe("CodexChatTab", () => {
     expect(requestId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
+    expect(mockToastSuccess).toHaveBeenCalledWith("Sent to the active Codex turn");
     expect(useCodexStore.getState().messageQueue.get(SESSION_KEY)).toBeUndefined();
   });
 
@@ -3561,7 +3579,7 @@ describe("CodexChatTab", () => {
 
   test("keeps a failed /steer available when the active turn has moved on", async () => {
     composeText = "/steer wait before editing";
-    mockSteerCodexSession.mockResolvedValue(false);
+    mockSteerCodexSession.mockResolvedValue({ outcome: "mismatch" });
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
 
     fireEvent.click(screen.getByTestId("codex-send"));
@@ -3572,6 +3590,153 @@ describe("CodexChatTab", () => {
       );
     });
     expect(mockSendPrompt).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [
+      { outcome: "idle" } as const,
+      "There is no active Codex turn to steer. Start a turn, then use /steer while it is running.",
+    ],
+    [
+      { outcome: "not-found" } as const,
+      "The Codex session is no longer available.",
+    ],
+    [
+      { outcome: "rejected", httpStatus: 503 } as const,
+      "Codex rejected the steering message (HTTP 503).",
+    ],
+    [
+      { outcome: "unknown", requestId: "req-unknown" } as const,
+      "Could not confirm whether Codex received your steering message. Refresh the session before retrying.",
+    ],
+  ])("surfaces the %s /steer outcome without dispatching a prompt", async (outcome, message) => {
+    composeText = "/steer keep checking";
+    mockSteerCodexSession.mockResolvedValue(outcome);
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => expect(lastComposeSendError).toEqual(new Error(message)));
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+    expect(useCodexStore.getState().messageQueue.get(SESSION_KEY)).toBeUndefined();
+  });
+
+  test("rejects a bodyless /steer before calling the client", async () => {
+    composeText = "/steer   \n  ";
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      expect(lastComposeSendError).toEqual(new Error("Add instructions after /steer."));
+    });
+    expect(mockSteerCodexSession).not.toHaveBeenCalled();
+  });
+
+  test("rejects /steer attachments without silently dropping them", async () => {
+    composeText = "/steer inspect this image";
+    composeAttachments = [{
+      id: "steer-image",
+      type: "image",
+      path: "/workspace/steer.png",
+      previewUrl: "data:image/png;base64,steer",
+      name: "steer.png",
+    }];
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      expect(lastComposeSendError).toEqual(
+        new Error("/steer currently supports text only. Remove the attachments and retry."),
+      );
+    });
+    expect(mockSteerCodexSession).not.toHaveBeenCalled();
+  });
+
+  test("reports a disconnected /steer before the generic send guard", async () => {
+    composeText = "/steer keep checking";
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+    beforeComposeQueue = () => useCodexStore.setState({ clients: new Map() });
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-queue"));
+
+    await waitFor(() => {
+      expect(lastComposeSendError).toEqual(new Error("The Codex session is not connected."));
+    });
+    expect(mockSteerCodexSession).not.toHaveBeenCalled();
+  });
+
+  test("allows /steer while a handoff is pending without consuming the handoff", async () => {
+    const handoffId = "steer-handoff";
+    const bootstrapPrompt = `<orkestrator-handoff id="${handoffId}">continue</orkestrator-handoff>`;
+    mockGetAgentHandoff.mockResolvedValue(agentHandoffRecord(handoffId, bootstrapPrompt));
+    useCodexStore.setState({
+      slashCommands: new Map([[
+        ENVIRONMENT_ID,
+        [{
+          name: "/steer",
+          description: "Send instructions to the active turn",
+          argumentHint: "<instructions>",
+          source: "builtin" as const,
+        }],
+      ]]),
+    });
+    composeText = "/steer verify the failing test first";
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        agentHandoffId={handoffId}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetAgentHandoff).toHaveBeenCalledWith(handoffId);
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(1));
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    composeText = "Continue the transferred task";
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => {
+      expect(mockSendPrompt.mock.calls.at(-1)?.[2]).toContain(`"id": "${handoffId}"`);
+      expect(mockSendPrompt.mock.calls.at(-1)?.[2]).toContain("Continue the transferred task");
+    });
+  });
+
+  test("a failed /steer does not discard an in-flight authoritative reconcile", async () => {
+    const status = deferred<CodexSessionStatusLookupResult>();
+    mockLookupSessionStatus.mockImplementationOnce(() => status.promise);
+    mockSteerCodexSession.mockResolvedValue({ outcome: "mismatch" });
+    composeText = "/steer wait before editing";
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(lastComposeSendError).toBeInstanceOf(Error));
+
+    await act(async () => {
+      status.resolve({
+        kind: "found",
+        session: {
+          status: "idle",
+          phase: "idle",
+          title: "Authoritative reconciled title",
+        },
+      });
+      await status.promise;
+    });
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.title)
+        .toBe("Authoritative reconciled title");
+    });
   });
 
   test("centers the compose bar with the ready title until message history exists", async () => {

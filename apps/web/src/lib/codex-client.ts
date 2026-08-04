@@ -1546,12 +1546,37 @@ export async function compactCodexSession(
   }
 }
 
+export type CodexSteerOutcome =
+  | { outcome: "accepted" }
+  | { outcome: "idle" }
+  | { outcome: "mismatch" }
+  | { outcome: "not-found" }
+  | { outcome: "rejected"; httpStatus: number }
+  | { outcome: "unknown"; requestId: string };
+
+export function describeCodexSteerFailure(outcome: CodexSteerOutcome): string | null {
+  switch (outcome.outcome) {
+    case "accepted":
+      return null;
+    case "idle":
+      return "There is no active Codex turn to steer. Start a turn, then use /steer while it is running.";
+    case "mismatch":
+      return "The active turn changed; your steering message was not sent.";
+    case "not-found":
+      return "The Codex session is no longer available.";
+    case "rejected":
+      return `Codex rejected the steering message (HTTP ${outcome.httpStatus}).`;
+    case "unknown":
+      return "Could not confirm whether Codex received your steering message. Refresh the session before retrying.";
+  }
+}
+
 export async function steerCodexSession(
   client: CodexClient,
   sessionId: string,
   input: string,
   requestId: string,
-): Promise<boolean> {
+): Promise<CodexSteerOutcome> {
   try {
     const response = await fetchCodex(
       client,
@@ -1562,10 +1587,25 @@ export async function steerCodexSession(
         body: JSON.stringify({ input, requestId }),
       },
     );
-    return response.ok;
+    if (response.ok) return { outcome: "accepted" };
+
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: unknown;
+      outcome?: unknown;
+    };
+    if (response.status === 404) return { outcome: "not-found" };
+    if (response.status === 409) {
+      if (body.outcome === "idle" || body.error === "There is no active turn") {
+        return { outcome: "idle" };
+      }
+      return { outcome: "mismatch" };
+    }
+    return { outcome: "rejected", httpStatus: response.status };
   } catch (error) {
     console.error("[codex-client] Failed to steer session:", error);
-    return false;
+    // A timeout or reset after the bridge accepted `turn/steer` is ambiguous.
+    // Do not tell the user the text definitely failed or silently retry it.
+    return { outcome: "unknown", requestId };
   }
 }
 

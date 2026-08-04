@@ -51,6 +51,7 @@ import {
 import {
   CodexForkError,
   compactCodexSession,
+  describeCodexSteerFailure,
   forkCodexSession,
   getCodexRuntimeHealth,
   getSessionMessages as getCodexSessionMessages,
@@ -1774,14 +1775,15 @@ export function AgentInfoButton({
                           "steer",
                           async ({ isCurrent, sessionIdentity: actionIdentity }) => {
                             const text = steerText.trim();
-                            const sent = await steerCodexSession(
+                            const outcome = await steerCodexSession(
                               codexClient,
                               currentSessionId,
                               text,
                               createUuid(),
                             );
-                            if (!sent) {
-                              throw new Error("The active turn changed; your text was not sent");
+                            const failure = describeCodexSteerFailure(outcome);
+                            if (failure) {
+                              throw new Error(failure);
                             }
                             if (isCurrent()) {
                               setSteerState({

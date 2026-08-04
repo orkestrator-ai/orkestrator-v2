@@ -6024,6 +6024,29 @@ describe("slash commands", () => {
     expect(messages?.[1]?.content).toContain("no active Codex turn to steer");
   });
 
+  test("a bare or multiline idle /steer is answered locally without leaking to Codex", async () => {
+    for (const [prompt, expectedReply] of [
+      ["/steer", "Usage: /steer <instructions>"],
+      ["/steer   \n  ", "Usage: /steer <instructions>"],
+      ["/steer\ncheck the API\nthen the UI", "no active Codex turn to steer"],
+    ] as const) {
+      const h = await harness();
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+      const outcome = await h.runtime.prompt(sessionId, {
+        prompt,
+        requestId: `req-${prompt.length}`,
+        attachments: [],
+      });
+
+      expect(outcome).toMatchObject({ ok: true });
+      expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
+      const messages = await h.runtime.getMessages(sessionId);
+      expect(messages?.[0]?.content).toBe(prompt);
+      expect(messages?.[1]?.content).toContain(expectedReply);
+    }
+  });
+
   /**
    * Local replies have no rollout item, so their timestamp is the only ordering
    * key they share with the model's transcript. Concatenating would show them
@@ -7221,6 +7244,7 @@ describe("steering", () => {
       .toMatchObject({
         threadId: "thread-1",
         expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "also check the tests" }],
         clientUserMessageId: "req-steer",
       });
   });

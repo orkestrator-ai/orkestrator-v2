@@ -925,11 +925,14 @@ describe("steer route outcomes", () => {
       async () => {
         const cases = [
           ["not-found", 404, { error: "Session not found" }],
-          ["idle", 409, { error: "There is no active turn" }],
+          ["idle", 409, { error: "There is no active turn", outcome: "idle" }],
           [
             "mismatch",
             409,
-            { error: "The active turn changed; the text was not sent" },
+            {
+              error: "The active turn changed; the text was not sent",
+              outcome: "mismatch",
+            },
           ],
           ["accepted", 202, { status: "accepted" }],
         ] as const;

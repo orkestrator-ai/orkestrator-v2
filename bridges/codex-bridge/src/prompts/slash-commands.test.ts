@@ -11,6 +11,7 @@ import {
   getAvailableSlashCommandDefinitions,
   isCodexCliNativeSlashCommand,
   normalizeSlashCommandName,
+  parseCodexSteerCommand,
   parseSlashCommandPrompt,
   resolveConversationMode,
   runInlinePromptCommand,
@@ -58,6 +59,28 @@ describe("slash command parsing and metadata", () => {
     expect(parseSlashCommandPrompt("/review")).toEqual({ name: "/review", args: "" });
     expect(parseSlashCommandPrompt("review")).toBeNull();
     expect(parseSlashCommandPrompt("/review\nextra")).toBeNull();
+  });
+
+  test("parses only an exact /steer token with single-line or multiline text", () => {
+    expect(parseCodexSteerCommand(" /STEER  check the tests ")).toEqual({
+      args: "check the tests",
+    });
+    expect(parseCodexSteerCommand("/steer\ncheck the API\nthen the UI")).toEqual({
+      args: "check the API\nthen the UI",
+    });
+    expect(parseCodexSteerCommand("/steer\tcheck the API")).toEqual({
+      args: "check the API",
+    });
+    expect(parseCodexSteerCommand("/steer  \n ")).toEqual({ args: "" });
+    for (const value of [
+      "/steering elsewhere",
+      "/steerx elsewhere",
+      "/steer-now",
+      "please /steer this",
+      "first line\n/steer second line",
+    ]) {
+      expect(parseCodexSteerCommand(value)).toBeNull();
+    }
   });
 
   test("recognizes only the CLI-native goal command", () => {
@@ -169,7 +192,7 @@ describe("prompt command discovery", () => {
     expect(await collectPromptSlashCommandsFromDir(join(root, "missing"))).toEqual([]);
   });
 
-  test("prefers repository prompts over home prompts and prompts over builtins", async () => {
+  test("prefers repository prompts while keeping /steer reserved for the builtin", async () => {
     const cwd = await temporaryDirectory();
     const codexHome = await temporaryDirectory();
     process.env.CODEX_HOME = codexHome;
@@ -179,6 +202,7 @@ describe("prompt command discovery", () => {
     await mkdir(homePrompts, { recursive: true });
     await writeFile(join(localPrompts, "shared.md"), "Local shared prompt");
     await writeFile(join(localPrompts, "help.md"), "Local help prompt");
+    await writeFile(join(localPrompts, "steer.md"), "Unreachable steer prompt");
     await writeFile(join(homePrompts, "shared.md"), "Home shared prompt");
     await writeFile(join(homePrompts, "home-only.md"), "Home-only prompt");
 
@@ -193,6 +217,8 @@ describe("prompt command discovery", () => {
     ]);
     expect(definitions.find((definition) => definition.name === "/help")?.source)
       .toBe("prompt");
+    expect(definitions.find((definition) => definition.name === "/steer"))
+      .toMatchObject({ source: "builtin", argumentHint: "<instructions>" });
     expect(definitions.find((definition) => definition.name === "/shared"))
       .toMatchObject({ source: "prompt", template: "Local shared prompt" });
   });

@@ -384,7 +384,9 @@ export function CodexComposeBar({
     (isLoading && !onQueue) ||
     (text.trim().length === 0 && attachments.length === 0);
   const showSendButton = !isLoading || !sendDisabled;
-  const isSteering = isLoading && parseCodexSteerCommand(text).matched;
+  const steerCommand = parseCodexSteerCommand(text);
+  const isSteering = isLoading && steerCommand.matched && steerCommand.input.length > 0;
+  const needsSteerInstructions = isLoading && steerCommand.matched && !steerCommand.input;
 
   return (
     <div
@@ -642,9 +644,11 @@ export function CodexComposeBar({
             title={
               isSteering
                 ? "Send to current turn"
-                : isLoading
-                  ? "Add to queue"
-                  : "Send message"
+                : needsSteerInstructions
+                  ? "Add instructions after /steer"
+                  : isLoading
+                    ? "Add to queue"
+                    : "Send message"
             }
           >
             <ArrowUp className="h-4 w-4" />

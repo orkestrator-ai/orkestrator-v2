@@ -70,6 +70,7 @@ import {
   expandPromptTemplate,
   getAvailableSlashCommandDefinitions,
   isCodexCliNativeSlashCommand,
+  parseCodexSteerCommand,
   parseSlashCommandPrompt,
   wrapPromptForConversationMode,
   type ConversationMode,
@@ -3845,6 +3846,19 @@ export class AppServerRuntime {
     prompt: string,
     cwd: string,
   ): Promise<{ kind: "prompt"; expandedPrompt: string } | { kind: "builtin"; response: string } | null> {
+    // `/steer` accepts multiline free text, whereas the general slash-command
+    // parser deliberately rejects newlines. Handle it first so an idle or stale
+    // client never starts a fresh model turn with the raw command text.
+    const steer = parseCodexSteerCommand(prompt);
+    if (steer) {
+      return {
+        kind: "builtin",
+        response: steer.args
+          ? "There is no active Codex turn to steer. Start a turn, then use /steer while it is running."
+          : "Usage: /steer <instructions>. Run it while a Codex turn is active.",
+      };
+    }
+
     const parsed = parseSlashCommandPrompt(prompt);
     if (!parsed) return null;
 
@@ -3887,18 +3901,6 @@ export class AppServerRuntime {
               `- ${model.id}${model.id === current ? " (current)" : ""}${model.description ? `: ${model.description}` : ""}`,
           ),
         ].join("\n"),
-      };
-    }
-
-    // The renderer routes this command to `/session/:id/steer` while a turn is
-    // active. If an idle or stale client submits it as a regular prompt, answer
-    // locally instead of leaking the command text into a brand-new model turn.
-    if (parsed.name.toLowerCase() === "/steer") {
-      return {
-        kind: "builtin",
-        response: parsed.args
-          ? "There is no active Codex turn to steer. Start a turn, then use /steer while it is running."
-          : "Usage: /steer <instructions>. Run it while a Codex turn is active.",
       };
     }
 

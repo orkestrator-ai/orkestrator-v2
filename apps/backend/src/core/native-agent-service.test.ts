@@ -2465,6 +2465,62 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("preserves an existing idle OpenCode native-session mapping", async () => {
+    const { provider } = createProviderStub("opencode", {
+      activityBatch: async () => new Map([["provider-idle", "idle"]]),
+    });
+    await withService({
+      prefix: "orkestrator-native-opencode-idle-existing-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey(
+        "env-1",
+        "opencode",
+        "tab-idle",
+      );
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "opencode",
+        logicalSessionKey: "tab-idle",
+        providerSessionId: "provider-idle",
+      });
+
+      await service.reconcileAgentActivity();
+
+      expect(await storage.getNativeAgentSession(key)).toMatchObject({
+        providerSessionId: "provider-idle",
+      });
+    });
+  });
+
+  test("invalidates a genuinely missing OpenCode native-session mapping", async () => {
+    const { provider } = createProviderStub("opencode", {
+      activityBatch: async () => new Map([["provider-deleted", "missing"]]),
+    });
+    await withService({
+      prefix: "orkestrator-native-opencode-missing-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey(
+        "env-1",
+        "opencode",
+        "tab-deleted",
+      );
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "opencode",
+        logicalSessionKey: "tab-deleted",
+        providerSessionId: "provider-deleted",
+      });
+
+      await service.reconcileAgentActivity();
+
+      expect(await storage.getNativeAgentSession(key)).toBeNull();
+    });
+  });
+
   test("invalidates a missing session through the status fallback", async () => {
     const { provider, status } = createProviderStub("codex", {
       status: async () => "missing",

@@ -1900,6 +1900,8 @@ type OpenCodeFake = {
   questionReplies: Array<Record<string, unknown>>;
   readonly statusCallCount: number;
   statusCalls: Array<Record<string, unknown> | undefined>;
+  readonly sessionListCallCount: number;
+  sessionListCalls: Array<Record<string, unknown> | undefined>;
   readonly subscribeCallCount: number;
   subscriptions: EventHarness[];
   setPending(
@@ -1927,6 +1929,8 @@ type OpenCodeFake = {
   setPromptResponse(response: Record<string, unknown>): void;
   setStatusError(error: unknown): void;
   setStatusResponse(response: Record<string, unknown>): void;
+  setSessionListError(error: unknown): void;
+  setSessionListResponse(response: Record<string, unknown>): void;
 };
 
 function openCodeFake(): OpenCodeFake {
@@ -1962,6 +1966,11 @@ function openCodeFake(): OpenCodeFake {
   const statusCalls: Array<Record<string, unknown> | undefined> = [];
   let statusResponse: Record<string, unknown> = {
     data: { "owned-session": { type: "idle" } },
+  };
+  let sessionListError: unknown = null;
+  const sessionListCalls: Array<Record<string, unknown> | undefined> = [];
+  let sessionListResponse: Record<string, unknown> = {
+    data: [{ id: "owned-session" }],
   };
 
   const client = {
@@ -2047,6 +2056,11 @@ function openCodeFake(): OpenCodeFake {
         if (statusError) throw statusError;
         return statusResponse;
       },
+      async list(parameters?: Record<string, unknown>) {
+        sessionListCalls.push(parameters);
+        if (sessionListError) throw sessionListError;
+        return sessionListResponse;
+      },
       async messages() {
         return messagesResponse;
       },
@@ -2074,6 +2088,10 @@ function openCodeFake(): OpenCodeFake {
       return statusCalls.length;
     },
     statusCalls,
+    get sessionListCallCount() {
+      return sessionListCalls.length;
+    },
+    sessionListCalls,
     get subscribeCallCount() {
       return subscribeCallCount;
     },
@@ -2132,6 +2150,12 @@ function openCodeFake(): OpenCodeFake {
     setStatusResponse(response) {
       statusResponse = response;
     },
+    setSessionListError(error) {
+      sessionListError = error;
+    },
+    setSessionListResponse(response) {
+      sessionListResponse = response;
+    },
   };
 }
 
@@ -2166,6 +2190,109 @@ function openCodeActivityProvider(fake: OpenCodeFake) {
 }
 
 describe("OpenCode build pipeline provider", () => {
+  test("treats a status-map omission as idle when the session still exists", async () => {
+    const fake = openCodeFake();
+    fake.setStatusResponse({ data: {} });
+    fake.setSessionListResponse({ data: [{ id: "omitted-session" }] });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      await expect(provider.status("omitted-session")).resolves.toBe("idle");
+      expect(fake.statusCallCount).toBe(1);
+      expect(fake.sessionListCallCount).toBe(1);
+      expect(fake.sessionListCalls).toEqual([{
+        directory: "/workspace",
+        limit: 1_025,
+      }]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("batches omitted idle and genuinely deleted OpenCode sessions", async () => {
+    const fake = openCodeFake();
+    fake.setStatusResponse({ data: {} });
+    fake.setSessionListResponse({ data: [{ id: "existing-session" }] });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      await expect(provider.activityBatch?.([
+        "existing-session",
+        "deleted-session",
+        "existing-session",
+      ])).resolves.toEqual(new Map([
+        ["existing-session", "idle"],
+        ["deleted-session", "missing"],
+      ]));
+      expect(fake.statusCallCount).toBe(1);
+      expect(fake.sessionListCallCount).toBe(1);
+      expect(fake.questionListCallCount).toBe(0);
+      expect(fake.permissionListCallCount).toBe(0);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("reports provider unavailability when OpenCode existence cannot be read", async () => {
+    for (const failure of [
+      { error: { message: "failed" } },
+      new Error("connection reset"),
+    ]) {
+      const fake = openCodeFake();
+      fake.setStatusResponse({ data: {} });
+      if (failure instanceof Error) fake.setSessionListError(failure);
+      else fake.setSessionListResponse(failure);
+      const provider = openCodeActivityProvider(fake);
+      try {
+        await expect(provider.status("omitted-session"))
+          .rejects.toBeInstanceOf(ProviderUnavailableError);
+        await expect(provider.activityBatch?.(["omitted-session"]))
+          .rejects.toBeInstanceOf(ProviderUnavailableError);
+      } finally {
+        await provider.dispose?.();
+      }
+    }
+  });
+
+  test("fails safely on malformed OpenCode existence snapshots", async () => {
+    for (const response of [
+      { data: {} },
+      { data: [{}] },
+      { data: [{ id: "" }] },
+      {
+        data: Array.from({ length: 1_026 }, (_, index) => ({
+          id: `session-${index}`,
+        })),
+      },
+    ]) {
+      const fake = openCodeFake();
+      fake.setStatusResponse({ data: {} });
+      fake.setSessionListResponse(response);
+      const provider = openCodeActivityProvider(fake);
+      try {
+        await expect(provider.activityBatch?.(["omitted-session"]))
+          .rejects.toBeInstanceOf(ProviderUnavailableError);
+      } finally {
+        await provider.dispose?.();
+      }
+    }
+  });
+
+  test("does not infer deletion from a truncated OpenCode session list", async () => {
+    const fake = openCodeFake();
+    fake.setStatusResponse({ data: {} });
+    fake.setSessionListResponse({
+      data: Array.from({ length: 1_025 }, (_, index) => ({
+        id: `other-session-${index}`,
+      })),
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      await expect(provider.status("omitted-session"))
+        .rejects.toBeInstanceOf(ProviderUnavailableError);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("reports busy OpenCode sessions with pending input as waiting", async () => {
     const fake = openCodeFake();
     fake.setStatusResponse({
@@ -2226,6 +2353,7 @@ describe("OpenCode build pipeline provider", () => {
         ["retry-session", "waiting"],
       ]));
       expect(fake.statusCallCount).toBe(1);
+      expect(fake.sessionListCallCount).toBe(1);
       expect(fake.questionListCallCount).toBe(1);
       expect(fake.permissionListCallCount).toBe(1);
       expect(fake.statusCalls).toEqual([{ directory: "/workspace" }]);
@@ -2258,6 +2386,7 @@ describe("OpenCode build pipeline provider", () => {
         ["missing-session", "missing"],
       ]));
       expect(fake.statusCallCount).toBe(1);
+      expect(fake.sessionListCallCount).toBe(1);
       expect(fake.questionListCallCount).toBe(0);
       expect(fake.permissionListCallCount).toBe(0);
     } finally {
@@ -2271,6 +2400,7 @@ describe("OpenCode build pipeline provider", () => {
     try {
       await expect(provider.activityBatch?.([])).resolves.toEqual(new Map());
       expect(fake.statusCallCount).toBe(0);
+      expect(fake.sessionListCallCount).toBe(0);
       expect(fake.questionListCallCount).toBe(0);
       expect(fake.permissionListCallCount).toBe(0);
     } finally {
@@ -3091,6 +3221,7 @@ describe("OpenCode build pipeline provider", () => {
       expect(fake.statusCalls).toEqual(
         Array.from({ length: 5 }, () => ({ directory: "/workspace" })),
       );
+      expect(fake.sessionListCallCount).toBe(1);
 
       fake.setPromptResponse({ error: { message: "rejected" } });
       await expect(provider.send("owned-session", "prompt", {

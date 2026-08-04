@@ -70,7 +70,16 @@ const {
   setEnvironmentPr,
   cacheOpenCodeModelCatalog,
   cacheAgentModelCatalog,
+  appendFeaturePlanMessage,
+  appendFeatureStoryMessage,
+  cancelFeaturePlanning,
   claimFeaturePlanBuild,
+  createFeaturePlan,
+  getFeaturePlanningSnapshot,
+  getFeaturePlans,
+  retryFeaturePlanning,
+  startFeaturePlanning,
+  updateFeaturePlan,
   updateAgentModelDefault,
   updateEnvironmentAgentSettings,
 } = backendWrappers;
@@ -746,7 +755,7 @@ describe("backend setup wrappers", () => {
      * existing draft.
      */
     await backendWrappers.transferPromptQueueMessageToComposeDraft(
-      "codex env-1:tab-1",
+      "codex\0env-1:tab-1",
       "env-1",
       "message-1",
       "codex:env-1:env-1%3Atab-1",
@@ -1822,6 +1831,89 @@ describe("backend command wrapper coverage", () => {
     expect(invokeMock).toHaveBeenCalledWith("claim_feature_plan_build", {
       featureId: "feature-1",
       taskId: "task-1",
+    });
+  });
+
+  test("forwards feature planning lifecycle command payloads", async () => {
+    await startFeaturePlanning("feature-1", "feature", "Plan search");
+    expect(invokeMock).toHaveBeenLastCalledWith("start_feature_planning", {
+      featureId: "feature-1",
+      kind: "feature",
+      userMessage: "Plan search",
+    });
+
+    await startFeaturePlanning("feature-1", "story", "Tighten criteria", "story-2");
+    expect(invokeMock).toHaveBeenLastCalledWith("start_feature_planning", {
+      featureId: "feature-1",
+      kind: "story",
+      userMessage: "Tighten criteria",
+      storyId: "story-2",
+    });
+
+    await getFeaturePlanningSnapshot("project-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("get_feature_planning_snapshot", {
+      projectId: "project-1",
+    });
+
+    await retryFeaturePlanning("feature-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("retry_feature_planning", {
+      featureId: "feature-1",
+    });
+
+    await cancelFeaturePlanning("feature-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("cancel_feature_planning", {
+      featureId: "feature-1",
+    });
+  });
+
+  test("forwards feature plan CRUD and message command payloads", async () => {
+    await getFeaturePlans("project-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("get_feature_plans", {
+      projectId: "project-1",
+    });
+
+    await createFeaturePlan("project-1");
+    expect(invokeMock).toHaveBeenLastCalledWith("create_feature_plan", {
+      projectId: "project-1",
+    });
+
+    const updates = { title: "Saved search", status: "stories" as const };
+    await updateFeaturePlan("feature-1", updates);
+    expect(invokeMock).toHaveBeenLastCalledWith("update_feature_plan", {
+      featureId: "feature-1",
+      updates,
+    });
+
+    await appendFeaturePlanMessage(
+      "feature-1",
+      "assistant",
+      "Ready",
+      "applied",
+      "gpt-5.3-codex",
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith("append_feature_plan_message", {
+      featureId: "feature-1",
+      role: "assistant",
+      content: "Ready",
+      stateApplication: "applied",
+      modelId: "gpt-5.3-codex",
+    });
+
+    await appendFeatureStoryMessage(
+      "feature-1",
+      "story-2",
+      "user",
+      "Add keyboard support",
+      undefined,
+      undefined,
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith("append_feature_story_message", {
+      featureId: "feature-1",
+      storyId: "story-2",
+      role: "user",
+      content: "Add keyboard support",
+      stateApplication: undefined,
+      modelId: undefined,
     });
   });
 

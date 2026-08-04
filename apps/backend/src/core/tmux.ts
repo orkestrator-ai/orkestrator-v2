@@ -3654,8 +3654,24 @@ export function registerTmuxBackendCommands(
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).sendKeys(asStringArray(keys)),
   );
   register("claude_tmux_submit", ({ tabId, text, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).submit(asString(text, "text")),
+    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId"))
+      .submit(asString(text, "text")),
   );
+  register("claude_tmux_submit_queued", async ({ tabId, text, environmentId }, context) => {
+    const envId = asString(environmentId, "environmentId");
+    const tab = asString(tabId, "tabId");
+    const prompt = asString(text, "text");
+    // Serialize the final liveness check and terminal side effect with tmux
+    // teardown. Deletion writes its tombstone before taking this same lock, so
+    // a queued dispatch can never type into a pane after deletion has begun.
+    await tmuxManager.installLock(envId).runExclusive(async () => {
+      const environment = await context.storage.getEnvironment(envId);
+      if (!environment || environment.deletionRequestedAt) {
+        throw new Error(`environment ${envId} is being deleted`);
+      }
+      await requireSession(envId, tab).submit(prompt);
+    });
+  });
   register("claude_tmux_switch_model", ({ tabId, model, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchModel(asString(model, "model")),
   );

@@ -50,19 +50,30 @@ class FakeProvider implements BuildPipelineProvider {
   statusState: ProviderStatus = "idle";
   transcript: BridgeMessage[] = [];
   aborted: string[] = [];
+  disposeCount = 0;
   sendBehaviour: "ok" | "ambiguous" | "reject" = "ok";
+  statusError: Error | null = null;
+  activityError: Error | null = null;
+  messagesError: Error | null = null;
+  createError: Error | null = null;
+  sendGate: Promise<void> | null = null;
+  onSendStart: (() => void) | null = null;
+  onAbort: (() => void) | null = null;
 
   async createSession(
     _phase: string,
     _label: string,
     options?: ProviderCreateSessionOptions,
   ): Promise<string> {
+    if (this.createError) throw this.createError;
     const id = `session-${this.created.length + 1}`;
     this.created.push(options?.clientSessionKey ?? id);
     return id;
   }
 
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
+    this.onSendStart?.();
+    if (this.sendGate) await this.sendGate;
     if (this.sendBehaviour === "ambiguous") {
       // Recorded first: an ambiguous dispatch may well have reached the agent.
       this.sends.push({ sessionId, prompt, requestId: options.requestId });
@@ -73,14 +84,17 @@ class FakeProvider implements BuildPipelineProvider {
   }
 
   async status(): Promise<ProviderStatus> {
+    if (this.statusError) throw this.statusError;
     return this.statusState;
   }
 
   async activity(): Promise<ProviderActivityState> {
+    if (this.activityError) throw this.activityError;
     return this.activityState;
   }
 
   async messages(): Promise<unknown[]> {
+    if (this.messagesError) throw this.messagesError;
     return this.transcript;
   }
 
@@ -91,6 +105,11 @@ class FakeProvider implements BuildPipelineProvider {
 
   async abort(sessionId: string): Promise<void> {
     this.aborted.push(sessionId);
+    this.onAbort?.();
+  }
+
+  async dispose(): Promise<void> {
+    this.disposeCount += 1;
   }
 
   /** The turn finishes with `content` as the newest assistant message. */
@@ -110,6 +129,7 @@ interface Harness {
   service: FeaturePlanningService;
   storage: StorageService;
   provider: FakeProvider;
+  providers: FakeProvider[];
   featureId: string;
   /**
    * Start an exchange and let the supervisor run its first pass.
@@ -123,7 +143,14 @@ interface Harness {
   dispose(): Promise<void>;
 }
 
-async function harness(options: { withStory?: boolean } = {}): Promise<Harness> {
+type TestInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+
+async function harness(options: {
+  withStory?: boolean;
+  providers?: FakeProvider[];
+  serviceOptions?: ConstructorParameters<typeof FeaturePlanningService>[2];
+  invoke?: (storage: StorageService) => TestInvoker;
+} = {}): Promise<Harness> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-feature-planning-"));
   const storage = new StorageService(dataDir);
   await storage.init();
@@ -162,16 +189,23 @@ async function harness(options: { withStory?: boolean } = {}): Promise<Harness> 
       }
       : {}),
   });
-  const provider = new FakeProvider();
+  const providers = options.providers ?? [new FakeProvider()];
+  const provider = providers[0]!;
+  let providerIndex = 0;
   const service = new FeaturePlanningService(
     storage,
-    async <T>() => undefined as T,
-    { autoAdvance: false, provider: async () => provider },
+    options.invoke?.(storage) ?? (async <T>() => undefined as T),
+    {
+      ...options.serviceOptions,
+      autoAdvance: false,
+      provider: async () => providers[Math.min(providerIndex++, providers.length - 1)]!,
+    },
   );
   return {
     service,
     storage,
     provider,
+    providers,
     featureId: plan.id,
     start: async (input) => {
       await service.start({ featureId: plan.id, ...input });
@@ -306,7 +340,7 @@ describe("FeaturePlanningService", () => {
     }
   });
 
-  test("a parse failure keeps the reply and offers a retry from persisting", async () => {
+  test("a parse failure keeps the reply and retry dispatches a fresh turn", async () => {
     const context = await harness();
     try {
       await context.start({ kind: "feature", userMessage: "Let me export reports" });
@@ -317,7 +351,7 @@ describe("FeaturePlanningService", () => {
       const record = await context.record();
       expect(record?.phase).toBe("failed");
       expect(record?.failure?.code).toBe("parse");
-      expect(record?.failure?.retryPhase).toBe("persisting");
+      expect(record?.failure?.retryPhase).toBe("dispatching");
       // The answer itself is on the record and on the plan.
       expect(record?.rawResponse).toBe("I have no idea what a state block is.");
       const plan = await context.storage.getFeaturePlan(context.featureId);
@@ -326,15 +360,23 @@ describe("FeaturePlanningService", () => {
         content: "I have no idea what a state block is.",
         stateApplication: "pending",
       });
-      // Retrying does not append the answer a second time.
+      // Retrying starts a new provider turn while retaining the malformed
+      // answer as auditable history.
+      context.provider.activityState = "working";
       await context.service.retry(context.featureId);
+      await context.service.advanceNow(context.featureId);
+      expect(context.provider.sends).toHaveLength(2);
+      context.provider.reply(PLANNER_REPLY);
+      await context.service.advanceNow(context.featureId);
       await context.service.advanceNow(context.featureId);
       const retried = await context.storage.getFeaturePlan(context.featureId);
       expect(
         retried?.messages.filter((entry) => entry.role === "assistant"
           && entry.content === "I have no idea what a state block is.").length,
       ).toBe(1);
-      expect(context.provider.sends).toHaveLength(1);
+      expect(retried?.messages.at(-1)?.content).toBe(PLANNER_REPLY);
+      expect(retried?.messages.at(-2)?.stateApplication).toBe("superseded");
+      expect(retried?.planning).toBeUndefined();
     } finally {
       await context.dispose();
     }
@@ -384,6 +426,68 @@ describe("FeaturePlanningService", () => {
     }
   });
 
+  test("validates story targets and retry requests before starting work", async () => {
+    const context = await harness();
+    try {
+      await expect(context.service.start({
+        featureId: context.featureId,
+        kind: "story",
+        storyId: "missing-story",
+        userMessage: "Refine it",
+      })).rejects.toThrow("Feature story not found");
+      await expect(context.service.retry(context.featureId)).rejects.toThrow(
+        "There is no planning request to retry",
+      );
+      await context.service.cancel(context.featureId);
+      expect(context.provider.sends).toHaveLength(0);
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("creates a replacement provider session when the stored session is missing", async () => {
+    const context = await harness();
+    try {
+      context.provider.statusState = "missing";
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+
+      expect(context.provider.created).toEqual([`feature-planning:${context.featureId}`]);
+      expect(context.provider.sends[0]?.sessionId).toBe("session-1");
+      expect((await context.storage.getFeaturePlan(context.featureId))?.codexSessionId)
+        .toBe("session-1");
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("keeps environment creation failures retryable without dispatching", async () => {
+    const context = await harness({
+      invoke: () => async <T>(command: string) => {
+        if (command === "create_environment") throw new Error("environment service unavailable");
+        return undefined as T;
+      },
+    });
+    try {
+      await context.storage.updateFeaturePlan(context.featureId, {
+        codexEnvironmentId: undefined,
+        codexSessionId: undefined,
+      });
+      await context.storage.removeEnvironment("env-1");
+      await context.service.start({
+        featureId: context.featureId,
+        kind: "feature",
+        userMessage: "Let me export reports",
+      });
+      await context.service.advanceNow(context.featureId);
+
+      expect((await context.record())?.phase).toBe("dispatching");
+      expect((await context.record())?.failure).toBeUndefined();
+      expect(context.provider.sends).toHaveLength(0);
+    } finally {
+      await context.dispose();
+    }
+  });
+
   test("cancelling aborts the turn and detaches the record without retracting the plan", async () => {
     const context = await harness();
     try {
@@ -396,6 +500,137 @@ describe("FeaturePlanningService", () => {
       expect(plan?.planning).toBeUndefined();
       // The user's message is theirs; cancelling the workflow does not erase it.
       expect(plan?.messages.at(-1)?.content).toBe("Let me export reports");
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("cancelling while send is in flight aborts and never leaves a hidden turn", async () => {
+    const context = await harness();
+    try {
+      let releaseSend!: () => void;
+      let markStarted!: () => void;
+      const sendStarted = new Promise<void>((resolve) => { markStarted = resolve; });
+      context.provider.sendGate = new Promise<void>((resolve) => { releaseSend = resolve; });
+      context.provider.onSendStart = markStarted;
+      // Model a provider whose hung send is released only by abort. If cancel
+      // waited for the feature lock before aborting, this test would deadlock.
+      context.provider.onAbort = releaseSend;
+
+      await context.service.start({
+        featureId: context.featureId,
+        kind: "feature",
+        userMessage: "Let me export reports",
+      });
+      await sendStarted;
+      await context.service.cancel(context.featureId);
+
+      expect(context.provider.sends).toHaveLength(1);
+      expect(context.provider.aborted).toEqual(["session-existing"]);
+      expect((await context.storage.getFeaturePlan(context.featureId))?.planning).toBeUndefined();
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("does not accept a refinement block naming another story", async () => {
+    const context = await harness({ withStory: true });
+    try {
+      await context.start({ kind: "story", storyId: "story-1", userMessage: "Tighten it" });
+      context.provider.reply(STORY_REPLY.replace('"story-1"', '"story-other"'));
+      await context.service.advanceNow(context.featureId);
+
+      const record = await context.record();
+      const story = (await context.storage.getFeaturePlan(context.featureId))?.stories[0];
+      expect(record?.phase).toBe("running");
+      expect(record?.rawResponse).toBeUndefined();
+      expect(story?.title).toBe("Export");
+      expect(story?.messages.map((entry) => entry.role)).toEqual(["user"]);
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("rejects a mismatched story id again at the persistence boundary", async () => {
+    const context = await harness({ withStory: true });
+    try {
+      await context.start({ kind: "story", storyId: "story-1", userMessage: "Tighten it" });
+      const record = (await context.record())!;
+      const wrongReply = STORY_REPLY.replace('"story-1"', '"story-other"');
+      await context.storage.mutateFeaturePlanning(
+        context.featureId,
+        record.operationId,
+        (_plan, current) => {
+          current.phase = "persisting";
+          current.rawResponse = wrongReply;
+        },
+      );
+
+      await context.service.advanceNow(context.featureId);
+      const failed = await context.record();
+      const story = (await context.storage.getFeaturePlan(context.featureId))?.stories[0];
+      expect(failed?.phase).toBe("failed");
+      expect(failed?.failure?.code).toBe("parse");
+      expect(failed?.failure?.retryPhase).toBe("dispatching");
+      expect(story?.title).toBe("Export");
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("uses dispatch time for reply timeout and resets attempt time on retry", async () => {
+    const context = await harness({ serviceOptions: { replyDeadlineMs: 50 } });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      const running = (await context.record())!;
+      expect(running.dispatchedAt).toBeString();
+      await context.storage.mutateFeaturePlanning(
+        context.featureId,
+        running.operationId,
+        (_plan, current) => {
+          // The overall exchange may be old; only the actual dispatch clock
+          // governs a running provider turn.
+          current.startedAt = new Date(0).toISOString();
+        },
+      );
+      await context.service.advanceNow(context.featureId);
+      expect((await context.record())?.phase).toBe("running");
+
+      const stillRunning = (await context.record())!;
+      await context.storage.mutateFeaturePlanning(
+        context.featureId,
+        stillRunning.operationId,
+        (_plan, current) => { current.dispatchedAt = new Date(0).toISOString(); },
+      );
+      await context.service.advanceNow(context.featureId);
+      expect((await context.record())?.phase).toBe("failed");
+
+      const beforeRetry = Date.now();
+      await context.service.retry(context.featureId);
+      const retried = await context.record();
+      expect(retried?.phase).not.toBe("failed");
+      expect(Date.parse(retried?.attemptStartedAt ?? "")).toBeGreaterThanOrEqual(beforeRetry);
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("bounds a large transcript baseline without selecting omitted history", async () => {
+    const context = await harness();
+    try {
+      context.provider.transcript = Array.from({ length: 700 }, (_, index) => ({
+        id: `old-assistant-${index}`,
+        role: "assistant",
+        content: `Old response ${index}`,
+        createdAt: new Date(index + 1).toISOString(),
+      }));
+      await context.start({ kind: "feature", userMessage: "A new request" });
+      expect((await context.record())?.baselineAssistantIds).toHaveLength(512);
+
+      context.provider.activityState = "idle";
+      await context.service.advanceNow(context.featureId);
+      expect((await context.record())?.phase).toBe("running");
+      expect((await context.record())?.rawResponse).toBeUndefined();
     } finally {
       await context.dispose();
     }
@@ -428,6 +663,47 @@ describe("FeaturePlanningService", () => {
     }
   });
 
+  test("evicts a failed cached provider and resumes from a rediscovered bridge", async () => {
+    const first = new FakeProvider();
+    const second = new FakeProvider();
+    const context = await harness({ providers: [first, second] });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+      first.activityError = new Error("bridge connection closed");
+
+      // This pass is transient, but it invalidates the cached connection.
+      await context.service.advanceNow(context.featureId);
+      expect((await context.record())?.phase).toBe("running");
+      expect(first.disposeCount).toBe(1);
+
+      second.reply(PLANNER_REPLY);
+      await context.service.advanceNow(context.featureId);
+      await context.service.advanceNow(context.featureId);
+      expect((await context.storage.getFeaturePlan(context.featureId))?.status).toBe("confirming");
+      expect(first.sends).toHaveLength(1);
+      expect(second.sends).toHaveLength(0);
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("rediscovers the bridge when session lookup fails before dispatch", async () => {
+    const first = new FakeProvider();
+    const second = new FakeProvider();
+    first.statusError = new Error("stale bridge port");
+    const context = await harness({ providers: [first, second] });
+    try {
+      await context.start({ kind: "feature", userMessage: "Let me export reports" });
+
+      expect(first.disposeCount).toBe(1);
+      expect(first.sends).toHaveLength(0);
+      expect(second.sends).toHaveLength(1);
+      expect((await context.record())?.phase).toBe("running");
+    } finally {
+      await context.dispose();
+    }
+  });
+
   test("adopts a conversation the renderer-driven controller left in flight", async () => {
     const context = await harness();
     try {
@@ -454,6 +730,65 @@ describe("FeaturePlanningService", () => {
       expect(context.provider.sends).toHaveLength(0);
       expect((await context.storage.getFeaturePlan(context.featureId))?.status)
         .toBe("confirming");
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("legacy adoption ignores assistant history from before the pending user message", async () => {
+    const context = await harness();
+    try {
+      await context.storage.appendFeaturePlanMessage(
+        context.featureId,
+        "assistant",
+        PLANNER_REPLY,
+        "applied",
+      );
+      await Bun.sleep(2);
+      await context.storage.appendFeaturePlanMessage(context.featureId, "user", "Left in flight");
+      const pending = (await context.storage.getFeaturePlan(context.featureId))?.messages.at(-1);
+      context.provider.transcript = [{
+        id: "historical-assistant",
+        role: "assistant",
+        content: PLANNER_REPLY,
+        createdAt: new Date(Date.parse(pending!.createdAt) - 1_000).toISOString(),
+      }];
+      context.provider.activityState = "idle";
+
+      await context.service.init();
+      await context.service.advanceNow(context.featureId);
+      expect((await context.record())?.phase).toBe("running");
+      expect((await context.record())?.rawResponse).toBeUndefined();
+
+      // Millisecond timestamps can collide; equality is not evidence that the
+      // assistant message predates the pending user message.
+      context.provider.transcript.push({
+        id: "current-assistant",
+        role: "assistant",
+        content: PLANNER_REPLY.replace("Bulk export", "Current export"),
+        createdAt: pending!.createdAt,
+      });
+      await context.service.advanceNow(context.featureId);
+      await context.service.advanceNow(context.featureId);
+      expect((await context.storage.getFeaturePlan(context.featureId))?.title).toBe("Current export");
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("fails safely when the target story is deleted before persistence", async () => {
+    const context = await harness({ withStory: true });
+    try {
+      await context.start({ kind: "story", storyId: "story-1", userMessage: "Tighten it" });
+      await context.storage.updateFeaturePlan(context.featureId, { stories: [] });
+      context.provider.reply(STORY_REPLY);
+      await context.service.advanceNow(context.featureId);
+      await context.service.advanceNow(context.featureId);
+
+      const failed = await context.record();
+      expect(failed?.phase).toBe("failed");
+      expect(failed?.failure?.code).toBe("persistence");
+      expect((await context.storage.getFeaturePlan(context.featureId))?.stories).toEqual([]);
     } finally {
       await context.dispose();
     }

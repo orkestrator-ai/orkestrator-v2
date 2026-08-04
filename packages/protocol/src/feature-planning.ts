@@ -55,6 +55,20 @@ const FEATURE_STATE_BLOCK_RE =
 const STORY_STATE_BLOCK_RE =
   /<story_refinement>\s*([\s\S]*?)\s*<\/story_refinement>/i;
 
+function singleTerminalStatePayload(
+  content: string,
+  pattern: RegExp,
+): string | null {
+  const match = content.match(pattern);
+  if (!match?.[1] || match.index === undefined) return null;
+  // The model contract requires exactly one state block at the end. Applying
+  // the first of several blocks, or a block followed by more prose, would make
+  // an ambiguous provider response mutate durable planning state.
+  if (content.slice(match.index + match[0].length).trim().length > 0) return null;
+  if (content.slice(0, match.index).match(pattern)) return null;
+  return match[1];
+}
+
 export interface ParsedFeaturePlannerState {
   phase?: "collecting" | "confirming" | "stories";
   title?: string;
@@ -199,10 +213,10 @@ ${userMessage}`;
 export function parseFeaturePlannerState(
   content: string,
 ): ParsedFeaturePlannerState | null {
-  const match = content.match(FEATURE_STATE_BLOCK_RE);
-  if (!match?.[1]) return null;
+  const payload = singleTerminalStatePayload(content, FEATURE_STATE_BLOCK_RE);
+  if (payload === null) return null;
   try {
-    const parsed = JSON.parse(match[1]) as Record<string, unknown>;
+    const parsed = JSON.parse(payload) as Record<string, unknown>;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
@@ -258,10 +272,10 @@ export function parseFeaturePlannerState(
 export function parseStoryRefinement(
   content: string,
 ): ParsedStoryRefinement | null {
-  const match = content.match(STORY_STATE_BLOCK_RE);
-  if (!match?.[1]) return null;
+  const payload = singleTerminalStatePayload(content, STORY_STATE_BLOCK_RE);
+  if (payload === null) return null;
   try {
-    const parsed = JSON.parse(match[1]) as Record<string, unknown>;
+    const parsed = JSON.parse(payload) as Record<string, unknown>;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
@@ -295,11 +309,11 @@ export function parseStoryRefinement(
 }
 
 export function stripFeaturePlannerStateBlocks(content: string): string {
-  return content.replace(FEATURE_STATE_BLOCK_RE, "").trim();
+  return content.replace(new RegExp(FEATURE_STATE_BLOCK_RE.source, "gi"), "").trim();
 }
 
 export function stripStoryRefinementStateBlocks(content: string): string {
-  return content.replace(STORY_STATE_BLOCK_RE, "").trim();
+  return content.replace(new RegExp(STORY_STATE_BLOCK_RE.source, "gi"), "").trim();
 }
 
 /**
@@ -387,6 +401,7 @@ export const FEATURE_PLANNING_RECORD_VERSION = 1 as const;
  */
 export const FEATURE_PLANNING_LIMITS = {
   maxIdLength: 512,
+  maxTimestampLength: 64,
   maxUserMessageLength: 100_000,
   maxRawResponseLength: 512 * 1024,
   maxBaselineAssistantIds: 512,
@@ -475,6 +490,10 @@ export interface FeaturePlanningRecord {
   /** Set once the reply has been appended to the plan, before it is applied. */
   responseMessageId?: string;
   failure?: FeaturePlanningFailure;
+  /** Start of the current retry attempt; reset whenever a failed exchange retries. */
+  attemptStartedAt?: string;
+  /** Time the provider accepted this exchange for dispatch. */
+  dispatchedAt?: string;
   startedAt: string;
   updatedAt: string;
   /** Monotonic per-record revision; the renderer projection rejects stale writes. */
@@ -512,8 +531,31 @@ function isBoundedString(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length <= max;
 }
 
+function isBoundedId(value: unknown, max: number): value is string {
+  return isBoundedString(value, max) && value.length > 0;
+}
+
 function isOptionalBoundedString(value: unknown, max: number): boolean {
   return value === undefined || isBoundedString(value, max);
+}
+
+function isOptionalBoundedId(value: unknown, max: number): boolean {
+  return value === undefined || isBoundedId(value, max);
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  if (!isBoundedString(value, FEATURE_PLANNING_LIMITS.maxTimestampLength)) {
+    return false;
+  }
+  // `Date.parse` alone accepts locale-like strings. Require the date-time
+  // separator and an explicit UTC/offset suffix so persisted wall-clock values
+  // have unambiguous ordering across backend and renderer timezones.
+  return /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/i.test(value)
+    && Number.isFinite(Date.parse(value));
+}
+
+function isOptionalIsoTimestamp(value: unknown): boolean {
+  return value === undefined || isIsoTimestamp(value);
 }
 
 function isFeaturePlanningFailure(
@@ -529,7 +571,7 @@ function isFeaturePlanningFailure(
       candidate.message,
       FEATURE_PLANNING_LIMITS.maxFailureMessageLength,
     )
-    && typeof candidate.occurredAt === "string"
+    && isIsoTimestamp(candidate.occurredAt)
     && isActiveFeaturePlanningPhase(candidate.retryPhase)
   );
 }
@@ -549,14 +591,14 @@ export function isFeaturePlanningRecord(
   const { maxIdLength } = FEATURE_PLANNING_LIMITS;
   if (candidate.version !== FEATURE_PLANNING_RECORD_VERSION) return false;
   if (
-    !isBoundedString(candidate.operationId, maxIdLength)
-    || !isBoundedString(candidate.featureId, maxIdLength)
-    || !isBoundedString(candidate.projectId, maxIdLength)
+    !isBoundedId(candidate.operationId, maxIdLength)
+    || !isBoundedId(candidate.featureId, maxIdLength)
+    || !isBoundedId(candidate.projectId, maxIdLength)
   ) {
     return false;
   }
   if (candidate.kind !== "feature" && candidate.kind !== "story") return false;
-  if (candidate.kind === "story" && !isBoundedString(candidate.storyId, maxIdLength)) {
+  if (candidate.kind === "story" && !isBoundedId(candidate.storyId, maxIdLength)) {
     return false;
   }
   if (candidate.kind === "feature" && candidate.storyId !== undefined) return false;
@@ -569,13 +611,13 @@ export function isFeaturePlanningRecord(
     return false;
   }
   if (
-    !isOptionalBoundedString(candidate.userMessageId, maxIdLength)
-    || !isOptionalBoundedString(candidate.environmentId, maxIdLength)
-    || !isOptionalBoundedString(candidate.providerSessionId, maxIdLength)
-    || !isOptionalBoundedString(candidate.dispatchId, maxIdLength)
-    || !isOptionalBoundedString(candidate.requestId, maxIdLength)
-    || !isOptionalBoundedString(candidate.responseMessageId, maxIdLength)
-    || !isOptionalBoundedString(candidate.responseModelId, maxIdLength)
+    !isOptionalBoundedId(candidate.userMessageId, maxIdLength)
+    || !isOptionalBoundedId(candidate.environmentId, maxIdLength)
+    || !isOptionalBoundedId(candidate.providerSessionId, maxIdLength)
+    || !isOptionalBoundedId(candidate.dispatchId, maxIdLength)
+    || !isOptionalBoundedId(candidate.requestId, maxIdLength)
+    || !isOptionalBoundedId(candidate.responseMessageId, maxIdLength)
+    || !isOptionalBoundedId(candidate.responseModelId, maxIdLength)
   ) {
     return false;
   }
@@ -591,7 +633,7 @@ export function isFeaturePlanningRecord(
     if (
       !Array.isArray(ids)
       || ids.length > FEATURE_PLANNING_LIMITS.maxBaselineAssistantIds
-      || !ids.every((id) => isBoundedString(id, maxIdLength))
+      || !ids.every((id) => isBoundedId(id, maxIdLength))
     ) {
       return false;
     }
@@ -612,8 +654,10 @@ export function isFeaturePlanningRecord(
     return false;
   }
   return (
-    typeof candidate.startedAt === "string"
-    && typeof candidate.updatedAt === "string"
+    isOptionalIsoTimestamp(candidate.attemptStartedAt)
+    && isOptionalIsoTimestamp(candidate.dispatchedAt)
+    && isIsoTimestamp(candidate.startedAt)
+    && isIsoTimestamp(candidate.updatedAt)
     && typeof candidate.backendRevision === "number"
     && Number.isSafeInteger(candidate.backendRevision)
     && candidate.backendRevision >= 0
@@ -626,9 +670,9 @@ export function isStartFeaturePlanningInput(
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
   const { maxIdLength, maxUserMessageLength } = FEATURE_PLANNING_LIMITS;
-  if (!isBoundedString(candidate.featureId, maxIdLength)) return false;
+  if (!isBoundedId(candidate.featureId, maxIdLength)) return false;
   if (candidate.kind !== "feature" && candidate.kind !== "story") return false;
-  if (candidate.kind === "story" && !isBoundedString(candidate.storyId, maxIdLength)) {
+  if (candidate.kind === "story" && !isBoundedId(candidate.storyId, maxIdLength)) {
     return false;
   }
   if (candidate.kind === "feature" && candidate.storyId !== undefined) return false;
@@ -648,5 +692,41 @@ export function isStartFeaturePlanningInput(
 export function boundRawResponse(content: string): string {
   const { maxRawResponseLength } = FEATURE_PLANNING_LIMITS;
   if (content.length <= maxRawResponseLength) return content;
-  return `${content.slice(0, maxRawResponseLength - 1)}…`;
+
+  const boundedPrefix = (length: number): string => {
+    // Do not split a UTF-16 surrogate pair when the cut happens inside emoji
+    // or another supplementary-plane character.
+    const lastCodeUnit = content.charCodeAt(length - 1);
+    const safeLength = lastCodeUnit >= 0xD800 && lastCodeUnit <= 0xDBFF
+      ? length - 1
+      : length;
+    return content.slice(0, safeLength);
+  };
+
+  // The state block is the machine-readable result of a planning turn. When a
+  // provider exceeds the storage bound with conversational prose, retain that
+  // terminal result rather than truncating it into invalid JSON and turning a
+  // successful turn into an unrecoverable parse failure.
+  const stateBlocks = Array.from(content.matchAll(
+    /<feature_planner_state>\s*[\s\S]*?\s*<\/feature_planner_state>|<story_refinement>\s*[\s\S]*?\s*<\/story_refinement>/gi,
+  ));
+  const terminalMatch = stateBlocks.at(-1);
+  const trailingContent = terminalMatch?.index === undefined
+    ? ""
+    : content.slice(terminalMatch.index + terminalMatch[0].length);
+  const terminalStateBlock = terminalMatch && trailingContent.trim().length === 0
+    ? `${terminalMatch[0]}${trailingContent}`
+    : undefined;
+  const separator = "…\n\n";
+  if (
+    terminalStateBlock
+    && terminalStateBlock.length + separator.length <= maxRawResponseLength
+  ) {
+    const prefixLength = maxRawResponseLength
+      - separator.length
+      - terminalStateBlock.length;
+    return `${boundedPrefix(prefixLength)}${separator}${terminalStateBlock}`;
+  }
+
+  return `${boundedPrefix(maxRawResponseLength - 1)}…`;
 }

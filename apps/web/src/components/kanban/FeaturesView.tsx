@@ -404,20 +404,35 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
    * There is nothing to reconcile client-side any more, so "refresh" is a
    * refetch. The backend is already advancing whatever is in flight.
    */
-  const refreshFeatures = useCallback(() => {
-    void loadFeatures(projectId);
+  const refreshFeatures = useCallback(async () => {
+    const refreshed = await loadFeatures(projectId);
+    if (!refreshed) {
+      toast.error("Failed to refresh feature planning", {
+        description: "The latest backend state could not be loaded.",
+      });
+    }
   }, [loadFeatures, projectId]);
 
   const retryFailedPlanning = useCallback(
-    (record: FeaturePlanningRecord) => {
-      void retryPlanning(record.featureId);
+    async (record: FeaturePlanningRecord) => {
+      const retried = await retryPlanning(record.featureId);
+      if (!retried) {
+        toast.error("Feature planning retry failed", {
+          description: "The backend refused the retry request.",
+        });
+      }
     },
     [retryPlanning],
   );
 
   const abandonFailedPlanning = useCallback(
-    (record: FeaturePlanningRecord) => {
-      void cancelPlanning(record.featureId);
+    async (record: FeaturePlanningRecord) => {
+      const cancelled = await cancelPlanning(record.featureId);
+      if (!cancelled) {
+        toast.error("Failed to stop feature planning", {
+          description: "The backend did not cancel the planning request.",
+        });
+      }
     },
     [cancelPlanning],
   );

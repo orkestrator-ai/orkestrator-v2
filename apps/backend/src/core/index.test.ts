@@ -731,10 +731,16 @@ describe("native-agent activity reconciliation lifecycle", () => {
         init: () => Promise<void>;
         reconcileAgentActivity: () => Promise<void>;
       };
+      promptQueues: {
+        drainAll: () => Promise<void>;
+        shutdown: () => Promise<void>;
+      };
     };
     internals.buildPipelines.init = mock(async () => undefined);
     internals.nativeAgents.init = mock(async () => undefined);
     internals.nativeAgents.reconcileAgentActivity = mock(async () => undefined);
+    internals.promptQueues.drainAll = mock(async () => undefined);
+    internals.promptQueues.shutdown = mock(async () => undefined);
 
     const { intervals, clearIntervalSpy, tick, restore } = controlledIntervals();
 
@@ -742,6 +748,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
       await backend.init();
       expect(internals.nativeAgents.reconcileAgentActivity)
         .toHaveBeenCalledTimes(1);
+      expect(internals.promptQueues.drainAll).toHaveBeenCalledTimes(1);
       const nativeSweep = intervals.find((interval) => interval.delay === 2_000);
       expect(nativeSweep).toBeDefined();
       expect(nativeSweep!.unref).toHaveBeenCalledTimes(1);
@@ -750,8 +757,10 @@ describe("native-agent activity reconciliation lifecycle", () => {
       await Promise.resolve();
       expect(internals.nativeAgents.reconcileAgentActivity)
         .toHaveBeenCalledTimes(2);
+      expect(internals.promptQueues.drainAll).toHaveBeenCalledTimes(2);
 
       await backend.shutdown();
+      expect(internals.promptQueues.shutdown).toHaveBeenCalledTimes(1);
       expect(nativeSweep!.active).toBe(false);
       expect(clearIntervalSpy).toHaveBeenCalledWith(nativeSweep!.handle);
 
@@ -759,6 +768,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
       await Promise.resolve();
       expect(internals.nativeAgents.reconcileAgentActivity)
         .toHaveBeenCalledTimes(2);
+      expect(internals.promptQueues.drainAll).toHaveBeenCalledTimes(2);
     } finally {
       await backend.shutdown().catch(() => undefined);
       restore();

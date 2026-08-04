@@ -426,6 +426,10 @@ export interface PersistedPromptQueue {
     message: unknown;
     requestId: string;
     reservedAt: string;
+    /** Persisted immediately before crossing the irreversible tmux boundary. */
+    submittingAt?: string;
+    /** Persisted after tmux accepted the prompt, before queue acknowledgement. */
+    submittedAt?: string;
   };
   /**
    * Terminal provider rejection. The original message is restored to the head

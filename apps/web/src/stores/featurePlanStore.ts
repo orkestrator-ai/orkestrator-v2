@@ -131,6 +131,9 @@ export function activeFeaturePlanning(
   return record;
 }
 
+let nextFeatureLoadRequestId = 0;
+const latestFeatureLoadRequestByProject = new Map<string, number>();
+
 export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
   features: [],
   isLoading: false,
@@ -138,17 +141,25 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
   chatDrafts: new Map(),
 
   loadFeatures: async (projectId) => {
+    const requestId = ++nextFeatureLoadRequestId;
+    latestFeatureLoadRequestByProject.set(projectId, requestId);
     set({ isLoading: true, currentProjectId: projectId });
     try {
       const features = await getFeaturePlans(projectId);
-      if (get().currentProjectId === projectId) {
+      if (
+        get().currentProjectId === projectId
+        && latestFeatureLoadRequestByProject.get(projectId) === requestId
+      ) {
         set({ features, isLoading: false });
         return true;
       }
       return false;
     } catch (error) {
       console.error("[FeaturePlanStore] Failed to load features:", error);
-      if (get().currentProjectId === projectId) {
+      if (
+        get().currentProjectId === projectId
+        && latestFeatureLoadRequestByProject.get(projectId) === requestId
+      ) {
         set({ isLoading: false });
       }
       return false;

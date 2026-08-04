@@ -70,6 +70,21 @@ const getClaudeModelCatalogMock = mock(async (environmentId: string) => ({
   fetchedAt: "2026-07-25T12:00:00.000Z",
   stale: false,
 }));
+const getComposeDraftMock = mock(async () => null);
+const saveComposeDraftMock = mock(async (
+  draftKey: string,
+  ownerType: "environment" | "project",
+  ownerId: string,
+  value: unknown,
+) => ({
+  draftKey,
+  ownerType,
+  ownerId,
+  value,
+  revision: 1,
+  updatedAt: new Date(0).toISOString(),
+}));
+const deleteComposeDraftMock = mock(async () => undefined);
 const enqueuePromptQueueMessageMock = mock(
   async (queueKey: string, environmentId: string, message: { id: string }) =>
     promptQueueSnapshot(queueKey, environmentId, [
@@ -311,6 +326,9 @@ mock.module("@/lib/backend", () => ({
   openInBrowser: openInBrowserMock,
   updateGlobalConfig: updateGlobalConfigMock,
   getClaudeModelCatalog: getClaudeModelCatalogMock,
+  getComposeDraft: getComposeDraftMock,
+  saveComposeDraft: saveComposeDraftMock,
+  deleteComposeDraft: deleteComposeDraftMock,
 }));
 
 mock.module("@/components/chat/FileMentionMenu", () => ({
@@ -561,6 +579,24 @@ describe("ClaudeTmuxChatTab", () => {
       fetchedAt: "2026-07-25T12:00:00.000Z",
       stale: false,
     }));
+    getComposeDraftMock.mockReset();
+    getComposeDraftMock.mockImplementation(async () => null);
+    saveComposeDraftMock.mockReset();
+    saveComposeDraftMock.mockImplementation(async (
+      draftKey: string,
+      ownerType: "environment" | "project",
+      ownerId: string,
+      value: unknown,
+    ) => ({
+      draftKey,
+      ownerType,
+      ownerId,
+      value,
+      revision: 1,
+      updatedAt: new Date(0).toISOString(),
+    }));
+    deleteComposeDraftMock.mockReset();
+    deleteComposeDraftMock.mockImplementation(async () => undefined);
     enqueuePromptQueueMessageMock.mockReset();
     enqueuePromptQueueMessageMock.mockImplementation(
       async (queueKey: string, environmentId: string, message: { id: string }) =>
@@ -1515,6 +1551,35 @@ Running 1 Explore agent...
       "env-1",
     ]);
     expect(screen.queryByAltText(/clipboard-/)).toBeNull();
+  });
+
+  test("persists tmux composer input under the backend queue interlock key", async () => {
+    mockRunningTmuxStatus();
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    const input = await screen.findByPlaceholderText(
+      "Ask Claude anything… (@ to mention, / for commands)",
+    );
+    fireEvent.change(input, { target: { value: "draft blocks queued work" } });
+
+    await waitFor(() => expect(saveComposeDraftMock).toHaveBeenCalled());
+    const call = saveComposeDraftMock.mock.calls.at(-1);
+    expect(call?.[0]).toBe(
+      "claude-tmux:env-1:env%3Aenv-1%3Atab%3Atab-1",
+    );
+    expect(call?.[1]).toBe("environment");
+    expect(call?.[2]).toBe("env-1");
+    expect(call?.[3]).toMatchObject({
+      text: "draft blocks queued work",
+      mentions: [],
+      attachments: [],
+    });
   });
 
   test("submits a pasted tmux image without text as a single prompt", async () => {

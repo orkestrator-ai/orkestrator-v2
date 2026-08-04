@@ -64,6 +64,7 @@ import {
   useNativeComposeBarPaste,
   type PastedImageAttachment,
 } from "@/hooks/useNativeComposeBarPaste";
+import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import {
   answerPreToolUse,
   capturePane,
@@ -1742,6 +1743,7 @@ export function ClaudeTmuxChatTab({
           >
             <TmuxComposeBar
               sessionKey={storeKey}
+              environmentId={environmentId}
               containerId={containerId}
               worktreePath={worktreePath}
               disabled={!running}
@@ -2604,6 +2606,7 @@ const EMPTY_TMUX_QUEUE: TmuxQueuedMessage[] = [];
 
 interface TmuxComposeBarProps {
   sessionKey: string;
+  environmentId: string;
   containerId?: string;
   worktreePath?: string;
   disabled: boolean;
@@ -2637,6 +2640,7 @@ interface TmuxComposeBarProps {
 
 function TmuxComposeBar({
   sessionKey,
+  environmentId,
   containerId,
   worktreePath,
   disabled,
@@ -2699,6 +2703,12 @@ function TmuxComposeBar({
   const addAttachmentToStore = useClaudeTmuxStore((state) => state.addAttachment);
   const removeAttachmentFromStore = useClaudeTmuxStore((state) => state.removeAttachment);
   const clearAttachments = useClaudeTmuxStore((state) => state.clearAttachments);
+  useNativeComposeDraftPersistence(
+    "claude-tmux",
+    environmentId,
+    sessionKey,
+    useClaudeTmuxStore,
+  );
   const modelObj = useMemo(
     () => getTmuxModel(selectedModel, models),
     [selectedModel, models],

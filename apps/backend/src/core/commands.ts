@@ -155,7 +155,11 @@ import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { LoopedReviewService } from "./looped-review-service.js";
 import type { FeaturePlanningService } from "./feature-planning.js";
-import type { FeaturePlanningKind } from "@orkestrator/protocol/feature-planning";
+import {
+  isStartFeaturePlanningInput,
+  type FeaturePlanningKind,
+  type StartFeaturePlanningInput,
+} from "@orkestrator/protocol/feature-planning";
 import {
   LOOPED_REVIEW_WORKFLOW_VERSION,
   isLoopedReviewTerminalPhase,
@@ -1327,6 +1331,146 @@ function requireFeaturePlanning(context: CommandContext): FeaturePlanningService
     throw new Error("Feature planning supervisor is unavailable");
   }
   return context.featurePlanning;
+}
+
+const FEATURE_PLAN_UPDATE_FIELDS = [
+  "title",
+  "status",
+  "summary",
+  "messages",
+  "stories",
+  "codexEnvironmentId",
+  "codexSessionId",
+  "buildTaskId",
+  "buildPipelineId",
+] as const;
+
+function asOptionalNonBlankFeaturePlanId(
+  value: unknown,
+  name: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  return asNonBlankString(value, name);
+}
+
+function asFeaturePlanMessage(value: unknown, name: string): JsonRecord {
+  const message = asRecord(value, name);
+  assertOnlyKeys(
+    message,
+    ["id", "role", "content", "createdAt", "modelId", "stateApplication"],
+    name,
+  );
+  const role = asFeaturePlanRole(message.role);
+  const stateApplication = asFeaturePlanStateApplication(message.stateApplication);
+  return {
+    id: asNonBlankString(message.id, `${name}.id`),
+    role,
+    content: asString(message.content, `${name}.content`),
+    createdAt: asNonBlankString(message.createdAt, `${name}.createdAt`),
+    ...(message.modelId === undefined
+      ? {}
+      : { modelId: asFeaturePlanModelId(message.modelId) }),
+    ...(stateApplication === undefined ? {} : { stateApplication }),
+  };
+}
+
+function asFeaturePlanMessages(value: unknown, name: string): JsonRecord[] {
+  if (!Array.isArray(value)) throw new Error(`Expected ${name} to be an array`);
+  return value.map((message, index) =>
+    asFeaturePlanMessage(message, `${name}[${index}]`)
+  );
+}
+
+function asFeaturePlanStories(value: unknown): JsonRecord[] {
+  if (!Array.isArray(value)) throw new Error("Expected updates.stories to be an array");
+  return value.map((candidate, index) => {
+    const name = `updates.stories[${index}]`;
+    const story = asRecord(candidate, name);
+    assertOnlyKeys(
+      story,
+      [
+        "id",
+        "title",
+        "description",
+        "acceptanceCriteria",
+        "messages",
+        "createdAt",
+        "updatedAt",
+      ],
+      name,
+    );
+    if (!Array.isArray(story.acceptanceCriteria)) {
+      throw new Error(`Expected ${name}.acceptanceCriteria to be an array`);
+    }
+    return {
+      id: asNonBlankString(story.id, `${name}.id`),
+      title: asString(story.title, `${name}.title`),
+      description: asString(story.description, `${name}.description`),
+      acceptanceCriteria: story.acceptanceCriteria.map((criterion, criterionIndex) =>
+        asString(criterion, `${name}.acceptanceCriteria[${criterionIndex}]`)
+      ),
+      messages: asFeaturePlanMessages(story.messages, `${name}.messages`),
+      createdAt: asNonBlankString(story.createdAt, `${name}.createdAt`),
+      updatedAt: asNonBlankString(story.updatedAt, `${name}.updatedAt`),
+    };
+  });
+}
+
+function asFeaturePlanUpdates(
+  value: unknown,
+): Parameters<StorageService["updateFeaturePlan"]>[1] {
+  const updates = asRecord(value, "updates");
+  assertOnlyKeys(updates, FEATURE_PLAN_UPDATE_FIELDS, "updates");
+  const parsed: Record<string, unknown> = {};
+  if (updates.title !== undefined) parsed.title = asString(updates.title, "updates.title");
+  if (updates.summary !== undefined) parsed.summary = asString(updates.summary, "updates.summary");
+  if (updates.status !== undefined) {
+    if (
+      updates.status !== "collecting"
+      && updates.status !== "confirming"
+      && updates.status !== "stories"
+      && updates.status !== "building"
+      && updates.status !== "built"
+    ) {
+      throw new Error("Expected updates.status to be a valid feature plan status");
+    }
+    parsed.status = updates.status;
+  }
+  if (updates.messages !== undefined) {
+    parsed.messages = asFeaturePlanMessages(updates.messages, "updates.messages");
+  }
+  if (updates.stories !== undefined) {
+    parsed.stories = asFeaturePlanStories(updates.stories);
+  }
+  for (const field of [
+    "codexEnvironmentId",
+    "codexSessionId",
+    "buildTaskId",
+    "buildPipelineId",
+  ] as const) {
+    if (Object.hasOwn(updates, field)) {
+      parsed[field] = asOptionalNonBlankFeaturePlanId(
+        updates[field],
+        `updates.${field}`,
+      );
+    }
+  }
+  return parsed as Parameters<StorageService["updateFeaturePlan"]>[1];
+}
+
+function asStartFeaturePlanningInput(args: JsonRecord): StartFeaturePlanningInput {
+  const input: StartFeaturePlanningInput = {
+    featureId: asNonBlankString(args.featureId, "featureId"),
+    kind: asFeaturePlanningKind(args.kind),
+    ...(args.storyId === undefined
+      ? {}
+      : { storyId: asNonBlankString(args.storyId, "storyId") }),
+    userMessage: asNonBlankString(args.userMessage, "userMessage"),
+  };
+  if (!isStartFeaturePlanningInput(input)) {
+    throw new Error("Expected a valid bounded feature planning request");
+  }
+  return input;
 }
 
 function asFeaturePlanStateApplication(
@@ -10408,7 +10552,13 @@ export function createCommandRegistry(
     )
   );
   register("create_feature_plan", ({ projectId }, { storage }) => storage.createFeaturePlan(asString(projectId, "projectId")));
-  register("update_feature_plan", ({ featureId, updates }, { storage }) => storage.updateFeaturePlan(asString(featureId, "featureId"), parseUpdateObject(updates) as never));
+  register("update_feature_plan", (args, { storage }) => {
+    assertOnlyKeys(args, ["featureId", "updates"], "arguments");
+    return storage.updateFeaturePlan(
+      asNonBlankString(args.featureId, "featureId"),
+      asFeaturePlanUpdates(args.updates),
+    );
+  });
   register("claim_feature_plan_build", ({ featureId, taskId }, { storage }) =>
     storage.claimFeaturePlanBuild(
       asString(featureId, "featureId"),
@@ -10439,14 +10589,7 @@ export function createCommandRegistry(
   // session, dispatch, reply, parse, persist — happens without it.
   register("start_feature_planning", (args, context) => {
     assertOnlyKeys(args, ["featureId", "kind", "storyId", "userMessage"], "arguments");
-    return requireFeaturePlanning(context).start({
-      featureId: asNonBlankString(args.featureId, "featureId"),
-      kind: asFeaturePlanningKind(args.kind),
-      ...(args.storyId === undefined
-        ? {}
-        : { storyId: asNonBlankString(args.storyId, "storyId") }),
-      userMessage: asString(args.userMessage, "userMessage"),
-    });
+    return requireFeaturePlanning(context).start(asStartFeaturePlanningInput(args));
   });
   register("get_feature_planning_snapshot", (args, context) => {
     assertOnlyKeys(args, ["projectId"], "arguments");

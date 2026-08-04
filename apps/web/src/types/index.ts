@@ -280,6 +280,10 @@ export interface PersistedPromptQueue<T = unknown> {
     message: T;
     requestId: string;
     reservedAt: string;
+    /** Durable fail-closed marker written before an irreversible dispatch. */
+    submittingAt?: string;
+    /** Durable acknowledgement-only marker written after confirmed dispatch. */
+    submittedAt?: string;
   };
   dispatchError?: {
     requestId: string;

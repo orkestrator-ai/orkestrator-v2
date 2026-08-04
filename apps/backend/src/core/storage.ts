@@ -30,6 +30,7 @@ import {
   isTerminalFeaturePlanningPhase,
   type FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
+import { parseClaudeTmuxStateKey } from "@orkestrator/protocol/tmux-prompt";
 import {
   getReviewInstructionValidationError,
   parseReviewInstruction,
@@ -476,6 +477,7 @@ function isPersistedPromptQueue(
     && isNonBlankString(value.queueKey)
     && (expectedKey === undefined || value.queueKey === expectedKey)
     && isNonBlankString(value.environmentId)
+    && promptQueueKeyMatchesEnvironment(value.queueKey, value.environmentId)
     && Array.isArray(value.messages)
     && (
       value.inFlight === undefined
@@ -485,6 +487,23 @@ function isPersistedPromptQueue(
         && isNonBlankString(value.inFlight.requestId)
         && typeof value.inFlight.reservedAt === "string"
         && Number.isFinite(Date.parse(value.inFlight.reservedAt))
+        && (
+          value.inFlight.submittingAt === undefined
+          || (
+            typeof value.inFlight.submittingAt === "string"
+            && Number.isFinite(Date.parse(value.inFlight.submittingAt))
+          )
+        )
+        && (
+          value.inFlight.submittedAt === undefined
+          || (
+            typeof value.inFlight.submittedAt === "string"
+            && Number.isFinite(Date.parse(value.inFlight.submittedAt))
+            && typeof value.inFlight.submittingAt === "string"
+            && Date.parse(value.inFlight.submittedAt)
+              >= Date.parse(value.inFlight.submittingAt)
+          )
+        )
       )
     )
     && (
@@ -515,6 +534,25 @@ function isPersistedPromptQueue(
     && typeof value.updatedAt === "string"
     && Number.isFinite(Date.parse(value.updatedAt))
     && isPositiveInteger(value.revision);
+}
+
+const CLAUDE_TMUX_QUEUE_PREFIX = "claude-tmux\0";
+
+function promptQueueKeyMatchesEnvironment(
+  queueKey: string,
+  environmentId: string,
+): boolean {
+  if (!queueKey.startsWith(CLAUDE_TMUX_QUEUE_PREFIX)) return true;
+  const target = parseClaudeTmuxStateKey(
+    queueKey.slice(CLAUDE_TMUX_QUEUE_PREFIX.length),
+  );
+  return target?.environmentId === environmentId;
+}
+
+function assertPromptQueueKeyOwner(queueKey: string, environmentId: string): void {
+  if (!promptQueueKeyMatchesEnvironment(queueKey, environmentId)) {
+    throw new Error("Prompt queue key does not match its environment owner");
+  }
 }
 
 function isPersistedNativeAgentSession(
@@ -4306,6 +4344,7 @@ export class StorageService {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Prompt queue environment ID must not be blank");
     }
+    assertPromptQueueKeyOwner(queueKey, environmentId);
     this.validatePromptQueueMessages(messages);
     if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
       throw new Error("Prompt queue expected revision must be a non-negative integer");
@@ -4352,6 +4391,7 @@ export class StorageService {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Prompt queue environment ID must not be blank");
     }
+    assertPromptQueueKeyOwner(queueKey, environmentId);
     this.validatePromptQueueMessage(message);
 
     return this.enqueuePromptQueueMutation(async () => {
@@ -4397,6 +4437,7 @@ export class StorageService {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Prompt queue environment ID must not be blank");
     }
+    assertPromptQueueKeyOwner(queueKey, environmentId);
     this.validatePromptQueueMessage(message);
 
     return this.enqueuePromptQueueMutation(async () => {
@@ -4538,6 +4579,7 @@ export class StorageService {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Prompt queue environment ID must not be blank");
     }
+    assertPromptQueueKeyOwner(queueKey, environmentId);
     if (!isNonBlankString(expectedMessageId)) {
       throw new Error("Expected prompt message ID must not be blank");
     }
@@ -4656,6 +4698,60 @@ export class StorageService {
       const { inFlight: _inFlight, ...withoutInFlight } = previous;
       const saved: PersistedPromptQueue = {
         ...withoutInFlight,
+        updatedAt: nowIso(),
+        revision: previous.revision + 1,
+      };
+      queues[queueKey] = saved;
+      await this.saveSensitiveJson(this.promptQueuesFile(), queues);
+      this.announce("prompt-queue", previous.environmentId);
+      return saved;
+    });
+  }
+
+  /**
+   * Durably fences an in-flight prompt before crossing the irreversible tmux
+   * submit boundary. If the backend dies after this write, recovery must treat
+   * the outcome as ambiguous rather than submitting the prompt again.
+   */
+  async markPromptQueueDispatchSubmitting(
+    queueKey: string,
+    requestId: string,
+  ): Promise<PersistedPromptQueue | null> {
+    return this.markPromptQueueDispatchBoundary(queueKey, requestId, "submittingAt");
+  }
+
+  /** Records that tmux accepted a fenced prompt so acknowledgement can retry safely. */
+  async markPromptQueueDispatchSubmitted(
+    queueKey: string,
+    requestId: string,
+  ): Promise<PersistedPromptQueue | null> {
+    return this.markPromptQueueDispatchBoundary(queueKey, requestId, "submittedAt");
+  }
+
+  private markPromptQueueDispatchBoundary(
+    queueKey: string,
+    requestId: string,
+    field: "submittingAt" | "submittedAt",
+  ): Promise<PersistedPromptQueue | null> {
+    if (!isNonBlankString(queueKey) || !isNonBlankString(requestId)) {
+      throw new Error("Prompt queue dispatch identity must not be blank");
+    }
+    return this.enqueuePromptQueueMutation(async () => {
+      const queues = await this.loadPromptQueues();
+      const previous = queues[queueKey];
+      if (!previous?.inFlight || previous.inFlight.requestId !== requestId) {
+        return previous ?? null;
+      }
+      if (field === "submittedAt" && previous.inFlight.submittingAt === undefined) {
+        throw new Error("Prompt queue dispatch was not fenced before submission");
+      }
+      if (previous.inFlight[field] !== undefined) return previous;
+      const saved: PersistedPromptQueue = {
+        ...previous,
+        inFlight: {
+          ...previous.inFlight,
+          [field]: nowIso(),
+        },
         updatedAt: nowIso(),
         revision: previous.revision + 1,
       };
@@ -6176,9 +6272,19 @@ export class StorageService {
 
       const originalId = plan.id;
       const originalProjectId = plan.projectId;
+      const originalCreatedAt = plan.createdAt;
+      const originalOrder = plan.order;
+      const originalPlanning = plan.planning;
       Object.assign(plan, updates);
       plan.id = originalId;
       plan.projectId = originalProjectId;
+      plan.createdAt = originalCreatedAt;
+      plan.order = originalOrder;
+      if (originalPlanning === undefined) {
+        delete plan.planning;
+      } else {
+        plan.planning = originalPlanning;
+      }
       plan.updatedAt = nowIso();
       return plan;
     }, (plan) => plan.projectId);
@@ -6300,6 +6406,9 @@ export class StorageService {
   async startFeaturePlanning(
     record: FeaturePlanningRecord,
   ): Promise<{ started: boolean; feature: FeaturePlan }> {
+    if (!isFeaturePlanningRecord(record)) {
+      throw new Error("Feature planning record is invalid");
+    }
     return this.mutateFeaturePlans((plans) => {
       const plan = plans.find((candidate) => candidate.id === record.featureId);
       if (!plan) throw new Error(`Feature plan not found: ${record.featureId}`);

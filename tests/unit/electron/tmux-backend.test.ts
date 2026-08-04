@@ -860,6 +860,7 @@ describe("Electron tmux backend command registration", () => {
       "claude_tmux_send_text",
       "claude_tmux_send_keys",
       "claude_tmux_submit",
+      "claude_tmux_submit_queued",
       "claude_tmux_switch_model",
       "claude_tmux_switch_effort",
       "claude_tmux_switch_plan_mode",
@@ -1593,6 +1594,50 @@ describe("Electron tmux backend command registration", () => {
       );
       expect(await fs.readFile(log, "utf8")).not.toContain(
         tmuxSessionName(environment.id, "tab-after-delete"),
+      );
+    });
+  });
+
+  test("a queued prompt submit rejects a deletion tombstone before typing", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      let storedEnvironment: Environment = environment;
+      const context = {
+        storage: {
+          getEnvironment: async () => storedEnvironment,
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-delete-submit", environmentId: environment.id },
+        context,
+      );
+
+      storedEnvironment = {
+        ...environment,
+        deletionRequestedAt: new Date().toISOString(),
+      };
+      await expect(invoke(
+        handlers,
+        "claude_tmux_submit_queued",
+        {
+          tabId: "tab-delete-submit",
+          environmentId: environment.id,
+          text: "must not be typed",
+        },
+        context,
+      )).rejects.toThrow("is being deleted");
+      expect(await fs.readFile(log, "utf8")).not.toContain("must not be typed");
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-delete-submit", environmentId: environment.id },
+        context,
       );
     });
   });

@@ -392,6 +392,24 @@ function chatFeature(overrides: Partial<FeaturePlan> = {}): FeaturePlan {
   });
 }
 
+function planningRecord(
+  overrides: Partial<NonNullable<FeaturePlan["planning"]>> = {},
+): NonNullable<FeaturePlan["planning"]> {
+  return {
+    version: 1,
+    operationId: "planning-1",
+    featureId: "feature-1",
+    projectId: "project-1",
+    kind: "feature",
+    userMessage: "Please plan this",
+    phase: "running",
+    startedAt: NOW,
+    updatedAt: NOW,
+    backendRevision: 1,
+    ...overrides,
+  };
+}
+
 function openStory(title = "Story 1") {
   fireEvent.click(screen.getByRole("button", {
     name: `${title} Story description 1 acceptance criteria`,
@@ -604,7 +622,14 @@ beforeEach(() => {
   });
   deleteTaskMock.mockClear();
   deleteTaskMock.mockImplementation(async () => undefined);
-  loadFeaturesMock.mockClear();
+  loadFeaturesMock.mockReset();
+  loadFeaturesMock.mockResolvedValue(true);
+  startPlanningMock.mockReset();
+  startPlanningMock.mockResolvedValue({ operationId: "planning-1" } as never);
+  retryPlanningMock.mockReset();
+  retryPlanningMock.mockResolvedValue({ operationId: "planning-1" } as never);
+  cancelPlanningMock.mockReset();
+  cancelPlanningMock.mockResolvedValue(true);
   createEnvironmentMock.mockClear();
   createEnvironmentMock.mockImplementation(async () => makeEnvironment());
   startEnvironmentMock.mockClear();
@@ -876,6 +901,143 @@ describe("FeaturesView message drafts", () => {
     ));
     expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1:story:story-1")).toBe("");
     expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("leave chat");
+  });
+
+  test("restores the exact feature draft and reports a rejected planning start", async () => {
+    startPlanningMock.mockResolvedValueOnce(undefined as never);
+    seedStores(chatFeature());
+    useFeaturePlanStore.setState({
+      chatDrafts: new Map([["feature:feature-1", "  keep my exact wording  "]]),
+    });
+    render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => expect(startPlanningMock).toHaveBeenCalledWith(
+      "feature-1",
+      "feature",
+      "keep my exact wording",
+    ));
+    await waitFor(() => expect((screen.getByPlaceholderText(
+      "Describe the feature or answer Codex...",
+    ) as HTMLTextAreaElement).value).toBe("  keep my exact wording  "));
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Feature planning failed to start",
+      { description: "The backend refused the planning request." },
+    );
+  });
+
+  test("restores the exact story draft and reports a rejected refinement start", async () => {
+    startPlanningMock.mockResolvedValueOnce(undefined as never);
+    seedStores(featureWithStories());
+    useFeaturePlanStore.setState({
+      chatDrafts: new Map([[
+        "feature:feature-1:story:story-1",
+        "  preserve story spacing  ",
+      ]]),
+    });
+    render(<FeaturesView projectId="project-1" />);
+    openStory();
+
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => expect(startPlanningMock).toHaveBeenCalledWith(
+      "feature-1",
+      "story",
+      "preserve story spacing",
+      "story-1",
+    ));
+    await waitFor(() => expect((screen.getByPlaceholderText(
+      "Refine the story, description, or acceptance criteria...",
+    ) as HTMLTextAreaElement).value).toBe("  preserve story spacing  "));
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Story refinement failed to start",
+      { description: "The backend refused the planning request." },
+    );
+  });
+});
+
+describe("FeaturesView backend-owned planning controls", () => {
+  test("projects active planning as working and blocks compose and refresh", () => {
+    seedStores(chatFeature({ planning: planningRecord() }));
+
+    render(<FeaturesView projectId="project-1" />);
+
+    expect(screen.getByText("Codex is working...")).toBeTruthy();
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+    const refresh = screen.getByTitle("Refresh Codex status");
+    expect(refresh.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(refresh);
+    expect(loadFeaturesMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+  });
+
+  test("shows failed planning recovery and wires retry and stop", async () => {
+    seedStores(chatFeature({
+      title: "Search feature",
+      planning: planningRecord({
+        phase: "failed",
+        failure: {
+          code: "provider",
+          message: "Codex bridge disconnected",
+          occurredAt: NOW,
+          retryPhase: "running",
+        },
+      }),
+    }));
+
+    render(<FeaturesView projectId="project-1" />);
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Search feature: Codex bridge disconnected",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(retryPlanningMock).toHaveBeenCalledWith("feature-1"));
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    await waitFor(() => expect(cancelPlanningMock).toHaveBeenCalledWith("feature-1"));
+  });
+
+  test("reports retry and stop failures from the planning recovery controls", async () => {
+    retryPlanningMock.mockResolvedValueOnce(undefined as never);
+    cancelPlanningMock.mockResolvedValueOnce(false);
+    seedStores(chatFeature({
+      planning: planningRecord({
+        phase: "failed",
+        failure: {
+          code: "provider",
+          message: "Planning needs attention",
+          occurredAt: NOW,
+          retryPhase: "running",
+        },
+      }),
+    }));
+    render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Feature planning retry failed",
+      { description: "The backend refused the retry request." },
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to stop feature planning",
+      { description: "The backend did not cancel the planning request." },
+    ));
+  });
+
+  test("refreshes idle planning state and reports refresh failure", async () => {
+    seedStores(chatFeature());
+    loadFeaturesMock.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.click(screen.getByTitle("Refresh Codex status"));
+
+    await waitFor(() => expect(loadFeaturesMock).toHaveBeenCalledTimes(2));
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to refresh feature planning",
+      { description: "The latest backend state could not be loaded." },
+    );
   });
 });
 

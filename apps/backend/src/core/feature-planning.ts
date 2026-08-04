@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  FEATURE_PLANNING_LIMITS,
   FEATURE_PLANNING_RECORD_VERSION,
   boundRawResponse,
   createStoryCardsFromParsedState,
@@ -89,7 +90,10 @@ class DefiniteFeaturePlanningError extends Error {
 function isBridgeMessage(value: unknown): value is BridgeMessage {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.id === "string" && typeof candidate.role === "string";
+  return typeof candidate.id === "string"
+    && candidate.id.length > 0
+    && candidate.id.length <= FEATURE_PLANNING_LIMITS.maxIdLength
+    && typeof candidate.role === "string";
 }
 
 function bridgeMessageContent(entry: BridgeMessage): string {
@@ -104,7 +108,9 @@ function bridgeMessageContent(entry: BridgeMessage): string {
 function assistantMessageIds(messages: readonly BridgeMessage[]): string[] {
   return messages
     .filter((entry) => entry.role === "assistant")
-    .map((entry) => entry.id);
+    .map((entry) => entry.id)
+    .filter((id) => id.length <= FEATURE_PLANNING_LIMITS.maxIdLength)
+    .slice(-FEATURE_PLANNING_LIMITS.maxBaselineAssistantIds);
 }
 
 /**
@@ -117,10 +123,21 @@ function latestAssistantReply(
   messages: readonly BridgeMessage[],
   baseline: ReadonlySet<string>,
   accept?: (content: string) => boolean,
+  createdAfter?: string,
 ): AssistantReply | null {
+  const minimumCreatedAt = createdAfter ? Date.parse(createdAfter) : null;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const entry = messages[index];
-    if (!entry || entry.role !== "assistant" || baseline.has(entry.id)) continue;
+    if (!entry || entry.role !== "assistant") continue;
+    // The baseline is deliberately bounded. Stop at its newest surviving
+    // anchor instead of continuing into older, omitted history and mistaking
+    // that history for this turn's response.
+    if (baseline.has(entry.id)) break;
+    if (minimumCreatedAt !== null) {
+      const createdAt = entry.createdAt ? Date.parse(entry.createdAt) : Number.NaN;
+      if (!Number.isFinite(minimumCreatedAt) || !Number.isFinite(createdAt)
+        || createdAt < minimumCreatedAt) continue;
+    }
     const content = bridgeMessageContent(entry);
     if (!content.trim()) continue;
     if (accept && !accept(content)) continue;
@@ -155,6 +172,10 @@ export class FeaturePlanningService {
   private readonly providers = new Map<string, BuildPipelineProvider>();
   /** Feature id → when the session was first seen idle with no new reply. */
   private readonly idleSince = new Map<string, number>();
+  /** Feature id -> operation id requested for cancellation. */
+  private readonly cancellationRequests = new Map<string, string>();
+  /** Operation ids whose provider turn has already been aborted. */
+  private readonly cancellationAborts = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private tickRun: { pending: boolean; promise: Promise<void> } | null = null;
   private stopped = false;
@@ -198,6 +219,8 @@ export class FeaturePlanningService {
     );
     this.providers.clear();
     this.idleSince.clear();
+    this.cancellationRequests.clear();
+    this.cancellationAborts.clear();
   }
 
   /**
@@ -228,6 +251,7 @@ export class FeaturePlanningService {
       ...(plan.codexEnvironmentId ? { environmentId: plan.codexEnvironmentId } : {}),
       phase: "dispatching",
       startedAt: timestamp,
+      attemptStartedAt: timestamp,
       updatedAt: timestamp,
       backendRevision: 0,
     };
@@ -270,6 +294,8 @@ export class FeaturePlanningService {
         delete current.rawResponse;
         delete current.responseModelId;
         delete current.responseMessageId;
+        delete current.dispatchedAt;
+        current.attemptStartedAt = nowIso();
       }
     });
     void this.runLocked(featureId);
@@ -285,12 +311,26 @@ export class FeaturePlanningService {
   async cancel(featureId: string): Promise<void> {
     const record = await this.read(featureId);
     if (!record) return;
-    if (record.phase === "running" && record.providerSessionId && record.environmentId) {
-      const provider = await this.provider(record.environmentId).catch(() => null);
-      await provider?.abort(record.providerSessionId).catch(() => undefined);
+    this.cancellationRequests.set(featureId, record.operationId);
+    try {
+      // Do not wait behind a provider call that may itself be hung. The
+      // dispatch record is stamped before send, so once it is present we can
+      // ask the bridge to abort immediately; the locked pass below remains the
+      // authoritative re-read/clear fence.
+      await this.abortForCancellation(record);
+      await this.withLock(featureId, async () => {
+        const current = await this.read(featureId);
+        if (!current || current.operationId !== record.operationId) return;
+        await this.abortForCancellation(current);
+        this.idleSince.delete(featureId);
+        await this.storage.clearFeaturePlanning(featureId, current.operationId);
+      });
+    } finally {
+      if (this.cancellationRequests.get(featureId) === record.operationId) {
+        this.cancellationRequests.delete(featureId);
+      }
+      this.cancellationAborts.delete(record.operationId);
     }
-    this.idleSince.delete(featureId);
-    await this.storage.clearFeaturePlanning(featureId, record.operationId);
   }
 
   advanceNow(featureId: string): Promise<void> {
@@ -370,6 +410,7 @@ export class FeaturePlanningService {
   private async advance(featureId: string): Promise<void> {
     const record = await this.read(featureId);
     if (!record || !isActiveFeaturePlanningPhase(record.phase)) return;
+    if (await this.clearIfCancellationRequested(record)) return;
     if (record.phase === "dispatching") return await this.runDispatch(record);
     if (record.phase === "running") return await this.runAwaitReply(record);
     return await this.runPersist(record);
@@ -383,10 +424,14 @@ export class FeaturePlanningService {
       await this.update(record, (_plan, current) => {
         current.phase = "running";
         current.dispatchState = "sent";
+        // `updatedAt` is the durable prepared timestamp. Using wall-clock now
+        // after a restart would grant an old ambiguous turn a fresh deadline.
+        current.dispatchedAt ??= current.updatedAt;
       });
       return;
     }
-    if (Date.now() - Date.parse(record.startedAt) > this.environmentDeadlineMs()) {
+    const attemptStartedAt = record.attemptStartedAt ?? record.startedAt;
+    if (Date.now() - Date.parse(attemptStartedAt) > this.environmentDeadlineMs()) {
       throw new DefiniteFeaturePlanningError(
         "environment",
         "dispatching",
@@ -396,15 +441,20 @@ export class FeaturePlanningService {
     const environment = await this.ensureEnvironment(record);
     if (!environment) return;
     const provider = await this.provider(environment.id);
-    const session = await this.ensureSession(record, provider);
+    const session = await this.ensureSession(record, environment.id, provider);
     const sessionId = session.sessionId;
+    if (await this.clearIfCancellationRequested(record)) return;
     const plan = await this.storage.getFeaturePlan(record.featureId);
     if (!plan) throw new DefiniteFeaturePlanningError(
       "persistence",
       "dispatching",
       "The feature plan no longer exists",
     );
-    const baseline = assistantMessageIds(await this.messages(provider, sessionId));
+    const baseline = assistantMessageIds(await this.providerOperation(
+      environment.id,
+      provider,
+      () => this.messages(provider, sessionId),
+    ));
     const prompt = this.buildPrompt(plan, record, sessionId, session.created);
     const requestId = randomUUID();
     const dispatchId = randomUUID();
@@ -417,6 +467,7 @@ export class FeaturePlanningService {
       current.baselineAssistantIds = baseline;
       current.providerSessionId = sessionId;
     });
+    if (await this.clearIfCancellationRequested(record)) return;
     const config = await this.storage.loadConfig();
     try {
       await provider.send(sessionId, prompt, {
@@ -426,18 +477,23 @@ export class FeaturePlanningService {
       });
     } catch (error) {
       if (error instanceof AmbiguousPromptDispatchError) {
+        await this.evictProvider(environment.id, provider);
+        if (await this.clearIfCancellationRequested(record, provider, sessionId)) return;
         // Whether the prompt ran is unknowable. Move to `running`: the reply
         // watcher settles it from the transcript either way.
         await this.update(record, (_plan, current) => {
           current.phase = "running";
           current.dispatchState = "sent";
+          current.dispatchedAt = nowIso();
         });
         return;
       }
       throw new DefiniteFeaturePlanningError("dispatch", "dispatching", message(error));
     }
+    if (await this.clearIfCancellationRequested(record, provider, sessionId)) return;
     await this.update(record, (_plan, current) => {
       current.dispatchState = "sent";
+      current.dispatchedAt = nowIso();
       current.phase = "running";
     });
   }
@@ -451,9 +507,13 @@ export class FeaturePlanningService {
       );
     }
     const provider = await this.provider(record.environmentId);
-    const activity = provider.activity
-      ? await provider.activity(record.providerSessionId)
-      : (await provider.status(record.providerSessionId)) === "idle" ? "idle" as const : "working" as const;
+    const activity = await this.providerOperation(record.environmentId, provider, async () => (
+      provider.activity
+        ? await provider.activity(record.providerSessionId!)
+        : (await provider.status(record.providerSessionId!)) === "idle"
+          ? "idle" as const
+          : "working" as const
+    ));
     if (activity === "missing") {
       throw new DefiniteFeaturePlanningError(
         "provider",
@@ -462,12 +522,25 @@ export class FeaturePlanningService {
       );
     }
     const baseline = new Set(record.baselineAssistantIds ?? []);
-    const messages = await this.messages(provider, record.providerSessionId);
+    const messages = await this.providerOperation(
+      record.environmentId,
+      provider,
+      () => this.messages(provider, record.providerSessionId!),
+    );
     const reply = record.kind === "story"
       // A story refinement only counts once the state block is present;
       // otherwise a preamble turn would be applied as the answer.
-      ? latestAssistantReply(messages, baseline, (content) => parseStoryRefinement(content) !== null)
-      : latestAssistantReply(messages, baseline);
+      ? latestAssistantReply(messages, baseline, (content) => {
+          const parsed = parseStoryRefinement(content);
+          return parsed !== null
+            && (parsed.storyId === undefined || parsed.storyId === record.storyId);
+        }, record.requestId ? undefined : record.startedAt)
+      : latestAssistantReply(
+          messages,
+          baseline,
+          undefined,
+          record.requestId ? undefined : record.startedAt,
+        );
 
     if (reply && activity === "idle") {
       this.idleSince.delete(record.featureId);
@@ -491,7 +564,8 @@ export class FeaturePlanningService {
       return;
     }
     this.idleSince.delete(record.featureId);
-    if (Date.now() - Date.parse(record.startedAt) > this.replyDeadlineMs()) {
+    const dispatchedAt = record.dispatchedAt ?? record.updatedAt ?? record.startedAt;
+    if (Date.now() - Date.parse(dispatchedAt) > this.replyDeadlineMs()) {
       throw new DefiniteFeaturePlanningError(
         "provider",
         "dispatching",
@@ -542,7 +616,7 @@ export class FeaturePlanningService {
       // failed, so this stops for a user decision without losing anything.
       throw new DefiniteFeaturePlanningError(
         "parse",
-        "persisting",
+        "dispatching",
         record.kind === "story"
           ? "The reply did not contain a story refinement block"
           : "The reply did not contain a feature planner state block",
@@ -658,7 +732,21 @@ export class FeaturePlanningService {
   ): void {
     const parsed = parseStoryRefinement(record.rawResponse ?? "");
     const story = plan.stories.find((candidate) => candidate.id === record.storyId);
-    if (!parsed || !story) return;
+    if (!parsed) return;
+    if (!story) {
+      throw new DefiniteFeaturePlanningError(
+        "persistence",
+        "dispatching",
+        "The story this refinement belongs to no longer exists",
+      );
+    }
+    if (parsed.storyId !== undefined && parsed.storyId !== record.storyId) {
+      throw new DefiniteFeaturePlanningError(
+        "parse",
+        "dispatching",
+        "The reply belongs to a different story",
+      );
+    }
     if (parsed.title?.trim()) story.title = parsed.title.trim();
     if (parsed.description?.trim()) story.description = parsed.description.trim();
     if (parsed.acceptanceCriteria) story.acceptanceCriteria = parsed.acceptanceCriteria;
@@ -763,24 +851,33 @@ export class FeaturePlanningService {
    */
   private async ensureSession(
     record: FeaturePlanningRecord,
+    environmentId: string,
     provider: BuildPipelineProvider,
   ): Promise<{ sessionId: string; created: boolean }> {
     const plan = await this.storage.getFeaturePlan(record.featureId);
     const existing = plan?.codexSessionId;
     if (existing) {
-      const status = await provider.status(existing).catch(() => "missing" as const);
+      const status = await this.providerOperation(
+        environmentId,
+        provider,
+        () => provider.status(existing),
+      );
       if (status !== "missing") return { sessionId: existing, created: false };
     }
     const config = await this.storage.loadConfig();
     const repository = config.repositories[record.projectId];
-    const created = await provider.createSession("review", plan?.title || "Feature planning", {
-      clientSessionKey: `feature-planning:${record.featureId}`,
-      mode: "plan",
-      ...(repository?.defaultModel || config.global.codexModel
-        ? { model: repository?.defaultModel || config.global.codexModel }
-        : {}),
-      effort: repository?.defaultEffort || config.global.codexReasoningEffort || "medium",
-    });
+    const created = await this.providerOperation(
+      environmentId,
+      provider,
+      () => provider.createSession("review", plan?.title || "Feature planning", {
+        clientSessionKey: `feature-planning:${record.featureId}`,
+        mode: "plan",
+        ...(repository?.defaultModel || config.global.codexModel
+          ? { model: repository?.defaultModel || config.global.codexModel }
+          : {}),
+        effort: repository?.defaultEffort || config.global.codexReasoningEffort || "medium",
+      }),
+    );
     await this.storage.updateFeaturePlan(record.featureId, { codexSessionId: created });
     await this.update(record, (_plan, current) => {
       current.providerSessionId = created;
@@ -888,6 +985,68 @@ export class FeaturePlanningService {
     return raw.filter(isBridgeMessage);
   }
 
+  /**
+   * Drops a provider whose transport failed so the next tick rediscovers the
+   * bridge port and authentication token. The operation itself is not retried
+   * here: dispatch reconciliation must remain at-most-once.
+   */
+  private async providerOperation<T>(
+    environmentId: string,
+    provider: BuildPipelineProvider,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      await this.evictProvider(environmentId, provider);
+      throw error;
+    }
+  }
+
+  private async evictProvider(
+    environmentId: string,
+    provider: BuildPipelineProvider,
+  ): Promise<void> {
+    if (this.providers.get(environmentId) !== provider) return;
+    this.providers.delete(environmentId);
+    await Promise.resolve(provider.dispose?.()).catch(() => undefined);
+  }
+
+  /** Completes a cancellation observed by work already holding the lock. */
+  private async clearIfCancellationRequested(
+    record: FeaturePlanningRecord,
+    provider?: BuildPipelineProvider,
+    sessionId?: string,
+  ): Promise<boolean> {
+    if (this.cancellationRequests.get(record.featureId) !== record.operationId) return false;
+    await this.abortForCancellation(record, provider, sessionId);
+    this.idleSince.delete(record.featureId);
+    await this.storage.clearFeaturePlanning(record.featureId, record.operationId);
+    return true;
+  }
+
+  private async abortForCancellation(
+    record: FeaturePlanningRecord,
+    provider?: BuildPipelineProvider,
+    sessionId?: string,
+  ): Promise<void> {
+    if (this.cancellationAborts.has(record.operationId)) return;
+    if (record.phase !== "running" && !record.dispatchId) return;
+    const targetSessionId = sessionId ?? record.providerSessionId;
+    if (!targetSessionId) return;
+    let targetProvider = provider;
+    if (!targetProvider && record.environmentId) {
+      targetProvider = await this.provider(record.environmentId).catch(() => undefined);
+    }
+    if (!targetProvider) return;
+    try {
+      await targetProvider.abort(targetSessionId);
+      this.cancellationAborts.add(record.operationId);
+    } catch {
+      // The locked pass retries once after any in-flight state transition.
+    }
+  }
+
   /* ---------------------------------------------------------------- *
    * Failure, adoption and helpers
    * ---------------------------------------------------------------- */
@@ -949,6 +1108,8 @@ export class FeaturePlanningService {
         baselineAssistantIds: [],
         phase: "running",
         startedAt: pending.message.createdAt,
+        attemptStartedAt: pending.message.createdAt,
+        dispatchedAt: pending.message.createdAt,
         updatedAt: nowIso(),
         backendRevision: 0,
       }).catch(() => undefined);

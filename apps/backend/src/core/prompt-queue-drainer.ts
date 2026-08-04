@@ -71,6 +71,13 @@ export class PromptQueueDrainer {
   private readonly queueTasks = new Map<string, Promise<void>>();
   private readonly queueAttempts = new Map<string, number>();
   private readonly queueRetryAt = new Map<string, number>();
+  /**
+   * Confirmed terminal submissions whose durable post-submit marker has not
+   * been written yet. This only bridges a transient storage failure in this
+   * process. After a process crash, a durable `submittingAt` without
+   * `submittedAt` is deliberately treated as ambiguous and parked for a human.
+   */
+  private readonly confirmedSubmissions = new Map<string, string>();
   private sweep: Promise<void> | null = null;
   private stopped = false;
 
@@ -89,6 +96,7 @@ export class PromptQueueDrainer {
     this.queueTasks.clear();
     this.queueAttempts.clear();
     this.queueRetryAt.clear();
+    this.confirmedSubmissions.clear();
   }
 
   /**
@@ -167,6 +175,50 @@ export class PromptQueueDrainer {
 
     const queue = await this.storage.getPromptQueue(queueKey);
     if (!queue || queue.dispatchError) return;
+    if (queue.environmentId !== target.environmentId) {
+      // A persisted queue is a trust boundary. Never let the owner field and
+      // the environment encoded in its routing key select different targets.
+      await this.defer(queueKey, "queue target does not match its owner");
+      return;
+    }
+    if (queue.inFlight?.submittedAt) {
+      await this.storage.acknowledgePromptQueueDispatch(
+        queueKey,
+        queue.inFlight.requestId,
+      );
+      this.confirmedSubmissions.delete(queueKey);
+      this.clearBackoff(queueKey);
+      return;
+    }
+    if (queue.inFlight?.submittingAt) {
+      if (this.confirmedSubmissions.get(queueKey) === queue.inFlight.requestId) {
+        const submitted = await this.storage.markPromptQueueDispatchSubmitted(
+          queueKey,
+          queue.inFlight.requestId,
+        );
+        if (
+          submitted?.inFlight?.requestId !== queue.inFlight.requestId
+          || !submitted.inFlight.submittedAt
+        ) {
+          this.confirmedSubmissions.delete(queueKey);
+          return;
+        }
+        await this.storage.acknowledgePromptQueueDispatch(
+          queueKey,
+          queue.inFlight.requestId,
+        );
+        this.confirmedSubmissions.delete(queueKey);
+        this.clearBackoff(queueKey);
+        return;
+      }
+      await this.storage.failPromptQueueDispatch(
+        queueKey,
+        queue.inFlight.requestId,
+        "Queued prompt submission was interrupted and may already have reached Claude. Review the pane before retrying.",
+      );
+      this.clearBackoff(queueKey);
+      return;
+    }
     const environment = await this.storage.getEnvironment(queue.environmentId);
     if (!environment || environment.deletionRequestedAt) return;
     // A stopped or still-provisioning environment must not be driven by a
@@ -183,13 +235,22 @@ export class PromptQueueDrainer {
     const draft = await this.storage.getComposeDraft(draftKey);
     if (this.composeDraftHoldsQueue(draft?.value)) return;
 
-    const status = await this.invoke<TmuxStatusSnapshot | null>("claude_tmux_status", {
+    let status = await this.invoke<TmuxStatusSnapshot | null>("claude_tmux_status", {
       environmentId: target.environmentId,
       tabId: target.tabId,
     });
     if (!status || status.running !== true) {
-      await this.defer(queueKey, "tmux session is not running");
-      return;
+      // The renderer is not the owner of a queued decision. Reconstruct an
+      // existing detached tmux session (or start the missing one) so a backend
+      // restart can continue draining with no mounted tab.
+      status = await this.invoke<TmuxStatusSnapshot | null>("claude_tmux_start", {
+        environmentId: target.environmentId,
+        tabId: target.tabId,
+      });
+      if (!status || status.running !== true) {
+        await this.defer(queueKey, "tmux session is not running");
+        return;
+      }
     }
     // Busy is not a failure: the turn in flight will finish and the next sweep
     // picks the queue up. Backing off here would delay it for no reason.
@@ -203,6 +264,67 @@ export class PromptQueueDrainer {
 
     const reservation = await this.storage.reservePromptQueueHeadForDispatch(queueKey);
     if (!reservation || typeof reservation.message !== "object") return;
+    if (reservation.submittedAt) {
+      await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
+      this.confirmedSubmissions.delete(queueKey);
+      this.clearBackoff(queueKey);
+      return;
+    }
+    if (reservation.submittingAt) {
+      if (this.confirmedSubmissions.get(queueKey) === reservation.requestId) {
+        const submitted = await this.storage.markPromptQueueDispatchSubmitted(
+          queueKey,
+          reservation.requestId,
+        );
+        if (
+          submitted?.inFlight?.requestId !== reservation.requestId
+          || !submitted.inFlight.submittedAt
+        ) {
+          this.confirmedSubmissions.delete(queueKey);
+          return;
+        }
+        await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
+        this.confirmedSubmissions.delete(queueKey);
+        this.clearBackoff(queueKey);
+        return;
+      }
+      await this.storage.failPromptQueueDispatch(
+        queueKey,
+        reservation.requestId,
+        "Queued prompt submission was interrupted and may already have reached Claude. Review the pane before retrying.",
+      );
+      this.clearBackoff(queueKey);
+      return;
+    }
+
+    // Revalidate every durable routing fact after reservation. Environment
+    // deletion and queue replacement can both race the earlier asynchronous
+    // status/draft checks.
+    const [latestEnvironment, latestQueue, finalDraft] = await Promise.all([
+      this.storage.getEnvironment(target.environmentId),
+      this.storage.getPromptQueue(queueKey),
+      this.storage.getComposeDraft(draftKey),
+    ]);
+    if (
+      !latestEnvironment
+      || latestEnvironment.deletionRequestedAt
+      || !isEnvironmentReadyForAgents(latestEnvironment)
+      || latestQueue?.environmentId !== target.environmentId
+      || latestQueue.inFlight?.requestId !== reservation.requestId
+    ) {
+      await this.storage.failPromptQueueDispatch(
+        queueKey,
+        reservation.requestId,
+        "Queued prompt target changed before submission. Review it before retrying.",
+      );
+      this.clearBackoff(queueKey);
+      return;
+    }
+    if (this.composeDraftHoldsQueue(finalDraft?.value)) {
+      // The reservation stays durable and will be revisited after the draft is
+      // cleared. It has not crossed the irreversible submission boundary.
+      return;
+    }
     const message = reservation.message as Record<string, unknown>;
     const attachments = parseTmuxPromptAttachments(message.attachments);
     if (!nonBlank(message.text) && attachments.length === 0) {
@@ -214,26 +336,50 @@ export class PromptQueueDrainer {
     const prompt = buildTmuxPromptWithAttachments(
       nonBlank(message.text) ? message.text : "",
       attachments,
-      environment.containerId ?? undefined,
+      latestEnvironment.containerId ?? undefined,
     );
+    await this.renameEnvironmentFromFirstPrompt(latestEnvironment, prompt);
+    const submitting = await this.storage.markPromptQueueDispatchSubmitting(
+      queueKey,
+      reservation.requestId,
+    );
+    if (
+      submitting?.inFlight?.requestId !== reservation.requestId
+      || !submitting.inFlight.submittingAt
+    ) return;
     try {
-      await this.renameEnvironmentFromFirstPrompt(environment, prompt);
-      await this.invoke("claude_tmux_submit", {
+      await this.invoke("claude_tmux_submit_queued", {
         environmentId: target.environmentId,
         tabId: target.tabId,
         text: prompt,
       });
-      await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
-      this.clearBackoff(queueKey);
     } catch (error) {
-      // Keep the in-flight record durable and retry the same request id after
-      // backoff, so a submit whose outcome is unclear cannot become two turns.
-      await this.defer(
+      // `send-keys` can fail after typing some or all of the prompt. There is no
+      // safe automatic retry after crossing this boundary, so park it for an
+      // explicit, informed user decision.
+      await this.storage.failPromptQueueDispatch(
         queueKey,
-        error instanceof Error ? error.name : "unknown dispatch error",
         reservation.requestId,
+        `Queued prompt submission may have partially completed (${error instanceof Error ? error.name : "unknown error"}). Review the pane before retrying.`,
       );
+      this.clearBackoff(queueKey);
+      return;
     }
+    this.confirmedSubmissions.set(queueKey, reservation.requestId);
+    const submitted = await this.storage.markPromptQueueDispatchSubmitted(
+      queueKey,
+      reservation.requestId,
+    );
+    if (
+      submitted?.inFlight?.requestId !== reservation.requestId
+      || !submitted.inFlight.submittedAt
+    ) {
+      this.confirmedSubmissions.delete(queueKey);
+      return;
+    }
+    await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
+    this.confirmedSubmissions.delete(queueKey);
+    this.clearBackoff(queueKey);
   }
 
   /**

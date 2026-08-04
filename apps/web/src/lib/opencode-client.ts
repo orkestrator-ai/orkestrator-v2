@@ -1943,6 +1943,17 @@ function toOpenCodeModelRef(model: string): { providerID: string; modelID: strin
 }
 
 /**
+ * OpenCode validates caller-supplied message IDs with its MessageID schema,
+ * which requires a `msg` prefix. UI request IDs are intentionally
+ * provider-neutral, so convert them at the SDK boundary while keeping retries
+ * deterministic and therefore idempotent.
+ */
+function toOpenCodeMessageId(requestId: string | undefined): string | undefined {
+  if (!requestId) return undefined;
+  return requestId.startsWith("msg") ? requestId : `msg_${requestId}`;
+}
+
+/**
  * Send a prompt to a session
  */
 export async function sendPrompt(
@@ -2015,11 +2026,12 @@ export async function sendPrompt(
     const requestId = options?.outputSchema
       ? (options.requestId ?? createUuid())
       : options?.requestId;
+    const messageID = toOpenCodeMessageId(requestId);
     const response = options?.command
       ? await client.session.command({
           sessionID: sessionId,
           directory: options.directory,
-          messageID: requestId,
+          messageID,
           command: options.command.name.replace(/^\//, ""),
           // `arguments` is a *required* field on the server's command request
           // body, so a bare `/init` must still send an empty string. Passing
@@ -2035,7 +2047,7 @@ export async function sendPrompt(
       : await client.session.promptAsync({
           sessionID: sessionId,
           directory: options?.directory,
-          messageID: requestId,
+          messageID,
           parts,
           model: options?.model ? toOpenCodeModelRef(options.model) : undefined,
           agent: options?.agent ?? options?.mode,
@@ -2469,9 +2481,12 @@ export async function getStructuredOutput<T = unknown>(
       return entry.info.role === "user" && format.type === "json_schema";
     })
     .at(-1)?.info.id;
-  const expectedParentId = requestId
+  const expectedParentId = toOpenCodeMessageId(requestId)
     ?? (typeof latestStructuredUserId === "string" ? latestStructuredUserId : undefined);
   if (!expectedParentId) return null;
+  // Keep the provider-neutral correlation ID on the public result. Only the
+  // transcript lookup uses OpenCode's provider-qualified message ID.
+  const resultRequestId = requestId ?? expectedParentId;
 
   const assistant = entries
     .filter((entry) =>
@@ -2483,7 +2498,7 @@ export async function getStructuredOutput<T = unknown>(
   if (assistant.info.error) {
     return openCodeStructuredFailure(
       assistant.info.error,
-      expectedParentId,
+      resultRequestId,
     );
   }
   if (!isRecord(assistant.info.time)) {
@@ -2491,7 +2506,7 @@ export async function getStructuredOutput<T = unknown>(
       "opencode",
       "malformed_output",
       "OpenCode returned malformed assistant timing data.",
-      { requestId: expectedParentId },
+      { requestId: resultRequestId },
     );
   }
   if (!assistant.info.time.completed) return null;
@@ -2500,13 +2515,13 @@ export async function getStructuredOutput<T = unknown>(
       "opencode",
       "malformed_output",
       "OpenCode completed the turn without a structured result.",
-      { requestId: expectedParentId },
+      { requestId: resultRequestId },
     );
   }
   return {
     ok: true,
     provider: "opencode",
-    requestId: expectedParentId,
+    requestId: resultRequestId,
     value: assistant.info.structured as T,
   };
 }

@@ -121,6 +121,18 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
   }
 }
 
+/**
+ * OpenCode's optional caller-supplied message ID is validated as a MessageID,
+ * whose public schema requires the value to start with `msg`. Our durable
+ * request IDs are provider-neutral (for example `initial-prompt:…`), so pass a
+ * stable provider-qualified form instead of letting an otherwise valid prompt
+ * fail with HTTP 400. Keeping the mapping deterministic preserves promptAsync
+ * idempotency when a supervisor retries an ambiguous dispatch.
+ */
+function openCodeMessageId(requestId: string): string {
+  return requestId.startsWith("msg") ? requestId : `msg_${requestId}`;
+}
+
 export interface ProviderCreateSessionOptions {
   /** Second layer of idempotency: bridges derive a stable session id from it. */
   clientSessionKey?: string;
@@ -1953,7 +1965,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
       response = await this.client.session.promptAsync({
         sessionID: sessionId,
         directory: this.connection.directory,
-        messageID: options.requestId,
+        messageID: openCodeMessageId(options.requestId),
         parts: parts as never,
         model: modelParts && modelParts.length > 1
           ? { providerID: modelParts[0]!, modelID: modelParts.slice(1).join("/") }
@@ -2426,6 +2438,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     sessionId: string,
     requestId: string,
   ): Promise<StructuredOutputResult<T> | null> {
+    const providerMessageId = openCodeMessageId(requestId);
     let response;
     try {
       response = await this.client.session.messages(
@@ -2442,7 +2455,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     if (!Array.isArray(response.data)) return null;
     const assistant = [...response.data].reverse().find((entry) => {
       const info = entry.info as { role?: unknown; parentID?: unknown };
-      return info.role === "assistant" && info.parentID === requestId;
+      return info.role === "assistant" && info.parentID === providerMessageId;
     });
     if (!assistant) return null;
     const info = assistant.info as {

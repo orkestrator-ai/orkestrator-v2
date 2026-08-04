@@ -3139,7 +3139,7 @@ describe("OpenCode build pipeline provider", () => {
         data: [{
           info: {
             role: "assistant",
-            parentID: "request-1",
+            parentID: "msg_request-1",
             structured: { complete: true },
             time: { completed: 1 },
           },
@@ -3152,7 +3152,7 @@ describe("OpenCode build pipeline provider", () => {
         data: [{
           info: {
             role: "assistant",
-            parentID: "request-1",
+            parentID: "msg_request-1",
             structured: { complete: true },
             time: {},
           },
@@ -3165,7 +3165,7 @@ describe("OpenCode build pipeline provider", () => {
         data: [{
           info: {
             role: "assistant",
-            parentID: "request-1",
+            parentID: "msg_request-1",
             error: { message: "failed" },
             time: { completed: 1 },
           },
@@ -3207,7 +3207,7 @@ describe("OpenCode build pipeline provider", () => {
           {
             info: {
               role: "assistant",
-              parentID: "request-1",
+              parentID: "msg_request-1",
               structured: { version: "old" },
               time: { completed: 1 },
             },
@@ -3215,7 +3215,7 @@ describe("OpenCode build pipeline provider", () => {
           {
             info: {
               role: "assistant",
-              parentID: "request-1",
+              parentID: "msg_request-1",
               structured: { version: "new" },
               time: { completed: 2 },
             },
@@ -3229,7 +3229,7 @@ describe("OpenCode build pipeline provider", () => {
         data: [{
           info: {
             role: "assistant",
-            parentID: "request-1",
+            parentID: "msg_request-1",
             structured: null,
             time: { completed: 1 },
           },
@@ -3242,7 +3242,7 @@ describe("OpenCode build pipeline provider", () => {
         data: [{
           info: {
             role: "assistant",
-            parentID: "request-1",
+            parentID: "msg_request-1",
             time: { completed: 1 },
           },
         }],
@@ -3764,7 +3764,7 @@ describe("OpenCode build pipeline provider dispatch", () => {
     }
   });
 
-  test("carries the request id as the durable message id", async () => {
+  test("maps the durable request id to a valid OpenCode message id", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
     try {
@@ -3775,11 +3775,25 @@ describe("OpenCode build pipeline provider dispatch", () => {
       const [call] = fake.promptCalls;
       // OpenCode deduplicates on messageID, which is what makes the supervisor's
       // same-request-id retry safe instead of a second agent turn.
-      expect(call!.messageID).toBe("request-42");
+      expect(call!.messageID).toBe("msg_request-42");
       expect(call!.sessionID).toBe("owned-session");
       expect(call!.agent).toBe("build");
       expect(call!.directory).toBe("/workspace");
       expect(call!.parts).toEqual([{ type: "text", text: "Build it" }]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("preserves an already valid OpenCode message id", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await provider.send("owned-session", "Build it", {
+        requestId: "msg_existing-id",
+      });
+
+      expect(fake.promptCalls[0]!.messageID).toBe("msg_existing-id");
     } finally {
       await provider.dispose?.();
     }

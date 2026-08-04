@@ -1363,7 +1363,7 @@ describe("opencode-client sendPrompt", () => {
       expect(command[0]).toEqual({
         sessionID: "session-1",
         directory: "/workspace/repo",
-        messageID: "req-1",
+        messageID: "msg_req-1",
         command: "init",
         arguments: "",
         // The command path forwards the model id as the raw string the server
@@ -1517,7 +1517,7 @@ describe("opencode-client sendPrompt", () => {
     expect(result).toEqual({ success: true, requestId: "structured-1" });
     expect(capturedRequest).toMatchObject({
       sessionID: "session-1",
-      messageID: "structured-1",
+      messageID: "msg_structured-1",
       format: { type: "json_schema", schema, retryCount: 3 },
     });
     // Omitting `tools` preserves the server's normal agent/tool configuration.
@@ -1531,7 +1531,7 @@ describe("opencode-client sendPrompt", () => {
           data: [
             {
               info: {
-                id: "structured-1",
+                id: "msg_structured-1",
                 role: "user",
                 format: { type: "json_schema", schema: { type: "object" } },
               },
@@ -1541,7 +1541,7 @@ describe("opencode-client sendPrompt", () => {
               info: {
                 id: "assistant-1",
                 role: "assistant",
-                parentID: "structured-1",
+                parentID: "msg_structured-1",
                 time: { created: 1, completed: 2 },
                 structured: { summary: "Looks good" },
               },
@@ -1603,7 +1603,7 @@ describe("opencode-client sendPrompt", () => {
           data: [
             {
               info: {
-                id: "structured-2",
+                id: "msg_structured-2",
                 role: "user",
                 format: { type: "json_schema", schema: { type: "object" } },
               },
@@ -1613,7 +1613,7 @@ describe("opencode-client sendPrompt", () => {
               info: {
                 id: "assistant-2",
                 role: "assistant",
-                parentID: "structured-2",
+                parentID: "msg_structured-2",
                 time: { created: 1, completed: 2 },
               },
               parts: [{ type: "text", text: "{\"summary\":\"not trusted\"}" }],
@@ -1636,7 +1636,7 @@ describe("opencode-client sendPrompt", () => {
               info: {
                 id: "assistant-3",
                 role: "assistant",
-                parentID: "structured-3",
+                parentID: "msg_structured-3",
                 time: { created: 1, completed: 2 },
                 error: {
                   name: "StructuredOutputError",
@@ -1719,7 +1719,7 @@ describe("opencode-client sendPrompt", () => {
             info: {
               id: "assistant-invalid-time",
               role: "assistant",
-              parentID: "structured-invalid-time",
+              parentID: "msg_structured-invalid-time",
               time: "completed yesterday",
               structured: { summary: "Must not be accepted" },
             },

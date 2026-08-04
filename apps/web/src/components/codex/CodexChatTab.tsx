@@ -42,6 +42,7 @@ import {
   checkHealth,
   createClient,
   createSession,
+  describeCodexSteerFailure,
   fetchPendingApprovals,
   fetchPendingInteractions,
   forkCodexSession,
@@ -58,6 +59,7 @@ import {
   preferNewerCodexRevisions,
   resumeSession,
   sendPrompt,
+  steerCodexSession,
   subscribeToEvents,
   updateSessionConfig as updateCodexSessionConfig,
 } from "@/lib/codex-client";
@@ -85,6 +87,7 @@ import {
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { CodexComposeBar } from "./CodexComposeBar";
+import { parseCodexSteerCommand } from "./codex-steer-command";
 import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexInteractionCard } from "./CodexInteractionCard";
 import { CodexPlanModeCard } from "./CodexPlanModeCard";
@@ -163,6 +166,25 @@ const MAX_AUTHORITATIVE_HYDRATION_FAILURES = 3;
 const AUTHORITATIVE_HYDRATION_RETRY_MS = 1_000;
 const AUTHORITATIVE_HYDRATION_ERROR =
   "Could not refresh the complete Codex transcript. Live updates will continue; refresh to try again.";
+
+export function waitForCodexReconnectDelay(
+  signal: AbortSignal,
+  delayMs = AUTHORITATIVE_HYDRATION_RETRY_MS,
+): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timeout = setTimeout(finish, delayMs);
+    function finish() {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    }
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
 
 /**
  * Bun component tests historically stubbed these clients with their old
@@ -680,6 +702,11 @@ export function CodexChatTab({
     ),
   );
   const handleSendRef = useRef<CodexSendHandler | null>(null);
+  const ambiguousSteerRef = useRef<{
+    sessionId: string;
+    input: string;
+    requestId: string;
+  } | null>(null);
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
     session?.isLoading,
     session?.sessionId,
@@ -757,6 +784,7 @@ export function CodexChatTab({
     interactionSnapshotSequenceRef.current += 1;
     interactionActivitySequenceRef.current += 1;
     retryablePromptRef.current = null;
+    ambiguousSteerRef.current = null;
     // The pending "stopped" marker belongs to the session that was interrupted.
     // If the identity changed before the interrupt settled, writing it now would
     // append TURN_STOPPED_BY_USER to a transcript the user never stopped.
@@ -802,17 +830,77 @@ export function CodexChatTab({
     tabId,
   ]);
 
+  const handleSteer = useCallback(
+    async (text: string, attachments: CodexAttachment[]): Promise<boolean> => {
+      const steer = parseCodexSteerCommand(text);
+      if (!steer.matched) return false;
+      if (!steer.input) {
+        throw new Error("Add instructions after /steer.");
+      }
+      if (attachments.length > 0) {
+        throw new Error("/steer currently supports text only. Remove the attachments and retry.");
+      }
+      // Resolve connectivity at click time. The tab can disconnect or resume a
+      // different session between the render that created this callback and the
+      // user action that invokes it.
+      const store = useCodexStore.getState();
+      const activeClient = store.clients.get(environmentId);
+      const activeSessionId = store.sessions.get(sessionKey)?.sessionId;
+      if (!activeClient || !activeSessionId) {
+        throw new Error("The Codex session is not connected.");
+      }
+      const retryable = ambiguousSteerRef.current;
+      const requestId = retryable?.sessionId === activeSessionId
+        && retryable.input === steer.input
+        ? retryable.requestId
+        : createUuid();
+      const outcome = await steerCodexSession(
+        activeClient,
+        activeSessionId,
+        steer.input,
+        requestId,
+      );
+      const sessionUnchanged = useCodexStore
+        .getState()
+        .sessions.get(sessionKey)?.sessionId === activeSessionId;
+      if (!sessionUnchanged) {
+        // The completion belongs to the session that was replaced. Suppress its
+        // toast/error; the compose callback also preserves the new draft.
+        return true;
+      }
+      if (outcome.outcome === "unknown") {
+        // Keep at most one ambiguous attempt. An unchanged retry reuses the
+        // same idempotency key, while different text replaces this slot.
+        ambiguousSteerRef.current = {
+          sessionId: activeSessionId,
+          input: steer.input,
+          requestId,
+        };
+      } else if (ambiguousSteerRef.current?.requestId === requestId) {
+        ambiguousSteerRef.current = null;
+      }
+      const failure = describeCodexSteerFailure(outcome);
+      if (failure) {
+        throw new Error(failure);
+      }
+      toast.success("Sent to the active Codex turn");
+      return true;
+    },
+    [environmentId, sessionKey],
+  );
+
   const handleSend = useCallback(
     async (
       text: string,
       attachments: CodexAttachment[],
       logicalRequestId?: string,
     ): Promise<CodexDispatchResult> => {
+      // Steering is a client-side action on the current turn. It neither starts
+      // a new turn nor carries handoff history, so route it before prompt-only
+      // guards and before invalidating an authoritative status reconcile.
+      if (await handleSteer(text, attachments)) return "accepted";
+
       if (!client || !session?.sessionId) return "rejected";
-      // A user dispatch is newer than any pending mount reconcile. Invalidate
-      // that snapshot before it can reapply idle/running state over the turn
-      // this interaction is about to start.
-      reconcileSequenceRef.current += 1;
 
       if (
         handoff.pendingHistory
@@ -824,6 +912,11 @@ export function CodexChatTab({
           "Slash commands cannot be the first message after a handoff. Send a regular message first, then run the slash command.",
         );
       }
+
+      // A prompt dispatch is newer than any pending mount reconcile. Invalidate
+      // that snapshot before it can reapply idle/running state over the turn
+      // this interaction is about to start.
+      reconcileSequenceRef.current += 1;
 
       const promptText = prependAgentHandoffHistory(handoff.pendingHistory, text);
 
@@ -1057,6 +1150,7 @@ export function CodexChatTab({
       addMessage,
       environmentId,
       handoff.pendingHistory,
+      handleSteer,
       slashCommands,
       refreshMessages,
       removeMessage,
@@ -1074,6 +1168,14 @@ export function CodexChatTab({
 
   const handleQueue = useCallback(
     async (text: string, attachments: CodexAttachment[]) => {
+      const submittedSessionId = useCodexStore
+        .getState()
+        .sessions.get(sessionKey)?.sessionId;
+      if (await handleSteer(text, attachments)) {
+        return useCodexStore.getState().sessions.get(sessionKey)?.sessionId
+          === submittedSessionId;
+      }
+
       const requestId = createUuid();
       await enqueueAgentPrompt<CodexQueuedMessage>("codex", sessionKey, {
         id: requestId,
@@ -1085,8 +1187,17 @@ export function CodexChatTab({
         reasoningEffort: selectedReasoningEffort,
         fastMode: fastModeEnabled,
       });
+      return useCodexStore.getState().sessions.get(sessionKey)?.sessionId
+        === submittedSessionId;
     },
-    [fastModeEnabled, selectedMode, selectedModel, selectedReasoningEffort, sessionKey],
+    [
+      fastModeEnabled,
+      handleSteer,
+      selectedMode,
+      selectedModel,
+      selectedReasoningEffort,
+      sessionKey,
+    ],
   );
 
   const promoteNextQueuedPromptToDraft = useCallback(async () => {
@@ -2470,22 +2581,6 @@ export function CodexChatTab({
     (async () => {
       let patchRecovery: Promise<boolean> | null = null;
       let consecutiveHydrationFailures = 0;
-      const waitForReconnectDelay = () => new Promise<void>((resolve) => {
-        if (abortController.signal.aborted) {
-          resolve();
-          return;
-        }
-        const timeout = setTimeout(
-          finish,
-          AUTHORITATIVE_HYDRATION_RETRY_MS,
-        );
-        function finish() {
-          clearTimeout(timeout);
-          abortController.signal.removeEventListener("abort", finish);
-          resolve();
-        }
-        abortController.signal.addEventListener("abort", finish, { once: true });
-      });
       const recoverMessagePatchGap = (): Promise<boolean> => {
         if (patchRecovery) return patchRecovery;
         const recovery = refreshMessages(client, session.sessionId, {
@@ -2837,7 +2932,7 @@ export function CodexChatTab({
         }
 
         if (retryHydration) {
-          await waitForReconnectDelay();
+          await waitForCodexReconnectDelay(abortController.signal);
           continue;
         }
 
@@ -2859,7 +2954,7 @@ export function CodexChatTab({
           break;
         }
 
-        await waitForReconnectDelay();
+        await waitForCodexReconnectDelay(abortController.signal);
       }
     })();
 
@@ -3093,12 +3188,17 @@ export function CodexChatTab({
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}
           onSend={async (text, attachments) => {
+            const submittedSessionId = useCodexStore
+              .getState()
+              .sessions.get(sessionKey)?.sessionId;
             const outcome = await handleSend(text, attachments);
             if (outcome === "rejected") {
               throw new Error(
                 "Codex did not accept the prompt. Your draft was preserved so you can edit or retry it.",
               );
             }
+            return useCodexStore.getState().sessions.get(sessionKey)?.sessionId
+              === submittedSessionId;
           }}
           onQueue={handleQueue}
           onStop={handleStop}

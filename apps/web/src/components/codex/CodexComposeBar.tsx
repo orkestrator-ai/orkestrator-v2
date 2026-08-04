@@ -42,6 +42,7 @@ import {
   transferAgentPromptToComposeDraft,
 } from "@/lib/prompt-queue-sources";
 import { composerOccupiedError } from "@/lib/prompt-queue-errors";
+import { parseCodexSteerCommand } from "./codex-steer-command";
 
 const EMPTY_ATTACHMENTS: CodexAttachment[] = [];
 const EMPTY_MENTIONS: FileMention[] = [];
@@ -80,8 +81,14 @@ interface CodexComposeBarProps {
   disabled?: boolean;
   isLoading?: boolean;
   queueLength?: number;
-  onSend: (text: string, attachments: CodexAttachment[]) => Promise<void>;
-  onQueue?: (text: string, attachments: CodexAttachment[]) => void | Promise<void>;
+  onSend: (
+    text: string,
+    attachments: CodexAttachment[],
+  ) => Promise<boolean | void>;
+  onQueue?: (
+    text: string,
+    attachments: CodexAttachment[],
+  ) => boolean | void | Promise<boolean | void>;
   onStop?: () => Promise<void>;
   onModeChange: (mode: CodexConversationMode) => Promise<void> | void;
   onModelChange: (modelId: string) => Promise<void> | void;
@@ -224,6 +231,12 @@ export function CodexComposeBar({
     onQueue,
     isLoading,
     disabled,
+    resolveSubmitOperation: (serializedText, isQueueing) =>
+      parseCodexSteerCommand(serializedText).matched
+        ? "steer"
+        : isQueueing
+          ? "queue"
+          : "send",
     // app-server rejects a second concurrent prompt with a 409.
     refuseWhenBusyWithoutQueue: true,
   });
@@ -383,6 +396,9 @@ export function CodexComposeBar({
     (isLoading && !onQueue) ||
     (text.trim().length === 0 && attachments.length === 0);
   const showSendButton = !isLoading || !sendDisabled;
+  const steerCommand = parseCodexSteerCommand(text);
+  const isSteering = isLoading && steerCommand.matched && steerCommand.input.length > 0;
+  const needsSteerInstructions = isLoading && steerCommand.matched && !steerCommand.input;
 
   return (
     <div
@@ -637,7 +653,15 @@ export function CodexComposeBar({
             onClick={() => {
               void handleSubmit();
             }}
-            title={isLoading ? "Add to queue" : "Send message"}
+            title={
+              isSteering
+                ? "Send to current turn"
+                : needsSteerInstructions
+                  ? "Add instructions after /steer"
+                  : isLoading
+                    ? "Add to queue"
+                    : "Send message"
+            }
           >
             <ArrowUp className="h-4 w-4" />
           </Button>

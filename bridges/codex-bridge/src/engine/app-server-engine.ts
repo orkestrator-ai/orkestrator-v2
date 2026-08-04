@@ -932,16 +932,21 @@ export class AppServerEngine implements CodexEngine {
       .filter((turn): turn is Record<string, unknown> => !!turn && typeof turn === "object")
       .map((turn) => {
         const items = Array.isArray(turn.items) ? turn.items : [];
-        const userMessage = items.find(
-          (item): item is Record<string, unknown> =>
-            !!item && typeof item === "object" && (item as Record<string, unknown>).type === "userMessage",
-        );
+        const clientIds = items
+          .filter(
+            (item): item is Record<string, unknown> =>
+              !!item
+              && typeof item === "object"
+              && (item as Record<string, unknown>).type === "userMessage",
+          )
+          .map((item) => item.clientId)
+          .filter((clientId): clientId is string => typeof clientId === "string");
         return {
           id: String(turn.id ?? ""),
           status: (turn.status as EngineThreadTurn["status"]) ?? "completed",
           items: [],
-          clientId:
-            userMessage && typeof userMessage.clientId === "string" ? userMessage.clientId : null,
+          clientId: clientIds[0] ?? null,
+          clientIds,
           startedAt: secondsToIso(turn.startedAt),
           completedAt: secondsToIso(turn.completedAt),
         } satisfies EngineThreadTurn;
@@ -1151,7 +1156,8 @@ export class AppServerEngine implements CodexEngine {
     const turns = (thread?.turns ?? []).map((turn) => ({
       id: turn.id,
       status: turn.status,
-      items: turn.clientId ? [{ type: "userMessage", clientId: turn.clientId }] : [],
+      items: (turn.clientIds ?? (turn.clientId ? [turn.clientId] : []))
+        .map((clientId) => ({ type: "userMessage" as const, clientId })),
     }));
     return reconcileFromThreadTurns(turns, requestId);
   }

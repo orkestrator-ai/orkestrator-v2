@@ -11,6 +11,7 @@ import {
   getAvailableSlashCommandDefinitions,
   isCodexCliNativeSlashCommand,
   normalizeSlashCommandName,
+  parseCodexSteerCommand,
   parseSlashCommandPrompt,
   resolveConversationMode,
   runInlinePromptCommand,
@@ -60,6 +61,28 @@ describe("slash command parsing and metadata", () => {
     expect(parseSlashCommandPrompt("/review\nextra")).toBeNull();
   });
 
+  test("parses only an exact /steer token with single-line or multiline text", () => {
+    expect(parseCodexSteerCommand(" /STEER  check the tests ")).toEqual({
+      args: "check the tests",
+    });
+    expect(parseCodexSteerCommand("/steer\ncheck the API\nthen the UI")).toEqual({
+      args: "check the API\nthen the UI",
+    });
+    expect(parseCodexSteerCommand("/steer\tcheck the API")).toEqual({
+      args: "check the API",
+    });
+    expect(parseCodexSteerCommand("/steer  \n ")).toEqual({ args: "" });
+    for (const value of [
+      "/steering elsewhere",
+      "/steerx elsewhere",
+      "/steer-now",
+      "please /steer this",
+      "first line\n/steer second line",
+    ]) {
+      expect(parseCodexSteerCommand(value)).toBeNull();
+    }
+  });
+
   test("recognizes only the CLI-native goal command", () => {
     expect(isCodexCliNativeSlashCommand("/GOAL")).toBe(true);
     expect(isCodexCliNativeSlashCommand("/help")).toBe(false);
@@ -67,6 +90,7 @@ describe("slash command parsing and metadata", () => {
       "/help",
       "/goal",
       "/models",
+      "/steer",
     ]);
   });
 
@@ -168,7 +192,7 @@ describe("prompt command discovery", () => {
     expect(await collectPromptSlashCommandsFromDir(join(root, "missing"))).toEqual([]);
   });
 
-  test("prefers repository prompts over home prompts and prompts over builtins", async () => {
+  test("prefers repository prompts while keeping /steer reserved for the builtin", async () => {
     const cwd = await temporaryDirectory();
     const codexHome = await temporaryDirectory();
     process.env.CODEX_HOME = codexHome;
@@ -178,6 +202,7 @@ describe("prompt command discovery", () => {
     await mkdir(homePrompts, { recursive: true });
     await writeFile(join(localPrompts, "shared.md"), "Local shared prompt");
     await writeFile(join(localPrompts, "help.md"), "Local help prompt");
+    await writeFile(join(localPrompts, "steer.md"), "Unreachable steer prompt");
     await writeFile(join(homePrompts, "shared.md"), "Home shared prompt");
     await writeFile(join(homePrompts, "home-only.md"), "Home-only prompt");
 
@@ -188,9 +213,12 @@ describe("prompt command discovery", () => {
       "/home-only",
       "/models",
       "/shared",
+      "/steer",
     ]);
     expect(definitions.find((definition) => definition.name === "/help")?.source)
       .toBe("prompt");
+    expect(definitions.find((definition) => definition.name === "/steer"))
+      .toMatchObject({ source: "builtin", argumentHint: "<instructions>" });
     expect(definitions.find((definition) => definition.name === "/shared"))
       .toMatchObject({ source: "prompt", template: "Local shared prompt" });
   });
@@ -211,6 +239,35 @@ describe("prompt expansion and shaping", () => {
         cwd,
       ),
     ).toBe("preferred-stdout");
+    expect(
+      await runInlinePromptCommand("printf failed-stderr >&2; exit 4", cwd),
+    ).toBe("failed-stderr");
+  });
+
+  test("uses the error message when a failed inline command has no output streams", async () => {
+    const cwd = await temporaryDirectory();
+    const missingShell = join(cwd, "missing-shell");
+    process.env.SHELL = missingShell;
+    process.env.ORKESTRATOR_RUNTIME_ENV_SCRIPT = join(cwd, "missing-runtime-env.sh");
+
+    expect(await runInlinePromptCommand(":", cwd)).toContain(missingShell);
+  });
+
+  test("uses the generic fallback when an inline command throws a non-Error value", async () => {
+    const cwd = await temporaryDirectory();
+    process.env.SHELL = join(cwd, "missing-shell");
+    process.env.ORKESTRATOR_RUNTIME_ENV_SCRIPT = join(cwd, "missing-runtime-env.sh");
+
+    // A native process failure supplies the caught value. Temporarily replacing
+    // the global constructor makes that value exercise the non-Error branch
+    // without mocking node:child_process process-wide.
+    const nativeError = globalThis.Error;
+    try {
+      globalThis.Error = class TestError extends nativeError {} as ErrorConstructor;
+      expect(await runInlinePromptCommand(":", cwd)).toBe("Command failed");
+    } finally {
+      globalThis.Error = nativeError;
+    }
   });
 
   test("expands arguments and every inline command in template order", async () => {

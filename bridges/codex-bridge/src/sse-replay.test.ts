@@ -302,6 +302,80 @@ describe("/event/subscribe", () => {
     ).toBe(false);
   });
 
+  test("replays superseded snapshots as cursor tombstones followed by the latest message", async () => {
+    const restoreRing = __testing.withIsolatedEventRingForTesting();
+    try {
+      const cursor = __testing.eventRingForTesting().latestRevision;
+      for (const content of ["first", "second", "third"]) {
+        __testing.emitForTesting({
+          type: "message.updated",
+          sessionId: "same-session",
+          data: { message: { id: "same-message", content } },
+        });
+      }
+
+      const revisions = __testing.eventRingForTesting().since(cursor).events
+        .map((entry) => entry.revision);
+      const frames = await collect(`?since=${cursor}`, () => undefined, { expected: 3 });
+      const replayed = frames.filter((frame) => frame.event !== "connected");
+
+      expect(replayed).toEqual([
+        { event: "bridge.cursor", id: String(revisions[0]), data: {} },
+        { event: "bridge.cursor", id: String(revisions[1]), data: {} },
+        {
+          event: "message.updated",
+          id: String(revisions[2]),
+          data: {
+            sessionId: "same-session",
+            message: { id: "same-message", content: "third" },
+          },
+        },
+      ]);
+    } finally {
+      restoreRing();
+    }
+  });
+
+  test("does not supersede the same message id across different sessions", async () => {
+    const restoreRing = __testing.withIsolatedEventRingForTesting();
+    try {
+      const cursor = __testing.eventRingForTesting().latestRevision;
+      __testing.emitForTesting({
+        type: "message.updated",
+        sessionId: "session-one",
+        data: { message: { id: "shared-id", content: "session one old" } },
+      });
+      __testing.emitForTesting({
+        type: "message.updated",
+        sessionId: "session-two",
+        data: { message: { id: "shared-id", content: "session two" } },
+      });
+      __testing.emitForTesting({
+        type: "message.updated",
+        sessionId: "session-one",
+        data: { message: { id: "shared-id", content: "session one new" } },
+      });
+
+      const frames = await collect(`?since=${cursor}`, () => undefined, { expected: 3 });
+      const replayed = frames.filter((frame) => frame.event !== "connected");
+      expect(replayed.map((frame) => frame.event)).toEqual([
+        "bridge.cursor",
+        "message.updated",
+        "message.updated",
+      ]);
+      expect(replayed[1]!.data).toMatchObject({
+        sessionId: "session-two",
+        message: { id: "shared-id", content: "session two" },
+      });
+      expect(replayed[2]!.data).toMatchObject({
+        sessionId: "session-one",
+        message: { id: "shared-id", content: "session one new" },
+      });
+    } finally {
+      restoreRing();
+    }
+  });
+
   test("an event's payload is serialized once and shared by live subscribers and replays", async () => {
     // The getter counts how many times the payload is walked. One live fan-out
     // plus two replays must serialize exactly once — per-subscriber and

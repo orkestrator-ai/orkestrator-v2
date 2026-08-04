@@ -70,6 +70,7 @@ import {
   expandPromptTemplate,
   getAvailableSlashCommandDefinitions,
   isCodexCliNativeSlashCommand,
+  parseCodexSteerCommand,
   parseSlashCommandPrompt,
   wrapPromptForConversationMode,
   type ConversationMode,
@@ -88,7 +89,7 @@ import {
   readPersistedSessionTitleEntries,
   type PersistedSessionTitleSource,
 } from "./session-titles.js";
-import { isMissingRolloutError } from "./app-server/errors.js";
+import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
 import type { BridgeModel } from "./models-cache.js";
 import {
   structuredOutputFailure,
@@ -380,6 +381,7 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
  * bounds that to one backstop rather than a wedged session.
  */
 const DEFAULT_COMPACTION_TIMEOUT_MS = 5 * 60_000;
+const MAX_STEER_REQUESTS = 500;
 
 function codexStructuredOutputFailure(
   turn: TurnAccumulator,
@@ -569,6 +571,23 @@ export class AppServerRuntime {
     { request: InteractionRequest }
   >();
   private readonly usageByThread = new Map<string, EngineUsageSnapshot>();
+  /**
+   * Bounded, process-local steering idempotency state.
+   *
+   * app-server persists `clientUserMessageId` on every steered userMessage, so
+   * an ambiguous response can be reconciled through thread/read. Remembering the
+   * request here prevents a confirmed response from being dispatched twice and
+   * tells an ambiguous retry that it must reconcile before doing anything.
+   */
+  private readonly steerRequests = new Map<
+    string,
+    {
+      threadId: string;
+      turnId: string;
+      inputDigest: string;
+      state: "accepted" | "unknown";
+    }
+  >();
   private accountRateLimits: EngineRateLimitWindow[] = [];
   private accountCredits?: import("./engine/types.js").EngineCreditSnapshot;
 
@@ -2670,24 +2689,154 @@ export class AppServerRuntime {
   async steerSession(
     sessionId: string,
     input: string,
-    requestId?: string,
-  ): Promise<"accepted" | "not-found" | "idle" | "mismatch"> {
+    expectedTurnId: string,
+    requestId: string,
+  ): Promise<"accepted" | "not-found" | "idle" | "mismatch" | "unknown"> {
     const session = this.registry.getSession(sessionId);
     const context = this.registry.getThreadForSession(sessionId);
     const turn = context?.activeTurn;
     if (!session?.threadId || !context) return "not-found";
+    const inputDigest = createHash("sha256").update(input).digest("hex");
+    const previous = this.steerRequests.get(requestId);
+    if (previous) {
+      // Reusing an id for different input or a different target cannot be
+      // interpreted safely. Do not dispatch either version again.
+      if (
+        previous.threadId !== session.threadId
+        || previous.turnId !== expectedTurnId
+        || previous.inputDigest !== inputDigest
+      ) {
+        return "unknown";
+      }
+      if (previous.state === "accepted") return "accepted";
+
+      try {
+        const reconciled = await this.options.engine.reconcileRequest(session.threadId, requestId);
+        if (
+          (reconciled.result === "attach" || reconciled.result === "terminal")
+          && reconciled.turnId === expectedTurnId
+        ) {
+          this.rememberSteerRequest(requestId, { ...previous, state: "accepted" });
+          this.appendAcceptedSteer(context, input, expectedTurnId);
+          return "accepted";
+        }
+        // A successful authoritative read found no matching client id, proving
+        // the ambiguous write did not land. It is now safe to try the same id.
+        this.steerRequests.delete(requestId);
+      } catch {
+        return "unknown";
+      }
+    }
+
     if (!turn || phaseToExternalStatus(context.phase) !== "running") return "idle";
+    // Pin steering to the turn the renderer observed. The engine repeats this
+    // check atomically, but rejecting the already-stale request here avoids an
+    // RPC and makes the ordinary race unambiguous to the caller.
+    if (turn.turnId !== expectedTurnId) return "mismatch";
+
+    // The browser deliberately retains the same id after an ambiguous response.
+    // The bounded cache above covers the normal retry, while this authoritative
+    // read closes the bridge-restart and cache-eviction gaps. Steering is rare;
+    // paying one read is preferable to ever applying the same instruction twice.
+    try {
+      const reconciled = await this.options.engine.reconcileRequest(session.threadId, requestId);
+      if (reconciled.result === "attach" || reconciled.result === "terminal") {
+        if (reconciled.turnId !== expectedTurnId) return "mismatch";
+        this.rememberSteerRequest(requestId, {
+          threadId: session.threadId,
+          turnId: expectedTurnId,
+          inputDigest,
+          state: "accepted",
+        });
+        // A request found after cache loss came from an earlier runtime. Its
+        // transcript is already authoritative; appending here would duplicate it.
+        return "accepted";
+      }
+    } catch {
+      this.rememberSteerRequest(requestId, {
+        threadId: session.threadId,
+        turnId: expectedTurnId,
+        inputDigest,
+        state: "unknown",
+      });
+      return "unknown";
+    }
+
     try {
       await this.options.engine.steerTurn(
         session.threadId,
-        turn.turnId,
+        expectedTurnId,
         [{ type: "text", text: input }],
         requestId,
       );
+      this.rememberSteerRequest(requestId, {
+        threadId: session.threadId,
+        turnId: expectedTurnId,
+        inputDigest,
+        state: "accepted",
+      });
+      this.appendAcceptedSteer(context, input, expectedTurnId);
       return "accepted";
-    } catch {
-      return "mismatch";
+    } catch (error) {
+      // A structured rejection that explicitly says the expected turn is stale
+      // proves the text was not applied. Transport failures (including timeout
+      // and process exit) are ambiguous: the write may have landed before the
+      // response was lost, so they must never be described as unsent.
+      if (
+        error instanceof AppServerRpcError
+        && (
+          /expectedTurnId.*(?:match|stale)/i.test(error.message)
+          || /expected\s+turn(?:\s+id)?.*(?:match|stale)/i.test(error.message)
+          || /no longer accepting input/i.test(error.message)
+        )
+      ) {
+        return "mismatch";
+      }
+      this.rememberSteerRequest(requestId, {
+        threadId: session.threadId,
+        turnId: expectedTurnId,
+        inputDigest,
+        state: "unknown",
+      });
+      return "unknown";
     }
+  }
+
+  private rememberSteerRequest(
+    requestId: string,
+    record: {
+      threadId: string;
+      turnId: string;
+      inputDigest: string;
+      state: "accepted" | "unknown";
+    },
+  ): void {
+    // Refresh insertion order so the cap retains the most recently used ids.
+    this.steerRequests.delete(requestId);
+    this.steerRequests.set(requestId, record);
+    while (this.steerRequests.size > MAX_STEER_REQUESTS) {
+      const oldest = this.steerRequests.keys().next().value;
+      if (typeof oldest !== "string") break;
+      this.steerRequests.delete(oldest);
+    }
+  }
+
+  private appendAcceptedSteer(
+    context: ThreadContext,
+    input: string,
+    turnId: string,
+  ): void {
+    // app-server persists a successful steer as another user message inside the
+    // active turn. Its live userMessage item is intentionally not rendered by
+    // the engine reducer, so append the accepted text here; detach/re-attach
+    // later reconstructs the same entry from the rollout.
+    const userMessage = this.appendUserMessage(context, input, []);
+    userMessage.turnId = turnId;
+    this.bumpMessageRevision(context);
+    for (const id of context.bridgeSessionIds) {
+      this.options.emit({ type: "message.updated", sessionId: id, data: { message: userMessage } });
+    }
+    this.emitStatus(context);
   }
 
   async startNativeReview(
@@ -3295,6 +3444,25 @@ export class AppServerRuntime {
       }
     }
 
+    // `/steer` is reserved even for a schema-constrained prompt. Structured
+    // output bypasses other local commands so the provider can satisfy the
+    // schema, but allowing this command through would start a brand-new model
+    // turn containing raw steering text.
+    if (parseCodexSteerCommand(input.prompt) && input.outputSchema) {
+      return {
+        ok: false,
+        status: 400,
+        error: "/steer cannot be used with structured output",
+      };
+    }
+    if (parseCodexSteerCommand(input.prompt)) {
+      const resolvedSteer = await this.resolveSlashCommand(session, input.prompt, this.options.cwd);
+      if (resolvedSteer?.kind === "builtin") {
+        this.emitLocalResponse(session, input.prompt, resolvedSteer.response);
+        return { ok: true, result: { status: "processing", requestId } };
+      }
+    }
+
     if (input.outputSchema) {
       session.structuredOutput = undefined;
       session.structuredOutputRequestId = requestId;
@@ -3845,6 +4013,19 @@ export class AppServerRuntime {
     prompt: string,
     cwd: string,
   ): Promise<{ kind: "prompt"; expandedPrompt: string } | { kind: "builtin"; response: string } | null> {
+    // `/steer` accepts multiline free text, whereas the general slash-command
+    // parser deliberately rejects newlines. Handle it first so an idle or stale
+    // client never starts a fresh model turn with the raw command text.
+    const steer = parseCodexSteerCommand(prompt);
+    if (steer) {
+      return {
+        kind: "builtin",
+        response: steer.args
+          ? "There is no active Codex turn to steer. Start a turn, then use /steer while it is running."
+          : "Usage: /steer <instructions>. Run it while a Codex turn is active.",
+      };
+    }
+
     const parsed = parseSlashCommandPrompt(prompt);
     if (!parsed) return null;
 

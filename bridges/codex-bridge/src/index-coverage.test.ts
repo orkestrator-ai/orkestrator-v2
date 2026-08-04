@@ -8,7 +8,27 @@ process.env.CODEX_BRIDGE_NO_SERVER = "1";
 // refresh mutates process.env underneath these tests.
 process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 
+const nativeSetTimeout = globalThis.setTimeout;
+let initialReplayRetentionTimer:
+  | { callback: () => void; cleared: boolean; unref: () => void }
+  | undefined;
+globalThis.setTimeout = ((
+  callback: (...args: unknown[]) => void,
+  delay?: number,
+  ...args: unknown[]
+) => {
+  if (delay === 60_000 && initialReplayRetentionTimer === undefined) {
+    initialReplayRetentionTimer = {
+      callback: () => callback(...args),
+      cleared: false,
+      unref: () => undefined,
+    };
+    return initialReplayRetentionTimer as unknown as ReturnType<typeof setTimeout>;
+  }
+  return nativeSetTimeout(callback, delay, ...args);
+}) as typeof setTimeout;
 const { __testing } = await import("./index.js");
+globalThis.setTimeout = nativeSetTimeout;
 
 const temporaryRoots: string[] = [];
 
@@ -25,6 +45,152 @@ afterEach(() => {
 });
 
 describe("codex bridge private boundary coverage", () => {
+  test("drops idle replay retention, reacquires it, and cancels a pending expiry", () => {
+    expect(initialReplayRetentionTimer).toBeDefined();
+    const restoreRing = __testing.withIsolatedEventRingForTesting();
+    const nativeClearTimeout = globalThis.clearTimeout;
+    const scheduled: Array<{
+      callback: () => void;
+      cleared: boolean;
+      unref: () => void;
+    }> = [];
+
+    globalThis.setTimeout = ((callback: () => void, delay?: number) => {
+      expect(delay).toBe(60_000);
+      const timer = {
+        callback,
+        cleared: false,
+        unref: () => undefined,
+      };
+      scheduled.push(timer);
+      return timer as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = ((timer: ReturnType<typeof setTimeout>) => {
+      (timer as unknown as { cleared: boolean }).cleared = true;
+    }) as typeof clearTimeout;
+
+    try {
+      __testing.emitForTesting({ type: "session.updated", sessionId: "before-idle" });
+      expect(__testing.eventRingForTesting().getStats().retained).toBe(1);
+
+      initialReplayRetentionTimer!.callback();
+      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
+        retained: 0,
+        retainedBytes: 0,
+        latestRevision: 1,
+      });
+
+      __testing.emitForTesting({ type: "session.updated", sessionId: "while-disabled" });
+      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
+        retained: 0,
+        latestRevision: 2,
+      });
+
+      const releaseFirst = __testing.subscribeForTesting(() => undefined);
+      __testing.emitForTesting({ type: "session.updated", sessionId: "after-reacquire" });
+      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
+        retained: 1,
+        latestRevision: 3,
+      });
+      releaseFirst();
+      expect(scheduled).toHaveLength(1);
+
+      const releaseSecond = __testing.subscribeForTesting(() => undefined);
+      expect(scheduled[0]!.cleared).toBe(true);
+      releaseSecond();
+      expect(scheduled).toHaveLength(2);
+
+      scheduled[1]!.callback();
+      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
+        retained: 0,
+        retainedBytes: 0,
+        latestRevision: 3,
+      });
+      __testing.emitForTesting({ type: "session.updated", sessionId: "disabled-again" });
+      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
+        retained: 0,
+        latestRevision: 4,
+      });
+
+      const releaseThird = __testing.subscribeForTesting(() => undefined);
+      __testing.emitForTesting({ type: "session.updated", sessionId: "reacquired-again" });
+      expect(__testing.eventRingForTesting().getStats()).toMatchObject({
+        retained: 1,
+        latestRevision: 5,
+      });
+      releaseThird();
+    } finally {
+      globalThis.setTimeout = nativeSetTimeout;
+      globalThis.clearTimeout = nativeClearTimeout;
+      restoreRing();
+    }
+  });
+
+  test("contains unserializable SSE payloads without breaking revision continuity", () => {
+    const restoreRing = __testing.withIsolatedEventRingForTesting();
+    // Re-enable retention after the preceding expiry test, then release the
+    // subscriber so this exercises the lazy background serialization path.
+    const releaseRetention = __testing.subscribeForTesting(() => undefined);
+    releaseRetention();
+    const originalError = console.error;
+    console.error = () => undefined;
+    try {
+      const cyclic: Record<string, unknown> = {};
+      cyclic.self = cyclic;
+      const throwing = {
+        get value(): never {
+          throw new Error("getter failed");
+        },
+      };
+
+      expect(() => {
+        __testing.emitForTesting({
+          type: "session.updated",
+          sessionId: "cyclic",
+          data: cyclic,
+        });
+        __testing.emitForTesting({
+          type: "session.updated",
+          sessionId: "bigint",
+          data: { value: 1n },
+        });
+        __testing.emitForTesting({
+          type: "session.updated",
+          sessionId: "throwing-getter",
+          data: throwing,
+        });
+        __testing.emitForTesting({
+          type: "session.idle",
+          sessionId: "after-errors",
+        });
+      }).not.toThrow();
+
+      const replay = __testing.eventRingForTesting().since(0);
+      expect(replay.complete).toBe(true);
+      expect(replay.events.map((entry) => entry.revision)).toEqual([1, 2, 3, 4]);
+      expect(replay.events.slice(0, 3).map((entry) => entry.event.serialize())).toEqual([
+        JSON.stringify({
+          sessionId: "cyclic",
+          error: "payload could not be serialized",
+        }),
+        JSON.stringify({
+          sessionId: "bigint",
+          error: "payload could not be serialized",
+        }),
+        JSON.stringify({
+          sessionId: "throwing-getter",
+          error: "payload could not be serialized",
+        }),
+      ]);
+      expect(JSON.parse(replay.events[3]!.event.serialize())).toEqual({
+        sessionId: "after-errors",
+      });
+    } finally {
+      console.error = originalError;
+      restoreRing();
+    }
+  });
+
   test("shares one transcript path snapshot across concurrent metadata lookups", async () => {
     const paths = ["/sessions/one.jsonl", "/sessions/two.jsonl"];
     let pathLoads = 0;

@@ -560,7 +560,9 @@ function serializeSseEventData(
     // must not propagate back into the reducer — and through it the app-server
     // read loop — that emitted it, and must not break the revision sequence every
     // client's cursor depends on. Emit a placeholder and keep going.
-    console.error("[codex-bridge] Failed to serialize an SSE payload:", error);
+    // The thrown value can originate from a payload getter. Never copy it into
+    // logs, which must not contain prompts, file contents, or attachment data.
+    console.error("[codex-bridge] Failed to serialize an SSE payload");
     return JSON.stringify({
       sessionId: event.sessionId,
       error: "payload could not be serialized",
@@ -645,24 +647,46 @@ function emit(event: SseEvent): void {
     return;
   }
   const sessionId = event.sessionId;
-  const payload = snapshotSseEventPayload(event);
-  // Encoded up front only when a live subscriber needs the string anyway; that
-  // string is then reused by replay, so an attached client pays nothing extra.
-  // With nobody attached the encoding is deferred to a replay that will usually
-  // never happen, because the next snapshot for this message collapses this one.
-  const eager =
-    subscribers.size > 0 ? serializeSseEventData({ sessionId, data: payload }) : null;
+  let payload: Record<string, unknown>;
+  let eager: string | null;
+  let messageId: string | undefined;
+  let bytes: number;
+  try {
+    payload = snapshotSseEventPayload(event);
+    // Encoded up front only when a live subscriber needs the string anyway; that
+    // string is then reused by replay, so an attached client pays nothing extra.
+    // With nobody attached the encoding is deferred to a replay that will usually
+    // never happen, because the next snapshot for this message collapses this one.
+    eager =
+      subscribers.size > 0 ? serializeSseEventData({ sessionId, data: payload }) : null;
+    messageId = retainedMessageId(event.type, payload);
+    bytes =
+      eager === null
+        ? estimateSsePayloadBytes(payload)
+        : Buffer.byteLength(eager, "utf8");
+  } catch {
+    // Snapshotting and size estimation also walk untrusted payloads. Accessors
+    // can throw before JSON.stringify gets its chance to contain them, so retain
+    // the same placeholder and still advance the bridge-wide cursor.
+    // As above, the thrown value is payload-controlled and must not reach logs.
+    console.error("[codex-bridge] Failed to snapshot an SSE payload");
+    payload = { error: "payload could not be serialized" };
+    eager =
+      subscribers.size > 0 ? serializeSseEventData({ sessionId, data: payload }) : null;
+    messageId = undefined;
+    bytes =
+      eager === null
+        ? estimateSsePayloadBytes(payload)
+        : Buffer.byteLength(eager, "utf8");
+  }
   const revision = eventRing.append({
     type: event.type,
     sessionId,
-    messageId: retainedMessageId(event.type, payload),
+    messageId,
     // Deliberately not memoized on the lazy path: caching the string here would
     // retain bytes the ring's budget never accounted for.
     serialize: () => eager ?? serializeSseEventData({ sessionId, data: payload }),
-    bytes:
-      eager === null
-        ? estimateSsePayloadBytes(payload)
-        : Buffer.byteLength(eager, "utf8"),
+    bytes,
   });
   for (const subscriber of subscribers) {
     try {
@@ -1414,19 +1438,50 @@ app.post("/session/:id/compact", async (c) => {
 });
 
 app.post("/session/:id/steer", async (c) => {
-  const body = await c.req.json().catch(() => ({}));
+  let body: Record<string, unknown>;
+  try {
+    const parsed: unknown = await c.req.json();
+    body = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return c.json({ error: "Request body must be valid JSON" }, 400);
+  }
   if (typeof body.input !== "string" || !body.input.trim()) {
     return c.json({ error: "input is required" }, 400);
   }
+  if (typeof body.requestId !== "string" || !body.requestId.trim()) {
+    return c.json({ error: "requestId is required" }, 400);
+  }
+  if (typeof body.expectedTurnId !== "string" || !body.expectedTurnId.trim()) {
+    return c.json({ error: "expectedTurnId is required" }, 400);
+  }
+  const requestId = body.requestId.trim();
   const outcome = await appServerRuntime.steerSession(
     c.req.param("id"),
     body.input.trim(),
-    typeof body.requestId === "string" ? body.requestId : undefined,
+    body.expectedTurnId.trim(),
+    requestId,
   );
   if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
-  if (outcome === "idle") return c.json({ error: "There is no active turn" }, 409);
+  if (outcome === "idle") {
+    return c.json({ error: "There is no active turn", outcome: "idle" }, 409);
+  }
   if (outcome === "mismatch") {
-    return c.json({ error: "The active turn changed; the text was not sent" }, 409);
+    return c.json(
+      { error: "The active turn changed; the text was not sent", outcome: "mismatch" },
+      409,
+    );
+  }
+  if (outcome === "unknown") {
+    return c.json(
+      {
+        error: "Could not confirm whether Codex received the steering text",
+        outcome: "unknown",
+        requestId,
+      },
+      503,
+    );
   }
   return c.json({ status: "accepted" }, 202);
 });

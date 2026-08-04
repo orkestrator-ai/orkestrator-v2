@@ -117,6 +117,8 @@ export interface EngineThreadTurn {
   items: EngineItem[];
   /** `clientUserMessageId` echoed back on the turn's user message, when present. */
   clientId?: string | null;
+  /** Every user-message client id in the turn, including steering additions. */
+  clientIds?: string[];
   startedAt?: string;
   completedAt?: string;
   error?: EngineError;

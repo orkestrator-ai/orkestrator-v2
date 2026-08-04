@@ -84,6 +84,7 @@ import * as realHooks from "@/hooks";
 import * as realUseFileMentions from "@/hooks/useFileMentions";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
+import { mockToastError } from "../../mocks/sonner";
 const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
 const realHooksSnapshot = { ...realHooks };
 const realUseFileMentionsSnapshot = { ...realUseFileMentions };
@@ -608,6 +609,41 @@ describe("CodexComposeBar", () => {
     expect(screen.getByTitle("Add to queue")).toBeTruthy();
   });
 
+  test("labels and routes /steer to the busy-path callback while Codex is loading", async () => {
+    const { onQueue, onSend } = renderComposeBar({ isLoading: true });
+    fireEvent.change(screen.getByTestId("mentionable-input"), {
+      target: { value: "/steer focus on the failing test" },
+    });
+
+    fireEvent.click(screen.getByTitle("Send to current turn"));
+
+    await waitFor(() => {
+      expect(onQueue).toHaveBeenCalledWith("/steer focus on the failing test", []);
+    });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.queryByTitle("Add to queue")).toBeNull();
+  });
+
+  test("does not label an idle /steer draft as an active-turn send", () => {
+    renderComposeBar();
+    fireEvent.change(screen.getByTestId("mentionable-input"), {
+      target: { value: "/steer focus on the failing test" },
+    });
+
+    expect(screen.getByTitle("Send message")).toBeTruthy();
+    expect(screen.queryByTitle("Send to current turn")).toBeNull();
+  });
+
+  test("asks for instructions when a busy /steer command has no body", () => {
+    renderComposeBar({ isLoading: true });
+    fireEvent.change(screen.getByTestId("mentionable-input"), {
+      target: { value: "/steer   " },
+    });
+
+    expect(screen.getByTitle("Add instructions after /steer")).toBeTruthy();
+    expect(screen.queryByTitle("Send to current turn")).toBeNull();
+  });
+
   test("shows queue indicator when queueLength > 0", () => {
     renderComposeBar({ queueLength: 2 });
     expect(screen.getByText("+2 queued")).toBeTruthy();
@@ -1031,22 +1067,25 @@ describe("CodexComposeBar", () => {
     );
   });
 
-  test("retains a busy draft when queueing rejects", async () => {
+  test("retains a /steer draft when busy-path dispatch rejects", async () => {
     const onQueue = mock(async () => {
-      throw new Error("queue unavailable");
+      throw new Error("steer unavailable");
     });
-    useCodexStore.getState().setDraftText(SESSION_KEY, "Keep queued prompt");
+    useCodexStore.getState().setDraftText(SESSION_KEY, "/steer keep checking");
     renderComposeBar({ isLoading: true, onQueue });
 
-    fireEvent.click(screen.getByTitle("Add to queue"));
+    fireEvent.click(screen.getByTitle("Send to current turn"));
 
     await waitFor(() => {
-      expect(onQueue).toHaveBeenCalledWith("Keep queued prompt", []);
-      expect(screen.getByTitle("Add to queue").hasAttribute("disabled")).toBe(false);
+      expect(onQueue).toHaveBeenCalledWith("/steer keep checking", []);
+      expect(screen.getByTitle("Send to current turn").hasAttribute("disabled")).toBe(false);
     });
     expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe(
-      "Keep queued prompt",
+      "/steer keep checking",
     );
+    expect(mockToastError).toHaveBeenCalledWith("Failed to steer Codex", {
+      description: "steer unavailable",
+    });
   });
 
   test("clicking a queued prompt restores it into the draft and removes it from the queue", async () => {

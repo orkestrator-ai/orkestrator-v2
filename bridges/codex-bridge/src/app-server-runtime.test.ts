@@ -32,6 +32,7 @@ import {
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
 import { persistSessionTitle } from "./session-titles.js";
 import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollout.js";
+import { AppServerProcessExitError, AppServerTimeoutError } from "./app-server/errors.js";
 import type {
   EngineEvent,
   EngineRateLimitWindow,
@@ -4423,11 +4424,24 @@ describe("idle detach and transparent re-attach", () => {
     expect(h.runtime.getRegistry().listThreads()).toHaveLength(1);
   });
 
-  test("a detached session serves messages again by re-attaching from the rollout", async () => {
+  test("a detached session rehydrates accepted steering text from the rollout", async () => {
     let clock = 1_000_000;
-    const h = await harness({}, { now: () => clock, threadIdleMs: 1_000, sweepIntervalMs: 0 });
+    const h = await harness(
+      { "turn/steer": () => ({ turnId: "turn-1" }) },
+      { now: () => clock, threadIdleMs: 1_000, sweepIntervalMs: 0 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "hello", requestId: "req-1", attachments: [] });
+    expect(
+      await h.runtime.steerSession(
+        sessionId,
+        "also inspect the bridge",
+        "turn-1",
+        "req-steer",
+      ),
+    ).toBe("accepted");
+    expect((await h.runtime.getMessages(sessionId))?.filter((message) => message.role === "user")
+      .map((message) => message.content)).toEqual(["hello", "also inspect the bridge"]);
     h.child().notify("turn/completed", {
       threadId: "thread-1",
       turn: { id: "turn-1", status: "completed" },
@@ -4481,6 +4495,14 @@ describe("idle detach and transparent re-attach", () => {
         {
           type: "response_item",
           payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "also inspect the bridge" }],
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
             type: "custom_tool_call",
             name: "apply_patch",
             call_id: "call-patch",
@@ -4522,6 +4544,13 @@ describe("idle detach and transparent re-attach", () => {
     // Same session id the UI still holds — this must just work.
     const messages = await h.runtime.getMessages(sessionId);
     expect(messages).not.toBeNull();
+    expect(messages!.filter((message) => message.role === "user").map((message) => ({
+      content: message.content,
+      turnId: message.turnId,
+    }))).toEqual([
+      { content: "hello", turnId: "turn-1" },
+      { content: "also inspect the bridge", turnId: "turn-1" },
+    ]);
     const patchParts = messages!
       .flatMap((message) => message.parts)
       .filter((part) => part.toolName === "apply_patch");
@@ -6007,6 +6036,69 @@ describe("slash commands", () => {
     expect(h.runtime.getStatus(sessionId)?.messageRevision).toBe(1);
   });
 
+  test("an idle /steer is answered locally instead of starting a model turn", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "/STEER check the failing test",
+      requestId: "req-idle-steer",
+      attachments: [],
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(messages?.[0]?.content).toBe("/STEER check the failing test");
+    expect(messages?.[1]?.content).toContain("no active Codex turn to steer");
+  });
+
+  test("a structured /steer is rejected and never starts a model turn", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "/steer do not start another turn",
+      requestId: "req-structured-steer",
+      attachments: [],
+      outputSchema: { type: "object" },
+    });
+
+    expect(outcome).toEqual({
+      ok: false,
+      status: 400,
+      error: "/steer cannot be used with structured output",
+    });
+    expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
+    expect(h.runtime.getRegistry().getSession(sessionId)?.structuredOutputRequestId)
+      .toBeUndefined();
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(messages).toEqual([]);
+  });
+
+  test("a bare or multiline idle /steer is answered locally without leaking to Codex", async () => {
+    for (const [prompt, expectedReply] of [
+      ["/steer", "Usage: /steer <instructions>"],
+      ["/steer   \n  ", "Usage: /steer <instructions>"],
+      ["/steer\ncheck the API\nthen the UI", "no active Codex turn to steer"],
+    ] as const) {
+      const h = await harness();
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+      const outcome = await h.runtime.prompt(sessionId, {
+        prompt,
+        requestId: `req-${prompt.length}`,
+        attachments: [],
+      });
+
+      expect(outcome).toMatchObject({ ok: true });
+      expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
+      const messages = await h.runtime.getMessages(sessionId);
+      expect(messages?.[0]?.content).toBe(prompt);
+      expect(messages?.[1]?.content).toContain(expectedReply);
+    }
+  });
+
   /**
    * Local replies have no rollout item, so their timestamp is the only ordering
    * key they share with the model's transcript. Concatenating would show them
@@ -7175,9 +7267,11 @@ describe("compaction", () => {
 describe("steering", () => {
   test("reports not-found without a session or a thread", async () => {
     const h = await harness();
-    expect(await h.runtime.steerSession("session-nope", "more")).toBe("not-found");
+    expect(await h.runtime.steerSession("session-nope", "more", "turn-1", "req-steer"))
+      .toBe("not-found");
     const { sessionId } = h.runtime.createSession({ mode: "build" });
-    expect(await h.runtime.steerSession(sessionId, "more")).toBe("not-found");
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer"))
+      .toBe("not-found");
   });
 
   test("reports idle when no turn is running", async () => {
@@ -7190,7 +7284,8 @@ describe("steering", () => {
     });
     await h.drain();
 
-    expect(await h.runtime.steerSession(sessionId, "more")).toBe("idle");
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer"))
+      .toBe("idle");
   });
 
   test("steers the active turn, pinning the turn id the user was looking at", async () => {
@@ -7198,42 +7293,223 @@ describe("steering", () => {
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
 
-    expect(await h.runtime.steerSession(sessionId, "also check the tests", "req-steer"))
+    expect(
+      await h.runtime.steerSession(
+        sessionId,
+        "also check the tests",
+        "turn-1",
+        "req-steer",
+      ),
+    )
       .toBe("accepted");
     expect(h.child().requests.find((request) => request.method === "turn/steer")?.params)
       .toMatchObject({
         threadId: "thread-1",
         expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "also check the tests" }],
         clientUserMessageId: "req-steer",
       });
+
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(messages?.filter((message) => message.role === "user").map((message) => ({
+      content: message.content,
+      turnId: message.turnId,
+    }))).toEqual([
+      { content: "go", turnId: "turn-1" },
+      { content: "also check the tests", turnId: "turn-1" },
+    ]);
+    expect(h.events.some(
+      (event) => event.type === "message.updated"
+        && (event.data?.message as { content?: unknown } | undefined)?.content
+          === "also check the tests",
+    )).toBe(true);
   });
 
-  test("every engine failure is reported as a mismatch, never as success", async () => {
-    // The catch is deliberately broad. A steer that did not land must never look
-    // accepted, whether the turn moved on or the transport failed.
-    for (const [index, failure] of [
-      "expectedTurnId does not match",
-      "transport is closed",
-    ].entries()) {
-      const h = await harness({
-        "turn/steer": () => {
-          throw new Error(failure);
-        },
-      });
-      const { sessionId } = h.runtime.createSession({ mode: "build" });
-      // A distinct request id per iteration: the dispatch journal is durable and
-      // both runtimes in this test share one CODEX_HOME, so reusing an id would
-      // be answered as an at-most-once duplicate rather than dispatched.
-      await h.runtime.prompt(sessionId, {
-        prompt: "go",
-        requestId: `req-steer-${index}`,
-        attachments: [],
-      });
+  test("rejects a stale renderer turn before calling app-server", async () => {
+    const h = await harness({ "turn/steer": () => ({ turnId: "turn-1" }) });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-steer-stale",
+      attachments: [],
+    });
 
-      expect(await h.runtime.steerSession(sessionId, "more")).toBe("mismatch");
-      // The turn is untouched: a failed steer is not a cancellation.
-      expect(h.runtime.getStatus(sessionId)?.status).toBe("running");
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-old", "req-steer"))
+      .toBe("mismatch");
+    expect(h.child().requests.some((request) => request.method === "turn/steer")).toBe(false);
+  });
+
+  test("an explicit app-server expected-turn rejection is a definite mismatch", async () => {
+    const h = await harness({
+      "turn/steer": () => {
+        throw new Error("expectedTurnId does not match");
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-steer-explicit",
+      attachments: [],
+    });
+
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer"))
+      .toBe("mismatch");
+    expect(h.runtime.getStatus(sessionId)?.status).toBe("running");
+  });
+
+  test("ambiguous steering failures never claim the text was unsent", async () => {
+    const h = await harness({ "turn/steer": () => ({ turnId: "turn-1" }) });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-steer-ambiguous",
+      attachments: [],
+    });
+
+    for (const error of [
+      new AppServerTimeoutError("turn/steer", 100),
+      new AppServerProcessExitError("child exited", {
+        generation: h.engine.info().generation,
+        method: "turn/steer",
+      }),
+      new Error("transport is closed"),
+    ]) {
+      h.engine.steerTurn = async () => {
+        throw error;
+      };
+      expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer"))
+        .toBe("unknown");
     }
+
+    expect(h.runtime.getStatus(sessionId)?.status).toBe("running");
+    expect((await h.runtime.getMessages(sessionId))?.filter((message) => message.role === "user"))
+      .toHaveLength(1);
+  });
+
+  test("an ambiguous steer retry reconciles its client id instead of dispatching twice", async () => {
+    let steerCalls = 0;
+    let steerAttempted = false;
+    const h = await harness({
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [{
+            id: "turn-1",
+            status: "inProgress",
+            items: [
+              { type: "userMessage", clientId: "req-original" },
+              ...(steerAttempted
+                ? [{ type: "userMessage", clientId: "req-steer-retry" }]
+                : []),
+            ],
+          }],
+        }),
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-original",
+      attachments: [],
+    });
+    h.engine.steerTurn = async () => {
+      steerCalls += 1;
+      steerAttempted = true;
+      throw new AppServerTimeoutError("turn/steer", 100);
+    };
+
+    expect(
+      await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry"),
+    ).toBe("unknown");
+    expect(
+      await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry"),
+    ).toBe("accepted");
+    expect(steerCalls).toBe(1);
+    expect((await h.runtime.getMessages(sessionId))?.filter((message) => message.role === "user")
+      .map((message) => message.content)).toEqual(["go", "more"]);
+
+    // A third delivery of the same logical request is served from the bounded
+    // accepted cache and cannot append or dispatch it again.
+    expect(
+      await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry"),
+    ).toBe("accepted");
+    expect(steerCalls).toBe(1);
+    expect((await h.runtime.getMessages(sessionId))?.filter((message) => message.role === "user"))
+      .toHaveLength(2);
+  });
+
+  test("a fresh runtime reconciles a retained steer request id before dispatch", async () => {
+    const first = await harness();
+    const { sessionId } = first.runtime.createSession({ mode: "build" });
+    await first.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-original",
+      attachments: [],
+    });
+    first.engine.steerTurn = async () => {
+      throw new AppServerTimeoutError("turn/steer", 100);
+    };
+    expect(
+      await first.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-restart"),
+    ).toBe("unknown");
+
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, "thread-1.jsonl"),
+      `${[
+        {
+          type: "session_meta",
+          payload: {
+            id: "thread-1",
+            cwd: "/tmp/ws",
+            timestamp: "2026-07-25T12:00:00.000Z",
+          },
+        },
+        { type: "turn_context", payload: { turn_id: "turn-1", cwd: "/tmp/ws" } },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "go" }],
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "more" }],
+          },
+        },
+      ].map((record) => JSON.stringify(record)).join("\n")}\n`,
+      "utf8",
+    );
+    await first.runtime.stop();
+
+    const second = await harness({
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [{
+            id: "turn-1",
+            status: "inProgress",
+            items: [
+              { type: "userMessage", clientId: "req-original" },
+              { type: "userMessage", clientId: "req-steer-restart" },
+            ],
+          }],
+        }),
+      }),
+    });
+    second.child().requests.length = 0;
+
+    expect(
+      await second.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-restart"),
+    ).toBe("accepted");
+    expect(second.child().requests.some((request) => request.method === "turn/steer"))
+      .toBe(false);
+    expect((await second.runtime.getMessages(sessionId))?.filter((message) => message.role === "user")
+      .map((message) => message.content)).toEqual(["go", "more"]);
   });
 
   /**
@@ -7254,7 +7530,8 @@ describe("steering", () => {
     await accepting.runtime.abort(sessionId);
     expect(accepting.runtime.getStatus(sessionId)).toMatchObject({ phase: "cancelling" });
 
-    expect(await accepting.runtime.steerSession(sessionId, "more")).toBe("accepted");
+    expect(await accepting.runtime.steerSession(sessionId, "more", "turn-1", "req-steer"))
+      .toBe("accepted");
     // The steer is pinned to the turn the user was looking at, interrupt or not.
     expect(
       accepting.child().requests.find((request) => request.method === "turn/steer")?.params,
@@ -7273,7 +7550,8 @@ describe("steering", () => {
     });
     await rejecting.runtime.abort(rejectedId);
 
-    expect(await rejecting.runtime.steerSession(rejectedId, "more")).toBe("mismatch");
+    expect(await rejecting.runtime.steerSession(rejectedId, "more", "turn-1", "req-steer"))
+      .toBe("mismatch");
     // Still cancelling: a refused steer neither completes nor resurrects the turn.
     expect(rejecting.runtime.getStatus(rejectedId)).toMatchObject({
       status: "running",

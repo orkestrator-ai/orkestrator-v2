@@ -138,8 +138,8 @@ const mockSteerCodexSession = mock<
     _sessionId: string,
     _text: string,
     _requestId: string,
-  ) => Promise<boolean>
->(async () => true);
+  ) => Promise<realCodexClient.CodexSteerOutcome>
+>(async () => ({ outcome: "accepted" }));
 
 mock.module("@/lib/claude-client", () => ({
   ...realClaudeClientSnapshot,
@@ -417,7 +417,7 @@ beforeEach(() => {
   mockGetCodexSessionStatus.mockImplementation(async () => ({ status: "idle" }));
   mockGetCodexRuntimeHealth.mockImplementation(async () => null);
   mockStartCodexNativeReview.mockImplementation(async () => true);
-  mockSteerCodexSession.mockImplementation(async () => true);
+  mockSteerCodexSession.mockImplementation(async () => ({ outcome: "accepted" }));
   resetAgentHandoffCache();
 
   seedPaneLayout();
@@ -1576,6 +1576,34 @@ describe("AgentInfoButton Codex runtime panel", () => {
     await waitFor(() =>
       expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
         { label: "Secondary", usedPercent: 3 },
+      ]),
+    );
+  });
+
+  test("skips a non-empty window when every recognized field is absent or invalid", async () => {
+    seedCodex();
+    useCodexStore.setState({
+      contextUsage: new Map([[CODEX_KEY, usage({ source: "codex" })]]),
+    } as never);
+    mockGetCodexRuntimeHealth.mockImplementation(async () => ({
+      rateLimits: {
+        rateLimits: {
+          primary: {
+            usedPercent: "unknown",
+            resetsAt: Number.POSITIVE_INFINITY,
+            windowDurationMins: -1,
+            unrecognizedButPresent: true,
+          },
+          secondary: { windowDurationMins: 60 },
+        },
+      },
+    }));
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    await waitFor(() =>
+      expect(useCodexStore.getState().contextUsage.get(CODEX_KEY)?.rateLimits).toEqual([
+        { label: "Secondary", windowMinutes: 60 },
       ]),
     );
   });
@@ -3387,7 +3415,7 @@ describe("AgentInfoButton Codex steering", () => {
 
   test("reports a turn that moved on and keeps the text for a retry", async () => {
     seedRunningCodex();
-    mockSteerCodexSession.mockImplementation(async () => false);
+    mockSteerCodexSession.mockImplementation(async () => ({ outcome: "mismatch" }));
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
     fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
@@ -3397,12 +3425,135 @@ describe("AgentInfoButton Codex steering", () => {
 
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith(
-        "The active turn changed; your text was not sent",
+        "The active turn changed; your steering message was not sent.",
       ),
     );
     expect(
       (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
     ).toBe("wait");
+  });
+
+  test.each([
+    [
+      { outcome: "idle" } as const,
+      "There is no active Codex turn to steer. Start a turn, then use /steer while it is running.",
+    ],
+    [
+      { outcome: "not-found" } as const,
+      "The Codex session is no longer available.",
+    ],
+    [
+      { outcome: "rejected", httpStatus: 503 } as const,
+      "Codex rejected the steering message (HTTP 503).",
+    ],
+  ])("reports the %j steer outcome and preserves the text", async (outcome, message) => {
+    seedRunningCodex();
+    mockSteerCodexSession.mockImplementation(async () => outcome);
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
+      target: { value: "wait" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(message));
+    expect(
+      (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
+    ).toBe("wait");
+  });
+
+  test("reuses an ambiguous request id without clearing the text", async () => {
+    seedRunningCodex();
+    mockSteerCodexSession.mockImplementation(
+      async (_client, _sessionId, _text, requestId) => ({
+        outcome: "unknown",
+        requestId,
+      }),
+    );
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
+      target: { value: "wait" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Could not confirm whether Codex received your steering message. Retry the unchanged steering message to check safely.",
+      ),
+    );
+    expect(
+      (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
+    ).toBe("wait");
+
+    const firstRequestId = mockSteerCodexSession.mock.calls[0]![3];
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(2));
+    expect(mockSteerCodexSession.mock.calls[1]![3]).toBe(firstRequestId);
+  });
+
+  test("reuses one pending request id until a definitive outcome clears it", async () => {
+    seedRunningCodex();
+    let attempt = 0;
+    mockSteerCodexSession.mockImplementation(
+      async (_client, _sessionId, _text, requestId) => {
+        attempt += 1;
+        return attempt <= 2
+          ? { outcome: "unknown" as const, requestId }
+          : { outcome: "accepted" as const };
+      },
+    );
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
+      target: { value: "wait" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(1));
+    const firstRequestId = mockSteerCodexSession.mock.calls[0]![3];
+
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(2));
+    expect(mockSteerCodexSession.mock.calls[1]![3]).toBe(firstRequestId);
+
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(3));
+    expect(mockSteerCodexSession.mock.calls[2]![3]).toBe(firstRequestId);
+    await waitFor(() =>
+      expect(
+        (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
+      ).toBe(""),
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
+      target: { value: "wait" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(4));
+    expect(mockSteerCodexSession.mock.calls[3]![3]).not.toBe(firstRequestId);
+  });
+
+  test("does not reuse an ambiguous request id after the steering text changes", async () => {
+    seedRunningCodex();
+    mockSteerCodexSession.mockImplementation(
+      async (_client, _sessionId, _text, requestId) => ({
+        outcome: "unknown",
+        requestId,
+      }),
+    );
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+    const input = screen.getByPlaceholderText("Correct or redirect Codex");
+    fireEvent.change(input, { target: { value: "wait" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(1));
+    const firstRequestId = mockSteerCodexSession.mock.calls[0]![3];
+
+    fireEvent.change(input, { target: { value: "stop instead" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(2));
+    expect(mockSteerCodexSession.mock.calls[1]![3]).not.toBe(firstRequestId);
   });
 
   test("text typed for one session is not carried into another", async () => {
@@ -3453,7 +3604,7 @@ describe("AgentInfoButton Codex steering", () => {
 
   test("a delayed steer completion cannot clear the resumed session's draft", async () => {
     seedRunningCodex();
-    let releaseSteer: (sent: boolean) => void = () => {};
+    let releaseSteer: (outcome: realCodexClient.CodexSteerOutcome) => void = () => {};
     mockSteerCodexSession.mockImplementation(
       () => new Promise((resolve) => {
         releaseSteer = resolve;
@@ -3481,7 +3632,7 @@ describe("AgentInfoButton Codex steering", () => {
     });
 
     await act(async () => {
-      releaseSteer(true);
+      releaseSteer({ outcome: "accepted" });
     });
     expect(
       (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,

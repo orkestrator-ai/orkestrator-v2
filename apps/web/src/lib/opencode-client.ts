@@ -457,6 +457,11 @@ export function formatOpenCodeError(error: unknown): string {
   return `${headline}\n\n${detailLines.join("\n")}`;
 }
 
+/** True when OpenCode is reporting an intentionally interrupted turn. */
+export function isOpenCodeMessageAbortedError(error: unknown): boolean {
+  return isRecord(error) && error.name === "MessageAbortedError";
+}
+
 function openCodeResponseError(operation: string, error: unknown): Error {
   if (error === undefined || error === null) {
     return new Error(operation);

@@ -6547,6 +6547,48 @@ describe("OpenCodeChatTab", () => {
       channel.close();
     });
 
+    test("shows only the stopped marker when OpenCode reports MessageAbortedError", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true));
+      fireEvent.click(await screen.findByTestId("opencode-stop"));
+      await waitFor(() => {
+        expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+        expect(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+            (message) => message.content === TURN_STOPPED_BY_USER,
+          ),
+        ).toBe(true);
+      });
+
+      channel.push({
+        type: "session.error",
+        properties: {
+          sessionID: "session-1",
+          error: {
+            name: "MessageAbortedError",
+            data: { message: "Aborted" },
+          },
+        },
+      });
+
+      await waitFor(() => {
+        const state = useOpenCodeStore.getState().sessions.get(SESSION_KEY);
+        expect(state?.isLoading).toBe(false);
+      });
+      expect(
+        useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+          (message) => message.id.startsWith(ERROR_MESSAGE_PREFIX),
+        ),
+      ).toBe(false);
+
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
     test("routes session titles and usage to the matching sibling tab in the same environment", async () => {
       const siblingKey = createOpenCodeSessionKey(ENVIRONMENT_ID, "tab-2");
       useOpenCodeStore.getState().setSession(siblingKey, {

@@ -51,6 +51,7 @@ import {
   summarizeOpenCodeUsage,
   sendPrompt,
   formatOpenCodeError,
+  isOpenCodeMessageAbortedError,
   abortSession,
   subscribeToEvents,
   normalizeOpenCodePart,
@@ -2335,19 +2336,25 @@ export function OpenCodeChatTab({
             // Handle errors
             if (eventType === "session.error") {
               pendingBackendTurnClockBySession.delete(sessionTabId);
-              console.error("[OpenCodeChatTab] Session error:", props?.error);
               setSessionLoading(sessionTabId, false);
-              const errorMsg = formatOpenCodeError(props?.error);
-              // Add error as a message with special ID prefix so it persists
-              // The setMessages function preserves messages with ERROR_MESSAGE_PREFIX
-              const errorMessage = {
-                id: `${ERROR_MESSAGE_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2)}`,
-                role: "assistant" as const,
-                content: errorMsg,
-                parts: [{ type: "text" as const, content: errorMsg }],
-                createdAt: new Date().toISOString(),
-              };
-              addMessage(sessionTabId, errorMessage);
+              // OpenCode reports a user-requested stop through the same
+              // session.error channel as real failures. The stop path adds a
+              // dedicated transcript marker, so rendering this expected event
+              // would show the cancellation twice, once as a red error card.
+              if (!isOpenCodeMessageAbortedError(props?.error)) {
+                console.error("[OpenCodeChatTab] Session error:", props?.error);
+                const errorMsg = formatOpenCodeError(props?.error);
+                // Add error as a message with special ID prefix so it persists
+                // The setMessages function preserves messages with ERROR_MESSAGE_PREFIX
+                const errorMessage = {
+                  id: `${ERROR_MESSAGE_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                  role: "assistant" as const,
+                  content: errorMsg,
+                  parts: [{ type: "text" as const, content: errorMsg }],
+                  createdAt: new Date().toISOString(),
+                };
+                addMessage(sessionTabId, errorMessage);
+              }
             }
           }
 

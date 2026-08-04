@@ -23,6 +23,7 @@ import {
   getSessionStatus,
   getStructuredOutput,
   hasOpenCodeSubagentSession,
+  isOpenCodeMessageAbortedError,
   listSessions,
   lookupSessionStatus,
   mergeOpenCodeMessageInfo,
@@ -3410,6 +3411,21 @@ describe("opencode-client formatOpenCodeError", () => {
     });
 
     expect(formatOpenCodeError(unserializable)).toBe("serialization failed");
+  });
+});
+
+describe("opencode-client isOpenCodeMessageAbortedError", () => {
+  test("recognizes only the SDK's intentional-abort discriminator", () => {
+    expect(isOpenCodeMessageAbortedError({
+      name: "MessageAbortedError",
+      data: { message: "Aborted" },
+    })).toBe(true);
+    expect(isOpenCodeMessageAbortedError({
+      name: "UnknownError",
+      data: { message: "MessageAbortedError" },
+    })).toBe(false);
+    expect(isOpenCodeMessageAbortedError("MessageAbortedError: Aborted")).toBe(false);
+    expect(isOpenCodeMessageAbortedError(null)).toBe(false);
   });
 });
 

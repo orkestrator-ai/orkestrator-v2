@@ -4,6 +4,7 @@ import {
   carryOverOpenCodeSubagentHydration,
   abortSession,
   compactOpenCodeSession,
+  checkHealth,
   checkClientHealth,
   collectOpenCodeSubagentIds,
   createClient,
@@ -51,6 +52,14 @@ function setTestUrl(url: string): void {
   (window as unknown as Window & { happyDOM: { setURL(url: string): void } }).happyDOM.setURL(url);
 }
 
+function expectedOpenCodeMessageId(requestId: string): string {
+  let encoded = "";
+  for (let index = 0; index < requestId.length; index += 1) {
+    encoded += requestId.charCodeAt(index).toString(16).padStart(4, "0");
+  }
+  return `msg_ork_${encoded}`;
+}
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
   delete window.orkestratorGateway;
@@ -59,6 +68,18 @@ afterEach(() => {
 });
 
 describe("opencode-client createClient", () => {
+  test("returns false when the health endpoint rejects or reports a non-success status", async () => {
+    globalThis.fetch = mock(
+      async () => new Response("unavailable", { status: 503 }),
+    ) as unknown as typeof fetch;
+    await expect(checkHealth("http://127.0.0.1:7777")).resolves.toBe(false);
+
+    globalThis.fetch = mock(async () => {
+      throw new TypeError("connection refused");
+    }) as unknown as typeof fetch;
+    await expect(checkHealth("http://127.0.0.1:7777")).resolves.toBe(false);
+  });
+
   test("rewrites loopback SDK requests through the gateway when enabled", async () => {
     const requests: string[] = [];
     const headers: Headers[] = [];
@@ -358,6 +379,65 @@ describe("opencode-client getModelsWithDefaults", () => {
       variant: "medium",
     });
   });
+
+  test("maps the legacy provider plus bare model default shape", async () => {
+    const client = {
+      ...noProviderCatalog,
+      config: {
+        providers: async () => ({
+          data: {
+            providers: [],
+            default: {
+              provider: "anthropic",
+              model: "claude-sonnet-4",
+              variant: "high",
+            },
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    await expect(getModelsWithDefaults(client)).resolves.toEqual({
+      models: [],
+      defaults: {
+        modelId: "anthropic/claude-sonnet-4",
+        variant: "high",
+      },
+    });
+  });
+
+  test.each([null, "not-a-catalog", 42, []])(
+    "returns an empty result for malformed provider catalog data %#",
+    async (data) => {
+      const client = {
+        provider: { list: async () => ({ data }) },
+      } as unknown as OpencodeClient;
+
+      await expect(getModelsWithDefaults(client)).resolves.toEqual({
+        models: [],
+        defaults: {},
+      });
+    },
+  );
+
+  test.each([
+    {},
+    { all: "not-a-provider-list" },
+    { providers: "not-a-provider-map" },
+    { all: [{ id: "broken", models: "not-a-model-list" }] },
+  ])(
+    "returns an empty result for malformed nested provider catalog data %#",
+    async (data) => {
+      const client = {
+        provider: { list: async () => ({ data }) },
+      } as unknown as OpencodeClient;
+
+      await expect(getModelsWithDefaults(client)).resolves.toEqual({
+        models: [],
+        defaults: {},
+      });
+    },
+  );
 
   test("accepts provider models returned as an array", async () => {
     const client = {
@@ -1028,6 +1108,18 @@ describe("opencode-client getAvailableSlashCommands", () => {
 
     expect(commands).toEqual([]);
   });
+
+  test("returns empty array when command discovery throws before returning a promise", async () => {
+    const client = {
+      command: {
+        list: () => {
+          throw new Error("command namespace unavailable");
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    await expect(getAvailableSlashCommands(client)).resolves.toEqual([]);
+  });
 });
 
 describe("opencode-client getSessionMessages", () => {
@@ -1082,6 +1174,54 @@ describe("opencode-client getSessionMessages", () => {
     expect(part?.type).toBe("tool-invocation");
     expect(part?.toolOutput).toBe(JSON.stringify(outputPayload, null, 2));
     expect(part?.toolError).toBe(JSON.stringify(errorPayload, null, 2));
+  });
+
+  test("falls back to string conversion when circular tool payloads cannot be serialized", async () => {
+    const circularOutput: Record<string, unknown> = { result: "partial" };
+    circularOutput.self = circularOutput;
+    const circularError: Record<string, unknown> = { reason: "failed" };
+    circularError.self = circularError;
+    const client = {
+      session: {
+        messages: async () => ({
+          data: [{
+            info: { id: "msg-circular", role: "assistant", time: { created: 1 } },
+            parts: [{
+              type: "tool",
+              tool: "bash",
+              state: {
+                status: "error",
+                input: {},
+                output: circularOutput,
+                error: circularError,
+              },
+            }],
+          }],
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    const part = (await getSessionMessages(
+      client,
+      "session-1",
+      { includeSubagents: false },
+    ))[0]?.parts[0];
+    expect(part?.toolOutput).toBe("[object Object]");
+    expect(part?.toolError).toBe("[object Object]");
+  });
+
+  test("wraps a non-Error strict message failure without exposing the thrown value", async () => {
+    const client = {
+      session: {
+        messages: async () => {
+          throw "transport failed";
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    await expect(
+      getSessionMessages(client, "session-1", { throwOnError: true }),
+    ).rejects.toThrow("Failed to get OpenCode session messages");
   });
 
   test("throws when a strict refresh cannot fetch messages", async () => {
@@ -1326,6 +1466,34 @@ describe("opencode-client sendPrompt", () => {
     expect(captured[2]?.agent).toBeUndefined();
   });
 
+  test("encodes msg-prefixed caller IDs without colliding with unprefixed IDs", async () => {
+    const { client, captured } = capturePromptAsync();
+
+    await expect(sendPrompt(client, "session-1", "Hello", {
+      requestId: "msg_collision",
+    })).resolves.toEqual({ success: true, requestId: "msg_collision" });
+    await expect(sendPrompt(client, "session-1", "Hello", {
+      requestId: "collision",
+    })).resolves.toEqual({ success: true, requestId: "collision" });
+
+    expect(captured[0]?.messageID).toBe(expectedOpenCodeMessageId("msg_collision"));
+    expect(captured[1]?.messageID).toBe(expectedOpenCodeMessageId("collision"));
+    expect(captured[0]?.messageID).not.toBe(captured[1]?.messageID);
+  });
+
+  test.each(["", "   "])(
+    "rejects a blank caller-supplied request ID without dispatching (%#)",
+    async (requestId) => {
+      const { client, captured } = capturePromptAsync();
+
+      const result = await sendPrompt(client, "session-1", "Hello", { requestId });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/request id|non-empty|blank/i);
+      expect(captured).toHaveLength(0);
+    },
+  );
+
   describe("command branch", () => {
     /** Captures both dispatch routes so the selection itself is observable. */
     function captureCommandClient() {
@@ -1363,7 +1531,7 @@ describe("opencode-client sendPrompt", () => {
       expect(command[0]).toEqual({
         sessionID: "session-1",
         directory: "/workspace/repo",
-        messageID: "msg_req-1",
+        messageID: expectedOpenCodeMessageId("req-1"),
         command: "init",
         arguments: "",
         // The command path forwards the model id as the raw string the server
@@ -1517,7 +1685,7 @@ describe("opencode-client sendPrompt", () => {
     expect(result).toEqual({ success: true, requestId: "structured-1" });
     expect(capturedRequest).toMatchObject({
       sessionID: "session-1",
-      messageID: "msg_structured-1",
+      messageID: expectedOpenCodeMessageId("structured-1"),
       format: { type: "json_schema", schema, retryCount: 3 },
     });
     // Omitting `tools` preserves the server's normal agent/tool configuration.
@@ -1531,7 +1699,7 @@ describe("opencode-client sendPrompt", () => {
           data: [
             {
               info: {
-                id: "msg_structured-1",
+                id: expectedOpenCodeMessageId("structured-1"),
                 role: "user",
                 format: { type: "json_schema", schema: { type: "object" } },
               },
@@ -1541,7 +1709,7 @@ describe("opencode-client sendPrompt", () => {
               info: {
                 id: "assistant-1",
                 role: "assistant",
-                parentID: "msg_structured-1",
+                parentID: expectedOpenCodeMessageId("structured-1"),
                 time: { created: 1, completed: 2 },
                 structured: { summary: "Looks good" },
               },
@@ -1556,6 +1724,48 @@ describe("opencode-client sendPrompt", () => {
       provider: "opencode",
       requestId: "structured-1",
       value: { summary: "Looks good" },
+    });
+    expect(await getStructuredOutput(successful, "session-1")).toEqual({
+      ok: true,
+      provider: "opencode",
+      requestId: expectedOpenCodeMessageId("structured-1"),
+      value: { summary: "Looks good" },
+    });
+
+    const msgPrefixedRequestId = "msg_explicit-structured";
+    const msgPrefixed = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                id: expectedOpenCodeMessageId(msgPrefixedRequestId),
+                role: "user",
+                format: { type: "json_schema", schema: { type: "object" } },
+              },
+              parts: [],
+            },
+            {
+              info: {
+                id: "assistant-msg-prefixed",
+                role: "assistant",
+                parentID: expectedOpenCodeMessageId(msgPrefixedRequestId),
+                time: { created: 1, completed: 2 },
+                structured: { summary: "Qualified input" },
+              },
+              parts: [],
+            },
+          ],
+        }),
+      },
+    } as unknown as OpencodeClient;
+    expect(
+      await getStructuredOutput(msgPrefixed, "session-1", msgPrefixedRequestId),
+    ).toEqual({
+      ok: true,
+      provider: "opencode",
+      requestId: msgPrefixedRequestId,
+      value: { summary: "Qualified input" },
     });
 
     const retryPending = {
@@ -1603,7 +1813,7 @@ describe("opencode-client sendPrompt", () => {
           data: [
             {
               info: {
-                id: "msg_structured-2",
+                id: expectedOpenCodeMessageId("structured-2"),
                 role: "user",
                 format: { type: "json_schema", schema: { type: "object" } },
               },
@@ -1613,7 +1823,7 @@ describe("opencode-client sendPrompt", () => {
               info: {
                 id: "assistant-2",
                 role: "assistant",
-                parentID: "msg_structured-2",
+                parentID: expectedOpenCodeMessageId("structured-2"),
                 time: { created: 1, completed: 2 },
               },
               parts: [{ type: "text", text: "{\"summary\":\"not trusted\"}" }],
@@ -1625,6 +1835,7 @@ describe("opencode-client sendPrompt", () => {
     expect(await getStructuredOutput(plaintextOnly, "session-1", "structured-2"))
       .toMatchObject({
         ok: false,
+        requestId: "structured-2",
         error: { code: "malformed_output", retryable: true },
       });
 
@@ -1636,7 +1847,7 @@ describe("opencode-client sendPrompt", () => {
               info: {
                 id: "assistant-3",
                 role: "assistant",
-                parentID: "msg_structured-3",
+                parentID: expectedOpenCodeMessageId("structured-3"),
                 time: { created: 1, completed: 2 },
                 error: {
                   name: "StructuredOutputError",
@@ -1652,6 +1863,7 @@ describe("opencode-client sendPrompt", () => {
     expect(await getStructuredOutput(exhausted, "session-1", "structured-3"))
       .toMatchObject({
         ok: false,
+        requestId: "structured-3",
         error: {
           code: "schema_retry_exhausted",
           retryable: true,
@@ -1659,6 +1871,19 @@ describe("opencode-client sendPrompt", () => {
         },
       });
   });
+
+  test.each(["", "  "])(
+    "rejects blank structured lookup IDs before reading transcript history (%#)",
+    async (requestId) => {
+      const messages = mock(async () => ({ data: [] }));
+      const client = { session: { messages } } as unknown as OpencodeClient;
+
+      await expect(
+        getStructuredOutput(client, "session-1", requestId),
+      ).rejects.toThrow(/request id|non-empty/i);
+      expect(messages).not.toHaveBeenCalled();
+    },
+  );
 
   test("keeps provider errors authoritative but throws for result-channel outages", async () => {
     const providerFailure = {
@@ -1719,7 +1944,7 @@ describe("opencode-client sendPrompt", () => {
             info: {
               id: "assistant-invalid-time",
               role: "assistant",
-              parentID: "msg_structured-invalid-time",
+              parentID: expectedOpenCodeMessageId("structured-invalid-time"),
               time: "completed yesterday",
               structured: { summary: "Must not be accepted" },
             },
@@ -2576,6 +2801,21 @@ describe("OpenCode subagent transcript hydration", () => {
     expect((await getSessionMessages(failed, "parent"))[0]?.parts[0]?.subagentId).toBeUndefined();
     await expect(getSessionMessages(failed, "parent", { throwOnError: true })).rejects.toThrow("children offline");
 
+    const resolvedFailure = {
+      session: {
+        messages: async () => ({ data: parentData }),
+        children: async () => ({
+          data: undefined,
+          error: { message: "children rejected" },
+        }),
+      },
+    } as unknown as OpencodeClient;
+    expect((await getSessionMessages(resolvedFailure, "parent"))[0]?.parts[0]?.subagentId)
+      .toBeUndefined();
+    await expect(
+      getSessionMessages(resolvedFailure, "parent", { throwOnError: true }),
+    ).rejects.toThrow("children rejected");
+
     const malformed = {
       session: {
         messages: async () => ({ data: parentData }),
@@ -3112,6 +3352,10 @@ describe("opencode-client formatOpenCodeError", () => {
           refresh_token: "refresh-secret",
           safeField: "safe-value",
         },
+        attempts: [
+          "Bearer array-secret",
+          { accessToken: "nested-array-secret" },
+        ],
       },
     });
 
@@ -3121,10 +3365,14 @@ describe("opencode-client formatOpenCodeError", () => {
     expect(errorText).toContain('"authorization": "[REDACTED]"');
     expect(errorText).toContain('"apiKey": "[REDACTED]"');
     expect(errorText).toContain('"refresh_token": "[REDACTED]"');
+    expect(errorText).toContain('"accessToken": "[REDACTED]"');
+    expect(errorText).toContain("Bearer [REDACTED]");
     expect(errorText).toContain('"safeField": "safe-value"');
     expect(errorText).not.toContain("top-secret-token");
     expect(errorText).not.toContain("sk-secret-key");
     expect(errorText).not.toContain("refresh-secret");
+    expect(errorText).not.toContain("array-secret");
+    expect(errorText).not.toContain("nested-array-secret");
   });
 
   test("formats primitive, Error, and headline-only fallbacks", () => {
@@ -3150,6 +3398,18 @@ describe("opencode-client formatOpenCodeError", () => {
     });
     expect(oversized).toContain("... (details truncated)");
     expect(oversized.length).toBeLessThan(4_200);
+  });
+
+  test("keeps the headline when raw error serialization fails", () => {
+    const unserializable: Record<string, unknown> = { message: "serialization failed" };
+    Object.defineProperty(unserializable, "details", {
+      enumerable: true,
+      get() {
+        throw new Error("getter must not escape");
+      },
+    });
+
+    expect(formatOpenCodeError(unserializable)).toBe("serialization failed");
   });
 });
 

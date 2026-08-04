@@ -93,6 +93,14 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
   return { promise, resolve };
 }
 
+function expectedOpenCodeMessageId(requestId: string): string {
+  const encoded = Array.from(
+    { length: requestId.length },
+    (_, index) => requestId.charCodeAt(index).toString(16).padStart(4, "0"),
+  ).join("");
+  return `msg_ork_${encoded}`;
+}
+
 function declineResolution(request: AgentInteractionRequest): AgentInteractionResolution {
   return {
     version: AGENT_INTERACTION_CONTRACT_VERSION,
@@ -3139,7 +3147,7 @@ describe("OpenCode build pipeline provider", () => {
         data: [{
           info: {
             role: "assistant",
-            parentID: "msg_request-1",
+            parentID: expectedOpenCodeMessageId("request-1"),
             structured: { complete: true },
             time: { completed: 1 },
           },
@@ -3152,7 +3160,7 @@ describe("OpenCode build pipeline provider", () => {
         data: [{
           info: {
             role: "assistant",
-            parentID: "msg_request-1",
+            parentID: expectedOpenCodeMessageId("request-1"),
             structured: { complete: true },
             time: {},
           },
@@ -3165,7 +3173,7 @@ describe("OpenCode build pipeline provider", () => {
         data: [{
           info: {
             role: "assistant",
-            parentID: "msg_request-1",
+            parentID: expectedOpenCodeMessageId("request-1"),
             error: { message: "failed" },
             time: { completed: 1 },
           },
@@ -3207,7 +3215,7 @@ describe("OpenCode build pipeline provider", () => {
           {
             info: {
               role: "assistant",
-              parentID: "msg_request-1",
+              parentID: expectedOpenCodeMessageId("request-1"),
               structured: { version: "old" },
               time: { completed: 1 },
             },
@@ -3215,7 +3223,7 @@ describe("OpenCode build pipeline provider", () => {
           {
             info: {
               role: "assistant",
-              parentID: "msg_request-1",
+              parentID: expectedOpenCodeMessageId("request-1"),
               structured: { version: "new" },
               time: { completed: 2 },
             },
@@ -3229,7 +3237,7 @@ describe("OpenCode build pipeline provider", () => {
         data: [{
           info: {
             role: "assistant",
-            parentID: "msg_request-1",
+            parentID: expectedOpenCodeMessageId("request-1"),
             structured: null,
             time: { completed: 1 },
           },
@@ -3242,7 +3250,7 @@ describe("OpenCode build pipeline provider", () => {
         data: [{
           info: {
             role: "assistant",
-            parentID: "msg_request-1",
+            parentID: expectedOpenCodeMessageId("request-1"),
             time: { completed: 1 },
           },
         }],
@@ -3252,6 +3260,47 @@ describe("OpenCode build pipeline provider", () => {
           ok: false,
           error: { code: "provider_error", retryable: true },
         });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("looks up structured output by the exact mapped request id", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await provider.send("owned-session", "First", { requestId: "foo" });
+      await provider.send("owned-session", "Second", { requestId: "msg_foo" });
+      const [fooMessageId, nativeLookingMessageId] = fake.promptCalls.map(
+        ({ messageID }) => messageID,
+      );
+      expect(fooMessageId).not.toBe(nativeLookingMessageId);
+
+      fake.setMessagesResponse({
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID: fooMessageId,
+              structured: { request: "foo" },
+              time: { completed: 1 },
+            },
+          },
+          {
+            info: {
+              role: "assistant",
+              parentID: nativeLookingMessageId,
+              structured: { request: "msg_foo" },
+              time: { completed: 2 },
+            },
+          },
+        ],
+      });
+
+      await expect(provider.structured("owned-session", "foo")).resolves
+        .toMatchObject({ ok: true, value: { request: "foo" } });
+      await expect(provider.structured("owned-session", "msg_foo")).resolves
+        .toMatchObject({ ok: true, value: { request: "msg_foo" } });
     } finally {
       await provider.dispose?.();
     }
@@ -3775,7 +3824,7 @@ describe("OpenCode build pipeline provider dispatch", () => {
       const [call] = fake.promptCalls;
       // OpenCode deduplicates on messageID, which is what makes the supervisor's
       // same-request-id retry safe instead of a second agent turn.
-      expect(call!.messageID).toBe("msg_request-42");
+      expect(call!.messageID).toBe(expectedOpenCodeMessageId("request-42"));
       expect(call!.sessionID).toBe("owned-session");
       expect(call!.agent).toBe("build");
       expect(call!.directory).toBe("/workspace");
@@ -3785,19 +3834,45 @@ describe("OpenCode build pipeline provider dispatch", () => {
     }
   });
 
-  test("preserves an already valid OpenCode message id", async () => {
+  test("maps aliased-looking request ids distinctly and retries stably", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
     try {
-      await provider.send("owned-session", "Build it", {
-        requestId: "msg_existing-id",
+      await provider.send("owned-session", "First attempt", {
+        requestId: "foo",
+      });
+      await provider.send("owned-session", "Retry", { requestId: "foo" });
+      await provider.send("owned-session", "Different request", {
+        requestId: "msg_foo",
       });
 
-      expect(fake.promptCalls[0]!.messageID).toBe("msg_existing-id");
+      const [first, retry, nativeLooking] = fake.promptCalls.map(
+        ({ messageID }) => messageID,
+      );
+      expect(first).toBe(expectedOpenCodeMessageId("foo"));
+      expect(retry).toBe(first);
+      expect(nativeLooking).toBe(expectedOpenCodeMessageId("msg_foo"));
+      expect(nativeLooking).not.toBe(first);
     } finally {
       await provider.dispose?.();
     }
   });
+
+  test.each(["", "   "])(
+    "rejects a blank request id before dispatch (%j)",
+    async (requestId) => {
+      const fake = openCodeFake();
+      const provider = openCodeProvider(fake);
+      try {
+        await expect(provider.send("owned-session", "Build it", { requestId }))
+          .rejects.toBeInstanceOf(TypeError);
+
+        expect(fake.promptCalls).toHaveLength(0);
+      } finally {
+        await provider.dispose?.();
+      }
+    },
+  );
 
   test("dispatches queued OpenCode plan turns to the plan agent", async () => {
     const fake = openCodeFake();

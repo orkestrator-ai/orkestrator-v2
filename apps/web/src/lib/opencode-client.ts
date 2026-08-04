@@ -1943,14 +1943,22 @@ function toOpenCodeModelRef(model: string): { providerID: string; modelID: strin
 }
 
 /**
- * OpenCode validates caller-supplied message IDs with its MessageID schema,
- * which requires a `msg` prefix. UI request IDs are intentionally
- * provider-neutral, so convert them at the SDK boundary while keeping retries
- * deterministic and therefore idempotent.
+ * OpenCode treats caller-supplied message IDs as durable idempotency keys. UI
+ * request IDs are provider-neutral, so encode every supplied value into a
+ * reserved namespace rather than guessing that an ID beginning with `msg` is
+ * already native. Fixed-width UTF-16 hex makes the mapping injective for every
+ * JavaScript string while satisfying OpenCode's `msg` prefix schema.
  */
 function toOpenCodeMessageId(requestId: string | undefined): string | undefined {
-  if (!requestId) return undefined;
-  return requestId.startsWith("msg") ? requestId : `msg_${requestId}`;
+  if (requestId === undefined) return undefined;
+  if (requestId.trim().length === 0) {
+    throw new TypeError("OpenCode request ID must be a non-empty string");
+  }
+  let encoded = "";
+  for (let index = 0; index < requestId.length; index += 1) {
+    encoded += requestId.charCodeAt(index).toString(16).padStart(4, "0");
+  }
+  return `msg_ork_${encoded}`;
 }
 
 /**
@@ -2441,6 +2449,10 @@ export async function getStructuredOutput<T = unknown>(
   sessionId: string,
   requestId?: string,
 ): Promise<StructuredOutputResult<T> | null> {
+  // Reject malformed correlation IDs before touching the authoritative
+  // transcript. Falling back to the latest turn for an explicit blank ID could
+  // associate an unrelated result with the caller's request.
+  const providerMessageId = toOpenCodeMessageId(requestId);
   let response: { data?: unknown; error?: unknown };
   try {
     response = await client.session.messages(
@@ -2481,7 +2493,7 @@ export async function getStructuredOutput<T = unknown>(
       return entry.info.role === "user" && format.type === "json_schema";
     })
     .at(-1)?.info.id;
-  const expectedParentId = toOpenCodeMessageId(requestId)
+  const expectedParentId = providerMessageId
     ?? (typeof latestStructuredUserId === "string" ? latestStructuredUserId : undefined);
   if (!expectedParentId) return null;
   // Keep the provider-neutral correlation ID on the public result. Only the

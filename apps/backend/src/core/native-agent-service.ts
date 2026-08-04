@@ -1277,6 +1277,9 @@ export class NativeAgentService {
               );
             }
             if (activity === "missing") {
+              // Provider adapters may return `missing` only from an
+              // authoritative existence read. Incremental activity/status
+              // snapshots must surface uncertainty as provider unavailability.
               await this.storage.invalidateNativeAgentSession(
                 session.key,
                 session.providerSessionId,

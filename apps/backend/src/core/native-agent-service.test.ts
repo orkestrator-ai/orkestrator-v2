@@ -13,6 +13,7 @@ import {
   type AgentInteractionSnapshot,
 } from "@orkestrator/protocol/agent-interactions";
 import {
+  createBuildPipelineProvider,
   PromptRejectedError,
   ProviderUnavailableError,
   type BridgeConnection,
@@ -91,6 +92,37 @@ function createProviderStub(
     activityBatch,
     dispose,
   };
+}
+
+function createOpenCodeLifecycleProvider(existingSessionIds: readonly string[]) {
+  const existing = new Set(existingSessionIds);
+  const client = {
+    session: {
+      async status() {
+        // OpenCode's real status map omits idle sessions.
+        return { data: {} };
+      },
+      async list() {
+        return { data: [...existing].map((id) => ({ id })) };
+      },
+      async get(parameters: { sessionID: string }) {
+        return existing.has(parameters.sessionID)
+          ? { data: { id: parameters.sessionID, directory: "/workspace" } }
+          : { error: { name: "NotFound" }, response: { status: 404 } };
+      },
+    },
+    question: { async list() { return { data: [] }; } },
+    permission: { async list() { return { data: [] }; } },
+  };
+  return createBuildPipelineProvider(
+    {
+      agent: "opencode",
+      baseUrl: "http://opencode.test",
+      authToken: "test-token",
+      directory: "/workspace",
+    },
+    { openCodeClient: client as never, autoAnswerRequests: false },
+  );
 }
 
 /** Reach the timer-driven scans and backoff bookkeeping the service keeps private. */
@@ -2462,6 +2494,58 @@ describe("NativeAgentService", () => {
       expect(await storage.getEnvironment("env-1")).toMatchObject({
         agentActivitySources: { "native-agent": { state: "waiting" } },
       });
+    });
+  });
+
+  test("preserves an existing idle OpenCode native-session mapping", async () => {
+    const provider = createOpenCodeLifecycleProvider(["provider-idle"]);
+    await withService({
+      prefix: "orkestrator-native-opencode-idle-existing-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey(
+        "env-1",
+        "opencode",
+        "tab-idle",
+      );
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "opencode",
+        logicalSessionKey: "tab-idle",
+        providerSessionId: "provider-idle",
+      });
+
+      await service.reconcileAgentActivity();
+
+      expect(await storage.getNativeAgentSession(key)).toMatchObject({
+        providerSessionId: "provider-idle",
+      });
+    });
+  });
+
+  test("invalidates a genuinely missing OpenCode native-session mapping", async () => {
+    const provider = createOpenCodeLifecycleProvider([]);
+    await withService({
+      prefix: "orkestrator-native-opencode-missing-",
+      provider: async () => provider,
+    }, async ({ storage, service }) => {
+      const key = nativeAgentSessionStorageKey(
+        "env-1",
+        "opencode",
+        "tab-deleted",
+      );
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: "env-1",
+        agent: "opencode",
+        logicalSessionKey: "tab-deleted",
+        providerSessionId: "provider-deleted",
+      });
+
+      await service.reconcileAgentActivity();
+
+      expect(await storage.getNativeAgentSession(key)).toBeNull();
     });
   });
 

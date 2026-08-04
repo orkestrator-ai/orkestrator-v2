@@ -50,6 +50,7 @@ import { hydrateLoopedReviewWorkflowsForEnvironment } from "@/lib/looped-review-
 import { PaneTree } from "@/components/pane-layout";
 import { TerminalPortalHost } from "./TerminalPortalHost";
 import { InitializationLogs } from "./InitializationLogs";
+import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import {
   parseDraggableTabId,
   parseEdgeDroppableId,
@@ -939,7 +940,7 @@ export function TerminalContainer({
   // Initialize pane layout from the backend-owned setup phase.
   useEffect(() => {
     if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return;
-    if (setupPhase === "pending" || setupPhase === "failed") return;
+    if (setupPhase === "pending") return;
 
     // Check if we need to initialize (no tabs yet for THIS environment)
     const currentTabs = currentEnvState
@@ -2003,6 +2004,16 @@ export function TerminalContainer({
               </ContextMenu>
             )}
           </div>
+        </div>
+      )}
+
+      {setupPhase === "failed" && isEnvironmentRunning && (
+        <div className="absolute inset-0 bg-background">
+          <SetupPendingOverlay
+            environmentId={environmentId}
+            setupPhase={setupPhase}
+            subtext="Retry setup, or skip it to continue with the current workspace."
+          />
         </div>
       )}
     </div>

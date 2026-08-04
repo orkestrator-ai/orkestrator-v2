@@ -30,7 +30,7 @@ import { shouldReconnectEventSubscription } from "@/stores/createNativeChatStore
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
-import { isSetupPending } from "@/lib/setup-commands";
+import { isSetupBlocked } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import {
   enqueueAgentPrompt,
@@ -625,7 +625,7 @@ export function OpenCodeChatTab({
   const setupPhase = useEnvironmentStore((state) =>
     state.environments.find((environment) => environment.id === environmentId)?.setupPhase
   );
-  const setupPending = isSetupPending({
+  const setupPending = isSetupBlocked({
     setupPhase,
   });
 
@@ -3162,6 +3162,7 @@ export function OpenCodeChatTab({
     return (
       <SetupPendingOverlay
         environmentId={environmentId}
+        setupPhase={setupPhase}
         subtext="OpenCode will connect automatically once setup finishes"
       />
     );

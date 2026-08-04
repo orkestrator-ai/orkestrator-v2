@@ -119,12 +119,7 @@ describe("useEnvironments", () => {
       environments: [],
       isLoading: false,
       error: null,
-      workspaceReadyEnvironments: new Set(),
       deletingEnvironments: new Set(),
-      pendingSetupCommands: new Map(),
-      setupCommandsResolved: new Set(),
-      setupScriptsRunning: new Set(),
-      sessionActivated: new Set(),
     });
     useUIStore.setState({ unreadEnvironmentIds: [] });
     useBuildPipelineStore.setState({
@@ -626,8 +621,8 @@ describe("useEnvironments", () => {
       useEnvironmentStore.getState().getEnvironmentById("env-background")?.status,
     ).toBe("creating");
     expect(
-      useEnvironmentStore.getState().isSetupCommandsResolved("env-background"),
-    ).toBe(false);
+      useEnvironmentStore.getState().getEnvironmentById("env-background")?.setupPhase,
+    ).not.toBe("ready");
   });
 
   test("never reports success for a background start, even without silent", async () => {
@@ -653,7 +648,7 @@ describe("useEnvironments", () => {
     expect(mockToastSuccess).not.toHaveBeenCalled();
   });
 
-  test("reports background admission failures and releases the setup gate", async () => {
+  test("reports background admission failures without claiming setup readiness", async () => {
     const existingEnv = createMockEnvironment({
       id: "env-background-rejected",
       projectId: "project-1",
@@ -680,8 +675,8 @@ describe("useEnvironments", () => {
 
     const state = useEnvironmentStore.getState();
     expect(thrownError?.message).toBe("background start rejected");
+    expect(state.getEnvironmentById(existingEnv.id)?.setupPhase).not.toBe("ready");
     expect(state.getEnvironmentById(existingEnv.id)?.status).toBe("error");
-    expect(state.isSetupCommandsResolved(existingEnv.id)).toBe(true);
     expect(mockToastError).toHaveBeenCalledWith(
       "Failed to start environment",
       expect.any(Object),
@@ -756,7 +751,6 @@ describe("useEnvironments", () => {
     const staleSnapshot = createDeferred<Environment[]>();
     useEnvironmentStore.setState({
       environments: [environment],
-      setupCommandsResolved: new Set([environment.id]),
     });
     useClaudeOptionsStore.setState({
       options: {},
@@ -799,14 +793,14 @@ describe("useEnvironments", () => {
       lifecycleError: null,
       pendingAgentLaunch: true,
     });
-    expect(state.isSetupCommandsResolved(environment.id)).toBe(false);
+    expect(state.getEnvironmentById(environment.id)?.setupPhase).not.toBe("ready");
     expect(
       useClaudeOptionsStore.getState().pendingNativeLaunches[environment.id],
     ).toBeDefined();
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
-  test("startEnvironment clears the setup placeholder when there are no setup commands", async () => {
+  test("startEnvironment projects authoritative ready state when there are no setup commands", async () => {
     const existingEnv = createMockEnvironment({
       id: "env-1",
       projectId: "project-1",
@@ -820,16 +814,14 @@ describe("useEnvironments", () => {
       ...existingEnv,
       status: "running",
       worktreePath: "/tmp/local-env",
+      setupScriptsComplete: true,
+      setupPhase: "ready",
     });
 
     useEnvironmentStore.setState({
       environments: [existingEnv],
       isLoading: false,
       error: null,
-      pendingSetupCommands: new Map(),
-      setupCommandsResolved: new Set(),
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
     });
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
@@ -847,8 +839,10 @@ describe("useEnvironments", () => {
     });
 
     const state = useEnvironmentStore.getState();
-    expect(state.setupCommandsResolved.has("env-1")).toBe(true);
-    expect(state.pendingSetupCommands.has("env-1")).toBe(false);
+    expect(state.getEnvironmentById("env-1")).toMatchObject({
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    });
   });
 
   test("startEnvironment does not clobber completed backend setup with a stale started result", async () => {
@@ -861,22 +855,20 @@ describe("useEnvironments", () => {
       environmentType: "local",
       worktreePath: undefined,
       setupScriptsComplete: false,
+      setupPhase: "pending",
     });
     const completedEnv = createMockEnvironment({
       ...existingEnv,
       status: "running",
       worktreePath: "/tmp/local-env",
       setupScriptsComplete: true,
+      setupPhase: "ready",
     });
 
     useEnvironmentStore.setState({
       environments: [existingEnv],
       isLoading: false,
       error: null,
-      pendingSetupCommands: new Map(),
-      setupCommandsResolved: new Set(),
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
     });
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
@@ -899,12 +891,13 @@ describe("useEnvironments", () => {
     });
 
     const state = useEnvironmentStore.getState();
-    expect(state.getEnvironmentById("env-1")?.setupScriptsComplete).toBe(true);
-    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
-    expect(state.isWorkspaceReady("env-1")).toBe(true);
+    expect(state.getEnvironmentById("env-1")).toMatchObject({
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    });
   });
 
-  test("startEnvironment marks workspace ready when a completion event was already handled mid-flight", async () => {
+  test("startEnvironment keeps an authoritative completion event handled mid-flight", async () => {
     const existingEnv = createMockEnvironment({
       id: "env-1",
       projectId: "project-1",
@@ -914,25 +907,20 @@ describe("useEnvironments", () => {
       environmentType: "local",
       worktreePath: undefined,
       setupScriptsComplete: false,
+      setupPhase: "pending",
     });
-    // The refreshed snapshot still reports setupScriptsComplete=false (the
-    // completion is reflected only in the runtime readiness sets, not the
-    // persisted flag yet).
     const refreshedEnv = createMockEnvironment({
       ...existingEnv,
       status: "running",
       worktreePath: "/tmp/local-env",
       setupScriptsComplete: false,
+      setupPhase: "running",
     });
 
     useEnvironmentStore.setState({
       environments: [existingEnv],
       isLoading: false,
       error: null,
-      pendingSetupCommands: new Map(),
-      setupCommandsResolved: new Set(),
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
     });
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
@@ -942,14 +930,19 @@ describe("useEnvironments", () => {
       setupStarted: true,
       setupSessionId: "env-1:setup",
     }));
-    // Simulate a setup-completion event landing while startEnvironment awaited:
-    // commands resolved and scripts no longer running, but workspaceReady was
-    // never flipped true (the inconsistent intermediate this guards against).
+    // Simulate a setup-completion event landing while startEnvironment awaits
+    // its follow-up read. The event's full environment is authoritative.
     mockGetEnvironment.mockImplementation(() => {
       const store = useEnvironmentStore.getState();
-      store.setSetupCommandsResolved("env-1", true);
-      store.setSetupScriptsRunning("env-1", false);
-      return Promise.resolve(refreshedEnv);
+      store.updateEnvironment("env-1", {
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+      });
+      return Promise.resolve({
+        ...refreshedEnv,
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+      });
     });
 
     const { result } = renderHook(() => useEnvironments("project-1"));
@@ -963,10 +956,10 @@ describe("useEnvironments", () => {
     });
 
     const state = useEnvironmentStore.getState();
-    // The env must not be stranded "not running, not ready": setup finished, so
-    // it should be ready and no longer flagged as running.
-    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
-    expect(state.isWorkspaceReady("env-1")).toBe(true);
+    expect(state.getEnvironmentById("env-1")).toMatchObject({
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    });
   });
 
   test("startEnvironment sets error on failure", async () => {
@@ -1444,6 +1437,7 @@ describe("useEnvironments", () => {
       projectId: "project-1",
       environmentType: "local",
       setupScriptsComplete: false,
+      setupPhase: "pending",
     });
     useEnvironmentStore.setState({ environments: [environment] });
     const callbacks = new Map<string, (event: { payload: any }) => void>();
@@ -1460,24 +1454,31 @@ describe("useEnvironments", () => {
 
     act(() => {
       callbacks.get("environment-setup-started")?.({
-        payload: { environment_id: "env-1", session_id: "setup-1", environment },
+        payload: {
+          environment_id: "env-1",
+          session_id: "setup-1",
+          environment: { ...environment, setupPhase: "running" },
+        },
       });
     });
     let state = useEnvironmentStore.getState();
-    expect(state.isSetupCommandsResolved("env-1")).toBe(true);
-    expect(state.isSetupScriptsRunning("env-1")).toBe(true);
-    expect(state.isWorkspaceReady("env-1")).toBe(false);
+    expect(state.getEnvironmentById("env-1")?.setupPhase).toBe("running");
 
-    const completedEnvironment = { ...environment, setupScriptsComplete: true };
+    const completedEnvironment = {
+      ...environment,
+      setupScriptsComplete: true,
+      setupPhase: "ready" as const,
+    };
     act(() => {
       callbacks.get("environment-setup-complete")?.({
         payload: { environment_id: "env-1", success: true, environment: completedEnvironment },
       });
     });
     state = useEnvironmentStore.getState();
-    expect(state.getEnvironmentById("env-1")?.setupScriptsComplete).toBe(true);
-    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
-    expect(state.isWorkspaceReady("env-1")).toBe(true);
+    expect(state.getEnvironmentById("env-1")).toMatchObject({
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    });
   });
 
   test("reconciles a missed setup-completion event from the backend snapshot", async () => {
@@ -1486,26 +1487,27 @@ describe("useEnvironments", () => {
       projectId: "project-1",
       status: "running",
       setupScriptsComplete: false,
+      setupPhase: "pending",
+      setupPhase: "running",
       pendingAgentLaunch: true,
     });
     useEnvironmentStore.setState({
       environments: [environment],
-      setupCommandsResolved: new Set(["env-1"]),
-      setupScriptsRunning: new Set(["env-1"]),
-      workspaceReadyEnvironments: new Set(),
     });
     mockGetEnvironment.mockResolvedValue({
       ...environment,
       setupScriptsComplete: true,
+      setupPhase: "ready",
     });
 
     await reconcileEnvironmentSetupSnapshots();
 
     const state = useEnvironmentStore.getState();
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
-    expect(state.getEnvironmentById("env-1")?.setupScriptsComplete).toBe(true);
-    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
-    expect(state.isWorkspaceReady("env-1")).toBe(true);
+    expect(state.getEnvironmentById("env-1")).toMatchObject({
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    });
     expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
   });
 
@@ -1515,17 +1517,15 @@ describe("useEnvironments", () => {
       projectId: "project-1",
       status: "creating",
       setupScriptsComplete: false,
+      setupPhase: "pending",
     });
     useEnvironmentStore.setState({
       environments: [environment],
-      pendingSetupCommands: new Map([[environment.id, []]]),
-      setupCommandsResolved: new Set(),
-      setupScriptsRunning: new Set([environment.id]),
-      workspaceReadyEnvironments: new Set([environment.id]),
     });
     mockGetEnvironment.mockResolvedValue({
       ...environment,
       status: "error",
+      setupPhase: "failed",
       lifecycleError: "Docker provisioning failed",
     });
 
@@ -1534,12 +1534,9 @@ describe("useEnvironments", () => {
     const state = useEnvironmentStore.getState();
     expect(state.getEnvironmentById(environment.id)).toMatchObject({
       status: "error",
+      setupPhase: "failed",
       lifecycleError: "Docker provisioning failed",
     });
-    expect(state.pendingSetupCommands.has(environment.id)).toBe(false);
-    expect(state.isSetupCommandsResolved(environment.id)).toBe(true);
-    expect(state.isSetupScriptsRunning(environment.id)).toBe(false);
-    expect(state.isWorkspaceReady(environment.id)).toBe(false);
     expect(state.error).toBe("Docker provisioning failed");
     expect(mockToastError).toHaveBeenCalledTimes(1);
     const toastOptions = mockToastError.mock.calls[0]?.[1] as {
@@ -1735,8 +1732,6 @@ describe("useEnvironments", () => {
     });
     useEnvironmentStore.setState({
       environments: [environment],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
     });
     mockGetEnvironment.mockResolvedValue(environment);
 
@@ -1745,9 +1740,8 @@ describe("useEnvironments", () => {
     expect(mockGetEnvironment).toHaveBeenCalledWith(environment.id);
     // A failed start has no setup plan, so nothing reads a setup session.
     expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
-    expect(
-      useEnvironmentStore.getState().isSetupCommandsResolved(environment.id),
-    ).toBe(true);
+    expect(useEnvironmentStore.getState().getEnvironmentById(environment.id))
+      .toMatchObject({ status: "error", lifecycleError: "Environment start failed." });
   });
 
   test("drops the pending agent launch when a start failure is reconciled", async () => {
@@ -1827,12 +1821,11 @@ describe("useEnvironments", () => {
       id: "env-setup-complete-failure",
       projectId: "project-1",
       status: "creating",
+      setupScriptsComplete: false,
+      setupPhase: "running",
       pendingAgentLaunch: true,
     });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      workspaceReadyEnvironments: new Set([environment.id]),
-    });
+    useEnvironmentStore.setState({ environments: [environment] });
     let completeCallback: ((event: { payload: any }) => void) | undefined;
     mockListen.mockImplementation((eventName: string, callback: (event: { payload: any }) => void) => {
       if (eventName === "environment-setup-complete") completeCallback = callback;
@@ -1849,6 +1842,7 @@ describe("useEnvironments", () => {
           environment: {
             ...environment,
             status: "error",
+            setupPhase: "failed",
             lifecycleError: "Docker provisioning failed",
           },
         },
@@ -1857,8 +1851,7 @@ describe("useEnvironments", () => {
 
     const state = useEnvironmentStore.getState();
     expect(mockToastError).toHaveBeenCalledTimes(1);
-    expect(state.isSetupCommandsResolved(environment.id)).toBe(true);
-    expect(state.isWorkspaceReady(environment.id)).toBe(false);
+    expect(state.getEnvironmentById(environment.id)?.setupPhase).toBe("failed");
     expect(state.getEnvironmentById(environment.id)?.pendingAgentLaunch).toBe(false);
   });
 
@@ -1891,8 +1884,13 @@ describe("useEnvironments", () => {
     expect(mockToastError).toHaveBeenCalledTimes(1);
   });
 
-  test("does not mark the workspace ready after a failed setup completion event", async () => {
-    const environment = createMockEnvironment({ id: "env-1", projectId: "project-1" });
+  test("keeps the failed setup phase from a setup completion event", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      setupScriptsComplete: false,
+      setupPhase: "running",
+    });
     useEnvironmentStore.setState({ environments: [environment] });
     let completeCallback: ((event: { payload: any }) => void) | undefined;
     mockListen.mockImplementation((eventName: string, callback: (event: { payload: any }) => void) => {
@@ -1903,12 +1901,21 @@ describe("useEnvironments", () => {
     await waitFor(() => expect(completeCallback).toBeDefined());
 
     act(() => {
-      completeCallback?.({ payload: { environment_id: "env-1", success: false, error: "setup failed" } });
+      completeCallback?.({
+        payload: {
+          environment_id: "env-1",
+          success: false,
+          error: "setup failed",
+          environment: { ...environment, setupPhase: "failed" },
+        },
+      });
     });
 
     const state = useEnvironmentStore.getState();
-    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
-    expect(state.isWorkspaceReady("env-1")).toBe(false);
+    expect(state.getEnvironmentById("env-1")).toMatchObject({
+      setupScriptsComplete: false,
+      setupPhase: "failed",
+    });
   });
 
   test("clears the durable agent launch when setup fails", async () => {
@@ -1962,9 +1969,6 @@ describe("useEnvironments", () => {
   test("skips reconciliation entirely when no environment is awaiting setup or a launch", async () => {
     useEnvironmentStore.setState({
       environments: [createMockEnvironment({ id: "env-1", projectId: "project-1", status: "running" })],
-      setupCommandsResolved: new Set(),
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
     });
 
     await reconcileEnvironmentSetupSnapshots();
@@ -1980,8 +1984,6 @@ describe("useEnvironments", () => {
         status: "stopped",
         pendingAgentLaunch: true,
       })],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
     });
 
     await reconcileEnvironmentSetupSnapshots();
@@ -1996,11 +1998,7 @@ describe("useEnvironments", () => {
       status: "running",
       setupScriptsComplete: false,
     });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
-    });
+    useEnvironmentStore.setState({ environments: [environment] });
     useClaudeOptionsStore.setState({
       options: {},
       pendingNativeLaunches: {
@@ -2013,12 +2011,17 @@ describe("useEnvironments", () => {
         } as any,
       },
     });
-    mockGetEnvironment.mockResolvedValue({ ...environment, setupScriptsComplete: true });
+    mockGetEnvironment.mockResolvedValue({
+      ...environment,
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    });
 
     await reconcileEnvironmentSetupSnapshots();
 
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
-    expect(useEnvironmentStore.getState().isWorkspaceReady("env-1")).toBe(true);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
+      .toBe("ready");
   });
 
   test("reconciles an environment targeted only by running setup scripts", async () => {
@@ -2027,13 +2030,14 @@ describe("useEnvironments", () => {
       projectId: "project-1",
       status: "running",
       setupScriptsComplete: false,
+      setupPhase: "running",
     });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      setupScriptsRunning: new Set(["env-1"]),
-      workspaceReadyEnvironments: new Set(),
+    useEnvironmentStore.setState({ environments: [environment] });
+    mockGetEnvironment.mockResolvedValue({
+      ...environment,
+      setupScriptsComplete: true,
+      setupPhase: "ready",
     });
-    mockGetEnvironment.mockResolvedValue({ ...environment, setupScriptsComplete: true });
 
     await reconcileEnvironmentSetupSnapshots();
 
@@ -2046,20 +2050,18 @@ describe("useEnvironments", () => {
       projectId: "project-1",
       status: "running",
       setupScriptsComplete: false,
+      setupPhase: "running",
       pendingAgentLaunch: true,
     });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
-    });
+    useEnvironmentStore.setState({ environments: [environment] });
     mockGetEnvironment.mockResolvedValue(null);
 
     await reconcileEnvironmentSetupSnapshots();
 
-    const state = useEnvironmentStore.getState();
-    expect(state.isSetupCommandsResolved("env-1")).toBe(false);
-    expect(state.isWorkspaceReady("env-1")).toBe(false);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
+      setupScriptsComplete: false,
+      setupPhase: "running",
+    });
     expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
   });
 
@@ -2069,13 +2071,10 @@ describe("useEnvironments", () => {
       projectId: "project-1",
       status: "running",
       setupScriptsComplete: false,
+      setupPhase: "running",
       pendingAgentLaunch: true,
     });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
-    });
+    useEnvironmentStore.setState({ environments: [environment] });
     const originalWarn = console.warn;
     console.warn = mock(() => undefined);
     try {
@@ -2088,151 +2087,137 @@ describe("useEnvironments", () => {
 
     // The singleton must have been released, or reconciliation is wedged for the
     // rest of the session.
-    mockGetEnvironment.mockResolvedValue({ ...environment, setupScriptsComplete: true });
+    mockGetEnvironment.mockResolvedValue({
+      ...environment,
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    });
     await reconcileEnvironmentSetupSnapshots();
-    expect(useEnvironmentStore.getState().isWorkspaceReady("env-1")).toBe(true);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
+      .toBe("ready");
   });
 
-  test("marks the workspace ready from a setup session that already succeeded", async () => {
+  test("marks the workspace ready from an authoritative ready snapshot", async () => {
     const environment = createMockEnvironment({
       id: "env-1",
       projectId: "project-1",
       status: "running",
       setupScriptsComplete: false,
+      setupPhase: "running",
       pendingAgentLaunch: true,
     });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
+    useEnvironmentStore.setState({ environments: [environment] });
+    mockGetEnvironment.mockResolvedValue({
+      ...environment,
+      setupScriptsComplete: true,
+      setupPhase: "ready",
     });
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    });
+    expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
+  });
+
+  test("keeps the setup gate closed for an authoritative running snapshot", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+      setupPhase: "running",
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
     mockGetEnvironment.mockResolvedValue(environment);
-    mockGetEnvironmentSetupSession.mockResolvedValue({
-      sessionId: "setup-1",
-      running: false,
-      success: true,
-    } as any);
 
     await reconcileEnvironmentSetupSnapshots();
 
-    const state = useEnvironmentStore.getState();
-    expect(state.isSetupCommandsResolved("env-1")).toBe(true);
-    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
-    expect(state.isWorkspaceReady("env-1")).toBe(true);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
+      .toBe("running");
   });
 
-  test("keeps the setup gate closed for a setup session still running", async () => {
+  test("does not unblock the workspace for an authoritative failed snapshot", async () => {
     const environment = createMockEnvironment({
       id: "env-1",
       projectId: "project-1",
       status: "running",
       setupScriptsComplete: false,
+      setupPhase: "running",
       pendingAgentLaunch: true,
     });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
-    });
-    mockGetEnvironment.mockResolvedValue(environment);
-    mockGetEnvironmentSetupSession.mockResolvedValue({
-      sessionId: "setup-1",
-      running: true,
-    } as any);
+    useEnvironmentStore.setState({ environments: [environment] });
+    mockGetEnvironment.mockResolvedValue({ ...environment, setupPhase: "failed" });
 
     await reconcileEnvironmentSetupSnapshots();
 
-    const state = useEnvironmentStore.getState();
-    expect(state.isSetupScriptsRunning("env-1")).toBe(true);
-    expect(state.isWorkspaceReady("env-1")).toBe(false);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
+      .toBe("failed");
   });
 
-  test("does not unblock the workspace for a setup session that finished unsuccessfully", async () => {
+  test("keeps authoritative running state without consulting setup sessions", async () => {
     const environment = createMockEnvironment({
       id: "env-1",
       projectId: "project-1",
       status: "running",
       setupScriptsComplete: false,
+      setupPhase: "running",
       pendingAgentLaunch: true,
     });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      setupScriptsRunning: new Set(["env-1"]),
-      workspaceReadyEnvironments: new Set(["env-1"]),
-    });
-    mockGetEnvironment.mockResolvedValue(environment);
-    mockGetEnvironmentSetupSession.mockResolvedValue({
-      sessionId: "setup-1",
-      running: false,
-      success: false,
-    } as any);
-
-    await reconcileEnvironmentSetupSnapshots();
-
-    const state = useEnvironmentStore.getState();
-    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
-    expect(state.isWorkspaceReady("env-1")).toBe(false);
-  });
-
-  test("returns without touching gates when no setup session exists", async () => {
-    const environment = createMockEnvironment({
-      id: "env-1",
-      projectId: "project-1",
-      status: "running",
-      setupScriptsComplete: false,
-      pendingAgentLaunch: true,
-    });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
-    });
+    useEnvironmentStore.setState({ environments: [environment] });
     mockGetEnvironment.mockResolvedValue(environment);
     mockGetEnvironmentSetupSession.mockResolvedValue(null);
 
     await reconcileEnvironmentSetupSnapshots();
 
-    expect(useEnvironmentStore.getState().isSetupCommandsResolved("env-1")).toBe(false);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
+      .toBe("running");
+    expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
   });
 
-  test("does not let a stale snapshot reopen a locally-completed setup", async () => {
+  test("applies the latest authoritative setup snapshot", async () => {
     const environment = createMockEnvironment({
       id: "env-1",
       projectId: "project-1",
       status: "running",
       setupScriptsComplete: true,
+      setupPhase: "ready",
       pendingAgentLaunch: true,
     });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
+    useEnvironmentStore.setState({ environments: [environment] });
+    mockGetEnvironment.mockResolvedValue({
+      ...environment,
+      setupScriptsComplete: false,
+      setupPhase: "running",
     });
-    // An out-of-order response can carry an older view of the flag.
-    mockGetEnvironment.mockResolvedValue({ ...environment, setupScriptsComplete: false });
 
     await reconcileEnvironmentSetupSnapshots();
 
     const state = useEnvironmentStore.getState();
-    expect(state.getEnvironmentById("env-1")?.setupScriptsComplete).toBe(true);
-    expect(state.isWorkspaceReady("env-1")).toBe(true);
+    expect(state.getEnvironmentById("env-1")).toMatchObject({
+      setupScriptsComplete: false,
+      setupPhase: "running",
+    });
     expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
   });
 
   test("reconciles every awaiting environment in one pass", async () => {
     const first = createMockEnvironment({
-      id: "env-1", projectId: "project-1", status: "running", pendingAgentLaunch: true,
+      id: "env-1", projectId: "project-1", status: "running", setupPhase: "running", pendingAgentLaunch: true,
     });
     const second = createMockEnvironment({
-      id: "env-2", projectId: "project-1", status: "running", pendingAgentLaunch: true,
+      id: "env-2", projectId: "project-1", status: "running", setupPhase: "running", pendingAgentLaunch: true,
     });
-    useEnvironmentStore.setState({
-      environments: [first, second],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
-    });
+    useEnvironmentStore.setState({ environments: [first, second] });
     mockGetEnvironment.mockImplementation((id: string) =>
-      Promise.resolve({ ...(id === "env-1" ? first : second), setupScriptsComplete: true })
+      Promise.resolve({
+        ...(id === "env-1" ? first : second),
+        setupScriptsComplete: true,
+        setupPhase: "ready" as const,
+      })
     );
 
     await reconcileEnvironmentSetupSnapshots();
@@ -2240,8 +2225,8 @@ describe("useEnvironments", () => {
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-2");
     const state = useEnvironmentStore.getState();
-    expect(state.isWorkspaceReady("env-1")).toBe(true);
-    expect(state.isWorkspaceReady("env-2")).toBe(true);
+    expect(state.getEnvironmentById("env-1")?.setupPhase).toBe("ready");
+    expect(state.getEnvironmentById("env-2")?.setupPhase).toBe("ready");
   });
 
   test("coalesces concurrent reconciles but still runs one more pass for the later trigger", async () => {
@@ -2250,17 +2235,14 @@ describe("useEnvironments", () => {
       projectId: "project-1",
       status: "running",
       setupScriptsComplete: false,
+      setupPhase: "running",
       pendingAgentLaunch: true,
     });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
-    });
+    useEnvironmentStore.setState({ environments: [environment] });
     const firstRead = createDeferred<Environment | null>();
     mockGetEnvironment.mockImplementationOnce(() => firstRead.promise);
     mockGetEnvironment.mockImplementation(() =>
-      Promise.resolve({ ...environment, setupScriptsComplete: true })
+      Promise.resolve({ ...environment, setupScriptsComplete: true, setupPhase: "ready" })
     );
 
     const first = reconcileEnvironmentSetupSnapshots();
@@ -2279,7 +2261,8 @@ describe("useEnvironments", () => {
     // be answered by a fresh read rather than the stale snapshot.
     await waitFor(() => {
       expect(mockGetEnvironment).toHaveBeenCalledTimes(2);
-      expect(useEnvironmentStore.getState().isWorkspaceReady("env-1")).toBe(true);
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
+        .toBe("ready");
     });
   });
 
@@ -2289,14 +2272,15 @@ describe("useEnvironments", () => {
       projectId: "project-1",
       status: "running",
       setupScriptsComplete: false,
+      setupPhase: "running",
       pendingAgentLaunch: true,
     });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
+    useEnvironmentStore.setState({ environments: [environment] });
+    mockGetEnvironment.mockResolvedValue({
+      ...environment,
+      setupScriptsComplete: true,
+      setupPhase: "ready",
     });
-    mockGetEnvironment.mockResolvedValue({ ...environment, setupScriptsComplete: true });
     const listened: string[] = [];
     let connectedCallback: (() => void) | undefined;
     mockListen.mockImplementation((eventName: string, callback: () => void) => {
@@ -2354,14 +2338,15 @@ describe("useEnvironments", () => {
       projectId: "project-1",
       status: "running",
       setupScriptsComplete: false,
+      setupPhase: "running",
       pendingAgentLaunch: true,
     });
-    useEnvironmentStore.setState({
-      environments: [environment],
-      setupScriptsRunning: new Set(),
-      workspaceReadyEnvironments: new Set(),
+    useEnvironmentStore.setState({ environments: [environment] });
+    mockGetEnvironment.mockResolvedValue({
+      ...environment,
+      setupScriptsComplete: true,
+      setupPhase: "ready",
     });
-    mockGetEnvironment.mockResolvedValue({ ...environment, setupScriptsComplete: true });
     mockListen.mockImplementation(() => Promise.resolve(() => {}));
 
     const visibility = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");

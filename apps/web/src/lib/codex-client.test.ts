@@ -24,6 +24,7 @@ import {
   getSlashCommands,
   isCodexSessionPhase,
   listSessions,
+  lookupSessionActivity,
   lookupSessionStatus,
   parseApproval,
   parseContextUsage,
@@ -881,6 +882,47 @@ describe("codex-client getSessionStatus", () => {
     expect(unavailableTransport.kind).toBe("unavailable");
     if (unavailableTransport.kind === "unavailable") {
       expect(unavailableTransport.error.message).toBe("timed out");
+    }
+  });
+
+  test("activity lookup distinguishes old bridges, missing sessions, and probe failures", async () => {
+    mockFetch(async () => new Response(null, { status: 404 }));
+    await expect(lookupSessionActivity(client, "session-1")).resolves.toEqual({
+      kind: "unsupported",
+    });
+
+    mockFetch(async () => Response.json({ activity: "missing" }));
+    await expect(lookupSessionActivity(client, "session-1")).resolves.toEqual({
+      kind: "missing",
+    });
+
+    for (const activity of ["idle", "working", "waiting"] as const) {
+      mockFetch(async () => Response.json({ activity }));
+      await expect(lookupSessionActivity(client, "session-1")).resolves.toEqual({
+        kind: "found",
+        activity,
+      });
+    }
+
+    mockFetch(async () => new Response(null, { status: 503 }));
+    const unavailableHttp = await lookupSessionActivity(client, "session-1");
+    expect(unavailableHttp.kind).toBe("unavailable");
+    if (unavailableHttp.kind === "unavailable") {
+      expect(unavailableHttp.error.message).toContain("HTTP 503");
+    }
+
+    mockFetch(async () => Response.json({ activity: "future-state" }));
+    const malformed = await lookupSessionActivity(client, "session-1");
+    expect(malformed.kind).toBe("unavailable");
+    if (malformed.kind === "unavailable") {
+      expect(malformed.error.message).toContain("malformed");
+    }
+
+    mockFetchError(new Error("connection lost"));
+    const unavailableTransport = await lookupSessionActivity(client, "session-1");
+    expect(unavailableTransport.kind).toBe("unavailable");
+    if (unavailableTransport.kind === "unavailable") {
+      expect(unavailableTransport.error.message).toBe("connection lost");
     }
   });
 

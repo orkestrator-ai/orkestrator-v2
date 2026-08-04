@@ -948,10 +948,17 @@ export const __testing = {
 function startSseKeepalive(
   writeSSE: (event: { event: string; data: string; id?: string }) => Promise<void>,
   intervalMs = 5_000,
-  shouldSend: () => boolean = () => true,
+  shouldSendAtActiveCadence: () => boolean = () => true,
+  idleIntervalMs = 30_000,
 ): ReturnType<typeof setInterval> {
+  let lastSentAt = Date.now();
   return setInterval(() => {
-    if (!shouldSend()) return;
+    const now = Date.now();
+    if (
+      !shouldSendAtActiveCadence()
+      && now - lastSentAt < idleIntervalMs
+    ) return;
+    lastSentAt = now;
     void writeSSE({
       event: "keepalive",
       // Echo the latest issued revision so an EventSource reconnect exposes a
@@ -1702,6 +1709,7 @@ app.get("/event/subscribe", (c) => {
           const activity = appServerRuntime.getActivity(sessionFilter);
           return activity === "working" || activity === "waiting";
         },
+        30_000,
       );
 
       await Promise.race([

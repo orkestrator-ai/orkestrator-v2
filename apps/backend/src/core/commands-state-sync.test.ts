@@ -20,7 +20,10 @@ import {
 } from "./commands.js";
 import { StorageService } from "./storage.js";
 import { ClaudeStatePollManager } from "./tmux.js";
-import { NativeAgentService } from "./native-agent-service.js";
+import {
+  NativeAgentService,
+  nativeAgentSessionStorageKey,
+} from "./native-agent-service.js";
 
 /**
  * Registry-level coverage for the commands that back the backend-owned state
@@ -33,6 +36,8 @@ async function withCommands<T>(
   run: (
     invoke: (command: string, args: Record<string, unknown>) => Promise<unknown>,
     storage: StorageService,
+    dataDir: string,
+    commands: ReturnType<typeof createCommandRegistry>,
   ) => Promise<T>,
   options: {
     claudeStatePolls?: ClaudeStatePollManager;
@@ -74,13 +79,106 @@ async function withCommands<T>(
   };
 
   try {
-    return await run(invoke, storage);
+    return await run(invoke, storage, dataDir, commands);
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }
 
 const KEY = "claude env-e1:tab-1";
+
+describe("durable tab teardown commands", () => {
+  test("disconnects persistent terminal sessions and clears direct and replayed intents", async () => {
+    await withCommands(async (invoke, storage) => {
+      const direct = await storage.createSession("e1", "local", "tab-direct", "plain");
+      await expect(invoke("teardown_tab", {
+        environmentId: "e1",
+        tabId: "tab-direct",
+        kind: "terminal",
+        persistentSessionId: direct.id,
+      })).resolves.toEqual({ completed: true });
+      expect((await storage.getSession(direct.id))?.status).toBe("disconnected");
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+
+      const replayed = await storage.createSession("e1", "local", "tab-replayed", "plain");
+      await storage.setTabTeardownIntent("e1", {
+        tabId: "tab-replayed",
+        kind: "terminal",
+        persistentSessionId: replayed.id,
+        createdAt: "2026-08-04T10:00:00.000Z",
+      });
+      await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+      expect((await storage.getSession(replayed.id))?.status).toBe("disconnected");
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    });
+  });
+
+  test("skips every destructive orphan path when the layout store is unreadable", async () => {
+    await withCommands(async (invoke, _storage, dataDir) => {
+      await fs.writeFile(path.join(dataDir, "pane-layouts.json"), "{truncated", "utf8");
+      await expect(invoke("reconcile_orphaned_tab_resources", {})).resolves.toEqual({
+        terminals: 0,
+        nativeSessions: 0,
+        tmuxSessions: 0,
+        skipped: true,
+      });
+    });
+  });
+
+  test("validates teardown inputs before journaling", async () => {
+    await withCommands(async (invoke, storage) => {
+      await expect(invoke("teardown_tab", {
+        environmentId: "e1",
+        tabId: "tab-1",
+        kind: "unknown",
+      })).rejects.toThrow("kind is not a supported tab teardown kind");
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    });
+  });
+
+  test("delegates tmux teardown and retires every native-provider mapping", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      const stopTmux = mock(async () => undefined);
+      commands.set("claude_tmux_stop", stopTmux);
+      await expect(invoke("teardown_tab", {
+        environmentId: "e1",
+        tabId: "tab-tmux",
+        kind: "claude-tmux",
+      })).resolves.toEqual({ completed: true });
+      expect(stopTmux).toHaveBeenCalledWith(
+        { environmentId: "e1", tabId: "tab-tmux" },
+        expect.any(Object),
+      );
+
+      for (const [agent, kind] of [
+        ["claude", "claude-native"],
+        ["codex", "codex-native"],
+        ["opencode", "opencode-native"],
+      ] as const) {
+        const tabId = `tab-${agent}`;
+        const logicalSessionKey = `env-e1:${tabId}`;
+        const key = nativeAgentSessionStorageKey("e1", agent, logicalSessionKey);
+        await storage.adoptNativeAgentSession({
+          key,
+          environmentId: "e1",
+          agent,
+          logicalSessionKey,
+          providerSessionId: `${agent}-provider-session`,
+          origin: "interactive-native",
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        });
+
+        await expect(invoke("teardown_tab", {
+          environmentId: "e1",
+          tabId,
+          kind,
+        })).resolves.toEqual({ completed: true });
+        expect(await storage.getNativeAgentSession(key)).toBeNull();
+      }
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    });
+  });
+});
 
 describe("prompt queue commands", () => {
   test("mutates and reads back a backend-owned queue", async () => {
@@ -992,6 +1090,49 @@ describe("native agent and looped-review controller commands", () => {
       nativeAgents,
       environment: {
         createdFromCommit: "commit-1",
+        pendingAgentLaunch: true,
+      },
+    });
+  });
+
+  test("a setup override restores readiness and reconciles a pending agent launch", async () => {
+    const reconcileInitialLaunch = mock(async (_environmentId: string) => undefined);
+    const nativeAgents = {
+      reconcileInitialLaunch,
+    } as unknown as NonNullable<CommandContext["nativeAgents"]>;
+
+    await withCommands(async (invoke, storage) => {
+      reconcileInitialLaunch.mockImplementationOnce(async (environmentId) => {
+        await storage.updateEnvironment(environmentId, { pendingAgentLaunch: false });
+      });
+
+      const result = await invoke("override_environment_setup", {
+        environmentId: "e1",
+      });
+
+      expect(reconcileInitialLaunch).toHaveBeenCalledWith("e1");
+      expect(result).toMatchObject({
+        id: "e1",
+        status: "running",
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+        setupOverride: true,
+        lifecycleError: null,
+        pendingAgentLaunch: false,
+      });
+      await expect(storage.getEnvironment("e1")).resolves.toMatchObject({
+        status: "running",
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+        pendingAgentLaunch: false,
+      });
+    }, {
+      nativeAgents,
+      environment: {
+        status: "error",
+        setupScriptsComplete: false,
+        setupPhase: "failed",
+        lifecycleError: "Setup script failed",
         pendingAgentLaunch: true,
       },
     });

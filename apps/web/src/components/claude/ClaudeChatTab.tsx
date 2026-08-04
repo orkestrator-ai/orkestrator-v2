@@ -82,7 +82,7 @@ import { ClaudePlanApprovalCard } from "./ClaudePlanApprovalCard";
 import { ResumeSessionDialog } from "./ResumeSessionDialog";
 import type { ClaudeNativeData } from "@/types/paneLayout";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { isSetupPending } from "@/lib/setup-commands";
+import { isSetupBlocked } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import {
   enqueueAgentPrompt,
@@ -984,7 +984,7 @@ export function ClaudeChatTab({
   const setupPhase = useEnvironmentStore((state) =>
     state.environments.find((environment) => environment.id === environmentId)?.setupPhase
   );
-  const setupPending = isSetupPending({
+  const setupPending = isSetupBlocked({
     setupPhase,
   });
 
@@ -2851,6 +2851,7 @@ export function ClaudeChatTab({
     return (
       <SetupPendingOverlay
         environmentId={environmentId}
+        setupPhase={setupPhase}
         subtext="Claude will connect automatically once setup finishes"
       />
     );

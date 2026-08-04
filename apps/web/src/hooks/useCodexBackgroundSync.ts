@@ -44,6 +44,8 @@ const DEFAULT_DEPENDENCIES: CodexBackgroundSyncDependencies = {
   fetchPendingInteractions,
 };
 
+const SAFETY_RECONCILE_INTERVAL_MS = 30_000;
+
 interface SessionTarget {
   sessionKey: string;
   sessionId: string;
@@ -196,7 +198,16 @@ export function createCodexBackgroundSynchronizer(
       // Working and waiting are non-terminal. Pending cards are refreshed by
       // the parallel request; a full transcript/status read waits for idle.
       if (activity?.kind === "found" && activity.activity !== "idle") return;
-      if (activity?.kind === "unavailable") return;
+      if (activity?.kind === "unavailable") {
+        // A transport failure is not evidence that a session is terminal or
+        // missing. Leave state untouched; the safety timer retries this probe.
+        console.debug(
+          "[CodexBackgroundSync] Activity probe unavailable:",
+          activity.error,
+        );
+        return;
+      }
+      // `unsupported` deliberately falls through to the legacy status route.
       const lookup = await dependencies.lookupSessionStatus(
         target.client,
         target.sessionId,
@@ -399,7 +410,6 @@ export function useCodexBackgroundSync(
   const dependencies = options?.dependencies;
   useEffect(() => {
     const synchronizer = createCodexBackgroundSynchronizer({ dependencies });
-    void synchronizer.reconcileNow();
     const unsubscribeEnvironment = useEnvironmentStore.subscribe((current, previous) => {
       const before = new Map(previous.environments.map((environment) => [
         environment.id,
@@ -414,13 +424,24 @@ export function useCodexBackgroundSync(
     });
     let unlisten: (() => void) | undefined;
     let cancelled = false;
+    let unlistenActivity: (() => void) | undefined;
+    let safetyInterval: number | undefined;
+
+    // `listen` registers its handler synchronously before its returned promise
+    // waits for stream readiness. Invoke both first, then take the snapshot, so
+    // a terminal transition cannot land in the old snapshot-before-subscribe
+    // gap. Listener readiness must not delay authoritative catch-up.
     void listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
       void synchronizer.reconcileNow();
     }).then((release) => {
       if (cancelled) release();
       else unlisten = release;
+    }).catch((error) => {
+      console.debug(
+        "[CodexBackgroundSync] Failed to install stream listener:",
+        error,
+      );
     });
-    let unlistenActivity: (() => void) | undefined;
     void listen<{ state?: unknown }>("native-agent-session-activity", (event) => {
       if (event.payload.state === "idle" || event.payload.state === "waiting") {
         void synchronizer.reconcileNow();
@@ -428,11 +449,24 @@ export function useCodexBackgroundSync(
     }).then((release) => {
       if (cancelled) release();
       else unlistenActivity = release;
+    }).catch((error) => {
+      console.debug(
+        "[CodexBackgroundSync] Failed to install activity listener:",
+        error,
+      );
     });
+    void synchronizer.reconcileNow();
+    // Events are the low-latency path, but this bounded retry ensures a
+    // listener setup race, half-open stream, or transient probe failure can
+    // never strand a loading session indefinitely.
+    safetyInterval = window.setInterval(() => {
+      void synchronizer.reconcileNow();
+    }, SAFETY_RECONCILE_INTERVAL_MS);
     return () => {
       cancelled = true;
       unlisten?.();
       unlistenActivity?.();
+      if (safetyInterval !== undefined) window.clearInterval(safetyInterval);
       unsubscribeEnvironment();
       synchronizer.dispose();
     };

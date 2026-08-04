@@ -194,6 +194,7 @@ function seedStores() {
         networkAccessMode: "restricted",
         order: 0,
         environmentType: "containerized",
+        setupPhase: "ready",
       },
     ],
     isLoading: false,

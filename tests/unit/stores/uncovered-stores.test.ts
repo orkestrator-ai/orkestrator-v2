@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
 import { useErrorDialogStore } from "../../../apps/web/src/stores/errorDialogStore";
 import { useFileDirtyStore } from "../../../apps/web/src/stores/fileDirtyStore";
@@ -12,7 +12,7 @@ import {
 
 afterEach(() => {
   useAgentActivityStore.setState({
-    tabStates: {}, containerStates: {}, containerStateUpdatedAt: {}, containerRefCounts: {}, stateChangeCallbacks: new Map(),
+    tabStates: {}, containerStates: {}, containerStateUpdatedAt: {}, containerRefCounts: {},
   });
   useErrorDialogStore.setState({ error: null });
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
@@ -22,334 +22,83 @@ afterEach(() => {
 });
 
 describe("agentActivityStore", () => {
-  test("tracks tabs, references, containers, and callback lifecycle", async () => {
-    const callback = mock(() => undefined);
-    const state = useAgentActivityStore.getState();
-    const callbackId = state.registerStateCallback(callback);
-    state.setTabState("tab-1", "working");
-    state.incrementContainerRef("env-1");
-    state.incrementContainerRef("env-1");
-    state.decrementContainerRef("env-1");
-    state.setContainerState("env-1", "waiting");
-    await Promise.resolve();
-
-    expect(useAgentActivityStore.getState().getTabState("tab-1")).toBe("working");
-    expect(useAgentActivityStore.getState().containerRefCounts["env-1"]).toBe(1);
-    expect(callback).toHaveBeenCalledWith(
-      "env-1",
-      "idle",
-      "waiting",
-      expect.any(String),
-    );
-
-    const currentObservation = Date.parse(
-      useAgentActivityStore.getState().containerStateUpdatedAt["env-1"],
-    );
-    const newest = new Date(currentObservation + 2_000).toISOString();
-    state.setContainerState("env-1", "working", newest);
-    state.setContainerState(
-      "env-1",
-      "idle",
-      new Date(currentObservation + 1_000).toISOString(),
-    );
-    expect(useAgentActivityStore.getState().getContainerState("env-1"))
-      .toBe("working");
-    expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-1"])
-      .toBe(newest);
-
-    useAgentActivityStore.getState().unregisterStateCallback(callbackId);
-    useAgentActivityStore.getState().removeTabState("tab-1");
-    useAgentActivityStore.getState().removeContainerState("env-1");
-    expect(useAgentActivityStore.getState().getTabState("tab-1")).toBe("idle");
-    expect(useAgentActivityStore.getState().getContainerState("env-1")).toBe("idle");
-  });
-
-  test("records and publishes the first explicit idle observation", async () => {
-    const callback = mock(() => undefined);
-    useAgentActivityStore.getState().registerStateCallback(callback);
-
-    useAgentActivityStore.getState().setContainerState(
-      "env-idle",
-      "idle",
-      "2026-07-27T12:00:00.000Z",
-    );
-    await Promise.resolve();
-
-    expect(useAgentActivityStore.getState().containerStates["env-idle"])
-      .toBe("idle");
-    expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-idle"])
-      .toBe("2026-07-27T12:00:00.000Z");
-    expect(callback).toHaveBeenCalledWith(
-      "env-idle",
-      "idle",
-      "idle",
-      "2026-07-27T12:00:00.000Z",
-    );
-  });
-
-  test("orders equal, malformed, and newer same-state observations", async () => {
-    const callback = mock(() => undefined);
-    useAgentActivityStore.getState().registerStateCallback(callback);
-    const originalTime = "2026-07-27T12:00:00.000Z";
-    const newerTime = "2026-07-27T12:00:01.000Z";
-
-    useAgentActivityStore.getState().setContainerState(
-      "env-1",
-      "waiting",
-      originalTime,
-    );
-    await Promise.resolve();
-    callback.mockClear();
-
-    useAgentActivityStore.getState().setContainerState(
-      "env-1",
-      "working",
-      originalTime,
-    );
-    expect(useAgentActivityStore.getState().getContainerState("env-1"))
-      .toBe("waiting");
-
-    useAgentActivityStore.getState().setContainerState(
-      "env-1",
-      "waiting",
-      newerTime,
-    );
-    await Promise.resolve();
-    expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-1"])
-      .toBe(newerTime);
-    expect(callback).not.toHaveBeenCalled();
-
-    useAgentActivityStore.getState().setContainerState(
-      "env-1",
-      "working",
-      "not-a-date",
-    );
-    await Promise.resolve();
-    expect(useAgentActivityStore.getState().getContainerState("env-1"))
-      .toBe("working");
-    expect(Number.isFinite(Date.parse(
-      useAgentActivityStore.getState().containerStateUpdatedAt["env-1"],
-    ))).toBe(true);
-    expect(callback).toHaveBeenCalledTimes(1);
-  });
-
-  test("normalizes poisoned future observations without breaking later updates", () => {
-    const maximumDate = "+275760-09-13T00:00:00.000Z";
+  test("tracks per-tab presentation state and mounted container references", () => {
     const store = useAgentActivityStore.getState();
 
-    expect(() => {
-      store.setContainerState("env-future", "working", maximumDate);
-      store.setContainerState("env-future", "idle");
-    }).not.toThrow();
+    expect(store.getTabState("missing")).toBe("idle");
+    expect(store.getContainerState("missing")).toBe("idle");
 
-    const updatedAt = useAgentActivityStore
-      .getState()
-      .containerStateUpdatedAt["env-future"];
-    expect(Number.isFinite(Date.parse(updatedAt))).toBe(true);
-    expect(Date.parse(updatedAt)).toBeLessThanOrEqual(Date.now() + 5 * 60_000);
-
-    useAgentActivityStore.setState((state) => ({
-      containerStates: { ...state.containerStates, "env-legacy": "working" },
-      containerStateUpdatedAt: {
-        ...state.containerStateUpdatedAt,
-        "env-legacy": maximumDate,
-      },
-    }));
-    expect(() => {
-      store.setContainerState(
-        "env-legacy",
-        "idle",
-        new Date().toISOString(),
-      );
-    }).not.toThrow();
-    expect(useAgentActivityStore.getState().containerStates["env-legacy"])
-      .toBe("idle");
-  });
-
-  test("isolates callback errors and supports suppression for backend-owned events", async () => {
-    const consoleError = spyOn(console, "error").mockImplementation(() => {});
-    const failingCallback = mock(() => {
-      throw new Error("callback failed");
-    });
-    const healthyCallback = mock(() => undefined);
-    useAgentActivityStore.getState().registerStateCallback(failingCallback);
-    useAgentActivityStore.getState().registerStateCallback(healthyCallback);
-
-    try {
-      useAgentActivityStore.getState().setContainerState(
-        "env-1",
-        "working",
-        "2026-07-27T12:00:00.000Z",
-      );
-      await Promise.resolve();
-      expect(failingCallback).toHaveBeenCalledTimes(1);
-      expect(healthyCallback).toHaveBeenCalledTimes(1);
-      expect(consoleError).toHaveBeenCalledWith(
-        "[agentActivityStore] Callback error:",
-        expect.any(Error),
-      );
-
-      failingCallback.mockClear();
-      healthyCallback.mockClear();
-      useAgentActivityStore.getState().setContainerState(
-        "env-1",
-        "idle",
-        "2026-07-27T12:00:01.000Z",
-        false,
-      );
-      await Promise.resolve();
-      expect(useAgentActivityStore.getState().getContainerState("env-1"))
-        .toBe("idle");
-      expect(failingCallback).not.toHaveBeenCalled();
-      expect(healthyCallback).not.toHaveBeenCalled();
-    } finally {
-      consoleError.mockRestore();
-    }
-  });
-
-  test("replaces optimistic activity with an older authoritative snapshot", async () => {
-    const callback = mock(() => undefined);
-    useAgentActivityStore.getState().registerStateCallback(callback);
-    useAgentActivityStore.getState().setContainerState(
-      "env-1",
-      "working",
-      "2026-07-27T12:00:02.000Z",
-    );
-    await Promise.resolve();
-    callback.mockClear();
-
-    useAgentActivityStore.getState().reconcileContainerState(
-      "env-1",
-      "idle",
-      "2026-07-27T12:00:01.000Z",
-    );
-    await Promise.resolve();
-    expect(useAgentActivityStore.getState().containerStates["env-1"])
-      .toBe("idle");
-    expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-1"])
-      .toBe("2026-07-27T12:00:01.000Z");
-    expect(callback).not.toHaveBeenCalled();
-
-    // An unusable authoritative pair means "nothing to reconcile to", not
-    // "the local observation was wrong". Dropping it would turn a failed
-    // backend write into a sidebar that reads idle mid-turn.
-    useAgentActivityStore.getState().reconcileContainerState(
-      "env-1",
-      "working",
-      "not-a-date",
-    );
-    expect(useAgentActivityStore.getState().containerStates["env-1"])
-      .toBe("idle");
-    expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-1"])
-      .toBe("2026-07-27T12:00:01.000Z");
-  });
-
-  test("keeps the local observation when there is no authoritative state to adopt", async () => {
-    // The rollback path passes `environment.agentActivityState`, which is
-    // undefined for any environment persisted before the field existed. Wiping
-    // the runtime observation there would report idle while the agent works.
-    const callback = mock(() => undefined);
-    useAgentActivityStore.getState().registerStateCallback(callback);
-    useAgentActivityStore.getState().setContainerState(
-      "env-legacy",
-      "working",
-      "2026-07-27T12:00:02.000Z",
-    );
-    await Promise.resolve();
-    callback.mockClear();
-
-    useAgentActivityStore.getState().reconcileContainerState(
-      "env-legacy",
-      undefined,
-      undefined,
-    );
-    expect(useAgentActivityStore.getState().containerStates["env-legacy"])
-      .toBe("working");
-    expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-legacy"])
-      .toBe("2026-07-27T12:00:02.000Z");
-
-    // A state with no timestamp is equally unorderable and equally ignored.
-    useAgentActivityStore.getState().reconcileContainerState(
-      "env-legacy",
-      "idle",
-      undefined,
-    );
-    expect(useAgentActivityStore.getState().containerStates["env-legacy"])
-      .toBe("working");
-    expect(callback).not.toHaveBeenCalled();
-  });
-
-  test("reports whether an observation was adopted so callers can stay in sync", () => {
-    const store = useAgentActivityStore.getState();
-    expect(store.setContainerState("env-1", "working", "2026-07-27T12:00:02.000Z"))
-      .toBe(true);
-    // Equal and older tokens both lose to the one already held.
-    expect(store.setContainerState("env-1", "idle", "2026-07-27T12:00:02.000Z"))
-      .toBe(false);
-    expect(store.setContainerState("env-1", "idle", "2026-07-27T12:00:01.000Z"))
-      .toBe(false);
-    expect(useAgentActivityStore.getState().getContainerState("env-1"))
-      .toBe("working");
-    expect(store.setContainerState("env-1", "idle", "2026-07-27T12:00:03.000Z"))
-      .toBe(true);
-  });
-
-  test("accepts any token for a key that has a state but no recorded time", () => {
-    // Legacy/raw-seeded shape: without a previous token there is nothing to
-    // order against, so the observation is taken rather than silently dropped.
-    useAgentActivityStore.setState((state) => ({
-      containerStates: { ...state.containerStates, "env-untimed": "working" },
-    }));
-
-    expect(useAgentActivityStore.getState().setContainerState(
-      "env-untimed",
-      "idle",
-      "2020-01-01T00:00:00.000Z",
-    )).toBe(true);
-    expect(useAgentActivityStore.getState().getContainerState("env-untimed"))
-      .toBe("idle");
-  });
-
-  test("keeps generated observation times independent across environments", () => {
-    // A backend token that is slightly ahead of the local clock must not drag
-    // an unrelated environment's generated token into the future with it.
-    const aheadOfLocalClock = new Date(Date.now() + 60_000).toISOString();
-    const store = useAgentActivityStore.getState();
-    store.setContainerState("env-ahead", "working", aheadOfLocalClock);
-    store.setContainerState("env-other", "working");
-
-    const otherTime = Date.parse(
-      useAgentActivityStore.getState().containerStateUpdatedAt["env-other"]!,
-    );
-    expect(otherTime).toBeLessThan(Date.parse(aheadOfLocalClock));
-    expect(otherTime).toBeLessThanOrEqual(Date.now());
-  });
-
-  test("preserves activity at zero references and removes all keyed state explicitly", () => {
-    const store = useAgentActivityStore.getState();
-    store.setContainerState(
-      "env-1",
-      "working",
-      "2026-07-27T12:00:00.000Z",
-    );
+    store.setTabState("tab-1", "working");
+    store.incrementContainerRef("env-1");
     store.incrementContainerRef("env-1");
     store.decrementContainerRef("env-1");
 
-    expect(useAgentActivityStore.getState().containerRefCounts["env-1"])
-      .toBeUndefined();
-    expect(useAgentActivityStore.getState().containerStates["env-1"])
-      .toBe("working");
-    expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-1"])
-      .toBe("2026-07-27T12:00:00.000Z");
+    expect(useAgentActivityStore.getState().getTabState("tab-1")).toBe("working");
+    expect(useAgentActivityStore.getState().containerRefCounts["env-1"]).toBe(1);
+
+    store.removeTabState("tab-1");
+    store.decrementContainerRef("env-1");
+    expect(useAgentActivityStore.getState().getTabState("tab-1")).toBe("idle");
+    expect(useAgentActivityStore.getState().containerRefCounts["env-1"]).toBeUndefined();
+  });
+
+  test("replaces the projection from complete backend-owned snapshots", () => {
+    const store = useAgentActivityStore.getState();
+    store.replaceActivitySnapshot([
+      {
+        id: "env-1",
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+      },
+      {
+        id: "env-incomplete",
+        agentActivityState: "waiting",
+        agentActivityUpdatedAt: undefined,
+      },
+    ]);
+
+    expect(useAgentActivityStore.getState().containerStates).toEqual({
+      "env-1": "working",
+    });
+    expect(useAgentActivityStore.getState().containerStateUpdatedAt).toEqual({
+      "env-1": "2026-07-27T12:00:00.000Z",
+    });
+
+    store.replaceActivitySnapshot([{
+      id: "env-2",
+      agentActivityState: "idle",
+      agentActivityUpdatedAt: "2026-07-27T12:00:01.000Z",
+    }]);
+    expect(useAgentActivityStore.getState().containerStates).toEqual({
+      "env-2": "idle",
+    });
+    expect(useAgentActivityStore.getState().getContainerState("env-1")).toBe("idle");
+  });
+
+  test("removes projected state without disturbing other environments", () => {
+    const store = useAgentActivityStore.getState();
+    store.replaceActivitySnapshot([
+      {
+        id: "env-1",
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "2026-07-27T12:00:00.000Z",
+      },
+      {
+        id: "env-2",
+        agentActivityState: "waiting",
+        agentActivityUpdatedAt: "2026-07-27T12:00:01.000Z",
+      },
+    ]);
 
     store.removeContainerState("env-1");
-    expect(useAgentActivityStore.getState().containerStates["env-1"])
-      .toBeUndefined();
+
+    expect(useAgentActivityStore.getState().containerStates).toEqual({
+      "env-2": "waiting",
+    });
     expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-1"])
       .toBeUndefined();
   });
 });
-
 describe("errorDialogStore and fileDirtyStore", () => {
   test("opens and closes error details with the original prompt", () => {
     useErrorDialogStore.getState().showError("Failure", "Details", "retry this");

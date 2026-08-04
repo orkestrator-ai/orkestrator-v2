@@ -9,7 +9,10 @@
 // consumers don't need to thread it through separately.
 
 import { create } from "zustand";
-import type { TmuxAgentObservation } from "@orkestrator/protocol/tmux-observation";
+import type {
+  TmuxAgentObservation,
+  TmuxSelectionPrompt,
+} from "@orkestrator/protocol/tmux-observation";
 import type {
   HookEventKind,
   TranscriptLine,
@@ -231,6 +234,7 @@ interface ClaudeTmuxState {
       busy?: boolean;
       busyStartedAt?: number | null;
       observation?: TmuxAgentObservation;
+      observationGeneration?: string;
     },
   ) => void;
   resetTab: (tabId: string) => void;
@@ -260,6 +264,7 @@ interface ClaudeTmuxState {
   dismissInfoEvent: (tabId: string, id: string) => void;
   setBusy: (tabId: string, busy: boolean, startedAt?: number | null) => void;
   setObservation: (tabId: string, observation: TmuxAgentObservation) => void;
+  clearSelectionPrompt: (tabId: string, expectedPrompt: TmuxSelectionPrompt) => void;
 
   addAttachment: (tabId: string, attachment: TmuxAttachment) => void;
   removeAttachment: (tabId: string, attachmentId: string) => void;
@@ -329,7 +334,11 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
 
   setRunning: (tabId, running, info) =>
     set((state) =>
-      patchTab(state, tabId, (s) => ({
+      patchTab(state, tabId, (s) => {
+        const generationChanged = info?.observationGeneration !== undefined
+          && info.observationGeneration !== s.observation.generation;
+        const stopped = !running && info?.observation === undefined;
+        return ({
         ...s,
         running,
         environmentId: info?.environmentId ?? s.environmentId,
@@ -342,8 +351,16 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
           : info.busy
             ? info.busyStartedAt ?? s.busyStartedAt ?? Date.now()
             : null,
-        observation: info?.observation ?? s.observation,
-      })),
+        observation: info?.observation ?? (generationChanged || stopped
+          ? {
+              ...emptyTabState().observation,
+              ...(info?.observationGeneration
+                ? { generation: info.observationGeneration }
+                : {}),
+            }
+          : s.observation),
+        });
+      }),
     ),
 
   resetTab: (tabId) => {
@@ -554,10 +571,25 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
 
   setObservation: (tabId, observation) =>
     set((state) =>
-      patchTab(state, tabId, (current) =>
-        observation.revision < current.observation.revision
+      patchTab(state, tabId, (current) => {
+        const currentGeneration = current.observation.generation;
+        const incomingGeneration = observation.generation;
+        if (currentGeneration && currentGeneration !== incomingGeneration) return current;
+        return observation.revision < current.observation.revision
           ? current
-          : { ...current, observation },
+          : { ...current, observation };
+      }),
+    ),
+
+  clearSelectionPrompt: (tabId, expectedPrompt) =>
+    set((state) =>
+      patchTab(state, tabId, (current) =>
+        current.observation.prompt !== expectedPrompt
+          ? current
+          : {
+              ...current,
+              observation: { ...current.observation, prompt: null },
+            },
       ),
     ),
 

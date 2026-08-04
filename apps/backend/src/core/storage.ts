@@ -91,6 +91,7 @@ import type {
 export type JsonRecord = Record<string, unknown>;
 
 const MAX_FRONTEND_AGENT_ACTIVITY_OBSERVERS = 32;
+const MAX_PANE_LAYOUT_ROOT_BYTES = 256 * 1024;
 const PROMPT_QUEUE_CLAIM_LEASE_MS = 5 * 60 * 1000;
 const MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES = 4 * 1024;
 const MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES = 1024;
@@ -108,6 +109,21 @@ export type KanbanImage = {
 };
 
 export type KanbanStatus = "backlog" | "in-progress" | "review" | "done";
+
+function assertPaneLayoutRootWithinBounds(root: unknown): void {
+  let serializedRoot: string | undefined;
+  try {
+    serializedRoot = JSON.stringify(root);
+  } catch {
+    throw new Error("Pane layout root must be JSON serializable");
+  }
+  if (serializedRoot === undefined) {
+    throw new Error("Pane layout root must be JSON serializable");
+  }
+  if (Buffer.byteLength(serializedRoot, "utf8") > MAX_PANE_LAYOUT_ROOT_BYTES) {
+    throw new Error("Pane layout root exceeds the 256 KB limit");
+  }
+}
 
 export type KanbanTask = {
   id: string;
@@ -2638,6 +2654,64 @@ export class StorageService {
   }
 
   /**
+   * Journals one teardown against the latest environment snapshot while the
+   * environment mutation lock is held. Whole-map updates from command callers
+   * can otherwise overwrite a sibling teardown that was added concurrently.
+   */
+  async setTabTeardownIntent(
+    environmentId: string,
+    intent: NonNullable<Environment["tabTeardownIntents"]>[string],
+  ): Promise<Environment> {
+    if (
+      !isNonBlankString(intent.tabId)
+      || !isTabTeardownKind(intent.kind)
+      || !isNonBlankString(intent.createdAt)
+      || (intent.sessionId !== undefined && !isNonBlankString(intent.sessionId))
+      || (
+        intent.persistentSessionId !== undefined
+        && !isNonBlankString(intent.persistentSessionId)
+      )
+    ) {
+      throw new Error("Tab teardown intent is malformed");
+    }
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      environment.tabTeardownIntents = {
+        ...environment.tabTeardownIntents,
+        [intent.tabId]: intent,
+      };
+      await this.saveEnvironments(environments);
+      this.announce("environment", environmentId, environment.projectId);
+      return environment;
+    });
+  }
+
+  /** Clears only the intent this caller completed, preserving newer retries. */
+  async clearTabTeardownIntent(
+    environmentId: string,
+    tabId: string,
+    expectedCreatedAt: string,
+  ): Promise<Environment> {
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const current = environment.tabTeardownIntents?.[tabId];
+      if (!current || current.createdAt !== expectedCreatedAt) return environment;
+      const intents = { ...environment.tabTeardownIntents };
+      delete intents[tabId];
+      environment.tabTeardownIntents = Object.keys(intents).length > 0
+        ? intents
+        : undefined;
+      await this.saveEnvironments(environments);
+      this.announce("environment", environmentId, environment.projectId);
+      return environment;
+    });
+  }
+
+  /**
    * Atomically arms conflict-resolution reconciliation against the latest PR
    * fields. Serializing the predicate with the write prevents an older Resolve
    * click from re-arming an intent after a concurrent monitor check already
@@ -2877,7 +2951,15 @@ export class StorageService {
       );
       const completionTransition = previousAggregate === "working"
         && (nextAggregate === "idle" || nextAggregate === "waiting");
-      if (activityTransition) environment.lastActivityAt = normalizedOccurredAt;
+      if (activityTransition) {
+        const previousLastActivityAt = Date.parse(environment.lastActivityAt ?? "");
+        environment.lastActivityAt = new Date(Math.max(
+          acceptedOccurredTime,
+          Number.isFinite(previousLastActivityAt)
+            ? previousLastActivityAt
+            : Number.NEGATIVE_INFINITY,
+        )).toISOString();
+      }
       if (completionTransition) environment.hasUnreadWork = true;
       // The lease itself must persist (its expiry is enforced from disk), but
       // the backup rotation is skipped: only volatile activity fields changed.
@@ -3324,11 +3406,44 @@ export class StorageService {
   }
 
   async getPaneLayout(environmentId: string): Promise<PersistedPaneLayout | null> {
-    const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+    const layouts = await this.loadJsonCached<Record<string, PersistedPaneLayout>>(
       this.paneLayoutsFile(),
       () => ({}),
     );
     return layouts[environmentId] ?? null;
+  }
+
+  /**
+   * Loads the layout store once for destructive reconciliation. An absent file
+   * is a valid empty store; a present file that cannot be parsed (including
+   * from a retained backup) is unavailable, never evidence that every tab was
+   * deleted.
+   */
+  async loadPaneLayoutsForReconciliation(): Promise<{
+    available: boolean;
+    layouts: Record<string, PersistedPaneLayout>;
+  }> {
+    const filePath = this.paneLayoutsFile();
+    if (!await exists(filePath)) return { available: true, layouts: {} };
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      if (!raw.trim()) throw new Error("Pane layout store is empty");
+      const layouts = JSON.parse(raw) as unknown;
+      if (!isRecord(layouts)) throw new Error("Pane layout store is not a record");
+      return {
+        available: true,
+        layouts: layouts as Record<string, PersistedPaneLayout>,
+      };
+    } catch {
+      const recovered = await this.recoverJsonFromBackups<unknown>(filePath);
+      if (!recovered || !isRecord(recovered.value)) {
+        return { available: false, layouts: {} };
+      }
+      return {
+        available: true,
+        layouts: recovered.value as Record<string, PersistedPaneLayout>,
+      };
+    }
   }
 
   async savePaneLayout(
@@ -3339,18 +3454,7 @@ export class StorageService {
     if (!isNonNegativeInteger(expectedRevision)) {
       throw new Error("Pane layout expected revision must be a non-negative integer");
     }
-    let serializedRoot: string | undefined;
-    try {
-      serializedRoot = JSON.stringify(layout.root);
-    } catch {
-      throw new Error("Pane layout root must be JSON serializable");
-    }
-    if (serializedRoot === undefined) {
-      throw new Error("Pane layout root must be JSON serializable");
-    }
-    if (Buffer.byteLength(serializedRoot, "utf8") > 256 * 1024) {
-      throw new Error("Pane layout root exceeds the 256 KB limit");
-    }
+    assertPaneLayoutRootWithinBounds(layout.root);
 
     return this.enqueuePaneLayoutMutation(async () => {
       if (!await this.getEnvironment(environmentId)) {
@@ -3465,6 +3569,7 @@ export class StorageService {
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,
       };
+      assertPaneLayoutRootWithinBounds(saved.root);
       layouts[input.environmentId] = saved;
       await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
       this.announce("pane-layout", input.environmentId);

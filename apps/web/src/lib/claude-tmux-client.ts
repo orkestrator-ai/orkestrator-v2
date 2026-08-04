@@ -24,6 +24,7 @@ export type TmuxEvent =
       tab_id: string;
       environment_id: string;
       session_id: string;
+      observation_generation?: string;
       resumed: boolean;
       fast_mode: boolean | null;
     }

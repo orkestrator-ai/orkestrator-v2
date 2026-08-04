@@ -309,13 +309,32 @@ export function createNativeChatStoreSlice<
         const session = state.sessions.get(sessionKey);
         if (!session) return state;
         const next = new Map(state.sessions);
-        const revisions = new Map(state.sessionLoadingRevisions);
         const timed = updateTimedSessionLoading(session, isLoading, Date.now(), startedAt);
+        const nextTurnId = isLoading ? turnId ?? session.turnId : undefined;
+        if (
+          timed.isLoading === session.isLoading
+          && timed.loadingStartedAt === session.loadingStartedAt
+          && timed.lastCompletedElapsedSeconds
+            === session.lastCompletedElapsedSeconds
+          && nextTurnId === session.turnId
+        ) {
+          // A repeated lifecycle edge is still an ordering event even when it
+          // carries no new session fields. Preserve the session/map identity
+          // used by render guards, but advance the dedicated generation token
+          // so an older in-flight snapshot cannot land after this edge.
+          const revisions = new Map(state.sessionLoadingRevisions);
+          revisions.set(
+            sessionKey,
+            (state.sessionLoadingRevisions.get(sessionKey) ?? 0) + 1,
+          );
+          return { sessionLoadingRevisions: revisions };
+        }
+        const revisions = new Map(state.sessionLoadingRevisions);
         next.set(
           sessionKey,
           {
             ...timed,
-            turnId: isLoading ? turnId ?? session.turnId : undefined,
+            turnId: nextTurnId,
           },
         );
         revisions.set(

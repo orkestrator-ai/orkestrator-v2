@@ -41,6 +41,7 @@ export class OrkestratorBackend {
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
   private nativeActivitySweep: ReturnType<typeof setInterval> | null = null;
+  private tabResourceSweep: ReturnType<typeof setInterval> | null = null;
   private readonly reapPidServers: typeof reapOrphanedLocalServers;
   private readonly reapTmuxRuntimes: typeof reapOrphanedClaudeTmuxRuntimes;
   private readonly agentTools: Pick<
@@ -111,8 +112,6 @@ export class OrkestratorBackend {
         onActivityTransition: (event) => {
           options.emit("native-agent-session-activity", {
             environment_id: event.environmentId,
-            session_key: event.sessionKey,
-            provider_session_id: event.providerSessionId,
             previous_state: event.previousState,
             state: event.state,
           });
@@ -311,6 +310,28 @@ export class OrkestratorBackend {
     await this.promptQueues.drainAll().catch((error) => {
       console.warn("[backend] Failed to drain tmux prompt queues:", error);
     });
+    let tabTeardownReconcileInFlight: Promise<void> | null = null;
+    const reconcileTabTeardownsOnce = (): void => {
+      if (!reconcileTabTeardowns || tabTeardownReconcileInFlight) return;
+      tabTeardownReconcileInFlight = Promise.resolve(
+        reconcileTabTeardowns({}, this.context),
+      ).then(() => undefined).catch((error: unknown) => {
+        console.warn("[backend] Failed to reconcile tab teardowns:", error);
+      }).finally(() => {
+        tabTeardownReconcileInFlight = null;
+      });
+    };
+    let orphanReconcileInFlight: Promise<void> | null = null;
+    const reconcileOrphanedTabResourcesOnce = (): void => {
+      if (!reconcileOrphanedTabResources || orphanReconcileInFlight) return;
+      orphanReconcileInFlight = Promise.resolve(
+        reconcileOrphanedTabResources({}, this.context),
+      ).then(() => undefined).catch((error: unknown) => {
+        console.warn("[backend] Failed to reconcile orphaned tab resources:", error);
+      }).finally(() => {
+        orphanReconcileInFlight = null;
+      });
+    };
     this.nativeActivitySweep ??= setInterval(() => {
       void this.nativeAgents.reconcileAgentActivity().catch((error) => {
         console.warn("[backend] Failed to reconcile native agent activity:", error);
@@ -320,23 +341,19 @@ export class OrkestratorBackend {
           console.warn("[backend] Failed to reconcile Claude terminal activity:", error);
         });
       }
-      if (reconcileTabTeardowns) {
-        void Promise.resolve(reconcileTabTeardowns({}, this.context)).catch((error: unknown) => {
-          console.warn("[backend] Failed to reconcile tab teardowns:", error);
-        });
-      }
-      if (reconcileOrphanedTabResources) {
-        void Promise.resolve(reconcileOrphanedTabResources({}, this.context)).catch(
-          (error: unknown) => {
-            console.warn("[backend] Failed to reconcile orphaned tab resources:", error);
-          },
-        );
-      }
       void this.promptQueues.drainAll().catch((error) => {
         console.warn("[backend] Failed to drain tmux prompt queues:", error);
       });
     }, 2_000);
     this.nativeActivitySweep.unref?.();
+    // Interrupted tab cleanup is durable and orphan reaping has a one-hour
+    // grace period. A one-minute, coalesced sweep is responsive enough without
+    // repeatedly parsing layouts or overlapping destructive work.
+    this.tabResourceSweep ??= setInterval(() => {
+      reconcileTabTeardownsOnce();
+      reconcileOrphanedTabResourcesOnce();
+    }, 60_000);
+    this.tabResourceSweep.unref?.();
   }
 
   /**
@@ -367,6 +384,10 @@ export class OrkestratorBackend {
     if (this.nativeActivitySweep) {
       clearInterval(this.nativeActivitySweep);
       this.nativeActivitySweep = null;
+    }
+    if (this.tabResourceSweep) {
+      clearInterval(this.tabResourceSweep);
+      this.tabResourceSweep = null;
     }
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.

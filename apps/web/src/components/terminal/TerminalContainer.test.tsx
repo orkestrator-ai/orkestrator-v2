@@ -434,6 +434,36 @@ describe("TerminalContainer", () => {
     expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
   });
 
+  test("hydrates a failed local setup and renders retry and skip recovery actions", async () => {
+    useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+      environmentType: "local",
+      containerId: null,
+      worktreePath: "/tmp/failed-local-worktree",
+      status: "error",
+      setupScriptsComplete: false,
+      setupPhase: "failed",
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isContainerRunning={false}
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
+      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+    });
+    expect(screen.getByText("Environment setup failed.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /retry setup/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /skip setup/i })).toBeTruthy();
+  });
+
   test("hydrates and preserves a build tab inserted before the container mounts", async () => {
     const pipeline = buildPipelineFixture({
       id: "pipeline-pre-mount",

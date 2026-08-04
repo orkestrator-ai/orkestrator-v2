@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { toast } from "sonner";
 import {
   getKanbanTasks,
   addKanbanTask,
@@ -123,11 +124,17 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
 
   clearTaskBuildStatus: async (taskId) => {
     try {
-      const { task: updated } = await clearTaskBuildStatus(taskId);
+      const { task: updated, failedPipelineIds } = await clearTaskBuildStatus(taskId);
       useBuildPipelineStore.getState().removePipelinesForTask(taskId);
       set((state) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }));
+      if (failedPipelineIds.length > 0) {
+        toast.warning("Some build pipeline data could not be removed", {
+          description:
+            "The task was unlinked, but its build environment may need clearing manually.",
+        });
+      }
     } catch (error) {
       console.error("[KanbanStore] Failed to clear task build status:", error);
     }

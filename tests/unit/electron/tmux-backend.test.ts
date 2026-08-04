@@ -1999,6 +1999,49 @@ exit 0
     });
   });
 
+  test("assigns a new observation generation when replacing the same resumed session", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = {
+        tabId: "tab-generation",
+        environmentId: environment.id,
+        resumeSessionId: "11111111-2222-3333-4444-555555555555",
+      };
+      const first = await invoke(
+        handlers,
+        "claude_tmux_start",
+        args,
+        context,
+      ) as { session_id: string; observation: { generation?: string; revision: number } };
+      const second = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { ...args, replaceExisting: true },
+        context,
+      ) as { session_id: string; observation: { generation?: string; revision: number } };
+
+      expect(second.session_id).toBe(first.session_id);
+      expect(first.observation.generation).toBeTruthy();
+      expect(second.observation.generation).toBeTruthy();
+      expect(second.observation.generation).not.toBe(first.observation.generation);
+      expect(second.observation.revision).toBe(0);
+
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: args.tabId, environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
   test("sends text and keys, captures, resizes, rejects blank switches, and answers PreToolUse", async () => {
     const handlers = createHandlers();
 
@@ -5250,6 +5293,62 @@ describe("live session read paths", () => {
     });
   }, 15_000);
 
+  test("sending prompt keys forces an immediate authoritative observation", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, alive }) => {
+      const observations: Array<{ revision: number; prompt: unknown }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: (event: string, payload: unknown) => {
+          const candidate = payload as {
+            kind?: string;
+            observation?: { revision: number; prompt: unknown };
+          };
+          if (event === "claude-tmux:event" && candidate.kind === "observation") {
+            observations.push(candidate.observation!);
+          }
+        },
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-prompt-refresh";
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      );
+      const session = tmuxSessionName(environment.id, tabId);
+      await fs.writeFile(path.join(alive, `${session}.mode`), "selection");
+      await waitFor(() => observations.some((entry) => entry.prompt !== null), 5_000);
+      const before = observations.length;
+
+      await invoke(
+        handlers,
+        "claude_tmux_send_keys",
+        { tabId, environmentId: environment.id, keys: ["Down"] },
+        context,
+      );
+
+      // The ordinary idle cadence is three seconds. A fresh frame inside one
+      // second proves input reset the cadence and forced an authoritative
+      // emission even though the fake pane deliberately stayed unchanged.
+      await waitFor(() => observations.length > before, 1_000);
+      expect(observations.at(-1)?.prompt).not.toBeNull();
+      expect(observations.at(-1)?.revision).toBeGreaterThan(
+        observations[before - 1]!.revision,
+      );
+
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId, environmentId: environment.id },
+        context,
+      );
+    });
+  }, 15_000);
+
   test("a failed poll snapshot skips the tick without ending the loop", async () => {
     const handlers = createHandlers();
 
@@ -5583,16 +5682,42 @@ describe("live session read paths", () => {
   test("still reports a tmux session that ended, on the slower liveness cadence", async () => {
     const handlers = createHandlers();
 
-    await withFakeTmuxRuntime(async ({ environment, alive }) => {
+    await withFakeTmuxRuntime(async ({ environment, alive, runtimeRoot }) => {
       const emitted: Array<{ event: string; payload: unknown }> = [];
+      const persistedStates: string[] = [];
       const context = {
-        storage: { getEnvironment: async () => environment },
+        storage: {
+          getEnvironment: async () => environment,
+          setEnvironmentAgentActivity: async (
+            _environmentId: string,
+            state: "idle" | "working" | "waiting",
+            occurredAt: string,
+          ) => {
+            persistedStates.push(state);
+            environment.agentActivitySources = {
+              ...environment.agentActivitySources,
+              "claude-tmux": { state, updatedAt: occurredAt },
+            };
+            return environment;
+          },
+        },
         emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
         appRoot: "",
         resourceRoot: "",
       };
       const tabId = "tab-liveness";
-      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      ) as { session_id: string };
+
+      // Make the dead session busy first. The liveness path must not leave
+      // that process-local state contributing "working" forever.
+      const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+      await fs.writeFile(path.join(pendingDir, "UserPromptSubmit-before-death.json"), "{}");
+      await waitFor(() => persistedStates.includes("working"));
 
       // Claude exits and tmux tears the session down; nothing else tells the
       // poll loop, so the periodic has-session check is the only signal.
@@ -5602,6 +5727,14 @@ describe("live session read paths", () => {
         item.event === "claude-tmux:event"
         && (item.payload as { kind?: string }).kind === "stopped"
       ), 8_000);
+
+      await waitFor(() => persistedStates.at(-1) === "idle");
+      await expect(invoke(
+        handlers,
+        "claude_tmux_status",
+        { tabId, environmentId: environment.id },
+        context,
+      )).resolves.toBeNull();
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });

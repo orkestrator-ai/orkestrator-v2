@@ -1743,13 +1743,17 @@ class TmuxSession {
   private fastMode: boolean | null = null;
   private paneCache: { text: string; hash: string; capturedAt: number } | undefined;
   private paneCaptureInFlight: Promise<{ text: string; hash: string; capturedAt: number }> | undefined;
+  private readonly observationGeneration = randomUUID();
   private observation: TmuxAgentObservation = {
+    generation: this.observationGeneration,
     revision: 0,
     observedAt: new Date(0).toISOString(),
     usage: [],
     prompt: null,
   };
   private nextObservationAt = 0;
+  /** Force the next scheduled capture to re-emit even if the pane is unchanged. */
+  private forceNextObservation = false;
   private observationInFlight: Promise<void> | undefined;
   private readonly inputMutex = new AsyncMutex();
 
@@ -1983,6 +1987,7 @@ class TmuxSession {
       tab_id: this.tabId,
       environment_id: this.environmentId,
       session_id: this.sessionId,
+      observation_generation: this.observationGeneration,
       resumed: this.resumed,
       fast_mode: this.fastMode,
     });
@@ -2174,7 +2179,13 @@ class TmuxSession {
                 ? TMUX_BUSY_OBSERVATION_INTERVAL_MS
                 : TMUX_OBSERVATION_INTERVAL_MS
             );
-            const observation = this.refreshObservation(context).catch((error) => {
+            const forceEmit = this.forceNextObservation;
+            this.forceNextObservation = false;
+            const observation = this.refreshObservation(context, forceEmit).catch((error) => {
+              if (forceEmit) {
+                this.forceNextObservation = true;
+                this.nextObservationAt = 0;
+              }
               // Pane contents are sensitive. Report only the error class.
               console.warn(
                 "[tmux] pane observation failed",
@@ -2193,11 +2204,37 @@ class TmuxSession {
           // checked on a slower cadence than the hook and transcript reads.
           if (tick % LIVENESS_CHECK_EVERY_TICKS !== 0) continue;
           if (!await this.tmuxAlive().catch(() => false)) {
+            let removed = false;
+            await tmuxManager.installLock(this.environmentId).runExclusive(async () => {
+              // A replace/stop may have won while the liveness process was in
+              // flight. It owns the transition and any newer session under the
+              // same tab key; never emit a stale stopped frame for that case.
+              if (this.stopRequested) return;
+              if (await this.tmuxAlive().catch(() => false)) return;
+              removed = tmuxManager.removeIfSame(
+                this.environmentId,
+                this.tabId,
+                this,
+              );
+              if (!removed) return;
+              this.setBusyState(false);
+              await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
+              if (tmuxManager.sessionsInEnvironment(this.environmentId) === 0) {
+                await uninstallWorkspaceHooks(this.backend, this.workspaceHookPaths).catch((error) => {
+                  console.warn("[tmux] uninstallWorkspaceHooks failed", error);
+                });
+              }
+            });
+            if (!removed) {
+              if (this.stopRequested) break;
+              continue;
+            }
             context.emit(CLAUDE_TMUX_EVENT, {
               kind: "stopped",
               tab_id: this.tabId,
               environment_id: this.environmentId,
             });
+            await persistTmuxEnvironmentActivity(context, this.environmentId);
             break;
           }
         }
@@ -2207,16 +2244,22 @@ class TmuxSession {
     })();
   }
 
-  private async refreshObservation(context: CommandContext): Promise<void> {
+  private async refreshObservation(
+    context: CommandContext,
+    forceEmit = false,
+  ): Promise<void> {
     const pane = await this.capturePane();
-    const next = parseTmuxAgentObservation(
-      pane,
-      this.observation.revision + 1,
-      new Date().toISOString(),
-    );
+    const next = {
+      ...parseTmuxAgentObservation(
+        pane,
+        this.observation.revision + 1,
+        new Date().toISOString(),
+      ),
+      generation: this.observationGeneration,
+    };
     const promptChanged = JSON.stringify(next.prompt) !== JSON.stringify(this.observation.prompt);
     const usageChanged = JSON.stringify(next.usage) !== JSON.stringify(this.observation.usage);
-    if (!promptChanged && !usageChanged) return;
+    if (!forceEmit && !promptChanged && !usageChanged) return;
 
     const previousPrompt = this.observation.prompt;
     this.observation = next;
@@ -2334,6 +2377,18 @@ class TmuxSession {
 
   async sendText(text: string): Promise<void> {
     await this.inputMutex.runExclusive(() => this.sendTextUnlocked(text));
+  }
+
+  /**
+   * Schedule an authoritative pane read immediately after input. The renderer
+   * may hide an answered prompt optimistically, but this forced emission makes
+   * the backend restore it if Claude did not actually accept the keys.
+   */
+  async sendKeysAndRefresh(keys: string[]): Promise<void> {
+    await this.sendKeys(keys);
+    this.paneCache = undefined;
+    this.forceNextObservation = true;
+    this.nextObservationAt = 0;
   }
 
   private async sendLiteralUnlocked(text: string): Promise<void> {
@@ -2794,6 +2849,13 @@ class TmuxSessionManager {
     const session = this.sessions.get(key);
     this.sessions.delete(key);
     return session;
+  }
+
+  removeIfSame(environmentId: string, tabId: string, expected: TmuxSession): boolean {
+    const key = this.key(environmentId, tabId);
+    if (this.sessions.get(key) !== expected) return false;
+    this.sessions.delete(key);
+    return true;
   }
 
   /** Drops and returns every session of an environment. Used by teardown. */
@@ -3866,7 +3928,8 @@ export function registerTmuxBackendCommands(
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).sendText(asString(text, "text")),
   );
   register("claude_tmux_send_keys", ({ tabId, keys, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).sendKeys(asStringArray(keys)),
+    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId"))
+      .sendKeysAndRefresh(asStringArray(keys)),
   );
   register("claude_tmux_submit", async ({ tabId, text, environmentId }, context) => {
     const envId = asString(environmentId, "environmentId");
@@ -3944,6 +4007,11 @@ export function registerTmuxBackendCommands(
     lastTmuxOrphanSweepAt = now;
     const graceMs = 60 * 60 * 1_000;
     const environments = await context.storage.loadEnvironments();
+    const paneLayouts = await context.storage.loadPaneLayoutsForReconciliation();
+    if (!paneLayouts.available) {
+      console.warn("[tmux] skipping orphan reconciliation because pane layouts are unreadable");
+      return { reaped: 0, skipped: true };
+    }
     const survivingIds = environments.map((environment) => environment.id);
     let reaped = 0;
 
@@ -3981,7 +4049,7 @@ export function registerTmuxBackendCommands(
       const listed = await backend.exec(["tmux", "list-sessions", "-F", "#{session_name}"])
         .catch(() => null);
       if (!listed || listed.status !== 0) continue;
-      const layout = await context.storage.getPaneLayout(environment.id);
+      const layout = paneLayouts.layouts[environment.id];
       const referenced = new Set<string>();
       if (layout) collectReferencedNames(environment.id, layout.root, referenced);
       const names = selectReapableTmuxSessions({

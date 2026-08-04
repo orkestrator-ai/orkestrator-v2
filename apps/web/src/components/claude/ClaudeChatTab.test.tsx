@@ -646,6 +646,7 @@ function resetStores(environmentName = "review-table") {
         branch: "main",
         containerId: "container-1",
         status: "running",
+        setupPhase: "ready",
         prUrl: null,
         prState: null,
         hasMergeConflicts: null,
@@ -5846,7 +5847,8 @@ describe("ClaudeChatTab", () => {
         createdAt: new Date().toISOString(),
         environmentType: "local",
       });
-      useEnvironmentStore.setState({
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        setupPhase: "ready",
       });
       mockGetLocalClaudeServerStatus.mockResolvedValue({
         running: false,
@@ -5994,7 +5996,8 @@ describe("ClaudeChatTab", () => {
       expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
 
       act(() => {
-        useEnvironmentStore.setState({
+        useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+          setupPhase: "ready",
         });
       });
       await flushMicrotaskWork();

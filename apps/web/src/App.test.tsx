@@ -552,11 +552,14 @@ describe("App background processing mounts", () => {
     expect(mockUseCodexBackgroundSync).toHaveBeenCalledTimes(1);
   });
 
-  test("keeps off-screen setup-running environments mounted in hidden background terminals", async () => {
+  test("does not mount off-screen environments solely for backend-owned setup work", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
-        makeEnvironment("env-background", "project-2"),
+        {
+          ...makeEnvironment("env-background", "project-2"),
+          setupPhase: "running",
+        },
       ],
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
@@ -564,19 +567,11 @@ describe("App background processing mounts", () => {
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
-      expect(screen.getByTestId("terminal-env-background")).toBeTruthy();
-    });
+    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
 
-    const backgroundHostClasses = screen
-      .getByTestId("background-terminal-host")
-      .className
-      .split(/\s+/);
-    expect(backgroundHostClasses).toContain("invisible");
-    expect(backgroundHostClasses).not.toContain("hidden");
     expect(screen.getByTestId("terminal-env-visible").getAttribute("data-active")).toBe("true");
-    expect(screen.getByTestId("terminal-env-background").getAttribute("data-active")).toBe("false");
+    expect(screen.queryByTestId("terminal-env-background")).toBeNull();
+    expect(screen.queryByTestId("background-terminal-host")).toBeNull();
   });
 
   test("hydrates looped reviews exactly once per environment, starting from an empty store", async () => {
@@ -842,7 +837,7 @@ describe("App background processing mounts", () => {
     );
   });
 
-  test("keeps off-screen environments with pending setup commands mounted before setup starts", async () => {
+  test("does not mount off-screen environments solely for pending backend setup", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
@@ -852,17 +847,14 @@ describe("App background processing mounts", () => {
       selectedEnvironmentId: "env-visible",
     });
     useEnvironmentStore.getState().updateEnvironment("env-pending-setup", {
-      setupPhase: "running",
+      setupPhase: "pending",
     });
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
-      expect(screen.getByTestId("terminal-env-pending-setup")).toBeTruthy();
-    });
-
-    expect(screen.getByTestId("terminal-env-pending-setup").getAttribute("data-active")).toBe("false");
+    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
+    expect(screen.queryByTestId("terminal-env-pending-setup")).toBeNull();
+    expect(screen.queryByTestId("background-terminal-host")).toBeNull();
   });
 
   test("does not duplicate setup-running environments that are already visible", async () => {

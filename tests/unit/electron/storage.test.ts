@@ -781,7 +781,9 @@ describe("Electron StorageService", () => {
       "working",
       frontendIdleAt,
       "unknown-source" as never,
-    )).rejects.toThrow("source must be frontend, claude-terminal, or native-agent");
+    )).rejects.toThrow(
+      "source must be frontend, claude-terminal, claude-tmux, or native-agent",
+    );
   });
 
   test("accepts backend-owned native activity without renderer observer ids", async () => {

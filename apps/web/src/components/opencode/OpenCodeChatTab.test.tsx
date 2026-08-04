@@ -696,6 +696,7 @@ function resetStores(name = "20260415-123456") {
         branch: "main",
         containerId: "container-1",
         status: "running",
+        setupPhase: "ready",
         prUrl: null,
         prState: null,
         hasMergeConflicts: null,
@@ -3082,7 +3083,8 @@ describe("OpenCodeChatTab", () => {
       useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
         createdAt: new Date().toISOString(),
       });
-      useEnvironmentStore.setState({
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        setupPhase: "ready",
       });
       mockGetLocalOpencodeServerStatus.mockResolvedValue({
         running: false,
@@ -3302,7 +3304,8 @@ describe("OpenCodeChatTab", () => {
       expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
 
       act(() => {
-        useEnvironmentStore.setState({
+        useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+          setupPhase: "ready",
         });
       });
 
@@ -3390,7 +3393,8 @@ describe("OpenCodeChatTab", () => {
     });
 
     test("surfaces a rejected local status probe without touching the container bridge", async () => {
-      useEnvironmentStore.setState({
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        setupPhase: "ready",
       });
       mockGetLocalOpencodeServerStatus.mockRejectedValue(
         new Error("local OpenCode status unavailable"),
@@ -8007,7 +8011,10 @@ describe("OpenCodeChatTab", () => {
     });
 
     test("skips cache IO when the environment has no project", async () => {
-      useEnvironmentStore.setState({ environments: [] });
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        projectId: "",
+        setupPhase: "ready",
+      });
       mockGetModelsWithDefaults.mockResolvedValue({
         models: [{ id: "openai/live", name: "Live", provider: "openai" }],
         defaults: {},

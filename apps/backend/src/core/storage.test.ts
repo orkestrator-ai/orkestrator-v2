@@ -160,6 +160,86 @@ describe("backend-owned setup and build surfaces", () => {
       });
     });
   });
+
+  test("refuses a backend-owned build tab that would exceed the layout bound", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-build-tab-bound";
+      await storage.addEnvironment(environment);
+      const root = {
+        kind: "leaf",
+        id: "default",
+        tabs: [] as Array<Record<string, unknown>>,
+        activeTabId: null,
+        padding: "",
+      };
+      const baseBytes = Buffer.byteLength(JSON.stringify(root), "utf8");
+      root.padding = "x".repeat(256 * 1024 - baseBytes - 32);
+      await storage.savePaneLayout(environment.id, {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "default",
+        root,
+      }, 0);
+
+      await expect(storage.ensureBuildPipelineTab({
+        pipelineId: "pipeline-overflow",
+        taskId: "task-overflow",
+        environmentId: environment.id,
+        isLocal: true,
+      })).rejects.toThrow("Pane layout root exceeds the 256 KB limit");
+      expect((await storage.getPaneLayout(environment.id))?.revision).toBe(1);
+    });
+  });
+
+  test("distinguishes an unreadable pane-layout store from a valid empty store", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      await expect(storage.loadPaneLayoutsForReconciliation()).resolves.toEqual({
+        available: true,
+        layouts: {},
+      });
+      await fs.writeFile(path.join(dataDir, "pane-layouts.json"), "{truncated", "utf8");
+      await expect(storage.loadPaneLayoutsForReconciliation()).resolves.toEqual({
+        available: false,
+        layouts: {},
+      });
+    });
+  });
+});
+
+describe("durable tab teardown intents", () => {
+  test("atomically preserves concurrent intents and clears only the completed generation", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-teardown-intents";
+      await storage.addEnvironment(environment);
+      const first = {
+        tabId: "tab-1",
+        kind: "terminal" as const,
+        createdAt: "2026-08-04T10:00:00.000Z",
+      };
+      const second = {
+        tabId: "tab-2",
+        kind: "codex-native" as const,
+        createdAt: "2026-08-04T10:00:01.000Z",
+      };
+
+      await Promise.all([
+        storage.setTabTeardownIntent(environment.id, first),
+        storage.setTabTeardownIntent(environment.id, second),
+      ]);
+      expect((await storage.getEnvironment(environment.id))?.tabTeardownIntents)
+        .toEqual({ "tab-1": first, "tab-2": second });
+
+      await storage.setTabTeardownIntent(environment.id, {
+        ...first,
+        createdAt: "2026-08-04T10:00:02.000Z",
+      });
+      await storage.clearTabTeardownIntent(environment.id, first.tabId, first.createdAt);
+      expect((await storage.getEnvironment(environment.id))?.tabTeardownIntents)
+        .toHaveProperty("tab-1.createdAt", "2026-08-04T10:00:02.000Z");
+    });
+  });
 });
 
 describe("PR completion refresh intent", () => {
@@ -642,6 +722,25 @@ describe("hot store read caching", () => {
 });
 
 describe("environment completion and unread state", () => {
+  test("does not move the unread activity token backwards for a fresh observer", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const completion = new Date(Date.now() + 60_000).toISOString();
+      await storage.recordEnvironmentCompletion(environment.id, completion);
+      const olderTransition = new Date(Date.now() + 1_000).toISOString();
+
+      await storage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        olderTransition,
+        "frontend",
+        "fresh-observer",
+      );
+
+      expect((await storage.getEnvironment(environment.id))?.lastActivityAt).toBe(completion);
+    });
+  });
+
   test("records a newer completion and ignores stale completion timestamps", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));

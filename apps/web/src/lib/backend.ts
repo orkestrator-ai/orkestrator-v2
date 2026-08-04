@@ -2239,6 +2239,7 @@ export async function deleteBuildPipeline(pipelineId: string): Promise<void> {
 export async function clearTaskBuildStatus(taskId: string): Promise<{
   task: KanbanTask;
   removedPipelineIds: string[];
+  failedPipelineIds: string[];
 }> {
   return invoke("clear_task_build_status", { taskId });
 }

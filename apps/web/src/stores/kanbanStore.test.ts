@@ -15,14 +15,15 @@ import { mockToastWarning } from "../../../../tests/mocks/sonner";
 import { useBuildPipelineStore } from "./buildPipelineStore";
 
 const realBackendSnapshot = { ...realBackend };
-const deleteBuildPipelineMock = mock(async (_pipelineId: string) => {});
-const updateKanbanTaskMock = mock(async (taskId: string) =>
-  task({ id: taskId, environmentId: undefined, buildPipelineId: undefined }));
+const clearTaskBuildStatusMock = mock(async (taskId: string) => ({
+  task: task({ id: taskId, environmentId: undefined, buildPipelineId: undefined }),
+  removedPipelineIds: [] as string[],
+  failedPipelineIds: [] as string[],
+}));
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
-  deleteBuildPipeline: deleteBuildPipelineMock,
-  updateKanbanTask: updateKanbanTaskMock,
+  clearTaskBuildStatus: clearTaskBuildStatusMock,
 }));
 
 const { useKanbanStore } = await import("./kanbanStore");
@@ -49,11 +50,13 @@ function task(overrides: Partial<KanbanTask> = {}): KanbanTask {
 
 describe("kanbanStore.clearTaskBuildStatus", () => {
   beforeEach(() => {
-    deleteBuildPipelineMock.mockReset();
-    deleteBuildPipelineMock.mockImplementation(async () => {});
-    updateKanbanTaskMock.mockReset();
-    updateKanbanTaskMock.mockImplementation(async (taskId: string) =>
-      task({ id: taskId, environmentId: undefined, buildPipelineId: undefined }));
+    clearTaskBuildStatusMock.mockReset();
+    clearTaskBuildStatusMock.mockImplementation(async (taskId: string) => ({
+      task: task({ id: taskId, environmentId: undefined, buildPipelineId: undefined }),
+      removedPipelineIds: [],
+      failedPipelineIds: [],
+    }));
+    mockToastWarning.mockClear();
     useKanbanStore.setState({
       tasks: [task()],
       isLoading: false,
@@ -65,38 +68,14 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
     });
   });
 
-  test("clears an unlinked task without issuing a pipeline delete", async () => {
+  test("delegates the authoritative cleanup and applies the returned task", async () => {
     await useKanbanStore.getState().clearTaskBuildStatus("task-1");
 
-    expect(deleteBuildPipelineMock).not.toHaveBeenCalled();
-    expect(updateKanbanTaskMock).toHaveBeenCalledTimes(1);
-    const updateCall = updateKanbanTaskMock.mock.calls[0] as unknown[];
-    expect(updateCall.slice(0, 7)).toEqual([
-      "task-1",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "",
-      "",
-    ]);
+    expect(clearTaskBuildStatusMock).toHaveBeenCalledWith("task-1");
+    expect(useKanbanStore.getState().tasks[0]?.buildPipelineId).toBeUndefined();
   });
 
-  test("deletes the backend-authoritative task link even when the pipeline cache is empty", async () => {
-    useKanbanStore.setState({
-      tasks: [task({ buildPipelineId: "persisted-pipeline" })],
-    });
-
-    await useKanbanStore.getState().clearTaskBuildStatus("task-1");
-
-    expect(deleteBuildPipelineMock).toHaveBeenCalledTimes(1);
-    expect(deleteBuildPipelineMock).toHaveBeenCalledWith("persisted-pipeline");
-  });
-
-  test("deletes every distinct cached and persisted pipeline before clearing the task", async () => {
-    useKanbanStore.setState({
-      tasks: [task({ buildPipelineId: "pipeline-a" })],
-    });
+  test("removes all cached pipelines for the task after the backend succeeds", async () => {
     const first = buildPipelineFixture({
       id: "pipeline-a",
       taskId: "task-1",
@@ -114,10 +93,6 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
 
     await useKanbanStore.getState().clearTaskBuildStatus("task-1");
 
-    expect(deleteBuildPipelineMock).toHaveBeenCalledTimes(2);
-    expect(new Set(deleteBuildPipelineMock.mock.calls.map(([id]) => id))).toEqual(
-      new Set(["pipeline-a", "pipeline-b"]),
-    );
     expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
   });
 
@@ -137,11 +112,14 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
-    deleteBuildPipelineMock.mockRejectedValueOnce(new Error("delete failed"));
+    clearTaskBuildStatusMock.mockResolvedValueOnce({
+      task: task({ environmentId: undefined, buildPipelineId: undefined }),
+      removedPipelineIds: [],
+      failedPipelineIds: [pipeline.id],
+    });
 
     await useKanbanStore.getState().clearTaskBuildStatus("task-1");
 
-    expect(updateKanbanTaskMock).toHaveBeenCalledTimes(1);
     expect(useKanbanStore.getState().tasks[0]?.buildPipelineId).toBeUndefined();
     expect(useBuildPipelineStore.getState().pipelines.has("pipeline-fail")).toBe(
       false,
@@ -164,7 +142,6 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
 
     await useKanbanStore.getState().clearTaskBuildStatus("task-1");
 
-    expect(updateKanbanTaskMock).toHaveBeenCalledTimes(1);
     expect(mockToastWarning).not.toHaveBeenCalled();
   });
 
@@ -182,7 +159,7 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
-    updateKanbanTaskMock.mockRejectedValueOnce(new Error("update failed"));
+    clearTaskBuildStatusMock.mockRejectedValueOnce(new Error("update failed"));
 
     await useKanbanStore.getState().clearTaskBuildStatus("task-1");
 

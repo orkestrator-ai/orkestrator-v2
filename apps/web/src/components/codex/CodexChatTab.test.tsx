@@ -841,6 +841,7 @@ function seedEnvironment(name = "20260415-123456") {
         branch: "main",
         containerId: CONTAINER_ID,
         status: "running",
+        setupPhase: "ready",
         prUrl: null,
         prState: null,
         hasMergeConflicts: null,
@@ -2577,7 +2578,8 @@ describe("CodexChatTab", () => {
     useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
       createdAt: new Date().toISOString(),
     });
-    useEnvironmentStore.setState({
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "ready",
     });
     mockGetLocalCodexServerStatus.mockResolvedValue({
       running: false,
@@ -2852,7 +2854,8 @@ describe("CodexChatTab", () => {
     useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
       createdAt: new Date(Date.now() - 61_000).toISOString(),
     });
-    useEnvironmentStore.setState({
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "pending",
     });
     mockGetCodexServerStatus
       .mockRejectedValueOnce(new Error("bridge delayed by setup"))
@@ -2869,7 +2872,8 @@ describe("CodexChatTab", () => {
       expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
 
       act(() => {
-        useEnvironmentStore.setState({
+        useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+          setupPhase: "ready",
         });
       });
 
@@ -3009,7 +3013,8 @@ describe("CodexChatTab", () => {
       clients: new Map(),
       sessions: new Map(),
     }));
-    useEnvironmentStore.setState({
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "ready",
     });
     mockGetLocalCodexServerStatus.mockRejectedValueOnce("local bridge offline");
 
@@ -3025,7 +3030,8 @@ describe("CodexChatTab", () => {
       clients: new Map(),
       sessions: new Map(),
     }));
-    useEnvironmentStore.setState({
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "ready",
     });
     mockGetLocalCodexServerStatus.mockResolvedValueOnce({
       running: false,
@@ -3052,7 +3058,8 @@ describe("CodexChatTab", () => {
       clients: new Map(),
       sessions: new Map(),
     }));
-    useEnvironmentStore.setState({
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "ready",
     });
 
     render(<CodexChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
@@ -3075,7 +3082,8 @@ describe("CodexChatTab", () => {
       clients: new Map(),
       sessions: new Map(),
     }));
-    useEnvironmentStore.setState({
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "ready",
     });
     mockGetLocalCodexServerStatus.mockResolvedValueOnce({
       running: true,

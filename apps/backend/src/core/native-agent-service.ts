@@ -186,7 +186,7 @@ function nonBlank(value: unknown): value is string {
  */
 function isEnvironmentReadyForAgents(environment: Environment): boolean {
   return environment.status === "running"
-    && environment.setupScriptsComplete === true;
+    && (environment.setupPhase === "ready" || environment.setupScriptsComplete === true);
 }
 
 const LEGACY_TIMESTAMP_ENVIRONMENT_NAME = /^\d{8}-\d{6}$/;

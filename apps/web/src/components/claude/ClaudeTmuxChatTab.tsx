@@ -81,6 +81,10 @@ import {
   buildTmuxPromptWithAttachments,
   escapePathForTerminalInput,
 } from "@orkestrator/protocol/tmux-prompt";
+import type {
+  TmuxSelectionOption,
+  TmuxSelectionPrompt,
+} from "@orkestrator/protocol/tmux-observation";
 import {
   payloadToApproval,
   payloadToElicitation,
@@ -289,20 +293,6 @@ function tmuxModelList(sdkModels: ClaudeModel[]): ClaudeModel[] {
     : [TMUX_FALLBACK_MODELS[0]!, ...sdkModels];
 }
 
-interface TmuxSelectionPrompt {
-  question: string | null;
-  options: TmuxSelectionOption[];
-  selectedOptionIndex: number;
-  inputMode: "navigate" | "number";
-}
-
-interface TmuxSelectionOption {
-  number: number;
-  label: string;
-  optionIndex: number;
-  selected: boolean;
-}
-
 /**
  * Claude Code's built-in slash commands. In tmux mode we ship a fixed list
  * (no SDK to enumerate) and forward the literal command text to the TUI on
@@ -377,6 +367,7 @@ export function ClaudeTmuxChatTab({
   const replacePendingHooks = useClaudeTmuxStore((s) => s.replacePendingHooks);
   const setTabBusy = useClaudeTmuxStore((s) => s.setBusy);
   const setObservation = useClaudeTmuxStore((s) => s.setObservation);
+  const clearSelectionPrompt = useClaudeTmuxStore((s) => s.clearSelectionPrompt);
   const clearTabInitialPrompt = usePaneLayoutStore((s) => s.clearTabInitialPrompt);
   const clearTabInitialAgentOptions = usePaneLayoutStore((s) => s.clearTabInitialAgentOptions);
   const setConfig = useConfigStore((s) => s.setConfig);
@@ -418,7 +409,7 @@ export function ClaudeTmuxChatTab({
   const [modeSwitching, setModeSwitching] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
-  const [promptControlBusy, setPromptControlBusy] = useState(false);
+  const promptControlBusyRef = useRef(false);
   const [backendHydrated, setBackendHydrated] = useState(false);
   const startedRef = useRef(false);
   const autoStartAttemptedRef = useRef(false);
@@ -800,6 +791,7 @@ export function ClaudeTmuxChatTab({
           setRunning(storeKey, true, {
             environmentId: ev.environment_id,
             sessionId: ev.session_id,
+            observationGeneration: ev.observation_generation,
             resumed: ev.resumed,
           });
           applyFastMode(ev.fast_mode);
@@ -1218,15 +1210,17 @@ export function ClaudeTmuxChatTab({
   };
 
   const handlePromptKeys = async (keys: string[]) => {
-    if (keys.length === 0 || promptControlBusy) return;
-    setPromptControlBusy(true);
+    if (keys.length === 0 || promptControlBusyRef.current) return false;
+    promptControlBusyRef.current = true;
     setError(null);
     try {
       await sendKeys(tabId, keys, environmentId);
+      return true;
     } catch (e) {
       setError(String(e));
+      return false;
     } finally {
-      setPromptControlBusy(false);
+      promptControlBusyRef.current = false;
     }
   };
 
@@ -1237,7 +1231,9 @@ export function ClaudeTmuxChatTab({
     const option = prompt.options[optionIndex];
     if (!option) return;
 
-    await handlePromptKeys(selectionPromptSubmitKeys(prompt, optionIndex));
+    if (await handlePromptKeys(selectionPromptSubmitKeys(prompt, optionIndex))) {
+      clearSelectionPrompt(storeKey, prompt);
+    }
   };
 
   const handleSelectionPromptAnswers = async (
@@ -2064,6 +2060,13 @@ function selectionPromptNavigationKeys(
   prompt: TmuxSelectionPrompt,
   optionIndex: number,
 ): string[] {
+  if (prompt.selectedOptionIndex === null) {
+    return [
+      ...Array.from({ length: prompt.options.length }, () => "Up"),
+      ...Array.from({ length: optionIndex }, () => "Down"),
+      "Enter",
+    ];
+  }
   const delta = optionIndex - prompt.selectedOptionIndex;
   const navKey = delta > 0 ? "Down" : "Up";
   return [...Array.from({ length: Math.abs(delta) }, () => navKey), "Enter"];
@@ -2169,7 +2172,9 @@ function selectionPromptToQuestion(
 }
 
 function selectionPromptInitialAnswer(prompt: TmuxSelectionPrompt): string[] {
-  const selected = prompt.options[prompt.selectedOptionIndex];
+  const selected = prompt.selectedOptionIndex === null
+    ? undefined
+    : prompt.options[prompt.selectedOptionIndex];
   return selected ? [selectionPromptOptionValue(selected)] : [];
 }
 

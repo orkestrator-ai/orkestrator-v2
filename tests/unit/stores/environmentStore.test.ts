@@ -26,12 +26,7 @@ describe("environmentStore", () => {
       environments: [],
       isLoading: false,
       error: null,
-      workspaceReadyEnvironments: new Set<string>(),
       deletingEnvironments: new Set<string>(),
-      pendingSetupCommands: new Map<string, string[]>(),
-      setupCommandsResolved: new Set<string>(),
-      setupScriptsRunning: new Set<string>(),
-      sessionActivated: new Set<string>(),
     });
   });
 
@@ -124,45 +119,24 @@ describe("environmentStore", () => {
     expect(store.isDeleting("live")).toBe(true);
   });
 
-  test("setSetupCommandsResolved is idempotent when already resolved", () => {
-    const store = useEnvironmentStore.getState();
-
-    store.setSetupCommandsResolved("env-1", true);
-    const firstSetRef = useEnvironmentStore.getState().setupCommandsResolved;
-
-    store.setSetupCommandsResolved("env-1", true);
-    const secondSetRef = useEnvironmentStore.getState().setupCommandsResolved;
-
-    expect(firstSetRef).toBe(secondSetRef);
-    expect(secondSetRef.has("env-1")).toBe(true);
-  });
-
-  test("setSetupCommandsResolved is idempotent when already unresolved", () => {
-    const store = useEnvironmentStore.getState();
-    const firstSetRef = useEnvironmentStore.getState().setupCommandsResolved;
-
-    store.setSetupCommandsResolved("env-1", false);
-    const secondSetRef = useEnvironmentStore.getState().setupCommandsResolved;
-
-    expect(firstSetRef).toBe(secondSetRef);
-    expect(secondSetRef.has("env-1")).toBe(false);
-  });
-
-  test("setEnvironments hydrates readiness sets from setupScriptsComplete", () => {
+  test("setEnvironments preserves authoritative setup lifecycle fields", () => {
     const completeLocal = createEnvironment({
       id: "env-complete-local",
       environmentType: "local",
       setupScriptsComplete: true,
+      setupPhase: "ready",
     });
     const completeContainer = createEnvironment({
       id: "env-complete-container",
       environmentType: "containerized",
       setupScriptsComplete: true,
+      setupPhase: "ready",
     });
     const incomplete = createEnvironment({
       id: "env-incomplete",
       environmentType: "local",
       setupScriptsComplete: false,
+      setupPhase: "running",
     });
 
     useEnvironmentStore
@@ -170,42 +144,49 @@ describe("environmentStore", () => {
       .setEnvironments([completeLocal, completeContainer, incomplete]);
 
     const state = useEnvironmentStore.getState();
-    expect(state.setupCommandsResolved.has("env-complete-local")).toBe(true);
-    expect(state.workspaceReadyEnvironments.has("env-complete-container")).toBe(
-      true
-    );
-    expect(state.setupCommandsResolved.has("env-incomplete")).toBe(false);
-    expect(state.workspaceReadyEnvironments.has("env-incomplete")).toBe(false);
+    expect(state.getEnvironmentById("env-complete-local")).toMatchObject({
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    });
+    expect(state.getEnvironmentById("env-complete-container")).toMatchObject({
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    });
+    expect(state.getEnvironmentById("env-incomplete")).toMatchObject({
+      setupScriptsComplete: false,
+      setupPhase: "running",
+    });
   });
 
-  test("addEnvironment hydrates readiness sets when setupScriptsComplete is true", () => {
+  test("addEnvironment keeps the backend-owned setup phase", () => {
     const env = createEnvironment({
       id: "env-complete",
       environmentType: "local",
       setupScriptsComplete: true,
+      setupPhase: "ready",
     });
 
     useEnvironmentStore.getState().addEnvironment(env);
 
-    const state = useEnvironmentStore.getState();
-    expect(state.setupCommandsResolved.has("env-complete")).toBe(true);
-    expect(state.workspaceReadyEnvironments.has("env-complete")).toBe(true);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-complete"))
+      .toMatchObject({ setupScriptsComplete: true, setupPhase: "ready" });
   });
 
-  test("mergeEnvironmentsForProject hydrates readiness from newly merged envs", () => {
+  test("mergeEnvironmentsForProject installs authoritative setup state from snapshots", () => {
     const env = createEnvironment({
       id: "env-complete",
       projectId: "project-1",
       environmentType: "local",
       setupScriptsComplete: true,
+      setupPhase: "ready",
     });
 
     useEnvironmentStore
       .getState()
       .mergeEnvironmentsForProject("project-1", [env]);
 
-    const state = useEnvironmentStore.getState();
-    expect(state.setupCommandsResolved.has("env-complete")).toBe(true);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-complete"))
+      .toMatchObject({ setupScriptsComplete: true, setupPhase: "ready" });
   });
 
   test("mergeEnvironmentsForProject preserves state and object identity for an unchanged snapshot", () => {
@@ -222,61 +203,76 @@ describe("environmentStore", () => {
     expect(afterState.environments[0]).toBe(beforeEnvironment);
   });
 
-  test("setEnvironments clears stale hydrated readiness when setupScriptsComplete becomes false", () => {
-    const complete = createEnvironment({ id: "env-1", setupScriptsComplete: true });
-    const incomplete = createEnvironment({ id: "env-1", setupScriptsComplete: false });
+  test("setEnvironments replaces stale ready setup state with a newer failed snapshot", () => {
+    const complete = createEnvironment({
+      id: "env-1",
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    });
+    const incomplete = createEnvironment({
+      id: "env-1",
+      setupScriptsComplete: false,
+      setupPhase: "failed",
+    });
 
     const store = useEnvironmentStore.getState();
     store.setEnvironments([complete]);
     store.setEnvironments([incomplete]);
 
-    const state = useEnvironmentStore.getState();
-    expect(state.setupCommandsResolved.has("env-1")).toBe(false);
-    expect(state.workspaceReadyEnvironments.has("env-1")).toBe(false);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1"))
+      .toMatchObject({ setupScriptsComplete: false, setupPhase: "failed" });
   });
 
-  test("updateEnvironment treats setupScriptsComplete as authoritative when false", () => {
+  test("updateEnvironment applies setupScriptsComplete and setupPhase atomically", () => {
     const store = useEnvironmentStore.getState();
-    store.addEnvironment(createEnvironment({ id: "env-1", setupScriptsComplete: true }));
-
-    store.updateEnvironment("env-1", { setupScriptsComplete: false });
-
-    const state = useEnvironmentStore.getState();
-    expect(state.setupCommandsResolved.has("env-1")).toBe(false);
-    expect(state.workspaceReadyEnvironments.has("env-1")).toBe(false);
-  });
-
-  test("updateEnvironment does not clobber runtime workspaceReady when setupScriptsComplete is unchanged", () => {
-    // Reproduces the bug where callers pass full env objects from the backend
-    // (e.g. updateEnvironmentAgentSettings, getEnvironment refresh) that carry
-    // setupScriptsComplete: false as an unchanged passenger. Without the fix,
-    // these calls clear the workspaceReady flag that was just flipped true by
-    // in-memory setup-complete detection, re-showing the "waiting" overlay.
-    const store = useEnvironmentStore.getState();
-    store.addEnvironment(createEnvironment({ id: "env-1", setupScriptsComplete: false }));
-    store.setWorkspaceReady("env-1", true);
+    store.addEnvironment(createEnvironment({
+      id: "env-1",
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    }));
 
     store.updateEnvironment("env-1", {
-      name: "renamed",
       setupScriptsComplete: false,
+      setupPhase: "running",
     });
 
-    const state = useEnvironmentStore.getState();
-    expect(state.workspaceReadyEnvironments.has("env-1")).toBe(true);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1"))
+      .toMatchObject({ setupScriptsComplete: false, setupPhase: "running" });
   });
 
-  test("updateEnvironment populates readiness sets when setupScriptsComplete transitions false→true", () => {
-    // Guards the positive side of the passenger-value fix: a genuine
-    // false→true transition (e.g. backend persisted setup complete) must
-    // still hydrate the runtime readiness sets.
+  test("updateEnvironment preserves setup state when unrelated fields change", () => {
     const store = useEnvironmentStore.getState();
-    store.addEnvironment(createEnvironment({ id: "env-1", setupScriptsComplete: false }));
+    store.addEnvironment(createEnvironment({
+      id: "env-1",
+      setupScriptsComplete: false,
+      setupPhase: "failed",
+    }));
 
-    store.updateEnvironment("env-1", { setupScriptsComplete: true });
+    store.updateEnvironment("env-1", { name: "renamed" });
 
-    const state = useEnvironmentStore.getState();
-    expect(state.setupCommandsResolved.has("env-1")).toBe(true);
-    expect(state.workspaceReadyEnvironments.has("env-1")).toBe(true);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1"))
+      .toMatchObject({
+        name: "renamed",
+        setupScriptsComplete: false,
+        setupPhase: "failed",
+      });
+  });
+
+  test("updateEnvironment applies the authoritative running-to-ready transition", () => {
+    const store = useEnvironmentStore.getState();
+    store.addEnvironment(createEnvironment({
+      id: "env-1",
+      setupScriptsComplete: false,
+      setupPhase: "running",
+    }));
+
+    store.updateEnvironment("env-1", {
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+    });
+
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1"))
+      .toMatchObject({ setupScriptsComplete: true, setupPhase: "ready" });
   });
 
   test("updateEnvironment is a no-op for identical partial updates and missing environments", () => {
@@ -315,55 +311,12 @@ describe("environmentStore", () => {
     ]);
   });
 
-  test("consumePendingSetupCommands returns and clears pending commands", () => {
-    const store = useEnvironmentStore.getState();
-
-    store.setPendingSetupCommands("env-1", ["bun install", "bun test"]);
-
-    expect(store.consumePendingSetupCommands("env-1")).toEqual([
-      "bun install",
-      "bun test",
-    ]);
-    expect(useEnvironmentStore.getState().pendingSetupCommands.has("env-1")).toBe(
-      false
-    );
-  });
-
-  test("setSetupScriptsRunning updates the running selector", () => {
-    const store = useEnvironmentStore.getState();
-
-    store.setSetupScriptsRunning("env-1", true);
-    expect(store.isSetupScriptsRunning("env-1")).toBe(true);
-
-    store.setSetupScriptsRunning("env-1", false);
-    expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-1")).toBe(
-      false
-    );
-  });
-
-  test("markSessionActivated returns true only on first call per environment", () => {
-    const store = useEnvironmentStore.getState();
-
-    expect(store.markSessionActivated("env-1")).toBe(true);
-    expect(store.markSessionActivated("env-1")).toBe(false);
-    expect(store.markSessionActivated("env-2")).toBe(true);
-
-    const state = useEnvironmentStore.getState();
-    expect(state.sessionActivated.has("env-1")).toBe(true);
-    expect(state.sessionActivated.has("env-2")).toBe(true);
-  });
-
-  test("removeEnvironment clears sessionActivated for the environment", () => {
+  test("removeEnvironment clears renderer-local deletion state", () => {
     const store = useEnvironmentStore.getState();
     store.addEnvironment(createEnvironment({ id: "env-1" }));
-    store.markSessionActivated("env-1");
-    expect(useEnvironmentStore.getState().sessionActivated.has("env-1")).toBe(
-      true
-    );
+    store.setDeleting("env-1", true);
 
     store.removeEnvironment("env-1");
-    expect(useEnvironmentStore.getState().sessionActivated.has("env-1")).toBe(
-      false
-    );
+    expect(useEnvironmentStore.getState().deletingEnvironments.has("env-1")).toBe(false);
   });
 });

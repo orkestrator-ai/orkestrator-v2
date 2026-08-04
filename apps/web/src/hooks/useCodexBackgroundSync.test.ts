@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createSessionKey } from "@/lib/utils";
+import { listen } from "@/lib/native/events";
 import type {
   CodexApproval,
   CodexClient,
@@ -165,6 +166,58 @@ describe("Codex background synchronization", () => {
     expect(session?.lastCompletedElapsedSeconds).toBeGreaterThanOrEqual(5);
     expect(session?.messages[0]?.parts[0]?.toolState).toBe("success");
     expect(useCodexStore.getState().sessionPhase.has(SESSION_KEY)).toBe(false);
+  });
+
+  test("falls back to status when the non-touching activity route is unsupported", async () => {
+    seedLoadingSession();
+    let statusCalls = 0;
+    const synchronizer = createCodexBackgroundSynchronizer({
+      dependencies: {
+        ...dependencies({
+          kind: "found",
+          session: { status: "running", phase: "running" },
+        }),
+        lookupSessionActivity: async () => ({ kind: "unsupported" }),
+        lookupSessionStatus: async () => {
+          statusCalls += 1;
+          return {
+            kind: "found",
+            session: { status: "running", phase: "running" },
+          };
+        },
+      },
+    });
+
+    await synchronizer.reconcileNow();
+
+    expect(statusCalls).toBe(1);
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+  });
+
+  test("leaves state untouched when the activity probe is temporarily unavailable", async () => {
+    seedLoadingSession();
+    let statusCalls = 0;
+    const synchronizer = createCodexBackgroundSynchronizer({
+      dependencies: {
+        ...dependencies({
+          kind: "found",
+          session: { status: "idle", phase: "idle" },
+        }),
+        lookupSessionActivity: async () => ({
+          kind: "unavailable",
+          error: new Error("offline"),
+        }),
+        lookupSessionStatus: async () => {
+          statusCalls += 1;
+          return { kind: "missing" };
+        },
+      },
+    });
+
+    await synchronizer.reconcileNow();
+
+    expect(statusCalls).toBe(0);
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
   });
 
   test("rehydrates pending input while a background turn is running", async () => {
@@ -1236,10 +1289,16 @@ describe("Codex background synchronization", () => {
     expect(useCodexStore.getState().sessions.get(malformedKey)?.isLoading).toBe(true);
   });
 
-  test("the hook reconciles immediately without installing a timer", async () => {
+  test("the hook subscribes before its initial snapshot and installs a safety retry", async () => {
     seedLoadingSession();
     const originalSetInterval = window.setInterval;
+    const listenMock = listen as unknown as {
+      mockClear: () => void;
+      mock: { calls: unknown[][] };
+    };
+    listenMock.mockClear();
     let intervalCalls = 0;
+    let intervalCallback: (() => void) | undefined;
     let statusCalls = 0;
     let approvalCalls = 0;
     let interactionCalls = 0;
@@ -1249,6 +1308,9 @@ describe("Codex background synchronization", () => {
         session: { status: "running", phase: "running" },
       }),
       lookupSessionStatus: async () => {
+        // Both async subscriptions must have been requested before the first
+        // authoritative snapshot begins.
+        expect(listenMock.mock.calls).toHaveLength(2);
         statusCalls += 1;
         return {
           kind: "found",
@@ -1264,8 +1326,9 @@ describe("Codex background synchronization", () => {
         return [];
       },
     };
-    window.setInterval = (() => {
+    window.setInterval = ((callback: TimerHandler) => {
       intervalCalls += 1;
+      intervalCallback = callback as () => void;
       return 73;
     }) as unknown as typeof window.setInterval;
 
@@ -1273,15 +1336,21 @@ describe("Codex background synchronization", () => {
       const hook = renderHook(() => useCodexBackgroundSync({
         dependencies: hookDependencies,
       }));
+      expect(listenMock.mock.calls).toHaveLength(2);
       expect([statusCalls, approvalCalls, interactionCalls]).toEqual([1, 1, 1]);
+      expect(intervalCalls).toBe(1);
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-      expect(intervalCalls).toBe(0);
+      intervalCallback?.();
+      await waitFor(() => {
+        expect([statusCalls, approvalCalls, interactionCalls]).toEqual([2, 2, 2]);
+      });
       hook.unmount();
-      expect([statusCalls, approvalCalls, interactionCalls]).toEqual([1, 1, 1]);
+      expect([statusCalls, approvalCalls, interactionCalls]).toEqual([2, 2, 2]);
       expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
     } finally {
       cleanup();
       window.setInterval = originalSetInterval;
+      listenMock.mockClear();
     }
   });
 });

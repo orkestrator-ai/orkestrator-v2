@@ -4354,6 +4354,37 @@ async function failEnvironmentSetup(environmentId: string, error: unknown, conte
   });
 }
 
+async function failEnvironmentSetupBeforeAttempt(
+  environmentId: string,
+  error: unknown,
+  context: CommandContext,
+): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  const lifecycleError = environmentLifecycleErrorMessage(error);
+  let updated: Environment | undefined;
+  try {
+    // No setup session or PTY was published, so this is a retryable preparation
+    // failure rather than proof that the running workspace is unusable. Keep
+    // both the environment status and the durable initial-agent launch intent.
+    updated = await context.storage.updateEnvironment(environmentId, {
+      setupPhase: "failed",
+      setupCompletedAt: new Date().toISOString(),
+      lifecycleError,
+    });
+  } catch (updateError) {
+    console.warn(
+      `[setup] Failed to record pre-attempt setup failure for ${environmentId}:`,
+      updateError,
+    );
+  }
+  context.emit("environment-setup-complete", {
+    environment_id: environmentId,
+    success: false,
+    error: message,
+    ...(updated ? { environment: toClientEnvironment(updated) } : {}),
+  });
+}
+
 async function startEnvironmentSetupOnce(
   environment: Environment,
   context: CommandContext,
@@ -4381,12 +4412,17 @@ async function startEnvironmentSetupOnce(
   // to close it explicitly or it reports a setup that is running forever.
   const setupSessionId = setupTerminalSessionId(current.id);
   const running = await context.storage.updateEnvironment(current.id, {
+    // A setup-script failure marks the environment error even though its
+    // container/worktree remains usable. Retrying re-enters the normal running
+    // lifecycle so a later successful setup satisfies agent readiness.
+    status: "running",
     setupScriptsComplete: false,
     setupPhase: "running",
     setupOverride: false,
     setupSessionId,
     setupStartedAt: new Date().toISOString(),
     setupCompletedAt: undefined,
+    lifecycleError: null,
   });
   const preparationSessionId = running.createdFromCommit
     ? undefined
@@ -4400,7 +4436,11 @@ async function startEnvironmentSetupOnce(
     // get_terminal_session keeps reporting an attachable terminal that has no
     // process behind it. Avoid manufacturing a failure session for errors that
     // happened before an attempt published one.
-    await failEnvironmentSetup(running.id, error, context);
+    if (environmentSetupSessions.get(running.id)?.running) {
+      await failEnvironmentSetup(running.id, error, context);
+    } else {
+      await failEnvironmentSetupBeforeAttempt(running.id, error, context);
+    }
     throw error;
   }
 }
@@ -8400,11 +8440,23 @@ export function createCommandRegistry(
   });
   register("override_environment_setup", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
-    const environment = await context.storage.updateEnvironment(id, {
+    const current = await context.storage.getEnvironment(id);
+    if (!current) throw new Error(`Environment not found: ${id}`);
+    let environment = await context.storage.updateEnvironment(id, {
+      status: "running",
+      setupScriptsComplete: true,
       setupPhase: "ready",
       setupOverride: true,
       setupCompletedAt: new Date().toISOString(),
+      lifecycleError: null,
     });
+    if (environment.pendingAgentLaunch && context.nativeAgents) {
+      await context.nativeAgents.reconcileInitialLaunch(environment.id).catch(() => {
+        // The launch intent remains durable. A transient bridge failure must not
+        // roll back the user's explicit setup override.
+      });
+      environment = await context.storage.getEnvironment(environment.id) ?? environment;
+    }
     context.emit("environment-setup-complete", {
       environment_id: id,
       success: true,
@@ -9575,17 +9627,32 @@ export function createCommandRegistry(
       })
       .map((record) => record.id));
     if (task.buildPipelineId) pipelineIds.add(task.buildPipelineId);
-    for (const pipelineId of pipelineIds) {
-      if (context.buildPipelines) await context.buildPipelines.remove(pipelineId);
-      else await context.storage.deleteBuildPipeline(pipelineId);
-    }
+    const failedPipelineIds: string[] = [];
+    await Promise.all(Array.from(pipelineIds, async (pipelineId) => {
+      try {
+        if (context.buildPipelines) await context.buildPipelines.remove(pipelineId);
+        else await context.storage.deleteBuildPipeline(pipelineId);
+      } catch {
+        // Unlinking the task is the authoritative user request. Cleanup may
+        // fail when an environment has already disappeared, so report the
+        // affected IDs without blocking the durable task update or exposing
+        // provider error details to the renderer.
+        failedPipelineIds.push(pipelineId);
+      }
+    }));
     const updated = await context.storage.updateKanbanTask(id, {
       environmentId: undefined,
       buildPipelineId: undefined,
       prUrl: "",
       prState: undefined,
     });
-    return { task: updated, removedPipelineIds: [...pipelineIds] };
+    return {
+      task: updated,
+      removedPipelineIds: [...pipelineIds].filter(
+        (pipelineId) => !failedPipelineIds.includes(pipelineId),
+      ),
+      failedPipelineIds,
+    };
   });
 
   register(
@@ -10776,16 +10843,14 @@ export function createCommandRegistry(
 
   const finishTabTeardown = async (
     environmentId: string,
-    tabId: string,
+    intent: TabTeardownIntent,
     context: CommandContext,
   ): Promise<void> => {
-    const latest = await context.storage.getEnvironment(environmentId);
-    if (!latest?.tabTeardownIntents?.[tabId]) return;
-    const intents = { ...latest.tabTeardownIntents };
-    delete intents[tabId];
-    await context.storage.updateEnvironment(environmentId, {
-      tabTeardownIntents: Object.keys(intents).length > 0 ? intents : undefined,
-    });
+    await context.storage.clearTabTeardownIntent(
+      environmentId,
+      intent.tabId,
+      intent.createdAt,
+    );
   };
 
   register("teardown_tab", async (args, context) => {
@@ -10810,14 +10875,9 @@ export function createCommandRegistry(
         : { persistentSessionId: asNonBlankString(args.persistentSessionId, "persistentSessionId") }),
       createdAt: new Date().toISOString(),
     };
-    await context.storage.updateEnvironment(environmentId, {
-      tabTeardownIntents: {
-        ...environment.tabTeardownIntents,
-        [tabId]: intent,
-      },
-    });
+    await context.storage.setTabTeardownIntent(environmentId, intent);
     await executeTabTeardown(environment, intent, context);
-    await finishTabTeardown(environmentId, tabId, context);
+    await finishTabTeardown(environmentId, intent, context);
     return { completed: true };
   });
 
@@ -10828,7 +10888,7 @@ export function createCommandRegistry(
       for (const intent of Object.values(environment.tabTeardownIntents ?? {})) {
         try {
           await executeTabTeardown(environment, intent, context);
-          await finishTabTeardown(environment.id, intent.tabId, context);
+          await finishTabTeardown(environment.id, intent, context);
           completed += 1;
         } catch (error) {
           console.warn(`[backend] Tab teardown remains pending for ${environment.id}/${intent.tabId}:`, conciseError(error));
@@ -10842,6 +10902,11 @@ export function createCommandRegistry(
     const graceMs = 60 * 60 * 1_000;
     const now = Date.now();
     const environments = await context.storage.loadEnvironments();
+    const paneLayouts = await context.storage.loadPaneLayoutsForReconciliation();
+    if (!paneLayouts.available) {
+      console.warn("[backend] Skipping orphaned tab reconciliation because pane layouts are unreadable");
+      return { terminals: 0, nativeSessions: 0, tmuxSessions: 0, skipped: true };
+    }
     const referencedTabs = new Map<string, Set<string>>();
     const collectTabs = (node: unknown, result: Set<string>): void => {
       if (!node || typeof node !== "object" || Array.isArray(node)) return;
@@ -10860,7 +10925,7 @@ export function createCommandRegistry(
     };
     for (const environment of environments) {
       const tabs = new Set<string>();
-      const layout = await context.storage.getPaneLayout(environment.id);
+      const layout = paneLayouts.layouts[environment.id];
       if (layout) collectTabs(layout.root, tabs);
       referencedTabs.set(environment.id, tabs);
     }

@@ -949,10 +949,16 @@ describe("NativeAgentService", () => {
       expect(listPendingInteractions).toHaveBeenCalledTimes(2);
       expect(internals(service).monitoredInteractionSessionKeys.has(session.key)).toBe(true);
 
-      await storage.updateEnvironment("env-1", { setupScriptsComplete: false });
+      await storage.updateEnvironment("env-1", {
+        setupScriptsComplete: false,
+        setupPhase: "pending",
+      });
       await service.reconcileAgentInteractions();
       expect(internals(service).monitoredInteractionSessionKeys.size).toBe(0);
-      await storage.updateEnvironment("env-1", { setupScriptsComplete: true });
+      await storage.updateEnvironment("env-1", {
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+      });
       await service.reconcileAgentInteractions();
       expect(listPendingInteractions).toHaveBeenCalledTimes(3);
 

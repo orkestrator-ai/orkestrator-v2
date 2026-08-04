@@ -1139,6 +1139,7 @@ export async function lookupSessionStatus(
 export type CodexSessionActivityLookupResult =
   | { kind: "found"; activity: "idle" | "working" | "waiting" }
   | { kind: "missing" }
+  | { kind: "unsupported" }
   | { kind: "unavailable"; error: Error };
 
 /** Cheap, non-touching probe used by background reconciliation. */
@@ -1148,7 +1149,10 @@ export async function lookupSessionActivity(
 ): Promise<CodexSessionActivityLookupResult> {
   try {
     const response = await fetchCodex(client, `/session/${sessionId}/activity`);
-    if (response.status === 404) return { kind: "unavailable", error: new Error("Activity route unavailable") };
+    // Older bridges predate this non-touching route. A 404 cannot mean the
+    // session is missing because current bridges report that in-band; let the
+    // caller fall back to the legacy status endpoint instead.
+    if (response.status === 404) return { kind: "unsupported" };
     if (!response.ok) throw new Error(`Failed to get Codex session activity: HTTP ${response.status}`);
     const body = await response.json() as { activity?: unknown };
     if (body.activity === "missing") return { kind: "missing" };

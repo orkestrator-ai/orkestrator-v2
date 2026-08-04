@@ -37,6 +37,7 @@ import {
   sendPrompt,
   sendStructuredPrompt,
   shareOpenCodeSession,
+  splitOpenCodeModelId,
   subscribeToEvents,
   summarizeOpenCodeUsage,
   unrevertOpenCodeSession,
@@ -1416,15 +1417,23 @@ describe("opencode-client sendPrompt", () => {
   /** Captures the request handed to `promptAsync` and answers with success. */
   function capturePromptAsync() {
     const captured: Record<string, unknown>[] = [];
+    let history: unknown[] = [];
     const client = {
       session: {
+        messages: async () => ({ data: history }),
         promptAsync: async (request: Record<string, unknown>) => {
           captured.push(request);
           return { data: null };
         },
       },
     } as unknown as OpencodeClient;
-    return { client, captured };
+    return {
+      client,
+      captured,
+      setHistory(entries: unknown[]) {
+        history = entries;
+      },
+    };
   }
 
   test("maps build/plan mode to SDK agent", async () => {
@@ -1534,24 +1543,36 @@ describe("opencode-client sendPrompt", () => {
       requestId: "collision",
     })).resolves.toEqual({ success: true, requestId: "collision" });
 
-    expect(captured[0]?.messageID).toBe(expectedOpenCodeMessageId("msg_collision"));
-    expect(captured[1]?.messageID).toBe(expectedOpenCodeMessageId("collision"));
+    expect(captured[0]?.messageID).toMatch(/^msg_[0-9a-f]{12}z{14}[0-9a-f]{12}_ork_/);
+    expect(captured[1]?.messageID).toMatch(/^msg_[0-9a-f]{12}z{14}[0-9a-f]{12}_ork_/);
     expect(captured[0]?.messageID).not.toBe(captured[1]?.messageID);
   });
 
-  test("orders a caller-owned user message before OpenCode assistant messages", async () => {
-    const { client, captured } = capturePromptAsync();
+  test("orders consecutive caller-owned messages by send order and reuses retries", async () => {
+    const { client, captured, setHistory } = capturePromptAsync();
+    const sessionId = "ses_fcd9281c1001abcdefghijklmn";
 
-    await sendPrompt(client, "session-1", "Hello", { requestId: "request-1" });
+    await sendPrompt(client, sessionId, "First", { requestId: "zz" });
+    const first = captured[0]?.messageID;
+    if (typeof first !== "string") throw new Error("first message ID missing");
+    const assistant = "msg_fcd9281c2001hsJUIHGDARuWRB";
+    setHistory([
+      { info: { id: first, role: "user" } },
+      { info: { id: assistant, role: "assistant", parentID: first } },
+    ]);
+    await sendPrompt(client, sessionId, "Second", { requestId: "aa" });
+    const second = captured[1]?.messageID;
+    if (typeof second !== "string") throw new Error("second message ID missing");
+    setHistory([
+      { info: { id: first, role: "user" } },
+      { info: { id: assistant, role: "assistant", parentID: first } },
+      { info: { id: second, role: "user" } },
+    ]);
+    await sendPrompt(client, sessionId, "Retry", { requestId: "aa" });
 
-    const messageID = captured[0]?.messageID;
-    expect(messageID).toBe(expectedOpenCodeMessageId("request-1"));
-    if (typeof messageID !== "string") {
-      throw new Error("OpenCode prompt omitted its message ID");
-    }
-    // Real server-generated assistant ID from the looping regression. OpenCode
-    // will not exit a finished turn unless the user ID sorts before this ID.
-    expect(messageID < "msg_fcd9281c2001hsJUIHGDARuWRB").toBe(true);
+    expect(first < assistant).toBe(true);
+    expect(assistant < second).toBe(true);
+    expect(captured[2]?.messageID).toBe(second);
   });
 
   test.each(["", "   "])(
@@ -1567,6 +1588,24 @@ describe("opencode-client sendPrompt", () => {
     },
   );
 
+  test("does not dispatch when caller-owned ID history is unavailable", async () => {
+    const promptAsync = mock(async () => ({ data: null }));
+    const client = {
+      session: {
+        messages: async () => ({ error: { message: "history unavailable" } }),
+        promptAsync,
+      },
+    } as unknown as OpencodeClient;
+
+    const result = await sendPrompt(client, "session-1", "Hello", {
+      requestId: "request-1",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("history unavailable");
+    expect(promptAsync).not.toHaveBeenCalled();
+  });
+
   describe("command branch", () => {
     /** Captures both dispatch routes so the selection itself is observable. */
     function captureCommandClient() {
@@ -1574,6 +1613,7 @@ describe("opencode-client sendPrompt", () => {
       const promptAsync: Record<string, unknown>[] = [];
       const client = {
         session: {
+          messages: async () => ({ data: [] }),
           command: async (request: Record<string, unknown>) => {
             command.push(request);
             return { data: null };
@@ -1604,7 +1644,7 @@ describe("opencode-client sendPrompt", () => {
       expect(command[0]).toEqual({
         sessionID: "session-1",
         directory: "/workspace/repo",
-        messageID: expectedOpenCodeMessageId("req-1"),
+        messageID: expect.any(String),
         command: "init",
         arguments: "",
         // The command path forwards the model id as the raw string the server
@@ -1614,6 +1654,7 @@ describe("opencode-client sendPrompt", () => {
         variant: "high",
         parts: [],
       });
+      expect(command[0]?.messageID).toMatch(/^msg_[0-9a-f]{12}z{14}[0-9a-f]{12}_ork_/);
     });
 
     test("sends an empty arguments string for a bare command", async () => {
@@ -1731,10 +1772,11 @@ describe("opencode-client sendPrompt", () => {
     expect(result.error).toContain("Raw error:");
   });
 
-  test("passes the JSON-schema format without disabling OpenCode tools", async () => {
+  test("forwards every structured prompt option without disabling OpenCode tools", async () => {
     let capturedRequest: Record<string, unknown> | undefined;
     const client = {
       session: {
+        messages: async () => ({ data: [] }),
         promptAsync: async (request: Record<string, unknown>) => {
           capturedRequest = request;
           return { data: undefined, error: undefined };
@@ -1752,17 +1794,85 @@ describe("opencode-client sendPrompt", () => {
       "session-1",
       "Review this",
       schema,
-      { requestId: "structured-1", retryCount: 3 },
+      {
+        requestId: "structured-1",
+        retryCount: 3,
+        model: "openrouter/anthropic/claude-sonnet-4",
+        variant: "high",
+        mode: "plan",
+        attachments: [{
+          type: "image",
+          path: "/workspace/screenshot.png",
+          filename: "screenshot.png",
+          dataUrl: "data:image/png;base64,AAAA",
+        }],
+      },
     );
 
     expect(result).toEqual({ success: true, requestId: "structured-1" });
     expect(capturedRequest).toMatchObject({
       sessionID: "session-1",
-      messageID: expectedOpenCodeMessageId("structured-1"),
+      messageID: expect.any(String),
+      parts: [
+        { type: "text", text: "Review this" },
+        {
+          type: "file",
+          mime: "image/png",
+          url: "data:image/png;base64,AAAA",
+          filename: "screenshot.png",
+        },
+      ],
+      model: {
+        providerID: "openrouter",
+        modelID: "anthropic/claude-sonnet-4",
+      },
+      agent: "plan",
+      variant: "high",
       format: { type: "json_schema", schema, retryCount: 3 },
     });
     // Omitting `tools` preserves the server's normal agent/tool configuration.
     expect(capturedRequest?.tools).toBeUndefined();
+  });
+
+  test("generates and reconciles a structured request ID when the caller omits one", async () => {
+    let history: unknown[] = [];
+    let dispatched: Record<string, unknown> | undefined;
+    const client = {
+      session: {
+        messages: async () => ({ data: history }),
+        promptAsync: async (request: Record<string, unknown>) => {
+          dispatched = request;
+          return { data: null };
+        },
+      },
+    } as unknown as OpencodeClient;
+    const schema = { type: "object", properties: { ok: { type: "boolean" } } };
+
+    const result = await sendStructuredPrompt(client, "session-1", "Review", schema);
+    expect(result.success).toBe(true);
+    expect(result.requestId).toEqual(expect.any(String));
+    expect(dispatched?.messageID).toEqual(expect.any(String));
+    history = [
+      {
+        info: {
+          id: dispatched?.messageID,
+          role: "user",
+          format: { type: "json_schema", schema },
+        },
+      },
+      {
+        info: {
+          id: "assistant-generated",
+          role: "assistant",
+          parentID: dispatched?.messageID,
+          time: { completed: 1 },
+          structured: { ok: true },
+        },
+      },
+    ];
+    await expect(
+      getStructuredOutput(client, "session-1", result.requestId),
+    ).resolves.toMatchObject({ ok: true, value: { ok: true } });
   });
 
   test("reads only OpenCode's structured field and types malformed/retry failures", async () => {
@@ -1943,6 +2053,56 @@ describe("opencode-client sendPrompt", () => {
           details: { retries: 3 },
         },
       });
+  });
+
+  test("keeps explicit structured lookup pinned when later unrelated turns exist", async () => {
+    const target = expectedOpenCodeMessageId("target-request");
+    const later = expectedOpenCodeMessageId("later-request");
+    const client = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                id: target,
+                role: "user",
+                format: { type: "json_schema", schema: { type: "object" } },
+              },
+            },
+            {
+              info: {
+                id: "assistant-target",
+                role: "assistant",
+                parentID: target,
+                time: { completed: 1 },
+                structured: { request: "target" },
+              },
+            },
+            {
+              info: {
+                id: later,
+                role: "user",
+                format: { type: "json_schema", schema: { type: "object" } },
+              },
+            },
+            {
+              info: {
+                id: "assistant-later",
+                role: "assistant",
+                parentID: later,
+                time: { completed: 2 },
+                structured: { request: "later" },
+              },
+            },
+          ],
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    await expect(getStructuredOutput(client, "session-1", "target-request"))
+      .resolves.toMatchObject({ ok: true, value: { request: "target" } });
+    await expect(getStructuredOutput(client, "session-1"))
+      .resolves.toMatchObject({ ok: true, value: { request: "later" } });
   });
 
   test.each(["", "  "])(
@@ -4618,6 +4778,29 @@ describe("opencode-client getOpenCodeRuntimeHealth", () => {
     expect(health.diffs).toEqual([]);
     expect(health.agents).toHaveLength(1);
   });
+});
+
+describe("splitOpenCodeModelId", () => {
+  test.each([
+    ["anthropic/claude-sonnet-4", { providerID: "anthropic", modelID: "claude-sonnet-4" }],
+    ["openrouter/anthropic/claude-sonnet-4", {
+      providerID: "openrouter",
+      modelID: "anthropic/claude-sonnet-4",
+    }],
+    ["  anthropic/claude-sonnet-4  ", {
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4",
+    }],
+  ] as const)("splits a complete model override (%s)", (model, expected) => {
+    expect(splitOpenCodeModelId(model)).toEqual(expected);
+  });
+
+  test.each([undefined, "", "   ", "default", "bare", "/", "/model", "provider/"])(
+    "omits an incomplete model override (%s)",
+    (model) => {
+      expect(splitOpenCodeModelId(model)).toEqual({});
+    },
+  );
 });
 
 describe("opencode-client session operations", () => {

@@ -6,6 +6,11 @@ import type {
 } from "@orkestrator/protocol/build-pipeline";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
+  findOpenCodeMessageId,
+  openCodeRequestMarker,
+  resolveOpenCodeMessageId,
+} from "@orkestrator/protocol/opencode-message-id";
+import {
   AGENT_ACTIVITY_STATES,
   type AgentActivityState,
 } from "@orkestrator/protocol/agent-activity";
@@ -119,25 +124,6 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
     super(message, options);
     this.name = "AmbiguousPromptDispatchError";
   }
-}
-
-/**
- * OpenCode uses message IDs for both identity and chronological ordering. Its
- * prompt loop only accepts a finished assistant message as newer than the user
- * message when `lastUser.id < lastAssistant.id`. Put caller-owned IDs in a
- * synthetic time-zero namespace so every server-generated response sorts after
- * them. Fixed-width UTF-16 hex keeps the request-ID mapping stable and injective
- * while satisfying OpenCode's `msg_` prefix schema.
- */
-function openCodeMessageId(requestId: string): string {
-  if (requestId.trim().length === 0) {
-    throw new TypeError("OpenCode request ID must be a non-empty string");
-  }
-  let encoded = "";
-  for (let index = 0; index < requestId.length; index += 1) {
-    encoded += requestId.charCodeAt(index).toString(16).padStart(4, "0");
-  }
-  return `msg_00000000000000000000000000_ork_${encoded}`;
 }
 
 export interface ProviderCreateSessionOptions {
@@ -1967,10 +1953,33 @@ class OpenCodeProvider implements BuildPipelineProvider {
       });
     }
     const modelParts = (options.model ?? this.connection.model)?.split("/");
-    // Validate and encode before entering the ambiguous-dispatch catch. A local
-    // validation failure is definitive and must not be retried as though the
-    // prompt might have reached OpenCode.
-    const messageID = openCodeMessageId(options.requestId);
+    // Validate before any provider I/O. A local failure is definitive and must
+    // not be retried as though the prompt might have reached OpenCode.
+    openCodeRequestMarker(options.requestId);
+    // The authoritative transcript doubles as the durable request-to-message-ID
+    // journal. This recovers an accepted ambiguous dispatch after a restart and
+    // otherwise mints an ID between the latest user/assistant pair.
+    let historyResponse;
+    try {
+      historyResponse = await this.client.session.messages(
+        { sessionID: sessionId },
+        this.requestOptions(),
+      );
+      assertSdkResponse(historyResponse, "OpenCode pre-dispatch transcript read");
+      if (!Array.isArray(historyResponse.data)) {
+        throw new TypeError("OpenCode returned malformed message history before dispatch");
+      }
+    } catch (error) {
+      throw new ProviderUnavailableError(
+        "OpenCode pre-dispatch transcript is unavailable",
+        { cause: error },
+      );
+    }
+    const messageID = resolveOpenCodeMessageId(
+      sessionId,
+      historyResponse.data,
+      options.requestId,
+    );
     let response;
     try {
       response = await this.client.session.promptAsync({
@@ -2449,7 +2458,7 @@ class OpenCodeProvider implements BuildPipelineProvider {
     sessionId: string,
     requestId: string,
   ): Promise<StructuredOutputResult<T> | null> {
-    const providerMessageId = openCodeMessageId(requestId);
+    openCodeRequestMarker(requestId);
     let response;
     try {
       response = await this.client.session.messages(
@@ -2464,12 +2473,19 @@ class OpenCodeProvider implements BuildPipelineProvider {
       );
     }
     if (!Array.isArray(response.data)) return null;
+    const providerMessageId = findOpenCodeMessageId(response.data, requestId);
+    if (!providerMessageId) return null;
     const assistant = [...response.data].reverse().find((entry) => {
-      const info = entry.info as { role?: unknown; parentID?: unknown };
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
+      const candidate = (entry as { info?: unknown }).info;
+      if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+        return false;
+      }
+      const info = candidate as { role?: unknown; parentID?: unknown };
       return info.role === "assistant" && info.parentID === providerMessageId;
     });
     if (!assistant) return null;
-    const info = assistant.info as {
+    const info = (assistant as { info: Record<string, unknown> }).info as {
       error?: unknown;
       structured?: unknown;
       time?: { completed?: unknown };

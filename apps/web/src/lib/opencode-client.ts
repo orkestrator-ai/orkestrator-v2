@@ -16,6 +16,11 @@ import {
   type StructuredOutputResult,
   StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
+import {
+  findOpenCodeMessageId,
+  openCodeRequestMarker,
+  resolveOpenCodeMessageId,
+} from "@orkestrator/protocol/opencode-message-id";
 import type { ContextUsageSnapshot } from "./context-usage";
 
 export { type OpencodeClient };
@@ -1985,24 +1990,29 @@ function toOpenCodeModelRef(model: string): { providerID: string; modelID: strin
   };
 }
 
-/**
- * OpenCode uses message IDs for both identity and chronological ordering. Its
- * prompt loop only accepts a finished assistant message as newer than the user
- * message when `lastUser.id < lastAssistant.id`. Put caller-owned IDs in a
- * synthetic time-zero namespace so every server-generated response sorts after
- * them. Fixed-width UTF-16 hex keeps the request-ID mapping stable and injective
- * while satisfying OpenCode's `msg_` prefix schema.
- */
-function toOpenCodeMessageId(requestId: string | undefined): string | undefined {
+async function callerOwnedOpenCodeMessageId(
+  client: OpencodeClient,
+  sessionId: string,
+  requestId: string | undefined,
+): Promise<string | undefined> {
   if (requestId === undefined) return undefined;
-  if (requestId.trim().length === 0) {
-    throw new TypeError("OpenCode request ID must be a non-empty string");
+  // Validate before provider I/O so a malformed local ID cannot be mistaken for
+  // an ambiguous dispatch.
+  openCodeRequestMarker(requestId);
+  const response = await client.session.messages(
+    { sessionID: sessionId },
+    { throwOnError: false },
+  );
+  if (response.error) {
+    throw new Error(formatOpenCodeError(response.error));
   }
-  let encoded = "";
-  for (let index = 0; index < requestId.length; index += 1) {
-    encoded += requestId.charCodeAt(index).toString(16).padStart(4, "0");
+  if (!Array.isArray(response.data)) {
+    throw new TypeError("OpenCode returned malformed message history before dispatch");
   }
-  return `msg_00000000000000000000000000_ork_${encoded}`;
+  // Message history is authoritative across renderer reloads. Reuse a matching
+  // ID after an accepted retry; otherwise mint one immediately after the latest
+  // materialized server ID.
+  return resolveOpenCodeMessageId(sessionId, response.data, requestId);
 }
 
 /**
@@ -2078,7 +2088,11 @@ export async function sendPrompt(
     const requestId = options?.outputSchema
       ? (options.requestId ?? createUuid())
       : options?.requestId;
-    const messageID = toOpenCodeMessageId(requestId);
+    const messageID = await callerOwnedOpenCodeMessageId(
+      client,
+      sessionId,
+      requestId,
+    );
     const response = options?.command
       ? await client.session.command({
           sessionID: sessionId,
@@ -2496,7 +2510,7 @@ export async function getStructuredOutput<T = unknown>(
   // Reject malformed correlation IDs before touching the authoritative
   // transcript. Falling back to the latest turn for an explicit blank ID could
   // associate an unrelated result with the caller's request.
-  const providerMessageId = toOpenCodeMessageId(requestId);
+  if (requestId !== undefined) openCodeRequestMarker(requestId);
   let response: { data?: unknown; error?: unknown };
   try {
     response = await client.session.messages(
@@ -2537,8 +2551,12 @@ export async function getStructuredOutput<T = unknown>(
       return entry.info.role === "user" && format.type === "json_schema";
     })
     .at(-1)?.info.id;
-  const expectedParentId = providerMessageId
-    ?? (typeof latestStructuredUserId === "string" ? latestStructuredUserId : undefined);
+  const providerMessageId = requestId === undefined
+    ? undefined
+    : findOpenCodeMessageId(entries, requestId);
+  const expectedParentId = requestId === undefined
+    ? (typeof latestStructuredUserId === "string" ? latestStructuredUserId : undefined)
+    : providerMessageId;
   if (!expectedParentId) return null;
   // Keep the provider-neutral correlation ID on the public result. Only the
   // transcript lookup uses OpenCode's provider-qualified message ID.

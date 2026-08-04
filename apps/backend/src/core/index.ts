@@ -19,6 +19,8 @@ import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-ac
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import { NativeAgentService } from "./native-agent-service.js";
 import { LoopedReviewService } from "./looped-review-service.js";
+import { FeaturePlanningService } from "./feature-planning.js";
+import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import {
   ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS,
   EnvironmentLifecycleTaskTracker,
@@ -31,6 +33,8 @@ export class OrkestratorBackend {
   private readonly buildPipelines: BuildPipelineService;
   private readonly nativeAgents: NativeAgentService;
   private readonly loopedReviews: LoopedReviewService;
+  private readonly featurePlanning: FeaturePlanningService;
+  private readonly promptQueues: PromptQueueDrainer;
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private shuttingDown = false;
@@ -135,6 +139,26 @@ export class OrkestratorBackend {
       },
     );
     context.loopedReviews = this.loopedReviews;
+    this.featurePlanning = new FeaturePlanningService(
+      storage,
+      async <T>(command: string, args: Record<string, unknown> = {}) => {
+        const handler = this.commands.get(command);
+        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        return await handler(args, context) as T;
+      },
+    );
+    context.featurePlanning = this.featurePlanning;
+    // Native agent queues are drained by NativeAgentService; this covers the
+    // claude-tmux queues, whose dispatch types into a pane rather than calling
+    // a bridge and so had no server-side drainer at all.
+    this.promptQueues = new PromptQueueDrainer(
+      storage,
+      async <T>(command: string, args: Record<string, unknown> = {}) => {
+        const handler = this.commands.get(command);
+        if (!handler) throw new Error(`Unknown backend command: ${command}`);
+        return await handler(args, context) as T;
+      },
+    );
     this.reapPidServers =
       options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =
@@ -218,15 +242,30 @@ export class OrkestratorBackend {
     await this.nativeAgents.init().catch((error) => {
       console.warn("[backend] Failed to restore native agent launches:", error);
     });
+    // Adopts planning conversations the previous renderer-driven controller
+    // left in flight, then advances every durable record on its own timer.
+    await this.featurePlanning.init().catch((error) => {
+      console.warn("[backend] Failed to restore feature planning:", error);
+    });
     // Hydrate the sidebar from bridge-owned session snapshots before the
     // gateway accepts a renderer. A refresh therefore sees active environments
     // immediately, without mounting each tab to recreate client state.
     await this.nativeAgents.reconcileAgentActivity().catch((error) => {
       console.warn("[backend] Failed to restore native agent activity:", error);
     });
+    // Queued tmux prompts left behind by a quit or crash drain from here, with
+    // no renderer involved. NativeAgentService drains its own queues on its own
+    // sweep; this one shares the activity sweep rather than adding a third
+    // interval over the same store.
+    await this.promptQueues.drainAll().catch((error) => {
+      console.warn("[backend] Failed to drain tmux prompt queues:", error);
+    });
     this.nativeActivitySweep ??= setInterval(() => {
       void this.nativeAgents.reconcileAgentActivity().catch((error) => {
         console.warn("[backend] Failed to reconcile native agent activity:", error);
+      });
+      void this.promptQueues.drainAll().catch((error) => {
+        console.warn("[backend] Failed to drain tmux prompt queues:", error);
       });
     }, 2_000);
     this.nativeActivitySweep.unref?.();
@@ -294,6 +333,16 @@ export class OrkestratorBackend {
           await this.loopedReviews.shutdown();
         } catch (error) {
           console.warn("[backend] Failed to drain looped reviews:", error);
+        }
+        try {
+          await this.featurePlanning.shutdown();
+        } catch (error) {
+          console.warn("[backend] Failed to drain feature planning:", error);
+        }
+        try {
+          await this.promptQueues.shutdown();
+        } catch (error) {
+          console.warn("[backend] Failed to drain tmux prompt queues:", error);
         }
         await lifecycleDrain;
         await shutdownLocalServers({

@@ -4,8 +4,7 @@
 
 import { readText } from "@/lib/native/clipboard";
 import { processClipboardPaste, processLocalClipboardPaste } from "@/hooks/useClipboardImagePaste";
-
-const TERMINAL_PATH_ESCAPE_PATTERN = /([\s\\"'`$&|;<>()[\]{}*?!#~])/g;
+import { escapePathForTerminalInput } from "@orkestrator/protocol/tmux-prompt";
 
 export interface TerminalPasteOptions {
   /** Container ID for container environments, null/undefined for local */
@@ -22,10 +21,11 @@ export interface TerminalPasteOptions {
 
 /**
  * Escape a filesystem path before typing it into a shell-like terminal input.
+ *
+ * Re-exported from the protocol package: the backend tmux queue drainer types
+ * the same paths into the same panes, and two copies of this rule would drift.
  */
-export function escapePathForTerminalInput(filePath: string): string {
-  return filePath.replace(TERMINAL_PATH_ESCAPE_PATTERN, "\\$1");
-}
+export { escapePathForTerminalInput };
 
 /**
  * Handle paste operations for terminal components.

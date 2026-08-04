@@ -127,6 +127,15 @@ export interface ClaimedPrompt<TItem extends QueuedItem> {
   claimToken: string;
 }
 
+/**
+ * How a send resolved, from the point of view of the durable claim.
+ *
+ * `unknown` is the important one: the request may already be running, so the
+ * lease is retained rather than acknowledged (which could lose an unaccepted
+ * prompt) or rejected (which could duplicate one the agent did accept).
+ */
+export type QueueDispatchOutcome = "accepted" | "rejected" | "unknown";
+
 /** Atomically takes one queue head before its irreversible agent dispatch. */
 export async function claimPromptQueueHead<TItem extends QueuedItem>(
   source: PromptQueueSource<TItem>,

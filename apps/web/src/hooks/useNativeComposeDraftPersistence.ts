@@ -36,7 +36,7 @@ interface PersistedNativeComposeDraft {
   attachments: unknown[];
 }
 
-type NativeDraftNamespace = "claude" | "codex" | "opencode";
+type NativeDraftNamespace = "claude" | "claude-tmux" | "codex" | "opencode";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

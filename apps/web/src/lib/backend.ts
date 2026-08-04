@@ -3,6 +3,10 @@ import { getGatewayBaseUrl } from "@/lib/gateway-url";
 import type { EnvironmentDiffStatsSnapshot } from "@orkestrator/protocol/diff-stats";
 import type { PrMonitorMode, PrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
 import type {
+  FeaturePlanningKind,
+  FeaturePlanningRecord,
+} from "@orkestrator/protocol/feature-planning";
+import type {
   AgentInteractionOrigin,
   AgentInteractionPolicy,
 } from "@orkestrator/protocol/agent-interactions";
@@ -2710,6 +2714,50 @@ export interface FeaturePlan {
   codexSessionId?: string;
   buildTaskId?: string;
   buildPipelineId?: string;
+  /**
+   * Backend-owned planning exchange currently attached to this plan.
+   *
+   * Present only while the backend is advancing one, or after it failed and is
+   * waiting for the user to retry. The renderer never writes it.
+   */
+  planning?: FeaturePlanningRecord;
+}
+
+/**
+ * Hand the user's message to the backend planning supervisor.
+ *
+ * Everything after this — environment, bridge, session, dispatch, reply, parse,
+ * persist — happens backend-side, so closing the view or reloading the page
+ * cannot abandon it.
+ */
+export async function startFeaturePlanning(
+  featureId: string,
+  kind: FeaturePlanningKind,
+  userMessage: string,
+  storyId?: string,
+): Promise<FeaturePlanningRecord> {
+  return invoke<FeaturePlanningRecord>("start_feature_planning", {
+    featureId,
+    kind,
+    userMessage,
+    ...(storyId ? { storyId } : {}),
+  });
+}
+
+export async function getFeaturePlanningSnapshot(
+  projectId: string,
+): Promise<FeaturePlanningRecord[]> {
+  return invoke<FeaturePlanningRecord[]>("get_feature_planning_snapshot", { projectId });
+}
+
+export async function retryFeaturePlanning(
+  featureId: string,
+): Promise<FeaturePlanningRecord> {
+  return invoke<FeaturePlanningRecord>("retry_feature_planning", { featureId });
+}
+
+export async function cancelFeaturePlanning(featureId: string): Promise<void> {
+  return invoke<void>("cancel_feature_planning", { featureId });
 }
 
 export async function getKanbanTasks(projectId: string): Promise<KanbanTask[]> {

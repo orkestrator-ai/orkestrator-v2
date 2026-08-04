@@ -1146,7 +1146,7 @@ describe("App background processing mounts", () => {
     expect(screen.getByTestId("terminal-env-pending-prompt").getAttribute("data-active")).toBe("false");
   });
 
-  test("keeps off-screen environments with queued prompts mounted across agents until queues drain", async () => {
+  test("does not mount an off-screen environment merely because prompts are queued", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
@@ -1165,96 +1165,60 @@ describe("App background processing mounts", () => {
     const openCodeSessionKey = createSessionKey("env-queued-opencode", "tab-1");
     useClaudeStore.setState({
       messageQueue: new Map([
-        [
-          claudeSessionKey,
-          [
-            {
-              id: "queue-claude",
-              text: "Run queued Claude work",
-              attachments: [],
-              effort: "medium",
-              planModeEnabled: false,
-              fastModeEnabled: false,
-            },
-          ],
-        ],
+        [claudeSessionKey, [{
+          id: "queue-claude",
+          text: "Run queued Claude work",
+          attachments: [],
+          effort: "medium",
+          planModeEnabled: false,
+          fastModeEnabled: false,
+        }]],
       ]),
     });
     useClaudeTmuxStore.setState({
       messageQueue: new Map([
-        [
-          tmuxStateKey,
-          [
-            {
-              id: "queue-tmux",
-              text: "Run queued tmux work",
-              attachments: [],
-            },
-          ],
-        ],
+        [tmuxStateKey, [{ id: "queue-tmux", text: "Run queued tmux work", attachments: [] }]],
       ]),
     });
     useCodexStore.setState({
       messageQueue: new Map([
-        [
-          codexSessionKey,
-          [
-            {
-              id: "queue-codex",
-              text: "Run queued Codex work",
-              attachments: [],
-              model: "gpt-5",
-              mode: "build",
-              reasoningEffort: "medium",
-              fastMode: false,
-            },
-          ],
-        ],
+        [codexSessionKey, [{
+          id: "queue-codex",
+          text: "Run queued Codex work",
+          attachments: [],
+          model: "gpt-5",
+          mode: "build",
+          reasoningEffort: "medium",
+          fastMode: false,
+        }]],
       ]),
     });
     useOpenCodeStore.setState({
       messageQueue: new Map([
-        [
-          openCodeSessionKey,
-          [
-            {
-              id: "queue-opencode",
-              text: "Run queued OpenCode work",
-              attachments: [],
-              model: "openai/gpt-5",
-              mode: "build",
-            },
-          ],
-        ],
+        [openCodeSessionKey, [{
+          id: "queue-opencode",
+          text: "Run queued OpenCode work",
+          attachments: [],
+          model: "openai/gpt-5",
+          mode: "build",
+        }]],
       ]),
     });
 
     render(<App />);
 
+    // The visible environment mounts, which is how we know the tree settled
+    // rather than simply not having rendered yet.
     await waitFor(() => {
-      expect(screen.getByTestId("terminal-env-queued-claude")).toBeTruthy();
-      expect(screen.getByTestId("terminal-env-queued-tmux")).toBeTruthy();
-      expect(screen.getByTestId("terminal-env-queued-codex")).toBeTruthy();
-      expect(screen.getByTestId("terminal-env-queued-opencode")).toBeTruthy();
+      expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
     });
-    expect(screen.getByTestId("terminal-env-queued-claude").getAttribute("data-active")).toBe("false");
-    expect(screen.getByTestId("terminal-env-queued-tmux").getAttribute("data-active")).toBe("false");
-    expect(screen.getByTestId("terminal-env-queued-codex").getAttribute("data-active")).toBe("false");
-    expect(screen.getByTestId("terminal-env-queued-opencode").getAttribute("data-active")).toBe("false");
-
-    act(() => {
-      useClaudeStore.getState().setQueueProjection(claudeSessionKey, []);
-      useClaudeTmuxStore.getState().setQueueProjection(tmuxStateKey, []);
-      useCodexStore.getState().setQueueProjection(codexSessionKey, []);
-      useOpenCodeStore.getState().setQueueProjection(openCodeSessionKey, []);
-    });
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("terminal-env-queued-claude")).toBeNull();
-      expect(screen.queryByTestId("terminal-env-queued-tmux")).toBeNull();
-      expect(screen.queryByTestId("terminal-env-queued-codex")).toBeNull();
-      expect(screen.queryByTestId("terminal-env-queued-opencode")).toBeNull();
-    });
+    // `NativeAgentService` and `PromptQueueDrainer` dispatch these server-side.
+    // Force-mounting a hidden terminal for them kept an environment alive for
+    // work the renderer was not doing.
+    expect(screen.queryByTestId("terminal-env-queued-claude")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-queued-tmux")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-queued-codex")).toBeNull();
+    expect(screen.queryByTestId("terminal-env-queued-opencode")).toBeNull();
   });
 
   test("keeps off-screen environments with a loading native session mounted until idle", async () => {

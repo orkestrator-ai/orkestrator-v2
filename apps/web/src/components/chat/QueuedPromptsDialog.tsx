@@ -32,7 +32,7 @@ interface QueuedPromptsDialogProps<TQueued extends { id: string; text: string }>
 }
 
 /**
- * Queue manager shared by the three compose bars.
+ * Queue manager shared by the native and tmux compose bars.
  */
 export function QueuedPromptsDialog<
   TQueued extends { id: string; text: string },

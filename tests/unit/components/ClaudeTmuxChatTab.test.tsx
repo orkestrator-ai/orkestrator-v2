@@ -14,6 +14,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   createClaudeTmuxStateKey,
   useClaudeTmuxStore,
+  type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -38,6 +39,11 @@ import { mockReadImage } from "../../mocks/clipboard";
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 import type { Environment, FileCandidate } from "@/types";
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
+import {
+  applyPromptQueueSnapshot,
+  promptQueueKey,
+  resetPromptQueueRevisions,
+} from "@/lib/prompt-queue-persistence";
 
 const realTmuxClientSnapshot = { ...realTmuxClient };
 const realBackendSnapshot = { ...realBackend };
@@ -70,6 +76,21 @@ const getClaudeModelCatalogMock = mock(async (environmentId: string) => ({
   fetchedAt: "2026-07-25T12:00:00.000Z",
   stale: false,
 }));
+const getComposeDraftMock = mock(async () => null);
+const saveComposeDraftMock = mock(async (
+  draftKey: string,
+  ownerType: "environment" | "project",
+  ownerId: string,
+  value: unknown,
+) => ({
+  draftKey,
+  ownerType,
+  ownerId,
+  value,
+  revision: 1,
+  updatedAt: new Date(0).toISOString(),
+}));
+const deleteComposeDraftMock = mock(async () => undefined);
 const enqueuePromptQueueMessageMock = mock(
   async (queueKey: string, environmentId: string, message: { id: string }) =>
     promptQueueSnapshot(queueKey, environmentId, [
@@ -181,6 +202,48 @@ const promptQueueSnapshot = (
   updatedAt: "2026-01-01T00:00:00.000Z",
   revision: promptQueueRevision++,
 });
+const retryPromptQueueDispatchMock = mock(async (queueKey: string) => {
+  const sessionKey = promptQueueSessionKey(queueKey);
+  return promptQueueSnapshot(
+    queueKey,
+    "env-1",
+    useClaudeTmuxStore.getState().getQueuedMessages(sessionKey),
+  );
+});
+
+function publishTmuxQueueSnapshot(
+  sessionKey: string,
+  dispatchError?: {
+    requestId: string;
+    messageId: string;
+    messageFingerprint: string;
+    message: string;
+    failedAt: string;
+  },
+): void {
+  const store = useClaudeTmuxStore.getState();
+  const messages = store.getQueuedMessages(sessionKey);
+  applyPromptQueueSnapshot<TmuxQueuedMessage>(
+    {
+      agent: "claude-tmux",
+      getQueues: () => useClaudeTmuxStore.getState().messageQueue,
+      setQueue: (key, nextMessages) => {
+        const next = new Map(useClaudeTmuxStore.getState().messageQueue);
+        next.set(key, nextMessages);
+        useClaudeTmuxStore.setState({ messageQueue: next });
+      },
+      environmentIdFor: () => "env-1",
+    },
+    {
+      queueKey: promptQueueKey("claude-tmux", sessionKey),
+      environmentId: "env-1",
+      messages,
+      ...(dispatchError ? { dispatchError } : {}),
+      updatedAt: "2026-08-04T10:00:00.000Z",
+      revision: promptQueueRevision++,
+    },
+  );
+}
 
 const startSessionMock = mock(async () => ({
   tab_id: "tab-1",
@@ -303,6 +366,7 @@ mock.module("@/lib/backend", () => ({
   requeuePromptQueueMessage: requeuePromptQueueMessageMock,
   removePromptQueueMessage: removePromptQueueMessageMock,
   movePromptQueueMessage: movePromptQueueMessageMock,
+  retryPromptQueueDispatch: retryPromptQueueDispatchMock,
   getFileTree: getFileTreeMock,
   getLocalFileTree: getLocalFileTreeMock,
   writeContainerFile: writeContainerFileMock,
@@ -311,6 +375,9 @@ mock.module("@/lib/backend", () => ({
   openInBrowser: openInBrowserMock,
   updateGlobalConfig: updateGlobalConfigMock,
   getClaudeModelCatalog: getClaudeModelCatalogMock,
+  getComposeDraft: getComposeDraftMock,
+  saveComposeDraft: saveComposeDraftMock,
+  deleteComposeDraft: deleteComposeDraftMock,
 }));
 
 mock.module("@/components/chat/FileMentionMenu", () => ({
@@ -490,6 +557,7 @@ describe("ClaudeTmuxChatTab", () => {
   afterEach(() => {
     dateNowSpy?.mockRestore();
     dateNowSpy = undefined;
+    resetPromptQueueRevisions();
   });
 
   afterAll(() => {
@@ -514,6 +582,7 @@ describe("ClaudeTmuxChatTab", () => {
   beforeEach(() => {
     setMobileViewport(false);
     cleanup();
+    resetPromptQueueRevisions();
     getFileTreeMock.mockReset();
     getFileTreeMock.mockResolvedValue([]);
     getLocalFileTreeMock.mockReset();
@@ -561,6 +630,24 @@ describe("ClaudeTmuxChatTab", () => {
       fetchedAt: "2026-07-25T12:00:00.000Z",
       stale: false,
     }));
+    getComposeDraftMock.mockReset();
+    getComposeDraftMock.mockImplementation(async () => null);
+    saveComposeDraftMock.mockReset();
+    saveComposeDraftMock.mockImplementation(async (
+      draftKey: string,
+      ownerType: "environment" | "project",
+      ownerId: string,
+      value: unknown,
+    ) => ({
+      draftKey,
+      ownerType,
+      ownerId,
+      value,
+      revision: 1,
+      updatedAt: new Date(0).toISOString(),
+    }));
+    deleteComposeDraftMock.mockReset();
+    deleteComposeDraftMock.mockImplementation(async () => undefined);
     enqueuePromptQueueMessageMock.mockReset();
     enqueuePromptQueueMessageMock.mockImplementation(
       async (queueKey: string, environmentId: string, message: { id: string }) =>
@@ -626,6 +713,15 @@ describe("ClaudeTmuxChatTab", () => {
         return promptQueueSnapshot(queueKey, environmentId, messages);
       },
     );
+    retryPromptQueueDispatchMock.mockReset();
+    retryPromptQueueDispatchMock.mockImplementation(async (queueKey: string) => {
+      const sessionKey = promptQueueSessionKey(queueKey);
+      return promptQueueSnapshot(
+        queueKey,
+        "env-1",
+        useClaudeTmuxStore.getState().getQueuedMessages(sessionKey),
+      );
+    });
     claimedPromptMessages.clear();
     acknowledgePromptQueueClaimMock.mockReset();
     acknowledgePromptQueueClaimMock.mockImplementation(
@@ -1515,6 +1611,35 @@ Running 1 Explore agent...
       "env-1",
     ]);
     expect(screen.queryByAltText(/clipboard-/)).toBeNull();
+  });
+
+  test("persists tmux composer input under the backend queue interlock key", async () => {
+    mockRunningTmuxStatus();
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    const input = await screen.findByPlaceholderText(
+      "Ask Claude anything… (@ to mention, / for commands)",
+    );
+    fireEvent.change(input, { target: { value: "draft blocks queued work" } });
+
+    await waitFor(() => expect(saveComposeDraftMock).toHaveBeenCalled());
+    const call = saveComposeDraftMock.mock.calls.at(-1);
+    expect(call?.[0]).toBe(
+      "claude-tmux:env-1:env%3Aenv-1%3Atab%3Atab-1",
+    );
+    expect(call?.[1]).toBe("environment");
+    expect(call?.[2]).toBe("env-1");
+    expect(call?.[3]).toMatchObject({
+      text: "draft blocks queued work",
+      mentions: [],
+      attachments: [],
+    });
   });
 
   test("submits a pasted tmux image without text as a single prompt", async () => {
@@ -5394,347 +5519,6 @@ Running 1 Explore agent...
     expect(stopSessionMock).not.toHaveBeenCalled();
   });
 
-  test("queues a compose draft while busy and drains it after the tmux Stop hook", async () => {
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    useClaudeTmuxStore.getState().setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    useClaudeTmuxStore.getState().setBusy(stateKey, true);
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    const textarea = screen.getByPlaceholderText(
-      /Ask Claude anything/,
-    ) as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "continue with this" } });
-    expect(textarea.value).toBe("continue with this");
-
-    fireEvent.click(screen.getByTitle("Add to queue"));
-
-    await waitFor(() => {
-      expect(useClaudeTmuxStore.getState().messageQueue.get(stateKey)?.map((m) => m.text)).toEqual([
-        "continue with this",
-      ]);
-      expect(useClaudeTmuxStore.getState().messageQueue.get(stateKey)?.[0]?.id).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-      );
-      expect(textarea.value).toBe("");
-    });
-    expect(submitMock).not.toHaveBeenCalled();
-    expect(screen.getByText("+1 queued")).toBeTruthy();
-
-    await waitFor(() => expect(subscribedHandler).not.toBeNull());
-
-    act(() => {
-      subscribedHandler?.({
-        kind: "hook",
-        tab_id: "tab-1",
-        environment_id: "env-1",
-        session_id: "session-1",
-        event_id: "stop",
-        event_kind: "Stop",
-        payload: {},
-      });
-    });
-
-    await waitFor(() => {
-      expect(submitMock).toHaveBeenCalledWith(
-        "tab-1",
-        "continue with this",
-        "env-1",
-      );
-      expect(useClaudeTmuxStore.getState().messageQueue.get(stateKey)).toEqual([]);
-    });
-    expect(acknowledgePromptQueueClaimMock).toHaveBeenCalledWith(
-      expect.stringContaining(stateKey),
-      "env-1",
-      expect.stringMatching(/^claim-/),
-    );
-  });
-
-  test("migrates legacy queue state before enqueue, edit, and move operations", async () => {
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning("tab-1", true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    store.setBusy("tab-1", true);
-    store.setDraftText("tab-1", "new legacy prompt");
-    seedQueuedPrompt(store, "tab-1", {
-      id: "legacy-queue-1",
-      text: "first legacy queued",
-      attachments: [],
-    });
-    seedQueuedPrompt(store, "tab-1", {
-      id: "legacy-queue-2",
-      text: "second legacy queued",
-      attachments: [],
-    });
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    const textarea = screen.getByPlaceholderText(
-      /Ask Claude anything/,
-    ) as HTMLTextAreaElement;
-    expect(textarea.value).toBe("new legacy prompt");
-    fireEvent.click(screen.getByTitle("Add to queue"));
-
-    await waitFor(() => {
-      expect(
-        useClaudeTmuxStore
-          .getState()
-          .getQueuedMessages(stateKey)
-          .map((message) => message.text),
-      ).toEqual([
-        "first legacy queued",
-        "second legacy queued",
-        "new legacy prompt",
-      ]);
-      expect(textarea.value).toBe("");
-    });
-    expect(useClaudeTmuxStore.getState().tabs.has("tab-1")).toBe(false);
-    expect(useClaudeTmuxStore.getState().messageQueue.has("tab-1")).toBe(false);
-    expect(enqueuePromptQueueMessageMock.mock.calls[0]?.[0]).toContain(stateKey);
-
-    fireEvent.click(screen.getByText("+3 queued"));
-    fireEvent.click((await screen.findAllByTitle("Move down"))[0]!);
-    await waitFor(() => {
-      expect(
-        useClaudeTmuxStore
-          .getState()
-          .getQueuedMessages(stateKey)
-          .map((message) => message.id),
-      ).toEqual(["legacy-queue-2", "legacy-queue-1", expect.any(String)]);
-    });
-
-    fireEvent.click(await screen.findByText("first legacy queued"));
-    await waitFor(() => {
-      expect(textarea.value).toBe("first legacy queued");
-      expect(
-        useClaudeTmuxStore
-          .getState()
-          .getQueuedMessages(stateKey)
-          .map((message) => message.id),
-      ).toEqual(["legacy-queue-2", expect.any(String)]);
-    });
-  });
-
-  test("claims and drains a queued prompt migrated from a legacy tab key", async () => {
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning("tab-1", true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    seedQueuedPrompt(store, "tab-1", {
-      id: "legacy-claim",
-      text: "drain migrated prompt",
-      attachments: [],
-    });
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    await waitFor(() => {
-      expect(submitMock).toHaveBeenCalledWith(
-        "tab-1",
-        "drain migrated prompt",
-        "env-1",
-      );
-      expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toEqual([]);
-    });
-    expect(claimPromptQueueHeadMock).toHaveBeenCalledTimes(1);
-    expect(useClaudeTmuxStore.getState().messageQueue.has("tab-1")).toBe(false);
-  });
-
-  test("guards a deferred busy enqueue against duplicate submissions", async () => {
-    let resolveEnqueue: (() => void) | undefined;
-    enqueuePromptQueueMessageMock.mockImplementationOnce(
-      (queueKey: string, environmentId: string, message: { id: string }) =>
-        new Promise<void>((resolve) => {
-          resolveEnqueue = resolve;
-        }).then(() =>
-          promptQueueSnapshot(queueKey, environmentId, [message]),
-        ),
-    );
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    store.setBusy(stateKey, true);
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    const textarea = screen.getByPlaceholderText(
-      /Ask Claude anything/,
-    ) as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "only once" } });
-    const button = screen.getByTitle("Add to queue");
-    fireEvent.click(button);
-    fireEvent.keyDown(textarea, { key: "Enter" });
-    fireEvent.click(button);
-
-    expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1);
-    expect(textarea.value).toBe("only once");
-    expect(textarea.disabled).toBe(true);
-
-    await act(async () => {
-      resolveEnqueue?.();
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(textarea.value).toBe("");
-      expect(textarea.disabled).toBe(false);
-      expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toHaveLength(1);
-    });
-  });
-
-  test("preserves a busy draft when backend enqueue fails", async () => {
-    enqueuePromptQueueMessageMock.mockRejectedValueOnce(
-      new Error("queue storage unavailable"),
-    );
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    store.setBusy(stateKey, true);
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    const textarea = screen.getByPlaceholderText(
-      /Ask Claude anything/,
-    ) as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "keep this draft" } });
-    fireEvent.click(screen.getByTitle("Add to queue"));
-
-    expect(
-      await screen.findByText("Failed to queue prompt: queue storage unavailable"),
-    ).toBeTruthy();
-    expect(textarea.value).toBe("keep this draft");
-    expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toEqual([]);
-  });
-
-  test("does not drain queued tmux prompts while a draft exists", async () => {
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    seedQueuedPrompt(store, stateKey, {
-      id: "queue-1",
-      text: "queued behind draft",
-      attachments: [],
-    });
-    store.setDraftText(stateKey, "draft in progress");
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    expect(
-      (screen.getByPlaceholderText(/Ask Claude anything/) as HTMLTextAreaElement).value,
-    ).toBe("draft in progress");
-    await Promise.resolve();
-    expect(submitMock).not.toHaveBeenCalled();
-
-    act(() => {
-      useClaudeTmuxStore.getState().setDraftText(stateKey, "");
-    });
-
-    await waitFor(() => {
-      expect(submitMock).toHaveBeenCalledWith(
-        "tab-1",
-        "queued behind draft",
-        "env-1",
-      );
-    });
-  });
-
-  test("does not drain queued tmux prompts while an attachment is staged", async () => {
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    seedQueuedPrompt(store, stateKey, {
-      id: "queue-1",
-      text: "queued behind attachment",
-      attachments: [],
-    });
-    store.addAttachment(stateKey, {
-      id: "att-staged",
-      type: "image",
-      path: "/workspace/blocking.png",
-      previewUrl: "data:image/png;base64,blocking",
-      name: "blocking.png",
-    });
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    await screen.findByAltText("blocking.png");
-    expect(submitMock).not.toHaveBeenCalled();
-
-    act(() => {
-      useClaudeTmuxStore.getState().clearAttachments(stateKey);
-    });
-
-    await waitFor(() => {
-      expect(submitMock).toHaveBeenCalledWith(
-        "tab-1",
-        "queued behind attachment",
-        "env-1",
-      );
-    });
-  });
-
   test("reorders and removes queued tmux prompts from the queue dialog", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
     const store = useClaudeTmuxStore.getState();
@@ -5778,6 +5562,52 @@ Running 1 Explore agent...
       ).toEqual(["second queued", "third queued"]);
     });
     expect(screen.queryByText("first queued")).toBeNull();
+  });
+
+  test("surfaces a parked tmux dispatch error and retries it explicitly", async () => {
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    const store = useClaudeTmuxStore.getState();
+    store.setRunning(stateKey, true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    store.setBusy(stateKey, true);
+    seedQueuedPrompt(store, stateKey, {
+      id: "queue-1",
+      text: "review the ambiguous submit",
+      attachments: [],
+    });
+    publishTmuxQueueSnapshot(stateKey, {
+      requestId: "request-1",
+      messageId: "queue-1",
+      messageFingerprint: "a".repeat(64),
+      message: "Submission may have partially completed. Review the pane before retrying.",
+      failedAt: "2026-08-04T10:00:00.000Z",
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    const blockedIndicator = await screen.findByRole("button", {
+      name: /1 queued prompts blocked: Submission may have partially completed/,
+    });
+    fireEvent.click(blockedIndicator);
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Review the pane before retrying.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(retryPromptQueueDispatchMock).toHaveBeenCalledWith(
+        promptQueueKey("claude-tmux", stateKey),
+      );
+      expect(screen.getByText("+1 queued").closest("button")?.getAttribute("aria-label"))
+        .toBeNull();
+    });
   });
 
   test("reports queue dialog mutation failures and keeps the projected queue intact", async () => {
@@ -5874,303 +5704,6 @@ Running 1 Explore agent...
         (screen.getByPlaceholderText(/Ask Claude anything/) as HTMLTextAreaElement).value,
       ).toBe("edit queued with image");
       expect(screen.getByAltText("diagram.png")).toBeTruthy();
-      expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toEqual([]);
-    });
-  });
-
-  test("drains queued tmux prompts with saved image attachment paths", async () => {
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    seedQueuedPrompt(store, stateKey, {
-      id: "queue-image",
-      text: "use this screenshot",
-      attachments: [
-        {
-          id: "att-1",
-          type: "image",
-          path: "/workspace/diagram.png",
-          previewUrl: "data:image/png;base64,diagram",
-          name: "diagram.png",
-        },
-      ],
-    });
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    await waitFor(() => {
-      expect(submitMock).toHaveBeenCalledWith(
-        "tab-1",
-        expect.stringContaining("/workspace/diagram.png"),
-        "env-1",
-      );
-      expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toEqual([]);
-    });
-  });
-
-  test("requeues a failed queued tmux prompt and reports the send error", async () => {
-    submitMock.mockImplementationOnce(async () => {
-      throw new Error("tmux unavailable");
-    });
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    seedQueuedPrompt(store, stateKey, {
-      id: "queue-fail",
-      text: "will fail",
-      attachments: [],
-    });
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    expect(
-      await screen.findByText(
-        "Failed to send queued prompt. It was returned to the queue.",
-      ),
-    ).toBeTruthy();
-    expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toEqual([
-      { id: "queue-fail", text: "will fail", attachments: [] },
-    ]);
-    expect(useClaudeTmuxStore.getState().getTab(stateKey).busy).toBe(false);
-    expect(submitMock).toHaveBeenCalledTimes(1);
-    expect(rejectPromptQueueClaimMock).toHaveBeenCalledWith(
-      expect.stringContaining(stateKey),
-      "env-1",
-      "claim-queue-fail",
-    );
-  });
-
-  test("retries a failed claim rejection until the queued prompt is restored", async () => {
-    submitMock.mockRejectedValueOnce(new Error("tmux unavailable"));
-    rejectPromptQueueClaimMock.mockRejectedValueOnce(
-      new Error("queue storage unavailable"),
-    );
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    seedQueuedPrompt(store, stateKey, {
-      id: "queue-requeue-fail",
-      text: "recover in draft",
-      attachments: [],
-    });
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    expect(
-      await screen.findByText(
-        "Failed to send queued prompt and return it to the queue yet: queue storage unavailable",
-      ),
-    ).toBeTruthy();
-    await waitFor(() => {
-      expect(rejectPromptQueueClaimMock).toHaveBeenCalledTimes(2);
-      expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toEqual([
-        {
-          id: "queue-requeue-fail",
-          text: "recover in draft",
-          attachments: [],
-        },
-      ]);
-    });
-    expect(submitMock).toHaveBeenCalledTimes(1);
-  });
-
-  test("retries a failed claim acknowledgement without dispatching the prompt twice", async () => {
-    acknowledgePromptQueueClaimMock.mockRejectedValueOnce(
-      new Error("queue storage unavailable"),
-    );
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    seedQueuedPrompt(store, stateKey, {
-      id: "queue-ack-fail",
-      text: "send exactly once",
-      attachments: [],
-    });
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    expect(
-      await screen.findByText(
-        "Queued prompt was sent, but its queue claim could not be acknowledged yet: queue storage unavailable",
-      ),
-    ).toBeTruthy();
-    expect(submitMock).toHaveBeenCalledTimes(1);
-    expect(submitMock).toHaveBeenCalledWith(
-      "tab-1",
-      "send exactly once",
-      "env-1",
-    );
-    await waitFor(() => {
-      expect(acknowledgePromptQueueClaimMock).toHaveBeenCalledTimes(2);
-    });
-    expect(submitMock).toHaveBeenCalledTimes(1);
-  });
-
-  test("leaves an unsettled rejected claim to the backend lease when the tab unmounts", async () => {
-    /**
-     * The prompt is still held by a durable backend claim, which re-heads it
-     * when the lease expires. Copying it into this tab's draft as well would
-     * put the same prompt in two places and send it twice.
-     */
-    submitMock.mockRejectedValueOnce(new Error("tmux unavailable"));
-    rejectPromptQueueClaimMock.mockRejectedValue(
-      new Error("queue storage unavailable"),
-    );
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    seedQueuedPrompt(store, stateKey, {
-      id: "queue-unmount-recovery",
-      text: "recover after unmount",
-      attachments: [],
-    });
-
-    const view = render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    expect(
-      await screen.findByText(
-        "Failed to send queued prompt and return it to the queue yet: queue storage unavailable",
-      ),
-    ).toBeTruthy();
-    const rejectAttemptsAtUnmount = rejectPromptQueueClaimMock.mock.calls.length;
-    view.unmount();
-
-    expect(useClaudeTmuxStore.getState().getDraftText(stateKey)).toBe("");
-    // No further settlement work either: the unmounted tab has released the
-    // claim to the lease rather than keeping a retry alive.
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    expect(rejectPromptQueueClaimMock.mock.calls.length).toBe(
-      rejectAttemptsAtUnmount,
-    );
-  });
-
-  test("keeps a queued tmux prompt and reports an atomic claim failure", async () => {
-    claimPromptQueueHeadMock.mockRejectedValueOnce(new Error("queue storage unavailable"));
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    seedQueuedPrompt(store, stateKey, {
-      id: "queue-claim-fail",
-      text: "retry after storage recovers",
-      attachments: [],
-    });
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    expect(
-      await screen.findByText(
-        "Failed to send queued prompt: queue storage unavailable",
-      ),
-    ).toBeTruthy();
-    expect(claimPromptQueueHeadMock).toHaveBeenCalledTimes(1);
-    expect(submitMock).not.toHaveBeenCalled();
-    expect(
-      useClaudeTmuxStore.getState().getQueuedMessages(stateKey).map((message) => message.id),
-    ).toEqual(["queue-claim-fail"]);
-    expect(useClaudeTmuxStore.getState().getTab(stateKey).busy).toBe(false);
-  });
-
-  test("retries the same head on a cooldown after a failed send", async () => {
-    /**
-     * A rejected claim restores a byte-identical head, so retrying immediately
-     * spins against whatever refused the send. Holding the pause until the head
-     * changed was the other extreme: a prompt that failed once would never
-     * drain again, however healthy the session became.
-     */
-    submitMock.mockImplementationOnce(async () => {
-      throw new Error("tmux briefly unavailable");
-    });
-    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
-    const store = useClaudeTmuxStore.getState();
-    store.setRunning(stateKey, true, {
-      environmentId: "env-1",
-      sessionId: "session-1",
-    });
-    seedQueuedPrompt(store, stateKey, {
-      id: "queue-transient-failure",
-      text: "retry me",
-      attachments: [],
-    });
-
-    render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", containerId: "container-1" }}
-        isActive
-      />,
-    );
-
-    expect(
-      await screen.findByText(
-        "Failed to send queued prompt. It was returned to the queue.",
-      ),
-    ).toBeTruthy();
-    expect(submitMock).toHaveBeenCalledTimes(1);
-
-    // Nothing re-drives it immediately...
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(submitMock).toHaveBeenCalledTimes(1);
-
-    // ...but the cooldown releases the same head with no further user input.
-    await waitFor(
-      () => expect(submitMock.mock.calls.length).toBeGreaterThanOrEqual(2),
-      { timeout: 5_000 },
-    );
-    await waitFor(() => {
       expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey)).toEqual([]);
     });
   });

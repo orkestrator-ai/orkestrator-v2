@@ -202,17 +202,14 @@ function App() {
     return environmentIds;
   }, [paneLayoutEnvironments]);
 
-  // Loading or queued agent sessions across Claude/Codex/OpenCode/tmux keep their
-  // environment mounted so SSE subscriptions, watchdog polls, and queue drains
-  // can advance even when the user has navigated elsewhere.
+  // Loading agent sessions across Claude/Codex/OpenCode/tmux keep their
+  // environment mounted so SSE subscriptions and watchdog polls can advance
+  // even when the user has navigated elsewhere. Queues are deliberately absent:
+  // the backend drains them, so a queued prompt is no reason to mount anything.
   const claudeSessions = useClaudeStore((state) => state.sessions);
   const codexSessions = useCodexStore((state) => state.sessions);
   const openCodeSessions = useOpenCodeStore((state) => state.sessions);
   const claudeTmuxTabs = useClaudeTmuxStore((state) => state.tabs);
-  const claudeMessageQueue = useClaudeStore((state) => state.messageQueue);
-  const claudeTmuxMessageQueue = useClaudeTmuxStore((state) => state.messageQueue);
-  const codexMessageQueue = useCodexStore((state) => state.messageQueue);
-  const openCodeMessageQueue = useOpenCodeStore((state) => state.messageQueue);
   const loadingNativeSessionEnvironmentIds = useMemo(() => {
     const environmentIds = new Set<string>();
     const sessionMaps = [claudeSessions, codexSessions, openCodeSessions];
@@ -241,33 +238,6 @@ function App() {
     }
     return Array.from(environmentIds);
   }, [claudeSessions, codexSessions, openCodeSessions, claudeTmuxTabs]);
-  const queuedAgentPromptEnvironmentIds = useMemo(() => {
-    const environmentIds = new Set<string>();
-    const queueMaps = [claudeMessageQueue, codexMessageQueue, openCodeMessageQueue];
-    for (const queueMap of queueMaps) {
-      for (const [sessionKey, queue] of queueMap) {
-        if (queue.length === 0) continue;
-        const environmentId = getEnvironmentIdFromSessionKey(sessionKey);
-        if (environmentId) {
-          environmentIds.add(environmentId);
-        }
-      }
-    }
-    for (const [stateKey, queue] of claudeTmuxMessageQueue) {
-      if (queue.length === 0) continue;
-      const environmentId = getEnvironmentIdFromClaudeTmuxStateKey(stateKey);
-      if (environmentId) {
-        environmentIds.add(environmentId);
-      }
-    }
-    return Array.from(environmentIds);
-  }, [
-    claudeMessageQueue,
-    claudeTmuxMessageQueue,
-    codexMessageQueue,
-    openCodeMessageQueue,
-  ]);
-
   // Environments with frontend-owned background concerns that aren't currently
   // visible. Build pipelines are intentionally absent: the backend supervises
   // them even when no renderer exists.
@@ -282,7 +252,6 @@ function App() {
       Object.keys(pendingNativeLaunches),
       pendingInitialPromptEnvironmentIds,
       loadingNativeSessionEnvironmentIds,
-      queuedAgentPromptEnvironmentIds,
       pendingSetupEnvironmentIds,
       loopedReviews.values(),
       durablePendingAgentLaunchEnvironmentIds,
@@ -296,7 +265,6 @@ function App() {
       pendingNativeLaunches,
       pendingInitialPromptEnvironmentIds,
       loadingNativeSessionEnvironmentIds,
-      queuedAgentPromptEnvironmentIds,
       loopedReviews,
       durablePendingAgentLaunchEnvironmentIds,
     ],

@@ -134,14 +134,14 @@ describe("parseFeaturePlannerState", () => {
     ).toBeNull();
   });
 
-  test("uses the first block when several are present", () => {
+  test("rejects ambiguous responses containing several state blocks", () => {
     const content = `<feature_planner_state>
 {"phase":"collecting","title":"first"}
 </feature_planner_state>
 <feature_planner_state>
 {"phase":"stories","title":"second"}
 </feature_planner_state>`;
-    expect(parseFeaturePlannerState(content)?.title).toBe("first");
+    expect(parseFeaturePlannerState(content)).toBeNull();
   });
 });
 

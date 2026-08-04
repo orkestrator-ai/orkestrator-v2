@@ -58,7 +58,7 @@ function expectedOpenCodeMessageId(requestId: string): string {
   for (let index = 0; index < requestId.length; index += 1) {
     encoded += requestId.charCodeAt(index).toString(16).padStart(4, "0");
   }
-  return `msg_ork_${encoded}`;
+  return `msg_00000000000000000000000000_ork_${encoded}`;
 }
 
 afterEach(() => {
@@ -1537,6 +1537,21 @@ describe("opencode-client sendPrompt", () => {
     expect(captured[0]?.messageID).toBe(expectedOpenCodeMessageId("msg_collision"));
     expect(captured[1]?.messageID).toBe(expectedOpenCodeMessageId("collision"));
     expect(captured[0]?.messageID).not.toBe(captured[1]?.messageID);
+  });
+
+  test("orders a caller-owned user message before OpenCode assistant messages", async () => {
+    const { client, captured } = capturePromptAsync();
+
+    await sendPrompt(client, "session-1", "Hello", { requestId: "request-1" });
+
+    const messageID = captured[0]?.messageID;
+    expect(messageID).toBe(expectedOpenCodeMessageId("request-1"));
+    if (typeof messageID !== "string") {
+      throw new Error("OpenCode prompt omitted its message ID");
+    }
+    // Real server-generated assistant ID from the looping regression. OpenCode
+    // will not exit a finished turn unless the user ID sorts before this ID.
+    expect(messageID < "msg_fcd9281c2001hsJUIHGDARuWRB").toBe(true);
   });
 
   test.each(["", "   "])(

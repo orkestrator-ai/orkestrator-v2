@@ -1986,11 +1986,12 @@ function toOpenCodeModelRef(model: string): { providerID: string; modelID: strin
 }
 
 /**
- * OpenCode treats caller-supplied message IDs as durable idempotency keys. UI
- * request IDs are provider-neutral, so encode every supplied value into a
- * reserved namespace rather than guessing that an ID beginning with `msg` is
- * already native. Fixed-width UTF-16 hex makes the mapping injective for every
- * JavaScript string while satisfying OpenCode's `msg` prefix schema.
+ * OpenCode uses message IDs for both identity and chronological ordering. Its
+ * prompt loop only accepts a finished assistant message as newer than the user
+ * message when `lastUser.id < lastAssistant.id`. Put caller-owned IDs in a
+ * synthetic time-zero namespace so every server-generated response sorts after
+ * them. Fixed-width UTF-16 hex keeps the request-ID mapping stable and injective
+ * while satisfying OpenCode's `msg_` prefix schema.
  */
 function toOpenCodeMessageId(requestId: string | undefined): string | undefined {
   if (requestId === undefined) return undefined;
@@ -2001,7 +2002,7 @@ function toOpenCodeMessageId(requestId: string | undefined): string | undefined 
   for (let index = 0; index < requestId.length; index += 1) {
     encoded += requestId.charCodeAt(index).toString(16).padStart(4, "0");
   }
-  return `msg_ork_${encoded}`;
+  return `msg_00000000000000000000000000_ork_${encoded}`;
 }
 
 /**

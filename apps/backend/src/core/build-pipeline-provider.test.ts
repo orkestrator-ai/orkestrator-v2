@@ -98,7 +98,7 @@ function expectedOpenCodeMessageId(requestId: string): string {
     { length: requestId.length },
     (_, index) => requestId.charCodeAt(index).toString(16).padStart(4, "0"),
   ).join("");
-  return `msg_ork_${encoded}`;
+  return `msg_00000000000000000000000000_ork_${encoded}`;
 }
 
 function declineResolution(request: AgentInteractionRequest): AgentInteractionResolution {
@@ -3822,9 +3822,15 @@ describe("OpenCode build pipeline provider dispatch", () => {
       });
 
       const [call] = fake.promptCalls;
-      // OpenCode deduplicates on messageID, which is what makes the supervisor's
-      // same-request-id retry safe instead of a second agent turn.
+      // OpenCode reconciles the user-message identity on messageID; the
+      // supervisor's durable dispatch journal prevents accepted retries.
       expect(call!.messageID).toBe(expectedOpenCodeMessageId("request-42"));
+      if (typeof call!.messageID !== "string") {
+        throw new Error("OpenCode prompt omitted its message ID");
+      }
+      // OpenCode's loop compares message IDs rather than timestamps before it
+      // honours finish=stop. Caller-owned user IDs must sort before responses.
+      expect(call!.messageID < "msg_fcd9281c2001hsJUIHGDARuWRB").toBe(true);
       expect(call!.sessionID).toBe("owned-session");
       expect(call!.agent).toBe("build");
       expect(call!.directory).toBe("/workspace");

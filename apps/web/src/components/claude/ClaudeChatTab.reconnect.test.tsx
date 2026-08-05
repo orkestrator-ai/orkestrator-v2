@@ -731,7 +731,9 @@ describe("ClaudeChatTab SSE reconnect", () => {
     mockGetSessionMessages.mockImplementation(
       async (..._args: unknown[]) => {
         if (_args[1] === "session-claude-stale") {
-          throw new Error("Session not found: session-claude-stale");
+          throw new realClaudeClientSnapshot.SessionNotFoundError(
+            "session-claude-stale",
+          );
         }
         return [];
       },
@@ -774,6 +776,65 @@ describe("ClaudeChatTab SSE reconnect", () => {
       );
     } finally {
       console.warn = originalConsoleWarn;
+      await act(async () => {
+        useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        channel.close();
+        await Promise.resolve();
+      });
+    }
+  });
+
+  test("retries a transient full-resync failure while a quiet stream stays live", async () => {
+    const channel = eventChannel();
+    const retryKey = createSessionKey(ENVIRONMENT_ID, "tab-claude-resync-retry");
+    const previous = new AbortController();
+    let snapshotAttempts = 0;
+    act(() => {
+      useClaudeStore.setState((state) => ({
+        sessions: new Map(state.sessions).set(retryKey, {
+          sessionId: "session-claude-resync-retry",
+          messages: [],
+          isLoading: false,
+        }),
+        eventSubscriptions: new Map([[ENVIRONMENT_ID, {
+          abortController: previous,
+          stream: null,
+          isActive: false,
+          reconnectAttempts: 10,
+          reconnectTimer: null,
+          desynced: true,
+        }]]),
+      }));
+    });
+    mockGetSessionMessages.mockImplementation(async (...args: unknown[]) => {
+      if (args[1] === "session-claude-resync-retry") {
+        snapshotAttempts += 1;
+        if (snapshotAttempts === 1) throw new Error("transient transcript outage");
+      }
+      return [];
+    });
+    mockSubscribeToEvents.mockImplementationOnce(() => channel.stream);
+    const timers = captureReconnectTimers();
+
+    try {
+      renderChat();
+      await waitFor(() => {
+        expect(
+          useClaudeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID),
+        ).toMatchObject({ desynced: true, isActive: true });
+        expect(timers.map((timer) => timer.delay)).toContain(60_000);
+      });
+
+      await runTimer(timers.find((timer) => timer.delay === 60_000)!);
+
+      await waitFor(() => {
+        expect(snapshotAttempts).toBeGreaterThanOrEqual(2);
+        expect(
+          useClaudeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID),
+        ).toMatchObject({ desynced: false, reconnectTimer: null });
+      });
+      expect(mockSubscribeToEvents).toHaveBeenCalledTimes(1);
+    } finally {
       await act(async () => {
         useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
         channel.close();

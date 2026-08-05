@@ -1967,8 +1967,14 @@ export async function applyPaneLayoutIntent(
   });
 }
 
-export async function deletePaneLayout(environmentId: string): Promise<void> {
-  return invoke("delete_pane_layout", { environmentId });
+export async function deletePaneLayout(
+  environmentId: string,
+  expectedRevision?: number,
+): Promise<void> {
+  return invoke("delete_pane_layout", {
+    environmentId,
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
+  });
 }
 
 // --- Looped Code Review Workflow Commands ---

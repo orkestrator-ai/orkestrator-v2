@@ -1748,7 +1748,7 @@ export function ClaudeChatTab({
         const eventStream = subscribeToEvents(bridgeClient, abortController.signal);
         setEventStream(environmentId, eventStream, abortController);
 
-        if (requiresFullRehydrate) {
+        const rehydrateProjectedSessions = async (): Promise<boolean> => {
           /*
            * One unreachable session must not abandon the rest of the rehydrate.
            * A stale projection whose session the bridge has forgotten answers
@@ -1758,7 +1758,7 @@ export function ClaudeChatTab({
            * every sixty seconds.
            */
           const prefix = sessionKeyPrefixFor(environmentId);
-          const unreachable: string[] = [];
+          const transientFailures: string[] = [];
           for (const [key, projected] of useClaudeStore.getState().sessions) {
             if (!key.startsWith(prefix)) continue;
             try {
@@ -1767,15 +1767,17 @@ export function ClaudeChatTab({
                 projected.sessionId,
                 { throwOnError: true },
               );
-              if (abortController.signal.aborted) return;
+              if (abortController.signal.aborted) return false;
               setMessages(key, messages);
               await syncPendingPrompts(bridgeClient, projected.sessionId, {
                 throwOnError: true,
                 targetSessionKey: key,
               });
             } catch (error) {
-              if (abortController.signal.aborted) return;
-              unreachable.push(projected.sessionId);
+              if (abortController.signal.aborted) return false;
+              if (!(error instanceof SessionNotFoundError)) {
+                transientFailures.push(projected.sessionId);
+              }
               console.warn(
                 "[ClaudeChatTab] Failed to rehydrate session during resync:",
                 projected.sessionId,
@@ -1783,21 +1785,51 @@ export function ClaudeChatTab({
               );
             }
           }
-          if (unreachable.length > 0) {
+          if (transientFailures.length > 0) {
             console.warn(
-              "[ClaudeChatTab] Resynced with unreachable sessions:",
-              unreachable.length,
+              "[ClaudeChatTab] Resync remains pending for unavailable sessions:",
+              transientFailures.length,
             );
           }
-          /*
-           * Resynced regardless of the failures above. The stream is up, so
-           * every session — including the ones that just failed — is back on
-           * the ordinary incremental path (`message.updated` and `session.idle`
-           * both refetch, and `replay.required` reconciles the environment).
-           * Holding the flag would only re-run this identical failure on a
-           * sixty-second loop while the banner stayed up.
-           */
-          markEventSubscriptionResynced(environmentId, abortController);
+          return transientFailures.length === 0;
+        };
+
+        const scheduleFullRehydrateRetry = () => {
+          if (abortController.signal.aborted) return;
+          const retryTimer = setTimeout(() => {
+            const current = useClaudeStore.getState().eventSubscriptions
+              .get(environmentId);
+            if (
+              current?.abortController !== abortController
+              || !current.isActive
+              || !current.desynced
+            ) return;
+            void rehydrateProjectedSessions().then((resynced) => {
+              if (abortController.signal.aborted) return;
+              if (resynced) {
+                markEventSubscriptionResynced(environmentId, abortController);
+              } else {
+                scheduleFullRehydrateRetry();
+              }
+            });
+          }, SSE_RECONNECT_MAX_DELAY);
+          setEventReconnectState(
+            environmentId,
+            { reconnectTimer: retryTimer },
+            abortController,
+          );
+        };
+
+        if (requiresFullRehydrate) {
+          const resynced = await rehydrateProjectedSessions();
+          if (abortController.signal.aborted) return;
+          if (resynced) {
+            markEventSubscriptionResynced(environmentId, abortController);
+          } else {
+            // The stream is already live. Keep consuming it while a store-owned
+            // timer retries the failed authoritative snapshot on a quiet tab.
+            scheduleFullRehydrateRetry();
+          }
         }
 
         const lastReloadTimeBySession = new Map<string, number>();

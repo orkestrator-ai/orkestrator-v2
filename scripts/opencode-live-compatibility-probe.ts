@@ -165,7 +165,7 @@ export async function availableLoopbackPort(): Promise<number> {
 /** Reads the exact `@opencode-ai/sdk` version `apps/web` pins. */
 export async function readPinnedSdkVersion(): Promise<string> {
   const webManifest = JSON.parse(
-    await readFile(join(import.meta.dir, "..", "..", "package.json"), "utf8"),
+    await readFile(join(import.meta.dir, "..", "apps", "web", "package.json"), "utf8"),
   ) as { dependencies?: Record<string, string> };
   const pinned = webManifest.dependencies?.["@opencode-ai/sdk"];
   if (!pinned?.match(/^\d+\.\d+\.\d+$/)) {
@@ -178,12 +178,13 @@ export async function readPinnedSdkVersion(): Promise<string> {
  * Reads the version of the `@opencode-ai/sdk` that is actually installed, so the
  * caller's comparison against the pin is a real check rather than a tautology.
  *
- * Resolution starts from this file, not the cwd, because the live test spawns
- * the probe from the repo root. The package does not export `./package.json`, so
- * this walks up from the resolved entry point instead of resolving the manifest.
+ * Resolution starts from the web workspace that owns the dependency, not the
+ * caller's cwd. The package does not export `./package.json`, so this walks up
+ * from the resolved entry point instead of resolving the manifest directly.
  */
 export async function readInstalledSdkVersion(): Promise<string> {
-  const entry = Bun.resolveSync("@opencode-ai/sdk/v2/client", import.meta.dir);
+  const webPackageRoot = join(import.meta.dir, "..", "apps", "web");
+  const entry = Bun.resolveSync("@opencode-ai/sdk/v2/client", webPackageRoot);
   let directory = dirname(entry);
   for (;;) {
     const manifestPath = join(directory, "package.json");
@@ -402,14 +403,23 @@ export async function runOpenCodeLiveCompatibility(
  * temp root down itself before exiting, or the server outlives the run holding a
  * port and a temp directory forever.
  */
-export function installProbeTerminationHandlers(): void {
+export interface ProbeTerminationRuntime {
+  on(signal: "SIGTERM" | "SIGINT", listener: () => void): unknown;
+  exit(code: number): unknown;
+}
+
+export function installProbeTerminationHandlers(
+  runtime: ProbeTerminationRuntime = process,
+  getActiveTeardown: () => (() => Promise<void>) | null = () => activeProbeTeardown,
+): void {
   for (const signal of ["SIGTERM", "SIGINT"] as const) {
-    process.on(signal, () => {
-      const teardown = activeProbeTeardown;
+    runtime.on(signal, () => {
+      const teardown = getActiveTeardown();
       if (!teardown) {
-        process.exit(1);
+        runtime.exit(1);
+        return;
       }
-      void teardown().catch(() => {}).finally(() => process.exit(1));
+      void teardown().catch(() => {}).finally(() => runtime.exit(1));
     });
   }
 }

@@ -5798,6 +5798,46 @@ describe("live session read paths", () => {
     });
   }, 30_000);
 
+  test("denies an oversized blocking hook without broadcasting truncated approval data", async () => {
+    const handlers = createHandlers();
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-oversized-blocking";
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      ) as { session_id: string };
+      const sessionRoot = path.join(runtimeRoot, "sessions", status.session_id);
+      const pending = path.join(sessionRoot, "pending", "PreToolUse-too-large.json");
+      const response = path.join(sessionRoot, "response", "PreToolUse-too-large.json");
+      await fs.writeFile(pending, "x".repeat(TMUX_HOOK_PAYLOAD_MAX_BYTES + 1));
+
+      await waitFor(() => existsSync(response), 10_000);
+      await expect(fs.readFile(response, "utf8")).resolves.toBe(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "Approval payload exceeded the safe size limit.",
+        },
+      }));
+      expect(existsSync(pending)).toBe(false);
+      expect(emitted.some((entry) =>
+        entry.event === "claude-tmux:event"
+        && (entry.payload as { event_id?: string }).event_id === "too-large"
+      )).toBe(false);
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  }, 30_000);
+
   test("notifies once for each armed UserPromptSubmit-to-Stop turn", async () => {
     const handlers = createHandlers();
 

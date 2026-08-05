@@ -97,6 +97,8 @@ export type JsonRecord = Record<string, unknown>;
 
 const MAX_FRONTEND_AGENT_ACTIVITY_OBSERVERS = 32;
 const MAX_PANE_LAYOUT_ROOT_BYTES = 256 * 1024;
+const MAX_PANE_LAYOUT_SELECTION_INTENT_BYTES = 64 * 1024;
+const MAX_PANE_LAYOUT_SELECTION_ENTRIES = 1_024;
 const PROMPT_QUEUE_CLAIM_LEASE_MS = 5 * 60 * 1000;
 const MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES = 4 * 1024;
 const MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES = 1024;
@@ -127,6 +129,28 @@ function assertPaneLayoutRootWithinBounds(root: unknown): void {
   }
   if (Buffer.byteLength(serializedRoot, "utf8") > MAX_PANE_LAYOUT_ROOT_BYTES) {
     throw new Error("Pane layout root exceeds the 256 KB limit");
+  }
+}
+
+function assertPaneLayoutSelectionIntentWithinBounds(
+  selectionIntent: PaneLayoutSelectionIntent | undefined,
+): void {
+  if (!selectionIntent) return;
+  const entries = Object.entries(selectionIntent.activeTabIds ?? {});
+  if (entries.length > MAX_PANE_LAYOUT_SELECTION_ENTRIES) {
+    throw new Error("Pane layout selection intent exceeds the 1024 entry limit");
+  }
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(selectionIntent);
+  } catch {
+    throw new Error("Pane layout selection intent must be JSON serializable");
+  }
+  if (
+    serialized === undefined
+    || Buffer.byteLength(serialized, "utf8") > MAX_PANE_LAYOUT_SELECTION_INTENT_BYTES
+  ) {
+    throw new Error("Pane layout selection intent exceeds the 64 KB limit");
   }
 }
 
@@ -3575,6 +3599,7 @@ export class StorageService {
   ): Promise<PersistedPaneLayout> {
     assertPaneLayoutRootWithinBounds(base.root);
     assertPaneLayoutRootWithinBounds(desired.root);
+    assertPaneLayoutSelectionIntentWithinBounds(selectionIntent);
     return this.enqueuePaneLayoutMutation(async () => {
       const environment = await this.getEnvironment(environmentId);
       if (!environment) {
@@ -6242,12 +6267,30 @@ export class StorageService {
     });
   }
 
-  async deletePaneLayout(environmentId: string): Promise<void> {
+  async deletePaneLayout(
+    environmentId: string,
+    expectedRevision?: number,
+  ): Promise<void> {
+    if (
+      expectedRevision !== undefined
+      && !isNonNegativeInteger(expectedRevision)
+    ) {
+      throw new Error("Pane layout expected revision must be a non-negative integer");
+    }
     return this.enqueuePaneLayoutMutation(async () => {
       const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
         this.paneLayoutsFile(),
         () => ({}),
       );
+      const currentRevision = layouts[environmentId]?.revision ?? 0;
+      if (
+        expectedRevision !== undefined
+        && currentRevision !== expectedRevision
+      ) {
+        throw new Error(
+          paneLayoutRevisionConflictMessage(expectedRevision, currentRevision),
+        );
+      }
       if (!(environmentId in layouts)) return;
       delete layouts[environmentId];
       await this.saveJson(this.paneLayoutsFile(), layouts);

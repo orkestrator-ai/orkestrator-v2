@@ -20,6 +20,9 @@ const mockSubscribeToEvents = mock<
 >(async () => emptyEventStream());
 const mockGetSessionMessages = mock(async () => []);
 const mockGetSessionStatus = mock(async () => null);
+const mockLookupSessionStatus = mock<
+  typeof realOpenCodeClient.lookupSessionStatus
+>(async () => ({ kind: "found", status: "idle" }));
 const mockGetPendingQuestions = mock(async () => []);
 const mockGetPendingPermissions = mock(async () => []);
 const mockGetAvailableSlashCommands = mock(async () => []);
@@ -40,6 +43,7 @@ mock.module("@/lib/opencode-client", () => ({
   subscribeToEvents: mockSubscribeToEvents,
   getSessionMessages: mockGetSessionMessages,
   getSessionStatus: mockGetSessionStatus,
+  lookupSessionStatus: mockLookupSessionStatus,
   getPendingQuestions: mockGetPendingQuestions,
   getPendingPermissions: mockGetPendingPermissions,
   getAvailableSlashCommands: mockGetAvailableSlashCommands,
@@ -272,6 +276,8 @@ describe("OpenCodeChatTab SSE reconnect", () => {
     mockGetSessionMessages.mockResolvedValue([]);
     mockGetSessionStatus.mockReset();
     mockGetSessionStatus.mockResolvedValue(null);
+    mockLookupSessionStatus.mockReset();
+    mockLookupSessionStatus.mockResolvedValue({ kind: "found", status: "idle" });
     mockGetPendingQuestions.mockReset();
     mockGetPendingQuestions.mockResolvedValue([]);
     mockGetPendingPermissions.mockReset();
@@ -749,7 +755,7 @@ describe("OpenCodeChatTab SSE reconnect", () => {
     });
   });
 
-  test("one unreachable session does not abandon the rest of the resync", async () => {
+  test("one definitively missing session does not abandon the rest of the resync", async () => {
     /*
      * `getSessionMessages` throws unconditionally on a 404, so a single stale
      * projection used to skip every remaining session *and* the event loop
@@ -794,6 +800,11 @@ describe("OpenCodeChatTab SSE reconnect", () => {
         return [];
       },
     );
+    mockLookupSessionStatus.mockImplementation(async (_client, sessionId) =>
+      sessionId === "session-opencode-stale"
+        ? { kind: "missing" as const }
+        : { kind: "found" as const, status: "idle" as const },
+    );
     mockSubscribeToEvents.mockResolvedValueOnce(channel.stream);
 
     try {
@@ -808,12 +819,9 @@ describe("OpenCodeChatTab SSE reconnect", () => {
           useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced,
         ).toBe(false);
       });
-      expect(consoleWarn).toHaveBeenCalledWith(
-        "[OpenCodeChatTab] Failed to rehydrate session during resync:",
-        "session-opencode-stale",
-        expect.objectContaining({
-          message: "Session not found: session-opencode-stale",
-        }),
+      expect(consoleWarn).not.toHaveBeenCalledWith(
+        "[OpenCodeChatTab] Resync remains pending for unavailable sessions:",
+        expect.anything(),
       );
 
       // Live events are being consumed, which the abandoned loop never reached.
@@ -834,6 +842,127 @@ describe("OpenCodeChatTab SSE reconnect", () => {
       );
     } finally {
       console.warn = originalConsoleWarn;
+      await act(async () => {
+        useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        channel.close();
+        await Promise.resolve();
+      });
+    }
+  });
+
+  test("retries a transient full-resync failure while a quiet stream stays live", async () => {
+    const channel = eventChannel();
+    const previous = new AbortController();
+    const retryKey = createSessionKey(ENVIRONMENT_ID, "tab-resync-retry");
+    let snapshotAttempts = 0;
+    act(() => {
+      useOpenCodeStore.setState((state) => ({
+        eventSubscriptions: new Map([[ENVIRONMENT_ID, {
+          abortController: previous,
+          stream: null,
+          isActive: false,
+          reconnectAttempts: 10,
+          reconnectTimer: null,
+          desynced: true,
+        }]]),
+        sessions: new Map(state.sessions).set(retryKey, {
+          sessionId: "session-resync-retry",
+          messages: [],
+          isLoading: true,
+        }),
+      }));
+    });
+    mockGetSessionMessages.mockImplementation(async (...args: unknown[]) => {
+      if (args[1] === "session-resync-retry") {
+        snapshotAttempts += 1;
+        if (snapshotAttempts === 1) throw new Error("transient transcript outage");
+      }
+      return [];
+    });
+    mockSubscribeToEvents.mockResolvedValueOnce(channel.stream);
+    const timers = captureReconnectTimers();
+
+    try {
+      renderChat();
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID),
+        ).toMatchObject({ desynced: true, isActive: true });
+        expect(timers.map((timer) => timer.delay)).toContain(60_000);
+      });
+
+      await runTimer(timers.find((timer) => timer.delay === 60_000)!);
+
+      await waitFor(() => {
+        expect(snapshotAttempts).toBeGreaterThanOrEqual(2);
+        expect(
+          useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID),
+        ).toMatchObject({ desynced: false, reconnectTimer: null });
+        expect(useOpenCodeStore.getState().sessions.get(retryKey)?.isLoading)
+          .toBe(false);
+      });
+      expect(mockSubscribeToEvents).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => {
+        useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        channel.close();
+        await Promise.resolve();
+      });
+    }
+  });
+
+  test("does not let an older full-resync status overwrite a newer lifecycle edge", async () => {
+    const channel = eventChannel();
+    const snapshot = deferred<never[]>();
+    const previous = new AbortController();
+    const lifecycleKey = createSessionKey(ENVIRONMENT_ID, "tab-lifecycle");
+    act(() => {
+      useOpenCodeStore.setState((state) => ({
+        sessions: new Map(state.sessions).set(lifecycleKey, {
+          sessionId: "session-lifecycle",
+          messages: [],
+          isLoading: false,
+        }),
+        eventSubscriptions: new Map([[ENVIRONMENT_ID, {
+          abortController: previous,
+          stream: null,
+          isActive: false,
+          reconnectAttempts: 10,
+          reconnectTimer: null,
+          desynced: true,
+        }]]),
+      }));
+    });
+    mockGetSessionMessages.mockImplementation(async (...args: unknown[]) =>
+      args[1] === "session-lifecycle" ? snapshot.promise : [],
+    );
+    mockLookupSessionStatus.mockResolvedValue({ kind: "found", status: "idle" });
+    mockSubscribeToEvents.mockResolvedValueOnce(channel.stream);
+
+    try {
+      renderChat();
+      await waitFor(() => expect((mockGetSessionMessages.mock.calls as unknown[][])
+        .some((call) => call[1] === "session-lifecycle")).toBe(true));
+      act(() => {
+        // Models a busy SSE edge delivered by another live owner while this
+        // authoritative snapshot was in flight.
+        useOpenCodeStore.getState().setSessionLoading(lifecycleKey, true, 1234);
+      });
+      await act(async () => {
+        snapshot.resolve([]);
+        await snapshot.promise;
+      });
+
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced,
+        ).toBe(false);
+      });
+      expect(useOpenCodeStore.getState().sessions.get(lifecycleKey)).toMatchObject({
+        isLoading: true,
+        loadingStartedAt: 1234,
+      });
+    } finally {
       await act(async () => {
         useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
         channel.close();

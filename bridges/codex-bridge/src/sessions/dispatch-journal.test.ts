@@ -16,8 +16,8 @@ function journal(options: {
   persist?: boolean;
   now?: () => number;
   maxRecords?: number;
+  maxBytes?: number;
   retentionMs?: number;
-  unresolvedRetentionMs?: number;
 } = {}) {
   const codexHome = mkdtempSync(join(tmpdir(), "ork-journal-"));
   temporaryDirs.push(codexHome);
@@ -27,8 +27,8 @@ function journal(options: {
     persist: options.persist ?? false,
     now: options.now,
     maxRecords: options.maxRecords,
+    maxBytes: options.maxBytes,
     retentionMs: options.retentionMs,
-    unresolvedRetentionMs: options.unresolvedRetentionMs,
   });
 }
 
@@ -276,14 +276,14 @@ describe("persistence across a bridge restart", () => {
     expect(other.classify("req-1").action).toBe("dispatch");
   });
 
-  test("an unreadable journal degrades to reconciliation, not a crash", async () => {
+  test("a missing journal starts empty without blocking dispatch", async () => {
     const codexHome = mkdtempSync(join(tmpdir(), "ork-journal-corrupt-"));
     temporaryDirs.push(codexHome);
     const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
 
-    // No file at all is the same path as a torn file.
     await store.load();
     expect(store.allRecords()).toEqual([]);
+    expect(store.classify("new").action).toBe("dispatch");
   });
 
   test("prepare fails closed when its safety record cannot be persisted", async () => {
@@ -322,15 +322,33 @@ describe("garbage collection", () => {
     expect(store.allRecords().map((entry) => entry.requestId)).toEqual(["new"]);
   });
 
-  test("unresolved records are never shed to satisfy the cap", async () => {
+  test("unresolved capacity exhaustion rejects before replacing safety state", async () => {
     const store = journal({ maxRecords: 2 });
-    for (const requestId of ["a", "b", "c", "d"]) {
+    for (const requestId of ["a", "b"]) {
       await store.markPrepared({ requestId, bridgeSessionId: "s1", threadId: "t1" });
     }
 
-    // All four are unresolved, so the cap must not evict any of them: losing one
-    // would mean losing the only record that a dispatch might be in flight.
-    expect(store.unresolved()).toHaveLength(4);
+    await expect(store.markPrepared({
+      requestId: "c",
+      bridgeSessionId: "s1",
+      threadId: "t1",
+    })).rejects.toThrow("safety-record limit (2) is exhausted");
+
+    expect(store.unresolved().map((record) => record.requestId)).toEqual(["a", "b"]);
+    expect(store.classify("c").action).toBe("dispatch");
+  });
+
+  test("serialized-byte exhaustion rejects without dropping unresolved records", async () => {
+    const store = journal({ maxRecords: 10, maxBytes: 600 });
+    await store.markPrepared({ requestId: "a", bridgeSessionId: "s1", threadId: "t1" });
+
+    await expect(store.markPrepared({
+      requestId: "b".repeat(200),
+      bridgeSessionId: "s2",
+      threadId: "t2",
+    })).rejects.toThrow("byte limit (600) is exhausted");
+
+    expect(store.unresolved().map((record) => record.requestId)).toEqual(["a"]);
   });
 
   test("old retryable records expire without affecting unresolved records", async () => {
@@ -379,10 +397,10 @@ describe("garbage collection", () => {
 
   test("capacity sheds retryable and terminal records but preserves unresolved safety state", async () => {
     const store = journal({ maxRecords: 2 });
-    await store.markPrepared({ requestId: "pending-a", bridgeSessionId: "s1", threadId: "t1" });
-    await store.markPrepared({ requestId: "pending-b", bridgeSessionId: "s2", threadId: "t2" });
     await store.markPrepared({ requestId: "safe", bridgeSessionId: "s3", threadId: "t3" });
     await store.markRetryable("safe");
+    await store.markPrepared({ requestId: "pending-a", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markPrepared({ requestId: "pending-b", bridgeSessionId: "s2", threadId: "t2" });
 
     expect(store.get("safe")).toBeUndefined();
     expect(store.unresolved().map((record) => record.requestId).sort()).toEqual([
@@ -445,9 +463,7 @@ describe("garbage collection", () => {
 
 describe("sequence assignment", () => {
   /**
-   * Same instant on every record, so only the sequence can break the tie. It has
-   * to be *now*: an unresolved record past the absolute ceiling is expired on
-   * load, which would empty these fixtures before they were compared.
+   * Same instant on every record, so only the sequence can break the tie.
    */
   const SAME_INSTANT = new Date().toISOString();
 
@@ -525,6 +541,22 @@ describe("sequence assignment", () => {
     expect(store.latestForSession("s1")?.requestId).toBe("newer");
   });
 
+  test("sequence remains authoritative when the wall clock moves backwards", async () => {
+    const { codexHome } = journalHome("ork-journal-clock-rollback-");
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [
+        legacyRecord("older", { updatedAt: "2026-08-05T12:00:00.000Z", sequence: 1 }),
+        legacyRecord("newer", { updatedAt: "2026-08-05T11:00:00.000Z", sequence: 2 }),
+      ],
+    });
+
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    expect(store.latestForSession("s1")?.requestId).toBe("newer");
+  });
+
   test("a full timestamp and sequence tie is broken by request id", async () => {
     const { codexHome } = journalHome("ork-journal-tie-");
     writeJournalFile(codexHome, {
@@ -546,7 +578,7 @@ describe("sequence assignment", () => {
 });
 
 describe("load rejects shapes it cannot trust", () => {
-  test("a journal written by a different version is ignored", async () => {
+  test("a journal written by a different version blocks unknown dispatches", async () => {
     const { codexHome } = journalHome("ork-journal-version-");
     writeJournalFile(codexHome, {
       version: DISPATCH_JOURNAL_VERSION + 1,
@@ -563,11 +595,14 @@ describe("load rejects shapes it cannot trust", () => {
     const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
     await store.load();
 
-    // Starting empty is safe: recovery falls back to reconciling from thread/read.
     expect(store.allRecords()).toEqual([]);
+    expect(store.classify("new")).toMatchObject({
+      action: "blocked",
+      reason: "Dispatch journal has an unsupported or malformed file shape",
+    });
   });
 
-  test("a records field that is not an array is ignored", async () => {
+  test("a records field that is not an array blocks unknown dispatches", async () => {
     const { codexHome } = journalHome("ork-journal-records-shape-");
     writeJournalFile(codexHome, { version: DISPATCH_JOURNAL_VERSION, records: "nope" });
 
@@ -575,6 +610,146 @@ describe("load rejects shapes it cannot trust", () => {
     await store.load();
 
     expect(store.allRecords()).toEqual([]);
+    expect(store.classify("new").action).toBe("blocked");
+  });
+
+  test("invalid JSON blocks unknown dispatches", async () => {
+    const { codexHome, path } = journalHome("ork-journal-invalid-json-");
+    mkdirSync(join(codexHome, "orkestrator-bridge"), { recursive: true });
+    writeFileSync(path, "{not-json", "utf8");
+
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    expect(store.classify("new")).toMatchObject({
+      action: "blocked",
+      reason: "Dispatch journal could not be safely decoded",
+    });
+    await expect(store.markPrepared({
+      requestId: "new",
+      bridgeSessionId: "s1",
+      threadId: "t1",
+    })).rejects.toThrow("could not be safely decoded");
+    await expect(store.markTerminal("unknown", "failed"))
+      .rejects.toThrow("could not be safely decoded");
+    expect(store.classify("new").action).toBe("blocked");
+  });
+
+  test("an oversized journal is rejected before JSON decoding", async () => {
+    const { codexHome, path } = journalHome("ork-journal-oversized-");
+    mkdirSync(join(codexHome, "orkestrator-bridge"), { recursive: true });
+    // Deliberately invalid JSON as well: the size guard must be the reported
+    // failure, proving the decoder never received the oversized contents.
+    writeFileSync(path, "x".repeat(257), "utf8");
+
+    const store = new DispatchJournal({
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      maxBytes: 256,
+    });
+    await store.load();
+
+    expect(store.classify("new")).toMatchObject({
+      action: "blocked",
+      reason: "Dispatch journal exceeds its 256-byte read limit",
+    });
+  });
+
+  test("loaded safety records over the count cap are retained but block unknown dispatches", async () => {
+    const { codexHome } = journalHome("ork-journal-loaded-count-cap-");
+    const timestamp = new Date().toISOString();
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [
+        { requestId: "prepared-a", bridgeSessionId: "s1", threadId: "t1", state: "prepared", createdAt: timestamp, updatedAt: timestamp, sequence: 1 },
+        { requestId: "prepared-b", bridgeSessionId: "s2", threadId: "t2", state: "prepared", createdAt: timestamp, updatedAt: timestamp, sequence: 2 },
+        { requestId: "quarantined", bridgeSessionId: "s3", threadId: "t3", state: "unknown", createdAt: timestamp, updatedAt: timestamp, sequence: 3 },
+      ],
+    });
+
+    const store = new DispatchJournal({
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      maxRecords: 2,
+    });
+    await store.load();
+
+    expect(store.allRecords()).toHaveLength(3);
+    expect(store.classify("prepared-a").action).toBe("reconcile");
+    expect(store.classify("quarantined")).toMatchObject({
+      action: "already-done",
+      record: { quarantined: true },
+    });
+    expect(store.classify("unknown")).toMatchObject({
+      action: "blocked",
+      reason: "Dispatch journal safety state exceeds its 2-record limit",
+    });
+  });
+
+  test("settlement clears a recovered capacity block without a restart", async () => {
+    const { codexHome } = journalHome("ork-journal-loaded-cap-recovery-");
+    const timestamp = new Date().toISOString();
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: ["a", "b", "c"].map((requestId, index) => ({
+        requestId,
+        bridgeSessionId: `s${index}`,
+        threadId: `t${index}`,
+        state: "prepared",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        sequence: index + 1,
+      })),
+    });
+    const store = new DispatchJournal({
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      maxRecords: 2,
+    });
+    await store.load();
+    expect(store.classify("new").action).toBe("blocked");
+
+    // The first settlement is collected to reach the cap; the second leaves a
+    // safe terminal record that admission can shed for the next request.
+    await store.markTerminal("a", "failed");
+    await store.markTerminal("b", "failed");
+
+    expect(store.allRecords()).toHaveLength(2);
+    expect(store.classify("new").action).toBe("dispatch");
+    await store.markPrepared({ requestId: "new", bridgeSessionId: "s-new", threadId: "t-new" });
+    expect(store.unresolved().map((record) => record.requestId).sort()).toEqual(["c", "new"]);
+  });
+
+  test("compact input that inflates past the normalized byte cap blocks unknown dispatches", async () => {
+    const { codexHome, path } = journalHome("ork-journal-normalized-byte-cap-");
+    const timestamp = new Date().toISOString();
+    const contents = JSON.stringify({
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [
+        { requestId: "prepared-a", bridgeSessionId: "s1", threadId: "t1", state: "prepared", createdAt: timestamp, updatedAt: timestamp, sequence: 1 },
+        { requestId: "prepared-b", bridgeSessionId: "s2", threadId: "t2", state: "prepared", createdAt: timestamp, updatedAt: timestamp, sequence: 2 },
+      ],
+    });
+    mkdirSync(join(codexHome, "orkestrator-bridge"), { recursive: true });
+    writeFileSync(path, contents, "utf8");
+    const maxBytes = Buffer.byteLength(contents, "utf8");
+
+    const store = new DispatchJournal({
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      maxBytes,
+    });
+    await store.load();
+
+    expect(store.unresolved()).toHaveLength(2);
+    expect(store.classify("unknown")).toMatchObject({
+      action: "blocked",
+      reason: `Dispatch journal normalized safety state exceeds its ${maxBytes}-byte limit`,
+    });
   });
 
   test("records without a string request id are skipped, not fatal", async () => {
@@ -599,6 +774,102 @@ describe("load rejects shapes it cannot trust", () => {
     await store.load();
 
     expect(store.allRecords().map((record) => record.requestId)).toEqual(["good"]);
+  });
+
+  test("records with an addressable id but malformed state are quarantined fail-closed", async () => {
+    const { codexHome } = journalHome("ork-journal-malformed-records-");
+    const timestamp = new Date().toISOString();
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [
+        { requestId: "unknown-state", bridgeSessionId: "s1", threadId: "t1", state: "surprise", createdAt: timestamp, updatedAt: timestamp },
+        { requestId: "missing-session", threadId: "t1", state: "prepared", createdAt: timestamp, updatedAt: timestamp },
+        { requestId: "bad-thread", bridgeSessionId: "s1", threadId: 42, state: "prepared", createdAt: timestamp, updatedAt: timestamp },
+        { requestId: "accepted-no-turn", bridgeSessionId: "s1", threadId: "t1", state: "accepted", createdAt: timestamp, updatedAt: timestamp },
+        { requestId: "bad-terminal", bridgeSessionId: "s1", threadId: "t1", state: "terminal", terminalStatus: "unknown", createdAt: timestamp, updatedAt: timestamp },
+        { requestId: "retryable-with-turn", bridgeSessionId: "s1", threadId: "t1", turnId: "turn-1", state: "retryable", createdAt: timestamp, updatedAt: timestamp },
+        { requestId: "bad-time", bridgeSessionId: "s1", threadId: "t1", state: "prepared", createdAt: "invalid", updatedAt: timestamp },
+        { requestId: "good", bridgeSessionId: "s1", threadId: "t1", state: "prepared", createdAt: timestamp, updatedAt: timestamp },
+      ],
+    });
+
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    for (const requestId of [
+      "unknown-state",
+      "missing-session",
+      "bad-thread",
+      "accepted-no-turn",
+      "bad-terminal",
+      "retryable-with-turn",
+      "bad-time",
+    ]) {
+      expect(store.classify(requestId)).toMatchObject({
+        duplicate: true,
+        action: "already-done",
+        record: { state: "terminal", terminalStatus: "failed" },
+      });
+    }
+    expect(store.classify("good").action).toBe("reconcile");
+  });
+
+  test("quarantined ids never expire or yield to capacity collection", async () => {
+    const { codexHome } = journalHome("ork-journal-quarantine-retention-");
+    let clock = 0;
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [{
+        requestId: "ambiguous",
+        bridgeSessionId: "s1",
+        threadId: "t1",
+        state: "unknown",
+        createdAt: "invalid",
+        updatedAt: "invalid",
+      }],
+    });
+    const store = new DispatchJournal({
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      retentionMs: 1,
+      maxRecords: 2,
+      now: () => clock,
+    });
+    await store.load();
+    clock = 10_000;
+    await store.markPrepared({ requestId: "new", bridgeSessionId: "s2", threadId: "t2" });
+
+    expect(store.classify("ambiguous")).toMatchObject({
+      action: "already-done",
+      record: { quarantined: true, terminalStatus: "failed" },
+    });
+    await store.markTerminal("ambiguous", "completed");
+    expect(store.get("ambiguous")).toMatchObject({
+      quarantined: true,
+      terminalStatus: "failed",
+    });
+    await store.forget("ambiguous");
+    expect(store.classify("ambiguous").action).toBe("already-done");
+
+    const restored = new DispatchJournal({
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      retentionMs: 1,
+      maxRecords: 2,
+      now: () => clock,
+    });
+    await restored.load();
+    expect(restored.classify("ambiguous")).toMatchObject({
+      action: "already-done",
+      record: { quarantined: true },
+    });
+    await expect(restored.markPrepared({
+      requestId: "third",
+      bridgeSessionId: "s3",
+      threadId: "t3",
+    })).rejects.toThrow("safety-record limit (2) is exhausted");
   });
 
   test("a second load does not re-read the file over live state", async () => {
@@ -684,9 +955,9 @@ describe("transitions without a prior prepared record", () => {
 describe("flush failure handling", () => {
   test("a non-fail-closed write failure warns instead of throwing", async () => {
     const { codexHome } = journalHome("ork-journal-soft-fail-");
-    writeFileSync(join(codexHome, "orkestrator-bridge"), "blocks journal directory creation");
     const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
     await store.load();
+    writeFileSync(join(codexHome, "orkestrator-bridge"), "blocks journal directory creation");
 
     const warnings = await captureWarnings(async () => {
       // Losing this marker only costs a retry opportunity, never correctness, so
@@ -700,9 +971,9 @@ describe("flush failure handling", () => {
 
   test("a failed rename removes its temporary file", async () => {
     const { codexHome, path } = journalHome("ork-journal-rename-fail-");
-    mkdirSync(path, { recursive: true });
     const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
     await store.load();
+    mkdirSync(path, { recursive: true });
 
     await captureWarnings(async () => {
       await store.markRetryable("temp-cleanup");
@@ -746,7 +1017,7 @@ describe("garbage collection edge cases", () => {
     ]);
   });
 
-  test("a record with an unparseable timestamp is never expired", async () => {
+  test("a record with an unparseable timestamp is quarantined instead of trusted", async () => {
     const { codexHome } = journalHome("ork-journal-bad-clock-");
     writeJournalFile(codexHome, {
       version: DISPATCH_JOURNAL_VERSION,
@@ -778,17 +1049,19 @@ describe("garbage collection edge cases", () => {
       cwd: "/workspace",
       persist: true,
       retentionMs: 1_000,
-      unresolvedRetentionMs: 5_000,
       now: () => 10_000_000,
     });
     await store.load();
 
-    // Expiry needs a real age. Guessing one from an unreadable clock could drop
-    // a record whose turn is still in flight.
+    // Both ids stay spent, but malformed data never reaches recovery as an
+    // unknown state or an invalid clock value.
     expect(store.allRecords().map((record) => record.requestId).sort()).toEqual([
       "prepared-garbage",
       "terminal-garbage",
     ]);
+    expect(store.allRecords().every(
+      (record) => record.state === "terminal" && record.terminalStatus === "failed",
+    )).toBe(true);
   });
 
   test("collection during load is not written back until the next mutation", async () => {
@@ -826,103 +1099,35 @@ describe("garbage collection edge cases", () => {
       .toEqual(["next"]);
   });
 
-  test("orphaned unresolved records expire past the absolute ceiling", async () => {
-    // Regression: `prepared`/`accepted` are exempt from retention *and* the cap,
-    // so without a ceiling an orphan whose session no longer exists would keep
-    // the file growing forever and make maxRecords unenforceable.
-    const { codexHome } = journalHome("ork-journal-unresolved-ceiling-");
-    let clock = 0;
-    const options = {
+  test("old unresolved records remain spent until runtime reconciliation", async () => {
+    const { codexHome } = journalHome("ork-journal-old-unresolved-");
+    const old = "2020-01-01T00:00:00.000Z";
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [
+        { requestId: "prepared", bridgeSessionId: "s1", threadId: "t1", state: "prepared", createdAt: old, updatedAt: old, sequence: 1 },
+        { requestId: "accepted", bridgeSessionId: "s2", threadId: "t2", turnId: "turn-2", state: "accepted", createdAt: old, updatedAt: old, sequence: 2 },
+      ],
+    });
+    const store = new DispatchJournal({
       codexHome,
       cwd: "/workspace",
       persist: true,
-      retentionMs: 1_000,
-      unresolvedRetentionMs: 5_000,
+      retentionMs: 1,
       maxRecords: 2,
-    };
-    const first = new DispatchJournal({ ...options, now: () => clock });
-    await first.load();
-    for (const requestId of ["a", "b", "c", "d", "e", "f"]) {
-      await first.markPrepared({ requestId, bridgeSessionId: `s-${requestId}`, threadId: "t1" });
-    }
-    expect(first.unresolved()).toHaveLength(6);
-
-    clock = 10_000_000;
-    const restored = new DispatchJournal({ ...options, now: () => clock });
-    const warnings = await captureWarnings(async () => {
-      await restored.load();
+      now: () => Date.parse("2030-01-01T00:00:00.000Z"),
     });
+    await store.load();
 
-    expect(restored.allRecords()).toEqual([]);
-    expect(warnings).toHaveLength(6);
-    // Ids and state only: a journal record never holds prompt or file content.
-    expect(warnings[0]).toMatch(/Expiring orphaned prepared dispatch a after \d+s\.$/);
-  });
-
-  test("an unresolved record inside the ceiling is still never dropped", async () => {
-    const { codexHome } = journalHome("ork-journal-unresolved-recent-");
-    let clock = 0;
-    const options = {
-      codexHome,
-      cwd: "/workspace",
-      persist: true,
-      retentionMs: 1_000,
-      unresolvedRetentionMs: 5_000,
-      maxRecords: 1,
-    };
-    const first = new DispatchJournal({ ...options, now: () => clock });
-    await first.load();
-    await first.markPrepared({ requestId: "recent", bridgeSessionId: "s1", threadId: "t1" });
-    await first.markPrepared({ requestId: "also-recent", bridgeSessionId: "s2", threadId: "t2" });
-
-    clock = 4_000;
-    const restored = new DispatchJournal({ ...options, now: () => clock });
-    await restored.load();
-
-    // Both are over the cap and past ordinary retention, but a turn dispatched
-    // four seconds ago can absolutely still be executing.
-    expect(restored.unresolved().map((record) => record.requestId).sort()).toEqual([
-      "also-recent",
-      "recent",
+    expect(store.unresolved().map((record) => record.requestId).sort()).toEqual([
+      "accepted",
+      "prepared",
     ]);
-  });
-
-  test("the journal stays bounded across repeated reloads", async () => {
-    const { codexHome } = journalHome("ork-journal-bounded-");
-    let clock = 0;
-    const options = {
-      codexHome,
-      cwd: "/workspace",
-      persist: true,
-      retentionMs: 1_000,
-      unresolvedRetentionMs: 10_000,
-      maxRecords: 5,
-    };
-
-    for (let round = 0; round < 10; round += 1) {
-      const store = new DispatchJournal({ ...options, now: () => clock });
-      await captureWarnings(async () => {
-        await store.load();
-        for (let index = 0; index < 3; index += 1) {
-          await store.markPrepared({
-            requestId: `round-${round}-${index}`,
-            bridgeSessionId: `s-${round}-${index}`,
-            threadId: "t1",
-          });
-        }
-      });
-      clock += 20_000;
-    }
-
-    const final = new DispatchJournal({ ...options, now: () => clock });
-    await captureWarnings(async () => {
-      await final.load();
-    });
-
-    // Ten rounds of three unresolved dispatches each; only the last round is
-    // young enough to still matter, so the file cannot creep upward forever.
-    expect(final.allRecords().map((record) => record.requestId)).toEqual([]);
-    expect(readJournalFile(codexHome).records).toHaveLength(3);
+    await expect(store.markPrepared({
+      requestId: "new",
+      bridgeSessionId: "s3",
+      threadId: "t3",
+    })).rejects.toThrow("safety-record limit (2) is exhausted");
   });
 });
 

@@ -2304,22 +2304,47 @@ export function CodexChatTab({
     if (status.contextUsage) {
       setContextUsage(sessionKey, status.contextUsage);
     }
-    if (
-      status.unconfirmedDispatch?.retryable
-      && !useCodexStore.getState().unconfirmedDispatches.has(sessionKey)
-    ) {
+    const currentUnconfirmed = useCodexStore
+      .getState()
+      .unconfirmedDispatches.get(sessionKey);
+    if (status.unconfirmedDispatch?.retryable) {
       const requestId = status.unconfirmedDispatch.requestId;
-      useCodexStore.getState().setUnconfirmedDispatch(sessionKey, {
-        userMessageId: `rehydrated-unconfirmed:${requestId}`,
-        fingerprint: requestId,
-        requestId,
-        retryable: true,
-      });
-      retryablePromptRef.current = { fingerprint: requestId, requestId };
+      if (
+        !currentUnconfirmed
+        || (
+          currentUnconfirmed.restoredFromStatus
+          && currentUnconfirmed.requestId !== requestId
+        )
+      ) {
+        useCodexStore.getState().setUnconfirmedDispatch(sessionKey, {
+          userMessageId: `rehydrated-unconfirmed:${requestId}`,
+          fingerprint: requestId,
+          requestId,
+          retryable: true,
+          restoredFromStatus: true,
+        });
+      }
       setSessionError(
         sessionKey,
         CODEX_UNCONFIRMED_DISPATCH_ERROR,
       );
+    } else if (currentUnconfirmed?.restoredFromStatus) {
+      /*
+       * The bridge no longer reports the fail-closed marker. Because a restored
+       * record does not contain the original prompt payload, matching it to a
+       * newly edited draft would be unsafe; retire it on this later
+       * authoritative status instead of leaving a permanent, unusable retry.
+       */
+      useCodexStore.getState().clearUnconfirmedDispatch(sessionKey);
+      if (retryablePromptRef.current?.requestId === currentUnconfirmed.requestId) {
+        retryablePromptRef.current = null;
+      }
+      if (
+        useCodexStore.getState().sessions.get(sessionKey)?.error
+          === CODEX_UNCONFIRMED_DISPATCH_ERROR
+      ) {
+        setSessionError(sessionKey, undefined);
+      }
     }
 
     /**

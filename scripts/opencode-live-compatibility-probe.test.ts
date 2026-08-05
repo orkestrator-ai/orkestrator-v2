@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+  availableLoopbackPort,
+  installProbeTerminationHandlers,
   parseCliVersion,
+  readInstalledSdkVersion,
+  readPinnedSdkVersion,
   readEmptySessionCount,
   runOpenCodeLiveCompatibility,
   stopServer,
@@ -73,6 +78,74 @@ async function tempRoots(): Promise<string[]> {
   const entries = await readdir(tmpdir());
   return entries.filter((entry) => entry.startsWith(TEMP_PREFIX));
 }
+
+describe("local SDK and network discovery", () => {
+  test("allocates a valid ephemeral loopback port and releases it", async () => {
+    const port = await availableLoopbackPort();
+    expect(Number.isInteger(port)).toBe(true);
+    expect(port).toBeGreaterThan(0);
+    expect(port).toBeLessThanOrEqual(65_535);
+  });
+
+  test("reads the SDK pin from the web application manifest", async () => {
+    const manifest = JSON.parse(
+      await readFile(join(import.meta.dir, "..", "apps", "web", "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+
+    expect(await readPinnedSdkVersion()).toBe(
+      manifest.dependencies?.["@opencode-ai/sdk"],
+    );
+  });
+
+  test("reads the version from the installed SDK package", async () => {
+    expect(await readInstalledSdkVersion()).toBe(await readPinnedSdkVersion());
+  });
+});
+
+describe("installProbeTerminationHandlers", () => {
+  function fakeRuntime() {
+    const handlers = new Map<"SIGTERM" | "SIGINT", () => void>();
+    const exitCodes: number[] = [];
+    return {
+      handlers,
+      exitCodes,
+      runtime: {
+        on(signal: "SIGTERM" | "SIGINT", listener: () => void) {
+          handlers.set(signal, listener);
+        },
+        exit(code: number) {
+          exitCodes.push(code);
+        },
+      },
+    };
+  }
+
+  test("registers SIGTERM and SIGINT handlers that exit when no probe is active", () => {
+    const fake = fakeRuntime();
+    installProbeTerminationHandlers(fake.runtime, () => null);
+
+    expect([...fake.handlers.keys()]).toEqual(["SIGTERM", "SIGINT"]);
+    fake.handlers.get("SIGTERM")?.();
+    fake.handlers.get("SIGINT")?.();
+    expect(fake.exitCodes).toEqual([1, 1]);
+  });
+
+  test("waits for active teardown before exiting and still exits after teardown fails", async () => {
+    const fake = fakeRuntime();
+    const teardownCalls: string[] = [];
+    installProbeTerminationHandlers(fake.runtime, () => async () => {
+      teardownCalls.push("called");
+      throw new Error("teardown failed");
+    });
+
+    fake.handlers.get("SIGTERM")?.();
+    expect(teardownCalls).toEqual(["called"]);
+    expect(fake.exitCodes).toEqual([]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fake.exitCodes).toEqual([1]);
+  });
+});
 
 describe("parseCliVersion", () => {
   test("reads the bare semver the CLI prints today", () => {

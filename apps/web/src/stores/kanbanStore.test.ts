@@ -22,15 +22,31 @@ const clearTaskBuildStatusMock = mock(async (taskId: string) => ({
 }));
 const getProjectNotesMock = mock(async (_projectId: string) => ({ content: "" }));
 const saveProjectNotesMock = mock(async (_projectId: string, _content: string) => {});
+const getKanbanTasksMock = mock(async () => [] as KanbanTask[]);
+const addKanbanTaskMock = mock(async () => task());
+const updateKanbanTaskMock = mock(async () => task());
+const deleteKanbanTaskMock = mock(async () => {});
+const addKanbanCommentMock = mock(async () => task());
+const deleteKanbanCommentMock = mock(async () => task());
+const addKanbanImageMock = mock(async () => task());
+const deleteKanbanImageMock = mock(async () => task());
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   clearTaskBuildStatus: clearTaskBuildStatusMock,
   getProjectNotes: getProjectNotesMock,
   saveProjectNotes: saveProjectNotesMock,
+  getKanbanTasks: getKanbanTasksMock,
+  addKanbanTask: addKanbanTaskMock,
+  updateKanbanTask: updateKanbanTaskMock,
+  deleteKanbanTask: deleteKanbanTaskMock,
+  addKanbanComment: addKanbanCommentMock,
+  deleteKanbanComment: deleteKanbanCommentMock,
+  addKanbanImage: addKanbanImageMock,
+  deleteKanbanImage: deleteKanbanImageMock,
 }));
 
-const { useKanbanStore } = await import("./kanbanStore");
+const { useKanbanStore, findTaskForEnvironment } = await import("./kanbanStore");
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -319,5 +335,123 @@ describe("kanbanStore project notes", () => {
       useKanbanStore.getState().saveNotes("project-1", "replacement"),
     ).rejects.toThrow("disk full");
     expect(useKanbanStore.getState().notes).toBe("original");
+  });
+});
+
+describe("kanbanStore task actions", () => {
+  beforeEach(() => {
+    getKanbanTasksMock.mockReset();
+    addKanbanTaskMock.mockReset();
+    updateKanbanTaskMock.mockReset();
+    deleteKanbanTaskMock.mockReset();
+    addKanbanCommentMock.mockReset();
+    deleteKanbanCommentMock.mockReset();
+    addKanbanImageMock.mockReset();
+    deleteKanbanImageMock.mockReset();
+    getKanbanTasksMock.mockResolvedValue([]);
+    addKanbanTaskMock.mockResolvedValue(task());
+    updateKanbanTaskMock.mockResolvedValue(task());
+    deleteKanbanTaskMock.mockResolvedValue(undefined);
+    addKanbanCommentMock.mockResolvedValue(task());
+    deleteKanbanCommentMock.mockResolvedValue(task());
+    addKanbanImageMock.mockResolvedValue(task());
+    deleteKanbanImageMock.mockResolvedValue(task());
+    useKanbanStore.setState({ tasks: [], isLoading: false, currentProjectId: null });
+  });
+
+  test("loads the latest selected project and ignores a stale response", async () => {
+    const stale = deferred<KanbanTask[]>();
+    getKanbanTasksMock
+      .mockImplementationOnce(() => stale.promise)
+      .mockResolvedValueOnce([task({ id: "new" })]);
+    const first = useKanbanStore.getState().loadTasks("project-1");
+    await useKanbanStore.getState().loadTasks("project-2");
+    stale.resolve([task({ id: "old" })]);
+    await first;
+    expect(useKanbanStore.getState()).toMatchObject({ currentProjectId: "project-2", isLoading: false });
+    expect(useKanbanStore.getState().tasks.map((item) => item.id)).toEqual(["new"]);
+  });
+
+  test("finds environment tasks directly and through kanban-owned pipelines", () => {
+    const direct = task({ id: "direct", environmentId: "env-direct" });
+    useKanbanStore.setState({ tasks: [direct] });
+    expect(findTaskForEnvironment("env-direct")).toEqual({ task: direct, taskId: "direct" });
+
+    const pipeline = buildPipelineFixture({
+      id: "pipeline-fallback",
+      taskId: "fallback-task",
+      environmentId: "env-fallback",
+      source: { type: "kanban", taskId: "fallback-task" },
+    });
+    useBuildPipelineStore.setState({ pipelines: new Map([[pipeline.id, pipeline]]) });
+    expect(findTaskForEnvironment("env-fallback")).toEqual({
+      task: undefined,
+      taskId: "fallback-task",
+    });
+    expect(findTaskForEnvironment("missing")).toEqual({ task: undefined, taskId: undefined });
+  });
+
+  test("adds, updates, and deletes tasks", async () => {
+    addKanbanTaskMock.mockResolvedValueOnce(task({ id: "created", title: "Created" }));
+    await expect(useKanbanStore.getState().addTask("project-1", "Created", "Description")).resolves.toBe("created");
+    updateKanbanTaskMock.mockResolvedValueOnce(task({ id: "created", title: "Updated" }));
+    await useKanbanStore.getState().updateTask("created", { title: "Updated" });
+    expect(useKanbanStore.getState().tasks[0]?.title).toBe("Updated");
+    await useKanbanStore.getState().deleteTask("created");
+    expect(useKanbanStore.getState().tasks).toEqual([]);
+  });
+
+  test("moves optimistically, adopts success, and rolls back failure", async () => {
+    useKanbanStore.setState({ tasks: [task({ status: "backlog" })] });
+    updateKanbanTaskMock.mockResolvedValueOnce(task({ status: "done" }));
+    await useKanbanStore.getState().moveTask("task-1", "done");
+    expect(useKanbanStore.getState().tasks[0]?.status).toBe("done");
+
+    updateKanbanTaskMock.mockRejectedValueOnce(new Error("offline"));
+    await useKanbanStore.getState().moveTask("task-1", "in-progress");
+    expect(useKanbanStore.getState().tasks[0]?.status).toBe("done");
+    const calls = updateKanbanTaskMock.mock.calls.length;
+    await useKanbanStore.getState().moveTask("missing", "backlog");
+    await useKanbanStore.getState().moveTask("task-1", "done");
+    expect(updateKanbanTaskMock).toHaveBeenCalledTimes(calls);
+  });
+
+  test("applies comment and image mutations", async () => {
+    useKanbanStore.setState({ tasks: [task()] });
+    addKanbanCommentMock.mockResolvedValueOnce(task({ title: "comment added" }));
+    deleteKanbanCommentMock.mockResolvedValueOnce(task({ title: "comment deleted" }));
+    addKanbanImageMock.mockResolvedValueOnce(task({ title: "image added" }));
+    deleteKanbanImageMock.mockResolvedValueOnce(task({ title: "image deleted" }));
+    await useKanbanStore.getState().addComment("task-1", "hello");
+    await useKanbanStore.getState().deleteComment("task-1", "comment-1");
+    await useKanbanStore.getState().addImage("task-1", "image.png", "base64");
+    await useKanbanStore.getState().deleteImage("task-1", "image-1");
+    expect(useKanbanStore.getState().tasks[0]?.title).toBe("image deleted");
+  });
+
+  test("contains backend failures without corrupting cached tasks", async () => {
+    useKanbanStore.setState({ tasks: [task()] });
+    getKanbanTasksMock.mockRejectedValueOnce(new Error("load failed"));
+    await useKanbanStore.getState().loadTasks("project-1");
+    expect(useKanbanStore.getState().isLoading).toBe(false);
+    addKanbanTaskMock.mockRejectedValueOnce(new Error("add failed"));
+    await expect(useKanbanStore.getState().addTask("project-1", "x", "y")).resolves.toBeUndefined();
+    for (const action of [
+      () => useKanbanStore.getState().updateTask("task-1", { title: "x" }),
+      () => useKanbanStore.getState().deleteTask("task-1"),
+      () => useKanbanStore.getState().addComment("task-1", "x"),
+      () => useKanbanStore.getState().deleteComment("task-1", "comment"),
+      () => useKanbanStore.getState().addImage("task-1", "x", "y"),
+      () => useKanbanStore.getState().deleteImage("task-1", "image"),
+    ]) {
+      updateKanbanTaskMock.mockRejectedValueOnce(new Error("ignored"));
+      deleteKanbanTaskMock.mockRejectedValueOnce(new Error("ignored"));
+      addKanbanCommentMock.mockRejectedValueOnce(new Error("ignored"));
+      deleteKanbanCommentMock.mockRejectedValueOnce(new Error("ignored"));
+      addKanbanImageMock.mockRejectedValueOnce(new Error("ignored"));
+      deleteKanbanImageMock.mockRejectedValueOnce(new Error("ignored"));
+      await action();
+    }
+    expect(useKanbanStore.getState().tasks).toEqual([task()]);
   });
 });

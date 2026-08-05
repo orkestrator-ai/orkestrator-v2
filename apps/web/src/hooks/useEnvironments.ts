@@ -143,6 +143,29 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
   });
 }
 
+/** Stop store-owned background subscriptions after backend deletion succeeds. */
+export function cleanupDeletedEnvironmentSubscriptions(environmentId: string): void {
+  useClaudeStore.getState().closeEventSubscription(environmentId);
+  useOpenCodeStore.getState().closeEventSubscription(environmentId);
+}
+
+/**
+ * Stop background subscriptions for environments an authoritative project
+ * snapshot removed. Other projects are deliberately outside this snapshot's
+ * scope and surviving IDs keep their existing long-lived subscriptions.
+ */
+export function cleanupSubscriptionsRemovedByProjectSnapshot(
+  projectId: string,
+  nextEnvironments: readonly Environment[],
+): void {
+  const nextIds = new Set(nextEnvironments.map((environment) => environment.id));
+  for (const environment of useEnvironmentStore.getState().environments) {
+    if (environment.projectId === projectId && !nextIds.has(environment.id)) {
+      cleanupDeletedEnvironmentSubscriptions(environment.id);
+    }
+  }
+}
+
 let setupSnapshotReconciliation: Promise<void> | null = null;
 let setupSnapshotReconcileRequested = false;
 
@@ -654,6 +677,7 @@ export function useEnvironments(
         // A snapshot requested before or during creation may omit the newly
         // created environment. Do not let it replace newer local state.
         if (snapshotIsCurrent) {
+          cleanupSubscriptionsRemovedByProjectSnapshot(pid, envs);
           mergeEnvironmentsForProject(
             pid,
             envs.map((environment) =>
@@ -724,8 +748,7 @@ export function useEnvironments(
         // rather than by a mounted tab, so nothing else stops them. Their
         // desynced probe re-arms itself on every failure, which would otherwise
         // reach for a bridge that no longer exists once a minute forever.
-        useClaudeStore.getState().closeEventSubscription(environmentId);
-        useOpenCodeStore.getState().closeEventSubscription(environmentId);
+        cleanupDeletedEnvironmentSubscriptions(environmentId);
         useBuildPipelineStore.getState().removePipelinesForEnvironment(environmentId);
         const loopedReviewState = useLoopedReviewStore.getState();
         for (const [workflowId, workflow] of loopedReviewState.workflows) {

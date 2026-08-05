@@ -146,7 +146,7 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
       {/* Notes Editor */}
       <div className="flex-1 p-6">
         <Textarea
-          value={draft}
+          value={notesReady ? draft : ""}
           onChange={(e) => handleChange(e.target.value)}
           placeholder="Write project notes here... These notes are shared across all environments in this project."
           className="h-full min-h-[300px] resize-none text-sm font-mono"

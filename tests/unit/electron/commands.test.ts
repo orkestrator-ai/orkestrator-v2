@@ -13561,6 +13561,11 @@ exit 0
         },
       ]);
 
+    expect(await commands.get("bootstrap_terminal_session")?.(
+      { sessionId: firstSessionId, data: "bun run dev\n" },
+      context,
+    )).toEqual({ bootstrapped: true, delivered: true, duplicate: false });
+
     // A natural shell exit retains the stable tab identity and bounded
     // transcript. Reopening the tab starts a replacement PTY under that same
     // identity rather than losing its history.
@@ -13584,6 +13589,11 @@ exit 0
       context,
     );
     expect(ptySpawn).toHaveBeenCalledTimes(2);
+    expect(await commands.get("bootstrap_terminal_session")?.(
+      { sessionId: exitedResult.sessionId, data: "bun run dev\n" },
+      context,
+    )).toEqual({ bootstrapped: true, delivered: true, duplicate: false });
+    expect(ptyProcesses[1]?.write).toHaveBeenCalledWith("bun run dev\n");
 
     await commands.get("close_local_terminal_session")?.(
       { sessionId: firstSessionId },
@@ -16451,6 +16461,11 @@ describe("pane layout commands", () => {
     await expect(commands.get("delete_pane_layout")?.({ environmentId: "env-1" }, context))
       .resolves.toBeUndefined();
     expect(deletePaneLayout).toHaveBeenCalledWith("env-1");
+    await expect(commands.get("delete_pane_layout")?.({
+      environmentId: "env-1",
+      expectedRevision: 7,
+    }, context)).resolves.toBeUndefined();
+    expect(deletePaneLayout).toHaveBeenCalledWith("env-1", 7);
     await expect(commands.get("save_pane_layout")?.({
       environmentId: "env-1",
       layout: { version: 2, containerId: null, activePaneId: "", root },

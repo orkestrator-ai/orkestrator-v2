@@ -7,6 +7,7 @@ import {
   base64DecodedByteLength,
   MAX_BASE64_PAYLOAD_BYTES,
   MAX_WRITE_FILE_BYTES,
+  removeConfinedDirectory,
   writeConfinedFile,
 } from "./path-safety.js";
 
@@ -150,6 +151,45 @@ describe("writeConfinedFile", () => {
       .rejects.toThrow("symlink or non-directory ancestor");
   });
 
+  test("does not truncate an external file when an overwrite parent is replaced", async () => {
+    const root = await createWorktree();
+    const external = await createWorktree();
+    const displacedRoot = `${root}-displaced`;
+    await fs.mkdir(path.join(root, "notes"));
+    await fs.writeFile(path.join(root, "notes/data.bin"), "inside-original");
+    await fs.mkdir(path.join(external, "notes"));
+    await fs.writeFile(path.join(external, "notes/data.bin"), "outside-sentinel");
+
+    const canonicalRoot = await fs.realpath(root);
+    const realLstat = fs.lstat.bind(fs);
+    let swapped = false;
+    const lstatSpy = spyOn(fs, "lstat").mockImplementation((async (
+      target: string,
+      ...rest: unknown[]
+    ) => {
+      const stats = await realLstat(target as never, ...rest as never[]);
+      if (target === canonicalRoot && !swapped) {
+        swapped = true;
+        await fs.rename(root, displacedRoot);
+        await fs.symlink(external, root);
+      }
+      return stats;
+    }) as typeof fs.lstat);
+    try {
+      await expect(writeConfinedFile(root, "notes/data.bin", "bmV3", {
+        exclusive: false,
+      })).rejects.toThrow();
+    } finally {
+      lstatSpy.mockRestore();
+    }
+    await expect(fs.readFile(path.join(external, "notes/data.bin"), "utf8"))
+      .resolves.toBe("outside-sentinel");
+    await expect(fs.readFile(path.join(displacedRoot, "notes/data.bin"), "utf8"))
+      .resolves.toBe("inside-original");
+    await fs.rm(root, { force: true });
+    await fs.rm(displacedRoot, { recursive: true, force: true });
+  });
+
   test("reports a missing worktree instead of creating one", async () => {
     const root = await createWorktree();
     await expect(writeConfinedFile(path.join(root, "gone"), "a/b.png", "QQ=="))
@@ -188,12 +228,8 @@ describe("writeConfinedFile", () => {
     await expect(fs.readFile(written, "utf8")).resolves.toBe("");
   });
 
-  /**
-   * The remaining branches guard against the target being replaced between the
-   * checks and the write. There is no way to lose that race deterministically
-   * from a test, so each one is driven by making the corresponding syscall
-   * report the outcome the race would have produced.
-   */
+  /** Parent validation failures are driven at the syscall boundary; the actual
+   * ancestor swap above exercises the pinned-cwd helper end to end. */
   describe("replacement races", () => {
     test("refuses a parent that resolves outside the worktree", async () => {
       const root = await createWorktree();
@@ -211,106 +247,53 @@ describe("writeConfinedFile", () => {
       }
     });
 
-    test("refuses a target that resolves outside the worktree", async () => {
+    test("atomically replaces a final symlink entry without following it", async () => {
       const root = await createWorktree();
-      const canonicalRoot = await fs.realpath(root);
-      const target = path.join(canonicalRoot, "notes", "image.png");
-      const realpath = fs.realpath.bind(fs);
-      const spy = spyOn(fs, "realpath").mockImplementation((async (candidate: string, ...rest: unknown[]) => {
-        if (candidate === target) return "/elsewhere/image.png";
-        return realpath(candidate as never, ...rest as never[]);
-      }) as typeof fs.realpath);
-      try {
-        await expect(writeConfinedFile(root, "notes/image.png", "QQ=="))
-          .rejects.toThrow("outside the local worktree");
-      } finally {
-        spy.mockRestore();
-      }
-      // The partially written file is removed rather than left for the caller.
-      expect(await fs.readdir(path.join(root, "notes"))).toEqual([]);
+      const external = path.join(await createWorktree(), "external.txt");
+      await fs.writeFile(external, "outside-sentinel");
+      await fs.mkdir(path.join(root, "notes"));
+      await fs.symlink(external, path.join(root, "notes/image.png"));
+      await expect(writeConfinedFile(root, "notes/image.png", "QQ==", {
+        exclusive: false,
+      })).resolves.toBe(path.join(await fs.realpath(root), "notes/image.png"));
+      await expect(fs.readFile(external, "utf8")).resolves.toBe("outside-sentinel");
+      await expect(fs.readFile(path.join(root, "notes/image.png"), "utf8")).resolves.toBe("A");
     });
 
-    test("refuses a target whose identity changed while it was being opened", async () => {
-      const root = await createWorktree();
-      const target = path.join(await fs.realpath(root), "notes", "image.png");
-      const lstat = fs.lstat.bind(fs);
-      const spy = spyOn(fs, "lstat").mockImplementation((async (candidate: string, ...rest: unknown[]) => {
-        const stats = await lstat(candidate as never, ...rest as never[]);
-        if (candidate === target) Object.assign(stats, { ino: stats.ino + 1 });
-        return stats;
-      }) as typeof fs.lstat);
-      try {
-        await expect(writeConfinedFile(root, "notes/image.png", "QQ=="))
-          .rejects.toThrow("changed while it was being opened");
-      } finally {
-        spy.mockRestore();
-      }
-      expect(await fs.readdir(path.join(root, "notes"))).toEqual([]);
-    });
+  });
+});
 
-    test("refuses a target whose identity changed while it was being written", async () => {
-      const root = await createWorktree();
-      const target = path.join(await fs.realpath(root), "notes", "image.png");
-      const lstat = fs.lstat.bind(fs);
-      let targetReads = 0;
-      const spy = spyOn(fs, "lstat").mockImplementation((async (candidate: string, ...rest: unknown[]) => {
-        const stats = await lstat(candidate as never, ...rest as never[]);
-        // Only the post-write check sees the swap; the pre-write one must pass
-        // so the failure is attributed to the write, not to the open.
-        if (candidate === target && (targetReads += 1) > 1) {
-          Object.assign(stats, { ino: stats.ino + 1 });
-        }
-        return stats;
-      }) as typeof fs.lstat);
-      try {
-        await expect(writeConfinedFile(root, "notes/image.png", "QQ=="))
-          .rejects.toThrow("changed while it was being written");
-      } finally {
-        spy.mockRestore();
+describe("removeConfinedDirectory", () => {
+  test("does not remove through a root replacement race", async () => {
+    const root = await createWorktree();
+    const external = await createWorktree();
+    const displaced = `${root}-displaced`;
+    await fs.mkdir(path.join(root, "batches/mine"), { recursive: true });
+    await fs.writeFile(path.join(root, "batches/mine/inside"), "inside");
+    await fs.mkdir(path.join(external, "batches/mine"), { recursive: true });
+    await fs.writeFile(path.join(external, "batches/mine/sentinel"), "outside");
+    const canonicalRoot = await fs.realpath(root);
+    const realLstat = fs.lstat.bind(fs);
+    let swapped = false;
+    const spy = spyOn(fs, "lstat").mockImplementation((async (target: string, ...rest: unknown[]) => {
+      const stats = await realLstat(target as never, ...rest as never[]);
+      if (target === canonicalRoot && !swapped) {
+        swapped = true;
+        await fs.rename(root, displaced);
+        await fs.symlink(external, root);
       }
-      expect(await fs.readdir(path.join(root, "notes"))).toEqual([]);
-    });
-
-    test("refuses a parent directory swapped between validation and the write", async () => {
-      const root = await createWorktree();
-      const canonicalRoot = await fs.realpath(root);
-      const parent = path.join(canonicalRoot, "notes");
-      const lstat = fs.lstat.bind(fs);
-      let parentReads = 0;
-      const spy = spyOn(fs, "lstat").mockImplementation((async (candidate: string, ...rest: unknown[]) => {
-        const stats = await lstat(candidate as never, ...rest as never[]);
-        // The loop's own lstat is first; the identity re-check before the open
-        // is second and must see a different directory.
-        if (candidate === parent && (parentReads += 1) > 1) {
-          Object.assign(stats, { ino: stats.ino + 1 });
-        }
-        return stats;
-      }) as typeof fs.lstat);
-      try {
-        await expect(writeConfinedFile(root, "notes/image.png", "QQ=="))
-          .rejects.toThrow("symlink ancestor is not allowed");
-      } finally {
-        spy.mockRestore();
-      }
-      expect(await fs.readdir(parent)).toEqual([]);
-    });
-
-    test("refuses a descriptor that is not a regular file", async () => {
-      const root = await createWorktree();
-      const open = fs.open.bind(fs);
-      const spy = spyOn(fs, "open").mockImplementation((async (...args: unknown[]) => {
-        const handle = await open(...args as Parameters<typeof fs.open>);
-        return Object.assign(Object.create(Object.getPrototypeOf(handle)), handle, {
-          stat: async () => Object.assign(await handle.stat(), { isFile: () => false }),
-          close: () => handle.close(),
-        });
-      }) as typeof fs.open);
-      try {
-        await expect(writeConfinedFile(root, "notes/image.png", "QQ=="))
-          .rejects.toThrow("not a regular file");
-      } finally {
-        spy.mockRestore();
-      }
-    });
+      return stats;
+    }) as typeof fs.lstat);
+    try {
+      await expect(removeConfinedDirectory(root, "batches/mine")).rejects.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
+    await expect(fs.readFile(path.join(external, "batches/mine/sentinel"), "utf8"))
+      .resolves.toBe("outside");
+    await expect(fs.readFile(path.join(displaced, "batches/mine/inside"), "utf8"))
+      .resolves.toBe("inside");
+    await fs.rm(root, { force: true });
+    await fs.rm(displaced, { recursive: true, force: true });
   });
 });

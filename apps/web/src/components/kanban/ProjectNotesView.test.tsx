@@ -217,6 +217,25 @@ describe("ProjectNotesView", () => {
     }
   });
 
+  test("never renders the previous project's draft while the next load is pending or failed", async () => {
+    const secondLoad = deferred<{ content: string }>();
+    getProjectNotesMock
+      .mockResolvedValueOnce({ content: "private project one notes" })
+      .mockImplementationOnce(() => secondLoad.promise);
+    const view = render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    const editor = await screen.findByPlaceholderText(/Write project notes here/) as HTMLTextAreaElement;
+    await waitFor(() => expect(editor.value).toBe("private project one notes"));
+
+    view.rerender(<ProjectNotesView projectId="project-2" onBack={() => {}} />);
+    expect(editor.value).toBe("");
+    expect(editor.disabled).toBe(true);
+
+    secondLoad.reject(new Error("project two unavailable"));
+    await screen.findByRole("alert");
+    expect(editor.value).toBe("");
+    expect(editor.disabled).toBe(true);
+  });
+
   test("re-persists a draft that is edited again after a discard", async () => {
     render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);

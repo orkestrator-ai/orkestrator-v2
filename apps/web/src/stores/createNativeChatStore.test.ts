@@ -710,6 +710,60 @@ describe("createEventSubscriptionSlice", () => {
       .toMatchObject({ desynced: false, reconnectAttempts: 0 });
   });
 
+  test("a live frame preserves a pending snapshot retry until resync completes", async () => {
+    let fired = false;
+    const store = useEventStore.getState();
+    const subscription = store.getOrCreateEventSubscription("env-1");
+    const retryTimer = setTimeout(() => {
+      fired = true;
+    }, 5);
+    store.setEventReconnectState("env-1", {
+      reconnectAttempts: 10,
+      reconnectTimer: retryTimer,
+      desynced: true,
+    }, subscription.abortController);
+
+    store.markEventSubscriptionHealthy("env-1", subscription.abortController);
+    expect(useEventStore.getState().eventSubscriptions.get("env-1"))
+      .toMatchObject({
+        desynced: true,
+        reconnectAttempts: 0,
+        reconnectTimer: retryTimer,
+      });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fired).toBe(true);
+  });
+
+  test("resync cancels its pending snapshot retry and timer replacement cancels the old one", async () => {
+    let firstFired = false;
+    let replacementFired = false;
+    const store = useEventStore.getState();
+    const subscription = store.getOrCreateEventSubscription("env-1");
+    const first = setTimeout(() => {
+      firstFired = true;
+    }, 5);
+    store.setEventReconnectState("env-1", {
+      reconnectTimer: first,
+      desynced: true,
+    }, subscription.abortController);
+    const replacement = setTimeout(() => {
+      replacementFired = true;
+    }, 10);
+    store.setEventReconnectState("env-1", {
+      reconnectTimer: replacement,
+    }, subscription.abortController);
+
+    await new Promise((resolve) => setTimeout(resolve, 7));
+    expect(firstFired).toBe(false);
+    store.markEventSubscriptionResynced("env-1", subscription.abortController);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+
+    expect(replacementFired).toBe(false);
+    expect(useEventStore.getState().eventSubscriptions.get("env-1"))
+      .toMatchObject({ desynced: false, reconnectTimer: null });
+  });
+
   test("closeEventSubscription cancels a pending desync probe", async () => {
     // Deleting an environment closes its subscription; a probe timer that
     // outlived that would resubscribe to a bridge that no longer exists.

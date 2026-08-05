@@ -23,7 +23,10 @@ import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "./claudeTmuxStore"
 import { useCodexStore } from "./codexStore";
 import { useOpenCodeStore } from "./openCodeStore";
 import * as backend from "@/lib/backend";
-import { boundBrowserHistory } from "@/lib/browser-history";
+import {
+  boundBrowserHistory,
+  sanitizeBrowserHistoryForPersistence,
+} from "@/lib/browser-history";
 import { createUuid } from "@/lib/uuid";
 import { destroyBrowserPreview } from "@/lib/native/browser-preview";
 import { forgetAgentHandoff } from "@/lib/agent-handoff";
@@ -1044,7 +1047,15 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const {
       history: boundedHistory,
       historyIndex: boundedHistoryIndex,
-    } = boundBrowserHistory(history, historyIndex, existingTab.browserData.history);
+    } = boundBrowserHistory(
+      history
+        ? sanitizeBrowserHistoryForPersistence(history)
+        : existingTab.browserData.history
+          ? sanitizeBrowserHistoryForPersistence(existingTab.browserData.history)
+          : undefined,
+      historyIndex
+        ?? (history === undefined ? existingTab.browserData.historyIndex : undefined),
+    );
 
     const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
       ...leaf,

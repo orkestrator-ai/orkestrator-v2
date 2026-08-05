@@ -1619,6 +1619,83 @@ describe("paneLayoutStore environment scoping", () => {
     expect(data?.historyIndex).toBe(99);
   });
 
+  test("removes credentials, queries, and fragments from durable browser history", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "browser-a",
+      type: "browser",
+      browserData: { url: "" },
+    }, "env-a");
+
+    store.updateTabBrowserUrl(
+      "browser-a",
+      "https://example.com/current?token=current",
+      "env-a",
+      [
+        "https://user:secret@example.com/previous?token=old#private",
+        "https://example.com/current?token=current",
+      ],
+      1,
+    );
+
+    const data = usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData;
+    expect(data?.url).toBe("https://example.com/current?token=current");
+    expect(data?.history).toEqual([
+      "https://example.com/previous",
+      "https://example.com/current",
+    ]);
+    expect(data?.historyIndex).toBe(1);
+  });
+
+  test("migrates existing sensitive history during a URL-only update", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "browser-a",
+      type: "browser",
+      browserData: {
+        url: "https://example.com/old",
+        history: ["https://alice:secret@example.com/old?token=secret#private"],
+        historyIndex: 0,
+      },
+    }, "env-a");
+
+    store.updateTabBrowserUrl("browser-a", "https://example.com/new?view=full", "env-a");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData).toEqual({
+      url: "https://example.com/new?view=full",
+      history: ["https://example.com/old"],
+      historyIndex: 0,
+    });
+  });
+
+  test("rebases a capped existing cursor during a URL-only migration", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    const history = Array.from(
+      { length: 120 },
+      (_, index) => `https://example.com/${index}?token=${index}`,
+    );
+    store.addTab("default", {
+      id: "browser-a",
+      type: "browser",
+      browserData: {
+        url: history[119]!,
+        history,
+        historyIndex: 119,
+      },
+    }, "env-a");
+
+    store.updateTabBrowserUrl("browser-a", "https://example.com/new?view=full", "env-a");
+
+    const data = usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData;
+    expect(data?.history).toHaveLength(100);
+    expect(data?.history?.[0]).toBe("https://example.com/20");
+    expect(data?.history?.[99]).toBe("https://example.com/119");
+    expect(data?.historyIndex).toBe(99);
+  });
+
   test("clamps a cursor sent without a history against the stored one", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");

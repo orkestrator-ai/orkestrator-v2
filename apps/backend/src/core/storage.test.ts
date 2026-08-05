@@ -302,6 +302,23 @@ describe("pane layout intent persistence", () => {
         current,
         { ...current, root: cyclicRoot } as unknown as PaneLayoutMergeInput,
       )).rejects.toThrow("JSON serializable");
+
+      await expect(storage.applyPaneLayoutIntent(
+        environment.id,
+        current,
+        current,
+        {
+          activeTabIds: Object.fromEntries(
+            Array.from({ length: 1_025 }, (_, index) => [`pane-${index}`, null]),
+          ),
+        },
+      )).rejects.toThrow("1024 entry limit");
+      await expect(storage.applyPaneLayoutIntent(
+        environment.id,
+        current,
+        current,
+        { activePaneId: "p".repeat(64 * 1024) },
+      )).rejects.toThrow("64 KB limit");
       expect((await storage.getPaneLayout(environment.id))?.revision).toBe(1);
     });
   });
@@ -323,6 +340,27 @@ describe("pane layout intent persistence", () => {
         current,
       )).rejects.toThrow("stale environment generation");
       expect((await storage.getPaneLayout(environment.id))?.revision).toBe(1);
+    });
+  });
+
+  test("preserves a concurrently replaced layout during revision-guarded deletion", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1", { environmentType: "local" });
+      environment.id = "env-layout-guarded-delete";
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(environment.id, layout("tab-a"), 0);
+      const newer = await storage.savePaneLayout(
+        environment.id,
+        layout("tab-b"),
+        1,
+      );
+
+      await expect(storage.deletePaneLayout(environment.id, 1))
+        .rejects.toThrow("expected 1, current 2");
+      expect(await storage.getPaneLayout(environment.id)).toEqual(newer);
+
+      await storage.deletePaneLayout(environment.id, 2);
+      expect(await storage.getPaneLayout(environment.id)).toBeNull();
     });
   });
 

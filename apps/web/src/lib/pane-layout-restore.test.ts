@@ -282,6 +282,35 @@ describe("reconcilePersistedLayout", () => {
     });
   });
 
+  test("migrates sensitive restored history without changing the current URL", () => {
+    const result = reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane",
+      tabs: [{
+        id: "browser",
+        type: "browser",
+        browserData: {
+          url: "https://example.com/current?token=current#live",
+          history: [
+            "https://alice:secret@example.com/previous?token=old#private",
+            "https://example.com/current?token=current#live",
+          ],
+          historyIndex: 1,
+        },
+      }],
+      activeTabId: "browser",
+    }), context);
+
+    const browserData = result?.root.kind === "leaf"
+      ? result.root.tabs[0]?.browserData
+      : undefined;
+    expect(browserData).toEqual({
+      url: "https://example.com/current?token=current#live",
+      history: ["https://example.com/previous", "https://example.com/current"],
+      historyIndex: 1,
+    });
+  });
+
   test("bounds browser history and rebases and clamps its cursor", () => {
     const history = Array.from({ length: 125 }, (_, index) => `http://localhost/${index}`);
     const restore = (historyIndex: unknown) => reconcilePersistedLayout(saved({

@@ -738,12 +738,22 @@ export function createEventSubscriptionSlice<TEvent>(
       set((state) => {
         const subscription = state.eventSubscriptions.get(environmentId);
         if (!subscription || subscription.abortController !== owner) return state;
-        if (subscription.reconnectTimer) clearTimeout(subscription.reconnectTimer);
+        /*
+         * A live frame proves the stream is healthy, but it does not repair an
+         * authoritative snapshot that failed during a full resync. In that
+         * state `reconnectTimer` belongs to the snapshot retry, so keep it
+         * armed until `markEventSubscriptionResynced` clears the desync flag.
+         */
+        if (!subscription.desynced && subscription.reconnectTimer) {
+          clearTimeout(subscription.reconnectTimer);
+        }
         const next = new Map(state.eventSubscriptions);
         next.set(environmentId, {
           ...subscription,
           reconnectAttempts: 0,
-          reconnectTimer: null,
+          reconnectTimer: subscription.desynced
+            ? subscription.reconnectTimer
+            : null,
         });
         return { eventSubscriptions: next };
       }),
@@ -756,6 +766,9 @@ export function createEventSubscriptionSlice<TEvent>(
           || subscription.abortController !== owner
           || !subscription.desynced
         ) return state;
+        if (subscription.reconnectTimer) {
+          clearTimeout(subscription.reconnectTimer);
+        }
         const next = new Map(state.eventSubscriptions);
         /*
          * Reset the ladder as well as the flag.
@@ -778,6 +791,7 @@ export function createEventSubscriptionSlice<TEvent>(
           ...subscription,
           desynced: false,
           reconnectAttempts: 0,
+          reconnectTimer: null,
         });
         return { eventSubscriptions: next };
       }),

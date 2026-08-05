@@ -24,6 +24,10 @@ import {
   type PersistedPaneLayoutInput,
   type TabInfo,
 } from "@/types/paneLayout";
+import {
+  boundBrowserHistory,
+  sanitizeBrowserHistoryForPersistence,
+} from "@/lib/browser-history";
 
 type SavePaneLayout = (
   environmentId: string,
@@ -78,6 +82,15 @@ function sanitizeTab(tab: TabInfo): TabInfo {
     ...rest
   } = tab;
 
+  if (rest.type === "browser" && rest.browserData?.history) {
+    return {
+      ...rest,
+      browserData: {
+        ...rest.browserData,
+        history: sanitizeBrowserHistoryForPersistence(rest.browserData.history),
+      },
+    };
+  }
   if (rest.claudeNativeData) {
     const { hostPort: _hostPort, ...data } = rest.claudeNativeData;
     return { ...rest, claudeNativeData: data };
@@ -189,6 +202,7 @@ function mergeSelectionIntents(
 type PaneLayoutEnqueue = (
   environmentId: string,
   input: PersistedPaneLayoutInput,
+  baseInput?: PersistedPaneLayoutInput,
 ) => Promise<void>;
 type PaneLayoutAdopt = (
   environmentId: string,
@@ -270,6 +284,63 @@ export function flushPaneLayoutNow(
       "Cannot safely flush pane layout without an authoritative merge base",
     );
   });
+}
+
+function sanitizeBrowserHistoryRoot(node: PaneNode): PaneNode {
+  if (node.kind === "split") {
+    return {
+      ...node,
+      children: [
+        sanitizeBrowserHistoryRoot(node.children[0]),
+        sanitizeBrowserHistoryRoot(node.children[1]),
+      ],
+    };
+  }
+  return {
+    ...node,
+    tabs: node.tabs.map((tab) => {
+      if (tab.type !== "browser" || !tab.browserData?.history) return tab;
+      const sanitized = sanitizeBrowserHistoryForPersistence(tab.browserData.history);
+      const bounded = boundBrowserHistory(sanitized, tab.browserData.historyIndex);
+      return {
+        ...tab,
+        browserData: {
+          ...tab.browserData,
+          history: bounded.history,
+          ...(bounded.historyIndex !== undefined
+            ? { historyIndex: bounded.historyIndex }
+            : { historyIndex: undefined }),
+        },
+      };
+    }),
+  };
+}
+
+/**
+ * Rewrite only privacy-sensitive browser-history fields from a snapshot that
+ * was just reconciled. The raw snapshot is the CAS/merge base, so this cannot
+ * accidentally bless unrelated renderer state as an edit.
+ */
+export async function migratePaneLayoutBrowserHistory(
+  environmentId: string,
+  snapshot: PersistedPaneLayout,
+  save: SavePaneLayout = backend.savePaneLayout,
+): Promise<boolean> {
+  if (!isPaneNode(snapshot.root)) return false;
+  const raw: PersistedPaneLayoutInput = {
+    version: snapshot.version,
+    containerId: snapshot.containerId,
+    activePaneId: snapshot.activePaneId,
+    root: snapshot.root,
+  };
+  const desired: PersistedPaneLayoutInput = {
+    ...raw,
+    root: sanitizeBrowserHistoryRoot(raw.root),
+  };
+  if (JSON.stringify(raw) === JSON.stringify(desired)) return false;
+  if (activeEnqueue) await activeEnqueue(environmentId, desired, raw);
+  else await save(environmentId, desired, snapshot.revision);
+  return true;
 }
 
 export function startPaneLayoutPersistence(
@@ -632,7 +703,7 @@ export function startPaneLayoutPersistence(
 
   // Joins the same chain as the debounced writes so ordering holds. Priming
   // `lastEnqueued` also stops the subscriber echoing this exact layout back.
-  const enqueueImmediate: PaneLayoutEnqueue = (environmentId, input) => {
+  const enqueueImmediate: PaneLayoutEnqueue = (environmentId, input, explicitBaseInput) => {
     const serialized = JSON.stringify(input);
     const matchingPending = pendingWrites.get(environmentId)?.serialized === serialized
       ? pendingWrites.get(environmentId)
@@ -652,7 +723,8 @@ export function startPaneLayoutPersistence(
       input,
       serialized,
       baseInput:
-        matchingPending?.baseInput
+        explicitBaseInput
+        ?? matchingPending?.baseInput
         ?? pendingSelection?.baseInput
         ?? authoritative.get(environmentId)?.input
         ?? input,

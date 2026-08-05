@@ -13,6 +13,28 @@ export interface BoundedBrowserHistory {
   historyIndex?: number;
 }
 
+/**
+ * Remove credentials and request-specific data before navigation history is
+ * written into the durable pane layout. The current address is persisted
+ * separately, so only superseded entries lose query/fragment detail.
+ */
+export function sanitizeBrowserHistoryForPersistence(history: string[]): string[] {
+  return history.map((address) => {
+    try {
+      const parsed = new URL(address);
+      parsed.username = "";
+      parsed.password = "";
+      parsed.search = "";
+      parsed.hash = "";
+      return parsed.toString();
+    } catch {
+      // Preserve opaque internal/test addresses. Browser navigation normalizes
+      // user-entered addresses before they reach this persistence boundary.
+      return address;
+    }
+  });
+}
+
 export function boundBrowserHistory(
   history: string[],
   historyIndex: number,

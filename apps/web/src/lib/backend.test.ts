@@ -25,10 +25,12 @@ const {
   createEnvironment,
   createLocalTerminalSession,
   createTerminalSession,
+  bootstrapTerminalSession,
   disconnectLinear,
   ensureEnvironmentSetup,
   deletePaneLayout,
   getEnvironmentSnapshots,
+  awaitEnvironmentSetupSession,
   getClaudeModelCatalog,
   getCachedOpenCodeModelCatalog,
   getPaneLayout,
@@ -82,6 +84,8 @@ const {
   updateFeaturePlan,
   updateAgentModelDefault,
   updateEnvironmentAgentSettings,
+  writeInitialPromptAttachments,
+  applyPaneLayoutIntent,
 } = backendWrappers;
 
 afterEach(() => {
@@ -280,6 +284,50 @@ describe("backend setup wrappers", () => {
 
     expect(invokeMock.mock.calls).toEqual([
       ["ensure_environment_setup", { environmentId: "env-1" }],
+    ]);
+  });
+
+  test("forwards terminal bootstrap and setup wait payloads exactly", async () => {
+    invokeMock
+      .mockResolvedValueOnce({ bootstrapped: true, delivered: true, duplicate: false })
+      .mockResolvedValueOnce(null);
+
+    await expect(bootstrapTerminalSession("pty-1", "bun run dev\n")).resolves.toEqual({
+      bootstrapped: true,
+      delivered: true,
+      duplicate: false,
+    });
+    await expect(awaitEnvironmentSetupSession("env-1", 2_500)).resolves.toBeNull();
+    expect(invokeMock.mock.calls).toEqual([
+      ["bootstrap_terminal_session", { sessionId: "pty-1", data: "bun run dev\n" }],
+      ["await_environment_setup_session", { environmentId: "env-1", timeoutMs: 2_500 }],
+    ]);
+  });
+
+  test("forwards initial attachments and pane-layout intents exactly", async () => {
+    const attachments = [{ id: "image-1", name: "diagram.png", base64Data: "cGl4ZWxz" }];
+    invokeMock
+      .mockResolvedValueOnce([{ name: "diagram.png", path: "/workspace/diagram.png" }])
+      .mockResolvedValueOnce({ revision: 2 });
+    const layout = {
+      version: 2,
+      containerId: "container-1",
+      root: { kind: "leaf" as const, id: "default", tabs: [], activeTabId: "" },
+      activePaneId: "default",
+    };
+    const selectionIntent = { activePaneId: "default", activeTabIds: { default: "tab-1" } };
+
+    await writeInitialPromptAttachments("env-1", attachments);
+    await applyPaneLayoutIntent("env-1", layout, layout, selectionIntent);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["write_initial_prompt_attachments", { environmentId: "env-1", attachments }],
+      ["apply_pane_layout_intent", {
+        environmentId: "env-1",
+        baseLayout: layout,
+        desiredLayout: layout,
+        selectionIntent,
+      }],
     ]);
   });
 
@@ -1083,6 +1131,7 @@ describe("backend pane layout wrappers", () => {
       root: layout.root,
     }, 1)).resolves.toEqual(layout);
     await expect(deletePaneLayout("env-1")).resolves.toBeUndefined();
+    await expect(deletePaneLayout("env-1", 2)).resolves.toBeUndefined();
 
     expect(invokeMock.mock.calls).toEqual([
       ["get_pane_layout", { environmentId: "env-1" }],
@@ -1097,6 +1146,7 @@ describe("backend pane layout wrappers", () => {
         expectedRevision: 1,
       }],
       ["delete_pane_layout", { environmentId: "env-1" }],
+      ["delete_pane_layout", { environmentId: "env-1", expectedRevision: 2 }],
     ]);
   });
 });

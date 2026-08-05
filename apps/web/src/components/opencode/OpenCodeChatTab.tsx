@@ -45,6 +45,7 @@ import {
   getModelsWithDefaults,
   getSessionMessages,
   getSessionStatus,
+  lookupSessionStatus,
   listSessions,
   getPendingPermissions,
   getPendingQuestions,
@@ -1802,7 +1803,7 @@ export function OpenCodeChatTab({
         // Store stream reference in the store for cleanup
         setEventStream(environmentId, eventStream, abortController);
 
-        if (requiresFullRehydrate) {
+        const rehydrateProjectedSessions = async (): Promise<boolean> => {
           /*
            * One unreachable session must not abandon the rest of the rehydrate.
            * A stale projection whose session the server has forgotten answers
@@ -1812,24 +1813,69 @@ export function OpenCodeChatTab({
            * every sixty seconds.
            */
           const prefix = sessionKeyPrefixFor(environmentId);
-          const unreachable: string[] = [];
+          const transientFailures: string[] = [];
           for (const [key, projected] of useOpenCodeStore.getState().sessions) {
             if (!key.startsWith(prefix)) continue;
             try {
-              const messages = await getSessionMessages(
-                sdkClient,
-                projected.sessionId,
-                { throwOnError: true },
-              );
-              if (abortController.signal.aborted) return;
+              const stateBeforeSnapshot = useOpenCodeStore.getState();
+              const sessionBeforeSnapshot = stateBeforeSnapshot.sessions.get(key);
+              const loadingRevisionBeforeSnapshot =
+                stateBeforeSnapshot.sessionLoadingRevisions.get(key) ?? 0;
+              const [messagesResult, statusResult] = await Promise.allSettled([
+                getSessionMessages(
+                  sdkClient,
+                  projected.sessionId,
+                  { throwOnError: true },
+                ),
+                lookupSessionStatus(sdkClient, projected.sessionId),
+              ]);
+              if (abortController.signal.aborted) return false;
+              if (statusResult.status === "rejected") {
+                throw statusResult.reason;
+              }
+              const statusLookup = statusResult.value;
+              if (statusLookup.kind === "missing") {
+                // A definitively deleted provider session cannot become
+                // reachable on retry. It does not keep the environment in a
+                // permanent desync loop.
+                continue;
+              }
+              if (statusLookup.kind === "unavailable") {
+                throw statusLookup.error;
+              }
+              if (messagesResult.status === "rejected") {
+                throw messagesResult.reason;
+              }
+              const messages = messagesResult.value;
+              const stateAfterSnapshot = useOpenCodeStore.getState();
+              const currentSession = stateAfterSnapshot.sessions.get(key);
+              if (
+                stateAfterSnapshot.clients.get(environmentId) !== sdkClient
+                || currentSession?.sessionId !== projected.sessionId
+              ) {
+                continue;
+              }
               setMessages(key, messages);
+              if (
+                currentSession === sessionBeforeSnapshot
+                && (
+                  stateAfterSnapshot.sessionLoadingRevisions.get(key) ?? 0
+                ) === loadingRevisionBeforeSnapshot
+              ) {
+                const isActive = statusLookup.status !== "idle";
+                setSessionLoading(
+                  key,
+                  isActive,
+                  isActive ? getOpenCodeTurnStartedAt(messages) : undefined,
+                );
+              }
               await syncPendingRequests(sdkClient, projected.sessionId, {
                 throwOnError: true,
                 targetSessionKey: key,
               });
             } catch (error) {
-              if (abortController.signal.aborted) return;
-              unreachable.push(projected.sessionId);
+              if (abortController.signal.aborted) return false;
+              transientFailures.push(projected.sessionId);
               console.warn(
                 "[OpenCodeChatTab] Failed to rehydrate session during resync:",
                 projected.sessionId,
@@ -1837,21 +1883,49 @@ export function OpenCodeChatTab({
               );
             }
           }
-          if (unreachable.length > 0) {
+          if (transientFailures.length > 0) {
             console.warn(
-              "[OpenCodeChatTab] Resynced with unreachable sessions:",
-              unreachable.length,
+              "[OpenCodeChatTab] Resync remains pending for unavailable sessions:",
+              transientFailures.length,
             );
           }
-          /*
-           * Resynced regardless of the failures above. The stream is up, so
-           * every session — including the ones that just failed — is back on
-           * the ordinary incremental path, where a live update refetches the
-           * transcript it belongs to. Holding the flag would only re-run this
-           * identical failure on a sixty-second loop while the banner stayed
-           * up.
-           */
-          markEventSubscriptionResynced(environmentId, abortController);
+          return transientFailures.length === 0;
+        };
+
+        const scheduleFullRehydrateRetry = () => {
+          if (abortController.signal.aborted) return;
+          const retryTimer = setTimeout(() => {
+            const current = useOpenCodeStore.getState().eventSubscriptions
+              .get(environmentId);
+            if (
+              current?.abortController !== abortController
+              || !current.isActive
+              || !current.desynced
+            ) return;
+            void rehydrateProjectedSessions().then((resynced) => {
+              if (abortController.signal.aborted) return;
+              if (resynced) {
+                markEventSubscriptionResynced(environmentId, abortController);
+              } else {
+                scheduleFullRehydrateRetry();
+              }
+            });
+          }, SSE_RECONNECT_MAX_DELAY);
+          setEventReconnectState(
+            environmentId,
+            { reconnectTimer: retryTimer },
+            abortController,
+          );
+        };
+
+        if (requiresFullRehydrate) {
+          const resynced = await rehydrateProjectedSessions();
+          if (abortController.signal.aborted) return;
+          if (resynced) {
+            markEventSubscriptionResynced(environmentId, abortController);
+          } else {
+            scheduleFullRehydrateRetry();
+          }
         }
 
         const DEBOUNCE_MS = 200; // Debounce all message fetches

@@ -409,6 +409,8 @@ async function harness(
     orderedEventMaxCount?: number;
     orderedEventMaxBytes?: number;
     initialPromptRetryDelayMs?: number;
+    dispatchJournalMaxRecords?: number;
+    dispatchJournalMaxBytes?: number;
     fingerprintEnvironment?: () => string;
     /** Uses the production adaptive cadence instead of deterministic immediate publishes. */
     adaptiveCoalesce?: boolean;
@@ -491,6 +493,12 @@ async function harness(
       : {}),
     ...(options.initialPromptRetryDelayMs !== undefined
       ? { initialPromptRetryDelayMs: options.initialPromptRetryDelayMs }
+      : {}),
+    ...(options.dispatchJournalMaxRecords !== undefined
+      ? { dispatchJournalMaxRecords: options.dispatchJournalMaxRecords }
+      : {}),
+    ...(options.dispatchJournalMaxBytes !== undefined
+      ? { dispatchJournalMaxBytes: options.dispatchJournalMaxBytes }
       : {}),
   });
   if (options.deferStart !== true) await runtime.start();
@@ -1270,7 +1278,7 @@ describe("session lifecycle", () => {
       .toBe(false);
   });
 
-  test("only the newest record per thread is recovered; older ones are failed", async () => {
+  test("the highest sequence per thread is recovered when timestamps tie", async () => {
     const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
     await store.upsert(
       store.toRecord({
@@ -1282,7 +1290,11 @@ describe("session lifecycle", () => {
         titleSource: "prompt",
       }),
     );
-    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    const journal = new DispatchJournal({
+      codexHome,
+      cwd: "/tmp/ws",
+      now: () => Date.parse("2026-08-05T12:00:00.000Z"),
+    });
     await journal.load();
     for (const requestId of ["req-old", "req-new"]) {
       await journal.markPrepared({
@@ -1294,8 +1306,6 @@ describe("session lifecycle", () => {
         threadId: "thread-multi",
         turnId: `turn-${requestId}`,
       });
-      // Distinct `updatedAt` values, which is what orders the records.
-      await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
     await harness({
@@ -3213,6 +3223,187 @@ describe("at-most-once dispatch", () => {
       action: "attach",
       record: { turnId: "turn-after-wait" },
     });
+  });
+
+  test("a delayed retry rebinds to the replacement engine generation", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "turn-after-restart" } };
+      },
+    }, { initialPromptRetryDelayMs: 80 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-restarted-delay";
+
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start on the replacement child",
+      requestId,
+      attachments: [],
+    });
+    await waitUntil(() => attempts === 1, "first initial prompt attempt did not run");
+    await h.engine.getSupervisor().restartNow("restart during retry delay");
+
+    expect(await pending).toMatchObject({
+      ok: true,
+      result: { requestId, turnId: "turn-after-restart" },
+    });
+    expect(h.children).toHaveLength(2);
+    expect(h.children[0]!.requests.filter((request) => request.method === "turn/start"))
+      .toHaveLength(1);
+    expect(h.children[1]!.requests.filter((request) => request.method === "turn/start"))
+      .toHaveLength(1);
+    expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
+      action: "attach",
+      record: { turnId: "turn-after-restart" },
+    });
+    expect((await h.runtime.getMessages(sessionId))?.map((message) => message.role))
+      .toEqual(["user", "assistant"]);
+  });
+
+  test("a no-id replacement thread settles the stale retry and remains reusable", async () => {
+    let turnAttempts = 0;
+    let threadStarts = 0;
+    const h = await harness({
+      "thread/start": () => {
+        threadStarts += 1;
+        if (threadStarts === 2) return { thread: {} };
+        return { thread: threadPayload(`thread-${threadStarts}`) };
+      },
+      "turn/start": () => {
+        turnAttempts += 1;
+        if (turnAttempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "turn-after-no-id" } };
+      },
+    }, { initialPromptRetryDelayMs: 80 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-no-id-replacement";
+
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+    await waitUntil(() => turnAttempts === 1, "first initial prompt attempt did not run");
+    const staleContext = h.runtime.getRegistry().getThread("thread-1")!;
+    await h.engine.getSupervisor().restartNow("restart before no-id replacement");
+
+    expect(await pending).toMatchObject({
+      ok: false,
+      status: 503,
+      error: "Codex did not return a thread id",
+    });
+    expect(staleContext.dispatchInFlight).toBe(false);
+    expect(staleContext.phase).toBe("failed");
+    expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
+      action: "dispatch",
+      record: { state: "retryable" },
+    });
+
+    expect(await h.runtime.prompt(sessionId, {
+      prompt: "retry after replacement failure",
+      requestId,
+      attachments: [],
+    })).toMatchObject({ ok: true, result: { turnId: "turn-after-no-id" } });
+    expect(turnAttempts).toBe(2);
+  });
+
+  test("a thrown replacement thread start settles without dereferencing null context", async () => {
+    let turnAttempts = 0;
+    let threadStarts = 0;
+    const h = await harness({
+      "thread/start": () => {
+        threadStarts += 1;
+        if (threadStarts === 2) throw new Error("replacement thread unavailable");
+        return { thread: threadPayload(`thread-${threadStarts}`) };
+      },
+      "turn/start": () => {
+        turnAttempts += 1;
+        const error = new Error("ingress queue full");
+        (error as { rpcCode?: number }).rpcCode = -32001;
+        throw error;
+      },
+    }, { initialPromptRetryDelayMs: 80 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-thrown-replacement";
+
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+    await waitUntil(() => turnAttempts === 1, "first initial prompt attempt did not run");
+    const staleContext = h.runtime.getRegistry().getThread("thread-1")!;
+    await h.engine.getSupervisor().restartNow("restart before thrown replacement");
+
+    expect(await pending).toMatchObject({
+      ok: false,
+      status: 503,
+      error: "thread/start failed (-32603): replacement thread unavailable",
+    });
+    expect(staleContext).toMatchObject({ dispatchInFlight: false, phase: "failed" });
+    expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
+      action: "dispatch",
+      record: { state: "retryable" },
+    });
+    expect(turnAttempts).toBe(1);
+  });
+
+  test("journal count exhaustion fails before turn/start", async () => {
+    const h = await harness({}, { dispatchJournalMaxRecords: 1 });
+    await h.runtime.getJournal().markPrepared({
+      requestId: "existing",
+      bridgeSessionId: "other-session",
+      threadId: "other-thread",
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    expect(await h.runtime.prompt(sessionId, {
+      prompt: "must not dispatch",
+      requestId: "new-request",
+      attachments: [],
+    })).toMatchObject({
+      ok: false,
+      status: 503,
+      error: "Dispatch journal safety-record limit (1) is exhausted",
+    });
+    expect(h.child().requests.some((request) => request.method === "turn/start"))
+      .toBe(false);
+    expect(h.runtime.getJournal().classify("existing").action).toBe("reconcile");
+  });
+
+  test("an oversized persisted journal blocks dispatch before thread creation", async () => {
+    const bridgeDir = join(codexHome, "orkestrator-bridge");
+    mkdirSync(bridgeDir, { recursive: true });
+    writeFileSync(
+      join(bridgeDir, `dispatch-journal-${hashCwd("/tmp/ws")}.json`),
+      "x".repeat(257),
+      "utf8",
+    );
+    const h = await harness({}, { dispatchJournalMaxBytes: 256 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    expect(await h.runtime.prompt(sessionId, {
+      prompt: "must not dispatch",
+      requestId: "blocked-by-oversized-journal",
+      attachments: [],
+    })).toMatchObject({
+      ok: false,
+      status: 503,
+      error: "Dispatch journal exceeds its 256-byte read limit",
+    });
+    expect(h.child().requests.some((request) =>
+      request.method === "thread/start" || request.method === "turn/start"
+    )).toBe(false);
   });
 
   test("a retryable dispatch remains visible after a bridge restart", async () => {

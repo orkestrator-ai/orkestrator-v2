@@ -1,4 +1,5 @@
 import { constants, promises as fs, type Stats } from "node:fs";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { APP_SLUG } from "./constants.js";
@@ -108,31 +109,157 @@ type ConfinedWriteOptions = {
   /**
    * Refuse the write when the target already exists (`O_EXCL`). Attachment
    * batches own a freshly created, unpredictable directory and must never adopt
-   * a planted file. Overwrite-intended writers (an editor save, a re-staged
-   * clipboard image) pass `false` and get `O_TRUNC` instead.
+   * a planted file. Overwrite-intended writers pass `false` and atomically
+   * publish a fully-written sibling over the prior entry.
    */
   exclusive?: boolean;
   /** Label used in path validation errors. */
   label?: string;
 };
 
-async function isSameDirectoryEntry(
-  directoryPath: string,
-  expected: Stats,
-): Promise<boolean> {
-  // Identity, not spelling. Comparing `realpath(parent)` to the lexical parent
-  // string rejects a legitimate directory on a case-insensitive filesystem: a
-  // pre-existing `.Orkestrator` makes mkdir return EEXIST and realpath report
-  // the on-disk casing, which never equals the requested `.orkestrator`.
+// The helper's cwd is resolved by the kernel during spawn and remains pinned to
+// that directory object even if a repository process renames an ancestor. All
+// opens, publishes, and cleanup are relative to that cwd, so no post-validation
+// pathname lookup can reach a replacement directory outside the worktree.
+const PINNED_CWD_WRITE_HELPER = String.raw`
+const fs = require("node:fs");
+const [targetPath, mode, expectedDev, expectedIno, expectedBytes] = process.argv.slice(1);
+const invalidAncestor = () => { process.stderr.write("symlink or non-directory ancestor"); process.exit(73); };
+const cwd = fs.statSync(".");
+if (String(cwd.dev) !== expectedDev || String(cwd.ino) !== expectedIno) invalidAncestor();
+const segments = targetPath.split("/");
+const target = segments.pop();
+for (const segment of segments) {
   try {
-    const stats = await fs.lstat(directoryPath);
-    return !stats.isSymbolicLink()
-      && stats.isDirectory()
-      && stats.dev === expected.dev
-      && stats.ino === expected.ino;
-  } catch {
-    return false;
+    const stat = fs.lstatSync(segment);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) invalidAncestor();
+  } catch (error) {
+    if (!error || error.code !== "ENOENT") throw error;
+    try { fs.mkdirSync(segment, { mode: 0o700 }); }
+    catch (mkdirError) { if (!mkdirError || mkdirError.code !== "EEXIST") throw mkdirError; }
   }
+  const expected = fs.lstatSync(segment);
+  process.chdir(segment);
+  const pinned = fs.statSync(".");
+  if (pinned.dev !== expected.dev || pinned.ino !== expected.ino) invalidAncestor();
+}
+const chunks = [];
+let bytes = 0;
+process.stdin.on("data", (chunk) => {
+  bytes += chunk.length;
+  if (bytes > Number(expectedBytes)) process.exit(74);
+  chunks.push(chunk);
+});
+process.stdin.on("end", () => {
+  if (bytes !== Number(expectedBytes)) process.exit(74);
+  const temp = "." + target + "." + require("node:crypto").randomUUID() + ".tmp";
+  let fd;
+  let identity;
+  try {
+    fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
+    identity = fs.fstatSync(fd);
+    fs.writeFileSync(fd, Buffer.concat(chunks));
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    if (mode === "exclusive") {
+      fs.linkSync(temp, target);
+      fs.unlinkSync(temp);
+    } else {
+      fs.renameSync(temp, target);
+    }
+    const published = fs.lstatSync(target);
+    if (published.isSymbolicLink() || !published.isFile() || published.dev !== identity.dev || published.ino !== identity.ino) {
+      process.exit(75);
+    }
+  } catch (error) {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+    try {
+      const current = fs.lstatSync(temp);
+      if (identity && current.dev === identity.dev && current.ino === identity.ino) fs.unlinkSync(temp);
+    } catch {}
+    const code = error && typeof error.code === "string" ? error.code : "WRITE_FAILED";
+    process.stderr.write(code);
+    process.exit(76);
+  }
+});
+`;
+
+const PINNED_CWD_REMOVE_DIRECTORY_HELPER = String.raw`
+const fs = require("node:fs");
+const [relativePath, expectedDev, expectedIno] = process.argv.slice(1);
+const root = fs.statSync(".");
+if (String(root.dev) !== expectedDev || String(root.ino) !== expectedIno) process.exit(73);
+const segments = relativePath.split("/"), target = segments.pop();
+for (const segment of segments) {
+  let stat; try { stat = fs.lstatSync(segment); } catch { process.exit(0); }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) process.exit(0);
+  process.chdir(segment);
+  const pinned = fs.statSync(".");
+  if (pinned.dev !== stat.dev || pinned.ino !== stat.ino) process.exit(73);
+}
+let final; try { final = fs.lstatSync(target); } catch { process.exit(0); }
+if (final.isSymbolicLink() || !final.isDirectory()) process.exit(0);
+fs.rmSync(target, { recursive: true, force: true });
+`;
+
+async function writeFromPinnedRoot(
+  rootPath: string,
+  rootStats: Stats,
+  target: string,
+  content: Buffer,
+  exclusive: boolean,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [
+      "-e",
+      PINNED_CWD_WRITE_HELPER,
+      target,
+      exclusive ? "exclusive" : "overwrite",
+      String(rootStats.dev),
+      String(rootStats.ino),
+      String(content.byteLength),
+    ], {
+      cwd: rootPath,
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      if (stderr.length < 1_024) stderr += chunk.toString().slice(0, 1_024 - stderr.length);
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Confined file write failed (${stderr || `exit ${code}`})`));
+    });
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      // An identity/symlink rejection can close stdin before the bounded
+      // payload is consumed. The exit status is the authoritative failure.
+      if (error.code !== "EPIPE") reject(error);
+    });
+    child.stdin.end(content);
+  });
+}
+
+/** Removes one directory tree relative to a root-pinned child cwd. */
+export async function removeConfinedDirectory(
+  rootPath: string,
+  relativePath: string,
+): Promise<void> {
+  const target = validateRelativeFilePath(relativePath, "directory path");
+  const canonicalRoot = await fs.realpath(rootPath);
+  const rootStats = await fs.lstat(canonicalRoot);
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) return;
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [
+      "-e", PINNED_CWD_REMOVE_DIRECTORY_HELPER, target,
+      String(rootStats.dev), String(rootStats.ino),
+    ], { cwd: canonicalRoot, stdio: ["ignore", "ignore", "ignore"] });
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0
+      ? resolve()
+      : reject(new Error(`Confined directory cleanup failed (exit ${code})`)));
+  });
 }
 
 /**
@@ -163,80 +290,29 @@ export async function writeConfinedFile(
   }
   const canonicalRoot = await fs.realpath(rootPath);
   const fullPath = path.join(canonicalRoot, target);
-  const parentPath = path.dirname(fullPath);
-
+  const rootStats = await fs.lstat(canonicalRoot);
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+    throw new Error(`Invalid ${label}: worktree root is not a directory`);
+  }
+  await writeFromPinnedRoot(
+    canonicalRoot,
+    rootStats,
+    target,
+    content,
+    options.exclusive !== false,
+  );
   let current = canonicalRoot;
-  let parentStats = await fs.lstat(canonicalRoot);
   for (const segment of target.split("/").slice(0, -1)) {
     current = path.join(current, segment);
-    try {
-      await fs.mkdir(current, { mode: 0o700 });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
     const stats = await fs.lstat(current);
     if (stats.isSymbolicLink() || !stats.isDirectory()) {
-      throw new Error(`Invalid ${label}: symlink or non-directory ancestor: ${target}`);
+      throw new Error(`Invalid ${label}: ancestor changed after the write: ${target}`);
     }
-    const canonicalDirectory = await fs.realpath(current);
-    if (!isPathInsideRoot(canonicalDirectory, canonicalRoot)) {
+    if (!isPathInsideRoot(await fs.realpath(current), canonicalRoot)) {
       throw new Error(`Invalid ${label}: path leaves the local worktree: ${target}`);
     }
-    parentStats = stats;
   }
-
-  // Validate the immediate parent again immediately before opening the file.
-  if (!await isSameDirectoryEntry(parentPath, parentStats)) {
-    throw new Error(`Invalid ${label}: symlink ancestor is not allowed: ${target}`);
-  }
-  const handle = await fs.open(
-    fullPath,
-    constants.O_WRONLY
-      | constants.O_CREAT
-      | (options.exclusive === false ? constants.O_TRUNC : constants.O_EXCL)
-      | (constants.O_NOFOLLOW || 0),
-    0o600,
-  );
-  let completed = false;
-  try {
-    const opened = await handle.stat();
-    if (!opened.isFile()) throw new Error("Attachment target is not a regular file");
-    const pathStats = await fs.lstat(fullPath);
-    if (
-      pathStats.isSymbolicLink()
-      || pathStats.dev !== opened.dev
-      || pathStats.ino !== opened.ino
-    ) {
-      throw new Error("Attachment target changed while it was being opened");
-    }
-    if (!isPathInsideRoot(await fs.realpath(fullPath), canonicalRoot)) {
-      throw new Error("Attachment target is outside the local worktree");
-    }
-
-    await handle.writeFile(content);
-    const finalOpened = await handle.stat();
-    const finalPath = await fs.lstat(fullPath);
-    if (
-      !finalOpened.isFile()
-      || finalOpened.size !== content.byteLength
-      || finalPath.isSymbolicLink()
-      || finalPath.dev !== finalOpened.dev
-      || finalPath.ino !== finalOpened.ino
-      || !await isSameDirectoryEntry(parentPath, parentStats)
-    ) {
-      throw new Error("Attachment target changed while it was being written");
-    }
-    completed = true;
-    return fullPath;
-  } finally {
-    await handle.close().catch(() => undefined);
-    // Only an exclusively created file is unambiguously ours to remove. An
-    // overwrite failure leaves a truncated file the caller already owned;
-    // deleting it would turn a failed save into a deleted file.
-    if (!completed && options.exclusive !== false) {
-      await fs.rm(fullPath, { force: true }).catch(() => undefined);
-    }
-  }
+  return fullPath;
 }
 
 async function resolveReadableHostTarget(

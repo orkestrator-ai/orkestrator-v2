@@ -8980,6 +8980,67 @@ describe("CodexChatTab", () => {
     });
   });
 
+  test("retires a restored retry marker when later status clears it before a fresh send", async () => {
+    mockLookupSessionStatus.mockResolvedValueOnce({
+      kind: "found",
+      session: {
+        status: "idle",
+        unconfirmedDispatch: {
+          requestId: "restored-stale-request",
+          retryable: true,
+        },
+      },
+    });
+    const view = render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().unconfirmedDispatches.get(SESSION_KEY))
+        .toMatchObject({
+          requestId: "restored-stale-request",
+          retryable: true,
+          restoredFromStatus: true,
+        });
+    });
+
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "found",
+      session: { status: "idle" },
+    });
+    view.rerender(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().unconfirmedDispatches.has(SESSION_KEY))
+        .toBe(false);
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.error)
+        .toBeUndefined();
+    });
+
+    composeText = "A new prompt after authoritative cleanup";
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledWith(
+      MOCK_CLIENT,
+      SESSION_ID,
+      composeText,
+      expect.objectContaining({
+        requestId: expect.not.stringMatching(/^restored-stale-request$/),
+      }),
+    ));
+  });
+
   describe("approval rehydration", () => {
     test("adopts approvals raised while the tab was unmounted", async () => {
       // The whole point of the route: a tab that was not mounted saw no SSE frame,

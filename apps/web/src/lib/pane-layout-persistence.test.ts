@@ -926,6 +926,56 @@ describe("pane layout persistence", () => {
     expect(state.root.children[0].activeTabId).toBe("codex");
   });
 
+  test("recursively sanitizes durable browser history without changing current URLs", () => {
+    const sensitive = "https://alice:secret@example.com/path?token=secret#private";
+    const state = {
+      containerId: "container-1",
+      activePaneId: "right",
+      root: {
+        kind: "split" as const,
+        id: "split",
+        direction: "horizontal" as const,
+        sizes: [50, 50] as [number, number],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf" as const,
+            id: "left",
+            tabs: [{
+              id: "browser-left",
+              type: "browser" as const,
+              browserData: { url: sensitive, history: [sensitive], historyIndex: 0 },
+            }],
+            activeTabId: "browser-left",
+          },
+          {
+            kind: "leaf" as const,
+            id: "right",
+            tabs: [{
+              id: "browser-right",
+              type: "browser" as const,
+              browserData: { url: sensitive, history: [sensitive], historyIndex: 0 },
+            }],
+            activeTabId: "browser-right",
+          },
+        ],
+      },
+    } satisfies EnvironmentPaneState;
+
+    const persisted = createPersistedPaneLayoutInput(state);
+    expect(persisted.root.kind).toBe("split");
+    if (persisted.root.kind !== "split") throw new Error("expected split");
+    for (const child of persisted.root.children) {
+      expect(child.kind).toBe("leaf");
+      if (child.kind !== "leaf") throw new Error("expected leaf");
+      expect(child.tabs[0]?.browserData).toEqual({
+        url: sensitive,
+        history: ["https://example.com/path"],
+        historyIndex: 0,
+      });
+    }
+  });
+
   test("rebases a conflicting local addition over a remote addition", async () => {
     const baseState = {
       containerId: "container-1",

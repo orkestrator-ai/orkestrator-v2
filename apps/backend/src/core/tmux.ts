@@ -632,7 +632,10 @@ class TmuxBackend {
    * read that feeds the retained snapshot and every SSE subscriber has to be
    * bounded at the source rather than trimmed afterwards.
    */
-  async readBoundedFile(filePath: string, maxBytes: number): Promise<string | undefined> {
+  async readBoundedFile(
+    filePath: string,
+    maxBytes: number,
+  ): Promise<{ content: string; truncated: boolean } | undefined> {
     if (this.kind === "local") {
       let handle: Awaited<ReturnType<typeof fs.open>>;
       try {
@@ -642,11 +645,12 @@ class TmuxBackend {
         throw error;
       }
       try {
-        const length = Math.min(maxBytes, (await handle.stat()).size);
-        if (length <= 0) return "";
-        const buffer = Buffer.allocUnsafe(length);
-        const { bytesRead } = await handle.read(buffer, 0, length, 0);
-        return buffer.subarray(0, bytesRead).toString("utf8");
+        const buffer = Buffer.allocUnsafe(maxBytes + 1);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        return {
+          content: buffer.subarray(0, Math.min(bytesRead, maxBytes)).toString("utf8"),
+          truncated: bytesRead > maxBytes,
+        };
       } finally {
         await handle.close().catch(() => undefined);
       }
@@ -654,9 +658,13 @@ class TmuxBackend {
 
     const probe = await this.exec(["test", "-f", filePath]);
     if (probe.status !== 0) return undefined;
-    const out = await this.exec(["head", "-c", String(maxBytes), filePath]);
+    const out = await this.exec(["head", "-c", String(maxBytes + 1), filePath]);
     if (out.status !== 0) throw new Error(out.stderr || `failed to read ${filePath}`);
-    return out.stdout;
+    const buffer = Buffer.from(out.stdout);
+    return {
+      content: buffer.subarray(0, maxBytes).toString("utf8"),
+      truncated: buffer.byteLength > maxBytes,
+    };
   }
 
   async writeFile(filePath: string, content: string): Promise<void> {
@@ -983,10 +991,10 @@ async function readBlockingHookTiming(
   id: string,
 ): Promise<{ requestedAt: number; expiresAt: number } | null> {
   const authoritative = parseBlockingHookTiming(
-    await backend.readBoundedFile(
+    (await backend.readBoundedFile(
       `${paths.timingDir}/${filename}`,
       TMUX_HOOK_TIMING_MAX_BYTES,
-    ),
+    ))?.content,
   );
   // Hooks installed by an older backend do not have a timing sidecar. Keep
   // their pending prompts displayable until the workspace hook is reinstalled.
@@ -1298,7 +1306,23 @@ async function drainPending(
     const blocking = isBlockingHook(kind);
     if (blocking && alreadyEmitted.has(id)) continue;
 
-    const content = await backend.readBoundedFile(full, TMUX_HOOK_PAYLOAD_MAX_BYTES);
+    const read = await backend.readBoundedFile(full, TMUX_HOOK_PAYLOAD_MAX_BYTES);
+    if (blocking && read?.truncated) {
+      // A blocking payload that cannot be safely read must still receive an
+      // answer. Leaving it pending would park the agent for five minutes;
+      // truncating it could present a materially different approval request.
+      await replyToHook(
+        backend,
+        paths,
+        kind,
+        id,
+        failClosedHookResponse(kind, "Approval payload exceeded the safe size limit."),
+      );
+      alreadyEmitted.delete(id);
+      continue;
+    }
+
+    const content = read?.content;
     if (content === undefined) continue;
 
     let payload: unknown = content;
@@ -1331,10 +1355,23 @@ async function listPendingBlocking(backend: TmuxBackend, paths: SessionHookPaths
     if (!isBlockingHook(kind)) continue;
     if (await backend.readFile(`${paths.responseDir}/${name}`) !== undefined) continue;
 
-    const content = await backend.readBoundedFile(
-      `${paths.pendingDir}/${name}`,
+    const pendingPath = `${paths.pendingDir}/${name}`;
+    const read = await backend.readBoundedFile(
+      pendingPath,
       TMUX_HOOK_PAYLOAD_MAX_BYTES,
     );
+    if (read?.truncated) {
+      await replyToHook(
+        backend,
+        paths,
+        kind,
+        id,
+        failClosedHookResponse(kind, "Approval payload exceeded the safe size limit."),
+      );
+      continue;
+    }
+
+    const content = read?.content;
     if (content === undefined) continue;
     let payload: unknown = content;
     try {
@@ -1377,6 +1414,24 @@ function preToolUseResponse(decision: string, reason?: string): unknown {
   };
   if (reason) hookSpecificOutput.permissionDecisionReason = reason;
   return { hookSpecificOutput };
+}
+
+function failClosedHookResponse(kind: string, reason: string): unknown {
+  if (kind === "PreToolUse") return preToolUseResponse("deny", reason);
+  if (kind === "PermissionRequest") {
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny", message: reason },
+      },
+    };
+  }
+  return {
+    hookSpecificOutput: {
+      hookEventName: "Elicitation",
+      action: "cancel",
+    },
+  };
 }
 
 function encodeCwd(cwd: string): string {

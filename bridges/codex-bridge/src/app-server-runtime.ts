@@ -45,7 +45,11 @@ import {
   type ThreadContext,
 } from "./sessions/thread-registry.js";
 import { TurnAccumulator, unconfirmedTurnId } from "./sessions/turn-accumulator.js";
-import { DispatchJournal } from "./sessions/dispatch-journal.js";
+import {
+  compareDispatchRecordsNewestFirst,
+  DispatchJournal,
+  DispatchJournalAdmissionError,
+} from "./sessions/dispatch-journal.js";
 import { BridgeSessionStore } from "./sessions/persistence.js";
 import {
   beginTurnRenderState,
@@ -148,6 +152,9 @@ export interface AppServerRuntimeOptions {
   orderedEventMaxBytes?: number;
   /** Test/embedding override for the one allowed initial-prompt overload retry. */
   initialPromptRetryDelayMs?: number;
+  /** Test/embedding override for dispatch-journal admission limits. */
+  dispatchJournalMaxRecords?: number;
+  dispatchJournalMaxBytes?: number;
 }
 
 interface OrderedRuntimeEvent {
@@ -598,7 +605,12 @@ export class AppServerRuntime {
     this.options = options;
     this.now = options.now ?? Date.now;
     this.registry = new ThreadRegistry({ now: this.now });
-    this.journal = new DispatchJournal({ codexHome: options.codexHome, cwd: options.cwd });
+    this.journal = new DispatchJournal({
+      codexHome: options.codexHome,
+      cwd: options.cwd,
+      maxRecords: options.dispatchJournalMaxRecords,
+      maxBytes: options.dispatchJournalMaxBytes,
+    });
     this.store = new BridgeSessionStore({
       codexHome: options.codexHome,
       cwd: options.cwd,
@@ -1020,7 +1032,7 @@ export class AppServerRuntime {
         continue;
       }
       const current = byThread.get(record.threadId);
-      if (!current || Date.parse(record.updatedAt) > Date.parse(current.updatedAt)) {
+      if (!current || compareDispatchRecordsNewestFirst(record, current) < 0) {
         if (current) {
           await this.journal.markTerminal(current.requestId, "failed", {
             threadId: current.threadId ?? undefined,
@@ -3399,6 +3411,13 @@ export class AppServerRuntime {
     //    text under a new id is a legitimately different turn.
     {
       const decision = this.journal.classify(requestId);
+      if (decision.action === "blocked") {
+        return {
+          ok: false,
+          status: 503,
+          error: decision.reason ?? "Dispatch journal is unavailable",
+        };
+      }
       if (decision.action === "already-done") {
         return {
           ok: true,
@@ -3602,7 +3621,7 @@ export class AppServerRuntime {
       });
 
       const startTurn = () => this.options.engine.startTurn({
-        handle: context.engineHandle,
+        handle: context!.engineHandle,
         input: engineInput,
         config: session.config,
         requestId,
@@ -3623,11 +3642,15 @@ export class AppServerRuntime {
         // turn did not run. Persist that fact throughout the delay so a bridge
         // shutdown cannot erase the only evidence that reusing this id is safe.
         await this.journal.markRetryable(requestId);
+        // Generation recovery clears an unmaterialized context's `messages`
+        // property when it detaches the dead thread. Retain the actual array
+        // before the delay, during which a generation change can complete.
+        const retryMessages = context.messages;
         await new Promise((resolve) => setTimeout(
           resolve,
           this.options.initialPromptRetryDelayMs ?? DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
         ));
-        const liveSession = this.registry.getSession(session.id);
+        let liveSession = this.registry.getSession(session.id);
         if (this.stopping || liveSession !== session) {
           context.dispatchInFlight = false;
           // The phase was moved to `starting` before the dispatch, and `starting`
@@ -3653,6 +3676,75 @@ export class AppServerRuntime {
           await this.journal.forget(requestId);
           return { ok: false, status: 404, error: "Session not found" };
         }
+
+        // The child may restart while the retry is deliberately delayed. Wait
+        // for generation recovery, then resolve the handle again instead of
+        // dispatching through the closure's pre-restart context. An initial
+        // prompt's empty thread has no rollout and is intentionally discarded by
+        // generation recovery, so recreate it and carry the already-published
+        // optimistic transcript onto the replacement context.
+        await this.generationRecovery;
+        liveSession = this.registry.getSession(session.id);
+        if (this.stopping || liveSession !== session) {
+          context.dispatchInFlight = false;
+          const message = this.stopping
+            ? "Codex bridge stopped during retry recovery"
+            : "Session was deleted during retry recovery";
+          this.registry.setPhase(context, "failed", message);
+          this.emitStatus(context);
+          if (liveSession !== session) await this.journal.forget(requestId);
+          return {
+            ok: false,
+            status: liveSession === session ? 503 : 404,
+            error: message,
+          };
+        }
+        const staleContext = context;
+        const reboundContext = await this.ensureAttached(session.id);
+        if (reboundContext) {
+          context = reboundContext;
+        } else {
+          let thread;
+          try {
+            thread = await this.options.engine.startThread({ config: session.config });
+          } catch (error) {
+            const message = error instanceof Error
+              ? error.message
+              : "Codex failed to create a replacement thread";
+            staleContext.dispatchInFlight = false;
+            this.registry.setPhase(staleContext, "failed", message);
+            this.emitStatus(staleContext);
+            return { ok: false, status: 503, error: message };
+          }
+          if (!thread.id) {
+            const message = "Codex did not return a thread id";
+            staleContext.dispatchInFlight = false;
+            this.registry.setPhase(staleContext, "failed", message);
+            this.emitStatus(staleContext);
+            return { ok: false, status: 503, error: message };
+          }
+          invalidateTranscriptCatalogCache();
+          context = this.registry.attach(session.id, thread.id, {
+            engineHandle: thread.handle,
+            engineGeneration: this.options.engine.info().generation,
+            cwd: thread.cwd,
+            modelId: thread.model,
+          });
+          if (thread.model) {
+            confirmedModelForTurn = thread.model;
+            assistantMessage.modelId = thread.model;
+          }
+          context.messages = retryMessages;
+          context.dispatchInFlight = true;
+          this.registry.setPhase(context, "starting");
+          const replacementState = this.stateFor(context.threadId);
+          replacementState.publishedMessageId = assistantMessage.id;
+          replacementState.publishedParts = [];
+          replacementState.publishedModelId = assistantMessage.modelId;
+          await this.persistSession(session);
+        }
+        context.dispatchInFlight = true;
+        this.registry.setPhase(context, "starting");
         await this.journal.markPrepared({
           requestId,
           bridgeSessionId: session.id,
@@ -3721,6 +3813,16 @@ export class AppServerRuntime {
       };
     } catch (error) {
       context.dispatchInFlight = false;
+      if (error instanceof DispatchJournalAdmissionError) {
+        this.registry.setPhase(context, "failed", error.message);
+        this.emitStatus(context);
+        this.options.emit({
+          type: "session.error",
+          sessionId: session.id,
+          data: { error: error.message, code: "dispatch_journal_capacity" },
+        });
+        return { ok: false, status: 503, error: error.message };
+      }
       const classified = this.options.engine.classifyFailure(error);
       let ambiguousResolution: AmbiguousDispatchResolution | undefined;
 

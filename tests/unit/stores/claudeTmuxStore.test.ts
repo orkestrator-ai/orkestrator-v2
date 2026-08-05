@@ -222,4 +222,78 @@ describe("claudeTmuxStore", () => {
       expect(tab.pendingPermissions.map((p) => p.eventId)).toEqual(["permission"]);
     });
   });
+
+  describe("informational hook events", () => {
+    const infoEvent = (
+      id: string,
+      kind: "Notification" | "Stop" = "Notification",
+      message = id,
+    ) => ({
+      id,
+      kind,
+      message,
+      receivedAt: `received-${message}`,
+    });
+
+    test("replaces a re-delivered event with the same id and kind", () => {
+      const store = useClaudeTmuxStore.getState();
+      store.pushInfoEvent("tab-1", infoEvent("event-1", "Notification", "old"));
+      store.pushInfoEvent("tab-1", infoEvent("event-1", "Notification", "new"));
+
+      expect(useClaudeTmuxStore.getState().getTab("tab-1").infoEvents).toEqual([
+        infoEvent("event-1", "Notification", "new"),
+      ]);
+    });
+
+    test("retains events that share an id but have different kinds", () => {
+      const store = useClaudeTmuxStore.getState();
+      store.pushInfoEvent("tab-1", infoEvent("event-1", "Notification"));
+      store.pushInfoEvent("tab-1", infoEvent("event-1", "Stop"));
+
+      expect(
+        useClaudeTmuxStore
+          .getState()
+          .getTab("tab-1")
+          .infoEvents.map(({ id, kind }) => ({ id, kind })),
+      ).toEqual([
+        { id: "event-1", kind: "Notification" },
+        { id: "event-1", kind: "Stop" },
+      ]);
+    });
+
+    test("keeps dismissal sticky across live delivery and authoritative replacement", () => {
+      const store = useClaudeTmuxStore.getState();
+      const dismissed = infoEvent("dismissed");
+      store.pushInfoEvent("tab-1", dismissed);
+      store.dismissInfoEvent("tab-1", dismissed.id);
+
+      store.pushInfoEvent("tab-1", { ...dismissed, message: "live re-delivery" });
+      store.replacePendingHooks("tab-1", {
+        approvals: [],
+        questions: [],
+        plans: [],
+        permissions: [],
+        elicitations: [],
+        infoEvents: [
+          { ...dismissed, message: "authoritative re-delivery" },
+          infoEvent("visible"),
+        ],
+      });
+
+      const tab = useClaudeTmuxStore.getState().getTab("tab-1");
+      expect(tab.infoEvents).toEqual([infoEvent("visible")]);
+      expect(tab.dismissedInfoEventIds).toEqual(["dismissed"]);
+    });
+
+    test("bounds remembered dismissals to the newest 20 ids", () => {
+      const store = useClaudeTmuxStore.getState();
+      for (let index = 0; index < 25; index += 1) {
+        store.dismissInfoEvent("tab-1", `event-${index}`);
+      }
+
+      expect(
+        useClaudeTmuxStore.getState().getTab("tab-1").dismissedInfoEventIds,
+      ).toEqual(Array.from({ length: 20 }, (_, index) => `event-${index + 5}`));
+    });
+  });
 });

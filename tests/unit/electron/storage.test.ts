@@ -1585,7 +1585,12 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-pane-layouts-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const firstEnvironment = await storage.addEnvironment(createEnvironment("project-1", { name: "first" }));
+    // The layouts below name container-1, and a pane layout write is refused
+    // unless it targets the environment's current container generation.
+    const firstEnvironment = await storage.addEnvironment({
+      ...createEnvironment("project-1", { name: "first" }),
+      containerId: "container-1",
+    });
     const secondEnvironment = await storage.addEnvironment(createEnvironment("project-1", { name: "second" }));
     const root = {
       kind: "leaf",
@@ -1715,7 +1720,10 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-pane-layout-serialize-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const environment = await storage.addEnvironment({
+      ...createEnvironment("project-1"),
+      containerId: "container-1",
+    });
     const rootFor = (index: number) => ({
       kind: "leaf",
       id: "default",
@@ -1754,7 +1762,10 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-pane-layout-delete-race-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const environment = await storage.addEnvironment({
+      ...createEnvironment("project-1"),
+      containerId: "container-1",
+    });
     const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
     await storage.savePaneLayout(environment.id, {
       version: 1,
@@ -1799,7 +1810,10 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-pane-layout-delete-race-cross-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const environment = await storage.addEnvironment({
+      ...createEnvironment("project-1"),
+      containerId: "container-1",
+    });
     const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
     await storage.savePaneLayout(environment.id, {
       version: 1,

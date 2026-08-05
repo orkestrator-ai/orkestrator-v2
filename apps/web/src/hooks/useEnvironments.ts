@@ -5,6 +5,8 @@ import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/
 import { toast } from "sonner";
 import { createSessionKey, useBuildPipelineStore, useClaudeOptionsStore, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore } from "@/stores";
 import { useSessionStore } from "@/stores/sessionStore";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
 import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
@@ -139,6 +141,29 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
     ...existing,
     sessionId,
   });
+}
+
+/** Stop store-owned background subscriptions after backend deletion succeeds. */
+export function cleanupDeletedEnvironmentSubscriptions(environmentId: string): void {
+  useClaudeStore.getState().closeEventSubscription(environmentId);
+  useOpenCodeStore.getState().closeEventSubscription(environmentId);
+}
+
+/**
+ * Stop background subscriptions for environments an authoritative project
+ * snapshot removed. Other projects are deliberately outside this snapshot's
+ * scope and surviving IDs keep their existing long-lived subscriptions.
+ */
+export function cleanupSubscriptionsRemovedByProjectSnapshot(
+  projectId: string,
+  nextEnvironments: readonly Environment[],
+): void {
+  const nextIds = new Set(nextEnvironments.map((environment) => environment.id));
+  for (const environment of useEnvironmentStore.getState().environments) {
+    if (environment.projectId === projectId && !nextIds.has(environment.id)) {
+      cleanupDeletedEnvironmentSubscriptions(environment.id);
+    }
+  }
 }
 
 let setupSnapshotReconciliation: Promise<void> | null = null;
@@ -652,6 +677,7 @@ export function useEnvironments(
         // A snapshot requested before or during creation may omit the newly
         // created environment. Do not let it replace newer local state.
         if (snapshotIsCurrent) {
+          cleanupSubscriptionsRemovedByProjectSnapshot(pid, envs);
           mergeEnvironmentsForProject(
             pid,
             envs.map((environment) =>
@@ -718,6 +744,11 @@ export function useEnvironments(
         await deleteSessionsByEnvironment(environmentId);
 
         await backend.deleteEnvironment(environmentId);
+        // The native chat subscriptions are deliberately owned by their stores
+        // rather than by a mounted tab, so nothing else stops them. Their
+        // desynced probe re-arms itself on every failure, which would otherwise
+        // reach for a bridge that no longer exists once a minute forever.
+        cleanupDeletedEnvironmentSubscriptions(environmentId);
         useBuildPipelineStore.getState().removePipelinesForEnvironment(environmentId);
         const loopedReviewState = useLoopedReviewStore.getState();
         for (const [workflowId, workflow] of loopedReviewState.workflows) {

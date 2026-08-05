@@ -542,6 +542,12 @@ export interface NativeEventSubscriptionState<TEvent> {
   abortController: AbortController;
   stream: AsyncIterable<TEvent> | null;
   isActive: boolean;
+  /** Consecutive reconnects since the last healthy frame. */
+  reconnectAttempts: number;
+  /** Store-owned so a tab unmount cannot lose or duplicate the retry timer. */
+  reconnectTimer: ReturnType<typeof setTimeout> | null;
+  /** The reconnect budget was exhausted and a full snapshot is required. */
+  desynced: boolean;
 }
 
 export interface NativeEventSubscriptionSlice<TEvent> {
@@ -566,6 +572,22 @@ export interface NativeEventSubscriptionSlice<TEvent> {
   ) => void;
   closeEventSubscription: (environmentId: string) => void;
   hasActiveEventSubscription: (environmentId: string) => boolean;
+  setEventReconnectState: (
+    environmentId: string,
+    update: Partial<Pick<
+      NativeEventSubscriptionState<TEvent>,
+      "reconnectAttempts" | "reconnectTimer" | "desynced"
+    >>,
+    owner?: AbortController,
+  ) => void;
+  markEventSubscriptionHealthy: (
+    environmentId: string,
+    owner: AbortController,
+  ) => void;
+  markEventSubscriptionResynced: (
+    environmentId: string,
+    owner: AbortController,
+  ) => void;
 }
 
 /**
@@ -601,6 +623,7 @@ export function teardownEventSubscription<TEvent>(
   subscription: NativeEventSubscriptionState<TEvent> | undefined,
 ): void {
   if (!subscription) return;
+  if (subscription.reconnectTimer) clearTimeout(subscription.reconnectTimer);
   subscription.abortController.abort();
   if (subscription.stream && Symbol.asyncIterator in subscription.stream) {
     const iterator = subscription.stream[Symbol.asyncIterator]();
@@ -647,7 +670,12 @@ export function createEventSubscriptionSlice<TEvent>(
         abortController: new AbortController(),
         stream: null,
         isActive: true,
+        reconnectAttempts: existing?.reconnectAttempts ?? 0,
+        reconnectTimer: null,
+        desynced: existing?.desynced ?? false,
       };
+
+      if (existing?.reconnectTimer) clearTimeout(existing.reconnectTimer);
 
       const next = new Map(state.eventSubscriptions);
       next.set(environmentId, newSubscription);
@@ -688,5 +716,84 @@ export function createEventSubscriptionSlice<TEvent>(
 
     hasActiveEventSubscription: (environmentId) =>
       get().eventSubscriptions.get(environmentId)?.isActive ?? false,
+
+    setEventReconnectState: (environmentId, update, owner) =>
+      set((state) => {
+        const subscription = state.eventSubscriptions.get(environmentId);
+        if (!subscription) return state;
+        if (owner && subscription.abortController !== owner) return state;
+        if (
+          update.reconnectTimer !== undefined
+          && subscription.reconnectTimer
+          && subscription.reconnectTimer !== update.reconnectTimer
+        ) {
+          clearTimeout(subscription.reconnectTimer);
+        }
+        const next = new Map(state.eventSubscriptions);
+        next.set(environmentId, { ...subscription, ...update });
+        return { eventSubscriptions: next };
+      }),
+
+    markEventSubscriptionHealthy: (environmentId, owner) =>
+      set((state) => {
+        const subscription = state.eventSubscriptions.get(environmentId);
+        if (!subscription || subscription.abortController !== owner) return state;
+        /*
+         * A live frame proves the stream is healthy, but it does not repair an
+         * authoritative snapshot that failed during a full resync. In that
+         * state `reconnectTimer` belongs to the snapshot retry, so keep it
+         * armed until `markEventSubscriptionResynced` clears the desync flag.
+         */
+        if (!subscription.desynced && subscription.reconnectTimer) {
+          clearTimeout(subscription.reconnectTimer);
+        }
+        const next = new Map(state.eventSubscriptions);
+        next.set(environmentId, {
+          ...subscription,
+          reconnectAttempts: 0,
+          reconnectTimer: subscription.desynced
+            ? subscription.reconnectTimer
+            : null,
+        });
+        return { eventSubscriptions: next };
+      }),
+
+    markEventSubscriptionResynced: (environmentId, owner) =>
+      set((state) => {
+        const subscription = state.eventSubscriptions.get(environmentId);
+        if (
+          !subscription
+          || subscription.abortController !== owner
+          || !subscription.desynced
+        ) return state;
+        if (subscription.reconnectTimer) {
+          clearTimeout(subscription.reconnectTimer);
+        }
+        const next = new Map(state.eventSubscriptions);
+        /*
+         * Reset the ladder as well as the flag.
+         *
+         * `getOrCreateEventSubscription` deliberately carries
+         * `reconnectAttempts` forward, and only an inbound frame clears it
+         * (`markEventSubscriptionHealthy`). A quiet-but-healthy session
+         * therefore stayed pinned at the ceiling after resyncing, so the next
+         * transient drop skipped the whole backoff and went straight to the
+         * 60s desynced state.
+         *
+         * This does not defeat the ceiling: reaching here means the stream was
+         * re-established *and* a full authoritative snapshot came back over
+         * HTTP, which a bridge that is actually down never manages. A bridge
+         * that flaps between those two states pays one full ladder — ~2.5
+         * minutes of capped, exponentially spaced attempts — per successful
+         * rehydrate, which is still bounded and still ends at the cap.
+         */
+        next.set(environmentId, {
+          ...subscription,
+          desynced: false,
+          reconnectAttempts: 0,
+          reconnectTimer: null,
+        });
+        return { eventSubscriptions: next };
+      }),
   });
 }

@@ -2837,7 +2837,7 @@ exit 0
       }));
       expect(
         commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
-      ).toEqual({ id: setupSessionId, running: false });
+      ).toEqual({ id: setupSessionId, running: false, bootstrapped: false });
       expect(ptySpawn).not.toHaveBeenCalled();
       expect(environment).toMatchObject({
         status: "error",
@@ -2852,7 +2852,7 @@ exit 0
       await waitForPtyProcessCount(1);
       expect(
         commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
-      ).toEqual({ id: setupSessionId, running: true });
+      ).toEqual({ id: setupSessionId, running: true, bootstrapped: false });
       expect(environment).toMatchObject({
         status: "running",
         setupPhase: "running",
@@ -2904,7 +2904,7 @@ exit 0
       }));
       expect(
         commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
-      ).toEqual({ id: setupSessionId, running: false });
+      ).toEqual({ id: setupSessionId, running: false, bootstrapped: false });
 
       const retry = commands.get("run_environment_setup")?.(
         { environmentId: environment.id },
@@ -2966,7 +2966,7 @@ exit 0
     }));
     expect(
       commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
-    ).toEqual({ id: setupSessionId, running: false });
+    ).toEqual({ id: setupSessionId, running: false, bootstrapped: false });
     expect(ptySpawn).not.toHaveBeenCalled();
   });
 
@@ -3464,7 +3464,7 @@ exit 0
           { sessionId: `${environment.id}:setup` },
           context,
         ),
-      ).toEqual({ id: `${environment.id}:setup`, running: false });
+      ).toEqual({ id: `${environment.id}:setup`, running: false, bootstrapped: false });
     });
   }, ASYNC_TEST_BUDGET_MS);
 
@@ -7900,7 +7900,7 @@ exit 0
         expect(ptySpawn).not.toHaveBeenCalled();
         expect(
           commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
-        ).toEqual({ id: setupSessionId, running: true });
+        ).toEqual({ id: setupSessionId, running: true, bootstrapped: false });
         expect(
           await commands.get("get_environment_setup_session")?.(
             { environmentId: environment.id },
@@ -7932,7 +7932,7 @@ exit 0
 
     expect(
       commands.get("get_terminal_session")?.({ sessionId: unknownSessionId }, context),
-    ).toEqual({ id: unknownSessionId, running: false });
+    ).toEqual({ id: unknownSessionId, running: false, bootstrapped: false });
     expect(
       await commands.get("get_environment_setup_session")?.(
         { environmentId: "env-unknown-setup-session" },
@@ -7991,7 +7991,7 @@ exit 0
           { sessionId: `${environment.id}:setup` },
           context,
         ),
-      ).toEqual({ id: `${environment.id}:setup`, running: false });
+      ).toEqual({ id: `${environment.id}:setup`, running: false, bootstrapped: false });
       expect(session.error).toContain("clone failed");
       expect(emitted.some((entry) => entry.event === "environment-setup-complete"
         && (entry.payload as { success: boolean }).success === false)).toBe(true);
@@ -11336,7 +11336,7 @@ exit 0
     expect(commands.get("get_terminal_session")?.(
       { sessionId: session.sessionId },
       context,
-    )).toEqual({ id: session.sessionId, running: true });
+    )).toEqual({ id: session.sessionId, running: true, bootstrapped: false });
     await expect(commands.get("get_environment")?.(
       { environmentId: environment.id },
       context,
@@ -13400,6 +13400,7 @@ exit 0
     expect(commands.get("get_terminal_session")?.({ sessionId }, context)).toEqual({
       id: sessionId,
       running: true,
+      bootstrapped: false,
     });
 
     ptyProcesses[0]?.emitData("ready\r\n");
@@ -13421,7 +13422,73 @@ exit 0
 
     await commands.get("close_local_terminal_session")?.({ sessionId }, context);
     expect(ptyProcesses[0]?.kill).toHaveBeenCalled();
-    expect(commands.get("get_terminal_session")?.({ sessionId }, context)).toEqual({ id: sessionId, running: false });
+    expect(commands.get("get_terminal_session")?.({ sessionId }, context)).toEqual({ id: sessionId, running: false, bootstrapped: false });
+  });
+
+  test("atomically bootstraps a terminal session at most once", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-bootstrap-");
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      { environmentId: environment.id, cols: 100, rows: 30 },
+      context,
+    )).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+
+    expect(await commands.get("bootstrap_terminal_session")?.(
+      { sessionId, data: "codex\n" },
+      context,
+    )).toEqual({ bootstrapped: true, delivered: true, duplicate: false });
+    expect(await commands.get("bootstrap_terminal_session")?.(
+      { sessionId, data: "codex\n" },
+      context,
+    )).toEqual({ bootstrapped: true, delivered: false, duplicate: true });
+    expect(ptyProcesses[0]?.write).toHaveBeenCalledTimes(1);
+    expect(ptyProcesses[0]?.write).toHaveBeenCalledWith("codex\n");
+    expect(commands.get("get_terminal_session")?.({ sessionId }, context)).toEqual({
+      id: sessionId,
+      running: true,
+      bootstrapped: true,
+    });
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+  });
+
+  test("does not consume terminal bootstrap ownership when delivery is unavailable or throws", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-bootstrap-errors-");
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    expect(await commands.get("bootstrap_terminal_session")?.(
+      { sessionId: "missing-session", data: "codex\n" },
+      context,
+    )).toEqual({ bootstrapped: false, delivered: false, duplicate: false });
+
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      { environmentId: environment.id, cols: 100, rows: 30 },
+      context,
+    )).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    ptyProcesses[0]!.write.mockImplementationOnce(() => {
+      throw new Error("PTY write failed");
+    });
+
+    expect(() => commands.get("bootstrap_terminal_session")?.(
+      { sessionId, data: "codex\n" },
+      context,
+    )).toThrow("PTY write failed");
+    expect(commands.get("get_terminal_session")?.({ sessionId }, context)).toEqual({
+      id: sessionId,
+      running: true,
+      bootstrapped: false,
+    });
+    expect(await commands.get("bootstrap_terminal_session")?.(
+      { sessionId, data: "codex\n" },
+      context,
+    )).toEqual({ bootstrapped: true, delivered: true, duplicate: false });
+    expect(ptyProcesses[0]!.write).toHaveBeenCalledTimes(2);
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
   });
 
   test("reattaches a stable terminal tab to the same backend PTY and buffer", async () => {
@@ -13494,6 +13561,11 @@ exit 0
         },
       ]);
 
+    expect(await commands.get("bootstrap_terminal_session")?.(
+      { sessionId: firstSessionId, data: "bun run dev\n" },
+      context,
+    )).toEqual({ bootstrapped: true, delivered: true, duplicate: false });
+
     // A natural shell exit retains the stable tab identity and bounded
     // transcript. Reopening the tab starts a replacement PTY under that same
     // identity rather than losing its history.
@@ -13502,7 +13574,7 @@ exit 0
       args,
       context,
     ));
-    expect(exitedResult).toEqual({ sessionId: firstSessionId, created: false });
+    expect(exitedResult).toEqual({ sessionId: firstSessionId, created: false, bootstrapped: false });
     expect(commands.get("get_terminal_output_snapshot")?.(
       { sessionId: firstSessionId },
       context,
@@ -13517,6 +13589,11 @@ exit 0
       context,
     );
     expect(ptySpawn).toHaveBeenCalledTimes(2);
+    expect(await commands.get("bootstrap_terminal_session")?.(
+      { sessionId: exitedResult.sessionId, data: "bun run dev\n" },
+      context,
+    )).toEqual({ bootstrapped: true, delivered: true, duplicate: false });
+    expect(ptyProcesses[1]?.write).toHaveBeenCalledWith("bun run dev\n");
 
     await commands.get("close_local_terminal_session")?.(
       { sessionId: firstSessionId },
@@ -13567,7 +13644,7 @@ exit 0
       { ...baseArgs, trackEnvironmentActivity: true },
       context,
     ));
-    expect(reused).toEqual({ sessionId: tracked.sessionId, created: false });
+    expect(reused).toEqual({ sessionId: tracked.sessionId, created: false, bootstrapped: false });
   });
 
   test("records prompt and settled-output activity for tracked local agent terminals", async () => {
@@ -13814,7 +13891,7 @@ exit 0
     await waitForCondition(() => notifyAgentTurnCompleted.mock.calls.length === 1, "first terminal completion");
 
     const replacement = terminalSessionResult(await commands.get("create_local_terminal_session")?.(args, context));
-    expect(replacement).toEqual({ sessionId: first.sessionId, created: false });
+    expect(replacement).toEqual({ sessionId: first.sessionId, created: false, bootstrapped: false });
     await commands.get("start_local_terminal_session")?.({ sessionId: replacement.sessionId }, context);
     ptyProcesses[1]?.emitData("$ ");
     await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
@@ -16384,6 +16461,11 @@ describe("pane layout commands", () => {
     await expect(commands.get("delete_pane_layout")?.({ environmentId: "env-1" }, context))
       .resolves.toBeUndefined();
     expect(deletePaneLayout).toHaveBeenCalledWith("env-1");
+    await expect(commands.get("delete_pane_layout")?.({
+      environmentId: "env-1",
+      expectedRevision: 7,
+    }, context)).resolves.toBeUndefined();
+    expect(deletePaneLayout).toHaveBeenCalledWith("env-1", 7);
     await expect(commands.get("save_pane_layout")?.({
       environmentId: "env-1",
       layout: { version: 2, containerId: null, activePaneId: "", root },

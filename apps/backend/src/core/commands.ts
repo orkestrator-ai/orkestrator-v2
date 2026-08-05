@@ -25,6 +25,11 @@ import {
 } from "@orkestrator/protocol/resource-events";
 import { paneLayoutUnsupportedVersionMessage } from "@orkestrator/protocol/pane-layout";
 import {
+  isAgentBridgeKind,
+  isStructuredCommandError,
+  type AwaitBridgeReadyResult,
+} from "@orkestrator/protocol/bridge-readiness";
+import {
   PANE_LAYOUT_VERSION,
   type AgentModelConfigKey,
   type ClientEnvironment,
@@ -114,9 +119,12 @@ import {
 } from "./extension-discovery.js";
 import {
   assertBase64PayloadWithinLimit,
+  base64DecodedByteLength,
   MAX_BINARY_FILE_BYTES,
+  removeConfinedDirectory,
   validateRelativeFilePath,
   workspaceFilePath,
+  writeConfinedFile,
 } from "./path-safety.js";
 import { terminateProcessTree } from "./process-tree.js";
 import {
@@ -174,6 +182,8 @@ import {
 import {
   assertValidPromptAttachments,
   assertValidPromptImages,
+  INITIAL_PROMPT_STAGING_DIRECTORY,
+  MAX_TOTAL_ATTACHMENT_BYTES,
 } from "./prompt-attachments.js";
 
 export type BackendEmit = (event: string, payload: unknown) => void;
@@ -249,6 +259,8 @@ const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalActivityArmed = new Set<string>();
 const terminalActivityGenerations = new Map<string, number>();
 const terminalActivityCompletions = new Map<string, number>();
+/** Auto-launch latch belongs to the backend PTY lifetime, not a React mount. */
+const bootstrappedTerminalSessions = new Set<string>();
 type TerminalActivityCompletionState = {
   id: string;
   generation: number;
@@ -272,6 +284,13 @@ const deletingLocalServerEnvironments = new Set<string>();
 const mergingEnvironments = new Set<string>();
 const mergeCleanupRecoveryTasks = new Map<string, Promise<void>>();
 type LocalServerKind = "opencode" | "claude" | "codex";
+
+function retryableBridgeStartupError(
+  message: string,
+  retryAfterMs = 500,
+): Error & { retryable: true; retryAfterMs: number } {
+  return Object.assign(new Error(message), { retryable: true as const, retryAfterMs });
+}
 const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "codex"];
 // Codex bridge shutdown can spend five seconds draining app-server before its
 // one-second hard-kill fallback. Give that path time to reap the MCP process
@@ -3628,6 +3647,10 @@ function cleanupTerminalSession(
   const retainStableState = !options.explicit
     && stableKey !== undefined
     && terminalSessionConfigs.has(id);
+  // Bootstrap ownership belongs to one concrete PTY lifetime. Stable tabs keep
+  // their identity and replay buffer across a natural shell exit, but the
+  // replacement PTY must be allowed to receive its launch command once.
+  bootstrappedTerminalSessions.delete(id);
   if (retainStableState) return;
 
   terminalSessionConfigs.delete(id);
@@ -5618,7 +5641,9 @@ async function startLocalServerUnlocked(
   }
 
   const environment = await context.storage.getEnvironment(environmentId);
-  if (!environment?.worktreePath) throw new Error("Local environment worktree is not available");
+  if (!environment?.worktreePath) {
+    throw retryableBridgeStartupError("Local environment worktree is not available");
+  }
   const agentToolConnection = context.agentTools?.connection(
     environment.id,
     environment.projectId,
@@ -6772,6 +6797,159 @@ async function assertNoLocalSymlinkAncestors(worktreePath: string, target: strin
   }
 }
 
+/** Batch directories kept under `.orkestrator/initial-prompt`, newest first. */
+const INITIAL_PROMPT_BATCH_RETENTION = 10;
+const INITIAL_PROMPT_PRUNE_BODY = String.raw`
+const batches = fs.readdirSync(".", { withFileTypes: true }).flatMap(entry => {
+  if (!entry.isDirectory()) return [];
+  const stat = fs.lstatSync(entry.name);
+  return stat.isDirectory() && !stat.isSymbolicLink() ? [{ name: entry.name, mtimeMs: stat.mtimeMs }] : [];
+});
+batches.sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
+for (const stale of batches.slice(Number(keep))) fs.rmSync(stale.name, { recursive: true, force: true });
+`;
+const PINNED_INITIAL_PROMPT_PRUNE = String.raw`
+const fs = require("node:fs");
+const [expectedDev, expectedIno, keep] = process.argv.slice(1);
+const cwd = fs.statSync(".");
+if (String(cwd.dev) !== expectedDev || String(cwd.ino) !== expectedIno) process.exit(73);
+${INITIAL_PROMPT_PRUNE_BODY}`;
+
+/**
+ * Drops every initial-prompt batch beyond the newest {@link
+ * INITIAL_PROMPT_BATCH_RETENTION}, minus the one about to be created.
+ *
+ * Each batch owns an unpredictable directory, so a successful write leaves it
+ * behind forever - and `docker/workspace-setup.sh` deliberately preserves the
+ * directory across re-setup. The traversal follows the same confinement rules
+ * as the writer: a symlinked ancestor or entry is skipped, never followed.
+ */
+async function pruneLocalInitialPromptBatches(worktreePath: string): Promise<void> {
+  let directory = await fs.realpath(worktreePath);
+  for (const segment of INITIAL_PROMPT_STAGING_DIRECTORY.split("/")) {
+    directory = path.join(directory, segment);
+    const stats = await fs.lstat(directory);
+    if (stats.isSymbolicLink() || !stats.isDirectory()) return;
+  }
+
+  const expected = await fs.lstat(directory);
+  await runCommand(process.execPath, [
+    "-e", PINNED_INITIAL_PROMPT_PRUNE,
+    String(expected.dev), String(expected.ino),
+    String(INITIAL_PROMPT_BATCH_RETENTION - 1),
+  ], { cwd: directory, timeoutMs: 30_000 });
+}
+
+/** The container-side equivalent of {@link pruneLocalInitialPromptBatches}. */
+function containerPruneInitialPromptBatchesCommand(): string {
+  const script = String.raw`
+const fs = require("node:fs"), path = require("node:path");
+let current = "/workspace";
+for (const segment of ${JSON.stringify(INITIAL_PROMPT_STAGING_DIRECTORY.split("/"))}) {
+  if (current === "/workspace") process.chdir(current);
+  let stat; try { stat = fs.lstatSync(segment); } catch { process.exit(0); }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) process.exit(0);
+  process.chdir(segment);
+  const pinnedSegment = fs.statSync(".");
+  if (pinnedSegment.dev !== stat.dev || pinnedSegment.ino !== stat.ino) process.exit(73);
+  current = path.join(current, segment);
+}
+const keep = ${INITIAL_PROMPT_BATCH_RETENTION - 1};
+${INITIAL_PROMPT_PRUNE_BODY}`;
+  return `node -e ${quoteShell(script)}`;
+}
+
+const CONTAINER_PINNED_ATTACHMENT_WRITE = String.raw`
+const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
+const [workspaceRoot, relativeDirectory, filename, expectedBytes, readyToken] = process.argv.slice(1);
+let current = workspaceRoot;
+const root = fs.lstatSync(current);
+if (root.isSymbolicLink() || !root.isDirectory()) process.exit(73);
+process.chdir(current);
+const pinnedRoot = fs.statSync(".");
+if (pinnedRoot.dev !== root.dev || pinnedRoot.ino !== root.ino) process.exit(73);
+for (const segment of relativeDirectory.split("/")) {
+  try {
+    const stat = fs.lstatSync(segment);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) process.exit(73);
+  } catch (error) {
+    if (!error || error.code !== "ENOENT") throw error;
+    try { fs.mkdirSync(segment, { mode: 0o700 }); }
+    catch (mkdirError) { if (!mkdirError || mkdirError.code !== "EEXIST") throw mkdirError; }
+  }
+  const expected = fs.lstatSync(segment);
+  process.chdir(segment);
+  const pinned = fs.statSync(".");
+  if (pinned.dev !== expected.dev || pinned.ino !== expected.ino) process.exit(73);
+}
+if (readyToken) process.stdout.write(readyToken + "\n");
+const chunks = []; let encodedBytes = 0;
+process.stdin.on("data", chunk => { encodedBytes += chunk.length; if (encodedBytes > Number(expectedBytes) * 2 + 16) process.exit(74); chunks.push(chunk); });
+process.stdin.on("end", () => {
+  const content = Buffer.from(Buffer.concat(chunks).toString("ascii"), "base64");
+  if (content.length !== Number(expectedBytes)) process.exit(74);
+  const temp = "." + filename + "." + crypto.randomUUID() + ".tmp";
+  let fd;
+  try {
+    fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
+    const identity = fs.fstatSync(fd);
+    fs.writeFileSync(fd, content); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
+    fs.linkSync(temp, filename); fs.unlinkSync(temp);
+    const published = fs.lstatSync(filename);
+    if (!published.isFile() || published.isSymbolicLink() || published.dev !== identity.dev || published.ino !== identity.ino) process.exit(75);
+  } catch (error) {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+    try { fs.unlinkSync(temp); } catch {}
+    process.stderr.write(error && error.code || "WRITE_FAILED"); process.exit(76);
+  }
+});
+`;
+
+const CONTAINER_PINNED_ATTACHMENT_REMOVE = String.raw`
+const fs = require("node:fs"), path = require("node:path");
+const [workspaceRoot, relativeDirectory, readyToken] = process.argv.slice(1);
+const segments = relativeDirectory.split("/"), batch = segments.pop();
+let current = workspaceRoot;
+const root = fs.lstatSync(current);
+if (root.isSymbolicLink() || !root.isDirectory()) process.exit(0);
+process.chdir(current);
+const pinnedRoot = fs.statSync(".");
+if (pinnedRoot.dev !== root.dev || pinnedRoot.ino !== root.ino) process.exit(0);
+for (const segment of segments) {
+  let stat; try { stat = fs.lstatSync(segment); } catch { process.exit(0); }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) process.exit(0);
+  process.chdir(segment);
+  const pinned = fs.statSync(".");
+  if (pinned.dev !== stat.dev || pinned.ino !== stat.ino) process.exit(0);
+}
+let target; try { target = fs.lstatSync(batch); } catch { process.exit(0); }
+if (!target.isDirectory() || target.isSymbolicLink()) process.exit(0);
+const remove = () => fs.rmSync(batch, { recursive: true, force: true });
+if (readyToken) {
+  process.stdout.write(readyToken + "\n");
+  process.stdin.resume();
+  process.stdin.on("end", remove);
+} else remove();
+`;
+
+function containerRemoveInitialPromptBatchCommand(relativeDirectory: string): string {
+  const safeDirectory = validateRelativeFilePath(relativeDirectory, "attachment directory");
+  return `node -e ${quoteShell(CONTAINER_PINNED_ATTACHMENT_REMOVE)} -- /workspace ${quoteShell(safeDirectory)}`;
+}
+
+/**
+ * Writes one command-owned workspace artifact without following a repository
+ * symlink. Attachment batches use an unpredictable, newly-created directory,
+ * and the final file is opened with O_EXCL + O_NOFOLLOW.
+ */
+function writeConfinedLocalArtifact(
+  worktreePath: string,
+  relativePath: string,
+  payload: string | Buffer,
+): Promise<string> {
+  return writeConfinedFile(worktreePath, relativePath, payload, { exclusive: true });
+}
+
 async function removeLocalWorkspacePath(worktreePath: string, target: string): Promise<void> {
   await assertNoLocalSymlinkAncestors(worktreePath, target);
   await runCommand(
@@ -7208,7 +7386,9 @@ async function startContainerServer(
   command: string,
   redactValues?: ReadonlyArray<string | null | undefined>,
 ): Promise<{ hostPort: number; wasRunning: boolean }> {
-  if (!await isContainerRunning(containerId)) throw new Error("Container is not running");
+  if (!await isContainerRunning(containerId)) {
+    throw retryableBridgeStartupError("Container is not running");
+  }
   const hostPort = await getHostPort(containerId, port);
   if (!hostPort) throw new Error(`Container port ${port} is not mapped`);
   if (await checkHttpHealth(hostPort)) return { hostPort, wasRunning: true };
@@ -7232,7 +7412,9 @@ async function startContainerServer(
 async function startContainerOpenCodeServer(
   containerId: string,
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
-  if (!await isContainerRunning(containerId)) throw new Error("Container is not running");
+  if (!await isContainerRunning(containerId)) {
+    throw retryableBridgeStartupError("Container is not running");
+  }
   const hostPort = await getHostPort(containerId, OPENCODE_SERVER_PORT);
   if (!hostPort) throw new Error(`Container port ${OPENCODE_SERVER_PORT} is not mapped`);
 
@@ -7677,6 +7859,10 @@ export function createCommandRegistry(
   const register = (name: string, handler: CommandHandler) => commands.set(name, handler);
   const pendingEnvironmentRenameTasks = new Map<string, Promise<void>>();
   const claudeModelCatalogRefreshes = new Map<string, Promise<ClaudeModelCatalogSnapshot>>();
+  const bridgeReadinessWaits = new Map<string, {
+    deadline: number;
+    promise: Promise<AwaitBridgeReadyResult>;
+  }>();
   const validatedClaudeModelCatalogs = new Set<string>();
   const extensionDiscoveryCache = createExtensionDiscoveryCache();
 
@@ -8533,6 +8719,30 @@ export function createCommandRegistry(
     });
     return payload;
   });
+  register("await_environment_setup_session", async ({ environmentId, timeoutMs }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const timeout = asNumber(timeoutMs, "timeoutMs");
+    if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > 60_000) {
+      throw new Error("timeoutMs must be an integer between 0 and 60000");
+    }
+    const deadline = Date.now() + timeout;
+    while (true) {
+      const snapshot = await commands.get("get_environment_setup_session")?.(
+        { environmentId: id },
+        context,
+      );
+      if (snapshot) return snapshot;
+      const environment = await context.storage.getEnvironment(id);
+      if (
+        !environment
+        || (environment.setupPhase !== "pending" && environment.setupPhase !== "running")
+        || Date.now() >= deadline
+      ) {
+        return null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  });
   register("get_setup_commands", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) return null;
@@ -9166,9 +9376,71 @@ export function createCommandRegistry(
       root,
     }, asNumber(expectedRevision, "expectedRevision"));
   });
-  register("delete_pane_layout", ({ environmentId }, { storage }) =>
-    storage.deletePaneLayout(asString(environmentId, "environmentId")),
-  );
+  register("apply_pane_layout_intent", async (
+    { environmentId, baseLayout, desiredLayout, selectionIntent },
+    { storage },
+  ) => {
+    const parseLayout = (raw: unknown, label: string) => {
+      const value = asRecord(raw, label);
+      assertOnlyKeys(value, ["version", "containerId", "activePaneId", "root"], label);
+      const version = asNumber(value.version, `${label}.version`);
+      if (version !== PANE_LAYOUT_VERSION) {
+        throw new Error(paneLayoutUnsupportedVersionMessage(version));
+      }
+      const activePaneId = asNonBlankString(value.activePaneId, `${label}.activePaneId`);
+      const containerId = value.containerId === null
+        ? null
+        : asString(value.containerId, `${label}.containerId`);
+      return {
+        version,
+        containerId,
+        activePaneId,
+        root: asRecord(value.root, `${label}.root`),
+      };
+    };
+    let parsedSelectionIntent;
+    if (selectionIntent !== undefined) {
+      const value = asRecord(selectionIntent, "selectionIntent");
+      assertOnlyKeys(value, ["activePaneId", "activeTabIds"], "selectionIntent");
+      const activeTabIds = value.activeTabIds === undefined
+        ? undefined
+        : Object.fromEntries(Object.entries(asRecord(value.activeTabIds, "selectionIntent.activeTabIds")).map(
+            ([paneId, tabId]) => {
+              if (!paneId.trim()) {
+                throw new Error("Expected selectionIntent.activeTabIds keys to be non-empty");
+              }
+              if (tabId !== null && (typeof tabId !== "string" || !tabId.trim())) {
+                throw new Error("Expected selectionIntent.activeTabIds values to be non-empty strings or null");
+              }
+              return [paneId, tabId];
+            },
+          ));
+      if (activeTabIds && Object.keys(activeTabIds).length > 1_024) {
+        throw new Error("selectionIntent.activeTabIds exceeds the 1024 entry limit");
+      }
+      parsedSelectionIntent = {
+        ...(value.activePaneId === undefined
+          ? {}
+          : { activePaneId: asNonBlankString(value.activePaneId, "selectionIntent.activePaneId") }),
+        ...(activeTabIds === undefined ? {} : { activeTabIds }),
+      };
+    }
+    return storage.applyPaneLayoutIntent(
+      asString(environmentId, "environmentId"),
+      parseLayout(baseLayout, "baseLayout") as never,
+      parseLayout(desiredLayout, "desiredLayout") as never,
+      parsedSelectionIntent,
+    );
+  });
+  register("delete_pane_layout", ({ environmentId, expectedRevision }, { storage }) => {
+    const envId = asString(environmentId, "environmentId");
+    return expectedRevision === undefined
+      ? storage.deletePaneLayout(envId)
+      : storage.deletePaneLayout(
+        envId,
+        asNumber(expectedRevision, "expectedRevision"),
+      );
+  });
 
   register("ensure_native_agent_session", async (args, context) => {
     if (!context.nativeAgents) {
@@ -9939,13 +10211,17 @@ export function createCommandRegistry(
     };
     const existingId = existingStableTerminalSession(stableKey);
     if (existingId && containerTerminalConfigMatches(existingId, config)) {
-      return { sessionId: existingId, created: false };
+      return {
+        sessionId: existingId,
+        created: false,
+        bootstrapped: bootstrappedTerminalSessions.has(existingId),
+      };
     }
     if (existingId) explicitlyCloseTerminalSession(existingId);
 
     const id = `${resolvedContainerId}:${randomUUID()}`;
     rememberStableTerminalSession(id, config, stableKey);
-    return { sessionId: id, created: true };
+    return { sessionId: id, created: true, bootstrapped: false };
   });
   register("attach_terminal", ({ containerId, cols, rows, user }, { emit }) => {
     const id = `${asString(containerId, "containerId")}:${randomUUID()}`;
@@ -10034,7 +10310,27 @@ export function createCommandRegistry(
         bufferChars: terminalOutputBuffers.get(id)?.length ?? 0,
       });
     }
-    return { id, running };
+    return { id, running, bootstrapped: bootstrappedTerminalSessions.has(id) };
+  });
+  register("bootstrap_terminal_session", ({ sessionId, data }, context) => {
+    const id = asString(sessionId, "sessionId");
+    const terminalData = asString(data, "data");
+    if (bootstrappedTerminalSessions.has(id)) {
+      return { bootstrapped: true, delivered: false, duplicate: true };
+    }
+    const terminalProcess = terminalProcesses.get(id);
+    if (!terminalProcess) {
+      return { bootstrapped: false, delivered: false, duplicate: false };
+    }
+    bootstrappedTerminalSessions.add(id);
+    try {
+      terminalProcess.write(terminalData);
+      recordTerminalInputActivity(id, terminalData, context);
+      return { bootstrapped: true, delivered: true, duplicate: false };
+    } catch (error) {
+      bootstrappedTerminalSessions.delete(id);
+      throw error;
+    }
   });
   register("get_terminal_output_buffer", ({ sessionId }) => {
     const id = asString(sessionId, "sessionId");
@@ -10122,13 +10418,17 @@ export function createCommandRegistry(
     };
     const existingId = existingStableTerminalSession(stableKey);
     if (existingId && localTerminalConfigMatches(existingId, config)) {
-      return { sessionId: existingId, created: false };
+      return {
+        sessionId: existingId,
+        created: false,
+        bootstrapped: bootstrappedTerminalSessions.has(existingId),
+      };
     }
     if (existingId) explicitlyCloseTerminalSession(existingId);
 
     const id = `${resolvedEnvironmentId}:${randomUUID()}`;
     rememberStableTerminalSession(id, config, stableKey);
-    return { sessionId: id, created: true };
+    return { sessionId: id, created: true, bootstrapped: false };
   });
   register("start_local_terminal_session", async ({ sessionId }, context) => {
     const { storage, emit } = context;
@@ -10348,6 +10648,136 @@ export function createCommandRegistry(
     diffStatsService.invalidateChanges({ containerId: id });
     diffStatsService.refresh(environmentIdString);
     return target;
+  });
+
+  register("write_initial_prompt_attachments", async ({ environmentId, attachments }, context) => {
+    const environmentIdString = asString(environmentId, "environmentId");
+    if (!Array.isArray(attachments) || attachments.length === 0 || attachments.length > 20) {
+      throw new Error("Expected between 1 and 20 initial prompt attachments");
+    }
+    const environment = await context.storage.getEnvironment(environmentIdString);
+    if (!environment) throw new Error(`Environment not found: ${environmentIdString}`);
+    if (environment.environmentType === "local" && !environment.worktreePath) {
+      throw new Error("Local environment worktree is not available");
+    }
+    if (environment.environmentType !== "local" && !environment.containerId) {
+      throw new Error("Container environment is not ready");
+    }
+
+    const usedNames = new Set<string>();
+    const batchId = randomUUID();
+    const batchRelativeDirectory = `${INITIAL_PROMPT_STAGING_DIRECTORY}/${batchId}`;
+    const saved: Array<{ name: string; path: string }> = [];
+    const allocateName = (rawName: unknown): string => {
+      const trimmed = asString(rawName, "attachment.name").trim() || "clipboard.png";
+      const sanitizedName = trimmed.replace(/[^a-zA-Z0-9._-]/g, "-");
+      // Match the other prompt-attachment staging path. Keeping this well
+      // below NAME_MAX leaves room for collision suffixes on every supported
+      // filesystem rather than turning a valid batch into ENAMETOOLONG.
+      const boundedName = sanitizedName.slice(0, 128);
+      const sanitized = boundedName === "." || boundedName === ".." || boundedName.length === 0
+        ? "clipboard.png"
+        : boundedName;
+      const dot = sanitized.lastIndexOf(".");
+      const stem = dot > 0 ? sanitized.slice(0, dot) : sanitized;
+      const extension = dot > 0 ? sanitized.slice(dot) : "";
+      let candidate = sanitized;
+      let suffix = 2;
+      while (usedNames.has(candidate.toLowerCase())) {
+        candidate = `${stem}-${suffix}${extension}`;
+        suffix += 1;
+      }
+      usedNames.add(candidate.toLowerCase());
+      return candidate;
+    };
+
+    // Validate and size-check the complete batch before creating any files. A
+    // malformed later item must not turn validation into a partial filesystem
+    // transaction that cleanup then has to infer. Whitespace is stripped exactly
+    // once here; the per-item write reuses the normalized payload.
+    let totalDecodedBytes = 0;
+    const parsedAttachments = attachments.map((rawAttachment) => {
+        const attachment = asRecord(rawAttachment, "attachment");
+        assertOnlyKeys(attachment, ["id", "name", "base64Data"], "attachment");
+        asNonBlankString(attachment.id, "attachment.id");
+        const name = allocateName(attachment.name);
+        const data = assertBase64PayloadWithinLimit(
+          asString(attachment.base64Data, "attachment.base64Data"),
+          { rejectEmpty: true },
+        );
+        // The per-item cap alone lets 20 attachments carry ~160MB of decoded
+        // payload, all of it retained by this array before the first write.
+        totalDecodedBytes += base64DecodedByteLength(data);
+        if (totalDecodedBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+          throw new Error(
+            `Initial prompt attachments exceed the ${MAX_TOTAL_ATTACHMENT_BYTES} byte total limit`,
+          );
+        }
+        return {
+          name,
+          data,
+          relativePath: `${batchRelativeDirectory}/${name}`,
+        };
+      });
+
+    // Best effort: a prune failure must never fail the write the user asked for.
+    await (environment.environmentType === "local"
+      ? pruneLocalInitialPromptBatches(environment.worktreePath!)
+      : dockerExec(
+          environment.containerId!,
+          containerPruneInitialPromptBatchesCommand(),
+        ).then(() => undefined)).catch(() => undefined);
+
+    try {
+      for (const { name, data, relativePath } of parsedAttachments) {
+        let resolvedPath: string;
+        if (environment.environmentType === "local") {
+          resolvedPath = await writeConfinedLocalArtifact(
+            environment.worktreePath!,
+            relativePath,
+            Buffer.from(data, "base64"),
+          );
+        } else {
+          const fullPath = workspaceFilePath(relativePath);
+          const child = spawnCommand("docker", [
+            "exec", "-i", environment.containerId!, "node", "-e",
+            CONTAINER_PINNED_ATTACHMENT_WRITE,
+            "/workspace",
+            batchRelativeDirectory,
+            name,
+            String(base64DecodedByteLength(data)),
+          ]);
+          await new Promise<void>((resolve, reject) => {
+            child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`docker exec exited with ${code}`)));
+            child.once("error", reject);
+            child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+              if (error.code !== "EPIPE") reject(error);
+            });
+            child.stdin.end(data);
+          });
+          resolvedPath = fullPath;
+        }
+        saved.push({ name, path: resolvedPath });
+      }
+      return saved;
+    } catch (error) {
+      if (environment.environmentType === "local") {
+        // Remove only this request's unpredictable batch. Concurrent prompt
+        // writes own different directories and cannot delete each other's files.
+        // The whole chain is non-throwing: a cleanup failure must not replace
+        // the failure the caller is actually being told about.
+        await removeConfinedDirectory(
+          environment.worktreePath!,
+          batchRelativeDirectory,
+        ).catch(() => undefined);
+      } else {
+        await dockerExec(
+          environment.containerId!,
+          containerRemoveInitialPromptBatchCommand(batchRelativeDirectory),
+        ).catch(() => undefined);
+      }
+      throw error;
+    }
   });
 
   register("verify_environment_pr", async ({ environmentId, prUrl, targetBranch }, context) =>
@@ -10649,6 +11079,199 @@ export function createCommandRegistry(
   register("stop_local_codex_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "codex"));
   register("get_local_codex_server_status", ({ environmentId }, context) => getLocalServerStatus(asString(environmentId, "environmentId"), context, "codex"));
   register("cleanup_stale_local_servers_cmd", () => undefined);
+
+  register("await_bridge_ready", (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "agent", "timeoutMs"], "arguments");
+    const environmentId = asNonBlankString(args.environmentId, "environmentId");
+    if (!isAgentBridgeKind(args.agent)) {
+      throw new Error("agent must be one of: claude, codex, opencode");
+    }
+    const agent = args.agent;
+    const timeoutMs = asNumber(args.timeoutMs, "timeoutMs");
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 120_000) {
+      throw new Error("timeoutMs must be an integer between 1000 and 120000");
+    }
+    const key = `${environmentId}:${agent}`;
+    const callerDeadline = Date.now() + timeoutMs;
+    let shared = bridgeReadinessWaits.get(key);
+    if (shared) {
+      // A late coalesced caller must receive its complete requested wait time,
+      // even when the existing probe is close to its original deadline.
+      shared.deadline = Math.max(shared.deadline, callerDeadline);
+    } else {
+      const created = {
+        deadline: callerDeadline,
+        promise: undefined as unknown as Promise<AwaitBridgeReadyResult>,
+      };
+      // Publish the mutable deadline before starting the async probe so every
+      // caller that joins while storage is loading can extend it.
+      bridgeReadinessWaits.set(key, created);
+      created.promise = Promise.resolve().then(async (): Promise<AwaitBridgeReadyResult> => {
+        const initial = await context.storage.getEnvironment(environmentId);
+        if (!initial) {
+          return {
+            status: "failed",
+            error: { message: "Environment not found", retryable: false },
+          };
+        }
+
+        let environment = initial;
+        while (
+          environment.status === "creating"
+          || environment.setupPhase === "pending"
+          || environment.setupPhase === "running"
+        ) {
+          const retryAfterMs = Math.min(
+            500,
+            Math.max(0, created.deadline - Date.now()),
+          );
+          if (retryAfterMs <= 0) {
+            return {
+              status: "timed-out",
+              error: {
+                message: `${agent} bridge did not become ready before the environment startup deadline`,
+                retryable: true,
+                retryAfterMs: 1_000,
+              },
+            };
+          }
+          await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+          const refreshed = await context.storage.getEnvironment(environmentId);
+          if (!refreshed) {
+            return {
+              status: "failed",
+              error: { message: "Environment was deleted", retryable: false },
+            };
+          }
+          environment = refreshed;
+        }
+
+        if (environment.status !== "running" || environment.setupPhase === "failed") {
+          return {
+            status: "failed",
+            error: {
+              message: environment.setupPhase === "failed"
+                ? "Environment setup failed"
+                : "Environment is not running",
+              retryable: false,
+            },
+          };
+        }
+
+        while (true) {
+          try {
+            const result = environment.environmentType === "local"
+              ? await commands.get(`start_local_${agent}_server_cmd`)?.(
+                  { environmentId },
+                  context,
+                ) as { port?: number; hostPort?: number; authToken?: string } | undefined
+              : await commands.get(`start_${agent}_server`)?.(
+                  { containerId: environment.containerId },
+                  context,
+                ) as { port?: number; hostPort?: number; authToken?: string } | undefined;
+            const port = environment.environmentType === "local"
+              ? result?.port
+              : result?.hostPort;
+            if (!port || !result?.authToken) {
+              return {
+                status: "failed",
+                error: {
+                  message: `${agent} bridge returned an incomplete ready endpoint`,
+                  retryable: false,
+                },
+              };
+            }
+            return { status: "ready", port, authToken: result.authToken };
+          } catch (error) {
+            if (!isStructuredCommandError(error) || !error.retryable) {
+              return {
+                status: "failed",
+                error: {
+                  message: error instanceof Error ? error.message : String(error),
+                  retryable: false,
+                },
+              };
+            }
+            const remainingMs = created.deadline - Date.now();
+            if (remainingMs <= 0) {
+              return {
+                status: "timed-out",
+                error: {
+                  message: `${agent} bridge did not become ready before the environment startup deadline`,
+                  retryable: true,
+                  retryAfterMs: error.retryAfterMs ?? 1_000,
+                },
+              };
+            }
+            await new Promise((resolve) => setTimeout(
+              resolve,
+              Math.min(error.retryAfterMs ?? 500, remainingMs),
+            ));
+            const refreshed = await context.storage.getEnvironment(environmentId);
+            if (!refreshed) {
+              return {
+                status: "failed",
+                error: { message: "Environment was deleted", retryable: false },
+              };
+            }
+            if (refreshed.setupPhase === "failed") {
+              return {
+                status: "failed",
+                error: {
+                  message: "Environment setup failed",
+                  retryable: false,
+                },
+              };
+            }
+            if (
+              refreshed.status === "creating"
+              || refreshed.setupPhase === "pending"
+              || refreshed.setupPhase === "running"
+            ) {
+              environment = refreshed;
+              continue;
+            }
+            if (refreshed.status !== "running") {
+              return {
+                status: "failed",
+                error: { message: "Environment is not running", retryable: false },
+              };
+            }
+            environment = refreshed;
+          }
+        }
+      }).finally(() => {
+        if (bridgeReadinessWaits.get(key) === created) bridgeReadinessWaits.delete(key);
+      });
+      shared = created;
+    }
+    const wait = shared.promise;
+
+    return new Promise<AwaitBridgeReadyResult>((resolve, reject) => {
+      let settled = false;
+      const finish = (result: AwaitBridgeReadyResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const timer = setTimeout(() => finish({
+        status: "timed-out",
+        error: {
+          message: `${agent} bridge did not become ready before the caller deadline`,
+          retryable: true,
+          retryAfterMs: 1_000,
+        },
+      }), timeoutMs);
+      timer.unref?.();
+      void wait.then(finish, (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+  });
 
   // Backend-internal observation surface. Never starts a bridge, so a
   // background reconciler can read activity without spawning one process per
@@ -11082,6 +11705,35 @@ export function createCommandRegistry(
     const teardownTab = commands.get("teardown_tab");
     let nativeSessions = 0;
     if (teardownTab) {
+      // Startup launch snapshots are consume-on-mount intents. If no pane ever
+      // adopts one (for example every renderer crashes after creation), expire
+      // it with the same grace period as any other orphaned native tab and
+      // retire both the provider session and the durable projection.
+      for (const environment of environments) {
+        const startup = environment.startupAgentSession;
+        if (
+          startup?.status !== "running"
+          || !startup.providerSessionId
+          || referencedTabs.get(environment.id)?.has(startup.tabId)
+        ) continue;
+        const startedAt = Date.parse(startup.startedAt ?? "");
+        if (!Number.isFinite(startedAt) || now - startedAt < graceMs) continue;
+        const kind = startup.agent === "claude"
+          ? "claude-native"
+          : startup.agent === "codex"
+            ? "codex-native"
+            : "opencode-native";
+        await teardownTab({
+          environmentId: environment.id,
+          tabId: startup.tabId,
+          kind,
+          sessionId: startup.providerSessionId,
+        }, context);
+        await context.storage.updateEnvironment(environment.id, {
+          startupAgentSession: undefined,
+        });
+        nativeSessions += 1;
+      }
       for (const session of await context.storage.listNativeAgentSessions()) {
         if (session.origin !== "interactive-native") continue;
         const prefix = `env-${session.environmentId}:`;
@@ -11118,6 +11770,8 @@ export function createCommandRegistry(
 }
 
 export const __testing = {
+  CONTAINER_PINNED_ATTACHMENT_WRITE,
+  CONTAINER_PINNED_ATTACHMENT_REMOVE,
   configureOpenCodeAgentTools,
   readBoundedOpenCodeResponse,
   ensureContainerAgentToolsHost,

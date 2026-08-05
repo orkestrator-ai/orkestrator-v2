@@ -39,6 +39,11 @@ import {
   PANE_LAYOUT_VERSION,
   paneLayoutRevisionConflictMessage,
 } from "@orkestrator/protocol/pane-layout";
+import {
+  mergePersistedPaneLayouts,
+  type PaneLayoutMergeInput,
+  type PaneLayoutSelectionIntent,
+} from "@orkestrator/protocol/pane-layout-merge";
 import { isTabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import {
   RESOURCE_MANIFEST_KINDS,
@@ -92,6 +97,8 @@ export type JsonRecord = Record<string, unknown>;
 
 const MAX_FRONTEND_AGENT_ACTIVITY_OBSERVERS = 32;
 const MAX_PANE_LAYOUT_ROOT_BYTES = 256 * 1024;
+const MAX_PANE_LAYOUT_SELECTION_INTENT_BYTES = 64 * 1024;
+const MAX_PANE_LAYOUT_SELECTION_ENTRIES = 1_024;
 const PROMPT_QUEUE_CLAIM_LEASE_MS = 5 * 60 * 1000;
 const MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES = 4 * 1024;
 const MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES = 1024;
@@ -122,6 +129,49 @@ function assertPaneLayoutRootWithinBounds(root: unknown): void {
   }
   if (Buffer.byteLength(serializedRoot, "utf8") > MAX_PANE_LAYOUT_ROOT_BYTES) {
     throw new Error("Pane layout root exceeds the 256 KB limit");
+  }
+}
+
+function assertPaneLayoutSelectionIntentWithinBounds(
+  selectionIntent: PaneLayoutSelectionIntent | undefined,
+): void {
+  if (!selectionIntent) return;
+  const entries = Object.entries(selectionIntent.activeTabIds ?? {});
+  if (entries.length > MAX_PANE_LAYOUT_SELECTION_ENTRIES) {
+    throw new Error("Pane layout selection intent exceeds the 1024 entry limit");
+  }
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(selectionIntent);
+  } catch {
+    throw new Error("Pane layout selection intent must be JSON serializable");
+  }
+  if (
+    serialized === undefined
+    || Buffer.byteLength(serialized, "utf8") > MAX_PANE_LAYOUT_SELECTION_INTENT_BYTES
+  ) {
+    throw new Error("Pane layout selection intent exceeds the 64 KB limit");
+  }
+}
+
+/**
+ * Refuses a renderer-supplied layout that belongs to a dead container.
+ *
+ * A local environment has no container, so its layouts always carry `null`;
+ * everything else must name the container the environment is running now.
+ */
+function assertPaneLayoutGeneration(
+  environment: Environment,
+  containerId: string | null,
+  source: "write" | "intent",
+): void {
+  const currentContainerId = environment.environmentType === "local"
+    ? null
+    : environment.containerId;
+  if (containerId !== currentContainerId) {
+    throw new Error(
+      `Pane layout ${source} targets stale environment generation: expected ${currentContainerId ?? "local"}, received ${containerId ?? "local"}`,
+    );
   }
 }
 
@@ -3494,9 +3544,16 @@ export class StorageService {
     assertPaneLayoutRootWithinBounds(layout.root);
 
     return this.enqueuePaneLayoutMutation(async () => {
-      if (!await this.getEnvironment(environmentId)) {
+      const environment = await this.getEnvironment(environmentId);
+      if (!environment) {
         throw new Error(`Environment not found: ${environmentId}`);
       }
+      // The CAS token alone does not make this write current: a renderer holding
+      // a layout from a previous container generation can still read the latest
+      // revision and overwrite the live tree with dead tabs. Without this guard
+      // the invariant applyPaneLayoutIntent enforces is bypassable by pointing
+      // the same renderer at save_pane_layout instead.
+      assertPaneLayoutGeneration(environment, layout.containerId, "write");
 
       const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
         this.paneLayoutsFile(),
@@ -3522,6 +3579,66 @@ export class StorageService {
       // Selection changes make this a high-churn record. Keep one current
       // recovery snapshot without rotating five near-identical historical
       // backups for every focus change.
+      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
+      this.announce("pane-layout", environmentId);
+      return saved;
+    });
+  }
+
+  /**
+   * Applies one optimistic renderer mutation against the latest durable tree.
+   * The read, three-way rebase, revision increment, and write share the pane
+   * mutation queue, so concurrent windows cannot race a renderer-side CAS
+   * retry or lose the mutation during a renderer crash.
+   */
+  async applyPaneLayoutIntent(
+    environmentId: string,
+    base: PaneLayoutMergeInput,
+    desired: PaneLayoutMergeInput,
+    selectionIntent?: PaneLayoutSelectionIntent,
+  ): Promise<PersistedPaneLayout> {
+    assertPaneLayoutRootWithinBounds(base.root);
+    assertPaneLayoutRootWithinBounds(desired.root);
+    assertPaneLayoutSelectionIntentWithinBounds(selectionIntent);
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.getEnvironment(environmentId);
+      if (!environment) {
+        throw new Error(`Environment not found: ${environmentId}`);
+      }
+      // Both sides of the three-way merge come from the untrusted renderer. A
+      // current `desired` with a dead `base` still merges against `previous`,
+      // which resurrects the tabs that ancestor carried.
+      assertPaneLayoutGeneration(environment, desired.containerId, "intent");
+      assertPaneLayoutGeneration(environment, base.containerId, "intent");
+      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+        this.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[environmentId];
+      const sameGeneration = previous
+        && previous.version === desired.version
+        && previous.containerId === desired.containerId;
+      const next = sameGeneration
+        ? mergePersistedPaneLayouts(
+            base,
+            desired,
+            {
+              version: previous.version,
+              containerId: previous.containerId,
+              activePaneId: previous.activePaneId,
+              root: previous.root,
+            } as PaneLayoutMergeInput,
+            { selectionIntent },
+          )
+        : desired;
+      assertPaneLayoutRootWithinBounds(next.root);
+      const saved: PersistedPaneLayout = {
+        ...next,
+        environmentId,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      layouts[environmentId] = saved;
       await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
       this.announce("pane-layout", environmentId);
       return saved;
@@ -6150,12 +6267,30 @@ export class StorageService {
     });
   }
 
-  async deletePaneLayout(environmentId: string): Promise<void> {
+  async deletePaneLayout(
+    environmentId: string,
+    expectedRevision?: number,
+  ): Promise<void> {
+    if (
+      expectedRevision !== undefined
+      && !isNonNegativeInteger(expectedRevision)
+    ) {
+      throw new Error("Pane layout expected revision must be a non-negative integer");
+    }
     return this.enqueuePaneLayoutMutation(async () => {
       const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
         this.paneLayoutsFile(),
         () => ({}),
       );
+      const currentRevision = layouts[environmentId]?.revision ?? 0;
+      if (
+        expectedRevision !== undefined
+        && currentRevision !== expectedRevision
+      ) {
+        throw new Error(
+          paneLayoutRevisionConflictMessage(expectedRevision, currentRevision),
+        );
+      }
       if (!(environmentId in layouts)) return;
       delete layouts[environmentId];
       await this.saveJson(this.paneLayoutsFile(), layouts);

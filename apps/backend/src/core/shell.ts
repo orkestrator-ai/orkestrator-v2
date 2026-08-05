@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
-  assertBase64PayloadWithinLimit,
   readReadableHostFile,
   validateRelativeFilePath,
+  writeConfinedFile,
 } from "./path-safety.js";
 
 const execFileAsync = promisify(execFile);
@@ -190,14 +190,22 @@ export async function readFileBase64(filePath: string): Promise<string> {
   return (await readReadableHostFile(filePath)).toString("base64");
 }
 
+/**
+ * Writes a base64 payload into a worktree, overwriting an existing file.
+ *
+ * A plain `mkdir -p` + `writeFile` follows a symlink planted anywhere along the
+ * path, so this goes through the confined writer that creates and validates
+ * every ancestor itself. The returned path stays the lexical join of the caller's
+ * root: callers echo it back to the renderer, which knows the worktree by the
+ * path it asked for, not by its canonical form.
+ */
 export async function writeFileBase64(rootPath: string, relativePath: string, base64Data: string): Promise<string> {
   const safeRelativePath = validateRelativeFilePath(relativePath, "relative file path");
-  assertBase64PayloadWithinLimit(base64Data);
-
-  const fullPath = path.join(rootPath, safeRelativePath);
-  await fs.mkdir(path.dirname(fullPath), { recursive: true });
-  await fs.writeFile(fullPath, Buffer.from(base64Data, "base64"));
-  return fullPath;
+  await writeConfinedFile(rootPath, safeRelativePath, base64Data, {
+    exclusive: false,
+    label: "relative file path",
+  });
+  return path.join(rootPath, safeRelativePath);
 }
 
 export function inferLanguage(filePath: string): string {

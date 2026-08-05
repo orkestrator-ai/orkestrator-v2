@@ -90,6 +90,10 @@ const runEnvironmentSetupMock = mock(async (environmentId: string) => ({
   setupScriptsComplete: true,
 }));
 const getEnvironmentSetupSessionMock = mock(async (_environmentId: string): Promise<EnvironmentSetupSession | null> => null);
+const awaitEnvironmentSetupSessionMock = mock(
+  async (environmentId: string): Promise<EnvironmentSetupSession | null> =>
+    getEnvironmentSetupSessionMock(environmentId),
+);
 const setEnvironmentPendingAgentLaunchMock = mock(async (environmentId: string, pending: boolean) => ({
   ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
   pendingAgentLaunch: pending,
@@ -111,6 +115,7 @@ const setEnvironmentInitialPromptMock = mock(async (environmentId: string, initi
 const savePaneLayoutMock = mock(async (
   environmentId: string,
   layout: Parameters<typeof realBackend.savePaneLayout>[1],
+  _expectedRevision: number,
 ): Promise<PersistedPaneLayout> => ({
   ...layout,
   environmentId,
@@ -118,6 +123,10 @@ const savePaneLayoutMock = mock(async (
   revision: 1,
 }));
 const getPaneLayoutMock = mock(async (_environmentId: string): Promise<PersistedPaneLayout | null> => null);
+const deletePaneLayoutMock = mock(async (
+  _environmentId: string,
+  _expectedRevision?: number,
+) => {});
 const listLoopedReviewWorkflowsMock = mock(async (_environmentId: string) => [] as Array<{
   version: number;
   id: string;
@@ -126,8 +135,42 @@ const listLoopedReviewWorkflowsMock = mock(async (_environmentId: string) => [] 
   updatedAt: string;
   revision: number;
 }>);
-const writeContainerFileMock = mock(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
-const writeLocalFileMock = mock(async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`);
+const writeContainerFileMock = mock(async (
+  _containerId: string,
+  filePath: string,
+  _base64Data: string,
+) => `/workspace/${filePath}`);
+const writeLocalFileMock = mock(async (
+  worktreePath: string,
+  filePath: string,
+  _base64Data: string,
+) => `${worktreePath}/${filePath}`);
+const writeInitialPromptAttachmentsMock = mock(async (
+  environmentId: string,
+  attachments: Parameters<typeof realBackend.writeInitialPromptAttachments>[1],
+) => {
+  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  const usedNames = new Set<string>();
+  return Promise.all(attachments.map(async (attachment) => {
+    const sanitized = attachment.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+    const dot = sanitized.lastIndexOf(".");
+    const stem = dot > 0 ? sanitized.slice(0, dot) : sanitized;
+    const extension = dot > 0 ? sanitized.slice(dot) : "";
+    let name = sanitized;
+    let suffix = 2;
+    while (usedNames.has(name.toLowerCase())) {
+      name = `${stem}-${suffix}${extension}`;
+      suffix += 1;
+    }
+    usedNames.add(name.toLowerCase());
+    const relativePath = `.orkestrator/initial-prompt/${name}`;
+    const savedPath = environment.environmentType === "local"
+      ? await writeLocalFileMock(environment.worktreePath!, relativePath, attachment.base64Data)
+      : await writeContainerFileMock(environment.containerId!, relativePath, attachment.base64Data);
+    return { name, path: savedPath };
+  }));
+});
 const seedContainerSetupCommands = (environmentId = "env-hidden") => {
   useEnvironmentStore.getState().updateEnvironment(environmentId, {
     setupPhase: "running",
@@ -160,14 +203,17 @@ mock.module("@/lib/backend", () => ({
   ensureEnvironmentSetup: ensureEnvironmentSetupMock,
   runEnvironmentSetup: runEnvironmentSetupMock,
   getEnvironmentSetupSession: getEnvironmentSetupSessionMock,
+  awaitEnvironmentSetupSession: awaitEnvironmentSetupSessionMock,
   setEnvironmentPendingAgentLaunch: setEnvironmentPendingAgentLaunchMock,
   acknowledgeStartupAgentSession: acknowledgeStartupAgentSessionMock,
   setEnvironmentInitialPrompt: setEnvironmentInitialPromptMock,
   savePaneLayout: savePaneLayoutMock,
   getPaneLayout: getPaneLayoutMock,
+  deletePaneLayout: deletePaneLayoutMock,
   listLoopedReviewWorkflows: listLoopedReviewWorkflowsMock,
   writeContainerFile: writeContainerFileMock,
   writeLocalFile: writeLocalFileMock,
+  writeInitialPromptAttachments: writeInitialPromptAttachmentsMock,
 }));
 
 mock.module("@/components/pane-layout", () => ({
@@ -316,6 +362,7 @@ describe("TerminalContainer", () => {
     }));
     getEnvironmentSetupSessionMock.mockReset();
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
+    awaitEnvironmentSetupSessionMock.mockClear();
     setEnvironmentPendingAgentLaunchMock.mockReset();
     setEnvironmentPendingAgentLaunchMock.mockImplementation(async (environmentId: string, pending: boolean) => ({
       ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
@@ -340,11 +387,14 @@ describe("TerminalContainer", () => {
     savePaneLayoutMock.mockClear();
     getPaneLayoutMock.mockReset();
     getPaneLayoutMock.mockResolvedValue(null);
+    deletePaneLayoutMock.mockReset();
+    deletePaneLayoutMock.mockResolvedValue(undefined);
     localStorage.clear();
     listLoopedReviewWorkflowsMock.mockReset();
     listLoopedReviewWorkflowsMock.mockResolvedValue([]);
     writeContainerFileMock.mockReset();
     writeLocalFileMock.mockReset();
+    writeInitialPromptAttachmentsMock.mockClear();
     writeContainerFileMock.mockImplementation(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
     writeLocalFileMock.mockImplementation(async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`);
 
@@ -432,6 +482,107 @@ describe("TerminalContainer", () => {
       });
     });
     expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
+  });
+
+  test("CAS-migrates sensitive restored browser history after hydration alone", async () => {
+    const currentUrl = "https://example.com/current?token=current#live";
+    getPaneLayoutMock.mockResolvedValue({
+      version: PANE_LAYOUT_VERSION,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [{
+          id: "browser",
+          type: "browser",
+          browserData: {
+            url: currentUrl,
+            history: [
+              "https://alice:secret@example.com/previous?token=old#private",
+              currentUrl,
+            ],
+            historyIndex: 1,
+          },
+        }],
+        activeTabId: "browser",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 7,
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(savePaneLayoutMock).toHaveBeenCalledTimes(1));
+    const [environmentId, persisted, expectedRevision] = savePaneLayoutMock.mock.calls[0]!;
+    expect(environmentId).toBe("env-hidden");
+    expect(expectedRevision).toBe(7);
+    expect(persisted.root).toMatchObject({
+      tabs: [{
+        browserData: {
+          url: currentUrl,
+          history: ["https://example.com/previous", "https://example.com/current"],
+          historyIndex: 1,
+        },
+      }],
+    });
+  });
+
+  test("revision-guard deletes a sensitive non-restorable generation snapshot", async () => {
+    getPaneLayoutMock.mockResolvedValue({
+      version: PANE_LAYOUT_VERSION,
+      environmentId: "env-hidden",
+      // The live test environment owns container-hidden, so this snapshot must
+      // never be installed or rewritten as if its tabs belonged to that generation.
+      containerId: "container-stale",
+      activePaneId: "stale-pane",
+      root: {
+        kind: "leaf",
+        id: "stale-pane",
+        tabs: [{
+          id: "browser",
+          type: "browser",
+          browserData: {
+            url: "https://example.com/current",
+            history: ["https://alice:secret@example.com/old?token=secret#private"],
+            historyIndex: 0,
+          },
+        }],
+        activeTabId: "browser",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 9,
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(deletePaneLayoutMock).toHaveBeenCalledWith("env-hidden", 9);
+    });
+    expect(savePaneLayoutMock).not.toHaveBeenCalled();
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden"))
+      .not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "browser" }),
+      ]));
   });
 
   test("hydrates a failed local setup and renders retry and skip recovery actions", async () => {
@@ -1087,60 +1238,6 @@ describe("TerminalContainer", () => {
       .getAllTabs("env-hidden")
       .filter((tab) => tab.isSetupTab)
       .map((tab) => tab.id);
-
-  test("retries a rejected setup-session lookup instead of stranding the restored tab", async () => {
-    // A backend-managed setup tab cannot create its own PTY, so a tab left
-    // unbound by a transient lookup failure renders a permanently blank pane
-    // with no error anywhere. Nothing else re-runs the rebind effect.
-    getEnvironmentSetupSessionMock.mockRejectedValueOnce(new Error("gateway unreachable"));
-    getEnvironmentSetupSessionMock.mockResolvedValue({
-      environmentId: "env-hidden",
-      sessionId: "env-hidden:setup",
-      running: false,
-      startedAt: "2026-01-01T00:00:00.000Z",
-      completedAt: "2026-01-01T00:01:00.000Z",
-      success: true,
-      terminalRunning: true,
-    });
-
-    restoreBackendSetupTabLayout();
-
-    await waitFor(() => {
-      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
-    });
-    // The failed lookup must not retire the tab — the retry needs it to exist.
-    expect(setupTabIds()).toEqual(["default"]);
-
-    await waitFor(
-      () => {
-        expect(
-          useTerminalSessionStore.getState().sessions.get(
-            createSessionKey(null, "default", "env-hidden"),
-          )?.sessionId,
-        ).toBe("env-hidden:setup");
-      },
-      { timeout: 8000 },
-    );
-    expect(getEnvironmentSetupSessionMock.mock.calls.length).toBeGreaterThan(1);
-    expect(setupTabIds()).toEqual(["default"]);
-  }, 15000);
-
-  test("retires an unbound setup tab after exhausting session lookup retries", async () => {
-    getEnvironmentSetupSessionMock.mockRejectedValue(new Error("gateway unavailable"));
-
-    restoreBackendSetupTabLayout();
-
-    await waitFor(
-      () => {
-        expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(3);
-        expect(setupTabIds()).toEqual([]);
-      },
-      { timeout: 10_000 },
-    );
-    const [replacement] = usePaneLayoutStore.getState().getAllTabs("env-hidden");
-    expect(replacement).toMatchObject({ type: "plain" });
-    expect(replacement?.isSetupTab).toBeUndefined();
-  }, 15_000);
 
   test("binds every restored backend-managed setup tab, not just the first", async () => {
     // Binding one tab per effect run relied on the run repeating to reach the
@@ -4002,6 +4099,50 @@ describe("TerminalContainer", () => {
     expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
       { id: "default", type: "plain", isSetupTab: true },
     ]);
+  });
+
+  test("retries a transient setup-session lookup failure without a remount", async () => {
+    awaitEnvironmentSetupSessionMock
+      .mockRejectedValueOnce(new Error("temporary bridge failure"))
+      .mockResolvedValueOnce({
+        environmentId: "env-hidden",
+        sessionId: "env-hidden:setup",
+        startedAt: "2026-08-05T00:00:00.000Z",
+        running: true,
+        terminalRunning: true,
+      });
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-hidden", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+          activeTabId: "default",
+        },
+        activePaneId: "default",
+        containerId: "container-hidden",
+      }),
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
+      expect(
+        useTerminalSessionStore.getState().sessions.get(
+          createSessionKey("container-hidden", "default", "env-hidden"),
+        )?.sessionId,
+      ).toBe("env-hidden:setup");
+    }, { timeout: 2_000 });
   });
 
   test("rehydrates a running backend setup session for a local environment", async () => {

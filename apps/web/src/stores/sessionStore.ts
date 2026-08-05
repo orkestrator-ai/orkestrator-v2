@@ -21,6 +21,19 @@ const sortByOrder = (sessions: Session[]): Session[] =>
   [...sessions].sort((a, b) => a.order - b.order);
 
 const activeSessionLoadRequests = new Map<string, object>();
+interface SessionStatusQueue {
+  tail: Promise<void>;
+  confirmed: SessionStatus | undefined;
+  latestToken: object;
+}
+
+/**
+ * Status writes are serialized per session. Besides preserving backend order,
+ * this gives a failed optimistic write an unambiguous last-confirmed value to
+ * restore. A token still protects a newer optimistic value while an older
+ * queued write settles.
+ */
+const sessionStatusQueues = new Map<string, SessionStatusQueue>();
 
 interface SessionState {
   // State
@@ -183,6 +196,15 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   },
 
   updateSessionStatus: async (sessionId, status) => {
+    const requestToken = {};
+    const existingQueue = sessionStatusQueues.get(sessionId);
+    const queue: SessionStatusQueue = existingQueue ?? {
+      tail: Promise.resolve(),
+      confirmed: get().sessions.get(sessionId)?.status,
+      latestToken: requestToken,
+    };
+    queue.latestToken = requestToken;
+    sessionStatusQueues.set(sessionId, queue);
     // Optimistic update
     set((state) => {
       const session = state.sessions.get(sessionId);
@@ -192,11 +214,27 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       return { sessions: newSessions };
     });
 
-    try {
-      await apiUpdateSessionStatus(sessionId, status);
-    } catch (error) {
-      // Revert on error would be complex; just log for now
-      console.error("Failed to update session status:", error);
+    const operation = queue.tail.then(async () => {
+      try {
+        await apiUpdateSessionStatus(sessionId, status);
+        queue.confirmed = status;
+      } catch (error) {
+        if (queue.latestToken === requestToken && queue.confirmed !== undefined) {
+          set((state) => {
+            const current = state.sessions.get(sessionId);
+            if (!current || current.status !== status) return state;
+            const sessions = new Map(state.sessions);
+            sessions.set(sessionId, { ...current, status: queue.confirmed! });
+            return { sessions };
+          });
+        }
+        console.error("Failed to update session status:", error);
+      }
+    });
+    queue.tail = operation;
+    await operation;
+    if (sessionStatusQueues.get(sessionId) === queue && queue.tail === operation) {
+      sessionStatusQueues.delete(sessionId);
     }
   },
 

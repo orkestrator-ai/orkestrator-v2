@@ -102,6 +102,7 @@ import {
   type TmuxPendingPermission,
   type TmuxPendingPlan,
   type TmuxPendingQuestion,
+  type TmuxInfoEvent,
   type TmuxAttachment,
   type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
@@ -367,6 +368,7 @@ export function ClaudeTmuxChatTab({
   const addPendingElicitation = useClaudeTmuxStore((s) => s.addPendingElicitation);
   const removePendingElicitation = useClaudeTmuxStore((s) => s.removePendingElicitation);
   const replacePendingHooks = useClaudeTmuxStore((s) => s.replacePendingHooks);
+  const pushInfoEvent = useClaudeTmuxStore((s) => s.pushInfoEvent);
   const setTabBusy = useClaudeTmuxStore((s) => s.setBusy);
   const setObservation = useClaudeTmuxStore((s) => s.setObservation);
   const clearSelectionPrompt = useClaudeTmuxStore((s) => s.clearSelectionPrompt);
@@ -671,7 +673,10 @@ export function ClaudeTmuxChatTab({
               const hooksToRender = hooks.filter(
                 (hook) => !shouldAutoAllowPermissionHook(hook),
               );
-              replacePendingHooks(storeKey, pendingSnapshotFromHooks(hooksToRender));
+              replacePendingHooks(
+                storeKey,
+                pendingSnapshotFromHooks(hooksToRender, status.info_events),
+              );
               for (const hook of hooks) {
                 if (shouldAutoAllowPermissionHook(hook)) {
                   void autoAllowPermissionHook(tabId, environmentId, hook.id, hook.payload).catch((e) => {
@@ -869,6 +874,20 @@ export function ClaudeTmuxChatTab({
             }
           } else if (ev.event_kind === "Elicitation") {
             addPendingElicitation(storeKey, payloadToElicitation(ev.event_id, ev.payload, timing));
+          } else if (ev.event_kind === "Notification" || ev.event_kind === "Stop") {
+            const payload = ev.payload && typeof ev.payload === "object"
+              ? ev.payload as Record<string, unknown>
+              : undefined;
+            pushInfoEvent(storeKey, {
+              id: ev.event_id,
+              kind: ev.event_kind,
+              message: typeof payload?.message === "string"
+                ? payload.message
+                : ev.event_kind === "Stop"
+                  ? "Claude finished responding"
+                  : "Claude sent a notification",
+              receivedAt: new Date(ev.requested_at ?? Date.now()).toISOString(),
+            });
           }
           break;
         }
@@ -915,6 +934,7 @@ export function ClaudeTmuxChatTab({
     removePendingPermission,
     addPendingElicitation,
     removePendingElicitation,
+    pushInfoEvent,
     setTabBusy,
     setObservation,
     clearTabInitialPrompt,
@@ -2060,7 +2080,10 @@ function TmuxElicitationCard({
 
 // ─── In-TUI selection prompt controls ───────────────────────────────────────
 
-function pendingSnapshotFromHooks(hooks: TmuxPendingHook[]) {
+function pendingSnapshotFromHooks(
+  hooks: TmuxPendingHook[],
+  infoEvents?: TmuxInfoEvent[],
+) {
   const approvals: TmuxPendingApproval[] = [];
   const questions: TmuxPendingQuestion[] = [];
   const plans: TmuxPendingPlan[] = [];
@@ -2085,7 +2108,7 @@ function pendingSnapshotFromHooks(hooks: TmuxPendingHook[]) {
     }
   }
 
-  return { approvals, questions, plans, permissions, elicitations };
+  return { approvals, questions, plans, permissions, elicitations, infoEvents };
 }
 
 function hookTiming(hook: TmuxPendingHook): {

@@ -61,6 +61,45 @@ describe("NativeComposeDock", () => {
     expect(screen.queryByRole("button", { name: "Scroll down" })).toBeNull();
   });
 
+  test("shows the notice in both centered and docked layouts", () => {
+    /**
+     * The desync banner rides here rather than on `topAccessory`: a tab that
+     * never received a message renders the centered composer, and that is
+     * precisely the state a desynced tab is in.
+     */
+    const { rerender } = render(
+      <NativeComposeDock
+        centered={false}
+        notice={<div>Live updates disconnected</div>}
+      >
+        <textarea aria-label="Prompt" />
+      </NativeComposeDock>,
+    );
+
+    expect(screen.getByText("Live updates disconnected")).toBeTruthy();
+
+    rerender(
+      <NativeComposeDock
+        centered={true}
+        notice={<div>Live updates disconnected</div>}
+      >
+        <textarea aria-label="Prompt" />
+      </NativeComposeDock>,
+    );
+
+    expect(screen.getByText("Live updates disconnected")).toBeTruthy();
+  });
+
+  test("renders no notice row when there is nothing to announce", () => {
+    render(
+      <NativeComposeDock centered={false}>
+        <textarea aria-label="Prompt" />
+      </NativeComposeDock>,
+    );
+
+    expect(screen.queryByTestId("compose-dock-notice")).toBeNull();
+  });
+
   test("shows pinned content in both centered and docked layouts", () => {
     /**
      * Unlike `topAccessory`, blocking prompts must never be hidden by layout:

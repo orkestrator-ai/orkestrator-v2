@@ -1266,7 +1266,7 @@ describe("ClaudeTmuxChatTab", () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
     const busyStartedAt = 1_000_000;
     dateNowSpy = spyOn(Date, "now").mockReturnValue(busyStartedAt);
-    useClaudeTmuxStore.getState().setBusy(stateKey, true);
+    useClaudeTmuxStore.getState().setBusy(stateKey, true, busyStartedAt);
     dateNowSpy.mockReturnValue(busyStartedAt + 65_000);
 
     render(
@@ -2141,6 +2141,61 @@ Running 1 Explore agent...
     });
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(startSessionMock).not.toHaveBeenCalled();
+  });
+
+  test("rehydrates missed informational events from the authoritative tmux status", async () => {
+    getStatusMock.mockImplementation(async () => ({
+      tab_id: "tab-1",
+      environment_id: "env-1",
+      session_id: "session-existing",
+      tmux_session: "orkestrator-env1-tab1",
+      running: true,
+      transcript_path: "/tmp/session-existing.jsonl",
+      resumed: false,
+      busy: false,
+      permission_mode: "bypassPermissions",
+      fast_mode: false,
+      info_events: [
+        {
+          id: "missed-notification",
+          kind: "Notification",
+          message: "Finished a background check",
+          receivedAt: "2026-05-15T12:02:00.000Z",
+        },
+        {
+          id: "missed-stop",
+          kind: "Stop",
+          message: "Claude finished responding",
+          receivedAt: "2026-05-15T12:03:00.000Z",
+        },
+      ],
+    }));
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useClaudeTmuxStore.getState().getTab("tab-1").infoEvents).toEqual([
+        {
+          id: "missed-notification",
+          kind: "Notification",
+          message: "Finished a background check",
+          receivedAt: "2026-05-15T12:02:00.000Z",
+        },
+        {
+          id: "missed-stop",
+          kind: "Stop",
+          message: "Claude finished responding",
+          receivedAt: "2026-05-15T12:03:00.000Z",
+        },
+      ]);
+    });
+    expect(screen.queryByText("Finished a background check")).toBeNull();
   });
 
   test("does not let a stale hydration response overwrite a live fast-mode event", async () => {
@@ -3023,9 +3078,146 @@ Running 1 Explore agent...
       });
     });
 
-    expect(useClaudeTmuxStore.getState().getTab("tab-1").infoEvents).toEqual([]);
+    expect(useClaudeTmuxStore.getState().getTab("tab-1").infoEvents).toEqual([
+      expect.objectContaining({
+        id: "notification",
+        kind: "Notification",
+        message: "Background note",
+      }),
+    ]);
     expect(screen.queryByText("SessionStart")).toBeNull();
     expect(screen.queryByText("Background note")).toBeNull();
+  });
+
+  test("normalizes default informational hook messages and timestamps", async () => {
+    dateNowSpy = spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(subscribedHandler).not.toBeNull());
+
+    act(() => {
+      subscribedHandler?.({
+        kind: "hook",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        event_id: "default-notification",
+        event_kind: "Notification",
+        payload: {},
+      });
+      subscribedHandler?.({
+        kind: "hook",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        event_id: "default-stop",
+        event_kind: "Stop",
+        payload: {},
+        requested_at: 1_700_000_000_000,
+      });
+    });
+
+    expect(useClaudeTmuxStore.getState().getTab("tab-1").infoEvents).toEqual([
+      {
+        id: "default-notification",
+        kind: "Notification",
+        message: "Claude sent a notification",
+        receivedAt: new Date(1_800_000_000_000).toISOString(),
+      },
+      {
+        id: "default-stop",
+        kind: "Stop",
+        message: "Claude finished responding",
+        receivedAt: new Date(1_700_000_000_000).toISOString(),
+      },
+    ]);
+  });
+
+  test("collapses re-delivered informational hooks and keeps a dismissal sticky", async () => {
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(subscribedHandler).not.toBeNull());
+
+    const deliver = (message: string) => {
+      act(() => {
+        subscribedHandler?.({
+          kind: "hook",
+          tab_id: "tab-1",
+          environment_id: "env-1",
+          session_id: "session-1",
+          event_id: "notification",
+          event_kind: "Notification",
+          payload: { message },
+          requested_at: 1_700_000_000_000,
+        });
+      });
+    };
+    const infoEvents = () => useClaudeTmuxStore.getState().getTab("tab-1").infoEvents;
+
+    // The backend de-duplicates its retained snapshot but still emits a frame
+    // per delivery, so a re-delivery must replace rather than stack.
+    deliver("Background note");
+    deliver("Background note");
+    expect(infoEvents()).toEqual([
+      expect.objectContaining({ id: "notification", message: "Background note" }),
+    ]);
+
+    act(() => {
+      useClaudeTmuxStore.getState().dismissInfoEvent("tab-1", "notification");
+    });
+    expect(infoEvents()).toEqual([]);
+
+    // Dismissal means "I have seen this". Neither another live delivery nor an
+    // authoritative rehydration may bring the card back.
+    deliver("Background note");
+    expect(infoEvents()).toEqual([]);
+    act(() => {
+      useClaudeTmuxStore.getState().replacePendingHooks("tab-1", {
+        approvals: [],
+        questions: [],
+        plans: [],
+        permissions: [],
+        elicitations: [],
+        infoEvents: [{
+          id: "notification",
+          kind: "Notification",
+          message: "Background note",
+          receivedAt: new Date(1_700_000_000_000).toISOString(),
+        }, {
+          id: "other",
+          kind: "Notification",
+          message: "Still new",
+          receivedAt: new Date(1_700_000_000_000).toISOString(),
+        }],
+      });
+    });
+    expect(infoEvents()).toEqual([
+      expect.objectContaining({ id: "other", message: "Still new" }),
+    ]);
   });
 
   test("removes each pending hook card when the backend reports a timeout", async () => {

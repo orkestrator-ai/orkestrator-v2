@@ -18,17 +18,20 @@ describe("claudeTmuxStore", () => {
   });
 
   describe("setBusy", () => {
-    test("flipping to true records busyStartedAt", () => {
-      const before = Date.now();
+    test("flipping to true without a backend clock does not invent busyStartedAt", () => {
       useClaudeTmuxStore.getState().setBusy("tab-1", true);
       const tab = useClaudeTmuxStore.getState().getTab("tab-1");
       expect(tab.busy).toBe(true);
-      expect(tab.busyStartedAt).not.toBeNull();
-      expect(tab.busyStartedAt!).toBeGreaterThanOrEqual(before);
+      expect(tab.busyStartedAt).toBeNull();
+    });
+
+    test("stores the backend busy clock verbatim", () => {
+      useClaudeTmuxStore.getState().setBusy("tab-1", true, 1_234);
+      expect(useClaudeTmuxStore.getState().getTab("tab-1").busyStartedAt).toBe(1_234);
     });
 
     test("flipping to false clears busyStartedAt", () => {
-      useClaudeTmuxStore.getState().setBusy("tab-1", true);
+      useClaudeTmuxStore.getState().setBusy("tab-1", true, 1_234);
       useClaudeTmuxStore.getState().setBusy("tab-1", false);
       const tab = useClaudeTmuxStore.getState().getTab("tab-1");
       expect(tab.busy).toBe(false);
@@ -36,7 +39,7 @@ describe("claudeTmuxStore", () => {
     });
 
     test("redundant setBusy(true) preserves original busyStartedAt", () => {
-      useClaudeTmuxStore.getState().setBusy("tab-1", true);
+      useClaudeTmuxStore.getState().setBusy("tab-1", true, 1_234);
       const first = useClaudeTmuxStore.getState().getTab("tab-1");
       const originalStart = first.busyStartedAt;
       // Advance wall-clock perceptibly before the no-op call.
@@ -61,13 +64,13 @@ describe("claudeTmuxStore", () => {
     });
 
     test("setBusy is scoped per tab", () => {
-      useClaudeTmuxStore.getState().setBusy("tab-1", true);
+      useClaudeTmuxStore.getState().setBusy("tab-1", true, 1_234);
       useClaudeTmuxStore.getState().setBusy("tab-2", false);
       const t1 = useClaudeTmuxStore.getState().getTab("tab-1");
       const t2 = useClaudeTmuxStore.getState().getTab("tab-2");
       expect(t1.busy).toBe(true);
       expect(t2.busy).toBe(false);
-      expect(t1.busyStartedAt).not.toBeNull();
+      expect(t1.busyStartedAt).toBe(1_234);
       expect(t2.busyStartedAt).toBeNull();
     });
 
@@ -217,6 +220,80 @@ describe("claudeTmuxStore", () => {
       expect(tab.pendingApprovals).toEqual([]);
       expect(tab.pendingQuestions.map((q) => q.eventId)).toEqual(["question"]);
       expect(tab.pendingPermissions.map((p) => p.eventId)).toEqual(["permission"]);
+    });
+  });
+
+  describe("informational hook events", () => {
+    const infoEvent = (
+      id: string,
+      kind: "Notification" | "Stop" = "Notification",
+      message = id,
+    ) => ({
+      id,
+      kind,
+      message,
+      receivedAt: `received-${message}`,
+    });
+
+    test("replaces a re-delivered event with the same id and kind", () => {
+      const store = useClaudeTmuxStore.getState();
+      store.pushInfoEvent("tab-1", infoEvent("event-1", "Notification", "old"));
+      store.pushInfoEvent("tab-1", infoEvent("event-1", "Notification", "new"));
+
+      expect(useClaudeTmuxStore.getState().getTab("tab-1").infoEvents).toEqual([
+        infoEvent("event-1", "Notification", "new"),
+      ]);
+    });
+
+    test("retains events that share an id but have different kinds", () => {
+      const store = useClaudeTmuxStore.getState();
+      store.pushInfoEvent("tab-1", infoEvent("event-1", "Notification"));
+      store.pushInfoEvent("tab-1", infoEvent("event-1", "Stop"));
+
+      expect(
+        useClaudeTmuxStore
+          .getState()
+          .getTab("tab-1")
+          .infoEvents.map(({ id, kind }) => ({ id, kind })),
+      ).toEqual([
+        { id: "event-1", kind: "Notification" },
+        { id: "event-1", kind: "Stop" },
+      ]);
+    });
+
+    test("keeps dismissal sticky across live delivery and authoritative replacement", () => {
+      const store = useClaudeTmuxStore.getState();
+      const dismissed = infoEvent("dismissed");
+      store.pushInfoEvent("tab-1", dismissed);
+      store.dismissInfoEvent("tab-1", dismissed.id);
+
+      store.pushInfoEvent("tab-1", { ...dismissed, message: "live re-delivery" });
+      store.replacePendingHooks("tab-1", {
+        approvals: [],
+        questions: [],
+        plans: [],
+        permissions: [],
+        elicitations: [],
+        infoEvents: [
+          { ...dismissed, message: "authoritative re-delivery" },
+          infoEvent("visible"),
+        ],
+      });
+
+      const tab = useClaudeTmuxStore.getState().getTab("tab-1");
+      expect(tab.infoEvents).toEqual([infoEvent("visible")]);
+      expect(tab.dismissedInfoEventIds).toEqual(["dismissed"]);
+    });
+
+    test("bounds remembered dismissals to the newest 20 ids", () => {
+      const store = useClaudeTmuxStore.getState();
+      for (let index = 0; index < 25; index += 1) {
+        store.dismissInfoEvent("tab-1", `event-${index}`);
+      }
+
+      expect(
+        useClaudeTmuxStore.getState().getTab("tab-1").dismissedInfoEventIds,
+      ).toEqual(Array.from({ length: 20 }, (_, index) => `event-${index + 5}`));
     });
   });
 });

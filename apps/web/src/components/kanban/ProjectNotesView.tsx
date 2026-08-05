@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ArrowLeft } from "lucide-react";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useProjectStore } from "@/stores";
+import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
 
 interface ProjectNotesViewProps {
   projectId: string;
@@ -14,63 +15,92 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
   const notes = useKanbanStore((s) => s.notes);
   const loadNotes = useKanbanStore((s) => s.loadNotes);
   const saveNotes = useKanbanStore((s) => s.saveNotes);
+  const notesLoading = useKanbanStore((s) => s.notesLoading);
+  const notesError = useKanbanStore((s) => s.notesError);
+  const currentNotesProjectId = useKanbanStore((s) => s.currentNotesProjectId);
   const getProjectById = useProjectStore((s) => s.getProjectById);
 
   const project = getProjectById(projectId);
-  const [draft, setDraft] = useState(notes);
-  const [isDirty, setIsDirty] = useState(false);
+  // A failed load leaves an empty editor that is not this project's content, so
+  // it must stay disabled until a retry succeeds. An enabled empty editor
+  // autosaves its first keystroke over the real backend notes.
+  const notesReady = currentNotesProjectId === projectId && !notesLoading && !notesError;
+  const [draft, setDraft, , discardDurableDraft] = useDurableComposeDraft<string>({
+    ownerType: "project",
+    ownerId: projectId,
+    namespace: "project-notes",
+    localKey: "editor",
+    initialValue: notes,
+    isEmpty: (value) => value.length === 0,
+    isValid: (value): value is string => typeof value === "string",
+    enabled: notesReady,
+  });
+  const isDirty = notesReady && draft !== notes;
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const draftRef = useRef(draft);
-  const isDirtyRef = useRef(isDirty);
-  draftRef.current = draft;
-  isDirtyRef.current = isDirty;
+  const editRevisionRef = useRef(0);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     void loadNotes(projectId);
   }, [projectId, loadNotes]);
 
-  // Sync draft when notes load from backend
-  useEffect(() => {
-    setDraft(notes);
-    setIsDirty(false);
-  }, [notes]);
+  const persistNotes = useCallback((value: string, editRevision: number) => {
+    const queuedSave = saveQueueRef.current.then(async () => {
+      try {
+        await saveNotes(projectId, value);
+        // A newer edit may have landed while this request was in flight. Only
+        // discard the recovery record when the completed save still represents
+        // the live editor; otherwise the newer text must remain recoverable.
+        if (editRevisionRef.current === editRevision) {
+          await discardDurableDraft();
+        }
+      } catch (error) {
+        console.warn("[ProjectNotesView] Notes remain in the durable draft:", error);
+      }
+    });
+    // Serialize writes so an older slow save can never complete after a newer
+    // manual save and overwrite the backend with stale content.
+    saveQueueRef.current = queuedSave;
+    return queuedSave;
+  }, [discardDurableDraft, projectId, saveNotes]);
 
   const handleChange = useCallback(
     (value: string) => {
+      // Disabling the textarea is an affordance, not a guard: nothing may be
+      // written back while the editor is not showing this project's loaded
+      // notes.
+      if (!notesReady) return;
+      editRevisionRef.current += 1;
       setDraft(value);
-      setIsDirty(true);
 
       // Auto-save after 1 second of inactivity
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
+      const editRevision = editRevisionRef.current;
       saveTimeoutRef.current = setTimeout(() => {
-        void saveNotes(projectId, value);
-        setIsDirty(false);
+        void persistNotes(value, editRevision);
       }, 1000);
     },
-    [projectId, saveNotes]
+    [notesReady, persistNotes, setDraft]
   );
 
   const handleSaveNow = () => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
-    void saveNotes(projectId, draft);
-    setIsDirty(false);
+    void persistNotes(draft, editRevisionRef.current);
   };
 
-  // Clean up timeout on unmount and flush save if dirty
+  // The durable draft hook flushes on unmount; only cancel the convenience
+  // auto-save timer here so a hidden view cannot race a later explicit save.
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
-      if (isDirtyRef.current) {
-        void saveNotes(projectId, draftRef.current);
-      }
     };
-  }, [projectId, saveNotes]);
+  }, []);
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -92,13 +122,35 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
         </div>
       </div>
 
+      {notesError && (
+        <div
+          role="alert"
+          className="flex items-center gap-3 border-b border-destructive/20 bg-destructive/10 px-6 py-2 text-xs text-destructive"
+        >
+          <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+            Couldn’t load these notes: {notesError}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto h-7 shrink-0"
+            onClick={() => {
+              void loadNotes(projectId);
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
       {/* Notes Editor */}
       <div className="flex-1 p-6">
         <Textarea
-          value={draft}
+          value={notesReady ? draft : ""}
           onChange={(e) => handleChange(e.target.value)}
           placeholder="Write project notes here... These notes are shared across all environments in this project."
           className="h-full min-h-[300px] resize-none text-sm font-mono"
+          disabled={!notesReady}
         />
       </div>
     </div>

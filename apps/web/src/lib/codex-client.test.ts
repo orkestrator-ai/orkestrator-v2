@@ -785,6 +785,43 @@ describe("codex-client getSessionStatus", () => {
     });
   });
 
+  test("accepts only a valid retryable unconfirmed-dispatch marker", async () => {
+    mockFetch(async () => Response.json({
+      status: "idle",
+      unconfirmedDispatch: {
+        requestId: "request-retry-1",
+        retryable: true,
+      },
+    }));
+
+    await expect(getSessionStatus(client, "session-1")).resolves.toMatchObject({
+      status: "idle",
+      unconfirmedDispatch: {
+        requestId: "request-retry-1",
+        retryable: true,
+      },
+    });
+  });
+
+  test.each([
+    ["missing", undefined],
+    ["null", null],
+    ["non-object", "request-retry-1"],
+    ["empty request id", { requestId: "", retryable: true }],
+    ["blank request id", { requestId: "   ", retryable: true }],
+    ["non-string request id", { requestId: 42, retryable: true }],
+    ["non-retryable", { requestId: "request-retry-1", retryable: false }],
+    ["missing retryable", { requestId: "request-retry-1" }],
+  ])("omits a %s unconfirmed-dispatch marker", async (_description, marker) => {
+    mockFetch(async () => Response.json({
+      status: "idle",
+      unconfirmedDispatch: marker,
+    }));
+
+    const status = await getSessionStatus(client, "session-1");
+    expect(status).not.toHaveProperty("unconfirmedDispatch");
+  });
+
   test.each([
     ["negative", -1],
     ["fractional", 1.5],

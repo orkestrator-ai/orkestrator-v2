@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { cn } from "@/lib/utils";
 import { resolveBrowserAddress } from "@/lib/browser-address";
+import { boundBrowserHistory } from "@/lib/browser-history";
 import {
   attachBrowserPreview,
   goBackBrowserPreview,
@@ -112,8 +113,19 @@ export function BrowserTab({
   })();
   const [address, setAddress] = useState(data.url);
   const [currentUrl, setCurrentUrl] = useState(data.url);
-  const [history, setHistory] = useState<string[]>(() => data.url ? [data.url] : []);
-  const [historyIndex, setHistoryIndex] = useState(() => data.url ? 0 : -1);
+  // The tracked history only drives the iframe preview: a native preview's
+  // history lives in Chromium (see `moveThroughHistory`). The refs are the
+  // authoritative cursor for the handlers that mutate it, so a second click or
+  // a submit that lands before React re-renders still reads what the previous
+  // one wrote. They are written only from those handlers, never during render.
+  const [history, setHistory] = useState<string[]>(() =>
+    data.history ?? (data.url ? [data.url] : [])
+  );
+  const [historyIndex, setHistoryIndex] = useState(() =>
+    data.historyIndex ?? (data.url ? 0 : -1)
+  );
+  const historyRef = useRef(history);
+  const historyIndexRef = useRef(historyIndex);
   const [loadRevision, setLoadRevision] = useState(0);
   const [isLoading, setIsLoading] = useState(Boolean(data.url));
   const [error, setError] = useState<string | null>(null);
@@ -125,19 +137,24 @@ export function BrowserTab({
   const [nativeState, setNativeState] = useState<BrowserPreviewState | null>(null);
   const [hasBlockingOverlay, setHasBlockingOverlay] = useState(false);
 
-  const applyNativeState = useCallback((state: BrowserPreviewState | null) => {
+  const applyNativeSurfaceState = useCallback((state: BrowserPreviewState | null) => {
     if (!state || state.tabId !== tabId) return;
     setNativeState(state);
     setIsLoading(state.loading);
     setError(state.error);
+  }, [tabId]);
 
+  const applyNativeState = useCallback((state: BrowserPreviewState | null) => {
+    if (!state || state.tabId !== tabId) return;
+    applyNativeSurfaceState(state);
     const navigatedDisplayUrl = displayUrlFromNativePreview(state.url, currentUrl);
-    if (!navigatedDisplayUrl || navigatedDisplayUrl === currentUrl) return;
+    if (!navigatedDisplayUrl) return;
+    if (navigatedDisplayUrl === currentUrl) return;
     setAddress(navigatedDisplayUrl);
     setCurrentUrl(navigatedDisplayUrl);
     locallyPersistedUrl.current = navigatedDisplayUrl;
     updateTabBrowserUrl(tabId, navigatedDisplayUrl, environmentId);
-  }, [currentUrl, environmentId, tabId, updateTabBrowserUrl]);
+  }, [applyNativeSurfaceState, currentUrl, environmentId, tabId, updateTabBrowserUrl]);
 
   useEffect(() => {
     const followsLocalNavigation = locallyPersistedUrl.current === data.url;
@@ -145,12 +162,16 @@ export function BrowserTab({
     setAddress(data.url);
     setCurrentUrl(data.url);
     if (!followsLocalNavigation) {
-      setHistory(data.url ? [data.url] : []);
-      setHistoryIndex(data.url ? 0 : -1);
+      const nextHistory = data.history ?? (data.url ? [data.url] : []);
+      const nextIndex = data.historyIndex ?? (data.url ? 0 : -1);
+      historyRef.current = nextHistory;
+      historyIndexRef.current = nextIndex;
+      setHistory(nextHistory);
+      setHistoryIndex(nextIndex);
       setIsLoading(Boolean(data.url));
       setError(null);
     }
-  }, [data.url]);
+  }, [data.history, data.historyIndex, data.url]);
 
   useEffect(() => {
     const refreshChanged = refreshRequestId !== previousRefreshRequestId.current;
@@ -304,7 +325,33 @@ export function BrowserTab({
     setIsLoading(true);
     if (!nativeBrowserPreview) setLoadRevision((revision) => revision + 1);
     locallyPersistedUrl.current = next.displayUrl;
-    updateTabBrowserUrl(tabId, next.displayUrl, environmentId);
+
+    if (recordHistory && nativeBrowserPreview) {
+      // Chromium recorded this navigation in its own history, so the address is
+      // the only durable part of it.
+      updateTabBrowserUrl(tabId, next.displayUrl, environmentId);
+    } else if (recordHistory) {
+      // Computed outside the state updater on purpose. The updater has to stay
+      // pure: React double-invokes it in development, and a second invocation
+      // that read the cursor the first one advanced would keep the forward
+      // entries this navigation is supposed to truncate.
+      const truncated = historyRef.current.slice(0, historyIndexRef.current + 1);
+      if (truncated[truncated.length - 1] !== next.displayUrl) {
+        truncated.push(next.displayUrl);
+      }
+      const bounded = boundBrowserHistory(truncated, truncated.length - 1);
+      historyRef.current = bounded.history;
+      historyIndexRef.current = bounded.historyIndex;
+      setHistory(bounded.history);
+      setHistoryIndex(bounded.historyIndex);
+      updateTabBrowserUrl(
+        tabId,
+        next.displayUrl,
+        environmentId,
+        bounded.history,
+        bounded.historyIndex,
+      );
+    }
 
     if (nativeBrowserPreview && nativeAttachedRef.current) {
       void navigateBrowserPreview(tabId, next.iframeUrl).then(applyNativeState).catch((navigationError) => {
@@ -312,18 +359,7 @@ export function BrowserTab({
         setError(errorMessage(navigationError));
       });
     }
-
-    if (recordHistory) {
-      setHistory((current) => {
-        const nextHistory = current.slice(0, historyIndex + 1);
-        if (nextHistory[nextHistory.length - 1] !== next.displayUrl) {
-          nextHistory.push(next.displayUrl);
-        }
-        setHistoryIndex(nextHistory.length - 1);
-        return nextHistory;
-      });
-    }
-  }, [applyNativeState, environmentId, historyIndex, nativeBrowserPreview, tabId, updateTabBrowserUrl]);
+  }, [applyNativeState, environmentId, nativeBrowserPreview, tabId, updateTabBrowserUrl]);
 
   const handleSubmit = useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -332,18 +368,27 @@ export function BrowserTab({
 
   const moveThroughHistory = useCallback((offset: -1 | 1) => {
     if (nativeBrowserPreview) {
+      // Chromium owns this preview's history. The tracked array only records
+      // address-bar navigations, so an in-preview link click already made the
+      // two diverge; forcing a tracked address back onto the surface would
+      // re-attach it as a fresh load and destroy the real forward entries.
+      // Only the RPC's own surface fields are applied here — the URL is
+      // reconciled by the state event that follows the navigation commit, which
+      // is also what persists it.
       const action = offset === -1 ? goBackBrowserPreview : goForwardBrowserPreview;
-      void action(tabId).then(applyNativeState).catch((navigationError) => {
+      void action(tabId).then(applyNativeSurfaceState).catch((navigationError) => {
         setError(errorMessage(navigationError));
       });
       return;
     }
-    const nextIndex = historyIndex + offset;
-    const nextAddress = history[nextIndex];
+    const nextIndex = historyIndexRef.current + offset;
+    const nextAddress = historyRef.current[nextIndex];
     if (!nextAddress) return;
+    historyIndexRef.current = nextIndex;
     setHistoryIndex(nextIndex);
+    updateTabBrowserUrl(tabId, nextAddress, environmentId, historyRef.current, nextIndex);
     navigate(nextAddress, false);
-  }, [applyNativeState, history, historyIndex, nativeBrowserPreview, navigate, tabId]);
+  }, [applyNativeSurfaceState, environmentId, nativeBrowserPreview, navigate, tabId, updateTabBrowserUrl]);
 
   const reload = useCallback(() => {
     if (!currentUrl) return;

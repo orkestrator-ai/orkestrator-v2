@@ -37,8 +37,6 @@ export interface TerminalSessionData {
   persistentSessionId?: string;
   /** Serialized terminal buffer (VT sequences) for restoration */
   serializedBuffer?: string;
-  /** Whether the auto-launch command (e.g., claude) was already executed */
-  hasLaunchedCommand?: boolean;
 }
 
 /** Draft image attachment for terminal compose bar persistence */
@@ -87,8 +85,6 @@ interface TerminalSessionStore {
   /** Set the persistent session ID for a tab */
   setPersistentSessionId: (tabId: string, persistentSessionId: string) => void;
 
-  /** Mark that the auto-launch command was executed for a tab */
-  setHasLaunchedCommand: (tabId: string, launched: boolean) => void;
 
   /** Get compose draft text for a tab */
   getComposeDraftText: (tabId: string) => string;
@@ -162,17 +158,6 @@ export const useTerminalSessionStore = create<TerminalSessionStore>(
 
         const newSessions = new Map(state.sessions);
         newSessions.set(tabId, { ...existing, persistentSessionId });
-        return { sessions: newSessions };
-      });
-    },
-
-    setHasLaunchedCommand: (tabId: string, launched: boolean) => {
-      set((state) => {
-        const existing = state.sessions.get(tabId);
-        if (!existing) return state;
-
-        const newSessions = new Map(state.sessions);
-        newSessions.set(tabId, { ...existing, hasLaunchedCommand: launched });
         return { sessions: newSessions };
       });
     },

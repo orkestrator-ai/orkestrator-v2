@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { RESULT_SENTINEL } from "./opencode-live-compatibility-probe";
+import { RESULT_SENTINEL } from "../../../../scripts/opencode-live-compatibility-probe";
 
 const liveTest =
   process.env.RUN_LIVE_OPENCODE_COMPATIBILITY === "1" ? test : test.skip;
@@ -22,7 +22,7 @@ liveTest(
     // rejects this cross-origin loopback request. Run the real CLI/SDK probe in
     // a clean Bun process so it uses Bun's native server-side fetch instead.
     const repoRoot = join(import.meta.dir, "..", "..", "..", "..");
-    const probePath = join(import.meta.dir, "opencode-live-compatibility-probe.ts");
+    const probePath = join(repoRoot, "scripts", "opencode-live-compatibility-probe.ts");
     // A renamed probe would otherwise surface as an opaque non-zero exit.
     expect(await Bun.file(probePath).exists(), `missing probe at ${probePath}`).toBe(true);
 

@@ -10,6 +10,15 @@ interface NativeComposeDockProps {
   /**
    * Always visible, in both centered and docked layouts.
    *
+   * For a connection-level status the user has to see whatever the transcript
+   * looks like. The desync banner is raised exactly when the tab received no
+   * messages, which is when the composer is centered, so routing it through
+   * `topAccessory` would hide it in the one state it exists for.
+   */
+  notice?: ReactNode;
+  /**
+   * Always visible, in both centered and docked layouts.
+   *
    * For content the turn is blocked on: an approval can arrive before the
    * transcript has any messages, which is exactly when the composer is
    * centered, so gating it on `!centered` would hide the prompt the user has
@@ -26,6 +35,7 @@ export function NativeComposeDock({
   children,
   actions,
   topAccessory,
+  notice,
   pinnedContent,
   title = "Ready to build!",
   rootRef,
@@ -50,6 +60,15 @@ export function NativeComposeDock({
         >
           <h2 className="text-xl font-bold text-white sm:text-2xl">{title}</h2>
         </div>
+
+        {notice ? (
+          <div
+            data-testid="compose-dock-notice"
+            className="pointer-events-auto mx-auto mb-1 flex w-full max-w-[56rem] flex-col sm:w-[min(calc(100%_-_2rem),56rem)]"
+          >
+            {notice}
+          </div>
+        ) : null}
 
         {pinnedContent ? (
           /**

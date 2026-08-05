@@ -65,6 +65,12 @@ export interface CodexUnconfirmedDispatch {
   fingerprint: string;
   requestId: string;
   /**
+   * This marker came from bridge status after the renderer lost its original
+   * prompt payload. It cannot be matched to an edited compose draft, and is
+   * retired when a later authoritative status no longer reports it.
+   */
+  restoredFromStatus?: boolean;
+  /**
    * The authoritative transcript did not contain this prompt, so the original
    * idempotency key must remain available for a safe retry.
    */

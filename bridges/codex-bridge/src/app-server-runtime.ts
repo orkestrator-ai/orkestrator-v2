@@ -45,7 +45,11 @@ import {
   type ThreadContext,
 } from "./sessions/thread-registry.js";
 import { TurnAccumulator, unconfirmedTurnId } from "./sessions/turn-accumulator.js";
-import { DispatchJournal } from "./sessions/dispatch-journal.js";
+import {
+  compareDispatchRecordsNewestFirst,
+  DispatchJournal,
+  DispatchJournalAdmissionError,
+} from "./sessions/dispatch-journal.js";
 import { BridgeSessionStore } from "./sessions/persistence.js";
 import {
   beginTurnRenderState,
@@ -146,6 +150,11 @@ export interface AppServerRuntimeOptions {
   orderedEventMaxCount?: number;
   /** Test/embedding override for the per-thread ordered-event byte estimate. */
   orderedEventMaxBytes?: number;
+  /** Test/embedding override for the one allowed initial-prompt overload retry. */
+  initialPromptRetryDelayMs?: number;
+  /** Test/embedding override for dispatch-journal admission limits. */
+  dispatchJournalMaxRecords?: number;
+  dispatchJournalMaxBytes?: number;
 }
 
 interface OrderedRuntimeEvent {
@@ -193,6 +202,7 @@ const VERY_LARGE_MESSAGE_CHARS = 1024 * 1024;
 
 const ORDERED_EVENT_ESTIMATE_MAX_DEPTH = 8;
 const ORDERED_EVENT_ESTIMATE_NODE_BYTES = 16;
+const DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS = 1_000;
 
 /** Cheap retained-size estimate that does not allocate a second encoded payload. */
 export function estimateOrderedEventBytes(value: unknown, depth = 0): number {
@@ -595,7 +605,12 @@ export class AppServerRuntime {
     this.options = options;
     this.now = options.now ?? Date.now;
     this.registry = new ThreadRegistry({ now: this.now });
-    this.journal = new DispatchJournal({ codexHome: options.codexHome, cwd: options.cwd });
+    this.journal = new DispatchJournal({
+      codexHome: options.codexHome,
+      cwd: options.cwd,
+      maxRecords: options.dispatchJournalMaxRecords,
+      maxBytes: options.dispatchJournalMaxBytes,
+    });
     this.store = new BridgeSessionStore({
       codexHome: options.codexHome,
       cwd: options.cwd,
@@ -1017,7 +1032,7 @@ export class AppServerRuntime {
         continue;
       }
       const current = byThread.get(record.threadId);
-      if (!current || Date.parse(record.updatedAt) > Date.parse(current.updatedAt)) {
+      if (!current || compareDispatchRecordsNewestFirst(record, current) < 0) {
         if (current) {
           await this.journal.markTerminal(current.requestId, "failed", {
             threadId: current.threadId ?? undefined,
@@ -1043,6 +1058,15 @@ export class AppServerRuntime {
           .find((candidate) => candidate.threadId === threadId);
       if (!session) {
         this.threadsAwaitingDispatchRecovery.delete(threadId);
+        // No bridge session is bound to this thread any more, so nothing will
+        // ever rehydrate the record and it would stay unresolved — and therefore
+        // exempt from retention and the cap — forever. Settling it `failed` keeps
+        // the id spent (`already-done`), which is the direction that can never
+        // duplicate an execution.
+        await this.journal.markTerminal(record.requestId, "failed", {
+          threadId,
+          turnId: record.turnId,
+        });
         continue;
       }
 
@@ -3076,6 +3100,7 @@ export class AppServerRuntime {
     structuredOutputRequestId?: string;
     structuredOutput?: StructuredOutputResult;
     contextUsage?: EngineUsageSnapshot;
+    unconfirmedDispatch?: { requestId: string; retryable: boolean };
     engineGeneration: number;
     messageRevision: number;
   } | null {
@@ -3090,6 +3115,7 @@ export class AppServerRuntime {
       session.threadId !== null
       && this.threadsAwaitingDispatchRecovery.has(session.threadId);
     const phase = context?.phase ?? (awaitingRecovery ? "recovering" : "idle");
+    const latestDispatch = this.journal.latestForSession(sessionId);
 
     return {
       // Keeps the pre-migration contract; `phase` carries the new detail.
@@ -3101,6 +3127,14 @@ export class AppServerRuntime {
       turnId: context?.activeTurn?.turnId,
       turnStartedAt: context?.turnStartedAt,
       requestId: context?.activeTurn?.requestId,
+      ...(latestDispatch?.state === "retryable"
+        ? {
+            unconfirmedDispatch: {
+              requestId: latestDispatch.requestId,
+              retryable: true,
+            },
+          }
+        : {}),
       structuredOutputRequestId: session.structuredOutputRequestId,
       structuredOutput: session.structuredOutput,
       contextUsage: session.threadId
@@ -3377,6 +3411,13 @@ export class AppServerRuntime {
     //    text under a new id is a legitimately different turn.
     {
       const decision = this.journal.classify(requestId);
+      if (decision.action === "blocked") {
+        return {
+          ok: false,
+          status: 503,
+          error: decision.reason ?? "Dispatch journal is unavailable",
+        };
+      }
       if (decision.action === "already-done") {
         return {
           ok: true,
@@ -3579,13 +3620,138 @@ export class AppServerRuntime {
         threadId: context.threadId,
       });
 
-      const turn = await this.options.engine.startTurn({
-        handle: context.engineHandle,
+      const startTurn = () => this.options.engine.startTurn({
+        handle: context!.engineHandle,
         input: engineInput,
         config: session.config,
         requestId,
         outputSchema: input.outputSchema,
       });
+      let turn;
+      try {
+        turn = await startTurn();
+      } catch (error) {
+        const failure = this.options.engine.classifyFailure(error);
+        if (
+          !requestId.startsWith("initial-prompt:")
+          || !failure.retryImmediately
+        ) {
+          throw error;
+        }
+        // Overload is the sole definite rejection: app-server guarantees the
+        // turn did not run. Persist that fact throughout the delay so a bridge
+        // shutdown cannot erase the only evidence that reusing this id is safe.
+        await this.journal.markRetryable(requestId);
+        // Generation recovery clears an unmaterialized context's `messages`
+        // property when it detaches the dead thread. Retain the actual array
+        // before the delay, during which a generation change can complete.
+        const retryMessages = context.messages;
+        await new Promise((resolve) => setTimeout(
+          resolve,
+          this.options.initialPromptRetryDelayMs ?? DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
+        ));
+        let liveSession = this.registry.getSession(session.id);
+        if (this.stopping || liveSession !== session) {
+          context.dispatchInFlight = false;
+          // The phase was moved to `starting` before the dispatch, and `starting`
+          // reports `running`. Settling it is not optional: the thread can outlive
+          // this bridge session (another tab may share it, and `releaseSession`
+          // only drops the thread once the last reference goes), so an unsettled
+          // context would 409 every later prompt with nothing scheduled to
+          // resolve it. `failed` rather than `idle` because it carries the reason
+          // to the surviving tabs, and it matches the rejected-dispatch exit
+          // below — the overload already proved this turn did not run, so this is
+          // not a `cancelling`/`recovering` phase that must keep reporting busy.
+          if (liveSession === session) {
+            this.registry.setPhase(context, "failed", "Codex bridge is stopping");
+            this.emitStatus(context);
+            // The marker was persisted before the delay, so shutdown can return
+            // without launching work or writing new state after engine stop.
+            return { ok: false, status: 503, error: "Codex bridge is stopping" };
+          }
+          this.registry.setPhase(context, "failed", "Session was deleted before its retry");
+          this.emitStatus(context);
+          // A deleted session has no consumer to rehydrate this marker and must
+          // never launch work after its final tab has gone away.
+          await this.journal.forget(requestId);
+          return { ok: false, status: 404, error: "Session not found" };
+        }
+
+        // The child may restart while the retry is deliberately delayed. Wait
+        // for generation recovery, then resolve the handle again instead of
+        // dispatching through the closure's pre-restart context. An initial
+        // prompt's empty thread has no rollout and is intentionally discarded by
+        // generation recovery, so recreate it and carry the already-published
+        // optimistic transcript onto the replacement context.
+        await this.generationRecovery;
+        liveSession = this.registry.getSession(session.id);
+        if (this.stopping || liveSession !== session) {
+          context.dispatchInFlight = false;
+          const message = this.stopping
+            ? "Codex bridge stopped during retry recovery"
+            : "Session was deleted during retry recovery";
+          this.registry.setPhase(context, "failed", message);
+          this.emitStatus(context);
+          if (liveSession !== session) await this.journal.forget(requestId);
+          return {
+            ok: false,
+            status: liveSession === session ? 503 : 404,
+            error: message,
+          };
+        }
+        const staleContext = context;
+        const reboundContext = await this.ensureAttached(session.id);
+        if (reboundContext) {
+          context = reboundContext;
+        } else {
+          let thread;
+          try {
+            thread = await this.options.engine.startThread({ config: session.config });
+          } catch (error) {
+            const message = error instanceof Error
+              ? error.message
+              : "Codex failed to create a replacement thread";
+            staleContext.dispatchInFlight = false;
+            this.registry.setPhase(staleContext, "failed", message);
+            this.emitStatus(staleContext);
+            return { ok: false, status: 503, error: message };
+          }
+          if (!thread.id) {
+            const message = "Codex did not return a thread id";
+            staleContext.dispatchInFlight = false;
+            this.registry.setPhase(staleContext, "failed", message);
+            this.emitStatus(staleContext);
+            return { ok: false, status: 503, error: message };
+          }
+          invalidateTranscriptCatalogCache();
+          context = this.registry.attach(session.id, thread.id, {
+            engineHandle: thread.handle,
+            engineGeneration: this.options.engine.info().generation,
+            cwd: thread.cwd,
+            modelId: thread.model,
+          });
+          if (thread.model) {
+            confirmedModelForTurn = thread.model;
+            assistantMessage.modelId = thread.model;
+          }
+          context.messages = retryMessages;
+          context.dispatchInFlight = true;
+          this.registry.setPhase(context, "starting");
+          const replacementState = this.stateFor(context.threadId);
+          replacementState.publishedMessageId = assistantMessage.id;
+          replacementState.publishedParts = [];
+          replacementState.publishedModelId = assistantMessage.modelId;
+          await this.persistSession(session);
+        }
+        context.dispatchInFlight = true;
+        this.registry.setPhase(context, "starting");
+        await this.journal.markPrepared({
+          requestId,
+          bridgeSessionId: session.id,
+          threadId: context.threadId,
+        });
+        turn = await startTurn();
+      }
       // Both halves of the exchange, so "fork from here" works on either bubble
       // for the lifetime of this process; hydration re-derives the same ids from
       // the rollout afterwards.
@@ -3647,6 +3813,16 @@ export class AppServerRuntime {
       };
     } catch (error) {
       context.dispatchInFlight = false;
+      if (error instanceof DispatchJournalAdmissionError) {
+        this.registry.setPhase(context, "failed", error.message);
+        this.emitStatus(context);
+        this.options.emit({
+          type: "session.error",
+          sessionId: session.id,
+          data: { error: error.message, code: "dispatch_journal_capacity" },
+        });
+        return { ok: false, status: 503, error: error.message };
+      }
       const classified = this.options.engine.classifyFailure(error);
       let ambiguousResolution: AmbiguousDispatchResolution | undefined;
 
@@ -3658,7 +3834,7 @@ export class AppServerRuntime {
        */
       if (classified.class === "rejected") {
         this.registry.setPhase(context, "failed", classified.engineError.message);
-        await this.journal.forget(requestId);
+        await this.journal.markRetryable(requestId);
       } else {
         ambiguousResolution = await this.settleAmbiguousDispatch(
           context,

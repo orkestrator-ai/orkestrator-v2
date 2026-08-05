@@ -625,6 +625,48 @@ class TmuxBackend {
     return out.stdout;
   }
 
+  /**
+   * At most `maxBytes` of `filePath`, or undefined when it does not exist.
+   *
+   * Hook payloads are written by an agent this process does not control, so the
+   * read that feeds the retained snapshot and every SSE subscriber has to be
+   * bounded at the source rather than trimmed afterwards.
+   */
+  async readBoundedFile(
+    filePath: string,
+    maxBytes: number,
+  ): Promise<{ content: string; truncated: boolean } | undefined> {
+    if (this.kind === "local") {
+      let handle: Awaited<ReturnType<typeof fs.open>>;
+      try {
+        handle = await fs.open(filePath, "r");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+      try {
+        const buffer = Buffer.allocUnsafe(maxBytes + 1);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        return {
+          content: buffer.subarray(0, Math.min(bytesRead, maxBytes)).toString("utf8"),
+          truncated: bytesRead > maxBytes,
+        };
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
+    }
+
+    const probe = await this.exec(["test", "-f", filePath]);
+    if (probe.status !== 0) return undefined;
+    const out = await this.exec(["head", "-c", String(maxBytes + 1), filePath]);
+    if (out.status !== 0) throw new Error(out.stderr || `failed to read ${filePath}`);
+    const buffer = Buffer.from(out.stdout);
+    return {
+      content: buffer.subarray(0, maxBytes).toString("utf8"),
+      truncated: buffer.byteLength > maxBytes,
+    };
+  }
+
   async writeFile(filePath: string, content: string): Promise<void> {
     if (this.kind === "local") {
       await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -894,6 +936,15 @@ type PendingHookEvent = {
   expiresAt?: number;
 };
 
+/**
+ * Upper bound on one hook payload file. Generous enough that a real tool-use
+ * payload parses as JSON, small enough that a pathological or hostile hook file
+ * cannot be held in memory and fanned out to every SSE subscriber.
+ */
+export const TMUX_HOOK_PAYLOAD_MAX_BYTES = 4 * 1024 * 1024;
+/** The timing sidecar is two integers. */
+const TMUX_HOOK_TIMING_MAX_BYTES = 4 * 1024;
+
 function blockingHookTiming(id: string): { requestedAt: number; expiresAt: number } | null {
   const timestamp = id.split("-", 1)[0] ?? "";
   if (!/^\d+$/.test(timestamp)) return null;
@@ -940,7 +991,10 @@ async function readBlockingHookTiming(
   id: string,
 ): Promise<{ requestedAt: number; expiresAt: number } | null> {
   const authoritative = parseBlockingHookTiming(
-    await backend.readFile(`${paths.timingDir}/${filename}`),
+    (await backend.readBoundedFile(
+      `${paths.timingDir}/${filename}`,
+      TMUX_HOOK_TIMING_MAX_BYTES,
+    ))?.content,
   );
   // Hooks installed by an older backend do not have a timing sidecar. Keep
   // their pending prompts displayable until the workspace hook is reinstalled.
@@ -1252,7 +1306,23 @@ async function drainPending(
     const blocking = isBlockingHook(kind);
     if (blocking && alreadyEmitted.has(id)) continue;
 
-    const content = await backend.readFile(full);
+    const read = await backend.readBoundedFile(full, TMUX_HOOK_PAYLOAD_MAX_BYTES);
+    if (blocking && read?.truncated) {
+      // A blocking payload that cannot be safely read must still receive an
+      // answer. Leaving it pending would park the agent for five minutes;
+      // truncating it could present a materially different approval request.
+      await replyToHook(
+        backend,
+        paths,
+        kind,
+        id,
+        failClosedHookResponse(kind, "Approval payload exceeded the safe size limit."),
+      );
+      alreadyEmitted.delete(id);
+      continue;
+    }
+
+    const content = read?.content;
     if (content === undefined) continue;
 
     let payload: unknown = content;
@@ -1285,7 +1355,23 @@ async function listPendingBlocking(backend: TmuxBackend, paths: SessionHookPaths
     if (!isBlockingHook(kind)) continue;
     if (await backend.readFile(`${paths.responseDir}/${name}`) !== undefined) continue;
 
-    const content = await backend.readFile(`${paths.pendingDir}/${name}`);
+    const pendingPath = `${paths.pendingDir}/${name}`;
+    const read = await backend.readBoundedFile(
+      pendingPath,
+      TMUX_HOOK_PAYLOAD_MAX_BYTES,
+    );
+    if (read?.truncated) {
+      await replyToHook(
+        backend,
+        paths,
+        kind,
+        id,
+        failClosedHookResponse(kind, "Approval payload exceeded the safe size limit."),
+      );
+      continue;
+    }
+
+    const content = read?.content;
     if (content === undefined) continue;
     let payload: unknown = content;
     try {
@@ -1328,6 +1414,24 @@ function preToolUseResponse(decision: string, reason?: string): unknown {
   };
   if (reason) hookSpecificOutput.permissionDecisionReason = reason;
   return { hookSpecificOutput };
+}
+
+function failClosedHookResponse(kind: string, reason: string): unknown {
+  if (kind === "PreToolUse") return preToolUseResponse("deny", reason);
+  if (kind === "PermissionRequest") {
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny", message: reason },
+      },
+    };
+  }
+  return {
+    hookSpecificOutput: {
+      hookEventName: "Elicitation",
+      action: "cancel",
+    },
+  };
 }
 
 function encodeCwd(cwd: string): string {
@@ -1615,7 +1719,38 @@ type TmuxStatus = {
   permission_mode: string;
   fast_mode: boolean | null;
   observation: TmuxAgentObservation;
+  info_events: Array<{
+    id: string;
+    kind: string;
+    message: string;
+    receivedAt: string;
+  }>;
 };
+
+const TMUX_INFO_EVENT_LIMIT = 20;
+const TMUX_INFO_EVENT_MESSAGE_MAX_UNITS = 2_000;
+
+/**
+ * Truncates an untrusted hook message to at most
+ * {@link TMUX_INFO_EVENT_MESSAGE_MAX_UNITS} UTF-16 units without splitting a
+ * surrogate pair.
+ *
+ * The bound is in UTF-16 units, not code points, so worst-case retained size is
+ * the 4KB the previous `.slice(0, 2000)` gave rather than double it. Iteration
+ * stops at the bound: `Array.from(message)` would first allocate one entry per
+ * code point of the whole payload before slicing it back down.
+ */
+export function boundedInfoEventMessage(message: string): string {
+  if (message.length <= TMUX_INFO_EVENT_MESSAGE_MAX_UNITS) return message;
+  const retained: string[] = [];
+  let units = 0;
+  for (const codePoint of message) {
+    if (units + codePoint.length > TMUX_INFO_EVENT_MESSAGE_MAX_UNITS) break;
+    retained.push(codePoint);
+    units += codePoint.length;
+  }
+  return retained.join("");
+}
 
 function permissionModeFromTranscriptLine(line: unknown): string | undefined {
   if (!line || typeof line !== "object") return undefined;
@@ -1739,6 +1874,7 @@ class TmuxSession {
   private taskTracker = new TranscriptTaskTracker();
   private busy = false;
   private busyStartedAt: number | null = null;
+  private readonly infoEvents: TmuxStatus["info_events"] = [];
   /**
    * A Stop hook is a turn boundary even when this backend did not observe the
    * matching UserPromptSubmit (for example, after a backend restart). The
@@ -1802,6 +1938,7 @@ class TmuxSession {
       permission_mode: this.permissionMode,
       fast_mode: this.fastMode,
       observation: this.observation,
+      info_events: [...this.infoEvents],
     };
   }
 
@@ -2305,6 +2442,37 @@ class TmuxSession {
   private emitHook(context: CommandContext, event: PendingHookEvent): void {
     this.updateBusyFromHookKind(event.kind, context);
     if (event.kind === "Stop") this.scheduleCompletionNotification(context);
+    let emittedPayload = event.payload;
+    if (event.kind === "Notification" || event.kind === "Stop") {
+      const payload = event.payload && typeof event.payload === "object"
+        ? event.payload as Record<string, unknown>
+        : undefined;
+      const rawMessage = typeof payload?.message === "string"
+        ? payload.message
+        : event.kind === "Stop"
+          ? "Claude finished responding"
+          : "Claude sent a notification";
+      const message = boundedInfoEventMessage(rawMessage);
+      // Bound the message the subscribers get too. Retaining a trimmed copy
+      // while broadcasting the original would move the cost rather than remove
+      // it: the payload is fanned out to every SSE listener.
+      if (payload && typeof payload.message === "string") {
+        emittedPayload = { ...payload, message };
+      }
+      const duplicateIndex = this.infoEvents.findIndex((entry) =>
+        entry.id === event.id && entry.kind === event.kind
+      );
+      if (duplicateIndex >= 0) this.infoEvents.splice(duplicateIndex, 1);
+      this.infoEvents.push({
+        id: event.id,
+        kind: event.kind,
+        message,
+        receivedAt: new Date(event.requestedAt ?? Date.now()).toISOString(),
+      });
+      if (this.infoEvents.length > TMUX_INFO_EVENT_LIMIT) {
+        this.infoEvents.splice(0, this.infoEvents.length - TMUX_INFO_EVENT_LIMIT);
+      }
+    }
     context.emit(CLAUDE_TMUX_EVENT, {
       kind: "hook",
       tab_id: this.tabId,
@@ -2312,7 +2480,7 @@ class TmuxSession {
       session_id: this.sessionId,
       event_id: event.id,
       event_kind: event.kind,
-      payload: event.payload,
+      payload: emittedPayload,
       requested_at: event.requestedAt,
       expires_at: event.expiresAt,
     });

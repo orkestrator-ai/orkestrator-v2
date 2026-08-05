@@ -36,7 +36,11 @@ import {
 } from "@/lib/initial-prompt-attachments";
 import { resolveClaudeConfig } from "@/lib/claude-mode-resolver";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
-import { createPersistedPaneLayoutInput, flushPaneLayoutNow } from "@/lib/pane-layout-persistence";
+import {
+  createPersistedPaneLayoutInput,
+  flushPaneLayoutNow,
+  migratePaneLayoutBrowserHistory,
+} from "@/lib/pane-layout-persistence";
 import {
   applyStoredPaneSelection,
   clearStoredPaneSelection,
@@ -79,8 +83,8 @@ interface TerminalContainerProps {
  * Backoff between retries of a failed backend setup-session lookup, and the
  * point at which the tab is given up on and retired instead of retried forever.
  */
-const SETUP_SESSION_BIND_RETRY_DELAY_MS = 2_000;
-const SETUP_SESSION_BIND_MAX_ATTEMPTS = 3;
+const SETUP_SESSION_BIND_RETRY_DELAY_MS = 250;
+const MAX_SETUP_SESSION_BIND_ATTEMPTS = 3;
 
 /**
  * Check if a collision ID represents a tab bar or tab (not an edge zone).
@@ -522,28 +526,10 @@ export function TerminalContainer({
   const setupSessionBindInFlightRef = useRef(new Set<string>());
   const setupSessionBindSettledTabsRef = useRef(new Set<string>());
   const setupSessionBindAttemptsRef = useRef(new Map<string, number>());
-  const setupSessionBindRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setupSessionBindRetryTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const durableLaunchClearInFlightRef = useRef(false);
   const [setupSessionBindNonce, setSetupSessionBindNonce] = useState(0);
   const [setupSessionBindRetryNonce, setSetupSessionBindRetryNonce] = useState(0);
-
-  // A rejected setup-session lookup leaves the tab neither bound nor settled,
-  // and nothing else re-runs the rebind effect. Without a retry the tab renders
-  // a permanently blank pane: it is backend-managed, so `attachExistingOnly`
-  // suppresses PTY creation and no error surfaces anywhere.
-  const scheduleSetupSessionBindRetry = useCallback(() => {
-    if (setupSessionBindRetryTimerRef.current) return;
-    setupSessionBindRetryTimerRef.current = setTimeout(() => {
-      setupSessionBindRetryTimerRef.current = null;
-      setSetupSessionBindRetryNonce((value) => value + 1);
-    }, SETUP_SESSION_BIND_RETRY_DELAY_MS);
-  }, []);
-
-  useEffect(() => () => {
-    if (!setupSessionBindRetryTimerRef.current) return;
-    clearTimeout(setupSessionBindRetryTimerRef.current);
-    setupSessionBindRetryTimerRef.current = null;
-  }, []);
 
   const setupSessionKeyForTab = useCallback(
     (tabId: string) => createSessionKey(containerId ?? null, tabId, environmentId),
@@ -579,8 +565,11 @@ export function TerminalContainer({
           tabId,
           key: setupSessionKeyForTab(tabId),
         });
-        const setupSession = await backend.getEnvironmentSetupSession(environmentId);
+        const setupSession = typeof backend.awaitEnvironmentSetupSession === "function"
+          ? await backend.awaitEnvironmentSetupSession(environmentId)
+          : await backend.getEnvironmentSetupSession(environmentId);
         lookupSettled = true;
+        setupSessionBindAttemptsRef.current.delete(tabId);
         if (!setupSession?.sessionId) {
           console.info("[setup-terminal] no backend setup session available", {
             environmentId,
@@ -608,27 +597,27 @@ export function TerminalContainer({
         return true;
       } catch (error) {
         console.error("[TerminalContainer] Failed to bind backend setup session:", error);
+        // A failed existence probe is not evidence that the backend-owned setup
+        // session is gone. Retry without requiring a component remount, while
+        // retaining a finite budget so a dead backend cannot pin a blank tab.
         const attempts = (setupSessionBindAttemptsRef.current.get(tabId) ?? 0) + 1;
         setupSessionBindAttemptsRef.current.set(tabId, attempts);
-        if (attempts < SETUP_SESSION_BIND_MAX_ATTEMPTS) {
-          scheduleSetupSessionBindRetry();
+        if (attempts < MAX_SETUP_SESSION_BIND_ATTEMPTS) {
+          const existingTimer = setupSessionBindRetryTimersRef.current.get(tabId);
+          if (existingTimer) clearTimeout(existingTimer);
+          const timer = setTimeout(() => {
+            setupSessionBindRetryTimersRef.current.delete(tabId);
+            setSetupSessionBindRetryNonce((value) => value + 1);
+          }, SETUP_SESSION_BIND_RETRY_DELAY_MS * attempts);
+          setupSessionBindRetryTimersRef.current.set(tabId, timer);
         } else {
-          // Out of retries. Settle the tab so stale-tab cleanup can retire this
-          // dead placeholder and the initial-layout effect can seed a working
-          // tab in its place, rather than leaving a pane that never connects.
-          console.warn("[setup-terminal] giving up on backend setup session lookup", {
-            environmentId,
-            tabId,
-            attempts,
-          });
-          setupSessionBindSettledTabsRef.current.add(tabId);
-          setSetupSessionBindNonce((value) => value + 1);
+          lookupSettled = true;
+          setupSessionBindAttemptsRef.current.delete(tabId);
         }
         return false;
       } finally {
         setupSessionBindInFlightRef.current.delete(tabId);
         if (lookupSettled) {
-          setupSessionBindAttemptsRef.current.delete(tabId);
           setupSessionBindSettledTabsRef.current.add(tabId);
           // The terminal store update itself rerenders PersistentTerminal. This
           // local nonce lets stale-tab cleanup distinguish a completed lookup
@@ -637,7 +626,7 @@ export function TerminalContainer({
         }
       }
     },
-    [environmentId, hasBoundSetupSession, scheduleSetupSessionBindRetry, setupSessionKeyForTab],
+    [environmentId, hasBoundSetupSession, setupSessionKeyForTab],
   );
 
   useEffect(() => {
@@ -666,12 +655,16 @@ export function TerminalContainer({
     currentEnvState,
     environmentId,
     hasBoundSetupSession,
-    // Re-runs this effect after a failed lookup's backoff elapses. Nothing else
-    // changes when a lookup rejects, so without it a transient network failure
-    // would strand the tab unbound forever.
-    setupSessionBindRetryNonce,
     setupPhase,
+    setupSessionBindRetryNonce,
   ]);
+
+  useEffect(() => () => {
+    for (const timer of setupSessionBindRetryTimersRef.current.values()) {
+      clearTimeout(timer);
+    }
+    setupSessionBindRetryTimersRef.current.clear();
+  }, []);
 
   useEffect(() => {
     if (
@@ -1027,6 +1020,27 @@ export function TerminalContainer({
             // the renderer-local v1 selection can no longer be useful.
             if (persisted?.version === PANE_LAYOUT_VERSION) {
               clearStoredPaneSelection(environmentId);
+              if (restored) {
+                void migratePaneLayoutBrowserHistory(environmentId, persisted)
+                  .catch((error) => {
+                    console.warn(
+                      "[TerminalContainer] Failed to migrate browser history privacy fields:",
+                      error,
+                    );
+                  });
+              } else {
+                // A stale-generation or malformed current-version snapshot
+                // cannot safely be rewritten as renderer state. Remove only
+                // the exact revision we inspected; a concurrent newer layout
+                // wins the CAS and is preserved for the next reconciliation.
+                void backend.deletePaneLayout(environmentId, persisted.revision)
+                  .catch((error) => {
+                    console.warn(
+                      "[TerminalContainer] Failed to remove an unusable pane layout snapshot:",
+                      error,
+                    );
+                  });
+              }
             }
 
             if (restored && persisted?.version === LEGACY_PANE_LAYOUT_VERSION) {
@@ -1092,8 +1106,7 @@ export function TerminalContainer({
             try {
               const savedAttachments = await saveInitialPromptAttachments({
                 attachments: pendingAttachments,
-                containerId: isLocalEnvironment ? null : containerId,
-                worktreePath,
+                environmentId,
               });
               const currentOptions = useClaudeOptionsStore.getState().getOptions(environmentId);
               if (!currentOptions) return;

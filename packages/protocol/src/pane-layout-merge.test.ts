@@ -1,21 +1,50 @@
+/**
+ * Sibling suite for the shared three-way pane-layout merge.
+ *
+ * The merge ships in `@orkestrator/protocol`, so it has to be covered by the
+ * protocol test group: the renderer is only one of its consumers, and a change
+ * made here must fail this package's own suite rather than a downstream app's.
+ */
 import { describe, expect, test } from "bun:test";
-import type {
-  PaneNode,
-  PersistedPaneLayoutInput,
-  TabInfo,
-} from "@/types/paneLayout";
-import { PANE_LAYOUT_VERSION } from "@/types/paneLayout";
+import { PANE_LAYOUT_VERSION } from "./pane-layout";
 import {
   isPaneNode,
   mergePersistedPaneLayouts,
+  type PaneLayoutTab,
 } from "./pane-layout-merge";
 
-function leaf(id: string, tabs: string[]): PaneNode {
+/**
+ * Tabs carry arbitrary renderer-owned metadata; the merge only knows `id` and
+ * `type` and treats the rest generically, which is exactly what these fixtures
+ * exercise.
+ */
+interface TabInfo extends PaneLayoutTab {
+  [key: string]: unknown;
+}
+
+type PaneNode =
+  | { kind: "leaf"; id: string; tabs: TabInfo[]; activeTabId: string | null }
+  | {
+      kind: "split";
+      id: string;
+      direction: string;
+      sizes: [number, number];
+      children: [PaneNode, PaneNode];
+    };
+
+interface PersistedPaneLayoutInput {
+  version: number;
+  containerId: string | null;
+  activePaneId: string;
+  root: PaneNode;
+}
+
+function leaf(id: string, tabIds: string[]): PaneNode {
   return {
     kind: "leaf",
     id,
-    tabs: tabs.map((tabId) => ({ id: tabId, type: "plain" })),
-    activeTabId: tabs[0] ?? null,
+    tabs: tabIds.map((tabId) => ({ id: tabId, type: "plain" })),
+    activeTabId: tabIds[0] ?? null,
   };
 }
 
@@ -26,7 +55,6 @@ function split(left: PaneNode, right: PaneNode): PaneNode {
     direction: "horizontal",
     children: [left, right],
     sizes: [50, 50],
-    depth: 1,
   };
 }
 
@@ -41,8 +69,18 @@ function input(root: PaneNode): PersistedPaneLayoutInput {
 
 function tabs(root: unknown): TabInfo[] {
   if (!isPaneNode(root)) throw new Error("invalid test root");
-  if (root.kind === "leaf") return root.tabs;
+  if (root.kind === "leaf") return root.tabs as TabInfo[];
   return [...tabs(root.children[0]), ...tabs(root.children[1])];
+}
+
+function asLeaf(node: PaneNode): Extract<PaneNode, { kind: "leaf" }> {
+  if (node.kind !== "leaf") throw new Error("expected a leaf fixture");
+  return node;
+}
+
+function asSplit(node: PaneNode): Extract<PaneNode, { kind: "split" }> {
+  if (node.kind !== "split") throw new Error("expected a split fixture");
+  return node;
 }
 
 describe("mergePersistedPaneLayouts", () => {
@@ -77,8 +115,7 @@ describe("mergePersistedPaneLayouts", () => {
     const base = input(leaf("default", ["base", "closed"]));
     const local = input(leaf("default", ["base"]));
     const remoteRoot = leaf("default", ["base", "closed"]);
-    (remoteRoot as Extract<PaneNode, { kind: "leaf" }>).tabs[1]!.displayTitle =
-      "remote rename";
+    asLeaf(remoteRoot).tabs[1]!.displayTitle = "remote rename";
 
     const merged = mergePersistedPaneLayouts(base, local, input(remoteRoot));
 
@@ -108,14 +145,14 @@ describe("mergePersistedPaneLayouts", () => {
       ...baseTab,
       displayTitle: "Remote title",
       codexNativeData: {
-        ...baseTab.codexNativeData!,
+        ...(baseTab.codexNativeData as Record<string, unknown>),
         sessionId: "session-new",
       },
     };
 
     const merged = mergePersistedPaneLayouts(
       makeInput(baseTab),
-      makeInput(localTab),
+      makeInput(localTab as TabInfo),
       makeInput(remoteTab),
     );
 
@@ -221,8 +258,8 @@ describe("mergePersistedPaneLayouts", () => {
     const malformed = (root: unknown) =>
       ({ ...valid, root }) as unknown as PersistedPaneLayoutInput;
 
-    // Every side is a trust boundary: base and local come from this renderer's
-    // own mirror, remote straight off disk.
+    // Every side is a trust boundary: base and local come from a renderer's own
+    // mirror, remote straight off disk.
     expect(() =>
       mergePersistedPaneLayouts(valid, valid, malformed({ kind: "leaf" }))
     ).toThrow("malformed");
@@ -381,17 +418,17 @@ describe("mergePersistedPaneLayouts", () => {
       activePaneId: "default",
       root: leaf("default", ["base", "remote"]),
     };
-    (localRoot as Extract<PaneNode, { kind: "split" }>).children[0] = {
-      ...(localRoot as Extract<PaneNode, { kind: "split" }>).children[0],
+    asSplit(localRoot).children[0] = {
+      ...asLeaf(asSplit(localRoot).children[0]),
       activeTabId: "local",
-    } as PaneNode;
+    };
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
     expect(merged.version).toBe(local.version);
     expect(merged.containerId).toBe("container-1");
     expect(merged.activePaneId).toBe("right");
-    const children = (merged.root as Extract<PaneNode, { kind: "split" }>).children;
+    const children = asSplit(merged.root).children;
     expect(children[0]).toMatchObject({ id: "left", activeTabId: "local" });
     expect(children[1]).toMatchObject({ id: "right", activeTabId: "only" });
   });
@@ -400,8 +437,8 @@ describe("mergePersistedPaneLayouts", () => {
     const baseRoot = leaf("default", ["a", "b", "c"]);
     const localRoot = leaf("default", ["a", "b", "c"]);
     const remoteRoot = leaf("default", ["a", "b", "c"]);
-    (localRoot as Extract<PaneNode, { kind: "leaf" }>).activeTabId = "b";
-    (remoteRoot as Extract<PaneNode, { kind: "leaf" }>).activeTabId = "c";
+    asLeaf(localRoot).activeTabId = "b";
+    asLeaf(remoteRoot).activeTabId = "c";
 
     const merged = mergePersistedPaneLayouts(
       input(baseRoot),
@@ -418,7 +455,7 @@ describe("mergePersistedPaneLayouts", () => {
   test("projects a local focus change through a concurrent remote split", () => {
     const baseRoot = leaf("default", ["a", "b"]);
     const localRoot = leaf("default", ["a", "b"]);
-    (localRoot as Extract<PaneNode, { kind: "leaf" }>).activeTabId = "b";
+    asLeaf(localRoot).activeTabId = "b";
     const remote = input(split(leaf("left", ["a"]), leaf("right", ["b"])));
 
     const merged = mergePersistedPaneLayouts(
@@ -439,7 +476,7 @@ describe("mergePersistedPaneLayouts", () => {
   test("uses explicit focus intent even when the desired value equals the base", () => {
     const base = input(leaf("default", ["a", "b"]));
     const remoteRoot = leaf("default", ["a", "b"]);
-    (remoteRoot as Extract<PaneNode, { kind: "leaf" }>).activeTabId = "b";
+    asLeaf(remoteRoot).activeTabId = "b";
 
     const merged = mergePersistedPaneLayouts(base, base, input(remoteRoot), {
       selectionIntent: {
@@ -470,7 +507,7 @@ describe("mergePersistedPaneLayouts", () => {
   test("falls back to a surviving remote selection when the local tab was deleted", () => {
     const base = input(leaf("default", ["a", "b"]));
     const localRoot = leaf("default", ["a", "b"]);
-    (localRoot as Extract<PaneNode, { kind: "leaf" }>).activeTabId = "b";
+    asLeaf(localRoot).activeTabId = "b";
     const remote = input(leaf("default", ["a"]));
 
     const merged = mergePersistedPaneLayouts(base, input(localRoot), remote);
@@ -520,11 +557,8 @@ describe("mergePersistedPaneLayouts", () => {
     const baseRoot = split(leaf("left", ["a", "b"]), leaf("right", ["c", "d"]));
     const localRoot = structuredClone(baseRoot);
     const remoteRoot = structuredClone(baseRoot);
-    if (localRoot.kind !== "split" || remoteRoot.kind !== "split") {
-      throw new Error("expected split fixtures");
-    }
-    localRoot.children[1] = {
-      ...localRoot.children[1] as Extract<PaneNode, { kind: "leaf" }>,
+    asSplit(localRoot).children[1] = {
+      ...asLeaf(asSplit(localRoot).children[1]),
       activeTabId: "d",
     };
 
@@ -542,10 +576,7 @@ describe("mergePersistedPaneLayouts", () => {
     const base = input(split(leaf("left", ["old"]), leaf("right", ["stay"])));
     const local = input(split(leaf("left", []), leaf("right", ["stay"])));
     const remoteRoot = split(leaf("left", ["c", "d"]), leaf("right", ["stay"]));
-    if (remoteRoot.kind !== "split" || remoteRoot.children[0].kind !== "leaf") {
-      throw new Error("expected split fixture");
-    }
-    remoteRoot.children[0].activeTabId = "d";
+    asLeaf(asSplit(remoteRoot).children[0]).activeTabId = "d";
 
     const merged = mergePersistedPaneLayouts(base, local, input(remoteRoot), {
       selectionIntent: { activeTabIds: { left: null } },
@@ -558,20 +589,11 @@ describe("mergePersistedPaneLayouts", () => {
 
   test("does not re-key local selection into a remotely selected surviving pane", () => {
     const baseRoot = split(leaf("left", ["x", "y"]), leaf("right", ["c", "d"]));
-    if (baseRoot.kind !== "split" || baseRoot.children[0].kind !== "leaf") {
-      throw new Error("expected split fixture");
-    }
-    baseRoot.children[0].activeTabId = "y";
+    asLeaf(asSplit(baseRoot).children[0]).activeTabId = "y";
     const localRoot = structuredClone(baseRoot);
-    if (localRoot.kind !== "split" || localRoot.children[0].kind !== "leaf") {
-      throw new Error("expected split fixture");
-    }
-    localRoot.children[0].activeTabId = "x";
+    asLeaf(asSplit(localRoot).children[0]).activeTabId = "x";
     const remoteRoot = split(leaf("left", ["y"]), leaf("right", ["c", "d", "x"]));
-    if (remoteRoot.kind !== "split" || remoteRoot.children[1].kind !== "leaf") {
-      throw new Error("expected split fixture");
-    }
-    remoteRoot.children[1].activeTabId = "d";
+    asLeaf(asSplit(remoteRoot).children[1]).activeTabId = "d";
 
     const merged = mergePersistedPaneLayouts(
       input(baseRoot),
@@ -584,6 +606,61 @@ describe("mergePersistedPaneLayouts", () => {
         { id: "left", activeTabId: "y" },
         { id: "right", activeTabId: "d" },
       ],
+    });
+  });
+});
+
+/**
+ * `selectionIntent` is checked for *presence*, so an empty object is truthy and
+ * disables both no-op fast paths. `commands.ts` builds exactly that shape when a
+ * request carries a selection-intent field it could not parse into anything, so
+ * this is a live input, not a theoretical one.
+ */
+describe("mergePersistedPaneLayouts selection-intent edge cases", () => {
+  test("an empty selection intent does not change the outcome of either fast path", () => {
+    const base = input(leaf("default", ["a"]));
+    const localOnly = input(leaf("default", ["a", "local"]));
+    const remoteRoot = leaf("default", ["a", "remote"]);
+    asLeaf(remoteRoot).activeTabId = "remote";
+    const remoteOnly = input(remoteRoot);
+
+    // Unchanged local: the fast path would clone remote, and the full merge has
+    // to agree with it.
+    expect(mergePersistedPaneLayouts(base, base, remoteOnly, { selectionIntent: {} }))
+      .toEqual(mergePersistedPaneLayouts(base, base, remoteOnly));
+
+    // Unchanged remote: same, in the other direction.
+    expect(mergePersistedPaneLayouts(base, localOnly, base, { selectionIntent: {} }))
+      .toEqual(mergePersistedPaneLayouts(base, localOnly, base));
+  });
+
+  test("an intent naming a concurrently deleted tab is discarded", () => {
+    const base = input(leaf("default", ["a", "b"]));
+    const remote = input(leaf("default", ["b"]));
+
+    const merged = mergePersistedPaneLayouts(base, base, remote, {
+      selectionIntent: { activePaneId: "default", activeTabIds: { default: "a" } },
+    });
+
+    // Selecting a tab that no longer exists would leave the pane pointing at
+    // nothing; the surviving selection has to win instead.
+    expect(tabs(merged.root).map(({ id }) => id)).toEqual(["b"]);
+    expect(merged.root).toMatchObject({ activeTabId: "b" });
+    expect(merged.activePaneId).toBe("default");
+  });
+
+  test("a null intent is ignored while the pane still has tabs", () => {
+    const base = input(leaf("default", ["a", "b"]));
+
+    const merged = mergePersistedPaneLayouts(base, base, structuredClone(base), {
+      selectionIntent: { activeTabIds: { default: null } },
+    });
+
+    // "No selection" is only meaningful for an emptied pane. Honouring it here
+    // would blank the user's active tab in a pane that still has two of them.
+    expect(merged.root).toMatchObject({
+      tabs: [{ id: "a" }, { id: "b" }],
+      activeTabId: "a",
     });
   });
 });

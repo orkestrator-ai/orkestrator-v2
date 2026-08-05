@@ -725,12 +725,12 @@ describe("direct backend command registry coverage", () => {
     const second = await invoke("create_terminal_session", args, context);
     expect(first.created).toBe(true);
     expect(first.sessionId).toStartWith("assigned-container:");
-    expect(second).toEqual({ sessionId: first.sessionId, created: false });
+    expect(second).toEqual({ sessionId: first.sessionId, created: false, bootstrapped: false });
     expect(await invoke(
       "get_terminal_session",
       { sessionId: first.sessionId },
       context,
-    )).toEqual({ id: first.sessionId, running: false });
+    )).toEqual({ id: first.sessionId, running: false, bootstrapped: false });
     expect(await invoke(
       "get_terminal_output_snapshot",
       { sessionId: first.sessionId },

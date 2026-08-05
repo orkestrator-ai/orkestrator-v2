@@ -129,6 +129,42 @@ describe("NativeChatShell", () => {
     expect(spacer.style.height).toBe("735px");
   });
 
+  test("shows a desync warning while already at the bottom without another accessory", () => {
+    render(<NativeChatShell {...shellProps()} desynced />);
+
+    expect(screen.getByText(/Live updates disconnected/)).toBeTruthy();
+  });
+
+  test("shows the desync warning while the composer is centered", () => {
+    /**
+     * `centerCompose` is true exactly when the transcript is empty, which is
+     * the state a tab sits in when it never received a message — the state the
+     * banner exists for. Routing it through `topAccessory` hid it here, because
+     * the dock suppresses that strip while centered.
+     */
+    render(<NativeChatShell {...shellProps()} centerCompose desynced />);
+
+    expect(screen.getByText(/Live updates disconnected/)).toBeTruthy();
+  });
+
+  test("keeps the scroll affordance out of the centered layout while desynced", () => {
+    // The banner is unconditional; the scroll-down button still belongs only to
+    // a scrolled transcript, so the two must not have been merged into one row.
+    render(
+      <NativeChatShell
+        {...shellProps()}
+        centerCompose
+        desynced
+        isAtBottom={false}
+      />,
+    );
+
+    expect(screen.getByText(/Live updates disconnected/)).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Scroll to bottom of conversation" }),
+    ).toBeNull();
+  });
+
   test("forwards the model-label resolver to each rendered message", () => {
     const resolveModelLabel = mock(() => "Friendly Model");
     const message = {

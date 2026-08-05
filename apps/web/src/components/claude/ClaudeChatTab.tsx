@@ -18,7 +18,10 @@ import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { TURN_STOPPED_BY_USER } from "@/lib/chat/client-only-messages";
 import {useClaudeStore} from "@/stores/claudeStore";
-import { shouldReconnectEventSubscription } from "@/stores/createNativeChatStore";
+import {
+  sessionKeyPrefixFor,
+  shouldReconnectEventSubscription,
+} from "@/stores/createNativeChatStore";
 import { useConfigStore } from "@/stores/configStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
@@ -69,6 +72,7 @@ import {
   getClaudeModelCatalog,
   adoptNativeAgentSession,
   ensureNativeAgentSession,
+  awaitBridgeReady,
   renameEnvironmentFromPrompt,
 } from "@/lib/backend";
 import { useMessageForkAction } from "@/components/chat/MessageForkAction";
@@ -98,12 +102,6 @@ import {
   normalizeClaudeMessagesForDisplay,
 } from "@/lib/chat/native-message-adapters";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
-import {
-  RetryableNewEnvironmentConnectionError,
-  classifyNewEnvironmentConnectionStartupError,
-  getNewEnvironmentConnectionRetryDecision,
-  isRetryableNewEnvironmentConnectionError,
-} from "@/lib/new-environment-connection-retry";
 
 /**
  * Event types that legitimately arrive without matching a stored session —
@@ -242,9 +240,6 @@ export function ClaudeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
-  const automaticInitRetryCountRef = useRef(0);
-  const automaticInitRetryWindowStartedAtRef = useRef<number | null>(null);
-  const setupPendingObservedForInitRetryRef = useRef(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [forkInFlight, setForkInFlight] = useState(false);
 
@@ -313,6 +308,12 @@ export function ClaudeChatTab({
     (state) => state.getOrCreateEventSubscription,
   );
   const setEventStream = useClaudeStore((state) => state.setEventStream);
+  const setEventReconnectState = useClaudeStore((state) => state.setEventReconnectState);
+  const eventSubscriptionDesynced = useClaudeStore(
+    (state) => state.eventSubscriptions.get(environmentId)?.desynced ?? false,
+  );
+  const markEventSubscriptionHealthy = useClaudeStore((state) => state.markEventSubscriptionHealthy);
+  const markEventSubscriptionResynced = useClaudeStore((state) => state.markEventSubscriptionResynced);
   const hasActiveEventSubscription = useClaudeStore(
     (state) => state.hasActiveEventSubscription,
   );
@@ -647,6 +648,8 @@ export function ClaudeChatTab({
          */
         throwOnStale?: boolean;
         shouldApply?: () => boolean;
+        /** Session projection being refreshed; defaults to this mounted tab. */
+        targetSessionKey?: string;
       } = {},
     ): Promise<boolean> => {
       const promptsBeforeSync = readSessionPendingPrompts(sessionId);
@@ -679,9 +682,10 @@ export function ClaudeChatTab({
        * in flight. Either way this answer belongs to nobody.
        */
       const stateAfterSync = useClaudeStore.getState();
+      const targetSessionKey = options.targetSessionKey ?? sessionKey;
       if (
         stateAfterSync.clients.get(environmentId) !== bridgeClient
-        || stateAfterSync.sessions.get(sessionKey)?.sessionId !== sessionId
+        || stateAfterSync.sessions.get(targetSessionKey)?.sessionId !== sessionId
       ) {
         return false;
       }
@@ -1029,7 +1033,6 @@ export function ClaudeChatTab({
 
   const lastInitTimeRef = useRef<number>(0);
   const INIT_DEBOUNCE_MS = 1000;
-  const sseReconnectAttemptsRef = useRef<number>(0);
   const startSharedEventSubscriptionRef = useRef<((client: ReturnType<typeof createClient>) => void) | null>(null);
   const MAX_SSE_RECONNECT_ATTEMPTS = 10;
   const SSE_RECONNECT_BASE_DELAY = 3000;
@@ -1041,7 +1044,6 @@ export function ClaudeChatTab({
   useEffect(() => {
     // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
     if (setupPending) {
-      setupPendingObservedForInitRetryRef.current = true;
       return;
     }
 
@@ -1053,22 +1055,6 @@ export function ClaudeChatTab({
      */
     if (handoffPending) {
       return;
-    }
-
-    if (automaticInitRetryWindowStartedAtRef.current === null) {
-      const environment = useEnvironmentStore
-        .getState()
-        .getEnvironmentById(environmentId);
-      const initialDecision = getNewEnvironmentConnectionRetryDecision({
-        createdAt: environment?.createdAt,
-        attempt: 0,
-        retryWindowStartedAt: null,
-        setupPendingObserved: setupPendingObservedForInitRetryRef.current,
-      });
-      if (initialDecision) {
-        automaticInitRetryWindowStartedAtRef.current =
-          initialDecision.retryWindowStartedAt;
-      }
     }
 
     const now = Date.now();
@@ -1326,13 +1312,24 @@ export function ClaudeChatTab({
         let hostPort: number | null = null;
         let authToken: string | undefined;
 
-        if (isLocal) {
+        if (typeof awaitBridgeReady === "function") {
+          const readiness = await awaitBridgeReady(environmentId, "claude");
+          if (readiness && readiness.status !== "ready") {
+            throw Object.assign(new Error(readiness.error.message), readiness.error);
+          }
+          if (readiness) {
+            hostPort = readiness.port;
+            authToken = readiness.authToken;
+          }
+        }
+
+        if (!hostPort && isLocal) {
           // Local environment - use local server commands
           let localStatus;
           try {
             localStatus = await getLocalClaudeServerStatus(environmentId);
           } catch (error) {
-            throw classifyNewEnvironmentConnectionStartupError(error);
+            throw error;
           }
           console.debug("[ClaudeChatTab] Local server status:", localStatus.running);
 
@@ -1342,7 +1339,7 @@ export function ClaudeChatTab({
             try {
               result = await startLocalClaudeServer(environmentId);
             } catch (error) {
-              throw classifyNewEnvironmentConnectionStartupError(error);
+              throw error;
             }
             localStatus = {
               running: true,
@@ -1360,7 +1357,7 @@ export function ClaudeChatTab({
 
           hostPort = localStatus.port;
           authToken = localStatus.authToken;
-        } else {
+        } else if (!hostPort) {
           // Containerized environment - use container server commands
           if (!containerId) {
             throw new Error("Container ID is required for containerized environments");
@@ -1370,7 +1367,7 @@ export function ClaudeChatTab({
           try {
             status = await getClaudeServerStatus(containerId);
           } catch (error) {
-            throw classifyNewEnvironmentConnectionStartupError(error);
+            throw error;
           }
           console.debug("[ClaudeChatTab] Container server status:", status.running);
 
@@ -1380,7 +1377,7 @@ export function ClaudeChatTab({
             try {
               result = await startClaudeServer(containerId);
             } catch (error) {
-              throw classifyNewEnvironmentConnectionStartupError(error);
+              throw error;
             }
             status = {
               running: true,
@@ -1417,14 +1414,12 @@ export function ClaudeChatTab({
         try {
           healthy = await checkHealth(bridgeClient);
         } catch (error) {
-          throw classifyNewEnvironmentConnectionStartupError(error);
+          throw error;
         }
         if (!isCurrentInitialization()) return;
         console.debug("[ClaudeChatTab] Claude bridge health:", healthy);
         if (!healthy) {
-          throw new RetryableNewEnvironmentConnectionError(
-            "Claude bridge health check failed",
-          );
+          throw new Error("Claude bridge health check failed");
         }
         const modelsStart = Date.now();
         const availableModels = await loadAuthoritativeModels(bridgeClient);
@@ -1701,44 +1696,6 @@ export function ClaudeChatTab({
         if (message.includes("port") && message.includes("not mapped")) {
           message += ". Try recreating the environment to enable Claude native mode support.";
         }
-        const environment = useEnvironmentStore
-          .getState()
-          .getEnvironmentById(environmentId);
-        const retryDecision = isRetryableNewEnvironmentConnectionError(error)
-          ? getNewEnvironmentConnectionRetryDecision({
-              createdAt: environment?.createdAt,
-              attempt: automaticInitRetryCountRef.current,
-              retryWindowStartedAt: automaticInitRetryWindowStartedAtRef.current,
-              setupPendingObserved: setupPendingObservedForInitRetryRef.current,
-            })
-          : null;
-        if (retryDecision !== null) {
-          const {
-            delayMs,
-            retryWindowStartedAt,
-            retryWindowExpiresAt,
-          } = retryDecision;
-          automaticInitRetryWindowStartedAtRef.current = retryWindowStartedAt;
-          automaticInitRetryCountRef.current += 1;
-          console.warn(
-            `[ClaudeChatTab] Retrying new environment connection in ${delayMs}ms:`,
-            message,
-          );
-          setClient(environmentId, null);
-          setConnectionState("connecting");
-          setErrorMessage(null);
-          window.setTimeout(() => {
-            if (!isCurrentInitialization()) return;
-            if (Date.now() > retryWindowExpiresAt) {
-              setConnectionState("error");
-              setErrorMessage(message);
-              return;
-            }
-            setInitAttempt((value) => value + 1);
-          }, delayMs);
-          return;
-        }
-
         console.error("[ClaudeChatTab] Initialization failed:", error);
         setConnectionState("error");
         setErrorMessage(message);
@@ -1784,11 +1741,96 @@ export function ClaudeChatTab({
 
       const subscriptionState = getOrCreateEventSubscription(environmentId);
       const { abortController } = subscriptionState;
+      const requiresFullRehydrate = subscriptionState.desynced;
 
       try {
         console.debug("[ClaudeChatTab] Starting shared event subscription", { environmentId });
         const eventStream = subscribeToEvents(bridgeClient, abortController.signal);
         setEventStream(environmentId, eventStream, abortController);
+
+        const rehydrateProjectedSessions = async (): Promise<boolean> => {
+          /*
+           * One unreachable session must not abandon the rest of the rehydrate.
+           * A stale projection whose session the bridge has forgotten answers
+           * 404 forever, and letting that reject here skipped every remaining
+           * session *and* the event loop below — so the tab consumed no live
+           * events at all and the desynced probe repeated the same failure
+           * every sixty seconds.
+           */
+          const prefix = sessionKeyPrefixFor(environmentId);
+          const transientFailures: string[] = [];
+          for (const [key, projected] of useClaudeStore.getState().sessions) {
+            if (!key.startsWith(prefix)) continue;
+            try {
+              const messages = await getSessionMessages(
+                bridgeClient,
+                projected.sessionId,
+                { throwOnError: true },
+              );
+              if (abortController.signal.aborted) return false;
+              setMessages(key, messages);
+              await syncPendingPrompts(bridgeClient, projected.sessionId, {
+                throwOnError: true,
+                targetSessionKey: key,
+              });
+            } catch (error) {
+              if (abortController.signal.aborted) return false;
+              if (!(error instanceof SessionNotFoundError)) {
+                transientFailures.push(projected.sessionId);
+              }
+              console.warn(
+                "[ClaudeChatTab] Failed to rehydrate session during resync:",
+                projected.sessionId,
+                error,
+              );
+            }
+          }
+          if (transientFailures.length > 0) {
+            console.warn(
+              "[ClaudeChatTab] Resync remains pending for unavailable sessions:",
+              transientFailures.length,
+            );
+          }
+          return transientFailures.length === 0;
+        };
+
+        const scheduleFullRehydrateRetry = () => {
+          if (abortController.signal.aborted) return;
+          const retryTimer = setTimeout(() => {
+            const current = useClaudeStore.getState().eventSubscriptions
+              .get(environmentId);
+            if (
+              current?.abortController !== abortController
+              || !current.isActive
+              || !current.desynced
+            ) return;
+            void rehydrateProjectedSessions().then((resynced) => {
+              if (abortController.signal.aborted) return;
+              if (resynced) {
+                markEventSubscriptionResynced(environmentId, abortController);
+              } else {
+                scheduleFullRehydrateRetry();
+              }
+            });
+          }, SSE_RECONNECT_MAX_DELAY);
+          setEventReconnectState(
+            environmentId,
+            { reconnectTimer: retryTimer },
+            abortController,
+          );
+        };
+
+        if (requiresFullRehydrate) {
+          const resynced = await rehydrateProjectedSessions();
+          if (abortController.signal.aborted) return;
+          if (resynced) {
+            markEventSubscriptionResynced(environmentId, abortController);
+          } else {
+            // The stream is already live. Keep consuming it while a store-owned
+            // timer retries the failed authoritative snapshot on a quiet tab.
+            scheduleFullRehydrateRetry();
+          }
+        }
 
         const lastReloadTimeBySession = new Map<string, number>();
         const DEBOUNCE_MS = 200;
@@ -1927,7 +1969,7 @@ export function ClaudeChatTab({
 
         for await (const event of eventStream) {
           // Reset reconnect backoff on first successful event
-          sseReconnectAttemptsRef.current = 0;
+          markEventSubscriptionHealthy(environmentId, abortController);
 
           if (abortController.signal.aborted) {
             for (const timeout of pendingReloads.values()) {
@@ -2308,16 +2350,55 @@ export function ClaudeChatTab({
         setEventStream(environmentId, null, abortController);
 
         // Auto-reconnect SSE if the connection dropped unexpectedly (not explicitly aborted).
-        // Uses exponential backoff capped at 60s, with a maximum retry count.
+        // After the exponential budget is exhausted, keep probing at the
+        // capped interval. The tab can remain mounted for days; stopping here
+        // would strand it permanently after a transient bridge outage.
         if (!abortController.signal.aborted) {
-          const attempt = sseReconnectAttemptsRef.current;
+          const attempt = useClaudeStore.getState().eventSubscriptions
+            .get(environmentId)?.reconnectAttempts ?? 0;
           if (attempt >= MAX_SSE_RECONNECT_ATTEMPTS) {
-            console.warn("[ClaudeChatTab] SSE reconnect limit reached for", environmentId);
+            /*
+             * The probe re-arms itself on every failure, so unlike the bounded
+             * ladder it has no natural end. A deleted environment has no bridge
+             * to reach and never will, and the retained closure keeps the whole
+             * tab alive — so stop here rather than probing a dead port every
+             * minute for the life of the process. Unmount is deliberately not a
+             * stop condition: the tab may simply not be visible.
+             */
+            const environmentExists = useEnvironmentStore
+              .getState()
+              .getEnvironmentById(environmentId) !== undefined;
+            const reconnectTimer = environmentExists
+              ? setTimeout(() => {
+                  const currentState = useClaudeStore.getState();
+                  const currentClient = currentState.clients.get(environmentId);
+                  if (
+                    currentClient
+                    && shouldReconnectEventSubscription(
+                      currentState.eventSubscriptions.get(environmentId),
+                      abortController,
+                    )
+                  ) {
+                    console.debug("[ClaudeChatTab] Probing desynced SSE for", environmentId);
+                    startSharedEventSubscriptionRef.current?.(currentClient);
+                  }
+                }, SSE_RECONNECT_MAX_DELAY)
+              : null;
+            setEventReconnectState(
+              environmentId,
+              { desynced: true, reconnectTimer },
+              abortController,
+            );
+            console.warn(
+              environmentExists
+                ? "[ClaudeChatTab] SSE reconnect limit reached; continuing desynced probes for"
+                : "[ClaudeChatTab] SSE reconnect limit reached; environment is gone, stopping probes for",
+              environmentId,
+            );
           } else {
             const reconnectDelay = Math.min(SSE_RECONNECT_BASE_DELAY * Math.pow(2, attempt), SSE_RECONNECT_MAX_DELAY);
-            sseReconnectAttemptsRef.current = attempt + 1;
             console.debug("[ClaudeChatTab] SSE dropped, reconnect attempt", attempt + 1, "in", reconnectDelay, "ms for", environmentId);
-            setTimeout(() => {
+            const reconnectTimer = setTimeout(() => {
               const currentState = useClaudeStore.getState();
               const currentClient = currentState.clients.get(environmentId);
               if (
@@ -2331,14 +2412,22 @@ export function ClaudeChatTab({
                 startSharedEventSubscriptionRef.current?.(currentClient);
               }
             }, reconnectDelay);
+            setEventReconnectState(
+              environmentId,
+              { reconnectAttempts: attempt + 1, reconnectTimer },
+              abortController,
+            );
           }
         } else {
-          // Explicit abort — reset reconnect counter
-          sseReconnectAttemptsRef.current = 0;
+          setEventReconnectState(
+            environmentId,
+            { reconnectAttempts: 0, reconnectTimer: null },
+            abortController,
+          );
         }
       }
     },
-    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setSessionError, setSessionTitle, setContextUsage, setPromptSuggestion, setBackgroundTasks, setCompletionBlockedByBackgroundTasks, applyServerSessionMetadata, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, setPlanMode, getSessionKeyBySdkSessionId]
+    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, markEventSubscriptionHealthy, markEventSubscriptionResynced, setEventReconnectState, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setSessionError, setSessionTitle, setContextUsage, setPromptSuggestion, setBackgroundTasks, setCompletionBlockedByBackgroundTasks, applyServerSessionMetadata, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, setPlanMode, getSessionKeyBySdkSessionId, syncPendingPrompts]
   );
   startSharedEventSubscriptionRef.current = startSharedEventSubscription;
 
@@ -2667,9 +2756,6 @@ export function ClaudeChatTab({
   }, [connectionState, client, session, handoff.ready, launchPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
 
   const handleRetry = useCallback(() => {
-    automaticInitRetryCountRef.current = 0;
-    automaticInitRetryWindowStartedAtRef.current = Date.now();
-    setupPendingObservedForInitRetryRef.current = false;
     setConnectionState("connecting");
     setErrorMessage(null);
     tabSessionIdRef.current = null;
@@ -2956,6 +3042,7 @@ export function ClaudeChatTab({
       containerId={containerId}
       connectionState={connectionState}
       errorMessage={errorMessage}
+      desynced={eventSubscriptionDesynced}
       serverLog={serverLog}
       onRetry={handleRetry}
       messages={displayMessages}

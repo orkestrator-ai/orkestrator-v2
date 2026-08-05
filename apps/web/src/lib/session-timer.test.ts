@@ -54,7 +54,7 @@ describe("session-timer helpers", () => {
     },
   );
 
-  test("stamps the current time for a newly started loading session", () => {
+  test("does not invent a clock for a newly started loading session", () => {
     const incoming: TimedSessionState = {
       isLoading: true,
       loadingStartedAt: undefined,
@@ -63,7 +63,7 @@ describe("session-timer helpers", () => {
 
     const next = reconcileTimedSession(undefined, incoming, 5000);
 
-    expect(next.loadingStartedAt).toBe(5000);
+    expect(next.loadingStartedAt).toBeUndefined();
     expect(next.lastCompletedElapsedSeconds).toBeNull();
   });
 
@@ -129,7 +129,7 @@ describe("session-timer helpers", () => {
     expect(next.lastCompletedElapsedSeconds).toBe(5);
   });
 
-  test("updateTimedSessionLoading stamps start and completion times", () => {
+  test("updateTimedSessionLoading waits for an authoritative start clock", () => {
     const idle: TimedSessionState = {
       isLoading: false,
       loadingStartedAt: undefined,
@@ -143,13 +143,13 @@ describe("session-timer helpers", () => {
     );
 
     expect(started.isLoading).toBe(true);
-    expect(started.loadingStartedAt).toBe(2000);
+    expect(started.loadingStartedAt).toBeUndefined();
     expect(started.lastCompletedElapsedSeconds).toBeNull();
 
     const completed = updateTimedSessionLoading(started, false, 8200);
     expect(completed.isLoading).toBe(false);
     expect(completed.loadingStartedAt).toBeUndefined();
-    expect(completed.lastCompletedElapsedSeconds).toBe(6);
+    expect(completed.lastCompletedElapsedSeconds).toBeNull();
   });
 
   test("returns the same session when already loading with a start time", () => {

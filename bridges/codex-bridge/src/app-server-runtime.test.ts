@@ -408,6 +408,9 @@ async function harness(
     compactionTimeoutMs?: number;
     orderedEventMaxCount?: number;
     orderedEventMaxBytes?: number;
+    initialPromptRetryDelayMs?: number;
+    dispatchJournalMaxRecords?: number;
+    dispatchJournalMaxBytes?: number;
     fingerprintEnvironment?: () => string;
     /** Uses the production adaptive cadence instead of deterministic immediate publishes. */
     adaptiveCoalesce?: boolean;
@@ -487,6 +490,15 @@ async function harness(
       : {}),
     ...(options.orderedEventMaxBytes !== undefined
       ? { orderedEventMaxBytes: options.orderedEventMaxBytes }
+      : {}),
+    ...(options.initialPromptRetryDelayMs !== undefined
+      ? { initialPromptRetryDelayMs: options.initialPromptRetryDelayMs }
+      : {}),
+    ...(options.dispatchJournalMaxRecords !== undefined
+      ? { dispatchJournalMaxRecords: options.dispatchJournalMaxRecords }
+      : {}),
+    ...(options.dispatchJournalMaxBytes !== undefined
+      ? { dispatchJournalMaxBytes: options.dispatchJournalMaxBytes }
       : {}),
   });
   if (options.deferStart !== true) await runtime.start();
@@ -1266,7 +1278,7 @@ describe("session lifecycle", () => {
       .toBe(false);
   });
 
-  test("only the newest record per thread is recovered; older ones are failed", async () => {
+  test("the highest sequence per thread is recovered when timestamps tie", async () => {
     const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
     await store.upsert(
       store.toRecord({
@@ -1278,7 +1290,11 @@ describe("session lifecycle", () => {
         titleSource: "prompt",
       }),
     );
-    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    const journal = new DispatchJournal({
+      codexHome,
+      cwd: "/tmp/ws",
+      now: () => Date.parse("2026-08-05T12:00:00.000Z"),
+    });
     await journal.load();
     for (const requestId of ["req-old", "req-new"]) {
       await journal.markPrepared({
@@ -1290,8 +1306,6 @@ describe("session lifecycle", () => {
         threadId: "thread-multi",
         turnId: `turn-${requestId}`,
       });
-      // Distinct `updatedAt` values, which is what orders the records.
-      await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
     await harness({
@@ -2870,6 +2884,555 @@ describe("at-most-once dispatch", () => {
     // The server said it did not accept the request, so the id is reusable.
     expect(h.runtime.getJournal().classify("req-1").action).toBe("dispatch");
     expect(h.runtime.getStatus(sessionId)!.phase).toBe("failed");
+  });
+
+  test("an initial prompt retries one definite overload inside the bridge", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "turn-after-overload" } };
+      },
+    }, { initialPromptRetryDelayMs: 0 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-1";
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      result: {
+        requestId,
+        turnId: "turn-after-overload",
+      },
+    });
+    expect(h.child().requests.filter((request) => request.method === "turn/start"))
+      .toHaveLength(2);
+    expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
+      action: "attach",
+      record: { turnId: "turn-after-overload" },
+    });
+  });
+
+  test("a second definite initial-prompt rejection becomes durably retryable", async () => {
+    const h = await harness({
+      "turn/start": () => {
+        const error = new Error("ingress queue full");
+        (error as { rpcCode?: number }).rpcCode = -32001;
+        throw error;
+      },
+    }, { initialPromptRetryDelayMs: 0 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-second-failure";
+
+    expect(await h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    })).toMatchObject({ ok: false, status: 503 });
+
+    expect(h.child().requests.filter((request) => request.method === "turn/start"))
+      .toHaveLength(2);
+    expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
+      action: "dispatch",
+      record: { state: "retryable" },
+    });
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      phase: "failed",
+      unconfirmedDispatch: { requestId, retryable: true },
+    });
+  });
+
+  test("a deleted session cannot dispatch its delayed initial-prompt retry", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "must-not-run" } };
+      },
+    }, { initialPromptRetryDelayMs: 30 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-deleted";
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+    await waitUntil(() => attempts === 1, "first initial prompt attempt did not run");
+
+    expect(await h.runtime.deleteSession(sessionId)).toBe(true);
+    expect(await pending).toMatchObject({ ok: false, status: 404 });
+    expect(attempts).toBe(1);
+    expect(h.runtime.getJournal().get(requestId)).toBeUndefined();
+  });
+
+  test("shutdown cancels a delayed retry and leaves a durable retry marker", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "must-not-run" } };
+      },
+    }, { initialPromptRetryDelayMs: 30 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-stopping";
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+    await waitUntil(() => attempts === 1, "first initial prompt attempt did not run");
+
+    await h.runtime.stop();
+    expect(await pending).toMatchObject({ ok: false, status: 503 });
+    expect(attempts).toBe(1);
+    expect(h.runtime.getJournal().get(requestId)).toMatchObject({ state: "retryable" });
+  });
+
+  /**
+   * Every exit past the `starting` phase has to settle it.
+   *
+   * `starting` reports `running`, so a thread left there fails
+   * `assertNoActiveTurn` for every later prompt and nothing is scheduled to
+   * resolve it. The two cancellation returns below are the only exits that leave
+   * the delay window without dispatching, which is exactly why they are easy to
+   * miss.
+   */
+  test("shutdown during the retry window settles the thread instead of leaving it starting", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "must-not-run" } };
+      },
+    }, { initialPromptRetryDelayMs: 60 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId: "initial-prompt:env-1:tab-stopping-phase",
+      attachments: [],
+    });
+    await waitUntil(() => attempts === 1, "first initial prompt attempt did not run");
+
+    await h.runtime.stop();
+    expect(await pending).toMatchObject({ ok: false, status: 503 });
+
+    expect(h.runtime.getRegistry().getThread("thread-1")?.phase).toBe("failed");
+    const status = h.runtime.getStatus(sessionId);
+    expect(status?.status).not.toBe("running");
+    expect(status).toMatchObject({ status: "error", phase: "failed" });
+  });
+
+  test("a deleted session's retry window does not wedge a thread another tab holds", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: `turn-${attempts}` } };
+      },
+    }, { initialPromptRetryDelayMs: 250 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId: "initial-prompt:env-1:tab-shared",
+      attachments: [],
+    });
+    await waitUntil(() => attempts === 1, "first initial prompt attempt did not run");
+
+    // `releaseSession` only surrenders the thread when the *last* reference goes,
+    // so a second tab inherits this context — including its unsettled phase.
+    const survivor = await h.runtime.resumeSession({ threadId: "thread-1", mode: "build" });
+    expect(await h.runtime.deleteSession(sessionId)).toBe(true);
+    expect(await pending).toMatchObject({ ok: false, status: 404 });
+    expect(attempts).toBe(1);
+
+    expect(h.runtime.getRegistry().getThread("thread-1")?.phase).toBe("failed");
+    expect(h.runtime.getStatus(survivor!.sessionId)?.status).not.toBe("running");
+
+    // The surviving tab must still be able to prompt: without a settled phase
+    // this 409s forever with no recovery backstop armed.
+    const next = await h.runtime.prompt(survivor!.sessionId, {
+      prompt: "carry on",
+      requestId: "req-after-shared-delete",
+      attachments: [],
+    });
+    expect(next).toMatchObject({ ok: true, result: { turnId: "turn-2" } });
+  });
+
+  test("a concurrent retry of the same request id cannot double-dispatch", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "turn-single" } };
+      },
+    }, { initialPromptRetryDelayMs: 200 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-concurrent";
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+    await waitUntil(() => attempts === 1, "first initial prompt attempt did not run");
+
+    // The journal marks the id `retryable` before the delay, so classification
+    // alone would wave this second copy straight through. `dispatchInFlight` on
+    // the thread is what stops it — the id is reusable, but not concurrently.
+    const concurrent = await h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+    expect(concurrent).toMatchObject({ ok: false, status: 409 });
+
+    expect(await pending).toMatchObject({ ok: true, result: { turnId: "turn-single" } });
+    // One definite rejection plus one accepted dispatch: never two accepted ones.
+    expect(attempts).toBe(2);
+    expect(h.child().requests.filter((request) => request.method === "turn/start"))
+      .toHaveLength(2);
+  });
+
+  test("a failed retryable journal write during the window still fails closed", async () => {
+    let attempts = 0;
+    const bridgeDir = join(codexHome, "orkestrator-bridge");
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          // Break the journal after the prepared write landed, so the retryable
+          // marker — which flushes without failing closed — cannot persist.
+          rmSync(join(bridgeDir, `dispatch-journal-${hashCwd("/tmp/ws")}.json`), { force: true });
+          mkdirSync(join(bridgeDir, `dispatch-journal-${hashCwd("/tmp/ws")}.json`));
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "must-not-run" } };
+      },
+      // Nothing carries the request id, so the failed retry is provably absent.
+      "thread/read": () => ({ thread: threadPayload("thread-1", { turns: [] }) }),
+    }, { initialPromptRetryDelayMs: 0 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId: "initial-prompt:env-1:tab-unwritable",
+      attachments: [],
+    });
+
+    // The retryable marker is best-effort, but the second prepared write is not:
+    // without durable evidence the id can be reused, the retry must not run.
+    expect(outcome).toMatchObject({ ok: false });
+    expect(attempts).toBe(1);
+    expect(h.runtime.getStatus(sessionId)?.status).not.toBe("running");
+  });
+
+  test("the default retry delay applies when no override is configured", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "turn-default-delay" } };
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    const started = Date.now();
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId: "initial-prompt:env-1:tab-default-delay",
+      attachments: [],
+    });
+    const elapsed = Date.now() - started;
+
+    expect(outcome).toMatchObject({ ok: true, result: { turnId: "turn-default-delay" } });
+    // A retry that fires immediately would hit the same overloaded queue. The
+    // default is a full second; anything under half of it means the constant is
+    // not being applied.
+    expect(elapsed).toBeGreaterThanOrEqual(500);
+    expect(h.runtime.getStatus(sessionId)?.phase).toBe("running");
+  });
+
+  test("a delayed retry succeeds and settles the phase after the wait", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "turn-after-wait" } };
+      },
+    }, { initialPromptRetryDelayMs: 40 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-delayed-success";
+
+    const started = Date.now();
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+
+    expect(Date.now() - started).toBeGreaterThanOrEqual(40);
+    expect(outcome).toMatchObject({ ok: true, result: { requestId, turnId: "turn-after-wait" } });
+    expect(h.runtime.getRegistry().getThread("thread-1")?.phase).toBe("running");
+    expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
+      action: "attach",
+      record: { turnId: "turn-after-wait" },
+    });
+  });
+
+  test("a delayed retry rebinds to the replacement engine generation", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "turn-after-restart" } };
+      },
+    }, { initialPromptRetryDelayMs: 80 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-restarted-delay";
+
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start on the replacement child",
+      requestId,
+      attachments: [],
+    });
+    await waitUntil(() => attempts === 1, "first initial prompt attempt did not run");
+    await h.engine.getSupervisor().restartNow("restart during retry delay");
+
+    expect(await pending).toMatchObject({
+      ok: true,
+      result: { requestId, turnId: "turn-after-restart" },
+    });
+    expect(h.children).toHaveLength(2);
+    expect(h.children[0]!.requests.filter((request) => request.method === "turn/start"))
+      .toHaveLength(1);
+    expect(h.children[1]!.requests.filter((request) => request.method === "turn/start"))
+      .toHaveLength(1);
+    expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
+      action: "attach",
+      record: { turnId: "turn-after-restart" },
+    });
+    expect((await h.runtime.getMessages(sessionId))?.map((message) => message.role))
+      .toEqual(["user", "assistant"]);
+  });
+
+  test("a no-id replacement thread settles the stale retry and remains reusable", async () => {
+    let turnAttempts = 0;
+    let threadStarts = 0;
+    const h = await harness({
+      "thread/start": () => {
+        threadStarts += 1;
+        if (threadStarts === 2) return { thread: {} };
+        return { thread: threadPayload(`thread-${threadStarts}`) };
+      },
+      "turn/start": () => {
+        turnAttempts += 1;
+        if (turnAttempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "turn-after-no-id" } };
+      },
+    }, { initialPromptRetryDelayMs: 80 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-no-id-replacement";
+
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+    await waitUntil(() => turnAttempts === 1, "first initial prompt attempt did not run");
+    const staleContext = h.runtime.getRegistry().getThread("thread-1")!;
+    await h.engine.getSupervisor().restartNow("restart before no-id replacement");
+
+    expect(await pending).toMatchObject({
+      ok: false,
+      status: 503,
+      error: "Codex did not return a thread id",
+    });
+    expect(staleContext.dispatchInFlight).toBe(false);
+    expect(staleContext.phase).toBe("failed");
+    expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
+      action: "dispatch",
+      record: { state: "retryable" },
+    });
+
+    expect(await h.runtime.prompt(sessionId, {
+      prompt: "retry after replacement failure",
+      requestId,
+      attachments: [],
+    })).toMatchObject({ ok: true, result: { turnId: "turn-after-no-id" } });
+    expect(turnAttempts).toBe(2);
+  });
+
+  test("a thrown replacement thread start settles without dereferencing null context", async () => {
+    let turnAttempts = 0;
+    let threadStarts = 0;
+    const h = await harness({
+      "thread/start": () => {
+        threadStarts += 1;
+        if (threadStarts === 2) throw new Error("replacement thread unavailable");
+        return { thread: threadPayload(`thread-${threadStarts}`) };
+      },
+      "turn/start": () => {
+        turnAttempts += 1;
+        const error = new Error("ingress queue full");
+        (error as { rpcCode?: number }).rpcCode = -32001;
+        throw error;
+      },
+    }, { initialPromptRetryDelayMs: 80 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-thrown-replacement";
+
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+    await waitUntil(() => turnAttempts === 1, "first initial prompt attempt did not run");
+    const staleContext = h.runtime.getRegistry().getThread("thread-1")!;
+    await h.engine.getSupervisor().restartNow("restart before thrown replacement");
+
+    expect(await pending).toMatchObject({
+      ok: false,
+      status: 503,
+      error: "thread/start failed (-32603): replacement thread unavailable",
+    });
+    expect(staleContext).toMatchObject({ dispatchInFlight: false, phase: "failed" });
+    expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
+      action: "dispatch",
+      record: { state: "retryable" },
+    });
+    expect(turnAttempts).toBe(1);
+  });
+
+  test("journal count exhaustion fails before turn/start", async () => {
+    const h = await harness({}, { dispatchJournalMaxRecords: 1 });
+    await h.runtime.getJournal().markPrepared({
+      requestId: "existing",
+      bridgeSessionId: "other-session",
+      threadId: "other-thread",
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    expect(await h.runtime.prompt(sessionId, {
+      prompt: "must not dispatch",
+      requestId: "new-request",
+      attachments: [],
+    })).toMatchObject({
+      ok: false,
+      status: 503,
+      error: "Dispatch journal safety-record limit (1) is exhausted",
+    });
+    expect(h.child().requests.some((request) => request.method === "turn/start"))
+      .toBe(false);
+    expect(h.runtime.getJournal().classify("existing").action).toBe("reconcile");
+  });
+
+  test("an oversized persisted journal blocks dispatch before thread creation", async () => {
+    const bridgeDir = join(codexHome, "orkestrator-bridge");
+    mkdirSync(bridgeDir, { recursive: true });
+    writeFileSync(
+      join(bridgeDir, `dispatch-journal-${hashCwd("/tmp/ws")}.json`),
+      "x".repeat(257),
+      "utf8",
+    );
+    const h = await harness({}, { dispatchJournalMaxBytes: 256 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    expect(await h.runtime.prompt(sessionId, {
+      prompt: "must not dispatch",
+      requestId: "blocked-by-oversized-journal",
+      attachments: [],
+    })).toMatchObject({
+      ok: false,
+      status: 503,
+      error: "Dispatch journal exceeds its 256-byte read limit",
+    });
+    expect(h.child().requests.some((request) =>
+      request.method === "thread/start" || request.method === "turn/start"
+    )).toBe(false);
+  });
+
+  test("a retryable dispatch remains visible after a bridge restart", async () => {
+    const first = await harness({
+      "turn/start": () => {
+        const error = new Error("ingress queue full");
+        (error as { rpcCode?: number }).rpcCode = -32001;
+        throw error;
+      },
+    });
+    const { sessionId } = first.runtime.createSession({ mode: "build" });
+    const requestId = "req-restored-retryable";
+    expect(await first.runtime.prompt(sessionId, {
+      prompt: "try once",
+      requestId,
+      attachments: [],
+    })).toMatchObject({ ok: false, status: 503 });
+    expect(first.runtime.getStatus(sessionId)?.unconfirmedDispatch).toEqual({
+      requestId,
+      retryable: true,
+    });
+    await first.runtime.stop();
+
+    const restored = await harness();
+    expect(restored.runtime.getStatus(sessionId)?.unconfirmedDispatch).toEqual({
+      requestId,
+      retryable: true,
+    });
+    await restored.runtime.stop();
   });
 
   test("a failed prepared-journal write prevents turn dispatch", async () => {

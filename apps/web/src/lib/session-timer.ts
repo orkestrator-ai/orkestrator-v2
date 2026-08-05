@@ -43,7 +43,7 @@ export function reconcileTimedSession<T extends TimedSessionState>(
   if (session.isLoading) {
     return {
       ...session,
-      loadingStartedAt: session.loadingStartedAt ?? previous?.loadingStartedAt ?? now,
+      loadingStartedAt: session.loadingStartedAt ?? previous?.loadingStartedAt,
       lastCompletedElapsedSeconds: session.lastCompletedElapsedSeconds ?? null,
     };
   }
@@ -73,7 +73,7 @@ export function updateTimedSessionLoading<T extends TimedSessionState>(
 ): T {
   if (isLoading) {
     const loadingStartedAt =
-      authoritativeStartedAt ?? session.loadingStartedAt ?? now;
+      authoritativeStartedAt ?? session.loadingStartedAt;
     if (
       session.isLoading
       && session.loadingStartedAt === loadingStartedAt

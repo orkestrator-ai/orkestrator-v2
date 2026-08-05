@@ -113,11 +113,14 @@ interface UseTerminalOptions {
 
 interface UseTerminalReturn {
   sessionId: string | null;
+  bootstrapped: boolean;
   isConnected: boolean;
   isConnecting: boolean;
   error: string | null;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
+  /** Publish a successful backend bootstrap only if this session still owns the hook. */
+  markBootstrapped: (sessionId: string) => boolean;
   resize: (cols: number, rows: number) => Promise<void>;
   write: (data: string) => Promise<void>;
 }
@@ -148,6 +151,7 @@ export function useTerminal({
   trackEnvironmentActivity = false,
 }: UseTerminalOptions): UseTerminalReturn {
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [bootstrapped, setBootstrapped] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -257,6 +261,7 @@ export function useTerminal({
     isConnectedRef.current = false;
     isConnectingRef.current = false;
     setSessionId(null);
+    setBootstrapped(false);
     setIsConnected(false);
     setIsConnecting(false);
     setError(null);
@@ -305,6 +310,7 @@ export function useTerminal({
     let targetCreated = false;
     let targetShouldStart = false;
     let existingSessionRunning: boolean | null = null;
+    let targetBootstrapped = false;
 
     // Stable/persistent sessions are backend-owned and may have been adopted by
     // another renderer after create returned. Only ephemeral renderer-owned
@@ -666,6 +672,7 @@ export function useTerminal({
           .catch(() => null);
         if (!isCurrentConnect()) return;
         existingSessionRunning = existingStatus?.running ?? false;
+        targetBootstrapped = existingStatus?.bootstrapped ?? false;
         if (existingSessionRunning || attachExistingOnly) {
           targetSessionId = existingSessionId;
         } else {
@@ -673,12 +680,14 @@ export function useTerminal({
           targetSessionId = created.sessionId;
           targetCreated = created.created;
           targetShouldStart = true;
+          targetBootstrapped = created.bootstrapped;
         }
       } else {
         const created = await createSession();
         targetSessionId = created.sessionId;
         targetCreated = created.created;
         targetShouldStart = true;
+        targetBootstrapped = created.bootstrapped;
       }
 
       if (!isCurrentConnect()) {
@@ -699,6 +708,7 @@ export function useTerminal({
       }
 
       isConnectedRef.current = true;
+      setBootstrapped(targetBootstrapped);
       setIsConnected(true);
     } catch (err) {
       releaseTargetListener();
@@ -718,6 +728,7 @@ export function useTerminal({
         sessionIdRef.current = null;
         isConnectedRef.current = false;
         setSessionId(null);
+        setBootstrapped(false);
         toast.error("Terminal connection failed", { description: message });
         return;
       }
@@ -728,6 +739,7 @@ export function useTerminal({
         await releaseCreatedSession(targetSessionId, targetCreated);
         sessionIdRef.current = null;
         setSessionId(null);
+        setBootstrapped(false);
         targetSessionId = null;
         targetCreated = false;
         targetShouldStart = false;
@@ -737,6 +749,7 @@ export function useTerminal({
           targetSessionId = replacement.sessionId;
           targetCreated = replacement.created;
           targetShouldStart = true;
+          targetBootstrapped = replacement.bootstrapped;
           if (!isCurrentConnect()) {
             await releaseCreatedSession(targetSessionId, targetCreated);
             return;
@@ -748,6 +761,7 @@ export function useTerminal({
           );
           if (!isCurrentConnect()) return;
           isConnectedRef.current = true;
+          setBootstrapped(targetBootstrapped);
           setIsConnected(true);
           return;
         } catch (fallbackErr) {
@@ -763,6 +777,7 @@ export function useTerminal({
           });
           sessionIdRef.current = null;
           setSessionId(null);
+          setBootstrapped(false);
         }
       } else {
         await releaseCreatedSession(targetSessionId, targetCreated);
@@ -771,6 +786,7 @@ export function useTerminal({
         sessionIdRef.current = null;
         isConnectedRef.current = false;
         setSessionId(null);
+        setBootstrapped(false);
       }
     } finally {
       // A superseded connect must not clear the in-flight state of the newer
@@ -792,6 +808,7 @@ export function useTerminal({
     sessionIdRef.current = null;
     isConnectedRef.current = false;
     setSessionId(null);
+    setBootstrapped(false);
     setIsConnected(false);
     setIsConnecting(false);
     setError(null);
@@ -813,6 +830,18 @@ export function useTerminal({
       // connection phases are cancelled immediately.
     }
   }, [cleanupEventListener]);
+
+  const markBootstrapped = useCallback((targetSessionId: string): boolean => {
+    if (
+      !isMountedRef.current
+      || !isConnectedRef.current
+      || sessionIdRef.current !== targetSessionId
+    ) {
+      return false;
+    }
+    setBootstrapped(true);
+    return true;
+  }, []);
 
   // A failed write can leave the browser gateway's input queue closed until the
   // session restarts, while output keeps streaming so the terminal still looks
@@ -887,11 +916,13 @@ export function useTerminal({
 
   return {
     sessionId,
+    bootstrapped,
     isConnected,
     isConnecting,
     error,
     connect,
     disconnect,
+    markBootstrapped,
     resize,
     write,
   };

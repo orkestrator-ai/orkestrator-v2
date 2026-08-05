@@ -130,6 +130,13 @@ export interface LoopedReviewTabData {
 export interface BrowserTabData {
   /** User-facing backend-local URL. An empty string opens the browser start screen. */
   url: string;
+  /**
+   * Durable navigation history for the iframe preview. A native (Electron)
+   * preview keeps its history in Chromium, so `BrowserTab` neither maintains
+   * nor reads this there; see `boundBrowserHistory` for the shared bounds.
+   */
+  history?: string[];
+  historyIndex?: number;
 }
 
 // Tab information stored in pane leaves

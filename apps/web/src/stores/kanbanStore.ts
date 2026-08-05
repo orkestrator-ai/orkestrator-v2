@@ -46,6 +46,8 @@ interface KanbanState {
   currentProjectId: string | null;
   notes: string;
   notesLoading: boolean;
+  /** Why the last notes load failed, or null when the notes are trustworthy. */
+  notesError: string | null;
   currentNotesProjectId: string | null;
 
   // Task actions
@@ -71,6 +73,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
   currentProjectId: null,
   notes: "",
   notesLoading: false,
+  notesError: null,
   currentNotesProjectId: null,
 
   loadTasks: async (projectId) => {
@@ -222,16 +225,30 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
   },
 
   loadNotes: async (projectId) => {
-    set({ notesLoading: true, currentNotesProjectId: projectId });
+    // Never expose the previous project's notes if this load fails. The editor
+    // enables itself once notesLoading clears, so stale content here could be
+    // edited and saved into the newly selected project.
+    set({
+      notes: "",
+      notesLoading: true,
+      notesError: null,
+      currentNotesProjectId: projectId,
+    });
     try {
       const result = await getProjectNotes(projectId);
       if (get().currentNotesProjectId === projectId) {
-        set({ notes: result.content, notesLoading: false });
+        set({ notes: result.content, notesLoading: false, notesError: null });
       }
     } catch (error) {
       console.error("[KanbanStore] Failed to load notes:", error);
+      // The empty notes above are not this project's content, so the editor has
+      // to stay disabled: a keystroke into it would autosave over the real
+      // backend notes.
       if (get().currentNotesProjectId === projectId) {
-        set({ notesLoading: false });
+        set({
+          notesLoading: false,
+          notesError: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   },
@@ -239,9 +256,12 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
   saveNotes: async (projectId, content) => {
     try {
       await saveProjectNotes(projectId, content);
-      set({ notes: content });
+      if (get().currentNotesProjectId === projectId) {
+        set({ notes: content });
+      }
     } catch (error) {
       console.error("[KanbanStore] Failed to save notes:", error);
+      throw error;
     }
   },
 }));

@@ -170,6 +170,12 @@ export interface TmuxStatus {
   permission_mode: string;
   fast_mode: boolean | null;
   observation: TmuxAgentObservation;
+  info_events?: Array<{
+    id: string;
+    kind: HookEventKind;
+    message: string;
+    receivedAt: string;
+  }>;
 }
 
 /** Metadata about a previously-recorded session the user could resume. */

@@ -1,17 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { listen } from "@/lib/native/events";
-import { getContainerLogs, streamContainerLogs } from "@/lib/backend";
+import { getContainerLogs } from "@/lib/backend";
 import { Loader2, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-interface ContainerLogPayload {
-  container_id: string;
-  text: string;
-}
 
 interface InitializationLogsProps {
   containerId: string;
   className?: string;
+  /** Override only for deterministic tests; production refreshes once a second. */
+  pollIntervalMs?: number;
 }
 
 /**
@@ -20,11 +16,22 @@ interface InitializationLogsProps {
  * during environment startup.
  */
 const MAX_LOG_LINES = 500;
+/**
+ * A single dropped poll is routine — the daemon is busy, the container is
+ * restarting. Several in a row means the tail on screen is no longer tracking
+ * the container, and the header's spinner would otherwise keep claiming it is.
+ */
+const STALE_LOG_FAILURE_THRESHOLD = 3;
 
-export function InitializationLogs({ containerId, className }: InitializationLogsProps) {
+export function InitializationLogs({
+  containerId,
+  className,
+  pollIntervalMs = 1_000,
+}: InitializationLogsProps) {
   const [logs, setLogs] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isStale, setIsStale] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new logs arrive
@@ -34,53 +41,60 @@ export function InitializationLogs({ containerId, className }: InitializationLog
     }
   }, [logs]);
 
-  // Fetch initial logs and start streaming
+  // Docker is the durable log buffer. Refresh from its authoritative tail so
+  // remounts recover everything still in the bounded snapshot without relying
+  // on a renderer-owned follower process or a gap-prone live event stream.
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
-
-    const setup = async () => {
+    let disposed = false;
+    let refreshInFlight = false;
+    let consecutiveFailures = 0;
+    const refresh = async (initial: boolean) => {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
       try {
-        // Get initial logs (last 100 lines)
-        const initialLogs = await getContainerLogs(containerId, "100");
-        if (initialLogs) {
-          // Split by newline and filter empty lines
-          const lines = initialLogs.split("\n").filter(line => line.length > 0);
-          setLogs(lines.slice(-MAX_LOG_LINES));
-        }
+        const snapshot = await getContainerLogs(containerId, String(MAX_LOG_LINES));
+        if (disposed) return;
+        const snapshotLines = snapshot
+          ? snapshot.split("\n").filter(line => line.length > 0)
+          : [];
+        consecutiveFailures = 0;
+        setLogs(snapshotLines.slice(-MAX_LOG_LINES));
+        setError(null);
+        setIsStale(false);
         setIsLoading(false);
-
-        // Start streaming new logs
-        await streamContainerLogs(containerId);
-
-        // Listen for new log events
-        const unlisten = await listen<ContainerLogPayload>("container-log", (event) => {
-          if (event.payload.container_id === containerId) {
-            const newLines = event.payload.text.split("\n").filter(line => line.length > 0);
-            setLogs(prev => {
-              const updated = [...prev, ...newLines];
-              // Keep only the last MAX_LOG_LINES to prevent memory growth
-              return updated.length > MAX_LOG_LINES ? updated.slice(-MAX_LOG_LINES) : updated;
-            });
-          }
-        });
-
-        unsubscribe = unlisten;
       } catch (err) {
+        if (disposed) return;
         const errorMessage = err instanceof Error ? err.message : "Unknown error";
-        console.error("[InitializationLogs] Error setting up logs:", errorMessage);
-        setError(`Failed to load container logs: ${errorMessage}`);
-        setIsLoading(false);
+        if (initial) {
+          console.error("[InitializationLogs] Error loading logs:", errorMessage);
+          setError(`Failed to load container logs: ${errorMessage}`);
+          setIsLoading(false);
+          return;
+        }
+        // A later failure keeps the last good tail — it is still the best view
+        // of the container — but says so rather than presenting stale output
+        // under a spinner that implies it is live.
+        consecutiveFailures += 1;
+        if (consecutiveFailures === STALE_LOG_FAILURE_THRESHOLD) {
+          console.warn(
+            "[InitializationLogs] Container logs stopped refreshing:",
+            errorMessage,
+          );
+        }
+        if (consecutiveFailures >= STALE_LOG_FAILURE_THRESHOLD) setIsStale(true);
+      } finally {
+        refreshInFlight = false;
       }
     };
 
-    setup();
+    void refresh(true);
+    const interval = setInterval(() => void refresh(false), pollIntervalMs);
 
     return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
+      disposed = true;
+      clearInterval(interval);
     };
-  }, [containerId]);
+  }, [containerId, pollIntervalMs]);
 
   return (
     <div className={cn("flex flex-col h-full bg-background", className)}>
@@ -89,6 +103,16 @@ export function InitializationLogs({ containerId, className }: InitializationLog
         <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
         <span className="text-sm font-medium">Initializing Container</span>
       </div>
+
+      {isStale && !error && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-600 dark:text-amber-300"
+        >
+          Container logs stopped refreshing. The output below may be out of date.
+        </div>
+      )}
 
       {/* Log content */}
       <div className="flex-1 overflow-auto p-4 font-mono text-xs">

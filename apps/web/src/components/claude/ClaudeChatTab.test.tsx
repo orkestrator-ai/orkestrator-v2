@@ -152,6 +152,7 @@ const mockReadFileBase64 = mock(async () => "chat-local-base64");
 const mockReadContainerFileBase64 = mock(async () => "chat-container-base64");
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
+const mockAwaitBridgeReady = mock(async (): Promise<any> => null);
 const mockAdoptNativeAgentSession = mock(async (input: {
   environmentId: string;
   agent: string;
@@ -339,6 +340,7 @@ const mockRejectPromptQueueClaim = mock(
 );
 
 mock.module("@/lib/backend", () => ({
+  awaitBridgeReady: mockAwaitBridgeReady,
   adoptNativeAgentSession: mockAdoptNativeAgentSession,
   ensureNativeAgentSession: mockEnsureNativeAgentSession,
   claimPromptQueueHead: mockClaimPromptQueueHead,
@@ -687,51 +689,6 @@ async function flushMicrotaskWork(rounds = 12) {
   });
 }
 
-function installRetryTimeoutQueue() {
-  const timers: Array<{ callback: () => void; delay: number }> = [];
-  let nextHandle = 20_000;
-  const retryDelays = new Set([500, 1_000, 2_000, 4_000, 8_000]);
-  const schedule = ((
-    handler: TimerHandler,
-    timeout?: number,
-    ...args: unknown[]
-  ) => {
-    const delay = timeout ?? 0;
-    // Match the connection-retry timer specifically, not merely a timer whose
-    // delay happens to collide with the backoff schedule. Unrelated 500ms/1s
-    // timers exist in the tab, and capturing one would read as "a retry was
-    // scheduled" in a test asserting that none was.
-    if (
-      !retryDelays.has(delay)
-      || typeof handler !== "function"
-      || !String(handler).includes("setInitAttempt")
-    ) {
-      return ORIGINAL_SET_TIMEOUT(handler, delay, ...args);
-    }
-    timers.push({
-      callback: () => {
-        if (typeof handler === "function") handler(...args);
-      },
-      delay,
-    });
-    return nextHandle++ as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.setTimeout = schedule;
-  window.setTimeout = schedule as typeof window.setTimeout;
-  return {
-    timers,
-    async runNextRetry() {
-      const timer = timers.shift();
-      if (!timer) throw new Error("Expected a queued retry timer");
-      await act(async () => {
-        timer.callback();
-        for (let round = 0; round < 12; round += 1) await Promise.resolve();
-      });
-      return timer.delay;
-    },
-  };
-}
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -875,6 +832,8 @@ describe("ClaudeChatTab", () => {
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
     mockGetAgentHandoff.mockReset();
     mockGetAgentHandoff.mockResolvedValue(null);
+    mockAwaitBridgeReady.mockReset();
+    mockAwaitBridgeReady.mockResolvedValue(null);
     mockStartClaudeServer.mockReset();
     mockStartClaudeServer.mockImplementation(async () => ({
       hostPort: 9999,
@@ -915,6 +874,39 @@ describe("ClaudeChatTab", () => {
     mockToastWarning.mockClear();
     lastVirtualizedMessages = [];
     lastVirtualizedFind = null;
+  });
+
+  test("uses backend bridge readiness without invoking the legacy Claude startup path", async () => {
+    useClaudeStore.setState({ clients: new Map(), sessions: new Map() });
+    mockAwaitBridgeReady.mockResolvedValue({
+      status: "ready",
+      port: 7777,
+      authToken: "ready-token",
+    });
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => expect(mockEnsureNativeAgentSession).toHaveBeenCalled());
+    expect(mockAwaitBridgeReady).toHaveBeenCalledWith(ENVIRONMENT_ID, "claude");
+    expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
+    expect(mockStartClaudeServer).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["failed", "Claude readiness failed"],
+    ["timed-out", "Claude readiness timed out"],
+  ])("surfaces a %s backend readiness result", async (status, message) => {
+    useClaudeStore.setState({ clients: new Map(), sessions: new Map() });
+    mockAwaitBridgeReady.mockResolvedValue({
+      status,
+      error: { message, retryable: true },
+    });
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
+    expect(mockStartClaudeServer).not.toHaveBeenCalled();
   });
 
   test("renders a friendly catalog label for the backend-confirmed assistant model", async () => {
@@ -3353,7 +3345,7 @@ describe("ClaudeChatTab", () => {
       }
     });
 
-    test("stops reconnecting after the SSE retry budget is exhausted", async () => {
+    test("continues low-frequency recovery after the SSE retry budget is exhausted", async () => {
       const originalWarn = console.warn;
       const consoleWarn = mock(() => {});
       console.warn = consoleWarn as unknown as typeof console.warn;
@@ -3365,9 +3357,11 @@ describe("ClaudeChatTab", () => {
       ) => {
         if ((timeout ?? 0) >= 3_000) {
           reconnectTimers += 1;
-          queueMicrotask(() => {
-            if (typeof handler === "function") handler(...args);
-          });
+          if (reconnectTimers <= 10) {
+            queueMicrotask(() => {
+              if (typeof handler === "function") handler(...args);
+            });
+          }
           return (10_000 + reconnectTimers) as unknown as ReturnType<typeof setTimeout>;
         }
         return ORIGINAL_SET_TIMEOUT(handler, timeout, ...args);
@@ -3379,16 +3373,19 @@ describe("ClaudeChatTab", () => {
 
         await waitFor(() =>
           expect(consoleWarn).toHaveBeenCalledWith(
-            "[ClaudeChatTab] SSE reconnect limit reached for",
+            "[ClaudeChatTab] SSE reconnect limit reached; continuing desynced probes for",
             ENVIRONMENT_ID,
           ),
         );
-        expect(reconnectTimers).toBe(10);
+        expect(reconnectTimers).toBe(11);
         expect(mockSubscribeToEvents).toHaveBeenCalledTimes(11);
+        expect(useClaudeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced)
+          .toBe(true);
       } finally {
         console.warn = originalWarn;
       }
     });
+
   });
 
   test("fast reconnect reuses the existing session instead of creating a new one", async () => {
@@ -6004,6 +6001,9 @@ describe("ClaudeChatTab", () => {
           abortController: new AbortController(),
           stream: abortableEmptyEventStream(),
           isActive: true,
+          reconnectAttempts: 0,
+          reconnectTimer: null,
+          desynced: false,
         },
       ]]),
     }));
@@ -6046,29 +6046,6 @@ describe("ClaudeChatTab", () => {
       expect(mockCreateSession).not.toHaveBeenCalled();
     });
 
-    test("automatically retries a transient bridge startup failure for a new environment", async () => {
-      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-        createdAt: new Date().toISOString(),
-      });
-      mockGetClaudeServerStatus
-        .mockRejectedValueOnce(new Error("bridge is still starting"))
-        .mockResolvedValueOnce({
-          running: true,
-          hostPort: 9999,
-          authToken: BRIDGE_AUTH_TOKEN,
-        });
-
-      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      expect(await screen.findByText("Connecting to Claude...")).toBeTruthy();
-      expect(screen.queryByText("Connection Failed")).toBeNull();
-      await waitFor(
-        () => expect(mockCreateSession).toHaveBeenCalledTimes(1),
-        { timeout: 1_500 },
-      );
-      expect(screen.queryByText("Connection Failed")).toBeNull();
-    });
-
     test("surfaces a generic health-wrapper start failure without spending a retry", async () => {
       /*
        * The backend uses this wording for every bridge child failure, permanent
@@ -6076,7 +6053,6 @@ describe("ClaudeChatTab", () => {
        * otherwise read as transient. Retrying on the wrapper would restart the
        * same broken child throughout the startup window before showing anything.
        */
-      const retryTimers = installRetryTimeoutQueue();
       useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
         createdAt: new Date().toISOString(),
       });
@@ -6093,205 +6069,8 @@ describe("ClaudeChatTab", () => {
       render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
       expect(await screen.findByText(/did not become healthy/)).toBeTruthy();
-      expect(retryTimers.timers).toHaveLength(0);
       expect(mockStartClaudeServer).toHaveBeenCalledTimes(1);
       expect(mockCreateSession).not.toHaveBeenCalled();
-    });
-
-    test("automatically retries when the bridge start command races container startup", async () => {
-      const retryTimers = installRetryTimeoutQueue();
-      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-        createdAt: new Date().toISOString(),
-      });
-      mockGetClaudeServerStatus.mockResolvedValue({
-        running: false,
-        hostPort: 9999,
-      });
-      mockStartClaudeServer
-        .mockRejectedValueOnce(new Error("Container is not running"))
-        .mockResolvedValueOnce({
-          hostPort: 9999,
-          authToken: BRIDGE_AUTH_TOKEN,
-        });
-
-      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
-      await flushMicrotaskWork();
-
-      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([500]);
-      expect(screen.queryByText("Connection Failed")).toBeNull();
-
-      await retryTimers.runNextRetry();
-
-      expect(mockStartClaudeServer).toHaveBeenCalledTimes(2);
-      expect(mockCreateSession).toHaveBeenCalledTimes(1);
-      expect(screen.queryByText("Connection Failed")).toBeNull();
-    });
-
-    test("automatically retries when the local bridge start races worktree creation", async () => {
-      const retryTimers = installRetryTimeoutQueue();
-      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-        createdAt: new Date().toISOString(),
-        environmentType: "local",
-      });
-      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-        setupPhase: "ready",
-      });
-      mockGetLocalClaudeServerStatus.mockResolvedValue({
-        running: false,
-        port: null,
-        pid: null,
-      });
-      mockStartLocalClaudeServer
-        .mockRejectedValueOnce(new Error("Local environment worktree is not available"))
-        .mockResolvedValueOnce({
-          running: true,
-          port: 9999,
-          pid: 1234,
-          authToken: BRIDGE_AUTH_TOKEN,
-        });
-
-      render(
-        <ClaudeChatTab
-          tabId={TAB_ID}
-          data={createData({ isLocal: true, containerId: undefined })}
-          isActive
-        />,
-      );
-      await flushMicrotaskWork();
-
-      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([500]);
-      await retryTimers.runNextRetry();
-
-      expect(mockStartLocalClaudeServer).toHaveBeenCalledTimes(2);
-      expect(mockCreateSession).toHaveBeenCalledTimes(1);
-      expect(screen.queryByText("Connection Failed")).toBeNull();
-    });
-
-    test("shows the terminal error after exhausting retries and manual retry resets the budget", async () => {
-      const retryTimers = installRetryTimeoutQueue();
-      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-        createdAt: new Date().toISOString(),
-      });
-      mockGetClaudeServerStatus.mockRejectedValue(new Error("bridge is still starting"));
-
-      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
-      await flushMicrotaskWork();
-      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([500]);
-
-      expect(await retryTimers.runNextRetry()).toBe(500);
-      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([1_000]);
-      expect(await retryTimers.runNextRetry()).toBe(1_000);
-      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([2_000]);
-      expect(await retryTimers.runNextRetry()).toBe(2_000);
-      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([4_000]);
-      expect(await retryTimers.runNextRetry()).toBe(4_000);
-      for (let attempt = 0; attempt < 6; attempt += 1) {
-        expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([8_000]);
-        expect(await retryTimers.runNextRetry()).toBe(8_000);
-      }
-
-      expect(screen.getByText("bridge is still starting")).toBeTruthy();
-      expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(11);
-      expect(retryTimers.timers).toHaveLength(0);
-
-      fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
-      await flushMicrotaskWork();
-
-      expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(12);
-      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([500]);
-      expect(screen.queryByText("Connection Failed")).toBeNull();
-    });
-
-    test("surfaces the saved error instead of running a throttled retry after its deadline", async () => {
-      const retryWindowStart = Date.parse("2026-07-28T18:30:00.000Z");
-      const originalDateNow = Date.now;
-      const originalGlobalSetTimeout = globalThis.setTimeout;
-      const originalWindowSetTimeout = window.setTimeout;
-      let now = retryWindowStart;
-      Date.now = () => now;
-      const retryTimers = installRetryTimeoutQueue();
-      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-        createdAt: new Date(retryWindowStart).toISOString(),
-      });
-      mockGetClaudeServerStatus.mockRejectedValue(
-        new Error("bridge is still starting"),
-      );
-
-      try {
-        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
-        await flushMicrotaskWork();
-
-        for (const expectedDelay of [500, 1_000, 2_000, 4_000]) {
-          expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([
-            expectedDelay,
-          ]);
-          now += expectedDelay;
-          await retryTimers.runNextRetry();
-        }
-        expect(now - retryWindowStart).toBe(7_500);
-        expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([8_000]);
-        expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(5);
-
-        // The timer was valid when scheduled, but the backgrounded renderer
-        // does not deliver it until just after the absolute deadline.
-        now = retryWindowStart + 60_001;
-        await retryTimers.runNextRetry();
-
-        expect(screen.getByText("bridge is still starting")).toBeTruthy();
-        expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(5);
-        expect(retryTimers.timers).toHaveLength(0);
-        expect(mockCreateSession).not.toHaveBeenCalled();
-      } finally {
-        Date.now = originalDateNow;
-        globalThis.setTimeout = originalGlobalSetTimeout;
-        window.setTimeout = originalWindowSetTimeout;
-      }
-    });
-
-    test("does not reconnect after unmounting with an automatic retry pending", async () => {
-      const retryTimers = installRetryTimeoutQueue();
-      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-        createdAt: new Date().toISOString(),
-      });
-      mockGetClaudeServerStatus.mockRejectedValue(new Error("bridge is still starting"));
-
-      const view = render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
-      await flushMicrotaskWork();
-      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([500]);
-
-      view.unmount();
-      await retryTimers.runNextRetry();
-
-      expect(mockGetClaudeServerStatus).toHaveBeenCalledTimes(1);
-      expect(retryTimers.timers).toHaveLength(0);
-    });
-
-    test("retries after slow setup using a window that starts at the first connection failure", async () => {
-      const retryTimers = installRetryTimeoutQueue();
-      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, { setupPhase: "pending" });
-      mockGetClaudeServerStatus
-        .mockRejectedValueOnce(new Error("bridge is still starting"))
-        .mockResolvedValueOnce({
-          running: true,
-          hostPort: 9999,
-          authToken: BRIDGE_AUTH_TOKEN,
-        });
-
-      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
-      expect(screen.getByText(/Waiting for setup/i)).toBeTruthy();
-      expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
-
-      act(() => {
-        useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-          setupPhase: "ready",
-        });
-      });
-      await flushMicrotaskWork();
-      expect(retryTimers.timers.map((timer) => timer.delay)).toEqual([500]);
-
-      await retryTimers.runNextRetry();
-      expect(mockCreateSession).toHaveBeenCalledTimes(1);
-      expect(screen.queryByText("Connection Failed")).toBeNull();
     });
 
     test("starts a stopped local server and connects to its port", async () => {

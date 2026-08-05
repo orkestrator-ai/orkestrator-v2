@@ -24,6 +24,10 @@ import {
   type PersistedPaneLayoutInput,
   type TabInfo,
 } from "@/types/paneLayout";
+import {
+  boundBrowserHistory,
+  sanitizeBrowserHistoryForPersistence,
+} from "@/lib/browser-history";
 
 type SavePaneLayout = (
   environmentId: string,
@@ -78,6 +82,15 @@ function sanitizeTab(tab: TabInfo): TabInfo {
     ...rest
   } = tab;
 
+  if (rest.type === "browser" && rest.browserData?.history) {
+    return {
+      ...rest,
+      browserData: {
+        ...rest.browserData,
+        history: sanitizeBrowserHistoryForPersistence(rest.browserData.history),
+      },
+    };
+  }
   if (rest.claudeNativeData) {
     const { hostPort: _hostPort, ...data } = rest.claudeNativeData;
     return { ...rest, claudeNativeData: data };
@@ -189,6 +202,7 @@ function mergeSelectionIntents(
 type PaneLayoutEnqueue = (
   environmentId: string,
   input: PersistedPaneLayoutInput,
+  baseInput?: PersistedPaneLayoutInput,
 ) => Promise<void>;
 type PaneLayoutAdopt = (
   environmentId: string,
@@ -272,16 +286,77 @@ export function flushPaneLayoutNow(
   });
 }
 
+function sanitizeBrowserHistoryRoot(node: PaneNode): PaneNode {
+  if (node.kind === "split") {
+    return {
+      ...node,
+      children: [
+        sanitizeBrowserHistoryRoot(node.children[0]),
+        sanitizeBrowserHistoryRoot(node.children[1]),
+      ],
+    };
+  }
+  return {
+    ...node,
+    tabs: node.tabs.map((tab) => {
+      if (tab.type !== "browser" || !tab.browserData?.history) return tab;
+      const sanitized = sanitizeBrowserHistoryForPersistence(tab.browserData.history);
+      const bounded = boundBrowserHistory(sanitized, tab.browserData.historyIndex);
+      return {
+        ...tab,
+        browserData: {
+          ...tab.browserData,
+          history: bounded.history,
+          ...(bounded.historyIndex !== undefined
+            ? { historyIndex: bounded.historyIndex }
+            : { historyIndex: undefined }),
+        },
+      };
+    }),
+  };
+}
+
+/**
+ * Rewrite only privacy-sensitive browser-history fields from a snapshot that
+ * was just reconciled. The raw snapshot is the CAS/merge base, so this cannot
+ * accidentally bless unrelated renderer state as an edit.
+ */
+export async function migratePaneLayoutBrowserHistory(
+  environmentId: string,
+  snapshot: PersistedPaneLayout,
+  save: SavePaneLayout = backend.savePaneLayout,
+): Promise<boolean> {
+  if (!isPaneNode(snapshot.root)) return false;
+  const raw: PersistedPaneLayoutInput = {
+    version: snapshot.version,
+    containerId: snapshot.containerId,
+    activePaneId: snapshot.activePaneId,
+    root: snapshot.root,
+  };
+  const desired: PersistedPaneLayoutInput = {
+    ...raw,
+    root: sanitizeBrowserHistoryRoot(raw.root),
+  };
+  if (JSON.stringify(raw) === JSON.stringify(desired)) return false;
+  if (activeEnqueue) await activeEnqueue(environmentId, desired, raw);
+  else await save(environmentId, desired, snapshot.revision);
+  return true;
+}
+
 export function startPaneLayoutPersistence(
   options: PaneLayoutPersistenceOptions = {},
 ): () => void {
+  const useBackendIntents = options.save === undefined && options.load === undefined;
   const save = options.save ?? backend.savePaneLayout;
   const load = options.load ?? backend.getPaneLayout;
   const hydrateDependencies =
     options.hydrateDependencies ?? hydratePaneLayoutDependencies;
-  const debounceMs = options.debounceMs ?? 1_000;
+  // Production mutations are dispatched in the same turn. Tests may still
+  // inject a delay to exercise coalescing and conflict ordering explicitly.
+  const debounceMs = options.debounceMs ?? 0;
   const selectionDebounceMs =
-    options.selectionDebounceMs ?? Math.min(debounceMs, 200);
+    options.selectionDebounceMs
+    ?? (options.debounceMs === undefined ? 0 : Math.min(debounceMs, 200));
   const maxConflictRetries = options.maxConflictRetries ?? 3;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const selectionTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -417,6 +492,20 @@ export function startPaneLayoutPersistence(
     writeBaseInput: PersistedPaneLayoutInput,
     selectionIntent?: PaneLayoutSelectionIntent,
   ): Promise<void> => {
+    if (useBackendIntents) {
+      const saved = await backend.applyPaneLayoutIntent(
+        environmentId,
+        writeBaseInput,
+        desiredInput,
+        selectionIntent,
+      );
+      const savedInput = persistedInput(saved) ?? desiredInput;
+      authoritative.set(environmentId, { input: savedInput, revision: saved.revision });
+      lastEnqueued.set(environmentId, JSON.stringify(savedInput));
+      await installSavedLayout(environmentId, saved, savedInput, desiredInput);
+      clearStoredPaneSelection(environmentId);
+      return;
+    }
     let desired = desiredInput;
     let base = authoritative.get(environmentId);
     if (!base) {
@@ -599,6 +688,12 @@ export function startPaneLayoutPersistence(
       ),
     });
     cancelSelectionTimer(environmentId);
+    if (selectionDebounceMs === 0) {
+      void flushSelectionEnvironment(environmentId)?.catch((error) =>
+        reportWriteFailure(environmentId, error)
+      );
+      return;
+    }
     selectionTimers.set(environmentId, setTimeout(() => {
       void flushSelectionEnvironment(environmentId)?.catch((error) =>
         reportWriteFailure(environmentId, error)
@@ -608,7 +703,7 @@ export function startPaneLayoutPersistence(
 
   // Joins the same chain as the debounced writes so ordering holds. Priming
   // `lastEnqueued` also stops the subscriber echoing this exact layout back.
-  const enqueueImmediate: PaneLayoutEnqueue = (environmentId, input) => {
+  const enqueueImmediate: PaneLayoutEnqueue = (environmentId, input, explicitBaseInput) => {
     const serialized = JSON.stringify(input);
     const matchingPending = pendingWrites.get(environmentId)?.serialized === serialized
       ? pendingWrites.get(environmentId)
@@ -628,7 +723,8 @@ export function startPaneLayoutPersistence(
       input,
       serialized,
       baseInput:
-        matchingPending?.baseInput
+        explicitBaseInput
+        ?? matchingPending?.baseInput
         ?? pendingSelection?.baseInput
         ?? authoritative.get(environmentId)?.input
         ?? input,
@@ -835,6 +931,12 @@ export function startPaneLayoutPersistence(
           selectionIntent,
         ),
       });
+      if (debounceMs === 0) {
+        void flushEnvironment(environmentId)?.catch((error) =>
+          reportWriteFailure(environmentId, error)
+        );
+        continue;
+      }
       timers.set(environmentId, setTimeout(() => {
         void flushEnvironment(environmentId)?.catch((error) =>
           reportWriteFailure(environmentId, error)

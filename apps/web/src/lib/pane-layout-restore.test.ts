@@ -282,6 +282,56 @@ describe("reconcilePersistedLayout", () => {
     });
   });
 
+  test("bounds browser history and rebases and clamps its cursor", () => {
+    const history = Array.from({ length: 125 }, (_, index) => `http://localhost/${index}`);
+    const restore = (historyIndex: unknown) => reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane",
+      tabs: [{
+        id: "browser",
+        type: "browser",
+        browserData: { url: history[120], history, historyIndex },
+      }],
+      activeTabId: "browser",
+    }), context)?.root as Extract<EnvironmentPaneState["root"], { kind: "leaf" }>;
+
+    expect(restore(120).tabs[0]?.browserData).toMatchObject({
+      history: history.slice(25),
+      historyIndex: 95,
+    });
+    expect(restore(-100).tabs[0]?.browserData?.historyIndex).toBe(0);
+    expect(restore(1000).tabs[0]?.browserData?.historyIndex).toBe(99);
+  });
+
+  test("drops malformed browser history and cursors without dropping the tab", () => {
+    for (const browserData of [
+      { url: "http://localhost", history: ["valid", 2], historyIndex: 0 },
+      { url: "http://localhost", history: ["valid"], historyIndex: 1.5 },
+      { url: "http://localhost", history: "not-an-array", historyIndex: 0 },
+    ]) {
+      const restored = reconcilePersistedLayout(saved({
+        kind: "leaf",
+        id: "pane",
+        tabs: [{ id: "browser", type: "browser", browserData }],
+        activeTabId: "browser",
+      }), context);
+      expect(restored?.root).toMatchObject({
+        kind: "leaf",
+        tabs: [{
+          id: "browser",
+          browserData: { url: "http://localhost" },
+        }],
+      });
+      const tab = (restored?.root as Extract<EnvironmentPaneState["root"], { kind: "leaf" }>).tabs[0];
+      if (!Array.isArray(browserData.history)) {
+        expect(tab?.browserData?.history).toBeUndefined();
+      }
+      if (!Number.isSafeInteger(browserData.historyIndex)) {
+        expect(tab?.browserData?.historyIndex).toBeUndefined();
+      }
+    }
+  });
+
   test("drops malformed browser data and normalizes a missing or non-string URL", () => {
     const malformed = reconcilePersistedLayout(saved({
       kind: "leaf",

@@ -129,6 +129,12 @@ describe("NativeChatShell", () => {
     expect(spacer.style.height).toBe("735px");
   });
 
+  test("shows a desync warning while already at the bottom without another accessory", () => {
+    render(<NativeChatShell {...shellProps()} desynced />);
+
+    expect(screen.getByText(/Live updates disconnected/)).toBeTruthy();
+  });
+
   test("forwards the model-label resolver to each rendered message", () => {
     const resolveModelLabel = mock(() => "Friendly Model");
     const message = {

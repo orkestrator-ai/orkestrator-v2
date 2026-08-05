@@ -1623,6 +1623,22 @@ type TmuxStatus = {
   }>;
 };
 
+const TMUX_INFO_EVENT_LIMIT = 20;
+const TMUX_INFO_EVENT_MESSAGE_MAX_CODE_POINTS = 2_000;
+
+function boundedInfoEventMessage(message: string): string {
+  // Iterate only as far as the retained bound. Array.from(message) would first
+  // allocate one entry for every code point in an untrusted hook payload before
+  // slicing it back down. String iteration still respects surrogate pairs, so
+  // the result cannot end with half of one.
+  const retained: string[] = [];
+  for (const codePoint of message) {
+    if (retained.length >= TMUX_INFO_EVENT_MESSAGE_MAX_CODE_POINTS) break;
+    retained.push(codePoint);
+  }
+  return retained.join("");
+}
+
 function permissionModeFromTranscriptLine(line: unknown): string | undefined {
   if (!line || typeof line !== "object") return undefined;
   const record = line as Record<string, unknown>;
@@ -2322,14 +2338,18 @@ class TmuxSession {
         : event.kind === "Stop"
           ? "Claude finished responding"
           : "Claude sent a notification";
+      const duplicateIndex = this.infoEvents.findIndex((entry) =>
+        entry.id === event.id && entry.kind === event.kind
+      );
+      if (duplicateIndex >= 0) this.infoEvents.splice(duplicateIndex, 1);
       this.infoEvents.push({
         id: event.id,
         kind: event.kind,
-        message: rawMessage.slice(0, 2_000),
+        message: boundedInfoEventMessage(rawMessage),
         receivedAt: new Date(event.requestedAt ?? Date.now()).toISOString(),
       });
-      if (this.infoEvents.length > 20) {
-        this.infoEvents.splice(0, this.infoEvents.length - 20);
+      if (this.infoEvents.length > TMUX_INFO_EVENT_LIMIT) {
+        this.infoEvents.splice(0, this.infoEvents.length - TMUX_INFO_EVENT_LIMIT);
       }
     }
     context.emit(CLAUDE_TMUX_EVENT, {

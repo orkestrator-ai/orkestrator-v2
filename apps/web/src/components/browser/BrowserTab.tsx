@@ -119,6 +119,7 @@ export function BrowserTab({
   const [historyIndex, setHistoryIndex] = useState(() =>
     data.historyIndex ?? (data.url ? 0 : -1)
   );
+  const historyIndexRef = useRef(historyIndex);
   const [loadRevision, setLoadRevision] = useState(0);
   const [isLoading, setIsLoading] = useState(Boolean(data.url));
   const [error, setError] = useState<string | null>(null);
@@ -130,19 +131,24 @@ export function BrowserTab({
   const [nativeState, setNativeState] = useState<BrowserPreviewState | null>(null);
   const [hasBlockingOverlay, setHasBlockingOverlay] = useState(false);
 
-  const applyNativeState = useCallback((state: BrowserPreviewState | null) => {
+  const applyNativeSurfaceState = useCallback((state: BrowserPreviewState | null) => {
     if (!state || state.tabId !== tabId) return;
     setNativeState(state);
     setIsLoading(state.loading);
     setError(state.error);
+  }, [tabId]);
 
+  const applyNativeState = useCallback((state: BrowserPreviewState | null) => {
+    if (!state || state.tabId !== tabId) return;
+    applyNativeSurfaceState(state);
     const navigatedDisplayUrl = displayUrlFromNativePreview(state.url, currentUrl);
-    if (!navigatedDisplayUrl || navigatedDisplayUrl === currentUrl) return;
+    if (!navigatedDisplayUrl) return;
+    if (navigatedDisplayUrl === currentUrl) return;
     setAddress(navigatedDisplayUrl);
     setCurrentUrl(navigatedDisplayUrl);
     locallyPersistedUrl.current = navigatedDisplayUrl;
     updateTabBrowserUrl(tabId, navigatedDisplayUrl, environmentId);
-  }, [currentUrl, environmentId, tabId, updateTabBrowserUrl]);
+  }, [applyNativeSurfaceState, currentUrl, environmentId, tabId, updateTabBrowserUrl]);
 
   useEffect(() => {
     const followsLocalNavigation = locallyPersistedUrl.current === data.url;
@@ -151,7 +157,9 @@ export function BrowserTab({
     setCurrentUrl(data.url);
     if (!followsLocalNavigation) {
       setHistory(data.history ?? (data.url ? [data.url] : []));
-      setHistoryIndex(data.historyIndex ?? (data.url ? 0 : -1));
+      const nextIndex = data.historyIndex ?? (data.url ? 0 : -1);
+      historyIndexRef.current = nextIndex;
+      setHistoryIndex(nextIndex);
       setIsLoading(Boolean(data.url));
       setError(null);
     }
@@ -310,16 +318,9 @@ export function BrowserTab({
     if (!nativeBrowserPreview) setLoadRevision((revision) => revision + 1);
     locallyPersistedUrl.current = next.displayUrl;
 
-    if (nativeBrowserPreview && nativeAttachedRef.current) {
-      void navigateBrowserPreview(tabId, next.iframeUrl).then(applyNativeState).catch((navigationError) => {
-        setIsLoading(false);
-        setError(errorMessage(navigationError));
-      });
-    }
-
     if (recordHistory) {
       setHistory((current) => {
-        let nextHistory = current.slice(0, historyIndex + 1);
+        let nextHistory = current.slice(0, historyIndexRef.current + 1);
         if (nextHistory[nextHistory.length - 1] !== next.displayUrl) {
           nextHistory.push(next.displayUrl);
         }
@@ -327,6 +328,7 @@ export function BrowserTab({
           nextHistory = nextHistory.slice(-MAX_BROWSER_HISTORY_ENTRIES);
         }
         const nextIndex = nextHistory.length - 1;
+        historyIndexRef.current = nextIndex;
         setHistoryIndex(nextIndex);
         updateTabBrowserUrl(
           tabId,
@@ -338,7 +340,14 @@ export function BrowserTab({
         return nextHistory;
       });
     }
-  }, [applyNativeState, environmentId, historyIndex, nativeBrowserPreview, tabId, updateTabBrowserUrl]);
+
+    if (nativeBrowserPreview && nativeAttachedRef.current) {
+      void navigateBrowserPreview(tabId, next.iframeUrl).then(applyNativeState).catch((navigationError) => {
+        setIsLoading(false);
+        setError(errorMessage(navigationError));
+      });
+    }
+  }, [applyNativeState, environmentId, nativeBrowserPreview, tabId, updateTabBrowserUrl]);
 
   const handleSubmit = useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -349,8 +358,20 @@ export function BrowserTab({
     if (nativeBrowserPreview) {
       const nextIndex = historyIndex + offset;
       const trackedAddress = history[nextIndex];
-      if (trackedAddress) {
+      const action = offset === -1 ? goBackBrowserPreview : goForwardBrowserPreview;
+      void action(tabId).then((state) => {
+        // BrowserPreviewManager returns before Chromium's navigation commit, so
+        // the RPC snapshot may still contain the old URL. Treat RPC success as
+        // confirmation to advance the known durable cursor; a later native
+        // state event will reconcile the final displayed URL without changing
+        // the history sequence.
+        applyNativeSurfaceState(state);
+        if (!trackedAddress) return;
+        historyIndexRef.current = nextIndex;
         setHistoryIndex(nextIndex);
+        setAddress(trackedAddress);
+        setCurrentUrl(trackedAddress);
+        locallyPersistedUrl.current = trackedAddress;
         updateTabBrowserUrl(
           tabId,
           trackedAddress,
@@ -358,9 +379,7 @@ export function BrowserTab({
           history,
           nextIndex,
         );
-      }
-      const action = offset === -1 ? goBackBrowserPreview : goForwardBrowserPreview;
-      void action(tabId).then(applyNativeState).catch((navigationError) => {
+      }).catch((navigationError) => {
         setError(errorMessage(navigationError));
       });
       return;
@@ -368,10 +387,11 @@ export function BrowserTab({
     const nextIndex = historyIndex + offset;
     const nextAddress = history[nextIndex];
     if (!nextAddress) return;
+    historyIndexRef.current = nextIndex;
     setHistoryIndex(nextIndex);
     updateTabBrowserUrl(tabId, nextAddress, environmentId, history, nextIndex);
     navigate(nextAddress, false);
-  }, [applyNativeState, environmentId, history, historyIndex, nativeBrowserPreview, navigate, tabId, updateTabBrowserUrl]);
+  }, [applyNativeSurfaceState, environmentId, history, historyIndex, nativeBrowserPreview, navigate, tabId, updateTabBrowserUrl]);
 
   const reload = useCallback(() => {
     if (!currentUrl) return;

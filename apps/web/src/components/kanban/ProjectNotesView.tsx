@@ -21,7 +21,7 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
 
   const project = getProjectById(projectId);
   const notesReady = currentNotesProjectId === projectId && !notesLoading;
-  const [draft, setDraft, clearDurableDraft] = useDurableComposeDraft<string>({
+  const [draft, setDraft, , discardDurableDraft] = useDurableComposeDraft<string>({
     ownerType: "project",
     ownerId: projectId,
     namespace: "project-notes",
@@ -33,30 +33,45 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
   });
   const isDirty = notesReady && draft !== notes;
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editRevisionRef = useRef(0);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     void loadNotes(projectId);
   }, [projectId, loadNotes]);
 
-  const persistNotes = useCallback(async (value: string) => {
-    try {
-      await saveNotes(projectId, value);
-      await clearDurableDraft();
-    } catch (error) {
-      console.warn("[ProjectNotesView] Notes remain in the durable draft:", error);
-    }
-  }, [clearDurableDraft, projectId, saveNotes]);
+  const persistNotes = useCallback((value: string, editRevision: number) => {
+    const queuedSave = saveQueueRef.current.then(async () => {
+      try {
+        await saveNotes(projectId, value);
+        // A newer edit may have landed while this request was in flight. Only
+        // discard the recovery record when the completed save still represents
+        // the live editor; otherwise the newer text must remain recoverable.
+        if (editRevisionRef.current === editRevision) {
+          await discardDurableDraft();
+        }
+      } catch (error) {
+        console.warn("[ProjectNotesView] Notes remain in the durable draft:", error);
+      }
+    });
+    // Serialize writes so an older slow save can never complete after a newer
+    // manual save and overwrite the backend with stale content.
+    saveQueueRef.current = queuedSave;
+    return queuedSave;
+  }, [discardDurableDraft, projectId, saveNotes]);
 
   const handleChange = useCallback(
     (value: string) => {
+      editRevisionRef.current += 1;
       setDraft(value);
 
       // Auto-save after 1 second of inactivity
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
+      const editRevision = editRevisionRef.current;
       saveTimeoutRef.current = setTimeout(() => {
-        void persistNotes(value);
+        void persistNotes(value, editRevision);
       }, 1000);
     },
     [persistNotes, setDraft]
@@ -66,7 +81,7 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
-    void persistNotes(draft);
+    void persistNotes(draft, editRevisionRef.current);
   };
 
   // The durable draft hook flushes on unmount; only cancel the convenience

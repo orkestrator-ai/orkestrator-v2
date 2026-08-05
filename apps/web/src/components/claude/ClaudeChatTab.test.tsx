@@ -152,6 +152,7 @@ const mockReadFileBase64 = mock(async () => "chat-local-base64");
 const mockReadContainerFileBase64 = mock(async () => "chat-container-base64");
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
+const mockAwaitBridgeReady = mock(async (): Promise<any> => null);
 const mockAdoptNativeAgentSession = mock(async (input: {
   environmentId: string;
   agent: string;
@@ -339,6 +340,7 @@ const mockRejectPromptQueueClaim = mock(
 );
 
 mock.module("@/lib/backend", () => ({
+  awaitBridgeReady: mockAwaitBridgeReady,
   adoptNativeAgentSession: mockAdoptNativeAgentSession,
   ensureNativeAgentSession: mockEnsureNativeAgentSession,
   claimPromptQueueHead: mockClaimPromptQueueHead,
@@ -830,6 +832,8 @@ describe("ClaudeChatTab", () => {
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
     mockGetAgentHandoff.mockReset();
     mockGetAgentHandoff.mockResolvedValue(null);
+    mockAwaitBridgeReady.mockReset();
+    mockAwaitBridgeReady.mockResolvedValue(null);
     mockStartClaudeServer.mockReset();
     mockStartClaudeServer.mockImplementation(async () => ({
       hostPort: 9999,
@@ -870,6 +874,39 @@ describe("ClaudeChatTab", () => {
     mockToastWarning.mockClear();
     lastVirtualizedMessages = [];
     lastVirtualizedFind = null;
+  });
+
+  test("uses backend bridge readiness without invoking the legacy Claude startup path", async () => {
+    useClaudeStore.setState({ clients: new Map(), sessions: new Map() });
+    mockAwaitBridgeReady.mockResolvedValue({
+      status: "ready",
+      port: 7777,
+      authToken: "ready-token",
+    });
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => expect(mockEnsureNativeAgentSession).toHaveBeenCalled());
+    expect(mockAwaitBridgeReady).toHaveBeenCalledWith(ENVIRONMENT_ID, "claude");
+    expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
+    expect(mockStartClaudeServer).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["failed", "Claude readiness failed"],
+    ["timed-out", "Claude readiness timed out"],
+  ])("surfaces a %s backend readiness result", async (status, message) => {
+    useClaudeStore.setState({ clients: new Map(), sessions: new Map() });
+    mockAwaitBridgeReady.mockResolvedValue({
+      status,
+      error: { message, retryable: true },
+    });
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
+    expect(mockStartClaudeServer).not.toHaveBeenCalled();
   });
 
   test("renders a friendly catalog label for the backend-confirmed assistant model", async () => {
@@ -3308,7 +3345,7 @@ describe("ClaudeChatTab", () => {
       }
     });
 
-    test("stops reconnecting after the SSE retry budget is exhausted", async () => {
+    test("continues low-frequency recovery after the SSE retry budget is exhausted", async () => {
       const originalWarn = console.warn;
       const consoleWarn = mock(() => {});
       console.warn = consoleWarn as unknown as typeof console.warn;
@@ -3320,9 +3357,11 @@ describe("ClaudeChatTab", () => {
       ) => {
         if ((timeout ?? 0) >= 3_000) {
           reconnectTimers += 1;
-          queueMicrotask(() => {
-            if (typeof handler === "function") handler(...args);
-          });
+          if (reconnectTimers <= 10) {
+            queueMicrotask(() => {
+              if (typeof handler === "function") handler(...args);
+            });
+          }
           return (10_000 + reconnectTimers) as unknown as ReturnType<typeof setTimeout>;
         }
         return ORIGINAL_SET_TIMEOUT(handler, timeout, ...args);
@@ -3334,16 +3373,19 @@ describe("ClaudeChatTab", () => {
 
         await waitFor(() =>
           expect(consoleWarn).toHaveBeenCalledWith(
-            "[ClaudeChatTab] SSE reconnect limit reached for",
+            "[ClaudeChatTab] SSE reconnect limit reached; continuing desynced probes for",
             ENVIRONMENT_ID,
           ),
         );
-        expect(reconnectTimers).toBe(10);
+        expect(reconnectTimers).toBe(11);
         expect(mockSubscribeToEvents).toHaveBeenCalledTimes(11);
+        expect(useClaudeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced)
+          .toBe(true);
       } finally {
         console.warn = originalWarn;
       }
     });
+
   });
 
   test("fast reconnect reuses the existing session instead of creating a new one", async () => {

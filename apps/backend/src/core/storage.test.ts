@@ -15,6 +15,7 @@ import type {
 } from "./models.js";
 import { MAX_CODEX_CONCURRENT_THREADS } from "./constants.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import type { PaneLayoutMergeInput } from "@orkestrator/protocol/pane-layout-merge";
 
 async function withTemporaryStorage<T>(
   run: (storage: StorageService, dataDir: string) => Promise<T>,
@@ -229,6 +230,101 @@ describe("backend-owned setup and build surfaces", () => {
         available: true,
         layouts: { [environment.id]: saved },
       });
+    });
+  });
+});
+
+describe("pane layout intent persistence", () => {
+  const layout = (
+    activeTabId: string | null,
+    tabs = ["tab-a", "tab-b"],
+  ): PaneLayoutMergeInput => ({
+    version: PANE_LAYOUT_VERSION,
+    containerId: null,
+    activePaneId: "pane-1",
+    root: {
+      kind: "leaf",
+      id: "pane-1",
+      tabs: tabs.map((id) => ({ id, type: "plain" })),
+      activeTabId,
+    },
+  });
+
+  test("creates an initial local layout and applies explicit selection intent", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1", { environmentType: "local" });
+      environment.id = "env-layout-intent";
+      await storage.addEnvironment(environment);
+      const base = layout("tab-a");
+
+      const initial = await storage.applyPaneLayoutIntent(
+        environment.id,
+        base,
+        base,
+      );
+      expect(initial).toMatchObject({
+        environmentId: environment.id,
+        containerId: null,
+        revision: 1,
+        root: base.root,
+      });
+
+      const selected = await storage.applyPaneLayoutIntent(
+        environment.id,
+        base,
+        base,
+        { activePaneId: "pane-1", activeTabIds: { "pane-1": "tab-b" } },
+      );
+      expect(selected.revision).toBe(2);
+      expect((selected.root as { activeTabId: string }).activeTabId).toBe("tab-b");
+    });
+  });
+
+  test("rejects malformed and stale generations without consuming a revision", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-layout-generation";
+      environment.containerId = "container-new";
+      await storage.addEnvironment(environment);
+      const current = {
+        ...layout("tab-a"),
+        containerId: "container-new",
+      };
+      await storage.savePaneLayout(environment.id, current, 0);
+      const stale = { ...current, containerId: "container-old" };
+      await expect(storage.applyPaneLayoutIntent(environment.id, stale, stale))
+        .rejects.toThrow("stale environment generation");
+
+      const cyclicRoot: Record<string, unknown> = { kind: "leaf" };
+      cyclicRoot.self = cyclicRoot;
+      await expect(storage.applyPaneLayoutIntent(
+        environment.id,
+        current,
+        { ...current, root: cyclicRoot } as unknown as PaneLayoutMergeInput,
+      )).rejects.toThrow("JSON serializable");
+      expect((await storage.getPaneLayout(environment.id))?.revision).toBe(1);
+    });
+  });
+
+  test("recovers the mutation queue after a filesystem write failure", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = createEnvironment("project-1", { environmentType: "local" });
+      environment.id = "env-layout-write-recovery";
+      await storage.addEnvironment(environment);
+      const filePath = path.join(dataDir, "pane-layouts.json");
+      await fs.mkdir(filePath);
+
+      await expect(storage.applyPaneLayoutIntent(
+        environment.id,
+        layout("tab-a"),
+        layout("tab-a"),
+      )).rejects.toThrow();
+      await fs.rm(filePath, { recursive: true, force: true });
+      await expect(storage.applyPaneLayoutIntent(
+        environment.id,
+        layout("tab-a"),
+        layout("tab-b"),
+      )).resolves.toMatchObject({ revision: 1 });
     });
   });
 });

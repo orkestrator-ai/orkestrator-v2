@@ -1038,6 +1038,15 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       && historyIndex === undefined
     ) return;
 
+    const historyOffset = Math.max(0, (history?.length ?? 0) - 100);
+    const boundedHistory = history?.slice(-100);
+    const boundedHistoryIndex = boundedHistory && historyIndex !== undefined
+      ? Math.min(
+          Math.max(historyIndex - historyOffset, boundedHistory.length === 0 ? -1 : 0),
+          boundedHistory.length - 1,
+        )
+      : historyIndex;
+
     const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
       ...leaf,
       tabs: leaf.tabs.map((tab) =>
@@ -1047,8 +1056,8 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
               browserData: {
                 ...tab.browserData,
                 url,
-                ...(history !== undefined ? { history } : {}),
-                ...(historyIndex !== undefined ? { historyIndex } : {}),
+                ...(boundedHistory !== undefined ? { history: boundedHistory } : {}),
+                ...(boundedHistoryIndex !== undefined ? { historyIndex: boundedHistoryIndex } : {}),
               },
             }
           : tab

@@ -44,6 +44,7 @@ export function isAwaitBridgeReadyResult(
   if (record.status === "ready") {
     return Number.isSafeInteger(record.port)
       && (record.port as number) > 0
+      && (record.port as number) <= 65_535
       && typeof record.authToken === "string"
       && record.authToken.length > 0;
   }

@@ -21,7 +21,9 @@ type TestTerminalOutputSnapshot =
     truncated?: boolean;
   };
 
-const getTerminalSessionMock = mock(async (_sessionId: string) => ({ id: "session-old", running: true }));
+const getTerminalSessionMock = mock(async (
+  _sessionId: string,
+): Promise<realBackend.TerminalSessionStatus> => ({ id: "session-old", running: true }));
 const createLocalTerminalSessionMock = mock(async (_environmentId: string, _cols: number, _rows: number, _track?: boolean, _terminalKey?: string) => ({
   sessionId: "session-new-local",
   created: true,
@@ -144,6 +146,147 @@ describe("useTerminal reconnect behavior", () => {
       expect.any(Function),
       expect.objectContaining({ signal: expect.anything() }),
     );
+  });
+
+  it("hydrates the bootstrap state from a running existing session", async () => {
+    getTerminalSessionMock.mockResolvedValue({
+      id: "session-old",
+      running: true,
+      bootstrapped: true,
+    });
+
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "session-old",
+        persistSession: true,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    expect(result.current.sessionId).toBe("session-old");
+    expect(result.current.bootstrapped).toBe(true);
+  });
+
+  it("publishes the bootstrap state returned by a newly created session", async () => {
+    createTerminalSessionMock.mockImplementation(async () => ({
+      sessionId: "session-new-container",
+      created: true,
+      bootstrapped: true,
+    }));
+
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        persistSession: true,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    expect(result.current.bootstrapped).toBe(true);
+  });
+
+  it("publishes the bootstrap state returned by a stale-session replacement", async () => {
+    getTerminalSessionMock.mockResolvedValue({ id: "session-old", running: false });
+    createTerminalSessionMock.mockImplementation(async () => ({
+      sessionId: "session-replacement",
+      created: true,
+      bootstrapped: true,
+    }));
+
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        existingSessionId: "session-old",
+        persistSession: true,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    expect(result.current.sessionId).toBe("session-replacement");
+    expect(result.current.bootstrapped).toBe(true);
+  });
+
+  it("marks only the currently connected session as bootstrapped", async () => {
+    createTerminalSessionMock.mockImplementation(async () => ({
+      sessionId: "session-new-container",
+      created: true,
+      bootstrapped: false,
+    }));
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        persistSession: true,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.connect();
+    });
+    expect(result.current.bootstrapped).toBe(false);
+
+    act(() => {
+      expect(result.current.markBootstrapped("stale-session")).toBe(false);
+    });
+    expect(result.current.bootstrapped).toBe(false);
+
+    act(() => {
+      expect(result.current.markBootstrapped("session-new-container")).toBe(true);
+    });
+    expect(result.current.bootstrapped).toBe(true);
+  });
+
+  it("keeps bootstrap state false when session creation fails", async () => {
+    createTerminalSessionMock.mockRejectedValue(new Error("create failed"));
+
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        persistSession: true,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    expect(result.current.sessionId).toBeNull();
+    expect(result.current.bootstrapped).toBe(false);
+    expect(result.current.error).toBe("create failed");
+  });
+
+  it("resets bootstrap state immediately when disconnecting", async () => {
+    createTerminalSessionMock.mockImplementation(async () => ({
+      sessionId: "session-new-container",
+      created: true,
+      bootstrapped: true,
+    }));
+
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        persistSession: true,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.connect();
+    });
+    expect(result.current.bootstrapped).toBe(true);
+
+    await act(async () => {
+      await result.current.disconnect();
+    });
+    expect(result.current.bootstrapped).toBe(false);
   });
 
   it("attaches once to a backend-owned setup session while preparation is running before its PTY exists", async () => {

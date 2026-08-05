@@ -13454,6 +13454,43 @@ exit 0
     await commands.get("close_local_terminal_session")?.({ sessionId }, context);
   });
 
+  test("does not consume terminal bootstrap ownership when delivery is unavailable or throws", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-bootstrap-errors-");
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    expect(await commands.get("bootstrap_terminal_session")?.(
+      { sessionId: "missing-session", data: "codex\n" },
+      context,
+    )).toEqual({ bootstrapped: false, delivered: false, duplicate: false });
+
+    const sessionId = terminalSessionResult(await commands.get("create_local_terminal_session")?.(
+      { environmentId: environment.id, cols: 100, rows: 30 },
+      context,
+    )).sessionId;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    ptyProcesses[0]!.write.mockImplementationOnce(() => {
+      throw new Error("PTY write failed");
+    });
+
+    expect(() => commands.get("bootstrap_terminal_session")?.(
+      { sessionId, data: "codex\n" },
+      context,
+    )).toThrow("PTY write failed");
+    expect(commands.get("get_terminal_session")?.({ sessionId }, context)).toEqual({
+      id: sessionId,
+      running: true,
+      bootstrapped: false,
+    });
+    expect(await commands.get("bootstrap_terminal_session")?.(
+      { sessionId, data: "codex\n" },
+      context,
+    )).toEqual({ bootstrapped: true, delivered: true, duplicate: false });
+    expect(ptyProcesses[0]!.write).toHaveBeenCalledTimes(2);
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+  });
+
   test("reattaches a stable terminal tab to the same backend PTY and buffer", async () => {
     const worktreePath = await createTempDir("ork-electron-terminal-reattach-");
     const environment = createEnvironment({ worktreePath });

@@ -222,7 +222,10 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
   },
 
   loadNotes: async (projectId) => {
-    set({ notesLoading: true, currentNotesProjectId: projectId });
+    // Never expose the previous project's notes if this load fails. The editor
+    // enables itself once notesLoading clears, so stale content here could be
+    // edited and saved into the newly selected project.
+    set({ notes: "", notesLoading: true, currentNotesProjectId: projectId });
     try {
       const result = await getProjectNotes(projectId);
       if (get().currentNotesProjectId === projectId) {
@@ -239,7 +242,9 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
   saveNotes: async (projectId, content) => {
     try {
       await saveProjectNotes(projectId, content);
-      set({ notes: content });
+      if (get().currentNotesProjectId === projectId) {
+        set({ notes: content });
+      }
     } catch (error) {
       console.error("[KanbanStore] Failed to save notes:", error);
       throw error;

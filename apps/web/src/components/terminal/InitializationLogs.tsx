@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 interface InitializationLogsProps {
   containerId: string;
   className?: string;
+  /** Override only for deterministic tests; production refreshes once a second. */
+  pollIntervalMs?: number;
 }
 
 /**
@@ -15,7 +17,11 @@ interface InitializationLogsProps {
  */
 const MAX_LOG_LINES = 500;
 
-export function InitializationLogs({ containerId, className }: InitializationLogsProps) {
+export function InitializationLogs({
+  containerId,
+  className,
+  pollIntervalMs = 1_000,
+}: InitializationLogsProps) {
   const [logs, setLogs] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,13 +66,13 @@ export function InitializationLogs({ containerId, className }: InitializationLog
     };
 
     void refresh(true);
-    const interval = setInterval(() => void refresh(false), 1_000);
+    const interval = setInterval(() => void refresh(false), pollIntervalMs);
 
     return () => {
       disposed = true;
       clearInterval(interval);
     };
-  }, [containerId]);
+  }, [containerId, pollIntervalMs]);
 
   return (
     <div className={cn("flex flex-col h-full bg-background", className)}>

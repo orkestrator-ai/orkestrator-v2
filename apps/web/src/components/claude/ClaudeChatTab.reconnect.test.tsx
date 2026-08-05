@@ -371,7 +371,7 @@ describe("ClaudeChatTab SSE reconnect", () => {
     }
   });
 
-  test("uses capped exponential delays and stops after ten reconnect attempts", async () => {
+  test("uses capped exponential delays then keeps probing while desynced", async () => {
     const held = eventChannel();
     const consoleWarn = mock(() => {});
     const originalConsoleWarn = console.warn;
@@ -393,7 +393,7 @@ describe("ClaudeChatTab SSE reconnect", () => {
 
       await waitFor(() => {
         expect(consoleWarn).toHaveBeenCalledWith(
-          "[ClaudeChatTab] SSE reconnect limit reached for",
+          "[ClaudeChatTab] SSE reconnect limit reached; continuing desynced probes for",
           ENVIRONMENT_ID,
         );
       });
@@ -408,8 +408,16 @@ describe("ClaudeChatTab SSE reconnect", () => {
         60_000,
         60_000,
         60_000,
+        60_000,
       ]);
       expect(mockSubscribeToEvents).toHaveBeenCalledTimes(11);
+
+      await runTimer(timers[10]!);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalledTimes(12));
+      await waitFor(() => expect(timers).toHaveLength(12));
+      expect(
+        useClaudeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced,
+      ).toBe(true);
     } finally {
       console.warn = originalConsoleWarn;
     }
@@ -514,5 +522,52 @@ describe("ClaudeChatTab SSE reconnect", () => {
     await waitFor(() =>
       expect(timers.map((timer) => timer.delay)).toEqual([3_000, 3_000]),
     );
+  });
+
+  test("a desynced reconnect rehydrates every projected session and pending prompt", async () => {
+    const channel = eventChannel();
+    const secondKey = createSessionKey(ENVIRONMENT_ID, "tab-claude-second");
+    const previous = new AbortController();
+    act(() => {
+      useClaudeStore.setState((state) => ({
+        sessions: new Map(state.sessions).set(secondKey, {
+          sessionId: "session-claude-second",
+          messages: [],
+          isLoading: false,
+        }),
+        eventSubscriptions: new Map([[ENVIRONMENT_ID, {
+          abortController: previous,
+          stream: null,
+          isActive: false,
+          reconnectAttempts: 10,
+          reconnectTimer: null,
+          desynced: true,
+        }]]),
+      }));
+    });
+    mockSubscribeToEvents.mockImplementationOnce(() => channel.stream);
+
+    renderChat();
+
+    await waitFor(() => {
+      expect((mockGetSessionMessages.mock.calls as unknown[][])
+        .some((call) => call[1] === "session-claude-second"))
+        .toBe(true);
+      expect((mockGetPendingQuestions.mock.calls as unknown[][])
+        .some((call) => call[1] === "session-claude-second"))
+        .toBe(true);
+      expect((mockGetPendingPlanApprovals.mock.calls as unknown[][])
+        .some((call) => call[1] === "session-claude-second"))
+        .toBe(true);
+      expect(
+        useClaudeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced,
+      ).toBe(false);
+    });
+
+    await act(async () => {
+      useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+      await Promise.resolve();
+    });
   });
 });

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useCallback, useState } from "react";
 import * as realSessionStore from "@/stores/sessionStore";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
 import { invoke } from "@/lib/native/backend";
@@ -22,6 +23,7 @@ import {
 const resizeMock = mock(async () => {});
 const connectMock = mock(async () => {});
 const writeMock = mock(async (_data: string) => {});
+const markBootstrappedMock = mock((_sessionId: string) => true);
 const invokeMock = invoke as ReturnType<typeof mock>;
 const bootstrapWrites = (): string[] => invokeMock.mock.calls
   .filter(([command]) => command === "bootstrap_terminal_session")
@@ -81,17 +83,24 @@ let composeBarOptions: {
 
 mock.module("@/hooks/useTerminal", () => ({
   useTerminal: (options: MockUseTerminalOptions) => {
+    const [locallyBootstrapped, setLocallyBootstrapped] = useState(false);
+    const markBootstrapped = useCallback((sessionId: string) => {
+      const accepted = markBootstrappedMock(sessionId);
+      if (accepted) setLocallyBootstrapped(true);
+      return accepted;
+    }, []);
     lastUseTerminalOptions = options;
     useTerminalOptionsHistory.push(options);
     terminalOnData = options.onData;
     return {
       sessionId: useTerminalSessionId,
-      bootstrapped: useTerminalBootstrapped,
+      bootstrapped: useTerminalBootstrapped || locallyBootstrapped,
       isConnected: useTerminalIsConnected,
       isConnecting: false,
       error: null,
       connect: connectMock,
       disconnect: mock(async () => {}),
+      markBootstrapped,
       resize: resizeMock,
       write: writeMock,
     };
@@ -372,6 +381,8 @@ describe("PersistentTerminal", () => {
     resizeMock.mockClear();
     connectMock.mockClear();
     writeMock.mockClear();
+    markBootstrappedMock.mockClear();
+    markBootstrappedMock.mockImplementation(() => true);
     invokeMock.mockReset();
     invokeMock.mockImplementation(async (command: string) =>
       command === "bootstrap_terminal_session"
@@ -3462,6 +3473,192 @@ describe("PersistentTerminal", () => {
       expect(writeMock).toHaveBeenCalledWith(ADDRESS_ALL_REVIEW_PROMPT);
       expect(writeMock).toHaveBeenCalledWith("\r");
     });
+  });
+
+  it("shows Address all in the same mount after backend bootstrap succeeds", async () => {
+    let attempts = 0;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== "bootstrap_terminal_session") return undefined;
+      attempts += 1;
+      return attempts === 1
+        ? { bootstrapped: false, delivered: false, duplicate: false }
+        : { bootstrapped: true, delivered: true, duplicate: false };
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        isReviewTab
+        paneId="pane-1"
+      />
+    );
+
+    act(() => {
+      terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
+    });
+
+    expect(await screen.findByRole(
+      "button",
+      { name: "Address all" },
+      { timeout: 2_000 },
+    )).toBeTruthy();
+    expect(attempts).toBe(2);
+    expect(markBootstrappedMock).toHaveBeenCalledWith("session-1");
+  });
+
+  it("retries a rejected bootstrap request and publishes the later success", async () => {
+    let attempts = 0;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== "bootstrap_terminal_session") return undefined;
+      attempts += 1;
+      if (attempts === 1) throw new Error("PTY is still starting");
+      return { bootstrapped: true, delivered: true, duplicate: false };
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        isReviewTab
+        paneId="pane-1"
+      />
+    );
+    act(() => {
+      terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
+    });
+
+    await screen.findByRole("button", { name: "Address all" }, { timeout: 2_000 });
+    expect(attempts).toBe(2);
+    expect(markBootstrappedMock).toHaveBeenCalledWith("session-1");
+  });
+
+  it("surfaces a launch warning after bounded unsuccessful bootstrap attempts", async () => {
+    invokeMock.mockImplementation(async (command: string) =>
+      command === "bootstrap_terminal_session"
+        ? { bootstrapped: false, delivered: false, duplicate: false }
+        : undefined
+    );
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />
+    );
+
+    act(() => {
+      terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
+    });
+
+    const warning = await screen.findByRole("status", {}, { timeout: 2_000 });
+    expect(warning.textContent).toContain("launch command could not start");
+    expect(bootstrapWrites()).toHaveLength(3);
+    expect(markBootstrappedMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels a scheduled bootstrap retry when the terminal unmounts", async () => {
+    invokeMock.mockImplementation(async (command: string) =>
+      command === "bootstrap_terminal_session"
+        ? { bootstrapped: false, delivered: false, duplicate: false }
+        : undefined
+    );
+
+    const view = render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />
+    );
+
+    act(() => {
+      terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
+    });
+    await waitFor(() => expect(bootstrapWrites()).toHaveLength(1));
+    view.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    expect(bootstrapWrites()).toHaveLength(1);
+    expect(markBootstrappedMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a bootstrap completion from a replaced terminal session", async () => {
+    let resolveFirst!: (result: {
+      bootstrapped: boolean;
+      delivered: boolean;
+      duplicate: boolean;
+    }) => void;
+    let attempts = 0;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== "bootstrap_terminal_session") return undefined;
+      attempts += 1;
+      if (attempts === 1) {
+        return new Promise((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return { bootstrapped: true, delivered: true, duplicate: false };
+    });
+
+    const props = {
+      terminalData: createTerminalData(),
+      tabId: "tab-1",
+      tabType: "claude" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: false,
+      paneId: "pane-1",
+    };
+    const view = render(<PersistentTerminal {...props} />);
+    act(() => {
+      terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
+    });
+    await waitFor(() => expect(bootstrapWrites()).toHaveLength(1));
+
+    useTerminalSessionId = "session-2";
+    view.rerender(<PersistentTerminal {...props} />);
+    await act(async () => {
+      resolveFirst({ bootstrapped: true, delivered: true, duplicate: false });
+    });
+
+    await waitFor(
+      () => expect(markBootstrappedMock).toHaveBeenCalledWith("session-2"),
+      { timeout: 2_000 },
+    );
+    expect(markBootstrappedMock).not.toHaveBeenCalledWith("session-1");
   });
 
   it("launches Codex terminal mode without an initial prompt", async () => {

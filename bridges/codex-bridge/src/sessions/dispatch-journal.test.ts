@@ -6,7 +6,12 @@ import { DispatchJournal, reconcileFromThreadTurns } from "./dispatch-journal.js
 
 const temporaryDirs: string[] = [];
 
-function journal(options: { persist?: boolean; now?: () => number; maxRecords?: number } = {}) {
+function journal(options: {
+  persist?: boolean;
+  now?: () => number;
+  maxRecords?: number;
+  retentionMs?: number;
+} = {}) {
   const codexHome = mkdtempSync(join(tmpdir(), "ork-journal-"));
   temporaryDirs.push(codexHome);
   return new DispatchJournal({
@@ -15,6 +20,7 @@ function journal(options: { persist?: boolean; now?: () => number; maxRecords?: 
     persist: options.persist ?? false,
     now: options.now,
     maxRecords: options.maxRecords,
+    retentionMs: options.retentionMs,
   });
 }
 
@@ -98,6 +104,49 @@ describe("journal state transitions", () => {
       state: "terminal",
       terminalStatus: "interrupted",
     });
+  });
+
+  test("retryable records can be dispatched again and are not unresolved", async () => {
+    const store = journal();
+    await store.markPrepared({ requestId: "retry", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markRetryable("retry");
+
+    expect(store.classify("retry")).toMatchObject({
+      duplicate: true,
+      action: "dispatch",
+      record: { state: "retryable" },
+    });
+    expect(store.unresolved()).toEqual([]);
+  });
+
+  test("missing record access and removal are harmless", async () => {
+    const store = journal();
+    expect(store.get("missing")).toBeUndefined();
+    expect(store.latestForSession("missing")).toBeUndefined();
+    await store.forget("missing");
+    expect(store.allRecords()).toEqual([]);
+  });
+
+  test("markRetryable records a safe retry even if preparation is missing", async () => {
+    const store = journal();
+    await store.markRetryable("missing-preparation");
+
+    expect(store.get("missing-preparation")).toMatchObject({
+      requestId: "missing-preparation",
+      bridgeSessionId: "",
+      threadId: null,
+      state: "retryable",
+    });
+  });
+
+  test("latestForSession uses mutation order when timestamps tie", async () => {
+    const store = journal({ now: () => 1_000 });
+    await store.markPrepared({ requestId: "first", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markTerminal("first", "completed");
+    await store.markPrepared({ requestId: "second", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markRetryable("second");
+
+    expect(store.latestForSession("s1")?.requestId).toBe("second");
   });
 
   test("unresolved lists exactly what recovery must reconcile", async () => {
@@ -227,6 +276,115 @@ describe("garbage collection", () => {
     // All four are unresolved, so the cap must not evict any of them: losing one
     // would mean losing the only record that a dispatch might be in flight.
     expect(store.unresolved()).toHaveLength(4);
+  });
+
+  test("old retryable records expire without affecting unresolved records", async () => {
+    let clock = 0;
+    const store = journal({ now: () => clock, retentionMs: 1_000 });
+    await store.markPrepared({ requestId: "retry", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markRetryable("retry");
+    await store.markPrepared({ requestId: "running", bridgeSessionId: "s2", threadId: "t2" });
+    await store.markAccepted("running", { threadId: "t2", turnId: "turn-2" });
+
+    clock = 10_000;
+    await store.markPrepared({ requestId: "trigger", bridgeSessionId: "s3", threadId: "t3" });
+
+    expect(store.get("retry")).toBeUndefined();
+    expect(store.unresolved().map((record) => record.requestId).sort()).toEqual([
+      "running",
+      "trigger",
+    ]);
+  });
+
+  test("only the newest retryable marker is retained for each session", async () => {
+    let clock = 0;
+    const store = journal({ now: () => clock });
+    await store.markPrepared({ requestId: "old", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markRetryable("old");
+    clock += 1;
+    await store.markPrepared({ requestId: "new", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markRetryable("new");
+
+    expect(store.get("old")).toBeUndefined();
+    expect(store.latestForSession("s1")?.requestId).toBe("new");
+  });
+
+  test("a newer settled dispatch makes an older retryable marker obsolete", async () => {
+    let clock = 0;
+    const store = journal({ now: () => clock });
+    await store.markPrepared({ requestId: "retry", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markRetryable("retry");
+    clock += 1;
+    await store.markPrepared({ requestId: "done", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markTerminal("done", "completed");
+
+    expect(store.get("retry")).toBeUndefined();
+    expect(store.latestForSession("s1")?.requestId).toBe("done");
+  });
+
+  test("capacity sheds retryable and terminal records but preserves unresolved safety state", async () => {
+    const store = journal({ maxRecords: 2 });
+    await store.markPrepared({ requestId: "pending-a", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markPrepared({ requestId: "pending-b", bridgeSessionId: "s2", threadId: "t2" });
+    await store.markPrepared({ requestId: "safe", bridgeSessionId: "s3", threadId: "t3" });
+    await store.markRetryable("safe");
+
+    expect(store.get("safe")).toBeUndefined();
+    expect(store.unresolved().map((record) => record.requestId).sort()).toEqual([
+      "pending-a",
+      "pending-b",
+    ]);
+  });
+
+  test("capacity sheds the oldest terminal record before newer safe records", async () => {
+    let clock = 0;
+    const store = journal({ maxRecords: 2, now: () => clock });
+    await store.markPrepared({ requestId: "old-terminal", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markTerminal("old-terminal", "completed");
+    clock += 1;
+    await store.markPrepared({ requestId: "new-terminal", bridgeSessionId: "s2", threadId: "t2" });
+    await store.markTerminal("new-terminal", "completed");
+    clock += 1;
+    await store.markPrepared({ requestId: "retry", bridgeSessionId: "s3", threadId: "t3" });
+    await store.markRetryable("retry");
+
+    expect(store.get("old-terminal")).toBeUndefined();
+    expect(store.allRecords().map((record) => record.requestId).sort()).toEqual([
+      "new-terminal",
+      "retry",
+    ]);
+  });
+
+  test("retention on load never drops an unresolved dispatch", async () => {
+    const codexHome = mkdtempSync(join(tmpdir(), "ork-journal-load-gc-"));
+    temporaryDirs.push(codexHome);
+    let clock = 0;
+    const first = new DispatchJournal({
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      retentionMs: 1_000,
+      now: () => clock,
+    });
+    await first.load();
+    await first.markPrepared({ requestId: "prepared", bridgeSessionId: "s1", threadId: "t1" });
+    await first.markPrepared({ requestId: "accepted", bridgeSessionId: "s2", threadId: "t2" });
+    await first.markAccepted("accepted", { threadId: "t2", turnId: "turn-2" });
+
+    clock = 10_000;
+    const restored = new DispatchJournal({
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      retentionMs: 1_000,
+      now: () => clock,
+    });
+    await restored.load();
+
+    expect(restored.unresolved().map((record) => record.requestId).sort()).toEqual([
+      "accepted",
+      "prepared",
+    ]);
   });
 });
 

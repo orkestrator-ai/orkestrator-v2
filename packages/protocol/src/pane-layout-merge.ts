@@ -305,7 +305,13 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
     serialized(local) === serialized(base)
     && !options.selectionIntent
   ) return clone(remote);
-  if (serialized(remote) === serialized(base)) return clone(local);
+  // Selection intent is an operation in its own right. Even when no remote
+  // structural change exists, returning the local snapshot here would silently
+  // discard an explicitly queued focus change.
+  if (
+    serialized(remote) === serialized(base)
+    && !options.selectionIntent
+  ) return clone(local);
 
   const baseState = collectTabs(base.root);
   const localState = collectTabs(local.root);

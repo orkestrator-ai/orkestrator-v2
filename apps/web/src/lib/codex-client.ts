@@ -1127,6 +1127,7 @@ export async function lookupSessionStatus(
         ...(contextUsage ? { contextUsage } : {}),
         ...(data.unconfirmedDispatch
           && typeof data.unconfirmedDispatch.requestId === "string"
+          && data.unconfirmedDispatch.requestId.trim().length > 0
           && data.unconfirmedDispatch.retryable === true
           ? { unconfirmedDispatch: data.unconfirmedDispatch }
           : {}),

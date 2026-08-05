@@ -39,6 +39,8 @@ export interface PromptDispatchRecord {
   state: DispatchState;
   createdAt: string;
   updatedAt: string;
+  /** Monotonic journal-local ordering for mutations sharing a millisecond. */
+  sequence?: number;
   terminalStatus?: DispatchTerminalStatus;
 }
 
@@ -78,6 +80,17 @@ export interface DuplicateDecision {
   record?: PromptDispatchRecord;
 }
 
+function compareNewestFirst(
+  left: PromptDispatchRecord,
+  right: PromptDispatchRecord,
+): number {
+  const timestampDelta = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+  if (Number.isFinite(timestampDelta) && timestampDelta !== 0) return timestampDelta;
+  const sequenceDelta = (right.sequence ?? 0) - (left.sequence ?? 0);
+  if (sequenceDelta !== 0) return sequenceDelta;
+  return right.requestId.localeCompare(left.requestId);
+}
+
 export class DispatchJournal {
   private readonly records = new Map<string, PromptDispatchRecord>();
   private readonly codexHome: string;
@@ -88,6 +101,7 @@ export class DispatchJournal {
   private readonly persist: boolean;
   private writeChain: Promise<void> = Promise.resolve();
   private loaded = false;
+  private nextSequence = 0;
 
   constructor(options: DispatchJournalOptions) {
     this.codexHome = options.codexHome;
@@ -110,13 +124,15 @@ export class DispatchJournal {
     try {
       const parsed = JSON.parse(await readFile(this.path(), "utf8")) as JournalFile;
       if (parsed.version !== DISPATCH_JOURNAL_VERSION || !Array.isArray(parsed.records)) return;
-      const cutoff = this.now() - this.retentionMs;
       for (const record of parsed.records) {
         if (typeof record?.requestId !== "string") continue;
-        const updatedAt = Date.parse(record.updatedAt ?? "");
-        if (Number.isFinite(updatedAt) && updatedAt < cutoff) continue;
-        this.records.set(record.requestId, record);
+        const sequence = Number.isSafeInteger(record.sequence) && (record.sequence ?? 0) > 0
+          ? record.sequence!
+          : this.nextSequence + 1;
+        this.nextSequence = Math.max(this.nextSequence, sequence);
+        this.records.set(record.requestId, { ...record, sequence });
       }
+      this.collectGarbage();
     } catch {
       // No journal, or an unreadable one. Starting empty is safe: it only means
       // recovery falls back to reconciling against thread/read.
@@ -166,6 +182,7 @@ export class DispatchJournal {
       state: "prepared",
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
+      sequence: ++this.nextSequence,
     };
     this.records.set(record.requestId, record);
     // This write is the safety boundary for at-most-once dispatch. If it did not
@@ -189,6 +206,7 @@ export class DispatchJournal {
       state: "accepted",
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
+      sequence: ++this.nextSequence,
     });
     await this.flush();
   }
@@ -209,6 +227,7 @@ export class DispatchJournal {
       terminalStatus: status,
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
+      sequence: ++this.nextSequence,
     });
     await this.flush();
   }
@@ -224,6 +243,7 @@ export class DispatchJournal {
       state: "retryable",
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
+      sequence: ++this.nextSequence,
     });
     await this.flush();
   }
@@ -231,7 +251,7 @@ export class DispatchJournal {
   latestForSession(bridgeSessionId: string): PromptDispatchRecord | undefined {
     return [...this.records.values()]
       .filter((record) => record.bridgeSessionId === bridgeSessionId)
-      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+      .sort(compareNewestFirst)[0];
   }
 
   /**
@@ -253,22 +273,50 @@ export class DispatchJournal {
     return [...this.records.values()];
   }
 
-  /** Drops old and excess records; terminal ones go first. */
+  /**
+   * Drops old and excess records that are safe to forget.
+   *
+   * `prepared` and `accepted` records are ambiguity/safety state and are never
+   * collected here, even when corrupt clocks or a large unresolved backlog put
+   * the file over its configured cap. A retryable record proves that its turn
+   * did not run, so it is safe to expire or shed; only the newest such marker is
+   * useful to a session status snapshot.
+   */
   private collectGarbage(): void {
+    const latestBySession = new Map<string, PromptDispatchRecord>();
+    for (const record of this.records.values()) {
+      const latest = latestBySession.get(record.bridgeSessionId);
+      if (!latest || compareNewestFirst(record, latest) < 0) {
+        latestBySession.set(record.bridgeSessionId, record);
+      }
+    }
+    for (const [requestId, record] of this.records) {
+      if (
+        record.state === "retryable"
+        && latestBySession.get(record.bridgeSessionId) !== record
+      ) {
+        this.records.delete(requestId);
+      }
+    }
+
     const cutoff = this.now() - this.retentionMs;
     for (const [requestId, record] of this.records) {
       const updatedAt = Date.parse(record.updatedAt);
-      if (record.state === "terminal" && Number.isFinite(updatedAt) && updatedAt < cutoff) {
+      if (
+        (record.state === "terminal" || record.state === "retryable")
+        && Number.isFinite(updatedAt)
+        && updatedAt < cutoff
+      ) {
         this.records.delete(requestId);
       }
     }
     if (this.records.size <= this.maxRecords) return;
 
-    // Over the cap: shed the oldest terminal records, never an unresolved one.
-    const terminal = [...this.records.values()]
-      .filter((record) => record.state === "terminal")
-      .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
-    for (const record of terminal) {
+    // Over the cap: shed the oldest safe records, never an unresolved one.
+    const safeToForget = [...this.records.values()]
+      .filter((record) => record.state === "terminal" || record.state === "retryable")
+      .sort((left, right) => compareNewestFirst(right, left));
+    for (const record of safeToForget) {
       if (this.records.size <= this.maxRecords) break;
       this.records.delete(record.requestId);
     }

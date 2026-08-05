@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import * as backend from "@/lib/backend";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import {
@@ -2025,6 +2026,98 @@ describe("pane layout persistence", () => {
       unsubscribeThrowing();
       unsubscribeHealthy();
       console.warn = warn;
+    }
+  });
+
+  test("uses the production backend-intent path immediately and installs its authoritative result", async () => {
+    const applyIntent = spyOn(backend, "applyPaneLayoutIntent").mockImplementation(
+      async (environmentId, _base, desired) => ({
+        ...desired,
+        environmentId,
+        updatedAt: "2026-01-02T00:00:00.000Z",
+        revision: 7,
+      }),
+    );
+    localStorage.setItem("orkestrator.pane-selection.v1", JSON.stringify({
+      version: 1,
+      entries: [{
+        environmentId: "env-1",
+        activePaneId: "default",
+        activeTabIds: {},
+      }],
+    }));
+
+    const stop = startPaneLayoutPersistence({
+      hydrateDependencies: async () => undefined,
+    });
+    try {
+      const store = usePaneLayoutStore.getState();
+      store.initialize("container-1", "env-1");
+      store.beginHydration("env-1");
+      store.finishHydration("env-1");
+      store.addTab("default", { id: "production-write", type: "plain" }, "env-1");
+
+      await waitForTimers();
+
+      expect(applyIntent).toHaveBeenCalledTimes(1);
+      const [environmentId, base, desired] = applyIntent.mock.calls[0]!;
+      expect(environmentId).toBe("env-1");
+      expect(base.root.kind).toBe("leaf");
+      expect(desired.root.kind).toBe("leaf");
+      expect(JSON.stringify(desired)).toContain("production-write");
+      expect(usePaneLayoutStore.getState().environments.get("env-1")?.backendRevision)
+        .toBe(7);
+      expect(localStorage.getItem("orkestrator.pane-selection.v1"))
+        .toBe(JSON.stringify({ version: 1, entries: [] }));
+    } finally {
+      stop();
+      applyIntent.mockRestore();
+      localStorage.removeItem("orkestrator.pane-selection.v1");
+    }
+  });
+
+  test("reports a production backend-intent failure and keeps later writes usable", async () => {
+    let attempt = 0;
+    const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
+    const applyIntent = spyOn(backend, "applyPaneLayoutIntent").mockImplementation(
+      async (environmentId, _base, desired) => {
+        attempt += 1;
+        if (attempt === 1) throw new Error("intent transport failed");
+        return {
+          ...desired,
+          environmentId,
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          revision: attempt,
+        };
+      },
+    );
+    const stop = startPaneLayoutPersistence({
+      hydrateDependencies: async () => undefined,
+    });
+    try {
+      const store = usePaneLayoutStore.getState();
+      store.initialize("container-1", "env-1");
+      store.beginHydration("env-1");
+      store.finishHydration("env-1");
+      store.addTab("default", { id: "first", type: "plain" }, "env-1");
+      await waitForTimers();
+      expect(errorLog).toHaveBeenCalledWith(
+        "[PaneLayout] Failed to persist pane layout:",
+        expect.objectContaining({ message: "intent transport failed" }),
+      );
+
+      usePaneLayoutStore.getState().addTab(
+        "default",
+        { id: "second", type: "plain" },
+        "env-1",
+      );
+      await waitForTimers();
+      expect(applyIntent).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(applyIntent.mock.calls[1]?.[2])).toContain("second");
+    } finally {
+      stop();
+      applyIntent.mockRestore();
+      errorLog.mockRestore();
     }
   });
 });

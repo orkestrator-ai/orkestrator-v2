@@ -52,6 +52,7 @@ export function useDurableComposeDraft<T>({
   T,
   Dispatch<SetStateAction<T>>,
   () => Promise<void>,
+  () => Promise<void>,
 ] {
   const key = useMemo(
     () => composeDraftKey(namespace, ownerId, localKey),
@@ -223,5 +224,19 @@ export function useDurableComposeDraft<T>({
     }
   }, [key, reportPersistenceError, revisionState]);
 
-  return [value, setDraftValue, clear];
+  // Successful submissions need to remove the durable recovery record without
+  // rewriting the live editor. A save can finish after React has accepted a
+  // newer edit, so resetting to initialValue here would destroy that input.
+  const discardPersisted = useCallback(async () => {
+    editRevisionRef.current += 1;
+    clearedKeyRef.current = key;
+    try {
+      await discardComposeDraft(key, revisionState);
+    } catch (error) {
+      reportPersistenceError(error, key);
+      throw error;
+    }
+  }, [key, reportPersistenceError, revisionState]);
+
+  return [value, setDraftValue, clear, discardPersisted];
 }

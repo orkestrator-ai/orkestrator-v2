@@ -90,6 +90,109 @@ async function withCommands<T>(
 const KEY = "claude env-e1:tab-1";
 
 describe("bridge readiness command", () => {
+  test("coalesces waiters and returns the authoritative ready endpoint", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      const start = mock(async () => ({ port: 4321, authToken: "bridge-token" }));
+      commands.set("start_local_codex_server_cmd", start);
+      const first = invoke("await_bridge_ready", {
+        environmentId: "e1",
+        agent: "codex",
+        timeoutMs: 2_000,
+      });
+      const second = invoke("await_bridge_ready", {
+        environmentId: "e1",
+        agent: "codex",
+        timeoutMs: 2_000,
+      });
+      setTimeout(() => {
+        void storage.updateEnvironment("e1", {
+          status: "running",
+          setupPhase: "ready",
+        });
+      }, 10);
+
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        { status: "ready", port: 4321, authToken: "bridge-token" },
+        { status: "ready", port: 4321, authToken: "bridge-token" },
+      ]);
+      expect(start).toHaveBeenCalledTimes(1);
+    }, {
+      environment: {
+        status: "creating",
+        setupPhase: "running",
+        worktreePath: "/tmp/ready-worktree",
+        createdAt: new Date().toISOString(),
+      },
+    });
+  });
+
+  test("fails closed for missing, failed, and incomplete bridge state", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      await expect(invoke("await_bridge_ready", {
+        environmentId: "missing",
+        agent: "codex",
+        timeoutMs: 1_000,
+      })).resolves.toEqual({
+        status: "failed",
+        error: { message: "Environment not found", retryable: false },
+      });
+
+      await storage.updateEnvironment("e1", { setupPhase: "failed" });
+      await expect(invoke("await_bridge_ready", {
+        environmentId: "e1",
+        agent: "codex",
+        timeoutMs: 1_000,
+      })).resolves.toEqual({
+        status: "failed",
+        error: { message: "Environment setup failed", retryable: false },
+      });
+
+      await storage.updateEnvironment("e1", { setupPhase: "ready" });
+      commands.set("start_local_codex_server_cmd", async () => ({ port: 4321 }));
+      await expect(invoke("await_bridge_ready", {
+        environmentId: "e1",
+        agent: "codex",
+        timeoutMs: 1_000,
+      })).resolves.toEqual({
+        status: "failed",
+        error: {
+          message: "codex bridge returned an incomplete ready endpoint",
+          retryable: false,
+        },
+      });
+    }, {
+      environment: {
+        status: "running",
+        setupPhase: "ready",
+        worktreePath: "/tmp/ready-worktree",
+        createdAt: new Date().toISOString(),
+      },
+    });
+  });
+
+  test("observes deletion while an environment is still starting", async () => {
+    await withCommands(async (invoke, storage) => {
+      const waiting = invoke("await_bridge_ready", {
+        environmentId: "e1",
+        agent: "codex",
+        timeoutMs: 2_000,
+      });
+      setTimeout(() => {
+        void storage.removeEnvironment("e1");
+      }, 10);
+      await expect(waiting).resolves.toEqual({
+        status: "failed",
+        error: { message: "Environment was deleted", retryable: false },
+      });
+    }, {
+      environment: {
+        status: "creating",
+        setupPhase: "running",
+        createdAt: new Date().toISOString(),
+      },
+    });
+  });
+
   test("returns a structured durable-window timeout instead of an error string", async () => {
     await withCommands(async (invoke) => {
       await expect(invoke("await_bridge_ready", {
@@ -139,7 +242,7 @@ describe("bridge readiness command", () => {
 });
 
 describe("initial prompt attachment command", () => {
-  test("writes a local batch and cleans up every prior file when a later item fails", async () => {
+  test("writes a validated local batch in an isolated request directory", async () => {
     const worktreePath = path.join(tmpdir(), `ork-attachments-${crypto.randomUUID()}`);
     await fs.mkdir(worktreePath, { recursive: true });
     try {
@@ -152,15 +255,17 @@ describe("initial prompt attachment command", () => {
           ],
         });
         expect(result).toEqual([
-          {
-            name: "screen-shot.png",
-            path: path.join(worktreePath, ".orkestrator/initial-prompt/screen-shot.png"),
-          },
-          {
-            name: "screen-shot-2.png",
-            path: path.join(worktreePath, ".orkestrator/initial-prompt/screen-shot-2.png"),
-          },
+          { name: "screen-shot.png", path: expect.any(String) },
+          { name: "screen-shot-2.png", path: expect.any(String) },
         ]);
+        const saved = result as Array<{ name: string; path: string }>;
+        const canonicalWorktree = await fs.realpath(worktreePath);
+        expect(path.dirname(saved[0]!.path)).toBe(path.dirname(saved[1]!.path));
+        expect(path.dirname(saved[0]!.path)).toStartWith(
+          path.join(canonicalWorktree, ".orkestrator/initial-prompt/"),
+        );
+        await expect(fs.readFile(saved[0]!.path, "utf8")).resolves.toBe("A");
+        await expect(fs.readFile(saved[1]!.path, "utf8")).resolves.toBe("B");
 
         await expect(invoke("write_initial_prompt_attachments", {
           environmentId: "e1",
@@ -169,14 +274,169 @@ describe("initial prompt attachment command", () => {
             { id: "broken", base64Data: "RA==" },
           ],
         })).rejects.toThrow("attachment.name");
-        await expect(fs.stat(path.join(
+        const batchDirectories = await fs.readdir(path.join(
           worktreePath,
-          ".orkestrator/initial-prompt/cleanup.png",
-        ))).rejects.toMatchObject({ code: "ENOENT" });
+          ".orkestrator/initial-prompt",
+        ));
+        expect(batchDirectories).toHaveLength(1);
       }, { environment: { worktreePath } });
     } finally {
       await fs.rm(worktreePath, { recursive: true, force: true });
     }
+  });
+
+  test("rejects symlink ancestors without modifying their external target", async () => {
+    const worktreePath = path.join(tmpdir(), `ork-attachments-worktree-${crypto.randomUUID()}`);
+    const externalPath = path.join(tmpdir(), `ork-attachments-external-${crypto.randomUUID()}`);
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.mkdir(externalPath, { recursive: true });
+    await fs.symlink(externalPath, path.join(worktreePath, ".orkestrator"));
+    try {
+      await withCommands(async (invoke) => {
+        await expect(invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: [{ id: "one", name: "image.png", base64Data: "QQ==" }],
+        })).rejects.toThrow("symlink or non-directory ancestor");
+        expect(await fs.readdir(externalPath)).toEqual([]);
+      }, { environment: { worktreePath } });
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+      await fs.rm(externalPath, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps concurrent same-name batches isolated and validates before writing", async () => {
+    const worktreePath = path.join(tmpdir(), `ork-attachments-concurrent-${crypto.randomUUID()}`);
+    await fs.mkdir(worktreePath, { recursive: true });
+    try {
+      await withCommands(async (invoke) => {
+        const [first, second] = await Promise.all([
+          invoke("write_initial_prompt_attachments", {
+            environmentId: "e1",
+            attachments: [{ id: "one", name: "same.png", base64Data: "QQ==" }],
+          }),
+          invoke("write_initial_prompt_attachments", {
+            environmentId: "e1",
+            attachments: [{ id: "two", name: "same.png", base64Data: "Qg==" }],
+          }),
+        ]) as [Array<{ path: string }>, Array<{ path: string }>];
+        expect(first[0]!.path).not.toBe(second[0]!.path);
+        await expect(fs.readFile(first[0]!.path, "utf8")).resolves.toBe("A");
+        await expect(fs.readFile(second[0]!.path, "utf8")).resolves.toBe("B");
+
+        await expect(invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: [
+            { id: "valid", name: "never-written.png", base64Data: "Qw==" },
+            { id: "invalid", name: "bad.png", base64Data: "not base64" },
+          ],
+        })).rejects.toThrow("not valid base64");
+        const allFiles = await fs.readdir(
+          path.join(worktreePath, ".orkestrator/initial-prompt"),
+          { recursive: true },
+        );
+        expect(allFiles).not.toContain("never-written.png");
+      }, { environment: { worktreePath } });
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("writes container batches through stdin and cleans its directory after partial failure", async () => {
+    const fakeRoot = await fs.mkdtemp(path.join(tmpdir(), "ork-attachment-docker-"));
+    const binDir = path.join(fakeRoot, "bin");
+    const dockerLog = path.join(fakeRoot, "docker.log");
+    const payloadLog = path.join(fakeRoot, "payload.log");
+    const writeCount = path.join(fakeRoot, "write-count");
+    await fs.mkdir(binDir);
+    await fs.writeFile(path.join(binDir, "docker"), `#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_ATTACHMENT_DOCKER_LOG"
+case "$*" in
+  *"rm -rf"*) exit 9 ;;
+esac
+if [ "$1" = "exec" ] && [ "$2" = "-i" ]; then
+  count=0
+  [ ! -f "$FAKE_ATTACHMENT_WRITE_COUNT" ] || count="$(cat "$FAKE_ATTACHMENT_WRITE_COUNT")"
+  count=$((count + 1))
+  printf '%s' "$count" > "$FAKE_ATTACHMENT_WRITE_COUNT"
+  cat >> "$FAKE_ATTACHMENT_PAYLOAD_LOG"
+  [ "$count" -lt 3 ] || exit 7
+fi
+exit 0
+`);
+    await fs.chmod(path.join(binDir, "docker"), 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+    process.env.FAKE_ATTACHMENT_DOCKER_LOG = dockerLog;
+    process.env.FAKE_ATTACHMENT_PAYLOAD_LOG = payloadLog;
+    process.env.FAKE_ATTACHMENT_WRITE_COUNT = writeCount;
+    try {
+      await withCommands(async (invoke) => {
+        const saved = await invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: [{ id: "one", name: "container.png", base64Data: "QQ==" }],
+        }) as Array<{ name: string; path: string }>;
+        expect(saved).toEqual([{
+          name: "container.png",
+          path: expect.stringMatching(
+            /^\/workspace\/\.orkestrator\/initial-prompt\/[0-9a-f-]+\/container\.png$/,
+          ),
+        }]);
+        await expect(fs.readFile(payloadLog, "utf8")).resolves.toBe("QQ==");
+
+        await expect(invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: [
+            { id: "two", name: "first.png", base64Data: "Qg==" },
+            { id: "three", name: "second.png", base64Data: "Qw==" },
+          ],
+        })).rejects.toThrow("docker exec exited with 7");
+        const calls = await fs.readFile(dockerLog, "utf8");
+        expect(calls).toMatch(
+          /rm -rf -- '\/workspace\/\.orkestrator\/initial-prompt\/[0-9a-f-]+'/,
+        );
+      }, {
+        environment: {
+          environmentType: "containerized",
+          containerId: "container-1",
+          worktreePath: null,
+        },
+      });
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      delete process.env.FAKE_ATTACHMENT_DOCKER_LOG;
+      delete process.env.FAKE_ATTACHMENT_PAYLOAD_LOG;
+      delete process.env.FAKE_ATTACHMENT_WRITE_COUNT;
+      await fs.rm(fakeRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects attachment count, identity, and unavailable environment targets", async () => {
+    await withCommands(async (invoke, storage) => {
+      await expect(invoke("write_initial_prompt_attachments", {
+        environmentId: "e1",
+        attachments: [],
+      })).rejects.toThrow("between 1 and 20");
+      await expect(invoke("write_initial_prompt_attachments", {
+        environmentId: "e1",
+        attachments: [{ id: "", name: "bad.png", base64Data: "QQ==" }],
+      })).rejects.toThrow("attachment.id");
+      await expect(invoke("write_initial_prompt_attachments", {
+        environmentId: "missing",
+        attachments: [{ id: "one", name: "bad.png", base64Data: "QQ==" }],
+      })).rejects.toThrow("Environment not found");
+
+      await storage.updateEnvironment("e1", {
+        environmentType: "containerized",
+        containerId: null,
+        worktreePath: undefined,
+      });
+      await expect(invoke("write_initial_prompt_attachments", {
+        environmentId: "e1",
+        attachments: [{ id: "one", name: "bad.png", base64Data: "QQ==" }],
+      })).rejects.toThrow("Container environment is not ready");
+    }, { environment: { worktreePath: "/tmp/attachment-validation-worktree" } });
   });
 });
 
@@ -216,6 +476,86 @@ describe("pane layout intent command", () => {
         "window-b",
       ]);
       expect(saved.revision).toBe(3);
+    });
+  });
+
+  test("rejects a stale container generation without replacing its layout", async () => {
+    await withCommands(async (invoke, storage) => {
+      const layout = (containerId: string, tabId: string) => ({
+        version: 2,
+        containerId,
+        activePaneId: "pane-1",
+        root: {
+          kind: "leaf",
+          id: "pane-1",
+          tabs: [{ id: tabId, type: "plain" }],
+          activeTabId: tabId,
+        },
+      });
+      const current = layout("container-new", "current");
+      await invoke("save_pane_layout", {
+        environmentId: "e1",
+        layout: current,
+        expectedRevision: 0,
+      });
+      await expect(invoke("apply_pane_layout_intent", {
+        environmentId: "e1",
+        baseLayout: layout("container-old", "base"),
+        desiredLayout: layout("container-old", "stale"),
+      })).rejects.toThrow("stale environment generation");
+      expect(await storage.getPaneLayout("e1")).toMatchObject({
+        containerId: "container-new",
+        revision: 1,
+        root: current.root,
+      });
+    }, {
+      environment: {
+        environmentType: "containerized",
+        containerId: "container-new",
+      },
+    });
+  });
+});
+
+describe("setup session wait command", () => {
+  test("rehydrates a durable setup session and validates timeout boundaries", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        setupPhase: "running",
+        setupSessionId: "e1:setup",
+        setupStartedAt: "2026-08-05T10:00:00.000Z",
+      });
+      await expect(invoke("await_environment_setup_session", {
+        environmentId: "e1",
+        timeoutMs: 0,
+      })).resolves.toEqual(expect.objectContaining({
+        environmentId: "e1",
+        sessionId: "e1:setup",
+        running: true,
+        terminalRunning: false,
+      }));
+      await expect(invoke("await_environment_setup_session", {
+        environmentId: "e1",
+        timeoutMs: -1,
+      })).rejects.toThrow("between 0 and 60000");
+      await expect(invoke("await_environment_setup_session", {
+        environmentId: "e1",
+        timeoutMs: 60_001,
+      })).rejects.toThrow("between 0 and 60000");
+    });
+  });
+
+  test("returns null when no setup is running or the wait expires", async () => {
+    await withCommands(async (invoke, storage) => {
+      await expect(invoke("await_environment_setup_session", {
+        environmentId: "e1",
+        timeoutMs: 0,
+      })).resolves.toBeNull();
+      await storage.updateEnvironment("e1", { setupPhase: "running" });
+      await expect(invoke("await_environment_setup_session", {
+        environmentId: "e1",
+        timeoutMs: 0,
+      })).resolves.toBeNull();
     });
   });
 });

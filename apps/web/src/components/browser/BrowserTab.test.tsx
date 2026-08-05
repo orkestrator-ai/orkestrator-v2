@@ -51,6 +51,16 @@ function previewState(overrides: Partial<BrowserPreviewState> = {}): BrowserPrev
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 function installNativePreview(overrides: Record<string, unknown> = {}) {
   let stateListener: ((state: BrowserPreviewState) => void) | undefined;
   let focusAddressListener: ((tabId: string) => void) | undefined;
@@ -1117,6 +1127,112 @@ describe("BrowserTab", () => {
       />,
     );
     await waitFor(() => expect(native.browserPreview.reload.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  test("does not speculatively persist native history when Back fails", async () => {
+    const goBack = mock(async () => { throw new Error("history failed"); });
+    const native = installNativePreview({
+      attach: mock(async () => previewState({ url: "http://localhost:4000/" })),
+      goBack,
+    });
+    const history = ["http://localhost:3000/", "http://localhost:4000/"];
+    setBrowserTab("http://localhost:4000/");
+    usePaneLayoutStore.getState().updateTabBrowserUrl(
+      "browser-1",
+      history[1]!,
+      "env-1",
+      history,
+      1,
+    );
+    render(<BrowserTab
+      tabId="browser-1"
+      environmentId="env-1"
+      data={{ url: history[1]!, history, historyIndex: 1 }}
+      isActive
+    />);
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+    native.emitState(previewState({
+      url: history[1],
+      canGoBack: true,
+    }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("history failed"));
+
+    const persisted = usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData;
+    expect(persisted).toMatchObject({ url: history[1], historyIndex: 1, history });
+  });
+
+  test("persists the native history cursor only after Back succeeds", async () => {
+    const history = ["http://localhost:3000/", "http://localhost:4000/"];
+    const pendingBack = deferred<BrowserPreviewState>();
+    const native = installNativePreview({
+      attach: mock(async () => previewState({ url: history[1] })),
+      goBack: mock(() => pendingBack.promise),
+    });
+    setBrowserTab(history[1]!);
+    usePaneLayoutStore.getState().updateTabBrowserUrl(
+      "browser-1",
+      history[1]!,
+      "env-1",
+      history,
+      1,
+    );
+    render(<BrowserTab
+      tabId="browser-1"
+      environmentId="env-1"
+      data={{ url: history[1]!, history, historyIndex: 1 }}
+      isActive
+    />);
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+    native.emitState(previewState({ url: history[1], canGoBack: true }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.historyIndex).toBe(1);
+    pendingBack.resolve(previewState({ url: history[0], canGoForward: true }));
+
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData)
+        .toMatchObject({ url: history[0], historyIndex: 0, history });
+    });
+  });
+
+  test("keeps native Forward durable state on failure and advances it on success", async () => {
+    const history = ["http://localhost:3000/", "http://localhost:4000/"];
+    const goForward = mock(async () => {
+      if (goForward.mock.calls.length === 1) throw new Error("forward failed");
+      return previewState({ url: history[1], canGoBack: true });
+    });
+    const native = installNativePreview({
+      attach: mock(async () => previewState({ url: history[0] })),
+      goForward,
+    });
+    setBrowserTab(history[0]!);
+    usePaneLayoutStore.getState().updateTabBrowserUrl(
+      "browser-1",
+      history[0]!,
+      "env-1",
+      history,
+      0,
+    );
+    render(<BrowserTab
+      tabId="browser-1"
+      environmentId="env-1"
+      data={{ url: history[0]!, history, historyIndex: 0 }}
+      isActive
+    />);
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+    native.emitState(previewState({ url: history[0], canGoForward: true }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("forward failed"));
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.historyIndex).toBe(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData)
+        .toMatchObject({ url: history[1], historyIndex: 1, history });
+    });
   });
 
   test("converges on the latest URL when navigation and refresh race the initial native attach", async () => {

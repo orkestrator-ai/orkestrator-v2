@@ -146,6 +146,8 @@ export interface AppServerRuntimeOptions {
   orderedEventMaxCount?: number;
   /** Test/embedding override for the per-thread ordered-event byte estimate. */
   orderedEventMaxBytes?: number;
+  /** Test/embedding override for the one allowed initial-prompt overload retry. */
+  initialPromptRetryDelayMs?: number;
 }
 
 interface OrderedRuntimeEvent {
@@ -193,6 +195,7 @@ const VERY_LARGE_MESSAGE_CHARS = 1024 * 1024;
 
 const ORDERED_EVENT_ESTIMATE_MAX_DEPTH = 8;
 const ORDERED_EVENT_ESTIMATE_NODE_BYTES = 16;
+const DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS = 1_000;
 
 /** Cheap retained-size estimate that does not allocate a second encoded payload. */
 export function estimateOrderedEventBytes(value: unknown, depth = 0): number {
@@ -3608,10 +3611,26 @@ export class AppServerRuntime {
           throw error;
         }
         // Overload is the sole definite rejection: app-server guarantees the
-        // turn did not run. Re-arm this durable startup request once beside the
-        // journal, where a tab unmount cannot cancel or duplicate the retry.
-        await this.journal.forget(requestId);
-        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        // turn did not run. Persist that fact throughout the delay so a bridge
+        // shutdown cannot erase the only evidence that reusing this id is safe.
+        await this.journal.markRetryable(requestId);
+        await new Promise((resolve) => setTimeout(
+          resolve,
+          this.options.initialPromptRetryDelayMs ?? DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
+        ));
+        const liveSession = this.registry.getSession(session.id);
+        if (this.stopping || liveSession !== session) {
+          context.dispatchInFlight = false;
+          if (liveSession === session) {
+            // The marker was persisted before the delay, so shutdown can return
+            // without launching work or writing new state after engine stop.
+            return { ok: false, status: 503, error: "Codex bridge is stopping" };
+          }
+          // A deleted session has no consumer to rehydrate this marker and must
+          // never launch work after its final tab has gone away.
+          await this.journal.forget(requestId);
+          return { ok: false, status: 404, error: "Session not found" };
+        }
         await this.journal.markPrepared({
           requestId,
           bridgeSessionId: session.id,

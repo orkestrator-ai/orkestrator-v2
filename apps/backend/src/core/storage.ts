@@ -3548,8 +3548,17 @@ export class StorageService {
     assertPaneLayoutRootWithinBounds(base.root);
     assertPaneLayoutRootWithinBounds(desired.root);
     return this.enqueuePaneLayoutMutation(async () => {
-      if (!await this.getEnvironment(environmentId)) {
+      const environment = await this.getEnvironment(environmentId);
+      if (!environment) {
         throw new Error(`Environment not found: ${environmentId}`);
+      }
+      const currentContainerId = environment.environmentType === "local"
+        ? null
+        : environment.containerId;
+      if (desired.containerId !== currentContainerId) {
+        throw new Error(
+          `Pane layout intent targets stale environment generation: expected ${currentContainerId ?? "local"}, received ${desired.containerId ?? "local"}`,
+        );
       }
       const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
         this.paneLayoutsFile(),

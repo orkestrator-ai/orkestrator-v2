@@ -5544,6 +5544,99 @@ describe("live session read paths", () => {
     });
   }, 20_000);
 
+  test("bounds informational hook snapshots and rehydrates Unicode-safe messages", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-info-events";
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      ) as { session_id: string };
+      const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
+      // Much larger than the retained bound: truncation must not make a
+      // code-point array proportional to this untrusted hook payload.
+      const longMessage = `${"😀".repeat(250_000)}tail`;
+      await Promise.all(Array.from({ length: 22 }, async (_, index) => {
+        const id = `info-${String(index).padStart(2, "0")}`;
+        await fs.writeFile(
+          path.join(pendingDir, `Notification-${id}.json`),
+          JSON.stringify({ message: index === 21 ? longMessage : `message-${index}` }),
+        );
+      }));
+      await waitFor(() => emitted.some((entry) =>
+        entry.event === "claude-tmux:event"
+        && (entry.payload as { event_id?: string }).event_id === "info-21"
+      ), 5_000);
+
+      const bounded = await invoke(handlers, "claude_tmux_status", {
+        tabId,
+        environmentId: environment.id,
+      }, context) as {
+        info_events: Array<{ id: string; kind: string; message: string; receivedAt: string }>;
+      };
+      expect(bounded.info_events).toHaveLength(20);
+      expect(bounded.info_events.map(({ id }) => id)).toEqual(
+        Array.from({ length: 20 }, (_, index) => `info-${String(index + 2).padStart(2, "0")}`),
+      );
+      expect(Array.from(bounded.info_events.at(-1)!.message)).toHaveLength(2_000);
+      expect(bounded.info_events.at(-1)!.message.endsWith("\ud83d")).toBe(false);
+      expect(bounded.info_events.every(({ receivedAt }) =>
+        Number.isFinite(Date.parse(receivedAt))
+      )).toBe(true);
+
+      await fs.writeFile(
+        path.join(pendingDir, "Notification-info-21.json"),
+        JSON.stringify({ message: "updated duplicate" }),
+      );
+      await waitFor(async () => {
+        const snapshot = await invoke(handlers, "claude_tmux_status", {
+          tabId,
+          environmentId: environment.id,
+        }, context) as { info_events: Array<{ id: string; message: string }> };
+        return snapshot.info_events.at(-1)?.message === "updated duplicate";
+      }, 5_000);
+      const deduplicated = await invoke(handlers, "claude_tmux_status", {
+        tabId,
+        environmentId: environment.id,
+      }, context) as { info_events: Array<{ id: string; message: string }> };
+      expect(deduplicated.info_events.filter(({ id }) => id === "info-21")).toEqual([expect.objectContaining({
+        id: "info-21",
+        message: "updated duplicate",
+      })]);
+      expect(deduplicated.info_events).toHaveLength(20);
+
+      await fs.writeFile(
+        path.join(pendingDir, "Notification-default-message.json"),
+        "{}",
+      );
+      await waitFor(() => emitted.some((entry) =>
+        entry.event === "claude-tmux:event"
+        && (entry.payload as { event_id?: string }).event_id === "default-message"
+      ), 5_000);
+      const rehydrated = await invoke(handlers, "claude_tmux_status", {
+        tabId,
+        environmentId: environment.id,
+      }, context) as { info_events: Array<{ id: string; message: string }> };
+      expect(rehydrated.info_events).toHaveLength(20);
+      expect(rehydrated.info_events.at(-1)).toEqual(expect.objectContaining({
+        id: "default-message",
+        message: "Claude sent a notification",
+      }));
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  }, 20_000);
+
   test("notifies once for each armed UserPromptSubmit-to-Stop turn", async () => {
     const handlers = createHandlers();
 

@@ -110,7 +110,11 @@ import {
 } from "@/lib/prompt-queue-sources";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { CodexNativeData } from "@/types/paneLayout";
-import type { CodexAttachment, CodexQueuedMessage } from "@/stores/codexStore";
+import {
+  CODEX_UNCONFIRMED_DISPATCH_ERROR,
+  type CodexAttachment,
+  type CodexQueuedMessage,
+} from "@/stores/codexStore";
 
 interface CodexChatTabProps {
   tabId: string;
@@ -807,11 +811,16 @@ export function CodexChatTab({
       fingerprint: pending.fingerprint,
       requestId: pending.requestId,
     };
+    setSessionError(
+      sessionKey,
+      CODEX_UNCONFIRMED_DISPATCH_ERROR,
+    );
   }, [
     clearTabInitialPrompt,
     environmentId,
     initialPromptRequestId,
     sessionKey,
+    setSessionError,
     tabId,
   ]);
 
@@ -2307,6 +2316,10 @@ export function CodexChatTab({
         retryable: true,
       });
       retryablePromptRef.current = { fingerprint: requestId, requestId };
+      setSessionError(
+        sessionKey,
+        CODEX_UNCONFIRMED_DISPATCH_ERROR,
+      );
     }
 
     /**

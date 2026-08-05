@@ -57,6 +57,8 @@ const BUFFER_SIZE_THRESHOLD = 0.5;
 // replacement-session output to bridge a slow storage read, but never retain an
 // unbounded second copy of a noisy terminal while that read is hung.
 const MAX_PENDING_DURABLE_REPLAY_BYTES = 1024 * 1024;
+const TERMINAL_BOOTSTRAP_DELAY_MS = 300;
+const TERMINAL_BOOTSTRAP_MAX_ATTEMPTS = 3;
 const terminalInputDisposables = new WeakMap<object, { dispose: () => void }>();
 
 type ReplayMetadata = {
@@ -136,6 +138,7 @@ export function PersistentTerminal({
   const [hasSelection, setHasSelection] = useState(false);
   const [isComposeBarOpen, setIsComposeBarOpen] = useState(false);
   const [replayWarning, setReplayWarning] = useState<string | null>(null);
+  const [bootstrapWarning, setBootstrapWarning] = useState<string | null>(null);
   const composeBarOpenRef = useRef(false); // Ref for synchronous access in key handler
   const dataBufferRef = useRef<string>("");
   const setupCompleteRef = useRef(false);
@@ -643,7 +646,16 @@ export function PersistentTerminal({
   const terminalUser = tabType === "root" ? ROOT_TERMINAL_USER : undefined;
   const trackEnvironmentActivity = tabType === "claude" || tabType === "opencode" || tabType === "codex";
 
-  const { sessionId, bootstrapped, isConnected, isConnecting, connect, resize, write } =
+  const {
+    sessionId,
+    bootstrapped,
+    isConnected,
+    isConnecting,
+    connect,
+    markBootstrapped,
+    resize,
+    write,
+  } =
     useTerminal({
       containerId,
       environmentId,
@@ -1332,63 +1344,93 @@ export function PersistentTerminal({
       !!initialCommands?.length;
     const canLaunch = isConnected && (isEnvironmentReady || shouldLaunchSetupCommand);
 
-    if (
-      canLaunch
-      && !bootstrapped
-      && sessionId
-      && bootstrapRequestedForSessionRef.current !== sessionId
-    ) {
-      bootstrapRequestedForSessionRef.current = sessionId;
-      setTimeout(() => {
-        const agentCommand = buildAgentLaunchCommand({
-          tabType,
-          initialPrompt,
-          model: initialLaunchModel,
-          reasoningEffort: initialLaunchReasoningEffort,
-        });
-        let launchData: string | null = null;
-        if (agentCommand) {
-          launchData = `${agentCommand}\n`;
-          console.debug("[PersistentTerminal] Launching command for tab:", tabId);
-        } else if (tabType === "plain" && initialCommands && initialCommands.length > 0) {
-          // For plain tabs with initial commands, execute them
-          console.debug("[PersistentTerminal] Executing initial commands for tab:", tabId, "commands:", initialCommands);
-          // Join all commands with && to run sequentially
-          const combinedCommand = initialCommands.join(" && ");
-          if (isSetupTab) {
-            // Always fire an OSC on completion so the UI unblocks even on
-            // failure. Success vs failure is signalled via the OSC payload,
-            // and persistence is gated on the success variant only.
-            // Note: `A && B || C` would emit both markers if B (printf) ever
-            // exits non-zero; the OSC handler's setupCompleteRef guard makes
-            // the second a no-op, so this stays correct.
-            launchData = `(${combinedCommand}) && ${SETUP_DONE_PRINTF_CMD} || ${SETUP_FAILED_PRINTF_CMD}\n`;
-          } else {
-            launchData = `${combinedCommand}\n`;
-          }
-        }
-        if (!launchData) {
-          if (bootstrapRequestedForSessionRef.current === sessionId) {
-            bootstrapRequestedForSessionRef.current = null;
-          }
-          return;
-        }
-        void bootstrapTerminalSession(sessionId, launchData).then((result) => {
-          if (!result.bootstrapped) return;
-          acknowledgeInitialLaunchOptions();
-        }).catch((error) => {
-          if (bootstrapRequestedForSessionRef.current === sessionId) {
-            bootstrapRequestedForSessionRef.current = null;
-          }
-          console.error("[PersistentTerminal] Failed to bootstrap terminal:", error);
-        });
-      }, 300);
+    if (!canLaunch || bootstrapped || !sessionId) return;
+    if (bootstrapRequestedForSessionRef.current === sessionId) return;
+
+    const targetSessionId = sessionId;
+    let disposed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const agentCommand = buildAgentLaunchCommand({
+      tabType,
+      initialPrompt,
+      model: initialLaunchModel,
+      reasoningEffort: initialLaunchReasoningEffort,
+    });
+    let launchData: string | null = null;
+    if (agentCommand) {
+      launchData = `${agentCommand}\n`;
+      console.debug("[PersistentTerminal] Launching command for tab:", tabId);
+    } else if (tabType === "plain" && initialCommands && initialCommands.length > 0) {
+      console.debug("[PersistentTerminal] Executing initial commands for tab:", tabId, "commands:", initialCommands);
+      const combinedCommand = initialCommands.join(" && ");
+      if (isSetupTab) {
+        // Always fire an OSC on completion so the UI unblocks even on
+        // failure. Success vs failure is signalled via the OSC payload,
+        // and persistence is gated on the success variant only.
+        launchData = `(${combinedCommand}) && ${SETUP_DONE_PRINTF_CMD} || ${SETUP_FAILED_PRINTF_CMD}\n`;
+      } else {
+        launchData = `${combinedCommand}\n`;
+      }
     }
-  }, [acknowledgeInitialLaunchOptions, bootstrapped, isEnvironmentReady, isConnected, sessionId, tabType, tabId, initialPrompt, initialCommands, initialLaunchModel, initialLaunchReasoningEffort, isSetupTab]);
+    if (!launchData) return;
+
+    setBootstrapWarning(null);
+    const scheduleAttempt = (attempt: number): void => {
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        if (disposed) return;
+        bootstrapRequestedForSessionRef.current = targetSessionId;
+
+        void bootstrapTerminalSession(targetSessionId, launchData!).then((result) => {
+          if (disposed || bootstrapRequestedForSessionRef.current !== targetSessionId) return;
+          if (result.bootstrapped) {
+            if (!markBootstrapped(targetSessionId)) return;
+            setBootstrapWarning(null);
+            acknowledgeInitialLaunchOptions();
+            return;
+          }
+
+          bootstrapRequestedForSessionRef.current = null;
+          if (attempt < TERMINAL_BOOTSTRAP_MAX_ATTEMPTS) {
+            scheduleAttempt(attempt + 1);
+            return;
+          }
+          setBootstrapWarning(
+            "The terminal connected, but its launch command could not start. Reopen the terminal to try again.",
+          );
+        }).catch((error) => {
+          if (disposed || bootstrapRequestedForSessionRef.current !== targetSessionId) return;
+          bootstrapRequestedForSessionRef.current = null;
+          console.error("[PersistentTerminal] Failed to bootstrap terminal:", error);
+          if (attempt < TERMINAL_BOOTSTRAP_MAX_ATTEMPTS) {
+            scheduleAttempt(attempt + 1);
+            return;
+          }
+          setBootstrapWarning(
+            "The terminal connected, but its launch command failed. Reopen the terminal to try again.",
+          );
+        });
+      }, TERMINAL_BOOTSTRAP_DELAY_MS);
+    };
+
+    scheduleAttempt(1);
+    return () => {
+      disposed = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      if (bootstrapRequestedForSessionRef.current === targetSessionId) {
+        bootstrapRequestedForSessionRef.current = null;
+      }
+    };
+  }, [acknowledgeInitialLaunchOptions, bootstrapped, isEnvironmentReady, isConnected, sessionId, tabType, tabId, initialPrompt, initialCommands, initialLaunchModel, initialLaunchReasoningEffort, isSetupTab, markBootstrapped]);
 
   useEffect(() => {
     if (bootstrapped) acknowledgeInitialLaunchOptions();
   }, [acknowledgeInitialLaunchOptions, bootstrapped]);
+
+  useEffect(() => {
+    setBootstrapWarning(null);
+  }, [sessionId]);
 
   // Focus when active. Mobile is excluded so activating a tab does not raise
   // the on-screen keyboard; the terminal still fits, and tapping it focuses.
@@ -1431,13 +1473,13 @@ export function PersistentTerminal({
 
   return (
     <>
-      {replayWarning && isActive && (
+      {(bootstrapWarning || replayWarning) && isActive && (
         <div
           role="status"
           aria-live="polite"
           className="absolute top-2 left-2 z-20 max-w-[min(36rem,calc(100%-1rem))] rounded-md border border-amber-500/40 bg-amber-950/90 px-2.5 py-1.5 text-xs text-amber-100 shadow-md backdrop-blur-sm"
         >
-          {replayWarning}
+          {bootstrapWarning || replayWarning}
         </div>
       )}
       {isSetupTab && isActive && !setupScriptsComplete && !manuallyCompleted && !setupCompleteRef.current && (

@@ -21,6 +21,7 @@ const sortByOrder = (sessions: Session[]): Session[] =>
   [...sessions].sort((a, b) => a.order - b.order);
 
 const activeSessionLoadRequests = new Map<string, object>();
+const activeSessionStatusRequests = new Map<string, object>();
 
 interface SessionState {
   // State
@@ -183,6 +184,8 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   },
 
   updateSessionStatus: async (sessionId, status) => {
+    const requestToken = {};
+    activeSessionStatusRequests.set(sessionId, requestToken);
     const previousStatus = get().sessions.get(sessionId)?.status;
     // Optimistic update
     set((state) => {
@@ -196,6 +199,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     try {
       await apiUpdateSessionStatus(sessionId, status);
     } catch (error) {
+      if (activeSessionStatusRequests.get(sessionId) !== requestToken) return;
       set((state) => {
         const current = state.sessions.get(sessionId);
         if (!current || current.status !== status || previousStatus === undefined) {
@@ -206,6 +210,10 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
         return { sessions };
       });
       console.error("Failed to update session status:", error);
+    } finally {
+      if (activeSessionStatusRequests.get(sessionId) === requestToken) {
+        activeSessionStatusRequests.delete(sessionId);
+      }
     }
   },
 

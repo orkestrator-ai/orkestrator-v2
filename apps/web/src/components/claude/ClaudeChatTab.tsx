@@ -648,6 +648,8 @@ export function ClaudeChatTab({
          */
         throwOnStale?: boolean;
         shouldApply?: () => boolean;
+        /** Session projection being refreshed; defaults to this mounted tab. */
+        targetSessionKey?: string;
       } = {},
     ): Promise<boolean> => {
       const promptsBeforeSync = readSessionPendingPrompts(sessionId);
@@ -680,9 +682,10 @@ export function ClaudeChatTab({
        * in flight. Either way this answer belongs to nobody.
        */
       const stateAfterSync = useClaudeStore.getState();
+      const targetSessionKey = options.targetSessionKey ?? sessionKey;
       if (
         stateAfterSync.clients.get(environmentId) !== bridgeClient
-        || stateAfterSync.sessions.get(sessionKey)?.sessionId !== sessionId
+        || stateAfterSync.sessions.get(targetSessionKey)?.sessionId !== sessionId
       ) {
         return false;
       }
@@ -1758,6 +1761,7 @@ export function ClaudeChatTab({
             setMessages(key, messages);
             await syncPendingPrompts(bridgeClient, projected.sessionId, {
               throwOnError: true,
+              targetSessionKey: key,
             });
           }
           markEventSubscriptionResynced(environmentId, abortController);
@@ -2281,17 +2285,36 @@ export function ClaudeChatTab({
         setEventStream(environmentId, null, abortController);
 
         // Auto-reconnect SSE if the connection dropped unexpectedly (not explicitly aborted).
-        // Uses exponential backoff capped at 60s, with a maximum retry count.
+        // After the exponential budget is exhausted, keep probing at the
+        // capped interval. The tab can remain mounted for days; stopping here
+        // would strand it permanently after a transient bridge outage.
         if (!abortController.signal.aborted) {
           const attempt = useClaudeStore.getState().eventSubscriptions
             .get(environmentId)?.reconnectAttempts ?? 0;
           if (attempt >= MAX_SSE_RECONNECT_ATTEMPTS) {
+            const reconnectTimer = setTimeout(() => {
+              const currentState = useClaudeStore.getState();
+              const currentClient = currentState.clients.get(environmentId);
+              if (
+                currentClient
+                && shouldReconnectEventSubscription(
+                  currentState.eventSubscriptions.get(environmentId),
+                  abortController,
+                )
+              ) {
+                console.debug("[ClaudeChatTab] Probing desynced SSE for", environmentId);
+                startSharedEventSubscriptionRef.current?.(currentClient);
+              }
+            }, SSE_RECONNECT_MAX_DELAY);
             setEventReconnectState(
               environmentId,
-              { desynced: true, reconnectTimer: null },
+              { desynced: true, reconnectTimer },
               abortController,
             );
-            console.warn("[ClaudeChatTab] SSE reconnect limit reached for", environmentId);
+            console.warn(
+              "[ClaudeChatTab] SSE reconnect limit reached; continuing desynced probes for",
+              environmentId,
+            );
           } else {
             const reconnectDelay = Math.min(SSE_RECONNECT_BASE_DELAY * Math.pow(2, attempt), SSE_RECONNECT_MAX_DELAY);
             console.debug("[ClaudeChatTab] SSE dropped, reconnect attempt", attempt + 1, "in", reconnectDelay, "ms for", environmentId);

@@ -408,6 +408,7 @@ async function harness(
     compactionTimeoutMs?: number;
     orderedEventMaxCount?: number;
     orderedEventMaxBytes?: number;
+    initialPromptRetryDelayMs?: number;
     fingerprintEnvironment?: () => string;
     /** Uses the production adaptive cadence instead of deterministic immediate publishes. */
     adaptiveCoalesce?: boolean;
@@ -487,6 +488,9 @@ async function harness(
       : {}),
     ...(options.orderedEventMaxBytes !== undefined
       ? { orderedEventMaxBytes: options.orderedEventMaxBytes }
+      : {}),
+    ...(options.initialPromptRetryDelayMs !== undefined
+      ? { initialPromptRetryDelayMs: options.initialPromptRetryDelayMs }
       : {}),
   });
   if (options.deferStart !== true) await runtime.start();
@@ -2884,7 +2888,7 @@ describe("at-most-once dispatch", () => {
         }
         return { turn: { id: "turn-after-overload" } };
       },
-    });
+    }, { initialPromptRetryDelayMs: 0 });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const requestId = "initial-prompt:env-1:tab-1";
 
@@ -2907,6 +2911,120 @@ describe("at-most-once dispatch", () => {
       action: "attach",
       record: { turnId: "turn-after-overload" },
     });
+  });
+
+  test("a second definite initial-prompt rejection becomes durably retryable", async () => {
+    const h = await harness({
+      "turn/start": () => {
+        const error = new Error("ingress queue full");
+        (error as { rpcCode?: number }).rpcCode = -32001;
+        throw error;
+      },
+    }, { initialPromptRetryDelayMs: 0 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-second-failure";
+
+    expect(await h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    })).toMatchObject({ ok: false, status: 503 });
+
+    expect(h.child().requests.filter((request) => request.method === "turn/start"))
+      .toHaveLength(2);
+    expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
+      action: "dispatch",
+      record: { state: "retryable" },
+    });
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      phase: "failed",
+      unconfirmedDispatch: { requestId, retryable: true },
+    });
+  });
+
+  test("a deleted session cannot dispatch its delayed initial-prompt retry", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "must-not-run" } };
+      },
+    }, { initialPromptRetryDelayMs: 30 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-deleted";
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+    await waitUntil(() => attempts === 1, "first initial prompt attempt did not run");
+
+    expect(await h.runtime.deleteSession(sessionId)).toBe(true);
+    expect(await pending).toMatchObject({ ok: false, status: 404 });
+    expect(attempts).toBe(1);
+    expect(h.runtime.getJournal().get(requestId)).toBeUndefined();
+  });
+
+  test("shutdown cancels a delayed retry and leaves a durable retry marker", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "must-not-run" } };
+      },
+    }, { initialPromptRetryDelayMs: 30 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-stopping";
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+    await waitUntil(() => attempts === 1, "first initial prompt attempt did not run");
+
+    await h.runtime.stop();
+    expect(await pending).toMatchObject({ ok: false, status: 503 });
+    expect(attempts).toBe(1);
+    expect(h.runtime.getJournal().get(requestId)).toMatchObject({ state: "retryable" });
+  });
+
+  test("a retryable dispatch remains visible after a bridge restart", async () => {
+    const first = await harness({
+      "turn/start": () => {
+        const error = new Error("ingress queue full");
+        (error as { rpcCode?: number }).rpcCode = -32001;
+        throw error;
+      },
+    });
+    const { sessionId } = first.runtime.createSession({ mode: "build" });
+    const requestId = "req-restored-retryable";
+    expect(await first.runtime.prompt(sessionId, {
+      prompt: "try once",
+      requestId,
+      attachments: [],
+    })).toMatchObject({ ok: false, status: 503 });
+    expect(first.runtime.getStatus(sessionId)?.unconfirmedDispatch).toEqual({
+      requestId,
+      retryable: true,
+    });
+    await first.runtime.stop();
+
+    const restored = await harness();
+    expect(restored.runtime.getStatus(sessionId)?.unconfirmedDispatch).toEqual({
+      requestId,
+      retryable: true,
+    });
+    await restored.runtime.stop();
   });
 
   test("a failed prepared-journal write prevents turn dispatch", async () => {

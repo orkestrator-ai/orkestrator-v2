@@ -452,6 +452,21 @@ describe("mergePersistedPaneLayouts", () => {
     expect(merged.root).toMatchObject({ activeTabId: "a" });
   });
 
+  test("applies explicit focus intent when the remote layout still equals the base", () => {
+    const base = input(leaf("default", ["a", "b"]));
+    const remote = structuredClone(base);
+
+    const merged = mergePersistedPaneLayouts(base, base, remote, {
+      selectionIntent: {
+        activePaneId: "default",
+        activeTabIds: { default: "b" },
+      },
+    });
+
+    expect(merged.activePaneId).toBe("default");
+    expect(merged.root).toMatchObject({ activeTabId: "b" });
+  });
+
   test("falls back to a surviving remote selection when the local tab was deleted", () => {
     const base = input(leaf("default", ["a", "b"]));
     const localRoot = leaf("default", ["a", "b"]);

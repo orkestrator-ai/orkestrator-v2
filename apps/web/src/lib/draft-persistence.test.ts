@@ -796,6 +796,31 @@ describe("useDurableComposeDraft", () => {
     expect(saveComposeDraft).not.toHaveBeenCalled();
   });
 
+  test("can discard the persisted recovery record without resetting newer live input", async () => {
+    getComposeDraft.mockResolvedValueOnce(null);
+    const { result, unmount } = renderHook(() => useDurableComposeDraft({
+      ownerType: "project",
+      ownerId: "project-hook-saved",
+      namespace: "test",
+      localKey: "value",
+      initialValue: "saved baseline",
+      isEmpty: isBlank,
+      isValid: isString,
+      debounceMs: 60_000,
+    }));
+    await waitFor(() => expect(getComposeDraft).toHaveBeenCalled());
+
+    act(() => result.current[1]("newer live input"));
+    await act(async () => result.current[3]());
+
+    expect(result.current[0]).toBe("newer live input");
+    expect(deleteComposeDraft).toHaveBeenCalledWith(
+      "test:project-hook-saved:value",
+      0,
+    );
+    unmount();
+  });
+
   test("does not delete an unread draft after a failed load but persists a later edit", async () => {
     getComposeDraft.mockRejectedValueOnce(new Error("backend unavailable"));
     const { result } = renderHook(() => useDurableComposeDraft({

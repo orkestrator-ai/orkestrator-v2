@@ -20,10 +20,14 @@ const clearTaskBuildStatusMock = mock(async (taskId: string) => ({
   removedPipelineIds: [] as string[],
   failedPipelineIds: [] as string[],
 }));
+const getProjectNotesMock = mock(async (_projectId: string) => ({ content: "" }));
+const saveProjectNotesMock = mock(async (_projectId: string, _content: string) => {});
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   clearTaskBuildStatus: clearTaskBuildStatusMock,
+  getProjectNotes: getProjectNotesMock,
+  saveProjectNotes: saveProjectNotesMock,
 }));
 
 const { useKanbanStore } = await import("./kanbanStore");
@@ -46,6 +50,16 @@ function task(overrides: Partial<KanbanTask> = {}): KanbanTask {
     order: 0,
     ...overrides,
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("kanbanStore.clearTaskBuildStatus", () => {
@@ -169,5 +183,81 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
     expect(
       useBuildPipelineStore.getState().pipelines.has("pipeline-update-fail"),
     ).toBe(true);
+  });
+});
+
+describe("kanbanStore project notes", () => {
+  beforeEach(() => {
+    getProjectNotesMock.mockReset();
+    getProjectNotesMock.mockResolvedValue({ content: "" });
+    saveProjectNotesMock.mockReset();
+    saveProjectNotesMock.mockResolvedValue(undefined);
+    useKanbanStore.setState({
+      notes: "",
+      notesLoading: false,
+      currentNotesProjectId: null,
+    });
+  });
+
+  test("loads notes and publishes the selected project", async () => {
+    getProjectNotesMock.mockResolvedValue({ content: "project notes" });
+
+    await useKanbanStore.getState().loadNotes("project-1");
+
+    expect(useKanbanStore.getState()).toMatchObject({
+      notes: "project notes",
+      notesLoading: false,
+      currentNotesProjectId: "project-1",
+    });
+  });
+
+  test("clears the previous project's notes before a failed load becomes editable", async () => {
+    useKanbanStore.setState({ notes: "private notes from project 1" });
+    getProjectNotesMock.mockRejectedValue(new Error("unavailable"));
+
+    await useKanbanStore.getState().loadNotes("project-2");
+
+    expect(useKanbanStore.getState()).toMatchObject({
+      notes: "",
+      notesLoading: false,
+      currentNotesProjectId: "project-2",
+    });
+  });
+
+  test("ignores an older load after navigation to another project", async () => {
+    const older = deferred<{ content: string }>();
+    getProjectNotesMock
+      .mockImplementationOnce(() => older.promise)
+      .mockResolvedValueOnce({ content: "new project" });
+
+    const first = useKanbanStore.getState().loadNotes("project-1");
+    await useKanbanStore.getState().loadNotes("project-2");
+    older.resolve({ content: "old project" });
+    await first;
+
+    expect(useKanbanStore.getState()).toMatchObject({
+      notes: "new project",
+      currentNotesProjectId: "project-2",
+      notesLoading: false,
+    });
+  });
+
+  test("saves notes only into the project that is still selected", async () => {
+    useKanbanStore.setState({ currentNotesProjectId: "project-2", notes: "project 2" });
+
+    await useKanbanStore.getState().saveNotes("project-1", "project 1 update");
+
+    expect(saveProjectNotesMock).toHaveBeenCalledWith("project-1", "project 1 update");
+    expect(useKanbanStore.getState().notes).toBe("project 2");
+  });
+
+  test("rethrows save failures without changing the current notes", async () => {
+    useKanbanStore.setState({ currentNotesProjectId: "project-1", notes: "original" });
+    saveProjectNotesMock.mockRejectedValue(new Error("disk full"));
+
+    await expect(
+      useKanbanStore.getState().saveNotes("project-1", "replacement"),
+    ).rejects.toThrow("disk full");
+    expect(useKanbanStore.getState().notes).toBe("original");
   });
 });

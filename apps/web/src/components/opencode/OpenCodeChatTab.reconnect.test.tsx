@@ -347,7 +347,7 @@ describe("OpenCodeChatTab SSE reconnect", () => {
     }
   });
 
-  test("uses capped exponential delays and stops after ten reconnect attempts", async () => {
+  test("uses capped exponential delays then keeps probing while desynced", async () => {
     const firstSubscription = deferred<AsyncIterable<OpenCodeEvent>>();
     const consoleWarn = mock(() => {});
     const originalConsoleWarn = console.warn;
@@ -379,7 +379,7 @@ describe("OpenCodeChatTab SSE reconnect", () => {
 
       await waitFor(() => {
         expect(consoleWarn).toHaveBeenCalledWith(
-          "[OpenCodeChatTab] SSE reconnect limit reached for",
+          "[OpenCodeChatTab] SSE reconnect limit reached; continuing desynced probes for",
           ENVIRONMENT_ID,
         );
       });
@@ -394,8 +394,16 @@ describe("OpenCodeChatTab SSE reconnect", () => {
         60_000,
         60_000,
         60_000,
+        60_000,
       ]);
       expect(mockSubscribeToEvents).toHaveBeenCalledTimes(11);
+
+      await runTimer(timers[10]!);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalledTimes(12));
+      await waitFor(() => expect(timers).toHaveLength(12));
+      expect(
+        useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced,
+      ).toBe(true);
     } finally {
       console.warn = originalConsoleWarn;
     }
@@ -571,5 +579,48 @@ describe("OpenCodeChatTab SSE reconnect", () => {
     } finally {
       console.error = originalConsoleError;
     }
+  });
+
+  test("a desynced reconnect rehydrates every projected session and pending request", async () => {
+    const channel = eventChannel();
+    const secondKey = createSessionKey(ENVIRONMENT_ID, "tab-opencode-second");
+    const previous = new AbortController();
+    act(() => {
+      useOpenCodeStore.setState((state) => ({
+        sessions: new Map(state.sessions).set(secondKey, {
+          sessionId: "session-opencode-second",
+          messages: [],
+          isLoading: false,
+        }),
+        eventSubscriptions: new Map([[ENVIRONMENT_ID, {
+          abortController: previous,
+          stream: null,
+          isActive: false,
+          reconnectAttempts: 10,
+          reconnectTimer: null,
+          desynced: true,
+        }]]),
+      }));
+    });
+    mockSubscribeToEvents.mockResolvedValueOnce(channel.stream);
+
+    renderChat();
+
+    await waitFor(() => {
+      expect((mockGetSessionMessages.mock.calls as unknown[][])
+        .some((call) => call[1] === "session-opencode-second"))
+        .toBe(true);
+      expect(mockGetPendingQuestions.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(mockGetPendingPermissions.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(
+        useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced,
+      ).toBe(false);
+    });
+
+    await act(async () => {
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+      await Promise.resolve();
+    });
   });
 });

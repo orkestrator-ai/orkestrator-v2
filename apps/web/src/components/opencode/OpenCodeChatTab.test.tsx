@@ -233,6 +233,7 @@ const mockTransferPromptQueueMessageToComposeDraft = mock(
   },
 );
 const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
+const mockAwaitBridgeReady = mock(async (): Promise<any> => null);
 const mockAdoptNativeAgentSession = mock(async (input: {
   environmentId: string;
   agent: "opencode";
@@ -291,6 +292,7 @@ const openCodeClientModuleFactory = () => ({
 mock.module("@/lib/opencode-client", openCodeClientModuleFactory);
 
 mock.module("@/lib/backend", () => ({
+  awaitBridgeReady: mockAwaitBridgeReady,
   adoptNativeAgentSession: mockAdoptNativeAgentSession,
   ensureNativeAgentSession: mockEnsureNativeAgentSession,
   claimPromptQueueHead: mockClaimPromptQueueHead,
@@ -767,19 +769,6 @@ function callOriginalWindowTimeout(
   ) as number;
 }
 
-function accelerateWindowTimers(delays: ReadonlySet<number>) {
-  window.setTimeout = ((
-    handler: TimerHandler,
-    timeout?: number,
-    ...args: unknown[]
-  ) => callOriginalWindowTimeout(
-    handler,
-    delays.has(timeout ?? 0) ? 0 : timeout,
-    ...args,
-  )
-  ) as unknown as typeof window.setTimeout;
-}
-
 async function flushReactMicrotasks() {
   await act(async () => {
     for (let index = 0; index < 10; index += 1) {
@@ -855,6 +844,8 @@ describe("OpenCodeChatTab", () => {
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
     mockGetAgentHandoff.mockReset();
     mockGetAgentHandoff.mockResolvedValue(null);
+    mockAwaitBridgeReady.mockReset();
+    mockAwaitBridgeReady.mockResolvedValue(null);
     mockAdoptNativeAgentSession.mockClear();
     mockEnsureNativeAgentSession.mockClear();
     mockSendPrompt.mockClear();
@@ -988,6 +979,39 @@ describe("OpenCodeChatTab", () => {
     globalThis.clearInterval = ORIGINAL_CLEAR_INTERVAL;
     window.setTimeout = ORIGINAL_WINDOW_SET_TIMEOUT;
     mock.restore();
+  });
+
+  test("uses backend bridge readiness without invoking the legacy OpenCode startup path", async () => {
+    useOpenCodeStore.setState({ clients: new Map(), sessions: new Map() });
+    mockAwaitBridgeReady.mockResolvedValue({
+      status: "ready",
+      port: 7778,
+      authToken: "ready-token",
+    });
+
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => expect(mockEnsureNativeAgentSession).toHaveBeenCalled());
+    expect(mockAwaitBridgeReady).toHaveBeenCalledWith(ENVIRONMENT_ID, "opencode");
+    expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
+    expect(mockStartOpenCodeServer).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["failed", "OpenCode readiness failed"],
+    ["timed-out", "OpenCode readiness timed out"],
+  ])("surfaces a %s backend readiness result", async (status, message) => {
+    useOpenCodeStore.setState({ clients: new Map(), sessions: new Map() });
+    mockAwaitBridgeReady.mockResolvedValue({
+      status,
+      error: { message, retryable: true },
+    });
+
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByText(`Error: ${message}`)).toBeTruthy();
+    expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
+    expect(mockStartOpenCodeServer).not.toHaveBeenCalled();
   });
 
   test("handles a subscription that returns no event stream", async () => {
@@ -7150,8 +7174,30 @@ describe("OpenCodeChatTab", () => {
       }
     });
 
-    test("reconnects a failed subscription up to the configured limit", async () => {
-      accelerateWindowTimers(new Set([3_000, 6_000, 12_000, 24_000, 48_000, 60_000]));
+    test("continues low-frequency recovery after the SSE retry budget is exhausted", async () => {
+      let reconnectTimers = 0;
+      const originalGlobalTimeout = globalThis.setTimeout;
+      useOpenCodeStore.setState({
+        eventSubscriptions: new Map([[ENVIRONMENT_ID, {
+          abortController: new AbortController(),
+          stream: null,
+          isActive: false,
+          reconnectAttempts: 10,
+          reconnectTimer: null,
+          desynced: false,
+        }]]),
+      });
+      globalThis.setTimeout = ((
+        handler: TimerHandler,
+        timeout?: number,
+        ...args: unknown[]
+      ) => {
+        if ((timeout ?? 0) >= 3_000) {
+          reconnectTimers += 1;
+          return (10_000 + reconnectTimers) as unknown as ReturnType<typeof setTimeout>;
+        }
+        return originalGlobalTimeout(handler, timeout, ...args);
+      }) as typeof globalThis.setTimeout;
       mockSubscribeToEvents.mockImplementation(async () =>
         (async function* () {
           throw new Error("event stream dropped");
@@ -7168,20 +7214,18 @@ describe("OpenCodeChatTab", () => {
       try {
         render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
-        // `accelerateWindowTimers` collapses every backoff to 0, so this budget
-        // is pure wall clock for eleven async reconnect cycles rather than part
-        // of the assertion. Keep it generous: a tighter one made the test a race
-        // against whatever else the file had already loaded.
         await waitFor(() => {
-          expect(mockSubscribeToEvents.mock.calls.length).toBeGreaterThanOrEqual(11);
           expect(consoleWarn).toHaveBeenCalledWith(
-            "[OpenCodeChatTab] SSE reconnect limit reached for",
+            "[OpenCodeChatTab] SSE reconnect limit reached; continuing desynced probes for",
             ENVIRONMENT_ID,
           );
         }, { timeout: 15_000 });
-        expect(useOpenCodeStore.getState().hasActiveEventSubscription(ENVIRONMENT_ID))
-          .toBe(false);
+        expect(mockSubscribeToEvents.mock.calls.length).toBeGreaterThanOrEqual(1);
+        expect(reconnectTimers).toBeGreaterThanOrEqual(1);
+        expect(useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced)
+          .toBe(true);
       } finally {
+        globalThis.setTimeout = originalGlobalTimeout;
         console.error = originalError;
         console.warn = originalWarn;
         console.debug = originalDebug;

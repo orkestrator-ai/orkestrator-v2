@@ -1580,6 +1580,50 @@ describe("backend command wrapper coverage", () => {
     );
   });
 
+  test("validates and returns backend bridge readiness snapshots", async () => {
+    await expect(backendWrappers.awaitBridgeReady("env-ready", "codex", 12_345))
+      .resolves.toEqual({ status: "ready", port: 4321, authToken: "token" });
+    expect(invokeMock).toHaveBeenLastCalledWith("await_bridge_ready", {
+      environmentId: "env-ready",
+      agent: "codex",
+      timeoutMs: 12_345,
+    });
+
+    const failed = {
+      status: "failed",
+      error: { message: "bridge failed", retryable: false },
+    } as const;
+    invokeMock.mockResolvedValueOnce(failed);
+    await expect(backendWrappers.awaitBridgeReady("env-ready", "claude"))
+      .resolves.toEqual(failed);
+
+    const timedOut = {
+      status: "timed-out",
+      error: { message: "bridge timed out", retryable: true, retryAfterMs: 500 },
+    } as const;
+    invokeMock.mockResolvedValueOnce(timedOut);
+    await expect(backendWrappers.awaitBridgeReady("env-ready", "opencode"))
+      .resolves.toEqual(timedOut);
+  });
+
+  test("keeps the legacy empty readiness response but rejects malformed payloads", async () => {
+    invokeMock.mockResolvedValueOnce(undefined);
+    await expect(backendWrappers.awaitBridgeReady("env-legacy", "claude"))
+      .resolves.toBeNull();
+
+    for (const malformed of [
+      null,
+      { status: "ready", port: 0, authToken: "token" },
+      { status: "ready", port: 4321, authToken: "" },
+      { status: "timed-out", error: { message: "timeout" } },
+      { status: "unknown" },
+    ]) {
+      invokeMock.mockResolvedValueOnce(malformed);
+      await expect(backendWrappers.awaitBridgeReady("env-invalid", "codex"))
+        .rejects.toThrow("invalid bridge readiness result");
+    }
+  });
+
   test("opens browser-gateway links in a client-side tab", async () => {
     const windowOpen = mock(() => null);
     window.open = windowOpen as typeof window.open;

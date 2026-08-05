@@ -171,6 +171,7 @@ const mockGetSessionStatus = mock<
     error?: string;
     turnStartedAt?: number;
     turnId?: string;
+    unconfirmedDispatch?: { requestId: string; retryable: boolean };
   } | null>
 >(async () => ({ status: "idle" }));
 const mockLookupSessionStatus = mock<
@@ -226,6 +227,7 @@ const mockUpdateGlobalConfig = mock(async (config: any) => ({
   global: config,
 }));
 const mockGetAgentHandoff = mock(async (_handoffId: string): Promise<any> => null);
+const mockAwaitBridgeReady = mock(async (): Promise<any> => null);
 const mockAdoptNativeAgentSession = mock(async (input: {
   environmentId: string;
   agent: string;
@@ -324,6 +326,7 @@ const mockTransferPromptQueueMessageToComposeDraft = mock(
 // safe defaults (isAtBottom: true) when no viewport is found in happy-dom.
 
 mock.module("@/lib/backend", () => ({
+  awaitBridgeReady: mockAwaitBridgeReady,
   adoptNativeAgentSession: mockAdoptNativeAgentSession,
   cacheAgentModelCatalog: mockCacheAgentModelCatalog,
   claimPromptQueueHead: mockClaimPromptQueueHead,
@@ -1035,6 +1038,8 @@ describe("CodexChatTab", () => {
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
     mockGetAgentHandoff.mockReset();
     mockGetAgentHandoff.mockResolvedValue(null);
+    mockAwaitBridgeReady.mockReset();
+    mockAwaitBridgeReady.mockResolvedValue(null);
     mockSendPrompt.mockClear();
     mockSendPrompt.mockImplementation(async () => ({ status: "processing" }));
     mockGetSessionMessages.mockClear();
@@ -1178,6 +1183,39 @@ describe("CodexChatTab", () => {
     cleanup();
     restoreTimerHarness();
     mock.restore();
+  });
+
+  test("uses backend bridge readiness without invoking the legacy Codex startup path", async () => {
+    useCodexStore.setState({ clients: new Map(), sessions: new Map() });
+    mockAwaitBridgeReady.mockResolvedValue({
+      status: "ready",
+      port: 7779,
+      authToken: "ready-token",
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+    expect(mockAwaitBridgeReady).toHaveBeenCalledWith(ENVIRONMENT_ID, "codex");
+    expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
+    expect(mockStartCodexServer).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["failed", "Codex readiness failed"],
+    ["timed-out", "Codex readiness timed out"],
+  ])("surfaces a %s backend readiness result", async (status, message) => {
+    useCodexStore.setState({ clients: new Map(), sessions: new Map() });
+    mockAwaitBridgeReady.mockResolvedValue({
+      status,
+      error: { message, retryable: true },
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
+    expect(mockStartCodexServer).not.toHaveBeenCalled();
   });
 
   test("renders a friendly catalog label for the backend-confirmed assistant model", async () => {
@@ -8872,6 +8910,33 @@ describe("CodexChatTab", () => {
       } finally {
         console.error = originalError;
       }
+    });
+  });
+
+  test("surfaces a retryable dispatch restored from authoritative status", async () => {
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "found",
+      session: {
+        status: "idle",
+        title: "Recovered session",
+        unconfirmedDispatch: {
+          requestId: "restored-retry-request",
+          retryable: true,
+        },
+      },
+    });
+    mockGetSessionMessages.mockResolvedValue([]);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().unconfirmedDispatches.get(SESSION_KEY))
+        .toMatchObject({
+          requestId: "restored-retry-request",
+          retryable: true,
+        });
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.error)
+        .toBe("Could not confirm whether Codex received the prompt. You can send it again safely.");
     });
   });
 

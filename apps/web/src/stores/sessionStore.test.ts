@@ -6,10 +6,12 @@ const realBackendSnapshot = { ...realBackend };
 const getSessionsByEnvironmentMock = mock<
   (environmentId: string) => Promise<Session[]>
 >(async () => []);
+const updateSessionStatusMock = mock(async (_sessionId: string, _status: string) => {});
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getSessionsByEnvironment: getSessionsByEnvironmentMock,
+  updateSessionStatus: updateSessionStatusMock,
 }));
 
 const { useSessionStore } = await import("./sessionStore");
@@ -187,5 +189,55 @@ describe("sessionStore.loadSessionsForEnvironment", () => {
     expect(useSessionStore.getState().loadingEnvironments.has("env-1")).toBe(
       false,
     );
+  });
+});
+
+describe("sessionStore.updateSessionStatus", () => {
+  beforeEach(() => {
+    updateSessionStatusMock.mockReset();
+    updateSessionStatusMock.mockResolvedValue(undefined);
+    const session = makeSession({ status: "connected" });
+    useSessionStore.setState({ sessions: new Map([[session.id, session]]), error: null });
+  });
+
+  test("keeps the optimistic status after a successful update", async () => {
+    await useSessionStore.getState().updateSessionStatus("session-1", "disconnected");
+
+    expect(useSessionStore.getState().sessions.get("session-1")?.status).toBe("disconnected");
+    expect(updateSessionStatusMock).toHaveBeenCalledWith("session-1", "disconnected");
+  });
+
+  test("rolls back the latest failed optimistic update", async () => {
+    updateSessionStatusMock.mockRejectedValue(new Error("offline"));
+
+    await useSessionStore.getState().updateSessionStatus("session-1", "disconnected");
+
+    expect(useSessionStore.getState().sessions.get("session-1")?.status).toBe("connected");
+  });
+
+  test("does not let an older same-target failure undo a newer success", async () => {
+    const older = deferred<void>();
+    const newer = deferred<void>();
+    updateSessionStatusMock
+      .mockImplementationOnce(() => older.promise)
+      .mockImplementationOnce(() => newer.promise);
+
+    const first = useSessionStore.getState().updateSessionStatus("session-1", "disconnected");
+    const second = useSessionStore.getState().updateSessionStatus("session-1", "disconnected");
+    newer.resolve();
+    await second;
+    older.reject(new Error("older failed"));
+    await first;
+
+    expect(useSessionStore.getState().sessions.get("session-1")?.status).toBe("disconnected");
+  });
+
+  test("still calls the backend when the session is not currently loaded", async () => {
+    useSessionStore.setState({ sessions: new Map() });
+
+    await useSessionStore.getState().updateSessionStatus("missing", "disconnected");
+
+    expect(updateSessionStatusMock).toHaveBeenCalledWith("missing", "disconnected");
+    expect(useSessionStore.getState().sessions.has("missing")).toBe(false);
   });
 });

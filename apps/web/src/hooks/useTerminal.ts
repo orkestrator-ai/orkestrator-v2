@@ -119,6 +119,8 @@ interface UseTerminalReturn {
   error: string | null;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
+  /** Publish a successful backend bootstrap only if this session still owns the hook. */
+  markBootstrapped: (sessionId: string) => boolean;
   resize: (cols: number, rows: number) => Promise<void>;
   write: (data: string) => Promise<void>;
 }
@@ -829,6 +831,18 @@ export function useTerminal({
     }
   }, [cleanupEventListener]);
 
+  const markBootstrapped = useCallback((targetSessionId: string): boolean => {
+    if (
+      !isMountedRef.current
+      || !isConnectedRef.current
+      || sessionIdRef.current !== targetSessionId
+    ) {
+      return false;
+    }
+    setBootstrapped(true);
+    return true;
+  }, []);
+
   // A failed write can leave the browser gateway's input queue closed until the
   // session restarts, while output keeps streaming so the terminal still looks
   // alive. Reconnecting is the only recovery, so the failure toast offers it.
@@ -908,6 +922,7 @@ export function useTerminal({
     error,
     connect,
     disconnect,
+    markBootstrapped,
     resize,
     write,
   };

@@ -2047,6 +2047,37 @@ describe("CodexChatTab", () => {
     expect(restoredTab?.codexNativeData?.sessionId).toBe(restoredSessionId);
   });
 
+  test("registers a newly created warm session with backend activity", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      sessions: new Map(),
+    }));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        expect.objectContaining({ clientSessionKey: SESSION_KEY }),
+      );
+      expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith({
+        environmentId: ENVIRONMENT_ID,
+        agent: "codex",
+        logicalSessionKey: SESSION_KEY,
+        providerSessionId: SESSION_ID,
+      });
+    });
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+      SESSION_ID,
+    );
+  });
+
   test("adopts a backend startup session projected after an empty session was cached", async () => {
     const startupTabId = "startup-agent";
     const startupSessionKey = createSessionKey(ENVIRONMENT_ID, startupTabId);
@@ -6478,6 +6509,52 @@ describe("CodexChatTab", () => {
         SESSION_ID,
         initialPrompt,
         expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
+      );
+    });
+  });
+
+  test("adopts an inactive tab's new session before dispatching its prompt", async () => {
+    const initialPrompt = "Run the background activity audit";
+    const adoption = deferred<any>();
+    seedPaneLayout(initialPrompt);
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    mockAdoptNativeAgentSession.mockImplementationOnce(() => adoption.promise);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalled();
+      expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith({
+        environmentId: ENVIRONMENT_ID,
+        agent: "codex",
+        logicalSessionKey: SESSION_KEY,
+        providerSessionId: SESSION_ID,
+      });
+    });
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    await act(async () => {
+      adoption.resolve({ providerSessionId: SESSION_ID });
+      await adoption.promise;
+    });
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        SESSION_ID,
+        initialPrompt,
+        expect.objectContaining({ requestId: expect.any(String) }),
       );
     });
   });

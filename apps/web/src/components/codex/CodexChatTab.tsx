@@ -380,6 +380,48 @@ export function CodexChatTab({
     },
     [environmentId, sessionKey],
   );
+  /**
+   * Register a session created directly through the Codex bridge with the
+   * backend-owned native-agent projection.
+   *
+   * Unlike Claude and OpenCode, Codex creates interactive sessions through its
+   * bridge client so it can apply the complete per-tab configuration. The
+   * backend still needs the resulting provider id: without this adoption the
+   * activity sweep has nothing to inspect and the environment stays green
+   * throughout a running turn.
+   *
+   * A replacement can point at a legacy pane session that was never adopted.
+   * Try the create-if-absent form first, then use the old provider id as the CAS
+   * fence only when a durable mapping already exists.
+   */
+  const adoptCreatedSession = useCallback(
+    async (
+      providerSessionId: string,
+      replacedProviderSessionId?: string,
+    ) => {
+      const input = {
+        environmentId,
+        agent: "codex" as const,
+        logicalSessionKey: sessionKey,
+        providerSessionId,
+      };
+      try {
+        await adoptNativeAgentSession(input);
+      } catch (error) {
+        if (
+          !replacedProviderSessionId
+          || replacedProviderSessionId === providerSessionId
+        ) {
+          throw error;
+        }
+        await adoptNativeAgentSession({
+          ...input,
+          expectedProviderSessionId: replacedProviderSessionId,
+        });
+      }
+    },
+    [environmentId, sessionKey],
+  );
   const config = useConfigStore((state) => state.config);
   const setConfig = useConfigStore((state) => state.setConfig);
   const persistedPreferencesRef = useRef(getPersistedCodexPreferences(config));
@@ -1361,6 +1403,19 @@ export function CodexChatTab({
         return;
       }
 
+      try {
+        await adoptCreatedSession(
+          resumed.session.sessionId,
+          session?.sessionId,
+        );
+      } catch (error) {
+        console.error("[CodexChatTab] Failed to adopt resumed session:", error);
+        toast.error("Failed to resume Codex session", {
+          description: error instanceof Error ? error.message : undefined,
+        });
+        return;
+      }
+
       // Invalidate every request tied to the previous bridge session before
       // publishing the new identity. This includes manual reconciles, whose
       // completion deliberately ignores ordinary live-event invalidation.
@@ -1413,6 +1468,7 @@ export function CodexChatTab({
     },
     [
       client,
+      adoptCreatedSession,
       clearTabAgentHandoff,
       fastModeEnabled,
       selectedModel,
@@ -1422,6 +1478,7 @@ export function CodexChatTab({
       tabId,
       updateTabNativeSessionId,
       environmentId,
+      session?.sessionId,
     ],
   );
 
@@ -1577,6 +1634,8 @@ export function CodexChatTab({
           && cachedSession?.sessionId
           && (!projectedSessionId || cachedSession.sessionId === projectedSessionId)
         ) {
+          await adoptRestoredSession(cachedSession.sessionId);
+          if (!mounted) return;
           acknowledgeInitialLaunchOptions();
           console.debug("[CodexChatTab] Fast reconnect - reusing existing client and session", {
             tabId,
@@ -1670,6 +1729,8 @@ export function CodexChatTab({
             fastMode: warmFastMode,
             clientSessionKey: sessionKey,
           });
+          if (!mounted) return;
+          await adoptCreatedSession(created.sessionId, projectedSessionId);
           if (!mounted) return;
 
           isInitializedRef.current = true;
@@ -1869,6 +1930,8 @@ export function CodexChatTab({
             clientSessionKey: sessionKey,
           });
           if (!mounted) return;
+          await adoptCreatedSession(created.sessionId, existingSessionId);
+          if (!mounted) return;
           setSession(sessionKey, {
             sessionId: created.sessionId,
             messages: [],
@@ -1922,6 +1985,8 @@ export function CodexChatTab({
     };
   }, [
     acknowledgeInitialLaunchOptions,
+    adoptCreatedSession,
+    adoptRestoredSession,
     containerId,
     environmentId,
     handoffPending,

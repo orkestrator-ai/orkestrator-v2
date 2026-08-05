@@ -23,6 +23,16 @@ describe("isStructuredCommandError", () => {
     })).toBe(true);
   });
 
+  test("accepts an explicitly undefined retry delay", () => {
+    // `JSON.parse` never produces this, but a structured-clone IPC payload built
+    // from `{ retryAfterMs: someOptional }` does, and it means "no delay".
+    expect(isStructuredCommandError({
+      message: "no",
+      retryable: false,
+      retryAfterMs: undefined,
+    })).toBe(true);
+  });
+
   test("rejects malformed errors and retry delays", () => {
     for (const value of [
       null,
@@ -64,6 +74,22 @@ describe("isAwaitBridgeReadyResult", () => {
     expect(isAwaitBridgeReadyResult({ status: "ready", port: 1.5, authToken: "x" })).toBe(false);
     expect(isAwaitBridgeReadyResult({ status: "ready", port: 1, authToken: "" })).toBe(false);
     expect(isAwaitBridgeReadyResult({ status: "unknown", error: {} })).toBe(false);
+  });
+
+  test("rejects a port that is not a number at all", () => {
+    // The port is fed straight into a bridge URL, so a stringly-typed or missing
+    // value has to be caught here rather than producing a request to `http://…:[object Object]`.
+    for (const port of [
+      "4321",
+      null,
+      undefined,
+      Number.NaN,
+      [4321],
+      { value: 4321 },
+      true,
+    ]) {
+      expect(isAwaitBridgeReadyResult({ status: "ready", port, authToken: "x" })).toBe(false);
+    }
   });
 
   test("accepts both TCP port boundaries", () => {

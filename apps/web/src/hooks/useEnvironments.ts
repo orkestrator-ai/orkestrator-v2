@@ -5,6 +5,8 @@ import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/
 import { toast } from "sonner";
 import { createSessionKey, useBuildPipelineStore, useClaudeOptionsStore, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore } from "@/stores";
 import { useSessionStore } from "@/stores/sessionStore";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
 import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
@@ -718,6 +720,12 @@ export function useEnvironments(
         await deleteSessionsByEnvironment(environmentId);
 
         await backend.deleteEnvironment(environmentId);
+        // The native chat subscriptions are deliberately owned by their stores
+        // rather than by a mounted tab, so nothing else stops them. Their
+        // desynced probe re-arms itself on every failure, which would otherwise
+        // reach for a bridge that no longer exists once a minute forever.
+        useClaudeStore.getState().closeEventSubscription(environmentId);
+        useOpenCodeStore.getState().closeEventSubscription(environmentId);
         useBuildPipelineStore.getState().removePipelinesForEnvironment(environmentId);
         const loopedReviewState = useLoopedReviewStore.getState();
         for (const [workflowId, workflow] of loopedReviewState.workflows) {

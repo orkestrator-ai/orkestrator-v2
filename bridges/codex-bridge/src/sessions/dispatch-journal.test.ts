@@ -1,8 +1,14 @@
 import { afterEach, describe, test, expect } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DispatchJournal, reconcileFromThreadTurns } from "./dispatch-journal.js";
+import {
+  DISPATCH_JOURNAL_VERSION,
+  DispatchJournal,
+  reconcileFromThreadTurns,
+  type PromptDispatchRecord,
+} from "./dispatch-journal.js";
+import { hashCwd } from "./persistence.js";
 
 const temporaryDirs: string[] = [];
 
@@ -11,6 +17,7 @@ function journal(options: {
   now?: () => number;
   maxRecords?: number;
   retentionMs?: number;
+  unresolvedRetentionMs?: number;
 } = {}) {
   const codexHome = mkdtempSync(join(tmpdir(), "ork-journal-"));
   temporaryDirs.push(codexHome);
@@ -21,7 +28,55 @@ function journal(options: {
     now: options.now,
     maxRecords: options.maxRecords,
     retentionMs: options.retentionMs,
+    unresolvedRetentionMs: options.unresolvedRetentionMs,
   });
+}
+
+/** A fresh CODEX_HOME plus the journal path a `/workspace` journal would use. */
+function journalHome(prefix: string): { codexHome: string; path: string } {
+  const codexHome = mkdtempSync(join(tmpdir(), prefix));
+  temporaryDirs.push(codexHome);
+  return {
+    codexHome,
+    path: join(
+      codexHome,
+      "orkestrator-bridge",
+      `dispatch-journal-${hashCwd("/workspace")}.json`,
+    ),
+  };
+}
+
+/** Writes a journal file byte-for-byte, so hand-rolled and legacy shapes can be loaded. */
+function writeJournalFile(codexHome: string, contents: unknown): void {
+  mkdirSync(join(codexHome, "orkestrator-bridge"), { recursive: true });
+  writeFileSync(
+    join(codexHome, "orkestrator-bridge", `dispatch-journal-${hashCwd("/workspace")}.json`),
+    `${JSON.stringify(contents, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+function readJournalFile(codexHome: string): { records: PromptDispatchRecord[] } {
+  return JSON.parse(
+    readFileSync(
+      join(codexHome, "orkestrator-bridge", `dispatch-journal-${hashCwd("/workspace")}.json`),
+      "utf8",
+    ),
+  ) as { records: PromptDispatchRecord[] };
+}
+
+async function captureWarnings(work: () => Promise<void>): Promise<string[]> {
+  const original = console.warn;
+  const lines: string[] = [];
+  console.warn = (...args: unknown[]) => {
+    lines.push(args.map((value) => String(value)).join(" "));
+  };
+  try {
+    await work();
+  } finally {
+    console.warn = original;
+  }
+  return lines;
 }
 
 afterEach(() => {
@@ -385,6 +440,489 @@ describe("garbage collection", () => {
       "accepted",
       "prepared",
     ]);
+  });
+});
+
+describe("sequence assignment", () => {
+  /**
+   * Same instant on every record, so only the sequence can break the tie. It has
+   * to be *now*: an unresolved record past the absolute ceiling is expired on
+   * load, which would empty these fixtures before they were compared.
+   */
+  const SAME_INSTANT = new Date().toISOString();
+
+  function legacyRecord(
+    requestId: string,
+    extra: Partial<PromptDispatchRecord> = {},
+  ): Record<string, unknown> {
+    return {
+      requestId,
+      bridgeSessionId: "s1",
+      threadId: "t1",
+      state: "prepared",
+      createdAt: SAME_INSTANT,
+      updatedAt: SAME_INSTANT,
+      ...extra,
+    };
+  }
+
+  test("a legacy file with no sequence field is numbered in file order", async () => {
+    // Journals written before `sequence` existed still have to order their
+    // records, and `latestForSession` is what a status snapshot reads.
+    const { codexHome } = journalHome("ork-journal-legacy-");
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [legacyRecord("first"), legacyRecord("second"), legacyRecord("third")],
+    });
+
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    expect(store.allRecords().map((record) => record.sequence)).toEqual([1, 2, 3]);
+    expect(store.latestForSession("s1")?.requestId).toBe("third");
+  });
+
+  test("hostile sequence values are replaced with monotonic ones", async () => {
+    const { codexHome } = journalHome("ork-journal-hostile-seq-");
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [
+        legacyRecord("zero", { sequence: 0 }),
+        legacyRecord("negative", { sequence: -5 }),
+        legacyRecord("fractional", { sequence: 1.5 }),
+        legacyRecord("beyond-safe", { sequence: Number.MAX_SAFE_INTEGER + 1 }),
+        legacyRecord("valid", { sequence: 10 }),
+      ],
+    });
+
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    const sequences = store.allRecords().map((record) => record.sequence!);
+    expect(sequences).toEqual([1, 2, 3, 4, 10]);
+    expect(sequences.every((value) => Number.isSafeInteger(value) && value > 0)).toBe(true);
+    expect(store.latestForSession("s1")?.requestId).toBe("valid");
+
+    // A record written after the load must still sort newest, which only holds
+    // if the counter resumed past the largest value it accepted.
+    await store.markPrepared({ requestId: "fresh", bridgeSessionId: "s1", threadId: "t1" });
+    expect(store.get("fresh")?.sequence).toBe(11);
+  });
+
+  test("an unparseable timestamp falls back to the sequence", async () => {
+    const { codexHome } = journalHome("ork-journal-nan-time-");
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [
+        legacyRecord("older", { updatedAt: "not-a-timestamp", sequence: 1 }),
+        legacyRecord("newer", { updatedAt: "not-a-timestamp", sequence: 2 }),
+      ],
+    });
+
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    expect(store.latestForSession("s1")?.requestId).toBe("newer");
+  });
+
+  test("a full timestamp and sequence tie is broken by request id", async () => {
+    const { codexHome } = journalHome("ork-journal-tie-");
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [
+        legacyRecord("aaa", { sequence: 5 }),
+        legacyRecord("bbb", { sequence: 5 }),
+      ],
+    });
+
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    // Arbitrary but total: two records that are indistinguishable on every
+    // ordering field must still produce a stable answer rather than depending on
+    // Map iteration order.
+    expect(store.latestForSession("s1")?.requestId).toBe("bbb");
+  });
+});
+
+describe("load rejects shapes it cannot trust", () => {
+  test("a journal written by a different version is ignored", async () => {
+    const { codexHome } = journalHome("ork-journal-version-");
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION + 1,
+      records: [{
+        requestId: "future",
+        bridgeSessionId: "s1",
+        threadId: "t1",
+        state: "prepared",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }],
+    });
+
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    // Starting empty is safe: recovery falls back to reconciling from thread/read.
+    expect(store.allRecords()).toEqual([]);
+  });
+
+  test("a records field that is not an array is ignored", async () => {
+    const { codexHome } = journalHome("ork-journal-records-shape-");
+    writeJournalFile(codexHome, { version: DISPATCH_JOURNAL_VERSION, records: "nope" });
+
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    expect(store.allRecords()).toEqual([]);
+  });
+
+  test("records without a string request id are skipped, not fatal", async () => {
+    const { codexHome } = journalHome("ork-journal-bad-id-");
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [
+        { requestId: 42, bridgeSessionId: "s1", state: "prepared" },
+        null,
+        {
+          requestId: "good",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "prepared",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    expect(store.allRecords().map((record) => record.requestId)).toEqual(["good"]);
+  });
+
+  test("a second load does not re-read the file over live state", async () => {
+    const { codexHome } = journalHome("ork-journal-reload-");
+    writeJournalFile(codexHome, { version: DISPATCH_JOURNAL_VERSION, records: [] });
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+    await store.markPrepared({ requestId: "live", bridgeSessionId: "s1", threadId: "t1" });
+
+    // Another process rewriting the file must not be adopted mid-flight: this
+    // journal's in-memory records are the authority for its own dispatches.
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [{
+        requestId: "from-disk",
+        bridgeSessionId: "s1",
+        threadId: "t1",
+        state: "prepared",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }],
+    });
+    await store.load();
+
+    expect(store.allRecords().map((record) => record.requestId)).toEqual(["live"]);
+  });
+});
+
+describe("transitions without a prior prepared record", () => {
+  test("markAccepted records the turn even with no preparation on file", async () => {
+    const store = journal({ now: () => 5_000 });
+    await store.markAccepted("orphan", { threadId: "t1", turnId: "turn-1" });
+
+    expect(store.get("orphan")).toMatchObject({
+      requestId: "orphan",
+      bridgeSessionId: "",
+      threadId: "t1",
+      turnId: "turn-1",
+      state: "accepted",
+    });
+    expect(store.get("orphan")!.createdAt).toBe(store.get("orphan")!.updatedAt);
+  });
+
+  test("markTerminal settles an id with no preparation on file", async () => {
+    const store = journal();
+    await store.markTerminal("orphan", "failed");
+
+    expect(store.get("orphan")).toMatchObject({
+      requestId: "orphan",
+      bridgeSessionId: "",
+      threadId: null,
+      state: "terminal",
+      terminalStatus: "failed",
+    });
+    expect(store.get("orphan")!.turnId).toBeUndefined();
+    // Still spent: the write may already have had side effects.
+    expect(store.classify("orphan").action).toBe("already-done");
+  });
+
+  test("markTerminal prefers explicit ids and inherits the rest", async () => {
+    const store = journal();
+    await store.markPrepared({ requestId: "a", bridgeSessionId: "s1", threadId: "t-prepared" });
+    await store.markAccepted("a", { threadId: "t-prepared", turnId: "turn-prepared" });
+    await store.markTerminal("a", "completed");
+    expect(store.get("a")).toMatchObject({
+      threadId: "t-prepared",
+      turnId: "turn-prepared",
+    });
+
+    await store.markPrepared({ requestId: "b", bridgeSessionId: "s1", threadId: "t-prepared" });
+    await store.markAccepted("b", { threadId: "t-prepared", turnId: "turn-prepared" });
+    await store.markTerminal("b", "completed", {
+      threadId: "t-explicit",
+      turnId: "turn-explicit",
+    });
+    expect(store.get("b")).toMatchObject({
+      threadId: "t-explicit",
+      turnId: "turn-explicit",
+    });
+  });
+});
+
+describe("flush failure handling", () => {
+  test("a non-fail-closed write failure warns instead of throwing", async () => {
+    const { codexHome } = journalHome("ork-journal-soft-fail-");
+    writeFileSync(join(codexHome, "orkestrator-bridge"), "blocks journal directory creation");
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    const warnings = await captureWarnings(async () => {
+      // Losing this marker only costs a retry opportunity, never correctness, so
+      // it must not fail the caller the way markPrepared does.
+      await store.markRetryable("soft");
+    });
+
+    expect(warnings.some((line) => line.includes("Failed to persist dispatch journal"))).toBe(true);
+    expect(store.get("soft")).toMatchObject({ state: "retryable" });
+  });
+
+  test("a failed rename removes its temporary file", async () => {
+    const { codexHome, path } = journalHome("ork-journal-rename-fail-");
+    mkdirSync(path, { recursive: true });
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    await captureWarnings(async () => {
+      await store.markRetryable("temp-cleanup");
+    });
+
+    // A leaked temp file per failed write would grow CODEX_HOME without bound.
+    expect(
+      readdirSync(join(codexHome, "orkestrator-bridge")).filter((name) => name.endsWith(".tmp")),
+    ).toEqual([]);
+  });
+});
+
+describe("garbage collection edge cases", () => {
+  test("session-less records do not evict each other through the empty sentinel", async () => {
+    // Regression: every record that lost its session id shares `""`. Grouping
+    // them made unrelated requests compete for one "latest" slot, so the newest
+    // orphan deleted every other one in the journal.
+    const store = journal();
+    await store.markRetryable("orphan-a");
+    await store.markRetryable("orphan-b");
+
+    expect(store.allRecords().map((record) => record.requestId).sort()).toEqual([
+      "orphan-a",
+      "orphan-b",
+    ]);
+  });
+
+  test("the empty sentinel does not shield a real session from its own sweep", async () => {
+    let clock = 0;
+    const store = journal({ now: () => clock });
+    await store.markRetryable("orphan");
+    await store.markPrepared({ requestId: "old", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markRetryable("old");
+    clock += 1;
+    await store.markPrepared({ requestId: "new", bridgeSessionId: "s1", threadId: "t1" });
+    await store.markRetryable("new");
+
+    expect(store.allRecords().map((record) => record.requestId).sort()).toEqual([
+      "new",
+      "orphan",
+    ]);
+  });
+
+  test("a record with an unparseable timestamp is never expired", async () => {
+    const { codexHome } = journalHome("ork-journal-bad-clock-");
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [
+        {
+          requestId: "terminal-garbage",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "terminal",
+          terminalStatus: "completed",
+          createdAt: "garbage",
+          updatedAt: "garbage",
+          sequence: 1,
+        },
+        {
+          requestId: "prepared-garbage",
+          bridgeSessionId: "s2",
+          threadId: "t2",
+          state: "prepared",
+          createdAt: "garbage",
+          updatedAt: "garbage",
+          sequence: 2,
+        },
+      ],
+    });
+
+    const store = new DispatchJournal({
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      retentionMs: 1_000,
+      unresolvedRetentionMs: 5_000,
+      now: () => 10_000_000,
+    });
+    await store.load();
+
+    // Expiry needs a real age. Guessing one from an unreadable clock could drop
+    // a record whose turn is still in flight.
+    expect(store.allRecords().map((record) => record.requestId).sort()).toEqual([
+      "prepared-garbage",
+      "terminal-garbage",
+    ]);
+  });
+
+  test("collection during load is not written back until the next mutation", async () => {
+    const { codexHome } = journalHome("ork-journal-lazy-write-");
+    writeJournalFile(codexHome, {
+      version: DISPATCH_JOURNAL_VERSION,
+      records: [{
+        requestId: "expired",
+        bridgeSessionId: "s1",
+        threadId: "t1",
+        state: "terminal",
+        terminalStatus: "completed",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        sequence: 1,
+      }],
+    });
+    const store = new DispatchJournal({
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      retentionMs: 1_000,
+      now: () => Date.parse("2026-01-02T00:00:00.000Z"),
+    });
+    await store.load();
+
+    expect(store.get("expired")).toBeUndefined();
+    // Load itself does not write. That keeps startup read-only, so an unwritable
+    // CODEX_HOME cannot turn a restart into a warning storm.
+    expect(readJournalFile(codexHome).records.map((record) => record.requestId))
+      .toEqual(["expired"]);
+
+    await store.markPrepared({ requestId: "next", bridgeSessionId: "s1", threadId: "t1" });
+    expect(readJournalFile(codexHome).records.map((record) => record.requestId))
+      .toEqual(["next"]);
+  });
+
+  test("orphaned unresolved records expire past the absolute ceiling", async () => {
+    // Regression: `prepared`/`accepted` are exempt from retention *and* the cap,
+    // so without a ceiling an orphan whose session no longer exists would keep
+    // the file growing forever and make maxRecords unenforceable.
+    const { codexHome } = journalHome("ork-journal-unresolved-ceiling-");
+    let clock = 0;
+    const options = {
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      retentionMs: 1_000,
+      unresolvedRetentionMs: 5_000,
+      maxRecords: 2,
+    };
+    const first = new DispatchJournal({ ...options, now: () => clock });
+    await first.load();
+    for (const requestId of ["a", "b", "c", "d", "e", "f"]) {
+      await first.markPrepared({ requestId, bridgeSessionId: `s-${requestId}`, threadId: "t1" });
+    }
+    expect(first.unresolved()).toHaveLength(6);
+
+    clock = 10_000_000;
+    const restored = new DispatchJournal({ ...options, now: () => clock });
+    const warnings = await captureWarnings(async () => {
+      await restored.load();
+    });
+
+    expect(restored.allRecords()).toEqual([]);
+    expect(warnings).toHaveLength(6);
+    // Ids and state only: a journal record never holds prompt or file content.
+    expect(warnings[0]).toMatch(/Expiring orphaned prepared dispatch a after \d+s\.$/);
+  });
+
+  test("an unresolved record inside the ceiling is still never dropped", async () => {
+    const { codexHome } = journalHome("ork-journal-unresolved-recent-");
+    let clock = 0;
+    const options = {
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      retentionMs: 1_000,
+      unresolvedRetentionMs: 5_000,
+      maxRecords: 1,
+    };
+    const first = new DispatchJournal({ ...options, now: () => clock });
+    await first.load();
+    await first.markPrepared({ requestId: "recent", bridgeSessionId: "s1", threadId: "t1" });
+    await first.markPrepared({ requestId: "also-recent", bridgeSessionId: "s2", threadId: "t2" });
+
+    clock = 4_000;
+    const restored = new DispatchJournal({ ...options, now: () => clock });
+    await restored.load();
+
+    // Both are over the cap and past ordinary retention, but a turn dispatched
+    // four seconds ago can absolutely still be executing.
+    expect(restored.unresolved().map((record) => record.requestId).sort()).toEqual([
+      "also-recent",
+      "recent",
+    ]);
+  });
+
+  test("the journal stays bounded across repeated reloads", async () => {
+    const { codexHome } = journalHome("ork-journal-bounded-");
+    let clock = 0;
+    const options = {
+      codexHome,
+      cwd: "/workspace",
+      persist: true,
+      retentionMs: 1_000,
+      unresolvedRetentionMs: 10_000,
+      maxRecords: 5,
+    };
+
+    for (let round = 0; round < 10; round += 1) {
+      const store = new DispatchJournal({ ...options, now: () => clock });
+      await captureWarnings(async () => {
+        await store.load();
+        for (let index = 0; index < 3; index += 1) {
+          await store.markPrepared({
+            requestId: `round-${round}-${index}`,
+            bridgeSessionId: `s-${round}-${index}`,
+            threadId: "t1",
+          });
+        }
+      });
+      clock += 20_000;
+    }
+
+    const final = new DispatchJournal({ ...options, now: () => clock });
+    await captureWarnings(async () => {
+      await final.load();
+    });
+
+    // Ten rounds of three unresolved dispatches each; only the last round is
+    // young enough to still matter, so the file cannot creep upward forever.
+    expect(final.allRecords().map((record) => record.requestId)).toEqual([]);
+    expect(readJournalFile(codexHome).records).toHaveLength(3);
   });
 });
 

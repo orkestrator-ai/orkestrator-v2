@@ -1046,6 +1046,15 @@ export class AppServerRuntime {
           .find((candidate) => candidate.threadId === threadId);
       if (!session) {
         this.threadsAwaitingDispatchRecovery.delete(threadId);
+        // No bridge session is bound to this thread any more, so nothing will
+        // ever rehydrate the record and it would stay unresolved — and therefore
+        // exempt from retention and the cap — forever. Settling it `failed` keeps
+        // the id spent (`already-done`), which is the direction that can never
+        // duplicate an execution.
+        await this.journal.markTerminal(record.requestId, "failed", {
+          threadId,
+          turnId: record.turnId,
+        });
         continue;
       }
 
@@ -3621,11 +3630,24 @@ export class AppServerRuntime {
         const liveSession = this.registry.getSession(session.id);
         if (this.stopping || liveSession !== session) {
           context.dispatchInFlight = false;
+          // The phase was moved to `starting` before the dispatch, and `starting`
+          // reports `running`. Settling it is not optional: the thread can outlive
+          // this bridge session (another tab may share it, and `releaseSession`
+          // only drops the thread once the last reference goes), so an unsettled
+          // context would 409 every later prompt with nothing scheduled to
+          // resolve it. `failed` rather than `idle` because it carries the reason
+          // to the surviving tabs, and it matches the rejected-dispatch exit
+          // below — the overload already proved this turn did not run, so this is
+          // not a `cancelling`/`recovering` phase that must keep reporting busy.
           if (liveSession === session) {
+            this.registry.setPhase(context, "failed", "Codex bridge is stopping");
+            this.emitStatus(context);
             // The marker was persisted before the delay, so shutdown can return
             // without launching work or writing new state after engine stop.
             return { ok: false, status: 503, error: "Codex bridge is stopping" };
           }
+          this.registry.setPhase(context, "failed", "Session was deleted before its retry");
+          this.emitStatus(context);
           // A deleted session has no consumer to rehydrate this marker and must
           // never launch work after its final tab has gone away.
           await this.journal.forget(requestId);

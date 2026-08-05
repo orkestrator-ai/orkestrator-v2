@@ -350,16 +350,24 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
             </>
           ) : null
         }
+        /*
+         * The desync banner gets its own always-visible row rather than sharing
+         * the top strip: `topAccessory` is suppressed while the composer is
+         * centered, and a tab that never received a message is centered — which
+         * is exactly the state a desynced tab is in.
+         */
+        notice={
+          desynced ? (
+            <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              Live updates disconnected. A full session refresh will run when the connection returns.
+            </div>
+          ) : null
+        }
         topAccessory={
-          desynced || topAccessory || !isAtBottom ? (
+          topAccessory || !isAtBottom ? (
             <div className="flex min-w-0 items-center gap-2">
-      {desynced && (
-        <div className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          Live updates disconnected. A full session refresh will run when the connection returns.
-        </div>
-      )}
-      {topAccessory}
+              {topAccessory}
               {!isAtBottom ? (
                 <button
                   type="button"

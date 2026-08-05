@@ -177,6 +177,12 @@ interface TmuxTabState {
   pendingPermissions: TmuxPendingPermission[];
   pendingElicitations: TmuxPendingElicitation[];
   infoEvents: TmuxInfoEvent[];
+  /**
+   * Ids the user has dismissed. The backend keeps re-delivering an event until
+   * it ages out of its own 20-entry window, so without this a dismissed card
+   * comes back on the next delivery or the next authoritative rehydration.
+   */
+  dismissedInfoEventIds: string[];
   /** True if this tab is replaying a previously-recorded session. */
   resumed: boolean;
   /**
@@ -203,6 +209,7 @@ const emptyTabState = (): TmuxTabState => ({
   pendingPermissions: [],
   pendingElicitations: [],
   infoEvents: [],
+  dismissedInfoEventIds: [],
   resumed: false,
   busy: false,
   busyStartedAt: null,
@@ -537,18 +544,35 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
         pendingPlans: pending.plans,
         pendingPermissions: pending.permissions,
         pendingElicitations: pending.elicitations,
-        infoEvents: pending.infoEvents ?? s.infoEvents,
+        infoEvents: (pending.infoEvents ?? s.infoEvents).filter(
+          (e) => !s.dismissedInfoEventIds.includes(e.id),
+        ),
       })),
     );
     usePromptDraftStore.getState().clearDrafts(withdrawnDraftKeys);
   },
 
+  // The backend de-duplicates its retained snapshot by id+kind but still emits
+  // a hook frame for every re-delivery, so the live path has to apply the same
+  // rule or an event stacks a card per delivery. Dismissal is sticky for the
+  // same reason: dismissInfoEvent means "I have seen this", which a later
+  // re-delivery of the same id does not undo - and the id survives the
+  // authoritative snapshot in replacePendingHooks, so a rehydration cannot
+  // resurrect it either.
   pushInfoEvent: (tabId, event) =>
     set((state) =>
-      patchTab(state, tabId, (s) => ({
-        ...s,
-        infoEvents: [...s.infoEvents.slice(-19), event],
-      })),
+      patchTab(state, tabId, (s) => {
+        if (s.dismissedInfoEventIds.includes(event.id)) return s;
+        const existing = s.infoEvents.findIndex(
+          (e) => e.id === event.id && e.kind === event.kind,
+        );
+        if (existing >= 0) {
+          const infoEvents = [...s.infoEvents];
+          infoEvents[existing] = event;
+          return { ...s, infoEvents };
+        }
+        return { ...s, infoEvents: [...s.infoEvents.slice(-19), event] };
+      }),
     ),
 
   dismissInfoEvent: (tabId, id) =>
@@ -556,6 +580,12 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
       patchTab(state, tabId, (s) => ({
         ...s,
         infoEvents: s.infoEvents.filter((e) => e.id !== id),
+        // Bounded to the same window as the events themselves: the backend
+        // retains 20, so an id that has aged out cannot be re-delivered.
+        dismissedInfoEventIds: [
+          ...s.dismissedInfoEventIds.filter((e) => e !== id).slice(-19),
+          id,
+        ],
       })),
     ),
 

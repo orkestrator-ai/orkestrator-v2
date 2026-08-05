@@ -119,9 +119,11 @@ import {
 } from "./extension-discovery.js";
 import {
   assertBase64PayloadWithinLimit,
+  base64DecodedByteLength,
   MAX_BINARY_FILE_BYTES,
   validateRelativeFilePath,
   workspaceFilePath,
+  writeConfinedFile,
 } from "./path-safety.js";
 import { terminateProcessTree } from "./process-tree.js";
 import {
@@ -179,6 +181,8 @@ import {
 import {
   assertValidPromptAttachments,
   assertValidPromptImages,
+  INITIAL_PROMPT_STAGING_DIRECTORY,
+  MAX_TOTAL_ATTACHMENT_BYTES,
 } from "./prompt-attachments.js";
 
 export type BackendEmit = (event: string, payload: unknown) => void;
@@ -6790,101 +6794,71 @@ async function assertNoLocalSymlinkAncestors(worktreePath: string, target: strin
   }
 }
 
+/** Batch directories kept under `.orkestrator/initial-prompt`, newest first. */
+const INITIAL_PROMPT_BATCH_RETENTION = 10;
+
+/**
+ * Drops every initial-prompt batch beyond the newest {@link
+ * INITIAL_PROMPT_BATCH_RETENTION}, minus the one about to be created.
+ *
+ * Each batch owns an unpredictable directory, so a successful write leaves it
+ * behind forever - and `docker/workspace-setup.sh` deliberately preserves the
+ * directory across re-setup. The traversal follows the same confinement rules
+ * as the writer: a symlinked ancestor or entry is skipped, never followed.
+ */
+async function pruneLocalInitialPromptBatches(worktreePath: string): Promise<void> {
+  let directory = await fs.realpath(worktreePath);
+  for (const segment of INITIAL_PROMPT_STAGING_DIRECTORY.split("/")) {
+    directory = path.join(directory, segment);
+    const stats = await fs.lstat(directory);
+    if (stats.isSymbolicLink() || !stats.isDirectory()) return;
+  }
+
+  const batches: Array<{ name: string; mtimeMs: number }> = [];
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const stats = await fs.lstat(path.join(directory, entry.name));
+    if (stats.isSymbolicLink() || !stats.isDirectory()) continue;
+    batches.push({ name: entry.name, mtimeMs: stats.mtimeMs });
+  }
+  batches.sort((left, right) =>
+    right.mtimeMs - left.mtimeMs || right.name.localeCompare(left.name)
+  );
+  for (const stale of batches.slice(INITIAL_PROMPT_BATCH_RETENTION - 1)) {
+    // rm unlinks symlinks rather than following them, and the entry itself was
+    // just confirmed to be a real directory inside the worktree.
+    await fs.rm(path.join(directory, stale.name), { recursive: true, force: true });
+  }
+}
+
+/** The container-side equivalent of {@link pruneLocalInitialPromptBatches}. */
+function containerPruneInitialPromptBatchesCommand(): string {
+  const directory = quoteShell(workspaceFilePath(INITIAL_PROMPT_STAGING_DIRECTORY));
+  return [
+    `d=${directory}`,
+    `[ -L "$d" ] && exit 0`,
+    `[ -d "$d" ] || exit 0`,
+    `ls -1t "$d" 2>/dev/null | tail -n +${INITIAL_PROMPT_BATCH_RETENTION} | while IFS= read -r name; do`,
+    `  [ -n "$name" ] || continue`,
+    `  [ -L "$d/$name" ] && continue`,
+    `  [ -d "$d/$name" ] || continue`,
+    `  rm -rf -- "$d/$name"`,
+    `done`,
+    `exit 0`,
+  ].join("\n");
+}
+
 /**
  * Writes one command-owned workspace artifact without following a repository
  * symlink. Attachment batches use an unpredictable, newly-created directory,
- * and the final file is opened with O_EXCL + O_NOFOLLOW. Re-checking the path
- * and descriptor identity before and after the write detects replacement races
- * instead of reporting an unsafe or ambiguous write as successful.
+ * and the final file is opened with O_EXCL + O_NOFOLLOW.
  */
-async function writeConfinedLocalArtifact(
+function writeConfinedLocalArtifact(
   worktreePath: string,
   relativePath: string,
-  base64Data: string,
+  payload: string | Buffer,
 ): Promise<string> {
-  const target = validateRelativeFilePath(relativePath, "attachment path");
-  assertBase64PayloadWithinLimit(base64Data);
-  const canonicalRoot = await fs.realpath(worktreePath);
-  const fullPath = path.join(canonicalRoot, target);
-  const parentPath = path.dirname(fullPath);
-
-  let current = canonicalRoot;
-  for (const segment of target.split("/").slice(0, -1)) {
-    current = path.join(current, segment);
-    try {
-      await fs.mkdir(current, { mode: 0o700 });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
-    const stats = await fs.lstat(current);
-    if (stats.isSymbolicLink() || !stats.isDirectory()) {
-      throw new Error(`Invalid attachment path: symlink or non-directory ancestor: ${target}`);
-    }
-    const canonicalDirectory = await fs.realpath(current);
-    const relativeToRoot = path.relative(canonicalRoot, canonicalDirectory);
-    if (
-      relativeToRoot === ".."
-      || relativeToRoot.startsWith(`..${path.sep}`)
-      || path.isAbsolute(relativeToRoot)
-    ) {
-      throw new Error(`Invalid attachment path: path leaves the local worktree: ${target}`);
-    }
-  }
-
-  // Validate the immediate parent again immediately before opening the file.
-  if (await fs.realpath(parentPath) !== parentPath) {
-    throw new Error(`Invalid attachment path: symlink ancestor is not allowed: ${target}`);
-  }
-  const handle = await fs.open(
-    fullPath,
-    fsConstants.O_WRONLY
-      | fsConstants.O_CREAT
-      | fsConstants.O_EXCL
-      | (fsConstants.O_NOFOLLOW || 0),
-    0o600,
-  );
-  let completed = false;
-  try {
-    const opened = await handle.stat();
-    if (!opened.isFile()) throw new Error("Attachment target is not a regular file");
-    const pathStats = await fs.lstat(fullPath);
-    if (
-      pathStats.isSymbolicLink()
-      || pathStats.dev !== opened.dev
-      || pathStats.ino !== opened.ino
-    ) {
-      throw new Error("Attachment target changed while it was being opened");
-    }
-    const canonicalTarget = await fs.realpath(fullPath);
-    const relativeToRoot = path.relative(canonicalRoot, canonicalTarget);
-    if (
-      relativeToRoot === ".."
-      || relativeToRoot.startsWith(`..${path.sep}`)
-      || path.isAbsolute(relativeToRoot)
-    ) {
-      throw new Error("Attachment target is outside the local worktree");
-    }
-
-    const content = Buffer.from(base64Data.replace(/\s/g, ""), "base64");
-    await handle.writeFile(content);
-    const finalOpened = await handle.stat();
-    const finalPath = await fs.lstat(fullPath);
-    if (
-      !finalOpened.isFile()
-      || finalOpened.size !== content.byteLength
-      || finalPath.isSymbolicLink()
-      || finalPath.dev !== finalOpened.dev
-      || finalPath.ino !== finalOpened.ino
-      || await fs.realpath(parentPath) !== parentPath
-    ) {
-      throw new Error("Attachment target changed while it was being written");
-    }
-    completed = true;
-    return fullPath;
-  } finally {
-    await handle.close().catch(() => undefined);
-    if (!completed) await fs.rm(fullPath, { force: true }).catch(() => undefined);
-  }
+  return writeConfinedFile(worktreePath, relativePath, payload, { exclusive: true });
 }
 
 async function removeLocalWorkspacePath(worktreePath: string, target: string): Promise<void> {
@@ -10583,8 +10557,8 @@ export function createCommandRegistry(
 
     const usedNames = new Set<string>();
     const batchId = randomUUID();
-    const batchRelativeDirectory = `.orkestrator/initial-prompt/${batchId}`;
-    const saved: Array<{ name: string; path: string; relativePath: string }> = [];
+    const batchRelativeDirectory = `${INITIAL_PROMPT_STAGING_DIRECTORY}/${batchId}`;
+    const saved: Array<{ name: string; path: string }> = [];
     const allocateName = (rawName: unknown): string => {
       const trimmed = asString(rawName, "attachment.name").trim() || "clipboard.png";
       const sanitizedName = trimmed.replace(/[^a-zA-Z0-9._-]/g, "-");
@@ -10604,16 +10578,25 @@ export function createCommandRegistry(
 
     // Validate and size-check the complete batch before creating any files. A
     // malformed later item must not turn validation into a partial filesystem
-    // transaction that cleanup then has to infer.
+    // transaction that cleanup then has to infer. Whitespace is stripped exactly
+    // once here; the per-item write reuses the normalized payload.
+    let totalDecodedBytes = 0;
     const parsedAttachments = attachments.map((rawAttachment) => {
         const attachment = asRecord(rawAttachment, "attachment");
         assertOnlyKeys(attachment, ["id", "name", "base64Data"], "attachment");
         asNonBlankString(attachment.id, "attachment.id");
         const name = allocateName(attachment.name);
-        const data = asString(attachment.base64Data, "attachment.base64Data");
-        assertBase64PayloadWithinLimit(data);
-        if (data.replace(/\s/g, "").length % 4 !== 0) {
-          throw new Error("File payload is not valid base64");
+        const data = assertBase64PayloadWithinLimit(
+          asString(attachment.base64Data, "attachment.base64Data"),
+          { rejectEmpty: true },
+        );
+        // The per-item cap alone lets 20 attachments carry ~160MB of decoded
+        // payload, all of it retained by this array before the first write.
+        totalDecodedBytes += base64DecodedByteLength(data);
+        if (totalDecodedBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+          throw new Error(
+            `Initial prompt attachments exceed the ${MAX_TOTAL_ATTACHMENT_BYTES} byte total limit`,
+          );
         }
         return {
           name,
@@ -10622,6 +10605,14 @@ export function createCommandRegistry(
         };
       });
 
+    // Best effort: a prune failure must never fail the write the user asked for.
+    await (environment.environmentType === "local"
+      ? pruneLocalInitialPromptBatches(environment.worktreePath!)
+      : dockerExec(
+          environment.containerId!,
+          containerPruneInitialPromptBatchesCommand(),
+        ).then(() => undefined)).catch(() => undefined);
+
     try {
       for (const { name, data, relativePath } of parsedAttachments) {
         let resolvedPath: string;
@@ -10629,7 +10620,7 @@ export function createCommandRegistry(
           resolvedPath = await writeConfinedLocalArtifact(
             environment.worktreePath!,
             relativePath,
-            data,
+            Buffer.from(data, "base64"),
           );
         } else {
           const fullPath = workspaceFilePath(relativePath);
@@ -10643,13 +10634,15 @@ export function createCommandRegistry(
           });
           resolvedPath = fullPath;
         }
-        saved.push({ name, path: resolvedPath, relativePath });
+        saved.push({ name, path: resolvedPath });
       }
-      return saved.map(({ name, path: resolvedPath }) => ({ name, path: resolvedPath }));
+      return saved;
     } catch (error) {
       if (environment.environmentType === "local") {
         // Remove only this request's unpredictable batch. Concurrent prompt
         // writes own different directories and cannot delete each other's files.
+        // The whole chain is non-throwing: a cleanup failure must not replace
+        // the failure the caller is actually being told about.
         await assertNoLocalSymlinkAncestors(
           environment.worktreePath!,
           `${batchRelativeDirectory}/placeholder`,
@@ -10659,7 +10652,7 @@ export function createCommandRegistry(
             force: true,
           }),
           () => undefined,
-        );
+        ).catch(() => undefined);
       } else {
         await dockerExec(
           environment.containerId!,

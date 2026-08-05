@@ -56,6 +56,12 @@ export interface DispatchJournalOptions {
   cwd: string;
   /** Records older than this are garbage-collected. */
   retentionMs?: number;
+  /**
+   * Absolute ceiling for `prepared`/`accepted` records, which are exempt from the
+   * ordinary retention and cap rules. Past this age the turn cannot still be
+   * executing, so keeping the record only leaks the journal.
+   */
+  unresolvedRetentionMs?: number;
   /** Hard cap so a long-lived environment cannot grow the file without bound. */
   maxRecords?: number;
   now?: () => number;
@@ -65,6 +71,15 @@ export interface DispatchJournalOptions {
 
 const DEFAULT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_RECORDS = 500;
+/**
+ * How much longer than ordinary retention an unresolved record is kept.
+ *
+ * Unresolved records are the at-most-once safety state, so the ceiling is
+ * deliberately far beyond any plausible turn: a dispatch that has been ambiguous
+ * for a week is not still in flight, it is an orphan that recovery could not
+ * settle because its session no longer exists.
+ */
+const UNRESOLVED_RETENTION_MULTIPLIER = 7;
 
 export interface DuplicateDecision {
   /** True when this request id has been seen before. */
@@ -96,6 +111,7 @@ export class DispatchJournal {
   private readonly codexHome: string;
   private readonly cwdHash: string;
   private readonly retentionMs: number;
+  private readonly unresolvedRetentionMs: number;
   private readonly maxRecords: number;
   private readonly now: () => number;
   private readonly persist: boolean;
@@ -107,6 +123,10 @@ export class DispatchJournal {
     this.codexHome = options.codexHome;
     this.cwdHash = hashCwd(options.cwd);
     this.retentionMs = options.retentionMs ?? DEFAULT_RETENTION_MS;
+    // Floored at the default retention so a deliberately short `retentionMs`
+    // (tests, ephemeral environments) cannot shrink the safety window to seconds.
+    this.unresolvedRetentionMs = options.unresolvedRetentionMs
+      ?? Math.max(this.retentionMs * UNRESOLVED_RETENTION_MULTIPLIER, DEFAULT_RETENTION_MS);
     this.maxRecords = options.maxRecords ?? DEFAULT_MAX_RECORDS;
     this.now = options.now ?? Date.now;
     this.persist = options.persist !== false;
@@ -276,21 +296,31 @@ export class DispatchJournal {
   /**
    * Drops old and excess records that are safe to forget.
    *
-   * `prepared` and `accepted` records are ambiguity/safety state and are never
-   * collected here, even when corrupt clocks or a large unresolved backlog put
-   * the file over its configured cap. A retryable record proves that its turn
-   * did not run, so it is safe to expire or shed; only the newest such marker is
-   * useful to a session status snapshot.
+   * `prepared` and `accepted` records are ambiguity/safety state and are exempt
+   * from ordinary retention and from the cap, even when corrupt clocks or a large
+   * unresolved backlog put the file over it. They are only dropped past
+   * `unresolvedRetentionMs`, an absolute ceiling well beyond any turn that could
+   * still be executing — without it an orphaned record (one whose session no
+   * longer exists, so recovery can never settle it) would live forever and make
+   * `maxRecords` unenforceable. A retryable record proves that its turn did not
+   * run, so it is safe to expire or shed; only the newest such marker is useful
+   * to a session status snapshot.
    */
   private collectGarbage(): void {
     const latestBySession = new Map<string, PromptDispatchRecord>();
     for (const record of this.records.values()) {
+      // Records whose session id was lost share the `""` sentinel. Grouping them
+      // would put unrelated requests in one bucket, so the sweep below would keep
+      // a single "latest" marker across the whole journal instead of one per
+      // session.
+      if (!record.bridgeSessionId) continue;
       const latest = latestBySession.get(record.bridgeSessionId);
       if (!latest || compareNewestFirst(record, latest) < 0) {
         latestBySession.set(record.bridgeSessionId, record);
       }
     }
     for (const [requestId, record] of this.records) {
+      if (!record.bridgeSessionId) continue;
       if (
         record.state === "retryable"
         && latestBySession.get(record.bridgeSessionId) !== record
@@ -309,6 +339,25 @@ export class DispatchJournal {
       ) {
         this.records.delete(requestId);
       }
+    }
+
+    const unresolvedCutoff = this.now() - this.unresolvedRetentionMs;
+    for (const [requestId, record] of this.records) {
+      const updatedAt = Date.parse(record.updatedAt);
+      if (
+        (record.state !== "prepared" && record.state !== "accepted")
+        || !Number.isFinite(updatedAt)
+        || updatedAt >= unresolvedCutoff
+      ) {
+        continue;
+      }
+      // Ids only — a journal record never holds prompt or file content, and this
+      // must stay that way.
+      console.warn(
+        `[codex-bridge] Expiring orphaned ${record.state} dispatch ${requestId}`
+        + ` after ${Math.round((this.now() - updatedAt) / 1000)}s.`,
+      );
+      this.records.delete(requestId);
     }
     if (this.records.size <= this.maxRecords) return;
 

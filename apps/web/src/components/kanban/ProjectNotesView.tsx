@@ -16,11 +16,15 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
   const loadNotes = useKanbanStore((s) => s.loadNotes);
   const saveNotes = useKanbanStore((s) => s.saveNotes);
   const notesLoading = useKanbanStore((s) => s.notesLoading);
+  const notesError = useKanbanStore((s) => s.notesError);
   const currentNotesProjectId = useKanbanStore((s) => s.currentNotesProjectId);
   const getProjectById = useProjectStore((s) => s.getProjectById);
 
   const project = getProjectById(projectId);
-  const notesReady = currentNotesProjectId === projectId && !notesLoading;
+  // A failed load leaves an empty editor that is not this project's content, so
+  // it must stay disabled until a retry succeeds. An enabled empty editor
+  // autosaves its first keystroke over the real backend notes.
+  const notesReady = currentNotesProjectId === projectId && !notesLoading && !notesError;
   const [draft, setDraft, , discardDurableDraft] = useDurableComposeDraft<string>({
     ownerType: "project",
     ownerId: projectId,
@@ -62,6 +66,10 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
 
   const handleChange = useCallback(
     (value: string) => {
+      // Disabling the textarea is an affordance, not a guard: nothing may be
+      // written back while the editor is not showing this project's loaded
+      // notes.
+      if (!notesReady) return;
       editRevisionRef.current += 1;
       setDraft(value);
 
@@ -74,7 +82,7 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
         void persistNotes(value, editRevision);
       }, 1000);
     },
-    [persistNotes, setDraft]
+    [notesReady, persistNotes, setDraft]
   );
 
   const handleSaveNow = () => {
@@ -113,6 +121,27 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
           </Button>
         </div>
       </div>
+
+      {notesError && (
+        <div
+          role="alert"
+          className="flex items-center gap-3 border-b border-destructive/20 bg-destructive/10 px-6 py-2 text-xs text-destructive"
+        >
+          <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+            Couldn’t load these notes: {notesError}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto h-7 shrink-0"
+            onClick={() => {
+              void loadNotes(projectId);
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
 
       {/* Notes Editor */}
       <div className="flex-1 p-6">

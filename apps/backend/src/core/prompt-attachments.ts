@@ -24,7 +24,7 @@ type CommandInvoker = <T>(
 /** Matches the per-payload cap the write-file commands already enforce. */
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const MAX_ATTACHMENT_COUNT = 20;
-const MAX_TOTAL_ATTACHMENT_BYTES = 32 * 1024 * 1024;
+export const MAX_TOTAL_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
 
 export const DEFAULT_STAGING_DIRECTORY = ".orkestrator/prompt-attachments";

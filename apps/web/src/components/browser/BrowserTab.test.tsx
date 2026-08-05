@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
@@ -682,6 +683,90 @@ describe("BrowserTab", () => {
     expect(container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:3000/");
   });
 
+  test("truncates forward history under a StrictMode double render", () => {
+    const { container } = render(
+      <StrictMode>
+        <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />
+      </StrictMode>,
+    );
+    const address = screen.getByLabelText("Browser address");
+    for (const port of ["3000", "4000", "5000"]) {
+      fireEvent.change(address, { target: { value: port } });
+      fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.change(address, { target: { value: "6000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+
+    // React double-invokes state updaters in development, so recording history
+    // inside one made the second invocation read the cursor the first had
+    // already advanced and keep the entry it was truncating.
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData).toMatchObject({
+      url: "http://localhost:6000/",
+      history: ["http://localhost:3000/", "http://localhost:4000/", "http://localhost:6000/"],
+      historyIndex: 2,
+    });
+    expect(container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:6000/");
+    expect(screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  test("bounds the history it records and keeps navigating from the newest entry", () => {
+    const history = Array.from(
+      { length: 100 },
+      (_, index) => `http://localhost:${3000 + index}/`,
+    );
+    setBrowserTab(history[99]!);
+    const { container } = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: history[99]!, history, historyIndex: 99 }}
+        isActive
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "4100" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+
+    const recorded = usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData;
+    expect(recorded?.history).toHaveLength(100);
+    expect(recorded?.history?.[0]).toBe(history[1]);
+    expect(recorded?.history?.[99]).toBe("http://localhost:4100/");
+    expect(recorded?.historyIndex).toBe(99);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(container.querySelector("iframe")?.getAttribute("src")).toBe(history[99]);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.historyIndex).toBe(98);
+  });
+
+  test("records a navigation from a cursor left behind the newest entry", () => {
+    const history = [
+      "http://localhost:3000/",
+      "http://localhost:4000/",
+      "http://localhost:5000/",
+    ];
+    setBrowserTab(history[0]!);
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: history[0]!, history, historyIndex: 0 }}
+        isActive
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "6000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData).toMatchObject({
+      url: "http://localhost:6000/",
+      history: [history[0], "http://localhost:6000/"],
+      historyIndex: 1,
+    });
+    expect(screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled")).toBe(true);
+  });
+
   test("preserves history and loading state when local persistence echoes back", () => {
     const view = render(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
@@ -1163,12 +1248,18 @@ describe("BrowserTab", () => {
     expect(persisted).toMatchObject({ url: history[1], historyIndex: 1, history });
   });
 
-  test("persists the native history cursor only after Back succeeds", async () => {
+  // The tracked array only records address-bar navigations, so an in-preview
+  // link click makes it diverge from Chromium's own history. Synthesizing the
+  // address from it re-attached a URL the preview had already left, which the
+  // main process loads afresh and which destroys the real forward entries.
+  test("lets the native preview own the address when moving back", async () => {
     const history = ["http://localhost:3000/", "http://localhost:4000/"];
     const pendingBack = deferred<BrowserPreviewState>();
+    const goBack = mock(() => pendingBack.promise);
     const native = installNativePreview({
-      attach: mock(async () => previewState({ url: history[1] })),
-      goBack: mock(() => pendingBack.promise),
+      attach: mock(async (input: { url: string }) =>
+        previewState({ url: input.url, canGoBack: true })),
+      goBack,
     });
     setBrowserTab(history[1]!);
     usePaneLayoutStore.getState().updateTabBrowserUrl(
@@ -1178,33 +1269,129 @@ describe("BrowserTab", () => {
       history,
       1,
     );
-    render(<BrowserTab
+    const view = render(<BrowserTab
       tabId="browser-1"
       environmentId="env-1"
       data={{ url: history[1]!, history, historyIndex: 1 }}
       isActive
     />);
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
-    native.emitState(previewState({ url: history[1], canGoBack: true }));
+
+    // A link click inside the preview: Chromium records it, the tracked array
+    // cannot see it.
+    native.emitState(previewState({ url: "http://localhost:9000/", canGoBack: true }));
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "http://localhost:9000/" }),
+    ));
+    native.browserPreview.attach.mockClear();
+    const persistedBeforeBack = usePaneLayoutStore.getState().environments;
 
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.historyIndex).toBe(1);
-    pendingBack.resolve(previewState({ url: history[0], canGoForward: true }));
+    // The RPC resolves before Chromium commits the navigation, so its snapshot
+    // still carries the pre-navigation URL. Nothing from it may be persisted or
+    // pushed back onto the surface.
+    pendingBack.resolve(previewState({
+      url: "http://localhost:9000/",
+      loading: true,
+      canGoBack: true,
+      canGoForward: true,
+    }));
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled"),
+    ).toBe(false));
+    expect(goBack).toHaveBeenCalledWith("browser-1");
+    // Only the surface fields of that snapshot are applied.
+    expect(view.container.querySelector(".animate-spin")).not.toBeNull();
+    expect(native.browserPreview.attach).not.toHaveBeenCalled();
+    expect(usePaneLayoutStore.getState().environments).toBe(persistedBeforeBack);
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+      "http://localhost:9000/",
+    );
 
-    await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData)
-        .toMatchObject({ url: history[0], historyIndex: 0, history });
-    });
+    native.emitState(previewState({ url: history[1], canGoBack: true, canGoForward: true }));
+    await waitFor(() => expect(
+      (screen.getByLabelText("Browser address") as HTMLInputElement).value,
+    ).toBe(history[1]!));
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.url)
+      .toBe(history[1]!);
+    // Every attach the move caused carries Chromium's own URL. The tracked
+    // entry for index 0 is never reattached, which is what truncated the real
+    // forward history.
+    for (const call of native.browserPreview.attach.mock.calls) {
+      expect((call[0] as { url: string }).url).toBe(history[1]!);
+    }
   });
 
-  test("keeps native Forward durable state on failure and advances it on success", async () => {
+  test("advances the native cursor once per Back click even while an RPC is in flight", async () => {
+    const history = [
+      "http://localhost:3000/",
+      "http://localhost:4000/",
+      "http://localhost:5000/",
+    ];
+    const pending: Array<ReturnType<typeof deferred<BrowserPreviewState>>> = [];
+    const goBack = mock(() => {
+      const next = deferred<BrowserPreviewState>();
+      pending.push(next);
+      return next.promise;
+    });
+    const native = installNativePreview({
+      attach: mock(async (input: { url: string }) =>
+        previewState({ url: input.url, canGoBack: true })),
+      goBack,
+    });
+    setBrowserTab(history[2]!);
+    usePaneLayoutStore.getState().updateTabBrowserUrl(
+      "browser-1",
+      history[2]!,
+      "env-1",
+      history,
+      2,
+    );
+    render(<BrowserTab
+      tabId="browser-1"
+      environmentId="env-1"
+      data={{ url: history[2]!, history, historyIndex: 2 }}
+      isActive
+    />);
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+    native.emitState(previewState({ url: history[2], canGoBack: true }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+    // Two clicks are two real steps in Chromium, and neither may write a cursor
+    // the second click would then recompute from a stale value.
+    expect(goBack).toHaveBeenCalledTimes(2);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData)
+      .toMatchObject({ url: history[2], historyIndex: 2, history });
+
+    await act(async () => {
+      pending[0]?.resolve(previewState({ url: history[2], canGoBack: true }));
+      pending[1]?.resolve(previewState({ url: history[1], canGoBack: true, canGoForward: true }));
+      await Promise.resolve();
+    });
+    native.emitState(previewState({ url: history[0], canGoForward: true }));
+
+    await waitFor(() => expect(
+      (screen.getByLabelText("Browser address") as HTMLInputElement).value,
+    ).toBe(history[0]!));
+    // The address the user sees and the durable address agree with the preview,
+    // and no cursor was advanced behind them: two clicks that each computed the
+    // same next index used to persist one that contradicted the address.
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData)
+      .toMatchObject({ url: history[0], historyIndex: 2, history });
+  });
+
+  test("keeps native Forward durable state on failure and follows the preview on success", async () => {
     const history = ["http://localhost:3000/", "http://localhost:4000/"];
     const goForward = mock(async () => {
       if (goForward.mock.calls.length === 1) throw new Error("forward failed");
-      return previewState({ url: history[1], canGoBack: true });
+      // A pre-commit snapshot: the surface has not moved yet.
+      return previewState({ url: history[0], canGoForward: true });
     });
     const native = installNativePreview({
-      attach: mock(async () => previewState({ url: history[0] })),
+      attach: mock(async (input: { url: string }) =>
+        previewState({ url: input.url, canGoForward: true })),
       goForward,
     });
     setBrowserTab(history[0]!);
@@ -1226,13 +1413,20 @@ describe("BrowserTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Forward" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("forward failed"));
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.historyIndex).toBe(0);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData)
+      .toMatchObject({ url: history[0], historyIndex: 0, history });
 
     fireEvent.click(screen.getByRole("button", { name: "Forward" }));
-    await waitFor(() => {
-      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData)
-        .toMatchObject({ url: history[1], historyIndex: 1, history });
-    });
+    await waitFor(() => expect(goForward).toHaveBeenCalledTimes(2));
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.url)
+      .toBe(history[0]);
+
+    native.emitState(previewState({ url: history[1], canGoBack: true }));
+    await waitFor(() => expect(
+      usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.url,
+    ).toBe(history[1]!));
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value)
+      .toBe(history[1]!);
   });
 
   test("converges on the latest URL when navigation and refresh race the initial native attach", async () => {

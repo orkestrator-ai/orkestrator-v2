@@ -306,6 +306,73 @@ describe("pane layout intent persistence", () => {
     });
   });
 
+  test("rejects a stale merge ancestor even when the desired generation is current", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1");
+      environment.id = "env-layout-base-generation";
+      environment.containerId = "container-new";
+      await storage.addEnvironment(environment);
+      const current = { ...layout("tab-a"), containerId: "container-new" };
+      await storage.savePaneLayout(environment.id, current, 0);
+
+      // Both sides of the merge come from the renderer. A dead ancestor still
+      // merges against the durable tree, which resurrects the tabs it carried.
+      await expect(storage.applyPaneLayoutIntent(
+        environment.id,
+        { ...current, containerId: "container-old" },
+        current,
+      )).rejects.toThrow("stale environment generation");
+      expect((await storage.getPaneLayout(environment.id))?.revision).toBe(1);
+    });
+  });
+
+  test("rejects a container generation on a local environment from both write paths", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1", { environmentType: "local" });
+      environment.id = "env-layout-local-generation";
+      // A local environment has no container, so only null is a live generation
+      // - even if a stale containerId is still recorded on the environment.
+      environment.containerId = "container-ghost";
+      await storage.addEnvironment(environment);
+      const containerLayout = { ...layout("tab-a"), containerId: "container-ghost" };
+
+      await expect(storage.savePaneLayout(environment.id, containerLayout, 0))
+        .rejects.toThrow("stale environment generation");
+      await expect(storage.applyPaneLayoutIntent(
+        environment.id,
+        containerLayout,
+        containerLayout,
+      )).rejects.toThrow("stale environment generation");
+      expect(await storage.getPaneLayout(environment.id)).toBeNull();
+
+      await expect(storage.savePaneLayout(environment.id, layout("tab-a"), 0))
+        .resolves.toMatchObject({ revision: 1, containerId: null });
+    });
+  });
+
+  test("replaces rather than merges when the persisted layout version differs", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1", { environmentType: "local" });
+      environment.id = "env-layout-version-generation";
+      await storage.addEnvironment(environment);
+      await storage.savePaneLayout(
+        environment.id,
+        { ...layout("tab-a", ["tab-a", "tab-b"]), version: PANE_LAYOUT_VERSION - 1 },
+        0,
+      );
+
+      // The persisted record is a different layout version, so there is no
+      // common ancestor to rebase onto: the intent replaces it wholesale.
+      const desired = layout("tab-c", ["tab-c"]);
+      const saved = await storage.applyPaneLayoutIntent(environment.id, desired, desired);
+      expect(saved).toMatchObject({
+        version: PANE_LAYOUT_VERSION,
+        revision: 2,
+        root: desired.root,
+      });
+    });
+  });
+
   test("recovers the mutation queue after a filesystem write failure", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const environment = createEnvironment("project-1", { environmentType: "local" });

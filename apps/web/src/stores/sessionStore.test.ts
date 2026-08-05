@@ -232,6 +232,37 @@ describe("sessionStore.updateSessionStatus", () => {
     expect(useSessionStore.getState().sessions.get("session-1")?.status).toBe("disconnected");
   });
 
+  test("rolls back to the last confirmed status when both updates fail", async () => {
+    const older = deferred<void>();
+    const newer = deferred<void>();
+    updateSessionStatusMock
+      .mockImplementationOnce(() => older.promise)
+      .mockImplementationOnce(() => newer.promise);
+
+    const first = useSessionStore.getState().updateSessionStatus("session-1", "disconnected");
+    const second = useSessionStore.getState().updateSessionStatus("session-1", "connected");
+    newer.reject(new Error("newer failed"));
+    await second;
+    older.reject(new Error("older failed"));
+    await first;
+
+    // "disconnected" was only ever optimistic, so restoring it would leave a
+    // status the backend never accepted.
+    expect(useSessionStore.getState().sessions.get("session-1")?.status).toBe("connected");
+  });
+
+  test("forgets a settled request so a later rollback uses the new baseline", async () => {
+    await useSessionStore.getState().updateSessionStatus("session-1", "disconnected");
+    expect(useSessionStore.getState().sessions.get("session-1")?.status).toBe("disconnected");
+
+    updateSessionStatusMock.mockRejectedValueOnce(new Error("offline"));
+    await useSessionStore.getState().updateSessionStatus("session-1", "connected");
+
+    // A leaked entry from the successful update would still hold "connected" as
+    // its baseline and undo a status the backend has confirmed.
+    expect(useSessionStore.getState().sessions.get("session-1")?.status).toBe("disconnected");
+  });
+
   test("still calls the backend when the session is not currently loaded", async () => {
     useSessionStore.setState({ sessions: new Map() });
 

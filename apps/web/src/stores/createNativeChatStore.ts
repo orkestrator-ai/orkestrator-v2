@@ -757,7 +757,28 @@ export function createEventSubscriptionSlice<TEvent>(
           || !subscription.desynced
         ) return state;
         const next = new Map(state.eventSubscriptions);
-        next.set(environmentId, { ...subscription, desynced: false });
+        /*
+         * Reset the ladder as well as the flag.
+         *
+         * `getOrCreateEventSubscription` deliberately carries
+         * `reconnectAttempts` forward, and only an inbound frame clears it
+         * (`markEventSubscriptionHealthy`). A quiet-but-healthy session
+         * therefore stayed pinned at the ceiling after resyncing, so the next
+         * transient drop skipped the whole backoff and went straight to the
+         * 60s desynced state.
+         *
+         * This does not defeat the ceiling: reaching here means the stream was
+         * re-established *and* a full authoritative snapshot came back over
+         * HTTP, which a bridge that is actually down never manages. A bridge
+         * that flaps between those two states pays one full ladder — ~2.5
+         * minutes of capped, exponentially spaced attempts — per successful
+         * rehydrate, which is still bounded and still ends at the cap.
+         */
+        next.set(environmentId, {
+          ...subscription,
+          desynced: false,
+          reconnectAttempts: 0,
+        });
         return { eventSubscriptions: next };
       }),
   });

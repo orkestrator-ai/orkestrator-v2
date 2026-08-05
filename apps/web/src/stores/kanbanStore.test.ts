@@ -195,8 +195,32 @@ describe("kanbanStore project notes", () => {
     useKanbanStore.setState({
       notes: "",
       notesLoading: false,
+      notesError: null,
       currentNotesProjectId: null,
     });
+  });
+
+  test("clears the previous project's notes before it awaits the fetch", () => {
+    const pending = deferred<{ content: string }>();
+    useKanbanStore.setState({
+      notes: "private notes from project 1",
+      currentNotesProjectId: "project-1",
+      notesError: "stale failure",
+    });
+    getProjectNotesMock.mockImplementationOnce(() => pending.promise);
+
+    const load = useKanbanStore.getState().loadNotes("project-2");
+
+    // Synchronously, before any await: an editor that rerenders during the load
+    // must never see another project's content.
+    expect(useKanbanStore.getState()).toMatchObject({
+      notes: "",
+      notesLoading: true,
+      notesError: null,
+      currentNotesProjectId: "project-2",
+    });
+    pending.resolve({ content: "project 2 notes" });
+    return load;
   });
 
   test("loads notes and publishes the selected project", async () => {
@@ -217,9 +241,45 @@ describe("kanbanStore project notes", () => {
 
     await useKanbanStore.getState().loadNotes("project-2");
 
+    // The error is what keeps the editor disabled: an empty enabled editor
+    // autosaves its first keystroke over the project's real notes.
     expect(useKanbanStore.getState()).toMatchObject({
       notes: "",
       notesLoading: false,
+      notesError: "unavailable",
+      currentNotesProjectId: "project-2",
+    });
+  });
+
+  test("clears a load error once a retry succeeds", async () => {
+    getProjectNotesMock.mockRejectedValueOnce("not an Error");
+    await useKanbanStore.getState().loadNotes("project-1");
+    expect(useKanbanStore.getState().notesError).toBe("not an Error");
+
+    getProjectNotesMock.mockResolvedValueOnce({ content: "recovered" });
+    await useKanbanStore.getState().loadNotes("project-1");
+
+    expect(useKanbanStore.getState()).toMatchObject({
+      notes: "recovered",
+      notesError: null,
+      notesLoading: false,
+    });
+  });
+
+  test("does not record a failure against a project the user already left", async () => {
+    const older = deferred<{ content: string }>();
+    getProjectNotesMock
+      .mockImplementationOnce(() => older.promise)
+      .mockResolvedValueOnce({ content: "new project" });
+
+    const first = useKanbanStore.getState().loadNotes("project-1");
+    await useKanbanStore.getState().loadNotes("project-2");
+    older.reject(new Error("older failure"));
+    await first;
+
+    expect(useKanbanStore.getState()).toMatchObject({
+      notes: "new project",
+      notesError: null,
       currentNotesProjectId: "project-2",
     });
   });

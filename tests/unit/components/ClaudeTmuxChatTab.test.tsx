@@ -3145,6 +3145,81 @@ Running 1 Explore agent...
     ]);
   });
 
+  test("collapses re-delivered informational hooks and keeps a dismissal sticky", async () => {
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(subscribedHandler).not.toBeNull());
+
+    const deliver = (message: string) => {
+      act(() => {
+        subscribedHandler?.({
+          kind: "hook",
+          tab_id: "tab-1",
+          environment_id: "env-1",
+          session_id: "session-1",
+          event_id: "notification",
+          event_kind: "Notification",
+          payload: { message },
+          requested_at: 1_700_000_000_000,
+        });
+      });
+    };
+    const infoEvents = () => useClaudeTmuxStore.getState().getTab("tab-1").infoEvents;
+
+    // The backend de-duplicates its retained snapshot but still emits a frame
+    // per delivery, so a re-delivery must replace rather than stack.
+    deliver("Background note");
+    deliver("Background note");
+    expect(infoEvents()).toEqual([
+      expect.objectContaining({ id: "notification", message: "Background note" }),
+    ]);
+
+    act(() => {
+      useClaudeTmuxStore.getState().dismissInfoEvent("tab-1", "notification");
+    });
+    expect(infoEvents()).toEqual([]);
+
+    // Dismissal means "I have seen this". Neither another live delivery nor an
+    // authoritative rehydration may bring the card back.
+    deliver("Background note");
+    expect(infoEvents()).toEqual([]);
+    act(() => {
+      useClaudeTmuxStore.getState().replacePendingHooks("tab-1", {
+        approvals: [],
+        questions: [],
+        plans: [],
+        permissions: [],
+        elicitations: [],
+        infoEvents: [{
+          id: "notification",
+          kind: "Notification",
+          message: "Background note",
+          receivedAt: new Date(1_700_000_000_000).toISOString(),
+        }, {
+          id: "other",
+          kind: "Notification",
+          message: "Still new",
+          receivedAt: new Date(1_700_000_000_000).toISOString(),
+        }],
+      });
+    });
+    expect(infoEvents()).toEqual([
+      expect.objectContaining({ id: "other", message: "Still new" }),
+    ]);
+  });
+
   test("removes each pending hook card when the backend reports a timeout", async () => {
     const store = useClaudeTmuxStore.getState();
     store.setRunning("tab-1", true, {

@@ -23,6 +23,7 @@ import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "./claudeTmuxStore"
 import { useCodexStore } from "./codexStore";
 import { useOpenCodeStore } from "./openCodeStore";
 import * as backend from "@/lib/backend";
+import { boundBrowserHistory } from "@/lib/browser-history";
 import { createUuid } from "@/lib/uuid";
 import { destroyBrowserPreview } from "@/lib/native/browser-preview";
 import { forgetAgentHandoff } from "@/lib/agent-handoff";
@@ -1038,14 +1039,12 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       && historyIndex === undefined
     ) return;
 
-    const historyOffset = Math.max(0, (history?.length ?? 0) - 100);
-    const boundedHistory = history?.slice(-100);
-    const boundedHistoryIndex = boundedHistory && historyIndex !== undefined
-      ? Math.min(
-          Math.max(historyIndex - historyOffset, boundedHistory.length === 0 ? -1 : 0),
-          boundedHistory.length - 1,
-        )
-      : historyIndex;
+    // A cursor without a new array still has to be clamped: it addresses the
+    // history already stored on the tab.
+    const {
+      history: boundedHistory,
+      historyIndex: boundedHistoryIndex,
+    } = boundBrowserHistory(history, historyIndex, existingTab.browserData.history);
 
     const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
       ...leaf,

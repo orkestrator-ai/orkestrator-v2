@@ -350,8 +350,11 @@ describe("OpenCodeChatTab SSE reconnect", () => {
   test("uses capped exponential delays then keeps probing while desynced", async () => {
     const firstSubscription = deferred<AsyncIterable<OpenCodeEvent>>();
     const consoleWarn = mock(() => {});
+    const consoleError = mock(() => {});
     const originalConsoleWarn = console.warn;
+    const originalConsoleError = console.error;
     console.warn = consoleWarn as typeof console.warn;
+    console.error = consoleError as typeof console.error;
     mockSubscribeToEvents
       .mockImplementationOnce(() => firstSubscription.promise)
       .mockImplementation(async () => emptyEventStream());
@@ -398,12 +401,134 @@ describe("OpenCodeChatTab SSE reconnect", () => {
       ]);
       expect(mockSubscribeToEvents).toHaveBeenCalledTimes(11);
 
+      // A probe that still cannot reach the bridge leaves the tab desynced and
+      // queues the next one at the cap, rather than stranding it forever.
+      mockSubscribeToEvents.mockImplementationOnce(async () => {
+        throw new Error("bridge still unreachable");
+      });
       await runTimer(timers[10]!);
       await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalledTimes(12));
       await waitFor(() => expect(timers).toHaveLength(12));
+      expect(timers[11]!.delay).toBe(60_000);
       expect(
         useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced,
       ).toBe(true);
+    } finally {
+      console.warn = originalConsoleWarn;
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("a successful probe restores the backoff ladder even with no events", async () => {
+    /*
+     * `markEventSubscriptionHealthy` only fires on an inbound frame, and
+     * `getOrCreateEventSubscription` carries the attempt count forward, so a
+     * quiet session that resynced stayed pinned at the ceiling and skipped the
+     * whole ladder on its next transient drop.
+     */
+    const firstSubscription = deferred<AsyncIterable<OpenCodeEvent>>();
+    const probe = eventChannel();
+    const consoleWarn = mock(() => {});
+    const originalConsoleWarn = console.warn;
+    console.warn = consoleWarn as typeof console.warn;
+    mockSubscribeToEvents
+      .mockImplementationOnce(() => firstSubscription.promise)
+      .mockImplementation(async () => emptyEventStream());
+
+    try {
+      renderChat();
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalledTimes(1));
+      const timers = captureReconnectTimers();
+
+      await act(async () => {
+        firstSubscription.resolve(emptyEventStream());
+        await firstSubscription.promise;
+      });
+      await waitFor(() => expect(timers).toHaveLength(1));
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await runTimer(timers[attempt]!);
+        await waitFor(() =>
+          expect(mockSubscribeToEvents).toHaveBeenCalledTimes(attempt + 2),
+        );
+      }
+      await waitFor(() =>
+        expect(
+          useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID),
+        ).toMatchObject({ desynced: true, reconnectAttempts: 10 }),
+      );
+
+      // The probe reconnects and rehydrates, but the session is idle so not a
+      // single event arrives over it.
+      mockSubscribeToEvents.mockImplementationOnce(async () => probe.stream);
+      await runTimer(timers[10]!);
+      await waitFor(() =>
+        expect(
+          useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID),
+        ).toMatchObject({ desynced: false, reconnectAttempts: 0 }),
+      );
+
+      await act(async () => {
+        probe.close();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(timers).toHaveLength(12));
+      expect(timers[11]!.delay).toBe(3_000);
+    } finally {
+      console.warn = originalConsoleWarn;
+    }
+  });
+
+  test("stops probing once the environment has been deleted", async () => {
+    /*
+     * The probe self-reschedules: every failure re-enters the exhausted branch
+     * and queues another 60s timer. A deleted environment has no bridge left to
+     * reach, so without this gate the chain probes a dead port for the life of
+     * the process and pins the whole component closure in memory.
+     */
+    const firstSubscription = deferred<AsyncIterable<OpenCodeEvent>>();
+    const consoleWarn = mock(() => {});
+    const originalConsoleWarn = console.warn;
+    console.warn = consoleWarn as typeof console.warn;
+    act(() => {
+      useOpenCodeStore.setState({
+        eventSubscriptions: new Map([[ENVIRONMENT_ID, {
+          abortController: new AbortController(),
+          stream: null,
+          isActive: false,
+          reconnectAttempts: 10,
+          reconnectTimer: null,
+          desynced: false,
+        }]]),
+      });
+    });
+    mockSubscribeToEvents.mockImplementationOnce(() => firstSubscription.promise);
+
+    try {
+      renderChat();
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalledTimes(1));
+      const timers = captureReconnectTimers();
+
+      act(() => {
+        useEnvironmentStore.setState({ environments: [] });
+      });
+      await act(async () => {
+        firstSubscription.resolve(emptyEventStream());
+        await firstSubscription.promise;
+      });
+
+      await waitFor(() => {
+        expect(consoleWarn).toHaveBeenCalledWith(
+          "[OpenCodeChatTab] SSE reconnect limit reached; environment is gone, stopping probes for",
+          ENVIRONMENT_ID,
+        );
+      });
+      expect(timers).toHaveLength(0);
+      expect(mockSubscribeToEvents).toHaveBeenCalledTimes(1);
+      expect(
+        useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID),
+      ).toMatchObject({ desynced: true, reconnectTimer: null });
     } finally {
       console.warn = originalConsoleWarn;
     }
@@ -622,5 +747,98 @@ describe("OpenCodeChatTab SSE reconnect", () => {
       channel.close();
       await Promise.resolve();
     });
+  });
+
+  test("one unreachable session does not abandon the rest of the resync", async () => {
+    /*
+     * `getSessionMessages` throws unconditionally on a 404, so a single stale
+     * projection used to skip every remaining session *and* the event loop
+     * underneath it — leaving the tab consuming no live events at all and
+     * repeating the identical failure on the sixty-second probe.
+     */
+    const channel = eventChannel();
+    const staleKey = createSessionKey(ENVIRONMENT_ID, "tab-opencode-stale");
+    const laterKey = createSessionKey(ENVIRONMENT_ID, "tab-opencode-later");
+    const consoleWarn = mock(() => {});
+    const originalConsoleWarn = console.warn;
+    console.warn = consoleWarn as typeof console.warn;
+    const previous = new AbortController();
+    act(() => {
+      useOpenCodeStore.setState((state) => ({
+        sessions: new Map(state.sessions)
+          .set(staleKey, {
+            sessionId: "session-opencode-stale",
+            messages: [],
+            isLoading: false,
+          })
+          .set(laterKey, {
+            sessionId: "session-opencode-later",
+            messages: [],
+            isLoading: false,
+          }),
+        eventSubscriptions: new Map([[ENVIRONMENT_ID, {
+          abortController: previous,
+          stream: null,
+          isActive: false,
+          reconnectAttempts: 10,
+          reconnectTimer: null,
+          desynced: true,
+        }]]),
+      }));
+    });
+    mockGetSessionMessages.mockImplementation(
+      async (..._args: unknown[]) => {
+        if (_args[1] === "session-opencode-stale") {
+          throw new Error("Session not found: session-opencode-stale");
+        }
+        return [];
+      },
+    );
+    mockSubscribeToEvents.mockResolvedValueOnce(channel.stream);
+
+    try {
+      renderChat();
+
+      await waitFor(() => {
+        // The session ordered after the failing one still rehydrated.
+        expect((mockGetSessionMessages.mock.calls as unknown[][])
+          .some((call) => call[1] === "session-opencode-later"))
+          .toBe(true);
+        expect(
+          useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced,
+        ).toBe(false);
+      });
+      expect(consoleWarn).toHaveBeenCalledWith(
+        "[OpenCodeChatTab] Failed to rehydrate session during resync:",
+        "session-opencode-stale",
+        expect.objectContaining({
+          message: "Session not found: session-opencode-stale",
+        }),
+      );
+
+      // Live events are being consumed, which the abandoned loop never reached.
+      const callsBefore = mockGetSessionMessages.mock.calls.length;
+      await act(async () => {
+        channel.push({
+          type: "message.updated",
+          properties: { info: { sessionID: "session-reconnect" } },
+        } as unknown as OpenCodeEvent);
+        await Promise.resolve();
+      });
+      await waitFor(() =>
+        expect(
+          (mockGetSessionMessages.mock.calls as unknown[][])
+            .slice(callsBefore)
+            .some((call) => call[1] === "session-reconnect"),
+        ).toBe(true),
+      );
+    } finally {
+      console.warn = originalConsoleWarn;
+      await act(async () => {
+        useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        channel.close();
+        await Promise.resolve();
+      });
+    }
   });
 });

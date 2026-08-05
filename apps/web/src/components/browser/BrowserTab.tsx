@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { cn } from "@/lib/utils";
 import { resolveBrowserAddress } from "@/lib/browser-address";
+import { boundBrowserHistory } from "@/lib/browser-history";
 import {
   attachBrowserPreview,
   goBackBrowserPreview,
@@ -27,7 +28,6 @@ interface BrowserTabProps {
 }
 
 const OPAQUE_PREVIEW_SANDBOX = "allow-forms allow-pointer-lock allow-presentation allow-scripts";
-const MAX_BROWSER_HISTORY_ENTRIES = 100;
 const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
 const BLOCKING_OVERLAY_SELECTOR = [
   '[role="dialog"]',
@@ -113,12 +113,18 @@ export function BrowserTab({
   })();
   const [address, setAddress] = useState(data.url);
   const [currentUrl, setCurrentUrl] = useState(data.url);
+  // The tracked history only drives the iframe preview: a native preview's
+  // history lives in Chromium (see `moveThroughHistory`). The refs are the
+  // authoritative cursor for the handlers that mutate it, so a second click or
+  // a submit that lands before React re-renders still reads what the previous
+  // one wrote. They are written only from those handlers, never during render.
   const [history, setHistory] = useState<string[]>(() =>
     data.history ?? (data.url ? [data.url] : [])
   );
   const [historyIndex, setHistoryIndex] = useState(() =>
     data.historyIndex ?? (data.url ? 0 : -1)
   );
+  const historyRef = useRef(history);
   const historyIndexRef = useRef(historyIndex);
   const [loadRevision, setLoadRevision] = useState(0);
   const [isLoading, setIsLoading] = useState(Boolean(data.url));
@@ -156,9 +162,11 @@ export function BrowserTab({
     setAddress(data.url);
     setCurrentUrl(data.url);
     if (!followsLocalNavigation) {
-      setHistory(data.history ?? (data.url ? [data.url] : []));
+      const nextHistory = data.history ?? (data.url ? [data.url] : []);
       const nextIndex = data.historyIndex ?? (data.url ? 0 : -1);
+      historyRef.current = nextHistory;
       historyIndexRef.current = nextIndex;
+      setHistory(nextHistory);
       setHistoryIndex(nextIndex);
       setIsLoading(Boolean(data.url));
       setError(null);
@@ -318,27 +326,31 @@ export function BrowserTab({
     if (!nativeBrowserPreview) setLoadRevision((revision) => revision + 1);
     locallyPersistedUrl.current = next.displayUrl;
 
-    if (recordHistory) {
-      setHistory((current) => {
-        let nextHistory = current.slice(0, historyIndexRef.current + 1);
-        if (nextHistory[nextHistory.length - 1] !== next.displayUrl) {
-          nextHistory.push(next.displayUrl);
-        }
-        if (nextHistory.length > MAX_BROWSER_HISTORY_ENTRIES) {
-          nextHistory = nextHistory.slice(-MAX_BROWSER_HISTORY_ENTRIES);
-        }
-        const nextIndex = nextHistory.length - 1;
-        historyIndexRef.current = nextIndex;
-        setHistoryIndex(nextIndex);
-        updateTabBrowserUrl(
-          tabId,
-          next.displayUrl,
-          environmentId,
-          nextHistory,
-          nextIndex,
-        );
-        return nextHistory;
-      });
+    if (recordHistory && nativeBrowserPreview) {
+      // Chromium recorded this navigation in its own history, so the address is
+      // the only durable part of it.
+      updateTabBrowserUrl(tabId, next.displayUrl, environmentId);
+    } else if (recordHistory) {
+      // Computed outside the state updater on purpose. The updater has to stay
+      // pure: React double-invokes it in development, and a second invocation
+      // that read the cursor the first one advanced would keep the forward
+      // entries this navigation is supposed to truncate.
+      const truncated = historyRef.current.slice(0, historyIndexRef.current + 1);
+      if (truncated[truncated.length - 1] !== next.displayUrl) {
+        truncated.push(next.displayUrl);
+      }
+      const bounded = boundBrowserHistory(truncated, truncated.length - 1);
+      historyRef.current = bounded.history;
+      historyIndexRef.current = bounded.historyIndex;
+      setHistory(bounded.history);
+      setHistoryIndex(bounded.historyIndex);
+      updateTabBrowserUrl(
+        tabId,
+        next.displayUrl,
+        environmentId,
+        bounded.history,
+        bounded.historyIndex,
+      );
     }
 
     if (nativeBrowserPreview && nativeAttachedRef.current) {
@@ -356,42 +368,27 @@ export function BrowserTab({
 
   const moveThroughHistory = useCallback((offset: -1 | 1) => {
     if (nativeBrowserPreview) {
-      const nextIndex = historyIndex + offset;
-      const trackedAddress = history[nextIndex];
+      // Chromium owns this preview's history. The tracked array only records
+      // address-bar navigations, so an in-preview link click already made the
+      // two diverge; forcing a tracked address back onto the surface would
+      // re-attach it as a fresh load and destroy the real forward entries.
+      // Only the RPC's own surface fields are applied here — the URL is
+      // reconciled by the state event that follows the navigation commit, which
+      // is also what persists it.
       const action = offset === -1 ? goBackBrowserPreview : goForwardBrowserPreview;
-      void action(tabId).then((state) => {
-        // BrowserPreviewManager returns before Chromium's navigation commit, so
-        // the RPC snapshot may still contain the old URL. Treat RPC success as
-        // confirmation to advance the known durable cursor; a later native
-        // state event will reconcile the final displayed URL without changing
-        // the history sequence.
-        applyNativeSurfaceState(state);
-        if (!trackedAddress) return;
-        historyIndexRef.current = nextIndex;
-        setHistoryIndex(nextIndex);
-        setAddress(trackedAddress);
-        setCurrentUrl(trackedAddress);
-        locallyPersistedUrl.current = trackedAddress;
-        updateTabBrowserUrl(
-          tabId,
-          trackedAddress,
-          environmentId,
-          history,
-          nextIndex,
-        );
-      }).catch((navigationError) => {
+      void action(tabId).then(applyNativeSurfaceState).catch((navigationError) => {
         setError(errorMessage(navigationError));
       });
       return;
     }
-    const nextIndex = historyIndex + offset;
-    const nextAddress = history[nextIndex];
+    const nextIndex = historyIndexRef.current + offset;
+    const nextAddress = historyRef.current[nextIndex];
     if (!nextAddress) return;
     historyIndexRef.current = nextIndex;
     setHistoryIndex(nextIndex);
-    updateTabBrowserUrl(tabId, nextAddress, environmentId, history, nextIndex);
+    updateTabBrowserUrl(tabId, nextAddress, environmentId, historyRef.current, nextIndex);
     navigate(nextAddress, false);
-  }, [applyNativeSurfaceState, environmentId, history, historyIndex, nativeBrowserPreview, navigate, tabId, updateTabBrowserUrl]);
+  }, [applyNativeSurfaceState, environmentId, nativeBrowserPreview, navigate, tabId, updateTabBrowserUrl]);
 
   const reload = useCallback(() => {
     if (!currentUrl) return;

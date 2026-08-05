@@ -1602,6 +1602,80 @@ describe("paneLayoutStore environment scoping", () => {
     expect(data?.historyIndex).toBe(95);
   });
 
+  test("keeps a history that is exactly at the bound untouched", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "browser-a",
+      type: "browser",
+      browserData: { url: "" },
+    }, "env-a");
+    const history = Array.from({ length: 100 }, (_, index) => `http://localhost/${index}`);
+
+    store.updateTabBrowserUrl("browser-a", history[99]!, "env-a", history, 99);
+
+    const data = usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData;
+    expect(data?.history).toEqual(history);
+    expect(data?.historyIndex).toBe(99);
+  });
+
+  test("clamps a cursor sent without a history against the stored one", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "browser-a",
+      type: "browser",
+      browserData: { url: "" },
+    }, "env-a");
+    store.updateTabBrowserUrl("browser-a", "b", "env-a", ["a", "b"], 1);
+
+    store.updateTabBrowserUrl("browser-a", "a", "env-a", undefined, 7);
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData).toMatchObject({
+      url: "a",
+      history: ["a", "b"],
+      historyIndex: 1,
+    });
+  });
+
+  test("drops a cursor that has no history to address and stores a history without one", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "browser-a",
+      type: "browser",
+      browserData: { url: "" },
+    }, "env-a");
+
+    store.updateTabBrowserUrl("browser-a", "a", "env-a", undefined, 3);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData).toEqual({
+      url: "a",
+    });
+
+    store.updateTabBrowserUrl("browser-a", "b", "env-a", ["a", "b"]);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData).toEqual({
+      url: "b",
+      history: ["a", "b"],
+    });
+  });
+
+  test("stores an emptied browser history with a cursor that points nowhere", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "browser-a",
+      type: "browser",
+      browserData: { url: "" },
+    }, "env-a");
+
+    store.updateTabBrowserUrl("browser-a", "", "env-a", [], 0);
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData).toMatchObject({
+      history: [],
+      historyIndex: -1,
+    });
+  });
+
   test("clamps malformed browser cursors to the bounded history", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");

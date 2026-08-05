@@ -4,6 +4,7 @@ import {
   describe,
   expect,
   mock,
+  spyOn,
   test,
 } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
@@ -817,6 +818,155 @@ describe("useDurableComposeDraft", () => {
     expect(deleteComposeDraft).toHaveBeenCalledWith(
       "test:project-hook-saved:value",
       0,
+    );
+    unmount();
+  });
+
+  test("keeps discarding after a discard until the next edit re-arms persistence", async () => {
+    getComposeDraft.mockResolvedValueOnce(null);
+    const { result, unmount } = renderHook(() => useDurableComposeDraft({
+      ownerType: "project",
+      ownerId: "project-hook-sticky",
+      namespace: "test",
+      localKey: "value",
+      initialValue: "",
+      isEmpty: isBlank,
+      isValid: isString,
+      debounceMs: 200,
+    }));
+    await waitFor(() => expect(getComposeDraft).toHaveBeenCalled());
+
+    act(() => result.current[1]("submitted text"));
+    await act(async () => result.current[3]());
+
+    // The debounce scheduled by that edit is still pending. It has to discard
+    // too: saving there would resurrect the record the submit just removed.
+    await waitFor(() => expect(deleteComposeDraft).toHaveBeenCalledTimes(2));
+    expect(saveComposeDraft).not.toHaveBeenCalled();
+    expect(result.current[0]).toBe("submitted text");
+
+    act(() => result.current[1]("typed after the submit"));
+
+    await waitFor(() => expect(saveComposeDraft).toHaveBeenCalledWith(
+      "test:project-hook-sticky:value",
+      "project",
+      "project-hook-sticky",
+      "typed after the submit",
+      0,
+    ));
+    unmount();
+  });
+
+  test("rethrows a failed discard of the persisted record", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    getComposeDraft.mockResolvedValueOnce(null);
+    deleteComposeDraft.mockRejectedValueOnce(new Error("delete failed"));
+    const { result, unmount } = renderHook(() => useDurableComposeDraft({
+      ownerType: "project",
+      ownerId: "project-hook-discard-failure",
+      namespace: "test",
+      localKey: "value",
+      initialValue: "",
+      isEmpty: isBlank,
+      isValid: isString,
+      debounceMs: 60_000,
+    }));
+    await waitFor(() => expect(getComposeDraft).toHaveBeenCalled());
+    act(() => result.current[1]("submitted text"));
+
+    let rejection: unknown;
+    await act(async () => {
+      rejection = await result.current[3]().then(() => null, (error: unknown) => error);
+    });
+
+    // Unlike the debounce, the caller of a submit-time discard is told: it is
+    // the only signal that the recovery record outlived the submit.
+    expect((rejection as Error).message).toBe("delete failed");
+    expect(warn).toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+    warn.mockRestore();
+    unmount();
+  });
+
+  test("offers to resolve a revision conflict raised by the discard", async () => {
+    getComposeDraft
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        draftKey: "test:project-hook-discard-conflict:value",
+        ownerType: "project",
+        ownerId: "project-hook-discard-conflict",
+        value: "other window",
+        updatedAt: "2026-08-05T00:00:00.000Z",
+        revision: 4,
+      });
+    deleteComposeDraft.mockRejectedValueOnce(new Error("Compose draft revision conflict"));
+    const { result, unmount } = renderHook(() => useDurableComposeDraft({
+      ownerType: "project",
+      ownerId: "project-hook-discard-conflict",
+      namespace: "test",
+      localKey: "value",
+      initialValue: "",
+      isEmpty: isBlank,
+      isValid: isString,
+      debounceMs: 60_000,
+    }));
+    await waitFor(() => expect(getComposeDraft).toHaveBeenCalled());
+    act(() => result.current[1]("submitted text"));
+
+    let rejection: unknown;
+    await act(async () => {
+      rejection = await result.current[3]().then(() => null, (error: unknown) => error);
+    });
+
+    expect(rejection).toBeInstanceOf(compose.DraftRevisionConflictError);
+    const options = toastError.mock.calls.at(-1)?.[1] as {
+      description?: string;
+      action?: { label?: string; onClick?: () => void };
+    };
+    // A discard that conflicts must not offer to save the live text: the user
+    // already submitted it.
+    expect(options.action?.label).toBe("Discard saved draft");
+    act(() => options.action?.onClick?.());
+    await waitFor(() => expect(deleteComposeDraft).toHaveBeenLastCalledWith(
+      "test:project-hook-discard-conflict:value",
+      4,
+    ));
+    unmount();
+  });
+
+  test("suppresses a draft that hydrates after the record was discarded", async () => {
+    const snapshot = deferred<Awaited<ReturnType<typeof realBackend.getComposeDraft<string>>>>();
+    getComposeDraft.mockImplementationOnce(() => snapshot.promise);
+    const { result, unmount } = renderHook(() => useDurableComposeDraft({
+      ownerType: "project",
+      ownerId: "project-hook-discard-hydration",
+      namespace: "test",
+      localKey: "value",
+      initialValue: "",
+      isEmpty: isBlank,
+      isValid: isString,
+      debounceMs: 60_000,
+    }));
+    await waitFor(() => expect(getComposeDraft).toHaveBeenCalled());
+
+    let discarded!: Promise<void>;
+    act(() => {
+      discarded = result.current[3]();
+    });
+    snapshot.resolve({
+      draftKey: "test:project-hook-discard-hydration:value",
+      ownerType: "project",
+      ownerId: "project-hook-discard-hydration",
+      value: "record the submit removed",
+      updatedAt: "2026-08-05T00:00:00.000Z",
+      revision: 3,
+    });
+    await act(async () => discarded);
+
+    expect(result.current[0]).toBe("");
+    expect(deleteComposeDraft).toHaveBeenCalledWith(
+      "test:project-hook-discard-hydration:value",
+      3,
     );
     unmount();
   });

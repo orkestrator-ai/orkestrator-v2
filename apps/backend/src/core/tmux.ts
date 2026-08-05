@@ -625,6 +625,40 @@ class TmuxBackend {
     return out.stdout;
   }
 
+  /**
+   * At most `maxBytes` of `filePath`, or undefined when it does not exist.
+   *
+   * Hook payloads are written by an agent this process does not control, so the
+   * read that feeds the retained snapshot and every SSE subscriber has to be
+   * bounded at the source rather than trimmed afterwards.
+   */
+  async readBoundedFile(filePath: string, maxBytes: number): Promise<string | undefined> {
+    if (this.kind === "local") {
+      let handle: Awaited<ReturnType<typeof fs.open>>;
+      try {
+        handle = await fs.open(filePath, "r");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+      try {
+        const length = Math.min(maxBytes, (await handle.stat()).size);
+        if (length <= 0) return "";
+        const buffer = Buffer.allocUnsafe(length);
+        const { bytesRead } = await handle.read(buffer, 0, length, 0);
+        return buffer.subarray(0, bytesRead).toString("utf8");
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
+    }
+
+    const probe = await this.exec(["test", "-f", filePath]);
+    if (probe.status !== 0) return undefined;
+    const out = await this.exec(["head", "-c", String(maxBytes), filePath]);
+    if (out.status !== 0) throw new Error(out.stderr || `failed to read ${filePath}`);
+    return out.stdout;
+  }
+
   async writeFile(filePath: string, content: string): Promise<void> {
     if (this.kind === "local") {
       await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -894,6 +928,15 @@ type PendingHookEvent = {
   expiresAt?: number;
 };
 
+/**
+ * Upper bound on one hook payload file. Generous enough that a real tool-use
+ * payload parses as JSON, small enough that a pathological or hostile hook file
+ * cannot be held in memory and fanned out to every SSE subscriber.
+ */
+export const TMUX_HOOK_PAYLOAD_MAX_BYTES = 4 * 1024 * 1024;
+/** The timing sidecar is two integers. */
+const TMUX_HOOK_TIMING_MAX_BYTES = 4 * 1024;
+
 function blockingHookTiming(id: string): { requestedAt: number; expiresAt: number } | null {
   const timestamp = id.split("-", 1)[0] ?? "";
   if (!/^\d+$/.test(timestamp)) return null;
@@ -940,7 +983,10 @@ async function readBlockingHookTiming(
   id: string,
 ): Promise<{ requestedAt: number; expiresAt: number } | null> {
   const authoritative = parseBlockingHookTiming(
-    await backend.readFile(`${paths.timingDir}/${filename}`),
+    await backend.readBoundedFile(
+      `${paths.timingDir}/${filename}`,
+      TMUX_HOOK_TIMING_MAX_BYTES,
+    ),
   );
   // Hooks installed by an older backend do not have a timing sidecar. Keep
   // their pending prompts displayable until the workspace hook is reinstalled.
@@ -1252,7 +1298,7 @@ async function drainPending(
     const blocking = isBlockingHook(kind);
     if (blocking && alreadyEmitted.has(id)) continue;
 
-    const content = await backend.readFile(full);
+    const content = await backend.readBoundedFile(full, TMUX_HOOK_PAYLOAD_MAX_BYTES);
     if (content === undefined) continue;
 
     let payload: unknown = content;
@@ -1285,7 +1331,10 @@ async function listPendingBlocking(backend: TmuxBackend, paths: SessionHookPaths
     if (!isBlockingHook(kind)) continue;
     if (await backend.readFile(`${paths.responseDir}/${name}`) !== undefined) continue;
 
-    const content = await backend.readFile(`${paths.pendingDir}/${name}`);
+    const content = await backend.readBoundedFile(
+      `${paths.pendingDir}/${name}`,
+      TMUX_HOOK_PAYLOAD_MAX_BYTES,
+    );
     if (content === undefined) continue;
     let payload: unknown = content;
     try {
@@ -1624,17 +1673,26 @@ type TmuxStatus = {
 };
 
 const TMUX_INFO_EVENT_LIMIT = 20;
-const TMUX_INFO_EVENT_MESSAGE_MAX_CODE_POINTS = 2_000;
+const TMUX_INFO_EVENT_MESSAGE_MAX_UNITS = 2_000;
 
-function boundedInfoEventMessage(message: string): string {
-  // Iterate only as far as the retained bound. Array.from(message) would first
-  // allocate one entry for every code point in an untrusted hook payload before
-  // slicing it back down. String iteration still respects surrogate pairs, so
-  // the result cannot end with half of one.
+/**
+ * Truncates an untrusted hook message to at most
+ * {@link TMUX_INFO_EVENT_MESSAGE_MAX_UNITS} UTF-16 units without splitting a
+ * surrogate pair.
+ *
+ * The bound is in UTF-16 units, not code points, so worst-case retained size is
+ * the 4KB the previous `.slice(0, 2000)` gave rather than double it. Iteration
+ * stops at the bound: `Array.from(message)` would first allocate one entry per
+ * code point of the whole payload before slicing it back down.
+ */
+export function boundedInfoEventMessage(message: string): string {
+  if (message.length <= TMUX_INFO_EVENT_MESSAGE_MAX_UNITS) return message;
   const retained: string[] = [];
+  let units = 0;
   for (const codePoint of message) {
-    if (retained.length >= TMUX_INFO_EVENT_MESSAGE_MAX_CODE_POINTS) break;
+    if (units + codePoint.length > TMUX_INFO_EVENT_MESSAGE_MAX_UNITS) break;
     retained.push(codePoint);
+    units += codePoint.length;
   }
   return retained.join("");
 }
@@ -2329,6 +2387,7 @@ class TmuxSession {
   private emitHook(context: CommandContext, event: PendingHookEvent): void {
     this.updateBusyFromHookKind(event.kind, context);
     if (event.kind === "Stop") this.scheduleCompletionNotification(context);
+    let emittedPayload = event.payload;
     if (event.kind === "Notification" || event.kind === "Stop") {
       const payload = event.payload && typeof event.payload === "object"
         ? event.payload as Record<string, unknown>
@@ -2338,6 +2397,13 @@ class TmuxSession {
         : event.kind === "Stop"
           ? "Claude finished responding"
           : "Claude sent a notification";
+      const message = boundedInfoEventMessage(rawMessage);
+      // Bound the message the subscribers get too. Retaining a trimmed copy
+      // while broadcasting the original would move the cost rather than remove
+      // it: the payload is fanned out to every SSE listener.
+      if (payload && typeof payload.message === "string") {
+        emittedPayload = { ...payload, message };
+      }
       const duplicateIndex = this.infoEvents.findIndex((entry) =>
         entry.id === event.id && entry.kind === event.kind
       );
@@ -2345,7 +2411,7 @@ class TmuxSession {
       this.infoEvents.push({
         id: event.id,
         kind: event.kind,
-        message: boundedInfoEventMessage(rawMessage),
+        message,
         receivedAt: new Date(event.requestedAt ?? Date.now()).toISOString(),
       });
       if (this.infoEvents.length > TMUX_INFO_EVENT_LIMIT) {
@@ -2359,7 +2425,7 @@ class TmuxSession {
       session_id: this.sessionId,
       event_id: event.id,
       event_kind: event.kind,
-      payload: event.payload,
+      payload: emittedPayload,
       requested_at: event.requestedAt,
       expires_at: event.expiresAt,
     });

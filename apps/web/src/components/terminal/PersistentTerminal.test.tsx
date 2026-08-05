@@ -3661,6 +3661,216 @@ describe("PersistentTerminal", () => {
     expect(markBootstrappedMock).not.toHaveBeenCalledWith("session-1");
   });
 
+  it("does not re-issue the launch when an equal initialCommands array is cloned", async () => {
+    /*
+     * Every authoritative pane-layout refresh hands down a fresh copy of
+     * `initialCommands`. Depending on that identity re-armed the bootstrap
+     * effect while the first request was still in flight, and only the
+     * backend's own dedup stopped the command running twice.
+     */
+    let resolveFirst!: (result: {
+      bootstrapped: boolean;
+      delivered: boolean;
+      duplicate: boolean;
+    }) => void;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== "bootstrap_terminal_session") return undefined;
+      return new Promise((resolve) => {
+        resolveFirst = resolve;
+      });
+    });
+
+    const terminalData = createTerminalData();
+    const props = (initialCommands: string[]) => ({
+      terminalData,
+      tabId: "tab-1",
+      tabType: "plain" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: false,
+      initialCommands,
+      paneId: "pane-1",
+    });
+
+    const view = render(<PersistentTerminal {...props(["echo ready"])} />);
+    act(() => terminalOnData?.(new TextEncoder().encode("workspace $ ")));
+    await waitFor(() => expect(bootstrapWrites()).toHaveLength(1));
+
+    // Equal contents, brand new array — exactly what `pane-layout-restore`
+    // produces on every refresh.
+    view.rerender(<PersistentTerminal {...props(["echo ready"])} />);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    expect(bootstrapWrites()).toEqual(["echo ready\n"]);
+
+    await act(async () => {
+      resolveFirst({ bootstrapped: true, delivered: true, duplicate: false });
+    });
+    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"));
+    expect(bootstrapWrites()).toHaveLength(1);
+  });
+
+  it("treats a duplicate backend bootstrap as delivered", async () => {
+    // The backend answers a repeat request with `delivered: false` because it
+    // wrote nothing — but `bootstrapped: true` because the launch is already
+    // recorded. Reading `delivered` here would retry a command that ran.
+    invokeMock.mockImplementation(async (command: string) =>
+      command === "bootstrap_terminal_session"
+        ? { bootstrapped: true, delivered: false, duplicate: true }
+        : undefined
+    );
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />
+    );
+    act(() => {
+      terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
+    });
+
+    await waitFor(
+      () => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"),
+      { timeout: 2_000 },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(bootstrapWrites()).toHaveLength(1);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("stops retrying once a bootstrap attempt succeeds", async () => {
+    let attempts = 0;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== "bootstrap_terminal_session") return undefined;
+      attempts += 1;
+      return attempts === 1
+        ? { bootstrapped: false, delivered: false, duplicate: false }
+        : { bootstrapped: true, delivered: true, duplicate: false };
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />
+    );
+    act(() => {
+      terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
+    });
+
+    await waitFor(
+      () => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"),
+      { timeout: 2_000 },
+    );
+    // The bound is three attempts; without a stop the chain would reach it.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(attempts).toBe(2);
+    expect(bootstrapWrites()).toHaveLength(2);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("stays quiet when a mid-flight disconnect rejects the bootstrap publish", async () => {
+    /*
+     * `markBootstrapped` returns false when the terminal disconnected or moved
+     * to another session while the request was in flight. The launch itself
+     * landed, so there is nothing to warn about — and the reconnect rehydrates
+     * `bootstrapped` from the backend.
+     */
+    markBootstrappedMock.mockImplementation(() => false);
+    invokeMock.mockImplementation(async (command: string) =>
+      command === "bootstrap_terminal_session"
+        ? { bootstrapped: true, delivered: true, duplicate: false }
+        : undefined
+    );
+
+    const props = {
+      terminalData: createTerminalData(),
+      tabId: "tab-1",
+      tabType: "claude" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: false,
+      paneId: "pane-1",
+    };
+    const view = render(<PersistentTerminal {...props} />);
+    act(() => {
+      terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
+    });
+
+    await waitFor(
+      () => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"),
+      { timeout: 2_000 },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(bootstrapWrites()).toHaveLength(1);
+
+    // The reconnect reads `bootstrapped` back from the backend session record,
+    // so the tab settles without ever launching again.
+    useTerminalBootstrapped = true;
+    view.rerender(<PersistentTerminal {...props} />);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(bootstrapWrites()).toHaveLength(1);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("clears a stale launch warning when the terminal moves to a new session", async () => {
+    invokeMock.mockImplementation(async (command: string) =>
+      command === "bootstrap_terminal_session"
+        ? { bootstrapped: false, delivered: false, duplicate: false }
+        : undefined
+    );
+
+    const props = {
+      terminalData: createTerminalData(),
+      tabId: "tab-1",
+      tabType: "claude" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: false,
+      paneId: "pane-1",
+    };
+    const view = render(<PersistentTerminal {...props} />);
+    act(() => {
+      terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
+    });
+
+    const warning = await screen.findByRole("status", {}, { timeout: 2_000 });
+    expect(warning.textContent).toContain("launch command could not start");
+
+    // The warning names a session that no longer exists; leaving it up would
+    // report a failure against a terminal that has not tried yet.
+    useTerminalSessionId = "session-2";
+    view.rerender(<PersistentTerminal {...props} />);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("launches Codex terminal mode without an initial prompt", async () => {
     render(
       <PersistentTerminal

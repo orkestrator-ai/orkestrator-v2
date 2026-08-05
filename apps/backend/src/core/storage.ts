@@ -130,6 +130,27 @@ function assertPaneLayoutRootWithinBounds(root: unknown): void {
   }
 }
 
+/**
+ * Refuses a renderer-supplied layout that belongs to a dead container.
+ *
+ * A local environment has no container, so its layouts always carry `null`;
+ * everything else must name the container the environment is running now.
+ */
+function assertPaneLayoutGeneration(
+  environment: Environment,
+  containerId: string | null,
+  source: "write" | "intent",
+): void {
+  const currentContainerId = environment.environmentType === "local"
+    ? null
+    : environment.containerId;
+  if (containerId !== currentContainerId) {
+    throw new Error(
+      `Pane layout ${source} targets stale environment generation: expected ${currentContainerId ?? "local"}, received ${containerId ?? "local"}`,
+    );
+  }
+}
+
 export type KanbanTask = {
   id: string;
   projectId: string;
@@ -3499,9 +3520,16 @@ export class StorageService {
     assertPaneLayoutRootWithinBounds(layout.root);
 
     return this.enqueuePaneLayoutMutation(async () => {
-      if (!await this.getEnvironment(environmentId)) {
+      const environment = await this.getEnvironment(environmentId);
+      if (!environment) {
         throw new Error(`Environment not found: ${environmentId}`);
       }
+      // The CAS token alone does not make this write current: a renderer holding
+      // a layout from a previous container generation can still read the latest
+      // revision and overwrite the live tree with dead tabs. Without this guard
+      // the invariant applyPaneLayoutIntent enforces is bypassable by pointing
+      // the same renderer at save_pane_layout instead.
+      assertPaneLayoutGeneration(environment, layout.containerId, "write");
 
       const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
         this.paneLayoutsFile(),
@@ -3552,14 +3580,11 @@ export class StorageService {
       if (!environment) {
         throw new Error(`Environment not found: ${environmentId}`);
       }
-      const currentContainerId = environment.environmentType === "local"
-        ? null
-        : environment.containerId;
-      if (desired.containerId !== currentContainerId) {
-        throw new Error(
-          `Pane layout intent targets stale environment generation: expected ${currentContainerId ?? "local"}, received ${desired.containerId ?? "local"}`,
-        );
-      }
+      // Both sides of the three-way merge come from the untrusted renderer. A
+      // current `desired` with a dead `base` still merges against `previous`,
+      // which resurrects the tabs that ancestor carried.
+      assertPaneLayoutGeneration(environment, desired.containerId, "intent");
+      assertPaneLayoutGeneration(environment, base.containerId, "intent");
       const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
         this.paneLayoutsFile(),
         () => ({}),

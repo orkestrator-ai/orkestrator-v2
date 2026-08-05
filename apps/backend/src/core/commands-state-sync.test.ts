@@ -374,7 +374,9 @@ exit 0
       await withCommands(async (invoke) => {
         const saved = await invoke("write_initial_prompt_attachments", {
           environmentId: "e1",
-          attachments: [{ id: "one", name: "container.png", base64Data: "QQ==" }],
+          // Whitespace is stripped before the payload reaches `base64 -d`
+          // rather than relying on the decoder to tolerate it.
+          attachments: [{ id: "one", name: "container.png", base64Data: "Q\n Q=\t=" }],
         }) as Array<{ name: string; path: string }>;
         expect(saved).toEqual([{
           name: "container.png",
@@ -383,6 +385,8 @@ exit 0
           ),
         }]);
         await expect(fs.readFile(payloadLog, "utf8")).resolves.toBe("QQ==");
+        // Old batches are pruned inside the container before a new one lands.
+        await expect(fs.readFile(dockerLog, "utf8")).resolves.toContain("tail -n +10");
 
         await expect(invoke("write_initial_prompt_attachments", {
           environmentId: "e1",
@@ -437,6 +441,226 @@ exit 0
         attachments: [{ id: "one", name: "bad.png", base64Data: "QQ==" }],
       })).rejects.toThrow("Container environment is not ready");
     }, { environment: { worktreePath: "/tmp/attachment-validation-worktree" } });
+  });
+
+  test("accepts twenty attachments and rejects the twenty-first", async () => {
+    const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-count-"));
+    try {
+      await withCommands(async (invoke) => {
+        const batch = (count: number) => Array.from({ length: count }, (_, index) => ({
+          id: `id-${index}`,
+          name: `image-${index}.png`,
+          base64Data: "QQ==",
+        }));
+        await expect(invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: batch(20),
+        })).resolves.toHaveLength(20);
+        await expect(invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: batch(21),
+        })).rejects.toThrow("between 1 and 20");
+      }, { environment: { worktreePath } });
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an aggregate payload above the total limit and an empty one", async () => {
+    const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-size-"));
+    try {
+      await withCommands(async (invoke) => {
+        // Each item is inside the 8MB per-payload cap; together they are not.
+        const oversized = Buffer.alloc(7 * 1024 * 1024).toString("base64");
+        await expect(invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: Array.from({ length: 6 }, (_, index) => ({
+            id: `id-${index}`,
+            name: `image-${index}.png`,
+            base64Data: oversized,
+          })),
+        })).rejects.toThrow("total limit");
+
+        // 0 % 4 === 0, so an empty payload used to pass every structural check
+        // and produce a 0-byte file still advertised to the agent.
+        await expect(invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: [{ id: "one", name: "empty.png", base64Data: "" }],
+        })).rejects.toThrow("must not be empty");
+        await expect(invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: [{ id: "one", name: "odd.png", base64Data: "QQQ" }],
+        })).rejects.toThrow("not valid base64");
+        await expect(fs.readdir(path.join(worktreePath, ".orkestrator"))).rejects.toThrow("ENOENT");
+      }, { environment: { worktreePath } });
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("allocates a safe unique name for every hostile or colliding attachment name", async () => {
+    const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-names-"));
+    try {
+      await withCommands(async (invoke) => {
+        const saved = await invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: [
+            { id: "a", name: ".", base64Data: "QQ==" },
+            { id: "b", name: "..", base64Data: "Qg==" },
+            { id: "c", name: "   ", base64Data: "Qw==" },
+            { id: "d", name: "shot.png", base64Data: "RA==" },
+            { id: "e", name: "shot.png", base64Data: "RQ==" },
+            { id: "f", name: "shot.png", base64Data: "Rg==" },
+            { id: "g", name: "../../etc/passwd", base64Data: "Rw==" },
+          ],
+        }) as Array<{ name: string; path: string }>;
+
+        expect(saved.map(({ name }) => name)).toEqual([
+          "clipboard.png",
+          "clipboard-2.png",
+          "clipboard-3.png",
+          "shot.png",
+          "shot-2.png",
+          "shot-3.png",
+          // Dots survive sanitization; separators do not, so no traversal
+          // segment can reach the filesystem.
+          "..-..-etc-passwd",
+        ]);
+        const batchDirectory = path.dirname(saved[0]!.path);
+        expect(new Set(saved.map(({ path: saved }) => path.dirname(saved)))).toEqual(
+          new Set([batchDirectory]),
+        );
+        // A successful batch owns exactly its own directory: nothing is written
+        // beside it, and nothing is left in the shared parent.
+        expect((await fs.readdir(batchDirectory)).sort()).toEqual(
+          saved.map(({ name }) => name).sort(),
+        );
+        expect(await fs.readdir(path.dirname(batchDirectory))).toEqual([
+          path.basename(batchDirectory),
+        ]);
+      }, { environment: { worktreePath } });
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("prunes local batch directories beyond the retention bound", async () => {
+    const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-prune-"));
+    const batchesDirectory = path.join(worktreePath, ".orkestrator/initial-prompt");
+    try {
+      await withCommands(async (invoke) => {
+        // Sequential, so each directory gets a distinct, increasing mtime.
+        const batches: string[] = [];
+        for (let index = 0; index < 13; index += 1) {
+          const saved = await invoke("write_initial_prompt_attachments", {
+            environmentId: "e1",
+            attachments: [{ id: `id-${index}`, name: "shot.png", base64Data: "QQ==" }],
+          }) as Array<{ path: string }>;
+          batches.push(path.basename(path.dirname(saved[0]!.path)));
+        }
+
+        const remaining = await fs.readdir(batchesDirectory);
+        expect(remaining).toHaveLength(10);
+        expect(new Set(remaining)).toEqual(new Set(batches.slice(-10)));
+      }, { environment: { worktreePath } });
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("removes the whole local batch and rethrows the original mid-batch failure", async () => {
+    const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-partial-"));
+    const batchesDirectory = path.join(worktreePath, ".orkestrator/initial-prompt");
+    const realOpen = fs.open.bind(fs);
+    const openSpy = spyOn(fs, "open").mockImplementation((async (target: string, ...rest: unknown[]) => {
+      if (typeof target === "string" && target.endsWith("second.png")) {
+        throw new Error("simulated attachment write failure");
+      }
+      return realOpen(target as never, ...rest as never[]);
+    }) as typeof fs.open);
+    try {
+      await withCommands(async (invoke) => {
+        const batch = {
+          environmentId: "e1",
+          attachments: [
+            { id: "one", name: "first.png", base64Data: "QQ==" },
+            { id: "two", name: "second.png", base64Data: "Qg==" },
+          ],
+        };
+        await expect(invoke("write_initial_prompt_attachments", batch))
+          .rejects.toThrow("simulated attachment write failure");
+        // The first item was already on disk; the batch directory goes with it.
+        expect(await fs.readdir(batchesDirectory)).toEqual([]);
+
+        // A cleanup that itself fails must not replace the failure the caller
+        // is being told about.
+        const realRm = fs.rm.bind(fs);
+        const rmSpy = spyOn(fs, "rm").mockImplementation((async (target: string, ...rest: unknown[]) => {
+          if (typeof target === "string" && target.startsWith(batchesDirectory)) {
+            throw new Error("cleanup exploded");
+          }
+          return realRm(target as never, ...rest as never[]);
+        }) as typeof fs.rm);
+        try {
+          await expect(invoke("write_initial_prompt_attachments", batch))
+            .rejects.toThrow("simulated attachment write failure");
+        } finally {
+          rmSpy.mockRestore();
+        }
+      }, { environment: { worktreePath } });
+    } finally {
+      openSpy.mockRestore();
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("surfaces container mkdir and spawn failures without writing anything", async () => {
+    const fakeRoot = await fs.mkdtemp(path.join(tmpdir(), "ork-attachment-docker-fail-"));
+    const binDir = path.join(fakeRoot, "bin");
+    await fs.mkdir(binDir);
+    await fs.writeFile(path.join(binDir, "docker"), `#!/bin/sh
+case "$*" in
+  *"mkdir -p"*) echo "mkdir refused" >&2; exit 3 ;;
+esac
+exit 0
+`);
+    await fs.chmod(path.join(binDir, "docker"), 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+    try {
+      await withCommands(async (invoke) => {
+        await expect(invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: [{ id: "one", name: "container.png", base64Data: "QQ==" }],
+        })).rejects.toThrow("mkdir refused");
+      }, {
+        environment: {
+          environmentType: "containerized",
+          containerId: "container-1",
+          worktreePath: null,
+        },
+      });
+
+      // A docker binary that cannot be spawned at all reaches the child "error"
+      // listener rather than the exit listener.
+      await fs.rm(path.join(binDir, "docker"));
+      await withCommands(async (invoke) => {
+        await expect(invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: [{ id: "one", name: "container.png", base64Data: "QQ==" }],
+        })).rejects.toThrow();
+      }, {
+        environment: {
+          environmentType: "containerized",
+          containerId: "container-1",
+          worktreePath: null,
+        },
+      });
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      await fs.rm(fakeRoot, { recursive: true, force: true });
+    }
   });
 });
 

@@ -555,6 +555,24 @@ describe("teardownEventSubscription", () => {
     expect(() => teardownEventSubscription(subscription)).not.toThrow();
     expect(subscription.abortController.signal.aborted).toBe(true);
   });
+
+  test("clears a pending reconnect timer", async () => {
+    /*
+     * The desynced probe re-arms itself on every failure, so an abandoned
+     * subscription whose timer survives teardown keeps reaching for a bridge
+     * nothing is listening to — and holds its whole closure alive doing it.
+     */
+    let fired = false;
+    const subscription = subscriptionWithStream(null);
+    subscription.reconnectTimer = setTimeout(() => {
+      fired = true;
+    }, 5);
+
+    teardownEventSubscription(subscription);
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(fired).toBe(false);
+  });
 });
 
 describe("createEventSubscriptionSlice", () => {
@@ -668,6 +686,67 @@ describe("createEventSubscriptionSlice", () => {
     store.markEventSubscriptionResynced("env-1", replacement.abortController);
     expect(useEventStore.getState().eventSubscriptions.get("env-1")?.desynced)
       .toBe(false);
+  });
+
+  test("a resync clears the reconnect budget as well as the desync flag", () => {
+    /*
+     * A quiet-but-healthy session never delivers the inbound frame that
+     * `markEventSubscriptionHealthy` needs, so leaving the count at the ceiling
+     * meant its next transient drop skipped the entire backoff ladder and went
+     * straight to the 60s desynced state.
+     */
+    const store = useEventStore.getState();
+    const first = store.getOrCreateEventSubscription("env-1");
+    store.setEventReconnectState("env-1", {
+      reconnectAttempts: 10,
+      desynced: true,
+    }, first.abortController);
+    store.setEventStream("env-1", null, first.abortController);
+    const replacement = store.getOrCreateEventSubscription("env-1");
+
+    store.markEventSubscriptionResynced("env-1", replacement.abortController);
+
+    expect(useEventStore.getState().eventSubscriptions.get("env-1"))
+      .toMatchObject({ desynced: false, reconnectAttempts: 0 });
+  });
+
+  test("closeEventSubscription cancels a pending desync probe", async () => {
+    // Deleting an environment closes its subscription; a probe timer that
+    // outlived that would resubscribe to a bridge that no longer exists.
+    let fired = false;
+    const store = useEventStore.getState();
+    const subscription = store.getOrCreateEventSubscription("env-1");
+    store.setEventReconnectState("env-1", {
+      reconnectAttempts: 10,
+      desynced: true,
+      reconnectTimer: setTimeout(() => {
+        fired = true;
+      }, 5),
+    }, subscription.abortController);
+
+    store.closeEventSubscription("env-1");
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(fired).toBe(false);
+    expect(useEventStore.getState().eventSubscriptions.has("env-1")).toBe(false);
+  });
+
+  test("a resync from a superseded owner is ignored", () => {
+    // The budget belongs to whichever subscription currently owns the
+    // environment; a late resync from a dropped loop must not clear it.
+    const store = useEventStore.getState();
+    const dropped = store.getOrCreateEventSubscription("env-1");
+    store.setEventReconnectState("env-1", {
+      reconnectAttempts: 10,
+      desynced: true,
+    }, dropped.abortController);
+    store.setEventStream("env-1", null, dropped.abortController);
+    store.getOrCreateEventSubscription("env-1");
+
+    store.markEventSubscriptionResynced("env-1", dropped.abortController);
+
+    expect(useEventStore.getState().eventSubscriptions.get("env-1"))
+      .toMatchObject({ desynced: true, reconnectAttempts: 10 });
   });
 });
 

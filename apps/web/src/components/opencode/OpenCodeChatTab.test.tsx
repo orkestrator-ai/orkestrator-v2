@@ -7175,26 +7175,27 @@ describe("OpenCodeChatTab", () => {
     });
 
     test("continues low-frequency recovery after the SSE retry budget is exhausted", async () => {
-      let reconnectTimers = 0;
+      /*
+       * The whole ladder is driven here rather than seeded: the budget is what
+       * keeps a flapping bridge from being hammered, so a test that starts at
+       * the ceiling proves nothing about the ten attempts that precede it.
+       */
+      const reconnectTimers: Array<{ delay: number; run: () => void }> = [];
+      // Only the backoff ladder's own delays — the tab schedules other long
+      // timers (health polls) that would otherwise land in this capture.
+      const reconnectDelays = new Set([3_000, 6_000, 12_000, 24_000, 48_000, 60_000]);
       const originalGlobalTimeout = globalThis.setTimeout;
-      useOpenCodeStore.setState({
-        eventSubscriptions: new Map([[ENVIRONMENT_ID, {
-          abortController: new AbortController(),
-          stream: null,
-          isActive: false,
-          reconnectAttempts: 10,
-          reconnectTimer: null,
-          desynced: false,
-        }]]),
-      });
       globalThis.setTimeout = ((
         handler: TimerHandler,
         timeout?: number,
         ...args: unknown[]
       ) => {
-        if ((timeout ?? 0) >= 3_000) {
-          reconnectTimers += 1;
-          return (10_000 + reconnectTimers) as unknown as ReturnType<typeof setTimeout>;
+        if (typeof handler === "function" && reconnectDelays.has(timeout ?? 0)) {
+          reconnectTimers.push({
+            delay: timeout ?? 0,
+            run: () => (handler as (...timerArgs: unknown[]) => void)(...args),
+          });
+          return reconnectTimers.length as unknown as ReturnType<typeof setTimeout>;
         }
         return originalGlobalTimeout(handler, timeout, ...args);
       }) as typeof globalThis.setTimeout;
@@ -7213,6 +7214,17 @@ describe("OpenCodeChatTab", () => {
 
       try {
         render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => expect(reconnectTimers).toHaveLength(1));
+
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          await act(async () => {
+            reconnectTimers[attempt]!.run();
+            await Promise.resolve();
+          });
+          await waitFor(() =>
+            expect(reconnectTimers).toHaveLength(attempt + 2),
+          );
+        }
 
         await waitFor(() => {
           expect(consoleWarn).toHaveBeenCalledWith(
@@ -7220,8 +7232,34 @@ describe("OpenCodeChatTab", () => {
             ENVIRONMENT_ID,
           );
         }, { timeout: 15_000 });
-        expect(mockSubscribeToEvents.mock.calls.length).toBeGreaterThanOrEqual(1);
-        expect(reconnectTimers).toBeGreaterThanOrEqual(1);
+        expect(reconnectTimers.map((timer) => timer.delay)).toEqual([
+          3_000,
+          6_000,
+          12_000,
+          24_000,
+          48_000,
+          60_000,
+          60_000,
+          60_000,
+          60_000,
+          60_000,
+          60_000,
+        ]);
+        expect(mockSubscribeToEvents.mock.calls.length).toBe(11);
+        expect(useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced)
+          .toBe(true);
+
+        // A probe that still cannot reach the bridge stays desynced and queues
+        // the next one at the cap rather than stranding the tab.
+        mockSubscribeToEvents.mockRejectedValueOnce(
+          new Error("bridge still unreachable"),
+        );
+        await act(async () => {
+          reconnectTimers[10]!.run();
+          await Promise.resolve();
+        });
+        await waitFor(() => expect(reconnectTimers).toHaveLength(12));
+        expect(reconnectTimers[11]!.delay).toBe(60_000);
         expect(useOpenCodeStore.getState().eventSubscriptions.get(ENVIRONMENT_ID)?.desynced)
           .toBe(true);
       } finally {

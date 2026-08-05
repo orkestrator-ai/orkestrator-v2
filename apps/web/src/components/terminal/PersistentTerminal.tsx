@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useMemo, useRef, useCallback, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { writeText } from "@/lib/native/clipboard";
 import { useTerminal } from "@/hooks/useTerminal";
@@ -1334,55 +1334,81 @@ export function PersistentTerminal({
     }
   }, [terminalIsOpened, isConnected, isConnecting, connect, tabId]);
 
-  // Launch command based on tab type once environment is ready.
-  // Setup tabs are the exception: their initial command is what produces the
-  // container setup readiness marker, so waiting for readiness would deadlock.
-  useEffect(() => {
-    const shouldLaunchSetupCommand =
-      isSetupTab &&
-      tabType === "plain" &&
-      !!initialCommands?.length;
-    const canLaunch = isConnected && (isEnvironmentReady || shouldLaunchSetupCommand);
-
-    if (!canLaunch || bootstrapped || !sessionId) return;
-    if (bootstrapRequestedForSessionRef.current === sessionId) return;
-
-    const targetSessionId = sessionId;
-    let disposed = false;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-
+  /**
+   * The launch payload, keyed on its contents rather than its props' identity.
+   *
+   * `initialCommands` is an array prop and every authoritative pane-layout
+   * refresh hands down a fresh clone of it, so an effect that depends on the
+   * array re-runs for a tab whose launch command never changed. That re-arms
+   * the bootstrap while a request is still in flight; nothing double-launched
+   * only because the backend deduplicates, which is not a guard the renderer
+   * should be leaning on.
+   */
+  const initialCommandsKey = initialCommands?.join(" ") ?? null;
+  const launchData = useMemo(() => {
     const agentCommand = buildAgentLaunchCommand({
       tabType,
       initialPrompt,
       model: initialLaunchModel,
       reasoningEffort: initialLaunchReasoningEffort,
     });
-    let launchData: string | null = null;
-    if (agentCommand) {
-      launchData = `${agentCommand}\n`;
-      console.debug("[PersistentTerminal] Launching command for tab:", tabId);
-    } else if (tabType === "plain" && initialCommands && initialCommands.length > 0) {
-      console.debug("[PersistentTerminal] Executing initial commands for tab:", tabId, "commands:", initialCommands);
-      const combinedCommand = initialCommands.join(" && ");
-      if (isSetupTab) {
-        // Always fire an OSC on completion so the UI unblocks even on
-        // failure. Success vs failure is signalled via the OSC payload,
-        // and persistence is gated on the success variant only.
-        launchData = `(${combinedCommand}) && ${SETUP_DONE_PRINTF_CMD} || ${SETUP_FAILED_PRINTF_CMD}\n`;
-      } else {
-        launchData = `${combinedCommand}\n`;
-      }
+    if (agentCommand) return `${agentCommand}\n`;
+    if (tabType !== "plain" || !initialCommands || initialCommands.length === 0) {
+      return null;
     }
-    if (!launchData) return;
+    const combinedCommand = initialCommands.join(" && ");
+    if (isSetupTab) {
+      // Always fire an OSC on completion so the UI unblocks even on failure.
+      // Success vs failure is signalled via the OSC payload, and persistence is
+      // gated on the success variant only.
+      return `(${combinedCommand}) && ${SETUP_DONE_PRINTF_CMD} || ${SETUP_FAILED_PRINTF_CMD}\n`;
+    }
+    return `${combinedCommand}\n`;
+    // `initialCommands` is read through `initialCommandsKey`, which encodes
+    // exactly its contents; listing the array itself would reinstate the
+    // identity churn this memo exists to absorb.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    tabType,
+    initialPrompt,
+    initialLaunchModel,
+    initialLaunchReasoningEffort,
+    initialCommandsKey,
+    isSetupTab,
+  ]);
+
+  // Launch command based on tab type once environment is ready.
+  // Setup tabs are the exception: their initial command is what produces the
+  // container setup readiness marker, so waiting for readiness would deadlock.
+  useEffect(() => {
+    // A plain setup tab's only launch source is its initial commands, so a
+    // non-null payload is the same condition as "it has commands to run".
+    const shouldLaunchSetupCommand =
+      isSetupTab && tabType === "plain" && launchData !== null;
+    const canLaunch = isConnected && (isEnvironmentReady || shouldLaunchSetupCommand);
+
+    if (!canLaunch || bootstrapped || !sessionId || !launchData) return;
+    if (bootstrapRequestedForSessionRef.current === sessionId) return;
+
+    const targetSessionId = sessionId;
+    let disposed = false;
+    let dispatched = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    console.debug("[PersistentTerminal] Launching command for tab:", tabId);
 
     setBootstrapWarning(null);
     const scheduleAttempt = (attempt: number): void => {
+      // Latch at schedule time, not inside the timer. Anything else leaves a
+      // window in which a re-render re-enters this effect and issues a second
+      // request for the same session.
+      bootstrapRequestedForSessionRef.current = targetSessionId;
       retryTimer = setTimeout(() => {
         retryTimer = null;
         if (disposed) return;
-        bootstrapRequestedForSessionRef.current = targetSessionId;
+        dispatched = true;
 
-        void bootstrapTerminalSession(targetSessionId, launchData!).then((result) => {
+        void bootstrapTerminalSession(targetSessionId, launchData).then((result) => {
           if (disposed || bootstrapRequestedForSessionRef.current !== targetSessionId) return;
           if (result.bootstrapped) {
             if (!markBootstrapped(targetSessionId)) return;
@@ -1418,11 +1444,18 @@ export function PersistentTerminal({
     return () => {
       disposed = true;
       if (retryTimer !== null) clearTimeout(retryTimer);
-      if (bootstrapRequestedForSessionRef.current === targetSessionId) {
+      // Release the latch only when the attempt genuinely aborted before the
+      // request went out. Once it has been dispatched the backend owns the
+      // launch, so clearing here would let the next render send it again while
+      // the first is still in flight.
+      if (
+        !dispatched
+        && bootstrapRequestedForSessionRef.current === targetSessionId
+      ) {
         bootstrapRequestedForSessionRef.current = null;
       }
     };
-  }, [acknowledgeInitialLaunchOptions, bootstrapped, isEnvironmentReady, isConnected, sessionId, tabType, tabId, initialPrompt, initialCommands, initialLaunchModel, initialLaunchReasoningEffort, isSetupTab, markBootstrapped]);
+  }, [acknowledgeInitialLaunchOptions, bootstrapped, isEnvironmentReady, isConnected, sessionId, tabType, tabId, launchData, isSetupTab, markBootstrapped]);
 
   useEffect(() => {
     if (bootstrapped) acknowledgeInitialLaunchOptions();

@@ -80,6 +80,77 @@ describe("InitializationLogs", () => {
     await waitFor(() => expect(screen.getByText("recovered")).toBeTruthy());
   });
 
+  test("polls once a second by default", async () => {
+    // The interval is only overridable for tests, so nothing else pins the
+    // production cadence.
+    const originalSetInterval = globalThis.setInterval;
+    const intervals: Array<number | undefined> = [];
+    globalThis.setInterval = ((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      intervals.push(timeout);
+      return originalSetInterval(handler, timeout, ...args);
+    }) as typeof globalThis.setInterval;
+
+    try {
+      render(<InitializationLogs containerId="container-1" />);
+      await waitFor(() => expect(intervals.length).toBeGreaterThan(0));
+      expect(intervals).toContain(1_000);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+    }
+  });
+
+  test("flags the tail as stale after repeated polling failures", async () => {
+    /*
+     * A dropped poll used to be swallowed forever: the last snapshot stayed on
+     * screen under the "Initializing Container" spinner with nothing to say it
+     * had stopped tracking the container.
+     */
+    const consoleWarn = spyOn(console, "warn").mockImplementation(() => undefined);
+    getContainerLogsMock
+      .mockResolvedValueOnce("still useful")
+      .mockRejectedValue(new Error("daemon unavailable"));
+    render(<InitializationLogs containerId="container-1" pollIntervalMs={5} />);
+    await waitFor(() => expect(screen.getByText("still useful")).toBeTruthy());
+
+    const stale = await screen.findByRole("status");
+    expect(stale.textContent).toContain("stopped refreshing");
+    // The last good tail is still the best view of the container.
+    expect(screen.getByText("still useful")).toBeTruthy();
+    expect(screen.queryByText(/Failed to load container logs/)).toBeNull();
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "[InitializationLogs] Container logs stopped refreshing:",
+      "daemon unavailable",
+    );
+
+    // A single warning, not one per failed poll.
+    const warnCalls = consoleWarn.mock.calls.length;
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 40)));
+    expect(consoleWarn.mock.calls.length).toBe(warnCalls);
+
+    getContainerLogsMock.mockResolvedValue("recovered");
+    await waitFor(() => expect(screen.getByText("recovered")).toBeTruthy());
+    expect(screen.queryByRole("status")).toBeNull();
+    consoleWarn.mockRestore();
+  });
+
+  test("tolerates isolated polling failures without flagging staleness", async () => {
+    const consoleWarn = spyOn(console, "warn").mockImplementation(() => undefined);
+    getContainerLogsMock
+      .mockResolvedValueOnce("first")
+      .mockRejectedValueOnce(new Error("blip"))
+      .mockResolvedValue("second");
+    render(<InitializationLogs containerId="container-1" pollIntervalMs={5} />);
+
+    await waitFor(() => expect(screen.getByText("second")).toBeTruthy());
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(consoleWarn).not.toHaveBeenCalled();
+    consoleWarn.mockRestore();
+  });
+
   test("suppresses overlapping polls and disposes the interval", async () => {
     const pending = deferred<string>();
     getContainerLogsMock.mockImplementationOnce(() => pending.promise);

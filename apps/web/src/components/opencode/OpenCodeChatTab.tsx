@@ -1803,21 +1803,54 @@ export function OpenCodeChatTab({
         setEventStream(environmentId, eventStream, abortController);
 
         if (requiresFullRehydrate) {
+          /*
+           * One unreachable session must not abandon the rest of the rehydrate.
+           * A stale projection whose session the server has forgotten answers
+           * 404 forever, and letting that reject here skipped every remaining
+           * session *and* the event loop below — so the tab consumed no live
+           * events at all and the desynced probe repeated the same failure
+           * every sixty seconds.
+           */
           const prefix = sessionKeyPrefixFor(environmentId);
+          const unreachable: string[] = [];
           for (const [key, projected] of useOpenCodeStore.getState().sessions) {
             if (!key.startsWith(prefix)) continue;
-            const messages = await getSessionMessages(
-              sdkClient,
-              projected.sessionId,
-              { throwOnError: true },
-            );
-            if (abortController.signal.aborted) return;
-            setMessages(key, messages);
-            await syncPendingRequests(sdkClient, projected.sessionId, {
-              throwOnError: true,
-              targetSessionKey: key,
-            });
+            try {
+              const messages = await getSessionMessages(
+                sdkClient,
+                projected.sessionId,
+                { throwOnError: true },
+              );
+              if (abortController.signal.aborted) return;
+              setMessages(key, messages);
+              await syncPendingRequests(sdkClient, projected.sessionId, {
+                throwOnError: true,
+                targetSessionKey: key,
+              });
+            } catch (error) {
+              if (abortController.signal.aborted) return;
+              unreachable.push(projected.sessionId);
+              console.warn(
+                "[OpenCodeChatTab] Failed to rehydrate session during resync:",
+                projected.sessionId,
+                error,
+              );
+            }
           }
+          if (unreachable.length > 0) {
+            console.warn(
+              "[OpenCodeChatTab] Resynced with unreachable sessions:",
+              unreachable.length,
+            );
+          }
+          /*
+           * Resynced regardless of the failures above. The stream is up, so
+           * every session — including the ones that just failed — is back on
+           * the ordinary incremental path, where a live update refetches the
+           * transcript it belongs to. Holding the flag would only re-run this
+           * identical failure on a sixty-second loop while the banner stayed
+           * up.
+           */
           markEventSubscriptionResynced(environmentId, abortController);
         }
 
@@ -2532,27 +2565,42 @@ export function OpenCodeChatTab({
           const attempt = useOpenCodeStore.getState().eventSubscriptions
             .get(environmentId)?.reconnectAttempts ?? 0;
           if (attempt >= MAX_SSE_RECONNECT_ATTEMPTS) {
-            const reconnectTimer = setTimeout(() => {
-              const currentState = useOpenCodeStore.getState();
-              const currentClient = currentState.clients.get(environmentId);
-              if (
-                currentClient
-                && shouldReconnectEventSubscription(
-                  currentState.eventSubscriptions.get(environmentId),
-                  abortController,
-                )
-              ) {
-                console.debug("[OpenCodeChatTab] Probing desynced SSE for", environmentId);
-                startSharedEventSubscriptionRef.current?.(currentClient);
-              }
-            }, SSE_RECONNECT_MAX_DELAY);
+            /*
+             * The probe re-arms itself on every failure, so unlike the bounded
+             * ladder it has no natural end. A deleted environment has no bridge
+             * to reach and never will, and the retained closure keeps the whole
+             * tab alive — so stop here rather than probing a dead port every
+             * minute for the life of the process. Unmount is deliberately not a
+             * stop condition: the tab may simply not be visible.
+             */
+            const environmentExists = useEnvironmentStore
+              .getState()
+              .getEnvironmentById(environmentId) !== undefined;
+            const reconnectTimer = environmentExists
+              ? setTimeout(() => {
+                  const currentState = useOpenCodeStore.getState();
+                  const currentClient = currentState.clients.get(environmentId);
+                  if (
+                    currentClient
+                    && shouldReconnectEventSubscription(
+                      currentState.eventSubscriptions.get(environmentId),
+                      abortController,
+                    )
+                  ) {
+                    console.debug("[OpenCodeChatTab] Probing desynced SSE for", environmentId);
+                    startSharedEventSubscriptionRef.current?.(currentClient);
+                  }
+                }, SSE_RECONNECT_MAX_DELAY)
+              : null;
             setEventReconnectState(
               environmentId,
               { desynced: true, reconnectTimer },
               abortController,
             );
             console.warn(
-              "[OpenCodeChatTab] SSE reconnect limit reached; continuing desynced probes for",
+              environmentExists
+                ? "[OpenCodeChatTab] SSE reconnect limit reached; continuing desynced probes for"
+                : "[OpenCodeChatTab] SSE reconnect limit reached; environment is gone, stopping probes for",
               environmentId,
             );
           } else {

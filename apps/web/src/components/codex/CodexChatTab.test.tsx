@@ -7552,6 +7552,46 @@ describe("CodexChatTab", () => {
     });
   });
 
+  test("re-asserts the safe-retry error on a later reconcile of an already-retryable dispatch", async () => {
+    /*
+     * `settleUnconfirmedDispatch` returns "retryable" from its early exit
+     * without touching the session, so the reconcile that had just cleared the
+     * error on its way to the transcript refresh left the composer looking
+     * clean while a prompt was still unaccounted for. The re-assert lives in
+     * `resolveUnconfirmedDispatch` for exactly that gap.
+     */
+    useCodexStore.setState((state) => ({
+      ...state,
+      unconfirmedDispatches: new Map([
+        [SESSION_KEY, {
+          userMessageId: "optimistic-already-withdrawn",
+          fingerprint: "already-retryable",
+          requestId: "already-retryable-request",
+          retryable: true,
+        }],
+      ]),
+    }));
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "found",
+      session: { status: "idle", title: "Idle" },
+    });
+    // The optimistic message is long gone, so nothing here proves delivery.
+    mockGetSessionMessages.mockResolvedValue([]);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    await waitFor(() => {
+      const state = useCodexStore.getState();
+      expect(state.sessions.get(SESSION_KEY)?.error)
+        .toBe("Could not confirm whether Codex received the prompt. You can send it again safely.");
+      // Still retryable: the reconcile must not spend the idempotency key.
+      expect(state.unconfirmedDispatches.get(SESSION_KEY)).toMatchObject({
+        requestId: "already-retryable-request",
+        retryable: true,
+      });
+    });
+  });
+
   test("accepts an ambiguous dispatch when authoritative status says it is running", async () => {
     composeText = "Keep this in-flight prompt locked";
     mockSubscribeToEvents.mockImplementation(

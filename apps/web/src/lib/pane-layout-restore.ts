@@ -1,4 +1,5 @@
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
+import { boundBrowserHistory } from "@/lib/browser-history";
 import {
   isGitFileStatus,
   LEGACY_PANE_LAYOUT_VERSION,
@@ -95,17 +96,12 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
       && value.browserData.history.every((entry) => typeof entry === "string")
       ? value.browserData.history as string[]
       : undefined;
-    const historyOffset = Math.max(0, (rawHistory?.length ?? 0) - 100);
-    const history = rawHistory?.slice(-100);
     const rawHistoryIndex = Number.isSafeInteger(value.browserData.historyIndex)
       ? value.browserData.historyIndex as number
       : undefined;
-    const historyIndex = history && rawHistoryIndex !== undefined
-      ? Math.min(
-          Math.max(rawHistoryIndex - historyOffset, history.length === 0 ? -1 : 0),
-          history.length - 1,
-        )
-      : undefined;
+    // No stored history means there is nothing for a cursor to address, so
+    // `boundBrowserHistory` drops it rather than restoring an unvalidated index.
+    const { history, historyIndex } = boundBrowserHistory(rawHistory, rawHistoryIndex);
     return {
       ...common,
       type,

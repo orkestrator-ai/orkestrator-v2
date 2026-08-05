@@ -21,7 +21,10 @@ const sortByOrder = (sessions: Session[]): Session[] =>
   [...sessions].sort((a, b) => a.order - b.order);
 
 const activeSessionLoadRequests = new Map<string, object>();
-const activeSessionStatusRequests = new Map<string, object>();
+const activeSessionStatusRequests = new Map<string, {
+  token: object;
+  baseline: SessionStatus | undefined;
+}>();
 
 interface SessionState {
   // State
@@ -185,8 +188,19 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 
   updateSessionStatus: async (sessionId, status) => {
     const requestToken = {};
-    activeSessionStatusRequests.set(sessionId, requestToken);
-    const previousStatus = get().sessions.get(sessionId)?.status;
+    // A rollback has to restore the last status the backend confirmed, not the
+    // optimistic value an in-flight request already wrote: when both requests
+    // fail, rolling back to the optimistic one would leave a status the backend
+    // never accepted. The newest request therefore inherits the pending
+    // baseline instead of reading the current optimistic status.
+    const pendingRequest = activeSessionStatusRequests.get(sessionId);
+    const previousStatus = pendingRequest
+      ? pendingRequest.baseline
+      : get().sessions.get(sessionId)?.status;
+    activeSessionStatusRequests.set(sessionId, {
+      token: requestToken,
+      baseline: previousStatus,
+    });
     // Optimistic update
     set((state) => {
       const session = state.sessions.get(sessionId);
@@ -199,7 +213,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     try {
       await apiUpdateSessionStatus(sessionId, status);
     } catch (error) {
-      if (activeSessionStatusRequests.get(sessionId) !== requestToken) return;
+      if (activeSessionStatusRequests.get(sessionId)?.token !== requestToken) return;
       set((state) => {
         const current = state.sessions.get(sessionId);
         if (!current || current.status !== status || previousStatus === undefined) {
@@ -211,7 +225,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       });
       console.error("Failed to update session status:", error);
     } finally {
-      if (activeSessionStatusRequests.get(sessionId) === requestToken) {
+      if (activeSessionStatusRequests.get(sessionId)?.token === requestToken) {
         activeSessionStatusRequests.delete(sessionId);
       }
     }

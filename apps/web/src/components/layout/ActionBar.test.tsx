@@ -1523,6 +1523,13 @@ describe("ActionBar toolbar interactions", () => {
 });
 
 describe("ActionBar workflow tabs", () => {
+  test("does not repeat the selected project name in the environment toolbar", () => {
+    render(<ActionBar />);
+
+    expect(screen.queryByText("repo")).toBeNull();
+    expect(screen.queryByText("Select an environment to get started")).toBeNull();
+  });
+
   test("shows the desktop empty-state guidance without a selected project", () => {
     currentSelectedProjectId = null;
     currentSelectedEnvironmentId = null;

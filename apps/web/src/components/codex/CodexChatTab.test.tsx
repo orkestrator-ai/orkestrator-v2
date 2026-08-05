@@ -2509,41 +2509,12 @@ describe("CodexChatTab", () => {
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(SESSION_ID);
   });
 
-  test("automatically retries a transient bridge startup failure for a new environment", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date().toISOString(),
-    });
-    mockGetCodexServerStatus
-      .mockRejectedValueOnce(new Error("bridge is still starting"))
-      .mockResolvedValueOnce({
-        running: true,
-        hostPort: 9999,
-        authToken: "container-test-token",
-      });
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-    expect(await screen.findByText("Connecting to Codex...")).toBeTruthy();
-    expect(screen.queryByText("Connection Failed")).toBeNull();
-    await waitFor(
-      () => expect(mockCreateSession).toHaveBeenCalledTimes(1),
-      { timeout: 1_500 },
-    );
-    expect(screen.queryByText("Connection Failed")).toBeNull();
-  });
-
   test("surfaces a generic health-wrapper start failure without spending a retry", async () => {
     /*
      * The backend wraps *every* bridge child failure in this wording, permanent
      * ones included, and appends the child's log. Retrying it would delay the
      * real error by the full backoff while the same broken child is restarted.
      */
-    const retryTimers = installAcceleratedConnectionRetryTimers({ hold: true });
     useCodexStore.setState((state) => ({
       ...state,
       clients: new Map(),
@@ -2563,388 +2534,11 @@ describe("CodexChatTab", () => {
       ),
     );
 
-    try {
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
 
-      // The terminal error reaches the user on the first failure, not after the
-      // backoff has been spent.
-      expect(await screen.findByText(/did not become healthy/)).toBeTruthy();
-
-      // Release anything the retry path might have queued, then confirm the
-      // start command was never re-issued.
-      for (const callback of retryTimers.callbacks) callback();
-      await retryTimers.settle();
-      expect(mockStartCodexServer).toHaveBeenCalledTimes(1);
-      expect(mockCreateSession).not.toHaveBeenCalled();
-    } finally {
-      retryTimers.restore();
-    }
-  });
-
-  test("automatically retries when the bridge start command races container startup", async () => {
-    const retryTimers = installAcceleratedConnectionRetryTimers({ hold: true });
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date().toISOString(),
-    });
-    mockGetCodexServerStatus.mockResolvedValue({
-      running: false,
-      hostPort: 9999,
-      authToken: "stale-status-token",
-    });
-    mockStartCodexServer
-      .mockRejectedValueOnce(new Error("Container is not running"))
-      .mockResolvedValueOnce({
-        hostPort: 9999,
-        authToken: "container-start-token",
-      });
-
-    try {
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-      await retryTimers.waitForDelayCount(1);
-
-      expect(retryTimers.delays).toEqual([500]);
-      expect(screen.queryByText("Connection Failed")).toBeNull();
-
-      await act(async () => {
-        retryTimers.callbacks[0]?.();
-        await Promise.resolve();
-      });
-      await retryTimers.settle();
-
-      expect(mockStartCodexServer).toHaveBeenCalledTimes(2);
-      expect(mockCreateSession).toHaveBeenCalledTimes(1);
-      expect(screen.queryByText("Connection Failed")).toBeNull();
-    } finally {
-      retryTimers.restore();
-    }
-  });
-
-  test("automatically retries when the local bridge start races worktree creation", async () => {
-    const retryTimers = installAcceleratedConnectionRetryTimers({ hold: true });
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date().toISOString(),
-    });
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      setupPhase: "ready",
-    });
-    mockGetLocalCodexServerStatus.mockResolvedValue({
-      running: false,
-      port: null,
-      pid: null,
-      authToken: undefined,
-    } as any);
-    mockStartLocalCodexServer
-      .mockRejectedValueOnce(new Error("Local environment worktree is not available"))
-      .mockResolvedValueOnce({
-        port: 9999,
-        pid: 1234,
-        authToken: "local-start-token",
-      });
-
-    try {
-      render(
-        <CodexChatTab
-          tabId={TAB_ID}
-          data={createData({ isLocal: true })}
-          isActive
-        />,
-      );
-      await retryTimers.waitForDelayCount(1);
-
-      expect(retryTimers.delays).toEqual([500]);
-      expect(screen.queryByText("Connection Failed")).toBeNull();
-
-      await act(async () => {
-        retryTimers.callbacks[0]?.();
-        await Promise.resolve();
-      });
-      await retryTimers.settle();
-
-      expect(mockStartLocalCodexServer).toHaveBeenCalledTimes(2);
-      expect(mockCreateClient).toHaveBeenCalledWith(
-        "http://127.0.0.1:9999",
-        "local-start-token",
-      );
-      expect(mockCreateSession).toHaveBeenCalledTimes(1);
-      expect(screen.queryByText("Connection Failed")).toBeNull();
-    } finally {
-      retryTimers.restore();
-    }
-  });
-
-  test("uses the full startup retry sequence before surfacing the final failure", async () => {
-    const retryWindowStart = Date.parse("2026-07-28T18:30:00.000Z");
-    const retryTimers = installAcceleratedConnectionRetryTimers({
-      hold: true,
-      now: retryWindowStart,
-    });
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date(retryWindowStart).toISOString(),
-    });
-    mockGetCodexServerStatus.mockRejectedValue(new Error("bridge never became ready"));
-
-    try {
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      for (let index = 0; index < 10; index += 1) {
-        await retryTimers.waitForDelayCount(index + 1);
-        await act(async () => {
-          retryTimers.runCallback(index);
-          await Promise.resolve();
-        });
-      }
-      await retryTimers.settle();
-      retryTimers.restore();
-      expect(await screen.findByText("bridge never became ready")).toBeTruthy();
-      expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(11);
-      expect(retryTimers.delays).toEqual([
-        500,
-        1_000,
-        2_000,
-        4_000,
-        8_000,
-        8_000,
-        8_000,
-        8_000,
-        8_000,
-        8_000,
-      ]);
-      expect(retryTimers.now! - retryWindowStart).toBe(55_500);
-      expect(mockCreateSession).not.toHaveBeenCalled();
-    } finally {
-      retryTimers.restore();
-    }
-  });
-
-  test("surfaces the saved error instead of running a throttled retry after its deadline", async () => {
-    const retryWindowStart = Date.parse("2026-07-28T18:30:00.000Z");
-    const retryTimers = installAcceleratedConnectionRetryTimers({
-      hold: true,
-      now: retryWindowStart,
-    });
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date(retryWindowStart).toISOString(),
-    });
-    mockGetCodexServerStatus.mockRejectedValue(
-      new Error("bridge is still starting"),
-    );
-
-    try {
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      // Reach the first 8-second retry at t=7.5s using the actual elapsed
-      // schedule rather than firing the callbacks immediately.
-      for (let index = 0; index < 4; index += 1) {
-        await retryTimers.waitForDelayCount(index + 1);
-        await act(async () => {
-          retryTimers.runCallback(index);
-          await Promise.resolve();
-        });
-      }
-      await retryTimers.waitForDelayCount(5);
-      expect(retryTimers.delays).toEqual([500, 1_000, 2_000, 4_000, 8_000]);
-      expect(retryTimers.now! - retryWindowStart).toBe(7_500);
-      expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(5);
-
-      // The 8-second timer was valid when scheduled, but a backgrounded
-      // renderer delivers it after the absolute one-minute deadline.
-      await act(async () => {
-        retryTimers.runCallback(4, 52_501);
-        await Promise.resolve();
-      });
-      await retryTimers.settle();
-
-      expect(retryTimers.now! - retryWindowStart).toBe(60_001);
-      expect(await screen.findByText("bridge is still starting")).toBeTruthy();
-      expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(5);
-      expect(mockCreateSession).not.toHaveBeenCalled();
-    } finally {
-      retryTimers.restore();
-    }
-  });
-
-  test("does not run a pending startup retry after the tab unmounts", async () => {
-    const retryTimers = installAcceleratedConnectionRetryTimers({ hold: true });
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date().toISOString(),
-    });
-    mockGetCodexServerStatus.mockRejectedValue(new Error("bridge is still starting"));
-
-    try {
-      const view = render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-      await act(async () => {
-        await retryTimers.waitForDelayCount(1);
-      });
-      expect(retryTimers.delays).toEqual([500]);
-
-      view.unmount();
-      act(() => {
-        retryTimers.callbacks[0]?.();
-      });
-
-      await act(async () => {
-        await Promise.resolve();
-      });
-      expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(1);
-    } finally {
-      retryTimers.restore();
-    }
-  });
-
-  test("manual retry restores the automatic startup retry budget after exhaustion", async () => {
-    const retryTimers = installAcceleratedConnectionRetryTimers({ hold: true });
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date().toISOString(),
-    });
-    mockGetCodexServerStatus
-      .mockRejectedValueOnce(new Error("bridge still starting (attempt 1)"))
-      .mockRejectedValueOnce(new Error("bridge still starting (attempt 2)"))
-      .mockRejectedValueOnce(new Error("bridge still starting (attempt 3)"))
-      .mockRejectedValueOnce(new Error("bridge still starting (attempt 4)"))
-      .mockRejectedValueOnce(new Error("bridge still starting (attempt 5)"))
-      .mockRejectedValueOnce(new Error("bridge still starting (attempt 6)"))
-      .mockRejectedValueOnce(new Error("bridge still starting (attempt 7)"))
-      .mockRejectedValueOnce(new Error("bridge still starting (attempt 8)"))
-      .mockRejectedValueOnce(new Error("bridge still starting (attempt 9)"))
-      .mockRejectedValueOnce(new Error("bridge still starting (attempt 10)"))
-      .mockRejectedValueOnce(new Error("bridge still starting (attempt 11)"))
-      .mockRejectedValueOnce(new Error("bridge still starting after manual retry"))
-      .mockResolvedValueOnce({
-        running: true,
-        hostPort: 9999,
-        authToken: "container-test-token",
-      });
-
-    try {
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      for (let index = 0; index < 10; index += 1) {
-        await retryTimers.waitForDelayCount(index + 1);
-        await act(async () => {
-          retryTimers.callbacks[index]?.();
-          await Promise.resolve();
-        });
-      }
-      await retryTimers.settle();
-      expect(screen.getByText("bridge still starting (attempt 11)")).toBeTruthy();
-      expect(retryTimers.delays).toEqual([
-        500,
-        1_000,
-        2_000,
-        4_000,
-        8_000,
-        8_000,
-        8_000,
-        8_000,
-        8_000,
-        8_000,
-      ]);
-
-      fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
-
-      await retryTimers.waitForDelayCount(11);
-      await act(async () => {
-        retryTimers.callbacks[10]?.();
-        await Promise.resolve();
-      });
-      await retryTimers.settle();
-      retryTimers.restore();
-      await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(1));
-      expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(13);
-      expect(retryTimers.delays).toEqual([
-        500,
-        1_000,
-        2_000,
-        4_000,
-        8_000,
-        8_000,
-        8_000,
-        8_000,
-        8_000,
-        8_000,
-        500,
-      ]);
-      expect(screen.queryByText("Connection Failed")).toBeNull();
-    } finally {
-      retryTimers.restore();
-    }
-  });
-
-  test("starts the startup retry window when setup finishes, not when the environment was created", async () => {
-    const retryTimers = installAcceleratedConnectionRetryTimers();
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date(Date.now() - 61_000).toISOString(),
-    });
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      setupPhase: "pending",
-    });
-    mockGetCodexServerStatus
-      .mockRejectedValueOnce(new Error("bridge delayed by setup"))
-      .mockResolvedValueOnce({
-        running: true,
-        hostPort: 9999,
-        authToken: "container-test-token",
-      });
-
-    try {
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-      expect(screen.getByText("Codex will connect automatically once setup finishes"))
-        .toBeTruthy();
-      expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
-
-      act(() => {
-        useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-          setupPhase: "ready",
-        });
-      });
-
-      await act(async () => {
-        await retryTimers.waitForDelayCount(1);
-        await retryTimers.settle();
-      });
-      retryTimers.restore();
-      await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(1));
-      expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(2);
-      expect(retryTimers.delays).toEqual([500]);
-      expect(screen.queryByText("Connection Failed")).toBeNull();
-    } finally {
-      retryTimers.restore();
-    }
+    expect(await screen.findByText(/did not become healthy/)).toBeTruthy();
+    expect(mockStartCodexServer).toHaveBeenCalledTimes(1);
+    expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
   test("surfaces a missing container id immediately even for a new environment", async () => {
@@ -6557,7 +6151,7 @@ describe("CodexChatTab", () => {
     });
   });
 
-  test("retains a rejected initial prompt and caps its automatic retry", async () => {
+  test("retains a rejected initial prompt without retrying in the renderer", async () => {
     const initialPrompt = "Do not lose this rejected launch";
     seedPaneLayout(initialPrompt);
     mockSendPrompt.mockResolvedValue({ outcome: "rejected", httpStatus: 503 });
@@ -6571,17 +6165,15 @@ describe("CodexChatTab", () => {
       />,
     );
 
-    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2), {
-      timeout: 2_000,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
-    expect(mockSendPrompt).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
     const pane = usePaneLayoutStore.getState().findPaneWithTab(TAB_ID, ENVIRONMENT_ID);
     expect(pane?.tabs.find((tab) => tab.id === TAB_ID)?.initialPrompt).toBe(initialPrompt);
   });
 
-  test("releases a rejected initial-prompt claim and clears its retry timer on unmount", async () => {
-    const initialPrompt = "Cancel this pending launch retry";
+  test("releases a rejected initial-prompt claim on unmount", async () => {
+    const initialPrompt = "Keep this rejected launch";
     seedPaneLayout(initialPrompt);
     mockSendPrompt.mockResolvedValue({ outcome: "rejected", httpStatus: 503 });
     const view = render(
@@ -6598,15 +6190,14 @@ describe("CodexChatTab", () => {
       expect(useCodexStore.getState().promptDispatchClaims.has(SESSION_KEY)).toBe(false);
     });
     view.unmount();
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
 
     expect(mockSendPrompt).toHaveBeenCalledTimes(1);
     const pane = usePaneLayoutStore.getState().findPaneWithTab(TAB_ID, ENVIRONMENT_ID);
     expect(pane?.tabs.find((tab) => tab.id === TAB_ID)?.initialPrompt).toBe(initialPrompt);
   });
 
-  test("retries an initial-prompt exception once while retaining durable intent", async () => {
-    const initialPrompt = "Retry this exceptional launch";
+  test("does not retry an initial-prompt exception in the renderer", async () => {
+    const initialPrompt = "Retain this exceptional launch";
     const originalError = console.error;
     const consoleError = mock(() => {});
     console.error = consoleError as unknown as typeof console.error;
@@ -6624,17 +6215,17 @@ describe("CodexChatTab", () => {
       );
 
       await waitFor(() => {
-        expect(mockSendPrompt).toHaveBeenCalledTimes(2);
-      }, { timeout: 2_000 });
+        expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+      });
       await waitFor(() => {
         expect(consoleError).toHaveBeenCalledWith(
           "[CodexChatTab] Failed to dispatch initial prompt:",
           expect.objectContaining({ message: "dispatch exploded" }),
         );
       });
-      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      await new Promise((resolve) => setTimeout(resolve, 20));
 
-      expect(mockSendPrompt).toHaveBeenCalledTimes(2);
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
       expect(useCodexStore.getState().promptDispatchClaims.has(SESSION_KEY)).toBe(false);
       const session = useCodexStore.getState().sessions.get(SESSION_KEY);
       expect(session?.error).toBe("dispatch exploded");

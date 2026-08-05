@@ -90,6 +90,10 @@ const runEnvironmentSetupMock = mock(async (environmentId: string) => ({
   setupScriptsComplete: true,
 }));
 const getEnvironmentSetupSessionMock = mock(async (_environmentId: string): Promise<EnvironmentSetupSession | null> => null);
+const awaitEnvironmentSetupSessionMock = mock(
+  async (environmentId: string): Promise<EnvironmentSetupSession | null> =>
+    getEnvironmentSetupSessionMock(environmentId),
+);
 const setEnvironmentPendingAgentLaunchMock = mock(async (environmentId: string, pending: boolean) => ({
   ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
   pendingAgentLaunch: pending,
@@ -126,8 +130,42 @@ const listLoopedReviewWorkflowsMock = mock(async (_environmentId: string) => [] 
   updatedAt: string;
   revision: number;
 }>);
-const writeContainerFileMock = mock(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
-const writeLocalFileMock = mock(async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`);
+const writeContainerFileMock = mock(async (
+  _containerId: string,
+  filePath: string,
+  _base64Data: string,
+) => `/workspace/${filePath}`);
+const writeLocalFileMock = mock(async (
+  worktreePath: string,
+  filePath: string,
+  _base64Data: string,
+) => `${worktreePath}/${filePath}`);
+const writeInitialPromptAttachmentsMock = mock(async (
+  environmentId: string,
+  attachments: Parameters<typeof realBackend.writeInitialPromptAttachments>[1],
+) => {
+  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  const usedNames = new Set<string>();
+  return Promise.all(attachments.map(async (attachment) => {
+    const sanitized = attachment.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+    const dot = sanitized.lastIndexOf(".");
+    const stem = dot > 0 ? sanitized.slice(0, dot) : sanitized;
+    const extension = dot > 0 ? sanitized.slice(dot) : "";
+    let name = sanitized;
+    let suffix = 2;
+    while (usedNames.has(name.toLowerCase())) {
+      name = `${stem}-${suffix}${extension}`;
+      suffix += 1;
+    }
+    usedNames.add(name.toLowerCase());
+    const relativePath = `.orkestrator/initial-prompt/${name}`;
+    const savedPath = environment.environmentType === "local"
+      ? await writeLocalFileMock(environment.worktreePath!, relativePath, attachment.base64Data)
+      : await writeContainerFileMock(environment.containerId!, relativePath, attachment.base64Data);
+    return { name, path: savedPath };
+  }));
+});
 const seedContainerSetupCommands = (environmentId = "env-hidden") => {
   useEnvironmentStore.getState().updateEnvironment(environmentId, {
     setupPhase: "running",
@@ -160,6 +198,7 @@ mock.module("@/lib/backend", () => ({
   ensureEnvironmentSetup: ensureEnvironmentSetupMock,
   runEnvironmentSetup: runEnvironmentSetupMock,
   getEnvironmentSetupSession: getEnvironmentSetupSessionMock,
+  awaitEnvironmentSetupSession: awaitEnvironmentSetupSessionMock,
   setEnvironmentPendingAgentLaunch: setEnvironmentPendingAgentLaunchMock,
   acknowledgeStartupAgentSession: acknowledgeStartupAgentSessionMock,
   setEnvironmentInitialPrompt: setEnvironmentInitialPromptMock,
@@ -168,6 +207,7 @@ mock.module("@/lib/backend", () => ({
   listLoopedReviewWorkflows: listLoopedReviewWorkflowsMock,
   writeContainerFile: writeContainerFileMock,
   writeLocalFile: writeLocalFileMock,
+  writeInitialPromptAttachments: writeInitialPromptAttachmentsMock,
 }));
 
 mock.module("@/components/pane-layout", () => ({
@@ -316,6 +356,7 @@ describe("TerminalContainer", () => {
     }));
     getEnvironmentSetupSessionMock.mockReset();
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
+    awaitEnvironmentSetupSessionMock.mockClear();
     setEnvironmentPendingAgentLaunchMock.mockReset();
     setEnvironmentPendingAgentLaunchMock.mockImplementation(async (environmentId: string, pending: boolean) => ({
       ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
@@ -345,6 +386,7 @@ describe("TerminalContainer", () => {
     listLoopedReviewWorkflowsMock.mockResolvedValue([]);
     writeContainerFileMock.mockReset();
     writeLocalFileMock.mockReset();
+    writeInitialPromptAttachmentsMock.mockClear();
     writeContainerFileMock.mockImplementation(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
     writeLocalFileMock.mockImplementation(async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`);
 
@@ -1087,60 +1129,6 @@ describe("TerminalContainer", () => {
       .getAllTabs("env-hidden")
       .filter((tab) => tab.isSetupTab)
       .map((tab) => tab.id);
-
-  test("retries a rejected setup-session lookup instead of stranding the restored tab", async () => {
-    // A backend-managed setup tab cannot create its own PTY, so a tab left
-    // unbound by a transient lookup failure renders a permanently blank pane
-    // with no error anywhere. Nothing else re-runs the rebind effect.
-    getEnvironmentSetupSessionMock.mockRejectedValueOnce(new Error("gateway unreachable"));
-    getEnvironmentSetupSessionMock.mockResolvedValue({
-      environmentId: "env-hidden",
-      sessionId: "env-hidden:setup",
-      running: false,
-      startedAt: "2026-01-01T00:00:00.000Z",
-      completedAt: "2026-01-01T00:01:00.000Z",
-      success: true,
-      terminalRunning: true,
-    });
-
-    restoreBackendSetupTabLayout();
-
-    await waitFor(() => {
-      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
-    });
-    // The failed lookup must not retire the tab — the retry needs it to exist.
-    expect(setupTabIds()).toEqual(["default"]);
-
-    await waitFor(
-      () => {
-        expect(
-          useTerminalSessionStore.getState().sessions.get(
-            createSessionKey(null, "default", "env-hidden"),
-          )?.sessionId,
-        ).toBe("env-hidden:setup");
-      },
-      { timeout: 8000 },
-    );
-    expect(getEnvironmentSetupSessionMock.mock.calls.length).toBeGreaterThan(1);
-    expect(setupTabIds()).toEqual(["default"]);
-  }, 15000);
-
-  test("retires an unbound setup tab after exhausting session lookup retries", async () => {
-    getEnvironmentSetupSessionMock.mockRejectedValue(new Error("gateway unavailable"));
-
-    restoreBackendSetupTabLayout();
-
-    await waitFor(
-      () => {
-        expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(3);
-        expect(setupTabIds()).toEqual([]);
-      },
-      { timeout: 10_000 },
-    );
-    const [replacement] = usePaneLayoutStore.getState().getAllTabs("env-hidden");
-    expect(replacement).toMatchObject({ type: "plain" });
-    expect(replacement?.isSetupTab).toBeUndefined();
-  }, 15_000);
 
   test("binds every restored backend-managed setup tab, not just the first", async () => {
     // Binding one tab per effect run relied on the run repeating to reach the

@@ -275,13 +275,17 @@ export function flushPaneLayoutNow(
 export function startPaneLayoutPersistence(
   options: PaneLayoutPersistenceOptions = {},
 ): () => void {
+  const useBackendIntents = options.save === undefined && options.load === undefined;
   const save = options.save ?? backend.savePaneLayout;
   const load = options.load ?? backend.getPaneLayout;
   const hydrateDependencies =
     options.hydrateDependencies ?? hydratePaneLayoutDependencies;
-  const debounceMs = options.debounceMs ?? 1_000;
+  // Production mutations are dispatched in the same turn. Tests may still
+  // inject a delay to exercise coalescing and conflict ordering explicitly.
+  const debounceMs = options.debounceMs ?? 0;
   const selectionDebounceMs =
-    options.selectionDebounceMs ?? Math.min(debounceMs, 200);
+    options.selectionDebounceMs
+    ?? (options.debounceMs === undefined ? 0 : Math.min(debounceMs, 200));
   const maxConflictRetries = options.maxConflictRetries ?? 3;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const selectionTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -417,6 +421,20 @@ export function startPaneLayoutPersistence(
     writeBaseInput: PersistedPaneLayoutInput,
     selectionIntent?: PaneLayoutSelectionIntent,
   ): Promise<void> => {
+    if (useBackendIntents) {
+      const saved = await backend.applyPaneLayoutIntent(
+        environmentId,
+        writeBaseInput,
+        desiredInput,
+        selectionIntent,
+      );
+      const savedInput = persistedInput(saved) ?? desiredInput;
+      authoritative.set(environmentId, { input: savedInput, revision: saved.revision });
+      lastEnqueued.set(environmentId, JSON.stringify(savedInput));
+      await installSavedLayout(environmentId, saved, savedInput, desiredInput);
+      clearStoredPaneSelection(environmentId);
+      return;
+    }
     let desired = desiredInput;
     let base = authoritative.get(environmentId);
     if (!base) {
@@ -599,6 +617,12 @@ export function startPaneLayoutPersistence(
       ),
     });
     cancelSelectionTimer(environmentId);
+    if (selectionDebounceMs === 0) {
+      void flushSelectionEnvironment(environmentId)?.catch((error) =>
+        reportWriteFailure(environmentId, error)
+      );
+      return;
+    }
     selectionTimers.set(environmentId, setTimeout(() => {
       void flushSelectionEnvironment(environmentId)?.catch((error) =>
         reportWriteFailure(environmentId, error)
@@ -835,6 +859,12 @@ export function startPaneLayoutPersistence(
           selectionIntent,
         ),
       });
+      if (debounceMs === 0) {
+        void flushEnvironment(environmentId)?.catch((error) =>
+          reportWriteFailure(environmentId, error)
+        );
+        continue;
+      }
       timers.set(environmentId, setTimeout(() => {
         void flushEnvironment(environmentId)?.catch((error) =>
           reportWriteFailure(environmentId, error)

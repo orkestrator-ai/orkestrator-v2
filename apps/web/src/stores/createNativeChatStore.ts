@@ -542,6 +542,12 @@ export interface NativeEventSubscriptionState<TEvent> {
   abortController: AbortController;
   stream: AsyncIterable<TEvent> | null;
   isActive: boolean;
+  /** Consecutive reconnects since the last healthy frame. */
+  reconnectAttempts: number;
+  /** Store-owned so a tab unmount cannot lose or duplicate the retry timer. */
+  reconnectTimer: ReturnType<typeof setTimeout> | null;
+  /** The reconnect budget was exhausted and a full snapshot is required. */
+  desynced: boolean;
 }
 
 export interface NativeEventSubscriptionSlice<TEvent> {
@@ -566,6 +572,22 @@ export interface NativeEventSubscriptionSlice<TEvent> {
   ) => void;
   closeEventSubscription: (environmentId: string) => void;
   hasActiveEventSubscription: (environmentId: string) => boolean;
+  setEventReconnectState: (
+    environmentId: string,
+    update: Partial<Pick<
+      NativeEventSubscriptionState<TEvent>,
+      "reconnectAttempts" | "reconnectTimer" | "desynced"
+    >>,
+    owner?: AbortController,
+  ) => void;
+  markEventSubscriptionHealthy: (
+    environmentId: string,
+    owner: AbortController,
+  ) => void;
+  markEventSubscriptionResynced: (
+    environmentId: string,
+    owner: AbortController,
+  ) => void;
 }
 
 /**
@@ -601,6 +623,7 @@ export function teardownEventSubscription<TEvent>(
   subscription: NativeEventSubscriptionState<TEvent> | undefined,
 ): void {
   if (!subscription) return;
+  if (subscription.reconnectTimer) clearTimeout(subscription.reconnectTimer);
   subscription.abortController.abort();
   if (subscription.stream && Symbol.asyncIterator in subscription.stream) {
     const iterator = subscription.stream[Symbol.asyncIterator]();
@@ -647,7 +670,12 @@ export function createEventSubscriptionSlice<TEvent>(
         abortController: new AbortController(),
         stream: null,
         isActive: true,
+        reconnectAttempts: existing?.reconnectAttempts ?? 0,
+        reconnectTimer: null,
+        desynced: existing?.desynced ?? false,
       };
+
+      if (existing?.reconnectTimer) clearTimeout(existing.reconnectTimer);
 
       const next = new Map(state.eventSubscriptions);
       next.set(environmentId, newSubscription);
@@ -688,5 +716,49 @@ export function createEventSubscriptionSlice<TEvent>(
 
     hasActiveEventSubscription: (environmentId) =>
       get().eventSubscriptions.get(environmentId)?.isActive ?? false,
+
+    setEventReconnectState: (environmentId, update, owner) =>
+      set((state) => {
+        const subscription = state.eventSubscriptions.get(environmentId);
+        if (!subscription) return state;
+        if (owner && subscription.abortController !== owner) return state;
+        if (
+          update.reconnectTimer !== undefined
+          && subscription.reconnectTimer
+          && subscription.reconnectTimer !== update.reconnectTimer
+        ) {
+          clearTimeout(subscription.reconnectTimer);
+        }
+        const next = new Map(state.eventSubscriptions);
+        next.set(environmentId, { ...subscription, ...update });
+        return { eventSubscriptions: next };
+      }),
+
+    markEventSubscriptionHealthy: (environmentId, owner) =>
+      set((state) => {
+        const subscription = state.eventSubscriptions.get(environmentId);
+        if (!subscription || subscription.abortController !== owner) return state;
+        if (subscription.reconnectTimer) clearTimeout(subscription.reconnectTimer);
+        const next = new Map(state.eventSubscriptions);
+        next.set(environmentId, {
+          ...subscription,
+          reconnectAttempts: 0,
+          reconnectTimer: null,
+        });
+        return { eventSubscriptions: next };
+      }),
+
+    markEventSubscriptionResynced: (environmentId, owner) =>
+      set((state) => {
+        const subscription = state.eventSubscriptions.get(environmentId);
+        if (
+          !subscription
+          || subscription.abortController !== owner
+          || !subscription.desynced
+        ) return state;
+        const next = new Map(state.eventSubscriptions);
+        next.set(environmentId, { ...subscription, desynced: false });
+        return { eventSubscriptions: next };
+      }),
   });
 }

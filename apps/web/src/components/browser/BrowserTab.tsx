@@ -27,6 +27,7 @@ interface BrowserTabProps {
 }
 
 const OPAQUE_PREVIEW_SANDBOX = "allow-forms allow-pointer-lock allow-presentation allow-scripts";
+const MAX_BROWSER_HISTORY_ENTRIES = 100;
 const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
 const BLOCKING_OVERLAY_SELECTOR = [
   '[role="dialog"]',
@@ -112,8 +113,12 @@ export function BrowserTab({
   })();
   const [address, setAddress] = useState(data.url);
   const [currentUrl, setCurrentUrl] = useState(data.url);
-  const [history, setHistory] = useState<string[]>(() => data.url ? [data.url] : []);
-  const [historyIndex, setHistoryIndex] = useState(() => data.url ? 0 : -1);
+  const [history, setHistory] = useState<string[]>(() =>
+    data.history ?? (data.url ? [data.url] : [])
+  );
+  const [historyIndex, setHistoryIndex] = useState(() =>
+    data.historyIndex ?? (data.url ? 0 : -1)
+  );
   const [loadRevision, setLoadRevision] = useState(0);
   const [isLoading, setIsLoading] = useState(Boolean(data.url));
   const [error, setError] = useState<string | null>(null);
@@ -145,12 +150,12 @@ export function BrowserTab({
     setAddress(data.url);
     setCurrentUrl(data.url);
     if (!followsLocalNavigation) {
-      setHistory(data.url ? [data.url] : []);
-      setHistoryIndex(data.url ? 0 : -1);
+      setHistory(data.history ?? (data.url ? [data.url] : []));
+      setHistoryIndex(data.historyIndex ?? (data.url ? 0 : -1));
       setIsLoading(Boolean(data.url));
       setError(null);
     }
-  }, [data.url]);
+  }, [data.history, data.historyIndex, data.url]);
 
   useEffect(() => {
     const refreshChanged = refreshRequestId !== previousRefreshRequestId.current;
@@ -304,7 +309,6 @@ export function BrowserTab({
     setIsLoading(true);
     if (!nativeBrowserPreview) setLoadRevision((revision) => revision + 1);
     locallyPersistedUrl.current = next.displayUrl;
-    updateTabBrowserUrl(tabId, next.displayUrl, environmentId);
 
     if (nativeBrowserPreview && nativeAttachedRef.current) {
       void navigateBrowserPreview(tabId, next.iframeUrl).then(applyNativeState).catch((navigationError) => {
@@ -315,11 +319,22 @@ export function BrowserTab({
 
     if (recordHistory) {
       setHistory((current) => {
-        const nextHistory = current.slice(0, historyIndex + 1);
+        let nextHistory = current.slice(0, historyIndex + 1);
         if (nextHistory[nextHistory.length - 1] !== next.displayUrl) {
           nextHistory.push(next.displayUrl);
         }
-        setHistoryIndex(nextHistory.length - 1);
+        if (nextHistory.length > MAX_BROWSER_HISTORY_ENTRIES) {
+          nextHistory = nextHistory.slice(-MAX_BROWSER_HISTORY_ENTRIES);
+        }
+        const nextIndex = nextHistory.length - 1;
+        setHistoryIndex(nextIndex);
+        updateTabBrowserUrl(
+          tabId,
+          next.displayUrl,
+          environmentId,
+          nextHistory,
+          nextIndex,
+        );
         return nextHistory;
       });
     }
@@ -332,6 +347,18 @@ export function BrowserTab({
 
   const moveThroughHistory = useCallback((offset: -1 | 1) => {
     if (nativeBrowserPreview) {
+      const nextIndex = historyIndex + offset;
+      const trackedAddress = history[nextIndex];
+      if (trackedAddress) {
+        setHistoryIndex(nextIndex);
+        updateTabBrowserUrl(
+          tabId,
+          trackedAddress,
+          environmentId,
+          history,
+          nextIndex,
+        );
+      }
       const action = offset === -1 ? goBackBrowserPreview : goForwardBrowserPreview;
       void action(tabId).then(applyNativeState).catch((navigationError) => {
         setError(errorMessage(navigationError));
@@ -342,8 +369,9 @@ export function BrowserTab({
     const nextAddress = history[nextIndex];
     if (!nextAddress) return;
     setHistoryIndex(nextIndex);
+    updateTabBrowserUrl(tabId, nextAddress, environmentId, history, nextIndex);
     navigate(nextAddress, false);
-  }, [applyNativeState, history, historyIndex, nativeBrowserPreview, navigate, tabId]);
+  }, [applyNativeState, environmentId, history, historyIndex, nativeBrowserPreview, navigate, tabId, updateTabBrowserUrl]);
 
   const reload = useCallback(() => {
     if (!currentUrl) return;

@@ -90,10 +90,30 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
 
   if (type === "browser") {
     if (!isRecord(value.browserData)) return null;
+    const url = optionalString(value.browserData.url) ?? "";
+    const rawHistory = Array.isArray(value.browserData.history)
+      && value.browserData.history.every((entry) => typeof entry === "string")
+      ? value.browserData.history as string[]
+      : undefined;
+    const historyOffset = Math.max(0, (rawHistory?.length ?? 0) - 100);
+    const history = rawHistory?.slice(-100);
+    const rawHistoryIndex = Number.isSafeInteger(value.browserData.historyIndex)
+      ? value.browserData.historyIndex as number
+      : undefined;
+    const historyIndex = history && rawHistoryIndex !== undefined
+      ? Math.min(
+          Math.max(rawHistoryIndex - historyOffset, history.length === 0 ? -1 : 0),
+          history.length - 1,
+        )
+      : undefined;
     return {
       ...common,
       type,
-      browserData: { url: optionalString(value.browserData.url) ?? "" },
+      browserData: {
+        url,
+        ...(history ? { history } : {}),
+        ...(historyIndex !== undefined ? { historyIndex } : {}),
+      },
     };
   }
 

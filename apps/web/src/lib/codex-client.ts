@@ -123,6 +123,7 @@ interface CodexSessionStatusResponse {
   structuredOutputRequestId?: string;
   structuredOutput?: StructuredOutputResult;
   contextUsage?: ContextUsageSnapshot;
+  unconfirmedDispatch?: { requestId: string; retryable: boolean };
 }
 
 export interface CodexClient {
@@ -290,6 +291,7 @@ export interface CodexSessionStatus {
   structuredOutputRequestId?: string;
   structuredOutput?: StructuredOutputResult;
   contextUsage?: ContextUsageSnapshot;
+  unconfirmedDispatch?: { requestId: string; retryable: boolean };
 }
 
 export type CodexSessionStatusLookupResult =
@@ -1123,6 +1125,11 @@ export async function lookupSessionStatus(
           ? { structuredOutput: data.structuredOutput }
           : {}),
         ...(contextUsage ? { contextUsage } : {}),
+        ...(data.unconfirmedDispatch
+          && typeof data.unconfirmedDispatch.requestId === "string"
+          && data.unconfirmedDispatch.retryable === true
+          ? { unconfirmedDispatch: data.unconfirmedDispatch }
+          : {}),
       },
     };
   } catch (error) {

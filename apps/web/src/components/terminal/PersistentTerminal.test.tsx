@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realSessionStore from "@/stores/sessionStore";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
+import { invoke } from "@/lib/native/backend";
 import { mockReadText, mockWriteText } from "../../../../../tests/mocks/clipboard";
 import {
   emitViewportChange,
@@ -21,6 +22,10 @@ import {
 const resizeMock = mock(async () => {});
 const connectMock = mock(async () => {});
 const writeMock = mock(async (_data: string) => {});
+const invokeMock = invoke as ReturnType<typeof mock>;
+const bootstrapWrites = (): string[] => invokeMock.mock.calls
+  .filter(([command]) => command === "bootstrap_terminal_session")
+  .map(([, args]) => (args as { data: string }).data);
 let terminalOnData: ((data: Uint8Array) => void) | undefined;
 let terminalInputHandler: ((data: string) => void) | undefined;
 let terminalOscHandler: ((data: string) => boolean) | undefined;
@@ -47,6 +52,7 @@ let lastUseTerminalOptions: MockUseTerminalOptions | undefined;
 let useTerminalOptionsHistory: MockUseTerminalOptions[] = [];
 let useTerminalSessionId: string | null = "session-1";
 let useTerminalIsConnected = true;
+let useTerminalBootstrapped = false;
 let clipboardImagePasteOptions: {
   onImageSaved: (filePath: string) => Promise<void>;
   onError: (message: string) => void;
@@ -80,6 +86,7 @@ mock.module("@/hooks/useTerminal", () => ({
     terminalOnData = options.onData;
     return {
       sessionId: useTerminalSessionId,
+      bootstrapped: useTerminalBootstrapped,
       isConnected: useTerminalIsConnected,
       isConnecting: false,
       error: null,
@@ -365,6 +372,12 @@ describe("PersistentTerminal", () => {
     resizeMock.mockClear();
     connectMock.mockClear();
     writeMock.mockClear();
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (command: string) =>
+      command === "bootstrap_terminal_session"
+        ? { bootstrapped: true, delivered: true, duplicate: false }
+        : undefined
+    );
     terminalOnData = undefined;
     terminalInputHandler = undefined;
     terminalOscHandler = undefined;
@@ -374,6 +387,7 @@ describe("PersistentTerminal", () => {
     useTerminalOptionsHistory = [];
     useTerminalSessionId = "session-1";
     useTerminalIsConnected = true;
+    useTerminalBootstrapped = false;
     clipboardImagePasteOptions = undefined;
     composeBarOptions = undefined;
     mockReadText.mockReset();
@@ -1849,8 +1863,6 @@ describe("PersistentTerminal", () => {
     ["a workspace path", "ready in /workspace/project"],
     ["substantial shell output", "x".repeat(101)],
   ])("marks a non-first tab ready after %s", async (_label, output) => {
-    useTerminalSessionId = null;
-
     render(
       <PersistentTerminal
         terminalData={createTerminalData()}
@@ -1868,10 +1880,10 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => expect(terminalOnData).toBeDefined());
-    expect(writeMock).not.toHaveBeenCalledWith("echo non-first-ready\n");
+    expect(bootstrapWrites()).not.toContain("echo non-first-ready\n");
     act(() => terminalOnData?.(new TextEncoder().encode(output)));
     await waitFor(() => {
-      expect(writeMock).toHaveBeenCalledWith("echo non-first-ready\n");
+      expect(bootstrapWrites()).toContain("echo non-first-ready\n");
     });
   });
 
@@ -2109,7 +2121,7 @@ describe("PersistentTerminal", () => {
     await waitFor(() => expect(terminalOnData).toBeDefined());
     act(() => terminalOnData?.(new TextEncoder().encode("workspace $ ")));
     await waitFor(
-      () => expect(writeMock).toHaveBeenCalledWith("echo ready\n"),
+      () => expect(bootstrapWrites()).toContain("echo ready\n"),
       { timeout: 1_000 },
     );
 
@@ -2132,7 +2144,7 @@ describe("PersistentTerminal", () => {
 
     act(() => terminalOnData?.(new TextEncoder().encode("replacement $ ")));
     await waitFor(
-      () => expect(writeMock).toHaveBeenCalledWith("echo ready\n"),
+      () => expect(bootstrapWrites()).toContain("echo ready\n"),
       { timeout: 1_000 },
     );
   });
@@ -2383,7 +2395,7 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => {
-      expect(writeMock).toHaveBeenCalledWith(
+      expect(bootstrapWrites()).toContain(
         'codex --model "gpt-review" --config "model_reasoning_effort=\\"high\\"" "Fix the failing tests"\n',
       );
     });
@@ -2452,7 +2464,7 @@ describe("PersistentTerminal", () => {
     });
 
     await waitFor(() => {
-      expect(writeMock).toHaveBeenCalledWith(
+      expect(bootstrapWrites()).toContain(
         'codex --model "gpt-review" --config "model_reasoning_effort=\\"high\\"" "Fix the failing tests"\n',
       );
     });
@@ -2884,7 +2896,7 @@ describe("PersistentTerminal", () => {
 
     let setupWrite: string | undefined;
     await waitFor(() => {
-      const writes = (writeMock as any).mock.calls.map((call: unknown[]) => call[0]);
+      const writes = bootstrapWrites();
       setupWrite = writes.find((entry: unknown) =>
         typeof entry === "string" && entry.includes("(false && echo ok) && printf")
       );
@@ -2916,7 +2928,7 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => {
-      const writes = (writeMock as any).mock.calls.map((call: unknown[]) => call[0]);
+      const writes = bootstrapWrites();
       expect(writes.some((entry: unknown) =>
         typeof entry === "string" &&
         entry.includes("/usr/local/bin/workspace-setup.sh") &&
@@ -3380,7 +3392,7 @@ describe("PersistentTerminal", () => {
     });
   });
 
-  it("restores hasLaunchedCommand from persistent session", async () => {
+  it("restores the persistent session identity without a renderer launch latch", async () => {
     persistentSessionStore.getSessionsByEnvironment = () => [
       {
         id: "launched-session-1",
@@ -3414,14 +3426,15 @@ describe("PersistentTerminal", () => {
     await waitFor(() => {
       const sessions = useTerminalSessionStore.getState().sessions;
       const session = sessions.get("container-1:tab-1");
-      expect(session?.hasLaunchedCommand).toBe(true);
+      expect(session?.persistentSessionId).toBe("launched-session-1");
     });
   });
 
   it("shows Address all for launched review tabs and writes the shared prompt", async () => {
+    useTerminalBootstrapped = true;
     useTerminalSessionStore.setState({
       sessions: new Map([
-        ["container-1:tab-1", { sessionId: "session-1", hasLaunchedCommand: true }],
+        ["container-1:tab-1", { sessionId: "session-1" }],
       ]),
       composeDraftText: new Map(),
       composeDraftImages: new Map(),
@@ -3468,7 +3481,7 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => {
-      expect(writeMock).toHaveBeenCalledWith("codex\n");
+      expect(bootstrapWrites()).toContain("codex\n");
     });
   });
 
@@ -3490,7 +3503,7 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => {
-      expect(writeMock).toHaveBeenCalledWith('codex "Use \\"\\$HOME\\" for the config path"\n');
+      expect(bootstrapWrites()).toContain('codex "Use \\"\\$HOME\\" for the config path"\n');
     });
   });
 
@@ -3512,7 +3525,7 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => {
-      expect(writeMock).toHaveBeenCalledWith('codex "Fix line one\nand line two"\n');
+      expect(bootstrapWrites()).toContain('codex "Fix line one\nand line two"\n');
     });
   });
 });

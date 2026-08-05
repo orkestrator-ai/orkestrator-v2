@@ -258,6 +258,7 @@ interface ClaudeTmuxState {
       plans: TmuxPendingPlan[];
       permissions: TmuxPendingPermission[];
       elicitations: TmuxPendingElicitation[];
+      infoEvents?: TmuxInfoEvent[];
     },
   ) => void;
   pushInfoEvent: (tabId: string, event: TmuxInfoEvent) => void;
@@ -349,7 +350,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
         busyStartedAt: info?.busy === undefined
           ? s.busyStartedAt
           : info.busy
-            ? info.busyStartedAt ?? s.busyStartedAt ?? Date.now()
+            ? info.busyStartedAt ?? null
             : null,
         observation: info?.observation ?? (generationChanged || stopped
           ? {
@@ -536,6 +537,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
         pendingPlans: pending.plans,
         pendingPermissions: pending.permissions,
         pendingElicitations: pending.elicitations,
+        infoEvents: pending.infoEvents ?? s.infoEvents,
       })),
     );
     usePromptDraftStore.getState().clearDrafts(withdrawnDraftKeys);
@@ -564,7 +566,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
         return {
           ...s,
           busy,
-          busyStartedAt: busy ? startedAt ?? Date.now() : null,
+          busyStartedAt: busy ? startedAt ?? null : null,
         };
       }),
     ),

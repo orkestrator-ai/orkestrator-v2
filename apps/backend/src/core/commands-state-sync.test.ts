@@ -89,6 +89,137 @@ async function withCommands<T>(
 
 const KEY = "claude env-e1:tab-1";
 
+describe("bridge readiness command", () => {
+  test("returns a structured durable-window timeout instead of an error string", async () => {
+    await withCommands(async (invoke) => {
+      await expect(invoke("await_bridge_ready", {
+        environmentId: "e1",
+        agent: "codex",
+        timeoutMs: 1_000,
+      })).resolves.toEqual({
+        status: "timed-out",
+        error: {
+          message: "codex bridge did not become ready before the environment startup deadline",
+          retryable: true,
+          retryAfterMs: 1_000,
+        },
+      });
+    }, {
+      environment: {
+        status: "creating",
+        setupPhase: "running",
+        createdAt: new Date(0).toISOString(),
+      },
+    });
+  });
+
+  test("keeps retryable local startup races inside the durable wait", async () => {
+    await withCommands(async (invoke) => {
+      await expect(invoke("await_bridge_ready", {
+        environmentId: "e1",
+        agent: "codex",
+        timeoutMs: 1_000,
+      })).resolves.toEqual({
+        status: "timed-out",
+        error: {
+          message: "codex bridge did not become ready before the environment startup deadline",
+          retryable: true,
+          retryAfterMs: 500,
+        },
+      });
+    }, {
+      environment: {
+        status: "running",
+        setupPhase: "ready",
+        worktreePath: null,
+        createdAt: new Date().toISOString(),
+      },
+    });
+  });
+});
+
+describe("initial prompt attachment command", () => {
+  test("writes a local batch and cleans up every prior file when a later item fails", async () => {
+    const worktreePath = path.join(tmpdir(), `ork-attachments-${crypto.randomUUID()}`);
+    await fs.mkdir(worktreePath, { recursive: true });
+    try {
+      await withCommands(async (invoke) => {
+        const result = await invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: [
+            { id: "one", name: "screen shot.png", base64Data: "QQ==" },
+            { id: "two", name: "screen-shot.png", base64Data: "Qg==" },
+          ],
+        });
+        expect(result).toEqual([
+          {
+            name: "screen-shot.png",
+            path: path.join(worktreePath, ".orkestrator/initial-prompt/screen-shot.png"),
+          },
+          {
+            name: "screen-shot-2.png",
+            path: path.join(worktreePath, ".orkestrator/initial-prompt/screen-shot-2.png"),
+          },
+        ]);
+
+        await expect(invoke("write_initial_prompt_attachments", {
+          environmentId: "e1",
+          attachments: [
+            { id: "first", name: "cleanup.png", base64Data: "Qw==" },
+            { id: "broken", base64Data: "RA==" },
+          ],
+        })).rejects.toThrow("attachment.name");
+        await expect(fs.stat(path.join(
+          worktreePath,
+          ".orkestrator/initial-prompt/cleanup.png",
+        ))).rejects.toMatchObject({ code: "ENOENT" });
+      }, { environment: { worktreePath } });
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("pane layout intent command", () => {
+  test("rebases concurrent optimistic additions inside the backend mutation queue", async () => {
+    await withCommands(async (invoke) => {
+      const layout = (tabIds: string[]) => ({
+        version: 2,
+        containerId: null,
+        activePaneId: "pane-1",
+        root: {
+          kind: "leaf",
+          id: "pane-1",
+          tabs: tabIds.map((id) => ({ id, type: "plain" })),
+          activeTabId: tabIds.at(-1) ?? null,
+        },
+      });
+      const base = layout(["base"]);
+      await invoke("save_pane_layout", {
+        environmentId: "e1",
+        layout: base,
+        expectedRevision: 0,
+      });
+      await invoke("apply_pane_layout_intent", {
+        environmentId: "e1",
+        baseLayout: base,
+        desiredLayout: layout(["base", "window-a"]),
+      });
+      const saved = await invoke("apply_pane_layout_intent", {
+        environmentId: "e1",
+        baseLayout: base,
+        desiredLayout: layout(["base", "window-b"]),
+      }) as { root: { tabs: Array<{ id: string }> }; revision: number };
+      expect(saved.root.tabs.map(({ id }) => id)).toEqual([
+        "base",
+        "window-a",
+        "window-b",
+      ]);
+      expect(saved.revision).toBe(3);
+    });
+  });
+});
+
 describe("durable tab teardown commands", () => {
   test("disconnects persistent terminal sessions and clears direct and replayed intents", async () => {
     await withCommands(async (invoke, storage) => {
@@ -220,7 +351,11 @@ describe("durable tab teardown commands", () => {
         cols: 80,
         rows: 24,
         trackEnvironmentActivity: false,
-      })).toEqual({ sessionId: otherTab.sessionId, created: false });
+      })).toEqual({
+        sessionId: otherTab.sessionId,
+        created: false,
+        bootstrapped: false,
+      });
 
       await expect(invoke("teardown_tab", {
         environmentId: "e1",

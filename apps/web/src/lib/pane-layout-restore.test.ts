@@ -255,7 +255,11 @@ describe("reconcilePersistedLayout", () => {
       tabs: [{
         id: "browser",
         type: "browser",
-        browserData: { url: "http://localhost:3000/app" },
+        browserData: {
+          url: "http://localhost:3000/app",
+          history: ["http://localhost:3000/", "http://localhost:3000/app"],
+          historyIndex: 1,
+        },
       }],
       activeTabId: "browser",
     }), context);
@@ -266,7 +270,11 @@ describe("reconcilePersistedLayout", () => {
       tabs: [{
         id: "browser",
         type: "browser",
-        browserData: { url: "http://localhost:3000/app" },
+        browserData: {
+          url: "http://localhost:3000/app",
+          history: ["http://localhost:3000/", "http://localhost:3000/app"],
+          historyIndex: 1,
+        },
         displayTitle: undefined,
         isReviewTab: undefined,
       }],

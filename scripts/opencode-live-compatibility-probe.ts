@@ -11,7 +11,7 @@ import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createClient } from "./opencode-client";
+import { createClient } from "../apps/web/src/lib/opencode-client";
 
 /**
  * Marks the single stdout line that carries the result. Anything else in this

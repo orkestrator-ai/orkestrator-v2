@@ -240,11 +240,15 @@ const mockGetEnvironment = mock(
   async (environmentId: string): Promise<Environment | null> =>
     useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
 );
-const mockSavePaneLayout = mock(async (environmentId: string, layout: Record<string, unknown>) => ({
+const mockSavePaneLayout = mock(async (
+  environmentId: string,
+  layout: Parameters<typeof realBackend.savePaneLayout>[1],
+  expectedRevision = 0,
+) => ({
   ...layout,
   environmentId,
   updatedAt: "2026-07-16T00:00:00.000Z",
-  revision: 1,
+  revision: expectedRevision + 1,
 }));
 const mockListLoopedReviewWorkflows = mock(
   async (_environmentId: string): Promise<Array<{
@@ -282,6 +286,11 @@ const mockStartBuildPipelinePersistence = mock(() => {
   appPersistenceLifecycle.push("start-build");
   return mockStopBuildPipelinePersistence;
 });
+const mockApplyPaneLayoutIntent = mock(async (
+  environmentId: string,
+  _base: Parameters<typeof realBackend.applyPaneLayoutIntent>[1],
+  desired: Parameters<typeof realBackend.applyPaneLayoutIntent>[2],
+) => mockSavePaneLayout(environmentId, desired, 0));
 
 mock.module("@/lib/build-pipeline-persistence", () => ({
   ...realBuildPipelinePersistenceSnapshot,
@@ -312,6 +321,7 @@ mock.module("@/lib/backend", () => ({
   listLoopedReviewWorkflows: mockListLoopedReviewWorkflows,
   listPromptQueues: mockListPromptQueues,
   savePaneLayout: mockSavePaneLayout,
+  applyPaneLayoutIntent: mockApplyPaneLayoutIntent,
   saveLoopedReviewWorkflow: mockSaveLoopedReviewWorkflow,
   syncAllEnvironmentsWithDocker: mockSyncAllEnvironmentsWithDocker,
 }));
@@ -466,6 +476,7 @@ function resetAppMocks() {
       useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
   );
   mockSavePaneLayout.mockClear();
+  mockApplyPaneLayoutIntent.mockClear();
   mockListLoopedReviewWorkflows.mockReset();
   mockListLoopedReviewWorkflows.mockResolvedValue([]);
   mockListPromptQueues.mockReset();
@@ -845,7 +856,7 @@ describe("App background processing mounts", () => {
     await waitFor(() => expect(mockCheckDocker).toHaveBeenCalled());
   });
 
-  test("starts one pane persistence subscription and flushes it on app teardown", async () => {
+  test("persists same-turn pane intents and flushes them on app teardown", async () => {
     resetStores({
       environments: [],
       selectedProjectId: null,
@@ -863,8 +874,8 @@ describe("App background processing mounts", () => {
     });
     unmount();
 
-    await waitFor(() => expect(mockSavePaneLayout).toHaveBeenCalledTimes(1));
-    expect(mockSavePaneLayout).toHaveBeenCalledWith(
+    await waitFor(() => expect(mockApplyPaneLayoutIntent).toHaveBeenCalledTimes(2));
+    expect(mockSavePaneLayout).toHaveBeenLastCalledWith(
       "env-1",
       expect.objectContaining({
         version: PANE_LAYOUT_VERSION,

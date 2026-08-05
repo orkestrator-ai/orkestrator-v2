@@ -242,6 +242,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
       set({ notes: content });
     } catch (error) {
       console.error("[KanbanStore] Failed to save notes:", error);
+      throw error;
     }
   },
 }));

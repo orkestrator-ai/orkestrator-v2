@@ -815,12 +815,12 @@ describe("backend setup wrappers", () => {
   });
 
   test("creates environment-tracked local and container terminal sessions", async () => {
-    const localResult = { sessionId: "local-session", created: true };
+    const localResult = { sessionId: "local-session", created: true, bootstrapped: false };
     invokeMock.mockResolvedValueOnce(localResult);
     await expect(createLocalTerminalSession("env-local", 100, 30, true, "tab-local"))
       .resolves.toEqual(localResult);
 
-    const containerResult = { sessionId: "container-session", created: false };
+    const containerResult = { sessionId: "container-session", created: false, bootstrapped: true };
     invokeMock.mockResolvedValueOnce(containerResult);
     await expect(createTerminalSession(
       "container-1",
@@ -1538,6 +1538,9 @@ describe("backend command wrapper coverage", () => {
     invokeMock.mockReset();
     invokeMock.mockImplementation(async (command: unknown) => {
       if (command === "read_file_base64") return btoa("binary");
+      if (command === "await_bridge_ready") {
+        return { status: "ready", port: 4321, authToken: "token" };
+      }
       if (command === "get_build_pipeline") return null;
       if (
         command === "list_build_pipelines"

@@ -435,7 +435,7 @@ describe("codexStore message helpers", () => {
       .toBe("none");
   });
 
-  test("preserves timer metadata across loading transitions", () => {
+  test("does not fabricate timer metadata across loading transitions", () => {
     const originalNow = Date.now;
     Date.now = () => 1000;
 
@@ -445,7 +445,7 @@ describe("codexStore message helpers", () => {
 
       let session = useCodexStore.getState().sessions.get(SESSION_KEY);
       expect(session?.isLoading).toBe(true);
-      expect(session?.loadingStartedAt).toBe(1000);
+      expect(session?.loadingStartedAt).toBeUndefined();
       expect(session?.lastCompletedElapsedSeconds).toBeNull();
 
       Date.now = () => 6500;
@@ -454,13 +454,13 @@ describe("codexStore message helpers", () => {
       session = useCodexStore.getState().sessions.get(SESSION_KEY);
       expect(session?.isLoading).toBe(false);
       expect(session?.loadingStartedAt).toBeUndefined();
-      expect(session?.lastCompletedElapsedSeconds).toBe(5);
+      expect(session?.lastCompletedElapsedSeconds).toBeNull();
     } finally {
       Date.now = originalNow;
     }
   });
 
-  test("reconciles timer metadata when a loading session refreshes", () => {
+  test("leaves elapsed metadata empty when a clockless loading session refreshes", () => {
     const originalNow = Date.now;
     Date.now = () => 1000;
 
@@ -477,7 +477,7 @@ describe("codexStore message helpers", () => {
 
       const session = useCodexStore.getState().sessions.get(SESSION_KEY);
       expect(session?.loadingStartedAt).toBeUndefined();
-      expect(session?.lastCompletedElapsedSeconds).toBe(5);
+      expect(session?.lastCompletedElapsedSeconds).toBeNull();
     } finally {
       Date.now = originalNow;
     }
@@ -500,7 +500,7 @@ describe("codexStore message helpers", () => {
 
       const session = useCodexStore.getState().sessions.get(SESSION_KEY);
       expect(session?.sessionId).toBe("session-2");
-      expect(session?.loadingStartedAt).toBe(8000);
+      expect(session?.loadingStartedAt).toBeUndefined();
       expect(session?.lastCompletedElapsedSeconds).toBeNull();
     } finally {
       Date.now = originalNow;

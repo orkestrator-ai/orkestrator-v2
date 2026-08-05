@@ -1266,7 +1266,7 @@ describe("ClaudeTmuxChatTab", () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
     const busyStartedAt = 1_000_000;
     dateNowSpy = spyOn(Date, "now").mockReturnValue(busyStartedAt);
-    useClaudeTmuxStore.getState().setBusy(stateKey, true);
+    useClaudeTmuxStore.getState().setBusy(stateKey, true, busyStartedAt);
     dateNowSpy.mockReturnValue(busyStartedAt + 65_000);
 
     render(
@@ -3023,7 +3023,13 @@ Running 1 Explore agent...
       });
     });
 
-    expect(useClaudeTmuxStore.getState().getTab("tab-1").infoEvents).toEqual([]);
+    expect(useClaudeTmuxStore.getState().getTab("tab-1").infoEvents).toEqual([
+      expect.objectContaining({
+        id: "notification",
+        kind: "Notification",
+        message: "Background note",
+      }),
+    ]);
     expect(screen.queryByText("SessionStart")).toBeNull();
     expect(screen.queryByText("Background note")).toBeNull();
   });

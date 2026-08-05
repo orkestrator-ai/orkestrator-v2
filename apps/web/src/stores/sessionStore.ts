@@ -183,6 +183,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   },
 
   updateSessionStatus: async (sessionId, status) => {
+    const previousStatus = get().sessions.get(sessionId)?.status;
     // Optimistic update
     set((state) => {
       const session = state.sessions.get(sessionId);
@@ -195,7 +196,15 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     try {
       await apiUpdateSessionStatus(sessionId, status);
     } catch (error) {
-      // Revert on error would be complex; just log for now
+      set((state) => {
+        const current = state.sessions.get(sessionId);
+        if (!current || current.status !== status || previousStatus === undefined) {
+          return state;
+        }
+        const sessions = new Map(state.sessions);
+        sessions.set(sessionId, { ...current, status: previousStatus });
+        return { sessions };
+      });
       console.error("Failed to update session status:", error);
     }
   },

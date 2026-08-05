@@ -11,7 +11,7 @@ import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useTerminalPortalStore, createTerminalKey, type PersistentTerminalData } from "@/stores/terminalPortalStore";
 import { cn } from "@/lib/utils";
-import { setSessionHasLaunchedCommand } from "@/lib/backend";
+import { bootstrapTerminalSession } from "@/lib/backend";
 import type { TabType } from "@/contexts";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
@@ -140,7 +140,7 @@ export function PersistentTerminal({
   const dataBufferRef = useRef<string>("");
   const setupCompleteRef = useRef(false);
   const workspaceReadySignaledRef = useRef(false);
-  const hasLaunchedCommandRef = useRef(false);
+  const bootstrapRequestedForSessionRef = useRef<string | null>(null);
   const hasInitiatedConnectionRef = useRef(false);
   const hasRenderedOutputRef = useRef(false);
   const pendingDurableReplayRef = useRef<PendingDurableReplay | null>(null);
@@ -193,9 +193,6 @@ export function PersistentTerminal({
   // Create a container-scoped session key
   // For local environments (containerId is null), use environmentId to ensure uniqueness
   const sessionKey = createSessionKey(containerId, tabId, environmentId);
-  const hasLaunchedCommand = useTerminalSessionStore(
-    (state) => state.sessions.get(sessionKey)?.hasLaunchedCommand ?? false,
-  );
   const agentActivityState = useAgentActivityStore(
     (state) => state.tabStates[tabId] ?? "idle",
   );
@@ -204,10 +201,8 @@ export function PersistentTerminal({
   const existingSession = useTerminalSessionStore((state) => state.sessions.get(sessionKey));
   const setSession = useTerminalSessionStore((state) => state.setSession);
   const setSerializedBuffer = useTerminalSessionStore((state) => state.setSerializedBuffer);
-  const setHasLaunchedCommandStore = useTerminalSessionStore((state) => state.setHasLaunchedCommand);
   const existingSessionId = existingSession?.sessionId;
   const serializedBuffer = existingSession?.serializedBuffer;
-  const existingHasLaunchedCommand = existingSession?.hasLaunchedCommand ?? false;
   const isReconnecting = !!existingSessionId;
   const isBackendManagedSetupTab = !!isSetupTab && (!initialCommands || initialCommands.length === 0);
   // Every terminal view asks for the backend-owned transcript. The serialized
@@ -403,7 +398,6 @@ export function PersistentTerminal({
       setIsEnvironmentReady(false);
       dataBufferRef.current = "";
       workspaceReadySignaledRef.current = false;
-      hasLaunchedCommandRef.current = false;
       hasInitiatedConnectionRef.current = false;
       hasRenderedOutputRef.current = false;
       initialRestorationCompleteRef.current = false;
@@ -649,7 +643,7 @@ export function PersistentTerminal({
   const terminalUser = tabType === "root" ? ROOT_TERMINAL_USER : undefined;
   const trackEnvironmentActivity = tabType === "claude" || tabType === "opencode" || tabType === "codex";
 
-  const { sessionId, isConnected, isConnecting, connect, resize, write } =
+  const { sessionId, bootstrapped, isConnected, isConnecting, connect, resize, write } =
     useTerminal({
       containerId,
       environmentId,
@@ -714,19 +708,11 @@ export function PersistentTerminal({
       console.debug(
         "[PersistentTerminal] Restoring from persistent session:",
         existingPersistentSession.id,
-        "hasLaunchedCommand:",
-        existingPersistentSession.hasLaunchedCommand
       );
 
       setSession(sessionKey, {
-        hasLaunchedCommand: existingPersistentSession.hasLaunchedCommand ?? false,
         persistentSessionId: existingPersistentSession.id,
       });
-
-      hasLaunchedCommandRef.current = existingPersistentSession.hasLaunchedCommand ?? false;
-      if (hasLaunchedCommandRef.current) {
-        acknowledgeInitialLaunchOptions();
-      }
 
       persistentBufferLoadPendingRef.current = true;
       loadPersistentSessionBuffer(existingPersistentSession.id)
@@ -844,10 +830,6 @@ export function PersistentTerminal({
       // Mark initial restoration as complete - cleanup can now safely serialize
       initialRestorationCompleteRef.current = true;
       setHasReconnected(true);
-      hasLaunchedCommandRef.current = existingHasLaunchedCommand;
-      if (existingHasLaunchedCommand) {
-        acknowledgeInitialLaunchOptions();
-      }
 
       // Only call onReady from reconnection path if:
       // 1. This is not the first tab, OR
@@ -880,7 +862,7 @@ export function PersistentTerminal({
         console.log("[PersistentTerminal] First tab on new environment, waiting for setup detection before calling onReady, tab:", tabId);
       }
     }
-  }, [acknowledgeInitialLaunchOptions, isReconnecting, isConnected, hasReconnected, tabId, environmentId, onReady, serializedBuffer, existingHasLaunchedCommand, terminal, fitAddon, isFirstTab, isLocalEnvironment]);
+  }, [isReconnecting, isConnected, hasReconnected, tabId, environmentId, onReady, serializedBuffer, terminal, fitAddon, isFirstTab, isLocalEnvironment]);
 
   // Persistent session buffers can arrive after the PTY reconnection effect has
   // already run. If that restored buffer contains setup completion, rehydrate
@@ -1350,17 +1332,13 @@ export function PersistentTerminal({
       !!initialCommands?.length;
     const canLaunch = isConnected && (isEnvironmentReady || shouldLaunchSetupCommand);
 
-    if (canLaunch && !hasLaunchedCommandRef.current) {
-      hasLaunchedCommandRef.current = true;
-      setHasLaunchedCommandStore(sessionKey, true);
-
-      const persistentId = persistentSessionIdRef.current;
-      if (persistentId) {
-        setSessionHasLaunchedCommand(persistentId, true).catch((err) => {
-          console.error("[PersistentTerminal] Failed to persist hasLaunchedCommand:", err);
-        });
-      }
-
+    if (
+      canLaunch
+      && !bootstrapped
+      && sessionId
+      && bootstrapRequestedForSessionRef.current !== sessionId
+    ) {
+      bootstrapRequestedForSessionRef.current = sessionId;
       setTimeout(() => {
         const agentCommand = buildAgentLaunchCommand({
           tabType,
@@ -1368,11 +1346,10 @@ export function PersistentTerminal({
           model: initialLaunchModel,
           reasoningEffort: initialLaunchReasoningEffort,
         });
+        let launchData: string | null = null;
         if (agentCommand) {
-          const command = agentCommand;
-          console.debug("[PersistentTerminal] Launching command for tab:", tabId, "command:", command);
-          writeRef.current(command + "\n");
-          acknowledgeInitialLaunchOptions();
+          launchData = `${agentCommand}\n`;
+          console.debug("[PersistentTerminal] Launching command for tab:", tabId);
         } else if (tabType === "plain" && initialCommands && initialCommands.length > 0) {
           // For plain tabs with initial commands, execute them
           console.debug("[PersistentTerminal] Executing initial commands for tab:", tabId, "commands:", initialCommands);
@@ -1385,16 +1362,33 @@ export function PersistentTerminal({
             // Note: `A && B || C` would emit both markers if B (printf) ever
             // exits non-zero; the OSC handler's setupCompleteRef guard makes
             // the second a no-op, so this stays correct.
-            writeRef.current(
-              `(${combinedCommand}) && ${SETUP_DONE_PRINTF_CMD} || ${SETUP_FAILED_PRINTF_CMD}\n`,
-            );
+            launchData = `(${combinedCommand}) && ${SETUP_DONE_PRINTF_CMD} || ${SETUP_FAILED_PRINTF_CMD}\n`;
           } else {
-            writeRef.current(combinedCommand + "\n");
+            launchData = `${combinedCommand}\n`;
           }
         }
+        if (!launchData) {
+          if (bootstrapRequestedForSessionRef.current === sessionId) {
+            bootstrapRequestedForSessionRef.current = null;
+          }
+          return;
+        }
+        void bootstrapTerminalSession(sessionId, launchData).then((result) => {
+          if (!result.bootstrapped) return;
+          acknowledgeInitialLaunchOptions();
+        }).catch((error) => {
+          if (bootstrapRequestedForSessionRef.current === sessionId) {
+            bootstrapRequestedForSessionRef.current = null;
+          }
+          console.error("[PersistentTerminal] Failed to bootstrap terminal:", error);
+        });
       }, 300);
     }
-  }, [acknowledgeInitialLaunchOptions, isEnvironmentReady, isConnected, tabType, tabId, initialPrompt, initialCommands, initialLaunchModel, initialLaunchReasoningEffort, isSetupTab, sessionKey, setHasLaunchedCommandStore]);
+  }, [acknowledgeInitialLaunchOptions, bootstrapped, isEnvironmentReady, isConnected, sessionId, tabType, tabId, initialPrompt, initialCommands, initialLaunchModel, initialLaunchReasoningEffort, isSetupTab]);
+
+  useEffect(() => {
+    if (bootstrapped) acknowledgeInitialLaunchOptions();
+  }, [acknowledgeInitialLaunchOptions, bootstrapped]);
 
   // Focus when active. Mobile is excluded so activating a tab does not raise
   // the on-screen keyboard; the terminal still fits, and tapping it focuses.
@@ -1503,7 +1497,7 @@ export function PersistentTerminal({
           onSend={handleComposeSend}
           containerId={containerId}
           worktreePath={worktreePath}
-          showAddressAll={isReviewTab && hasLaunchedCommand && agentActivityState !== "working"}
+          showAddressAll={isReviewTab && bootstrapped && agentActivityState !== "working"}
           onAddressAll={handleAddressAll}
           className={isMobile
             ? "bottom-[calc(3.5rem+env(safe-area-inset-bottom))]"

@@ -40,6 +40,7 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
 
   connectionState: NativeConnectionState;
   errorMessage?: string | null;
+  desynced?: boolean;
   serverLog?: string | null;
   onRetry: () => void;
 
@@ -115,6 +116,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   agentExpansionScope,
   connectionState,
   errorMessage,
+  desynced = false,
   serverLog,
   onRetry,
   messages,
@@ -351,7 +353,13 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         topAccessory={
           topAccessory || !isAtBottom ? (
             <div className="flex min-w-0 items-center gap-2">
-              {topAccessory}
+      {desynced && (
+        <div className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          Live updates disconnected. A full session refresh will run when the connection returns.
+        </div>
+      )}
+      {topAccessory}
               {!isAtBottom ? (
                 <button
                   type="button"

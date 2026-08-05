@@ -26,7 +26,10 @@ import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { findLatestBackendUserTurnStartedAt } from "@/lib/session-timer";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
-import { shouldReconnectEventSubscription } from "@/stores/createNativeChatStore";
+import {
+  sessionKeyPrefixFor,
+  shouldReconnectEventSubscription,
+} from "@/stores/createNativeChatStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -84,6 +87,7 @@ import {
   getLocalOpencodeServerStatus,
   adoptNativeAgentSession,
   ensureNativeAgentSession,
+  awaitBridgeReady,
   renameEnvironmentFromPrompt,
   type OpenCodeModelPreferences,
 } from "@/lib/backend";
@@ -115,11 +119,6 @@ import type {
   OpenCodeAttachment,
   OpenCodeQueuedMessage,
 } from "@/stores/openCodeStore";
-import {
-  classifyNewEnvironmentConnectionStartupError,
-  getNewEnvironmentConnectionRetryDecision,
-  isRetryableNewEnvironmentConnectionError,
-} from "@/lib/new-environment-connection-retry";
 
 interface OpenCodeChatTabProps {
   tabId: string;
@@ -330,9 +329,6 @@ export function OpenCodeChatTab({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
-  const automaticInitRetryCountRef = useRef(0);
-  const automaticInitRetryWindowStartedAtRef = useRef<number | null>(null);
-  const setupPendingObservedForInitRetryRef = useRef(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [modelPreferences, setModelPreferences] =
     useState<OpenCodeModelPreferences>(EMPTY_MODEL_PREFERENCES);
@@ -424,6 +420,12 @@ export function OpenCodeChatTab({
     (state) => state.getOrCreateEventSubscription,
   );
   const setEventStream = useOpenCodeStore((state) => state.setEventStream);
+  const setEventReconnectState = useOpenCodeStore((state) => state.setEventReconnectState);
+  const eventSubscriptionDesynced = useOpenCodeStore(
+    (state) => state.eventSubscriptions.get(environmentId)?.desynced ?? false,
+  );
+  const markEventSubscriptionHealthy = useOpenCodeStore((state) => state.markEventSubscriptionHealthy);
+  const markEventSubscriptionResynced = useOpenCodeStore((state) => state.markEventSubscriptionResynced);
   const hasActiveEventSubscription = useOpenCodeStore(
     (state) => state.hasActiveEventSubscription,
   );
@@ -753,7 +755,6 @@ export function OpenCodeChatTab({
   // Track last initialization time to prevent rapid re-initialization
   const lastInitTimeRef = useRef<number>(0);
   const INIT_DEBOUNCE_MS = 1000; // Don't re-initialize within 1 second
-  const sseReconnectAttemptsRef = useRef<number>(0);
   const startSharedEventSubscriptionRef = useRef<((client: ReturnType<typeof createClient>) => void) | null>(null);
   const MAX_SSE_RECONNECT_ATTEMPTS = 10;
   const SSE_RECONNECT_BASE_DELAY = 3000;
@@ -978,24 +979,7 @@ export function OpenCodeChatTab({
 
     // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
     if (setupPending) {
-      setupPendingObservedForInitRetryRef.current = true;
       return;
-    }
-
-    if (automaticInitRetryWindowStartedAtRef.current === null) {
-      const environment = useEnvironmentStore
-        .getState()
-        .getEnvironmentById(environmentId);
-      const initialDecision = getNewEnvironmentConnectionRetryDecision({
-        createdAt: environment?.createdAt,
-        attempt: 0,
-        retryWindowStartedAt: null,
-        setupPendingObserved: setupPendingObservedForInitRetryRef.current,
-      });
-      if (initialDecision) {
-        automaticInitRetryWindowStartedAtRef.current =
-          initialDecision.retryWindowStartedAt;
-      }
     }
 
     // Debounce rapid re-initialization
@@ -1328,13 +1312,24 @@ export function OpenCodeChatTab({
         let hostPort: number | null = null;
         let authToken: string | undefined;
 
-        if (isLocal) {
+        if (typeof awaitBridgeReady === "function") {
+          const readiness = await awaitBridgeReady(environmentId, "opencode");
+          if (readiness && readiness.status !== "ready") {
+            throw Object.assign(new Error(readiness.error.message), readiness.error);
+          }
+          if (readiness) {
+            hostPort = readiness.port;
+            authToken = readiness.authToken;
+          }
+        }
+
+        if (!hostPort && isLocal) {
           // Local environment - use local server commands
           let localStatus;
           try {
             localStatus = await getLocalOpencodeServerStatus(environmentId);
           } catch (error) {
-            throw classifyNewEnvironmentConnectionStartupError(error);
+            throw error;
           }
 
           if (!localStatus.running) {
@@ -1342,7 +1337,7 @@ export function OpenCodeChatTab({
             try {
               result = await startLocalOpencodeServer(environmentId);
             } catch (error) {
-              throw classifyNewEnvironmentConnectionStartupError(error);
+              throw error;
             }
             localStatus = {
               running: true,
@@ -1360,7 +1355,7 @@ export function OpenCodeChatTab({
 
           hostPort = localStatus.port;
           authToken = localStatus.authToken;
-        } else {
+        } else if (!hostPort) {
           // Containerized environment - use container server commands
           if (!containerId) {
             throw new Error(
@@ -1372,7 +1367,7 @@ export function OpenCodeChatTab({
           try {
             status = await getOpenCodeServerStatus(containerId);
           } catch (error) {
-            throw classifyNewEnvironmentConnectionStartupError(error);
+            throw error;
           }
 
           if (!status.running) {
@@ -1380,7 +1375,7 @@ export function OpenCodeChatTab({
             try {
               result = await startOpenCodeServer(containerId);
             } catch (error) {
-              throw classifyNewEnvironmentConnectionStartupError(error);
+              throw error;
             }
             status = {
               running: true,
@@ -1660,52 +1655,12 @@ export function OpenCodeChatTab({
       } catch (error) {
         if (!mounted) return;
         // Extract error message with structured details when available.
-        let message = isRetryableNewEnvironmentConnectionError(error)
-          ? error.message
-          : formatOpenCodeError(error);
+        let message = formatOpenCodeError(error);
         // Add hint for port mapping issues
         if (message.includes("port") && message.includes("not mapped")) {
           message +=
             ". Try recreating the environment to enable native mode support.";
         }
-        const environment = useEnvironmentStore
-          .getState()
-          .getEnvironmentById(environmentId);
-        const retryDecision = isRetryableNewEnvironmentConnectionError(error)
-          ? getNewEnvironmentConnectionRetryDecision({
-              createdAt: environment?.createdAt,
-              attempt: automaticInitRetryCountRef.current,
-              retryWindowStartedAt: automaticInitRetryWindowStartedAtRef.current,
-              setupPendingObserved: setupPendingObservedForInitRetryRef.current,
-            })
-          : null;
-        if (retryDecision !== null) {
-          const {
-            delayMs,
-            retryWindowStartedAt,
-            retryWindowExpiresAt,
-          } = retryDecision;
-          automaticInitRetryWindowStartedAtRef.current = retryWindowStartedAt;
-          automaticInitRetryCountRef.current += 1;
-          console.warn(
-            `[OpenCodeChatTab] Retrying new environment connection in ${delayMs}ms:`,
-            message,
-          );
-          setClient(environmentId, null);
-          setConnectionState("connecting");
-          setErrorMessage(null);
-          window.setTimeout(() => {
-            if (!mounted) return;
-            if (Date.now() > retryWindowExpiresAt) {
-              setConnectionState("error");
-              setErrorMessage(message);
-              return;
-            }
-            setInitAttempt((value) => value + 1);
-          }, delayMs);
-          return;
-        }
-
         console.error("[OpenCodeChatTab] Initialization failed:", error);
         setConnectionState("error");
         setErrorMessage(message);
@@ -1810,6 +1765,7 @@ export function OpenCodeChatTab({
       // Get or create subscription state from store
       const subscriptionState = getOrCreateEventSubscription(environmentId);
       const { abortController } = subscriptionState;
+      const requiresFullRehydrate = subscriptionState.desynced;
       const lastReloadTimeBySession = new Map<string, number>();
       const pendingReloads = new Map<string, NodeJS.Timeout>();
       const reloadGenerationByKey = new Map<string, number>();
@@ -1842,6 +1798,24 @@ export function OpenCodeChatTab({
 
         // Store stream reference in the store for cleanup
         setEventStream(environmentId, eventStream, abortController);
+
+        if (requiresFullRehydrate) {
+          const prefix = sessionKeyPrefixFor(environmentId);
+          for (const [key, projected] of useOpenCodeStore.getState().sessions) {
+            if (!key.startsWith(prefix)) continue;
+            const messages = await getSessionMessages(
+              sdkClient,
+              projected.sessionId,
+              { throwOnError: true },
+            );
+            if (abortController.signal.aborted) return;
+            setMessages(key, messages);
+            await syncPendingRequests(sdkClient, projected.sessionId, {
+              throwOnError: true,
+            });
+          }
+          markEventSubscriptionResynced(environmentId, abortController);
+        }
 
         const DEBOUNCE_MS = 200; // Debounce all message fetches
 
@@ -2190,7 +2164,7 @@ export function OpenCodeChatTab({
 
         for await (const event of eventStream) {
           // Reset reconnect backoff on first successful event
-          sseReconnectAttemptsRef.current = 0;
+          markEventSubscriptionHealthy(environmentId, abortController);
 
           if (abortController.signal.aborted) {
             // Clean up pending reloads on abort
@@ -2549,14 +2523,19 @@ export function OpenCodeChatTab({
         // Auto-reconnect SSE if the connection dropped unexpectedly (not explicitly aborted).
         // Uses exponential backoff capped at 60s, with a maximum retry count.
         if (!abortController.signal.aborted) {
-          const attempt = sseReconnectAttemptsRef.current;
+          const attempt = useOpenCodeStore.getState().eventSubscriptions
+            .get(environmentId)?.reconnectAttempts ?? 0;
           if (attempt >= MAX_SSE_RECONNECT_ATTEMPTS) {
+            setEventReconnectState(
+              environmentId,
+              { desynced: true, reconnectTimer: null },
+              abortController,
+            );
             console.warn("[OpenCodeChatTab] SSE reconnect limit reached for", environmentId);
           } else {
             const reconnectDelay = Math.min(SSE_RECONNECT_BASE_DELAY * Math.pow(2, attempt), SSE_RECONNECT_MAX_DELAY);
-            sseReconnectAttemptsRef.current = attempt + 1;
             console.debug("[OpenCodeChatTab] SSE dropped, reconnect attempt", attempt + 1, "in", reconnectDelay, "ms for", environmentId);
-            setTimeout(() => {
+            const reconnectTimer = setTimeout(() => {
               const currentState = useOpenCodeStore.getState();
               const currentClient = currentState.clients.get(environmentId);
               if (
@@ -2570,10 +2549,18 @@ export function OpenCodeChatTab({
                 startSharedEventSubscriptionRef.current?.(currentClient);
               }
             }, reconnectDelay);
+            setEventReconnectState(
+              environmentId,
+              { reconnectAttempts: attempt + 1, reconnectTimer },
+              abortController,
+            );
           }
         } else {
-          // Explicit abort — reset reconnect counter
-          sseReconnectAttemptsRef.current = 0;
+          setEventReconnectState(
+            environmentId,
+            { reconnectAttempts: 0, reconnectTimer: null },
+            abortController,
+          );
         }
       }
     },
@@ -2581,6 +2568,9 @@ export function OpenCodeChatTab({
       environmentId,
       hasActiveEventSubscription,
       getOrCreateEventSubscription,
+      markEventSubscriptionHealthy,
+      markEventSubscriptionResynced,
+      setEventReconnectState,
       setEventStream,
       setMessages,
       upsertMessage,
@@ -2591,6 +2581,7 @@ export function OpenCodeChatTab({
       addPendingQuestion,
       removePendingPermission,
       removePendingQuestion,
+      syncPendingRequests,
     ],
   );
   startSharedEventSubscriptionRef.current = startSharedEventSubscription;
@@ -2833,9 +2824,6 @@ export function OpenCodeChatTab({
 
   // Handle retry connection
   const handleRetry = useCallback(() => {
-    automaticInitRetryCountRef.current = 0;
-    automaticInitRetryWindowStartedAtRef.current = Date.now();
-    setupPendingObservedForInitRetryRef.current = false;
     setConnectionState("connecting");
     setErrorMessage(null);
     // Reset initialization state to force new session creation
@@ -3176,6 +3164,7 @@ export function OpenCodeChatTab({
       containerId={containerId}
       connectionState={connectionState}
       errorMessage={errorMessage}
+      desynced={eventSubscriptionDesynced}
       serverLog={serverLog}
       onRetry={handleRetry}
       messages={displayMessages}

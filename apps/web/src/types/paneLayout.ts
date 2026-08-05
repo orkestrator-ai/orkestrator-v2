@@ -130,6 +130,9 @@ export interface LoopedReviewTabData {
 export interface BrowserTabData {
   /** User-facing backend-local URL. An empty string opens the browser start screen. */
   url: string;
+  /** Durable navigation history for renderer-backed previews. */
+  history?: string[];
+  historyIndex?: number;
 }
 
 // Tab information stored in pane leaves

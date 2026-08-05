@@ -2872,6 +2872,43 @@ describe("at-most-once dispatch", () => {
     expect(h.runtime.getStatus(sessionId)!.phase).toBe("failed");
   });
 
+  test("an initial prompt retries one definite overload inside the bridge", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "turn-after-overload" } };
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const requestId = "initial-prompt:env-1:tab-1";
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "start once",
+      requestId,
+      attachments: [],
+    });
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      result: {
+        requestId,
+        turnId: "turn-after-overload",
+      },
+    });
+    expect(h.child().requests.filter((request) => request.method === "turn/start"))
+      .toHaveLength(2);
+    expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
+      action: "attach",
+      record: { turnId: "turn-after-overload" },
+    });
+  });
+
   test("a failed prepared-journal write prevents turn dispatch", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

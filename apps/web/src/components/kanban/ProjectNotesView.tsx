@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ArrowLeft } from "lucide-react";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useProjectStore } from "@/stores";
+import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
 
 interface ProjectNotesViewProps {
   projectId: string;
@@ -14,63 +15,69 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
   const notes = useKanbanStore((s) => s.notes);
   const loadNotes = useKanbanStore((s) => s.loadNotes);
   const saveNotes = useKanbanStore((s) => s.saveNotes);
+  const notesLoading = useKanbanStore((s) => s.notesLoading);
+  const currentNotesProjectId = useKanbanStore((s) => s.currentNotesProjectId);
   const getProjectById = useProjectStore((s) => s.getProjectById);
 
   const project = getProjectById(projectId);
-  const [draft, setDraft] = useState(notes);
-  const [isDirty, setIsDirty] = useState(false);
+  const notesReady = currentNotesProjectId === projectId && !notesLoading;
+  const [draft, setDraft, clearDurableDraft] = useDurableComposeDraft<string>({
+    ownerType: "project",
+    ownerId: projectId,
+    namespace: "project-notes",
+    localKey: "editor",
+    initialValue: notes,
+    isEmpty: (value) => value.length === 0,
+    isValid: (value): value is string => typeof value === "string",
+    enabled: notesReady,
+  });
+  const isDirty = notesReady && draft !== notes;
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const draftRef = useRef(draft);
-  const isDirtyRef = useRef(isDirty);
-  draftRef.current = draft;
-  isDirtyRef.current = isDirty;
 
   useEffect(() => {
     void loadNotes(projectId);
   }, [projectId, loadNotes]);
 
-  // Sync draft when notes load from backend
-  useEffect(() => {
-    setDraft(notes);
-    setIsDirty(false);
-  }, [notes]);
+  const persistNotes = useCallback(async (value: string) => {
+    try {
+      await saveNotes(projectId, value);
+      await clearDurableDraft();
+    } catch (error) {
+      console.warn("[ProjectNotesView] Notes remain in the durable draft:", error);
+    }
+  }, [clearDurableDraft, projectId, saveNotes]);
 
   const handleChange = useCallback(
     (value: string) => {
       setDraft(value);
-      setIsDirty(true);
 
       // Auto-save after 1 second of inactivity
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
       saveTimeoutRef.current = setTimeout(() => {
-        void saveNotes(projectId, value);
-        setIsDirty(false);
+        void persistNotes(value);
       }, 1000);
     },
-    [projectId, saveNotes]
+    [persistNotes, setDraft]
   );
 
   const handleSaveNow = () => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
-    void saveNotes(projectId, draft);
-    setIsDirty(false);
+    void persistNotes(draft);
   };
 
-  // Clean up timeout on unmount and flush save if dirty
+  // The durable draft hook flushes on unmount; only cancel the convenience
+  // auto-save timer here so a hidden view cannot race a later explicit save.
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
-      if (isDirtyRef.current) {
-        void saveNotes(projectId, draftRef.current);
-      }
     };
-  }, [projectId, saveNotes]);
+  }, []);
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -99,6 +106,7 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
           onChange={(e) => handleChange(e.target.value)}
           placeholder="Write project notes here... These notes are shared across all environments in this project."
           className="h-full min-h-[300px] resize-none text-sm font-mono"
+          disabled={!notesReady}
         />
       </div>
     </div>

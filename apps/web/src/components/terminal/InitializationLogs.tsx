@@ -1,13 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { listen } from "@/lib/native/events";
-import { getContainerLogs, streamContainerLogs } from "@/lib/backend";
+import { getContainerLogs } from "@/lib/backend";
 import { Loader2, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-interface ContainerLogPayload {
-  container_id: string;
-  text: string;
-}
 
 interface InitializationLogsProps {
   containerId: string;
@@ -34,51 +28,43 @@ export function InitializationLogs({ containerId, className }: InitializationLog
     }
   }, [logs]);
 
-  // Fetch initial logs and start streaming
+  // Docker is the durable log buffer. Refresh from its authoritative tail so
+  // remounts recover everything still in the bounded snapshot without relying
+  // on a renderer-owned follower process or a gap-prone live event stream.
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
-
-    const setup = async () => {
+    let disposed = false;
+    let refreshInFlight = false;
+    const refresh = async (initial: boolean) => {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
       try {
-        // Get initial logs (last 100 lines)
-        const initialLogs = await getContainerLogs(containerId, "100");
-        if (initialLogs) {
-          // Split by newline and filter empty lines
-          const lines = initialLogs.split("\n").filter(line => line.length > 0);
-          setLogs(lines.slice(-MAX_LOG_LINES));
-        }
+        const snapshot = await getContainerLogs(containerId, String(MAX_LOG_LINES));
+        if (disposed) return;
+        const snapshotLines = snapshot
+          ? snapshot.split("\n").filter(line => line.length > 0)
+          : [];
+        setLogs(snapshotLines.slice(-MAX_LOG_LINES));
+        setError(null);
         setIsLoading(false);
-
-        // Start streaming new logs
-        await streamContainerLogs(containerId);
-
-        // Listen for new log events
-        const unlisten = await listen<ContainerLogPayload>("container-log", (event) => {
-          if (event.payload.container_id === containerId) {
-            const newLines = event.payload.text.split("\n").filter(line => line.length > 0);
-            setLogs(prev => {
-              const updated = [...prev, ...newLines];
-              // Keep only the last MAX_LOG_LINES to prevent memory growth
-              return updated.length > MAX_LOG_LINES ? updated.slice(-MAX_LOG_LINES) : updated;
-            });
-          }
-        });
-
-        unsubscribe = unlisten;
       } catch (err) {
+        if (disposed) return;
         const errorMessage = err instanceof Error ? err.message : "Unknown error";
-        console.error("[InitializationLogs] Error setting up logs:", errorMessage);
-        setError(`Failed to load container logs: ${errorMessage}`);
-        setIsLoading(false);
+        if (initial) {
+          console.error("[InitializationLogs] Error loading logs:", errorMessage);
+          setError(`Failed to load container logs: ${errorMessage}`);
+          setIsLoading(false);
+        }
+      } finally {
+        refreshInFlight = false;
       }
     };
 
-    setup();
+    void refresh(true);
+    const interval = setInterval(() => void refresh(false), 1_000);
 
     return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
+      disposed = true;
+      clearInterval(interval);
     };
   }, [containerId]);
 

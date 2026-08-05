@@ -26,7 +26,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { hashCwd } from "./persistence.js";
 
-export type DispatchState = "prepared" | "accepted" | "terminal";
+export type DispatchState = "prepared" | "accepted" | "retryable" | "terminal";
 export type DispatchTerminalStatus = "completed" | "interrupted" | "failed";
 
 export interface PromptDispatchRecord {
@@ -142,6 +142,8 @@ export class DispatchJournal {
         return { duplicate: true, action: "already-done", record };
       case "prepared":
         return { duplicate: true, action: "reconcile", record };
+      case "retryable":
+        return { duplicate: true, action: "dispatch", record };
     }
   }
 
@@ -211,6 +213,27 @@ export class DispatchJournal {
     await this.flush();
   }
 
+  /** Proven not to have run; the same idempotency key may be dispatched again. */
+  async markRetryable(requestId: string): Promise<void> {
+    const existing = this.records.get(requestId);
+    const timestamp = new Date(this.now()).toISOString();
+    this.records.set(requestId, {
+      requestId,
+      bridgeSessionId: existing?.bridgeSessionId ?? "",
+      threadId: existing?.threadId ?? null,
+      state: "retryable",
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+    });
+    await this.flush();
+  }
+
+  latestForSession(bridgeSessionId: string): PromptDispatchRecord | undefined {
+    return [...this.records.values()]
+      .filter((record) => record.bridgeSessionId === bridgeSessionId)
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+  }
+
   /**
    * Drops a `prepared` record once reconciliation proved the turn never ran, so
    * the request can be dispatched cleanly.
@@ -221,7 +244,9 @@ export class DispatchJournal {
 
   /** Records still in flight, i.e. what recovery has to reconcile. */
   unresolved(): PromptDispatchRecord[] {
-    return [...this.records.values()].filter((record) => record.state !== "terminal");
+    return [...this.records.values()].filter(
+      (record) => record.state === "prepared" || record.state === "accepted",
+    );
   }
 
   allRecords(): PromptDispatchRecord[] {

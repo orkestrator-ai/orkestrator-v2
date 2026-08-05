@@ -64,7 +64,7 @@ describe("claudeStore timer metadata", () => {
     });
   });
 
-  test("preserves timer metadata across loading transitions", () => {
+  test("does not fabricate timer metadata across loading transitions", () => {
     const originalNow = Date.now;
     Date.now = () => 1000;
 
@@ -73,7 +73,7 @@ describe("claudeStore timer metadata", () => {
       store.setSessionLoading(SESSION_KEY, true);
 
       let session = store.getSession(SESSION_KEY);
-      expect(session?.loadingStartedAt).toBe(1000);
+      expect(session?.loadingStartedAt).toBeUndefined();
       expect(session?.lastCompletedElapsedSeconds).toBeNull();
 
       Date.now = () => 6500;
@@ -81,13 +81,13 @@ describe("claudeStore timer metadata", () => {
 
       session = store.getSession(SESSION_KEY);
       expect(session?.loadingStartedAt).toBeUndefined();
-      expect(session?.lastCompletedElapsedSeconds).toBe(5);
+      expect(session?.lastCompletedElapsedSeconds).toBeNull();
     } finally {
       Date.now = originalNow;
     }
   });
 
-  test("reconciles timer metadata when a loading session refreshes", () => {
+  test("leaves elapsed metadata empty when a clockless loading session refreshes", () => {
     const originalNow = Date.now;
     Date.now = () => 1000;
 
@@ -104,7 +104,7 @@ describe("claudeStore timer metadata", () => {
 
       const session = store.getSession(SESSION_KEY);
       expect(session?.loadingStartedAt).toBeUndefined();
-      expect(session?.lastCompletedElapsedSeconds).toBe(5);
+      expect(session?.lastCompletedElapsedSeconds).toBeNull();
     } finally {
       Date.now = originalNow;
     }
@@ -127,7 +127,7 @@ describe("claudeStore timer metadata", () => {
 
       const session = store.getSession(SESSION_KEY);
       expect(session?.sessionId).toBe("session-2");
-      expect(session?.loadingStartedAt).toBe(8000);
+      expect(session?.loadingStartedAt).toBeUndefined();
       expect(session?.lastCompletedElapsedSeconds).toBeNull();
     } finally {
       Date.now = originalNow;

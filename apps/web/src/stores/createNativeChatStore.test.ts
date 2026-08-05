@@ -493,7 +493,14 @@ describe("teardownEventSubscription", () => {
   function subscriptionWithStream(
     stream: AsyncIterable<TestEvent> | null,
   ): NativeEventSubscriptionState<TestEvent> {
-    return { abortController: new AbortController(), stream, isActive: true };
+    return {
+      abortController: new AbortController(),
+      stream,
+      isActive: true,
+      reconnectAttempts: 0,
+      reconnectTimer: null,
+      desynced: false,
+    };
   }
 
   test("tolerates an undefined subscription", () => {
@@ -639,6 +646,29 @@ describe("createEventSubscriptionSlice", () => {
     store.setEventStream("env-1", null);
     expect(store.hasActiveEventSubscription("env-1")).toBe(false);
   });
+
+  test("reconnect budget and desync survive subscription replacement until a full resync", () => {
+    const store = useEventStore.getState();
+    const first = store.getOrCreateEventSubscription("env-1");
+    store.setEventReconnectState("env-1", {
+      reconnectAttempts: 10,
+      desynced: true,
+    }, first.abortController);
+    store.setEventStream("env-1", null, first.abortController);
+
+    const replacement = store.getOrCreateEventSubscription("env-1");
+    expect(replacement.reconnectAttempts).toBe(10);
+    expect(replacement.desynced).toBe(true);
+
+    store.markEventSubscriptionHealthy("env-1", replacement.abortController);
+    expect(useEventStore.getState().eventSubscriptions.get("env-1")?.reconnectAttempts)
+      .toBe(0);
+    expect(useEventStore.getState().eventSubscriptions.get("env-1")?.desynced)
+      .toBe(true);
+    store.markEventSubscriptionResynced("env-1", replacement.abortController);
+    expect(useEventStore.getState().eventSubscriptions.get("env-1")?.desynced)
+      .toBe(false);
+  });
 });
 
 describe("shouldReconnectEventSubscription", () => {
@@ -646,7 +676,14 @@ describe("shouldReconnectEventSubscription", () => {
     abortController: AbortController,
     isActive: boolean,
   ): NativeEventSubscriptionState<TestEvent> {
-    return { abortController, stream: null, isActive };
+    return {
+      abortController,
+      stream: null,
+      isActive,
+      reconnectAttempts: 0,
+      reconnectTimer: null,
+      desynced: false,
+    };
   }
 
   test("reconnects only the dropped subscription that still owns the environment", () => {

@@ -74,6 +74,11 @@ import type {
 } from "@/types/github";
 import type { CodexModel } from "@/lib/codex-client";
 import {
+  isAwaitBridgeReadyResult,
+  type AgentBridgeKind,
+  type AwaitBridgeReadyResult,
+} from "@orkestrator/protocol/bridge-readiness";
+import {
   isResourceRevisionManifest,
   type ResourceRevisionManifest,
   type ResourceRevisionMap,
@@ -291,6 +296,7 @@ export async function attachTerminal(
 export interface TerminalSessionCreateResult {
   sessionId: string;
   created: boolean;
+  bootstrapped: boolean;
 }
 
 function parseTerminalSessionCreateResult(
@@ -301,11 +307,19 @@ function parseTerminalSessionCreateResult(
     value === null ||
     typeof (value as { sessionId?: unknown }).sessionId !== "string" ||
     (value as { sessionId: string }).sessionId.length === 0 ||
-    typeof (value as { created?: unknown }).created !== "boolean"
+    typeof (value as { created?: unknown }).created !== "boolean" ||
+    (
+      (value as { bootstrapped?: unknown }).bootstrapped !== undefined &&
+      typeof (value as { bootstrapped?: unknown }).bootstrapped !== "boolean"
+    )
   ) {
     throw new Error("Backend returned an invalid terminal session result");
   }
-  return value as TerminalSessionCreateResult;
+  return {
+    ...(value as Omit<TerminalSessionCreateResult, "bootstrapped">),
+    // Compatibility with the previous backend for one release.
+    bootstrapped: (value as { bootstrapped?: boolean }).bootstrapped ?? false,
+  };
 }
 
 export async function createTerminalSession(
@@ -336,6 +350,23 @@ export async function startTerminalSession(sessionId: string): Promise<void> {
 export interface TerminalSessionStatus {
   id: string;
   running: boolean;
+  bootstrapped?: boolean;
+}
+
+export interface BootstrapTerminalResult {
+  bootstrapped: boolean;
+  delivered: boolean;
+  duplicate: boolean;
+}
+
+export async function bootstrapTerminalSession(
+  sessionId: string,
+  data: string,
+): Promise<BootstrapTerminalResult> {
+  return invoke<BootstrapTerminalResult>("bootstrap_terminal_session", {
+    sessionId,
+    data,
+  });
 }
 
 export async function getTerminalSession(
@@ -403,6 +434,16 @@ export async function getEnvironmentSetupSession(
   environmentId: string
 ): Promise<EnvironmentSetupSession | null> {
   return invoke<EnvironmentSetupSession | null>("get_environment_setup_session", { environmentId });
+}
+
+export async function awaitEnvironmentSetupSession(
+  environmentId: string,
+  timeoutMs = 15_000,
+): Promise<EnvironmentSetupSession | null> {
+  return invoke<EnvironmentSetupSession | null>("await_environment_setup_session", {
+    environmentId,
+    timeoutMs,
+  });
 }
 
 export async function detachTerminal(sessionId: string): Promise<void> {
@@ -1462,6 +1503,28 @@ export async function writeContainerFile(
   return invoke<string>("write_container_file", { containerId, filePath, base64Data });
 }
 
+export interface InitialPromptAttachmentWrite {
+  id: string;
+  name: string;
+  base64Data: string;
+}
+
+export interface SavedInitialPromptAttachment {
+  name: string;
+  path: string;
+}
+
+/** Persist an initial-prompt attachment batch atomically inside its environment. */
+export async function writeInitialPromptAttachments(
+  environmentId: string,
+  attachments: InitialPromptAttachmentWrite[],
+): Promise<SavedInitialPromptAttachment[]> {
+  return invoke<SavedInitialPromptAttachment[]>("write_initial_prompt_attachments", {
+    environmentId,
+    attachments,
+  });
+}
+
 /** Restore a container file to its state at the target branch or commit. */
 export async function revertContainerFile(
   environmentId: string,
@@ -1887,6 +1950,20 @@ export async function savePaneLayout(
     environmentId,
     layout,
     expectedRevision,
+  });
+}
+
+export async function applyPaneLayoutIntent(
+  environmentId: string,
+  baseLayout: PersistedPaneLayoutInput,
+  desiredLayout: PersistedPaneLayoutInput,
+  selectionIntent?: import("@orkestrator/protocol/pane-layout-merge").PaneLayoutSelectionIntent,
+): Promise<PersistedPaneLayout> {
+  return invoke<PersistedPaneLayout>("apply_pane_layout_intent", {
+    environmentId,
+    baseLayout,
+    desiredLayout,
+    ...(selectionIntent ? { selectionIntent } : {}),
   });
 }
 
@@ -2540,6 +2617,29 @@ export interface LocalServerStatus {
   pid: number | null;
   /** Per-process renderer credential for all native servers. */
   authToken?: string;
+}
+
+/** Join the backend-owned startup wait for one environment/provider pair. */
+export async function awaitBridgeReady(
+  environmentId: string,
+  agent: AgentBridgeKind,
+  timeoutMs = 60_000,
+): Promise<AwaitBridgeReadyResult | null> {
+  const result = await invoke<unknown>("await_bridge_ready", {
+    environmentId,
+    agent,
+    timeoutMs,
+  });
+  // Keep a narrow compatibility path for older desktop hosts (and embedded
+  // web test hosts) that acknowledge an unknown command without a payload.
+  // A present but malformed payload is still treated as a protocol error.
+  if (result === undefined) {
+    return null;
+  }
+  if (!isAwaitBridgeReadyResult(result)) {
+    throw new Error("Backend returned an invalid bridge readiness result");
+  }
+  return result;
 }
 
 /** Start the local OpenCode server for a local environment */

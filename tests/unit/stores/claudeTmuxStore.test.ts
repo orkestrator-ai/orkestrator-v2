@@ -18,17 +18,20 @@ describe("claudeTmuxStore", () => {
   });
 
   describe("setBusy", () => {
-    test("flipping to true records busyStartedAt", () => {
-      const before = Date.now();
+    test("flipping to true without a backend clock does not invent busyStartedAt", () => {
       useClaudeTmuxStore.getState().setBusy("tab-1", true);
       const tab = useClaudeTmuxStore.getState().getTab("tab-1");
       expect(tab.busy).toBe(true);
-      expect(tab.busyStartedAt).not.toBeNull();
-      expect(tab.busyStartedAt!).toBeGreaterThanOrEqual(before);
+      expect(tab.busyStartedAt).toBeNull();
+    });
+
+    test("stores the backend busy clock verbatim", () => {
+      useClaudeTmuxStore.getState().setBusy("tab-1", true, 1_234);
+      expect(useClaudeTmuxStore.getState().getTab("tab-1").busyStartedAt).toBe(1_234);
     });
 
     test("flipping to false clears busyStartedAt", () => {
-      useClaudeTmuxStore.getState().setBusy("tab-1", true);
+      useClaudeTmuxStore.getState().setBusy("tab-1", true, 1_234);
       useClaudeTmuxStore.getState().setBusy("tab-1", false);
       const tab = useClaudeTmuxStore.getState().getTab("tab-1");
       expect(tab.busy).toBe(false);
@@ -36,7 +39,7 @@ describe("claudeTmuxStore", () => {
     });
 
     test("redundant setBusy(true) preserves original busyStartedAt", () => {
-      useClaudeTmuxStore.getState().setBusy("tab-1", true);
+      useClaudeTmuxStore.getState().setBusy("tab-1", true, 1_234);
       const first = useClaudeTmuxStore.getState().getTab("tab-1");
       const originalStart = first.busyStartedAt;
       // Advance wall-clock perceptibly before the no-op call.
@@ -61,13 +64,13 @@ describe("claudeTmuxStore", () => {
     });
 
     test("setBusy is scoped per tab", () => {
-      useClaudeTmuxStore.getState().setBusy("tab-1", true);
+      useClaudeTmuxStore.getState().setBusy("tab-1", true, 1_234);
       useClaudeTmuxStore.getState().setBusy("tab-2", false);
       const t1 = useClaudeTmuxStore.getState().getTab("tab-1");
       const t2 = useClaudeTmuxStore.getState().getTab("tab-2");
       expect(t1.busy).toBe(true);
       expect(t2.busy).toBe(false);
-      expect(t1.busyStartedAt).not.toBeNull();
+      expect(t1.busyStartedAt).toBe(1_234);
       expect(t2.busyStartedAt).toBeNull();
     });
 

@@ -3076,6 +3076,7 @@ export class AppServerRuntime {
     structuredOutputRequestId?: string;
     structuredOutput?: StructuredOutputResult;
     contextUsage?: EngineUsageSnapshot;
+    unconfirmedDispatch?: { requestId: string; retryable: boolean };
     engineGeneration: number;
     messageRevision: number;
   } | null {
@@ -3090,6 +3091,7 @@ export class AppServerRuntime {
       session.threadId !== null
       && this.threadsAwaitingDispatchRecovery.has(session.threadId);
     const phase = context?.phase ?? (awaitingRecovery ? "recovering" : "idle");
+    const latestDispatch = this.journal.latestForSession(sessionId);
 
     return {
       // Keeps the pre-migration contract; `phase` carries the new detail.
@@ -3101,6 +3103,14 @@ export class AppServerRuntime {
       turnId: context?.activeTurn?.turnId,
       turnStartedAt: context?.turnStartedAt,
       requestId: context?.activeTurn?.requestId,
+      ...(latestDispatch?.state === "retryable"
+        ? {
+            unconfirmedDispatch: {
+              requestId: latestDispatch.requestId,
+              retryable: true,
+            },
+          }
+        : {}),
       structuredOutputRequestId: session.structuredOutputRequestId,
       structuredOutput: session.structuredOutput,
       contextUsage: session.threadId
@@ -3579,13 +3589,36 @@ export class AppServerRuntime {
         threadId: context.threadId,
       });
 
-      const turn = await this.options.engine.startTurn({
+      const startTurn = () => this.options.engine.startTurn({
         handle: context.engineHandle,
         input: engineInput,
         config: session.config,
         requestId,
         outputSchema: input.outputSchema,
       });
+      let turn;
+      try {
+        turn = await startTurn();
+      } catch (error) {
+        const failure = this.options.engine.classifyFailure(error);
+        if (
+          !requestId.startsWith("initial-prompt:")
+          || !failure.retryImmediately
+        ) {
+          throw error;
+        }
+        // Overload is the sole definite rejection: app-server guarantees the
+        // turn did not run. Re-arm this durable startup request once beside the
+        // journal, where a tab unmount cannot cancel or duplicate the retry.
+        await this.journal.forget(requestId);
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        await this.journal.markPrepared({
+          requestId,
+          bridgeSessionId: session.id,
+          threadId: context.threadId,
+        });
+        turn = await startTurn();
+      }
       // Both halves of the exchange, so "fork from here" works on either bubble
       // for the lifetime of this process; hydration re-derives the same ids from
       // the rollout afterwards.
@@ -3658,7 +3691,7 @@ export class AppServerRuntime {
        */
       if (classified.class === "rejected") {
         this.registry.setPhase(context, "failed", classified.engineError.message);
-        await this.journal.forget(requestId);
+        await this.journal.markRetryable(requestId);
       } else {
         ambiguousResolution = await this.settleAmbiguousDispatch(
           context,

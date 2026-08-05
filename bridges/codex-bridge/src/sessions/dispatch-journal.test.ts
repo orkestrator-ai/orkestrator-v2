@@ -141,6 +141,24 @@ describe("persistence across a bridge restart", () => {
     expect(second.get("req-1")?.turnId).toBe("turn-1");
   });
 
+  test("a retryable dispatch marker survives restart and remains session-addressable", async () => {
+    const codexHome = mkdtempSync(join(tmpdir(), "ork-journal-retryable-"));
+    temporaryDirs.push(codexHome);
+    const first = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await first.load();
+    await first.markPrepared({ requestId: "req-retry", bridgeSessionId: "s1", threadId: null });
+    await first.markRetryable("req-retry");
+
+    const second = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await second.load();
+    expect(second.classify("req-retry")).toMatchObject({
+      duplicate: true,
+      action: "dispatch",
+      record: { state: "retryable" },
+    });
+    expect(second.latestForSession("s1")?.requestId).toBe("req-retry");
+  });
+
   test("a journal for a different cwd is not read", async () => {
     const codexHome = mkdtempSync(join(tmpdir(), "ork-journal-cwd-"));
     temporaryDirs.push(codexHome);

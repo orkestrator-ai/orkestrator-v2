@@ -934,7 +934,7 @@ describe("openCodeStore selectors and session mutations", () => {
     resetOpenCodeStore();
   });
 
-  test("preserves timer metadata across loading transitions", () => {
+  test("does not fabricate timer metadata across loading transitions", () => {
     const originalNow = Date.now;
     Date.now = () => 1000;
 
@@ -949,7 +949,7 @@ describe("openCodeStore selectors and session mutations", () => {
       store.setSessionLoading("env-env-1:tab-1", true);
 
       let session = store.getSession("env-env-1:tab-1");
-      expect(session?.loadingStartedAt).toBe(1000);
+      expect(session?.loadingStartedAt).toBeUndefined();
       expect(session?.lastCompletedElapsedSeconds).toBeNull();
 
       Date.now = () => 6500;
@@ -957,13 +957,13 @@ describe("openCodeStore selectors and session mutations", () => {
 
       session = store.getSession("env-env-1:tab-1");
       expect(session?.loadingStartedAt).toBeUndefined();
-      expect(session?.lastCompletedElapsedSeconds).toBe(5);
+      expect(session?.lastCompletedElapsedSeconds).toBeNull();
     } finally {
       Date.now = originalNow;
     }
   });
 
-  test("reconciles timer metadata when a loading session refreshes", () => {
+  test("leaves elapsed metadata empty when a clockless loading session refreshes", () => {
     const originalNow = Date.now;
     Date.now = () => 1000;
 
@@ -985,7 +985,7 @@ describe("openCodeStore selectors and session mutations", () => {
 
       const session = store.getSession("env-env-1:tab-1");
       expect(session?.loadingStartedAt).toBeUndefined();
-      expect(session?.lastCompletedElapsedSeconds).toBe(5);
+      expect(session?.lastCompletedElapsedSeconds).toBeNull();
     } finally {
       Date.now = originalNow;
     }
@@ -1013,7 +1013,7 @@ describe("openCodeStore selectors and session mutations", () => {
 
       const session = store.getSession("env-env-1:tab-1");
       expect(session?.sessionId).toBe("session-2");
-      expect(session?.loadingStartedAt).toBe(8000);
+      expect(session?.loadingStartedAt).toBeUndefined();
       expect(session?.lastCompletedElapsedSeconds).toBeNull();
     } finally {
       Date.now = originalNow;

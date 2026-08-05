@@ -1615,6 +1615,12 @@ type TmuxStatus = {
   permission_mode: string;
   fast_mode: boolean | null;
   observation: TmuxAgentObservation;
+  info_events: Array<{
+    id: string;
+    kind: string;
+    message: string;
+    receivedAt: string;
+  }>;
 };
 
 function permissionModeFromTranscriptLine(line: unknown): string | undefined {
@@ -1739,6 +1745,7 @@ class TmuxSession {
   private taskTracker = new TranscriptTaskTracker();
   private busy = false;
   private busyStartedAt: number | null = null;
+  private readonly infoEvents: TmuxStatus["info_events"] = [];
   /**
    * A Stop hook is a turn boundary even when this backend did not observe the
    * matching UserPromptSubmit (for example, after a backend restart). The
@@ -1802,6 +1809,7 @@ class TmuxSession {
       permission_mode: this.permissionMode,
       fast_mode: this.fastMode,
       observation: this.observation,
+      info_events: [...this.infoEvents],
     };
   }
 
@@ -2305,6 +2313,25 @@ class TmuxSession {
   private emitHook(context: CommandContext, event: PendingHookEvent): void {
     this.updateBusyFromHookKind(event.kind, context);
     if (event.kind === "Stop") this.scheduleCompletionNotification(context);
+    if (event.kind === "Notification" || event.kind === "Stop") {
+      const payload = event.payload && typeof event.payload === "object"
+        ? event.payload as Record<string, unknown>
+        : undefined;
+      const rawMessage = typeof payload?.message === "string"
+        ? payload.message
+        : event.kind === "Stop"
+          ? "Claude finished responding"
+          : "Claude sent a notification";
+      this.infoEvents.push({
+        id: event.id,
+        kind: event.kind,
+        message: rawMessage.slice(0, 2_000),
+        receivedAt: new Date(event.requestedAt ?? Date.now()).toISOString(),
+      });
+      if (this.infoEvents.length > 20) {
+        this.infoEvents.splice(0, this.infoEvents.length - 20);
+      }
+    }
     context.emit(CLAUDE_TMUX_EVENT, {
       kind: "hook",
       tab_id: this.tabId,

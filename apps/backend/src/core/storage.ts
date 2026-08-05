@@ -39,6 +39,11 @@ import {
   PANE_LAYOUT_VERSION,
   paneLayoutRevisionConflictMessage,
 } from "@orkestrator/protocol/pane-layout";
+import {
+  mergePersistedPaneLayouts,
+  type PaneLayoutMergeInput,
+  type PaneLayoutSelectionIntent,
+} from "@orkestrator/protocol/pane-layout-merge";
 import { isTabTeardownKind } from "@orkestrator/protocol/tab-teardown";
 import {
   RESOURCE_MANIFEST_KINDS,
@@ -3522,6 +3527,59 @@ export class StorageService {
       // Selection changes make this a high-churn record. Keep one current
       // recovery snapshot without rotating five near-identical historical
       // backups for every focus change.
+      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
+      this.announce("pane-layout", environmentId);
+      return saved;
+    });
+  }
+
+  /**
+   * Applies one optimistic renderer mutation against the latest durable tree.
+   * The read, three-way rebase, revision increment, and write share the pane
+   * mutation queue, so concurrent windows cannot race a renderer-side CAS
+   * retry or lose the mutation during a renderer crash.
+   */
+  async applyPaneLayoutIntent(
+    environmentId: string,
+    base: PaneLayoutMergeInput,
+    desired: PaneLayoutMergeInput,
+    selectionIntent?: PaneLayoutSelectionIntent,
+  ): Promise<PersistedPaneLayout> {
+    assertPaneLayoutRootWithinBounds(base.root);
+    assertPaneLayoutRootWithinBounds(desired.root);
+    return this.enqueuePaneLayoutMutation(async () => {
+      if (!await this.getEnvironment(environmentId)) {
+        throw new Error(`Environment not found: ${environmentId}`);
+      }
+      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+        this.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[environmentId];
+      const sameGeneration = previous
+        && previous.version === desired.version
+        && previous.containerId === desired.containerId;
+      const next = sameGeneration
+        ? mergePersistedPaneLayouts(
+            base,
+            desired,
+            {
+              version: previous.version,
+              containerId: previous.containerId,
+              activePaneId: previous.activePaneId,
+              root: previous.root,
+            } as PaneLayoutMergeInput,
+            { selectionIntent },
+          )
+        : desired;
+      assertPaneLayoutRootWithinBounds(next.root);
+      const saved: PersistedPaneLayout = {
+        ...next,
+        environmentId,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      layouts[environmentId] = saved;
       await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
       this.announce("pane-layout", environmentId);
       return saved;

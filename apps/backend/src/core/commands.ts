@@ -25,6 +25,11 @@ import {
 } from "@orkestrator/protocol/resource-events";
 import { paneLayoutUnsupportedVersionMessage } from "@orkestrator/protocol/pane-layout";
 import {
+  isAgentBridgeKind,
+  isStructuredCommandError,
+  type AwaitBridgeReadyResult,
+} from "@orkestrator/protocol/bridge-readiness";
+import {
   PANE_LAYOUT_VERSION,
   type AgentModelConfigKey,
   type ClientEnvironment,
@@ -249,6 +254,8 @@ const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalActivityArmed = new Set<string>();
 const terminalActivityGenerations = new Map<string, number>();
 const terminalActivityCompletions = new Map<string, number>();
+/** Auto-launch latch belongs to the backend PTY lifetime, not a React mount. */
+const bootstrappedTerminalSessions = new Set<string>();
 type TerminalActivityCompletionState = {
   id: string;
   generation: number;
@@ -272,6 +279,13 @@ const deletingLocalServerEnvironments = new Set<string>();
 const mergingEnvironments = new Set<string>();
 const mergeCleanupRecoveryTasks = new Map<string, Promise<void>>();
 type LocalServerKind = "opencode" | "claude" | "codex";
+
+function retryableBridgeStartupError(
+  message: string,
+  retryAfterMs = 500,
+): Error & { retryable: true; retryAfterMs: number } {
+  return Object.assign(new Error(message), { retryable: true as const, retryAfterMs });
+}
 const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "codex"];
 // Codex bridge shutdown can spend five seconds draining app-server before its
 // one-second hard-kill fallback. Give that path time to reap the MCP process
@@ -3630,6 +3644,8 @@ function cleanupTerminalSession(
     && terminalSessionConfigs.has(id);
   if (retainStableState) return;
 
+  bootstrappedTerminalSessions.delete(id);
+
   terminalSessionConfigs.delete(id);
   if (stableKey) {
     terminalStableKeysBySessionId.delete(id);
@@ -5618,7 +5634,9 @@ async function startLocalServerUnlocked(
   }
 
   const environment = await context.storage.getEnvironment(environmentId);
-  if (!environment?.worktreePath) throw new Error("Local environment worktree is not available");
+  if (!environment?.worktreePath) {
+    throw retryableBridgeStartupError("Local environment worktree is not available");
+  }
   const agentToolConnection = context.agentTools?.connection(
     environment.id,
     environment.projectId,
@@ -7208,7 +7226,9 @@ async function startContainerServer(
   command: string,
   redactValues?: ReadonlyArray<string | null | undefined>,
 ): Promise<{ hostPort: number; wasRunning: boolean }> {
-  if (!await isContainerRunning(containerId)) throw new Error("Container is not running");
+  if (!await isContainerRunning(containerId)) {
+    throw retryableBridgeStartupError("Container is not running");
+  }
   const hostPort = await getHostPort(containerId, port);
   if (!hostPort) throw new Error(`Container port ${port} is not mapped`);
   if (await checkHttpHealth(hostPort)) return { hostPort, wasRunning: true };
@@ -7232,7 +7252,9 @@ async function startContainerServer(
 async function startContainerOpenCodeServer(
   containerId: string,
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
-  if (!await isContainerRunning(containerId)) throw new Error("Container is not running");
+  if (!await isContainerRunning(containerId)) {
+    throw retryableBridgeStartupError("Container is not running");
+  }
   const hostPort = await getHostPort(containerId, OPENCODE_SERVER_PORT);
   if (!hostPort) throw new Error(`Container port ${OPENCODE_SERVER_PORT} is not mapped`);
 
@@ -7677,6 +7699,7 @@ export function createCommandRegistry(
   const register = (name: string, handler: CommandHandler) => commands.set(name, handler);
   const pendingEnvironmentRenameTasks = new Map<string, Promise<void>>();
   const claudeModelCatalogRefreshes = new Map<string, Promise<ClaudeModelCatalogSnapshot>>();
+  const bridgeReadinessWaits = new Map<string, Promise<AwaitBridgeReadyResult>>();
   const validatedClaudeModelCatalogs = new Set<string>();
   const extensionDiscoveryCache = createExtensionDiscoveryCache();
 
@@ -8533,6 +8556,26 @@ export function createCommandRegistry(
     });
     return payload;
   });
+  register("await_environment_setup_session", async ({ environmentId, timeoutMs }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const timeout = asNumber(timeoutMs, "timeoutMs");
+    if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > 60_000) {
+      throw new Error("timeoutMs must be an integer between 0 and 60000");
+    }
+    const deadline = Date.now() + timeout;
+    while (true) {
+      const snapshot = await commands.get("get_environment_setup_session")?.(
+        { environmentId: id },
+        context,
+      );
+      if (snapshot) return snapshot;
+      const environment = await context.storage.getEnvironment(id);
+      if (!environment || environment.setupPhase !== "running" || Date.now() >= deadline) {
+        return null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  });
   register("get_setup_commands", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) return null;
@@ -9165,6 +9208,55 @@ export function createCommandRegistry(
       activePaneId,
       root,
     }, asNumber(expectedRevision, "expectedRevision"));
+  });
+  register("apply_pane_layout_intent", async (
+    { environmentId, baseLayout, desiredLayout, selectionIntent },
+    { storage },
+  ) => {
+    const parseLayout = (raw: unknown, label: string) => {
+      const value = asRecord(raw, label);
+      const version = asNumber(value.version, `${label}.version`);
+      if (version !== PANE_LAYOUT_VERSION) {
+        throw new Error(paneLayoutUnsupportedVersionMessage(version));
+      }
+      const activePaneId = asNonBlankString(value.activePaneId, `${label}.activePaneId`);
+      const containerId = value.containerId === null
+        ? null
+        : asString(value.containerId, `${label}.containerId`);
+      return {
+        version,
+        containerId,
+        activePaneId,
+        root: asRecord(value.root, `${label}.root`),
+      };
+    };
+    let parsedSelectionIntent;
+    if (selectionIntent !== undefined) {
+      const value = asRecord(selectionIntent, "selectionIntent");
+      assertOnlyKeys(value, ["activePaneId", "activeTabIds"], "selectionIntent");
+      const activeTabIds = value.activeTabIds === undefined
+        ? undefined
+        : Object.fromEntries(Object.entries(asRecord(value.activeTabIds, "selectionIntent.activeTabIds")).map(
+            ([paneId, tabId]) => {
+              if (tabId !== null && typeof tabId !== "string") {
+                throw new Error("Expected selectionIntent.activeTabIds values to be strings or null");
+              }
+              return [paneId, tabId];
+            },
+          ));
+      parsedSelectionIntent = {
+        ...(value.activePaneId === undefined
+          ? {}
+          : { activePaneId: asNonBlankString(value.activePaneId, "selectionIntent.activePaneId") }),
+        ...(activeTabIds === undefined ? {} : { activeTabIds }),
+      };
+    }
+    return storage.applyPaneLayoutIntent(
+      asString(environmentId, "environmentId"),
+      parseLayout(baseLayout, "baseLayout") as never,
+      parseLayout(desiredLayout, "desiredLayout") as never,
+      parsedSelectionIntent,
+    );
   });
   register("delete_pane_layout", ({ environmentId }, { storage }) =>
     storage.deletePaneLayout(asString(environmentId, "environmentId")),
@@ -9939,13 +10031,17 @@ export function createCommandRegistry(
     };
     const existingId = existingStableTerminalSession(stableKey);
     if (existingId && containerTerminalConfigMatches(existingId, config)) {
-      return { sessionId: existingId, created: false };
+      return {
+        sessionId: existingId,
+        created: false,
+        bootstrapped: bootstrappedTerminalSessions.has(existingId),
+      };
     }
     if (existingId) explicitlyCloseTerminalSession(existingId);
 
     const id = `${resolvedContainerId}:${randomUUID()}`;
     rememberStableTerminalSession(id, config, stableKey);
-    return { sessionId: id, created: true };
+    return { sessionId: id, created: true, bootstrapped: false };
   });
   register("attach_terminal", ({ containerId, cols, rows, user }, { emit }) => {
     const id = `${asString(containerId, "containerId")}:${randomUUID()}`;
@@ -10034,7 +10130,27 @@ export function createCommandRegistry(
         bufferChars: terminalOutputBuffers.get(id)?.length ?? 0,
       });
     }
-    return { id, running };
+    return { id, running, bootstrapped: bootstrappedTerminalSessions.has(id) };
+  });
+  register("bootstrap_terminal_session", ({ sessionId, data }, context) => {
+    const id = asString(sessionId, "sessionId");
+    const terminalData = asString(data, "data");
+    if (bootstrappedTerminalSessions.has(id)) {
+      return { bootstrapped: true, delivered: false, duplicate: true };
+    }
+    const terminalProcess = terminalProcesses.get(id);
+    if (!terminalProcess) {
+      return { bootstrapped: false, delivered: false, duplicate: false };
+    }
+    bootstrappedTerminalSessions.add(id);
+    try {
+      terminalProcess.write(terminalData);
+      recordTerminalInputActivity(id, terminalData, context);
+      return { bootstrapped: true, delivered: true, duplicate: false };
+    } catch (error) {
+      bootstrappedTerminalSessions.delete(id);
+      throw error;
+    }
   });
   register("get_terminal_output_buffer", ({ sessionId }) => {
     const id = asString(sessionId, "sessionId");
@@ -10122,13 +10238,17 @@ export function createCommandRegistry(
     };
     const existingId = existingStableTerminalSession(stableKey);
     if (existingId && localTerminalConfigMatches(existingId, config)) {
-      return { sessionId: existingId, created: false };
+      return {
+        sessionId: existingId,
+        created: false,
+        bootstrapped: bootstrappedTerminalSessions.has(existingId),
+      };
     }
     if (existingId) explicitlyCloseTerminalSession(existingId);
 
     const id = `${resolvedEnvironmentId}:${randomUUID()}`;
     rememberStableTerminalSession(id, config, stableKey);
-    return { sessionId: id, created: true };
+    return { sessionId: id, created: true, bootstrapped: false };
   });
   register("start_local_terminal_session", async ({ sessionId }, context) => {
     const { storage, emit } = context;
@@ -10348,6 +10468,85 @@ export function createCommandRegistry(
     diffStatsService.invalidateChanges({ containerId: id });
     diffStatsService.refresh(environmentIdString);
     return target;
+  });
+
+  register("write_initial_prompt_attachments", async ({ environmentId, attachments }, context) => {
+    const environmentIdString = asString(environmentId, "environmentId");
+    if (!Array.isArray(attachments) || attachments.length === 0 || attachments.length > 20) {
+      throw new Error("Expected between 1 and 20 initial prompt attachments");
+    }
+    const environment = await context.storage.getEnvironment(environmentIdString);
+    if (!environment) throw new Error(`Environment not found: ${environmentIdString}`);
+    if (environment.environmentType === "local" && !environment.worktreePath) {
+      throw new Error("Local environment worktree is not available");
+    }
+    if (environment.environmentType !== "local" && !environment.containerId) {
+      throw new Error("Container environment is not ready");
+    }
+
+    const usedNames = new Set<string>();
+    const saved: Array<{ name: string; path: string; relativePath: string }> = [];
+    const attemptedRelativePaths: string[] = [];
+    const allocateName = (rawName: unknown): string => {
+      const trimmed = asString(rawName, "attachment.name").trim() || "clipboard.png";
+      const sanitizedName = trimmed.replace(/[^a-zA-Z0-9._-]/g, "-");
+      const sanitized = sanitizedName === "." || sanitizedName === ".." ? "clipboard.png" : sanitizedName;
+      const dot = sanitized.lastIndexOf(".");
+      const stem = dot > 0 ? sanitized.slice(0, dot) : sanitized;
+      const extension = dot > 0 ? sanitized.slice(dot) : "";
+      let candidate = sanitized;
+      let suffix = 2;
+      while (usedNames.has(candidate.toLowerCase())) {
+        candidate = `${stem}-${suffix}${extension}`;
+        suffix += 1;
+      }
+      usedNames.add(candidate.toLowerCase());
+      return candidate;
+    };
+
+    try {
+      for (const rawAttachment of attachments) {
+        const attachment = asRecord(rawAttachment, "attachment");
+        assertOnlyKeys(attachment, ["id", "name", "base64Data"], "attachment");
+        const name = allocateName(attachment.name);
+        const relativePath = `.orkestrator/initial-prompt/${name}`;
+        attemptedRelativePaths.push(relativePath);
+        const data = asString(attachment.base64Data, "attachment.base64Data");
+        assertBase64PayloadWithinLimit(data);
+        let resolvedPath: string;
+        if (environment.environmentType === "local") {
+          resolvedPath = await writeFileBase64(environment.worktreePath!, relativePath, data);
+        } else {
+          const fullPath = workspaceFilePath(relativePath);
+          await dockerExec(environment.containerId!, `mkdir -p ${quoteShell(path.posix.dirname(fullPath))}`);
+          const child = spawnCommand("docker", ["exec", "-i", environment.containerId!, "bash", "-lc", `base64 -d > ${quoteShell(fullPath)}`]);
+          child.stdin.write(data);
+          child.stdin.end();
+          await new Promise<void>((resolve, reject) => {
+            child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`docker exec exited with ${code}`)));
+            child.once("error", reject);
+          });
+          resolvedPath = fullPath;
+        }
+        saved.push({ name, path: resolvedPath, relativePath });
+      }
+      return saved.map(({ name, path: resolvedPath }) => ({ name, path: resolvedPath }));
+    } catch (error) {
+      await Promise.allSettled(attemptedRelativePaths.map(async (relativePath) => {
+        if (environment.environmentType === "local") {
+          // These are command-owned artifacts, not arbitrary workspace files;
+          // cleanup must also work before the worktree has a usable Git index.
+          await assertNoLocalSymlinkAncestors(environment.worktreePath!, relativePath);
+          await fs.rm(path.join(environment.worktreePath!, relativePath), { force: true });
+        } else {
+          await dockerExec(
+            environment.containerId!,
+            `rm -f -- ${quoteShell(workspaceFilePath(relativePath))}`,
+          );
+        }
+      }));
+      throw error;
+    }
   });
 
   register("verify_environment_pr", async ({ environmentId, prUrl, targetBranch }, context) =>
@@ -10649,6 +10848,163 @@ export function createCommandRegistry(
   register("stop_local_codex_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "codex"));
   register("get_local_codex_server_status", ({ environmentId }, context) => getLocalServerStatus(asString(environmentId, "environmentId"), context, "codex"));
   register("cleanup_stale_local_servers_cmd", () => undefined);
+
+  register("await_bridge_ready", (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "agent", "timeoutMs"], "arguments");
+    const environmentId = asNonBlankString(args.environmentId, "environmentId");
+    if (!isAgentBridgeKind(args.agent)) {
+      throw new Error("agent must be one of: claude, codex, opencode");
+    }
+    const agent = args.agent;
+    const timeoutMs = asNumber(args.timeoutMs, "timeoutMs");
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 120_000) {
+      throw new Error("timeoutMs must be an integer between 1000 and 120000");
+    }
+    const key = `${environmentId}:${agent}`;
+    const existing = bridgeReadinessWaits.get(key);
+    if (existing) return existing;
+
+    const wait = (async (): Promise<AwaitBridgeReadyResult> => {
+      const initial = await context.storage.getEnvironment(environmentId);
+      if (!initial) {
+        return {
+          status: "failed",
+          error: { message: "Environment not found", retryable: false },
+        };
+      }
+      const createdAt = Date.parse(initial.createdAt);
+      const deadline = Number.isFinite(createdAt)
+        ? createdAt + timeoutMs
+        : Date.now() + timeoutMs;
+
+      let environment = initial;
+      while (
+        environment.status === "creating"
+        || environment.setupPhase === "pending"
+        || environment.setupPhase === "running"
+      ) {
+        const retryAfterMs = Math.min(500, Math.max(0, deadline - Date.now()));
+        if (retryAfterMs <= 0) {
+          return {
+            status: "timed-out",
+            error: {
+              message: `${agent} bridge did not become ready before the environment startup deadline`,
+              retryable: true,
+              retryAfterMs: 1_000,
+            },
+          };
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
+        const refreshed = await context.storage.getEnvironment(environmentId);
+        if (!refreshed) {
+          return {
+            status: "failed",
+            error: { message: "Environment was deleted", retryable: false },
+          };
+        }
+        environment = refreshed;
+      }
+
+      if (environment.status !== "running" || environment.setupPhase === "failed") {
+        return {
+          status: "failed",
+          error: {
+            message: environment.setupPhase === "failed"
+              ? "Environment setup failed"
+              : "Environment is not running",
+            retryable: false,
+          },
+        };
+      }
+
+      while (true) {
+        try {
+          const result = environment.environmentType === "local"
+            ? await commands.get(`start_local_${agent}_server_cmd`)?.(
+                { environmentId },
+                context,
+              ) as { port?: number; hostPort?: number; authToken?: string } | undefined
+            : await commands.get(`start_${agent}_server`)?.(
+                { containerId: environment.containerId },
+                context,
+              ) as { port?: number; hostPort?: number; authToken?: string } | undefined;
+          const port = environment.environmentType === "local"
+            ? result?.port
+            : result?.hostPort;
+          if (!port || !result?.authToken) {
+            return {
+              status: "failed",
+              error: {
+                message: `${agent} bridge returned an incomplete ready endpoint`,
+                retryable: false,
+              },
+            };
+          }
+          return { status: "ready", port, authToken: result.authToken };
+        } catch (error) {
+          if (!isStructuredCommandError(error) || !error.retryable) {
+            return {
+              status: "failed",
+              error: {
+                message: error instanceof Error ? error.message : String(error),
+                retryable: false,
+              },
+            };
+          }
+          const remainingMs = deadline - Date.now();
+          if (remainingMs <= 0) {
+            return {
+              status: "timed-out",
+              error: {
+                message: `${agent} bridge did not become ready before the environment startup deadline`,
+                retryable: true,
+                retryAfterMs: error.retryAfterMs ?? 1_000,
+              },
+            };
+          }
+          await new Promise((resolve) => setTimeout(
+            resolve,
+            Math.min(error.retryAfterMs ?? 500, remainingMs),
+          ));
+          const refreshed = await context.storage.getEnvironment(environmentId);
+          if (!refreshed) {
+            return {
+              status: "failed",
+              error: { message: "Environment was deleted", retryable: false },
+            };
+          }
+          if (refreshed.setupPhase === "failed") {
+            return {
+              status: "failed",
+              error: {
+                message: "Environment setup failed",
+                retryable: false,
+              },
+            };
+          }
+          if (
+            refreshed.status === "creating"
+            || refreshed.setupPhase === "pending"
+            || refreshed.setupPhase === "running"
+          ) {
+            environment = refreshed;
+            continue;
+          }
+          if (refreshed.status !== "running") {
+            return {
+              status: "failed",
+              error: { message: "Environment is not running", retryable: false },
+            };
+          }
+          environment = refreshed;
+        }
+      }
+    })().finally(() => {
+      if (bridgeReadinessWaits.get(key) === wait) bridgeReadinessWaits.delete(key);
+    });
+    bridgeReadinessWaits.set(key, wait);
+    return wait;
+  });
 
   // Backend-internal observation surface. Never starts a bridge, so a
   // background reconciler can read activity without spawning one process per
@@ -11082,6 +11438,35 @@ export function createCommandRegistry(
     const teardownTab = commands.get("teardown_tab");
     let nativeSessions = 0;
     if (teardownTab) {
+      // Startup launch snapshots are consume-on-mount intents. If no pane ever
+      // adopts one (for example every renderer crashes after creation), expire
+      // it with the same grace period as any other orphaned native tab and
+      // retire both the provider session and the durable projection.
+      for (const environment of environments) {
+        const startup = environment.startupAgentSession;
+        if (
+          startup?.status !== "running"
+          || !startup.providerSessionId
+          || referencedTabs.get(environment.id)?.has(startup.tabId)
+        ) continue;
+        const startedAt = Date.parse(startup.startedAt ?? "");
+        if (!Number.isFinite(startedAt) || now - startedAt < graceMs) continue;
+        const kind = startup.agent === "claude"
+          ? "claude-native"
+          : startup.agent === "codex"
+            ? "codex-native"
+            : "opencode-native";
+        await teardownTab({
+          environmentId: environment.id,
+          tabId: startup.tabId,
+          kind,
+          sessionId: startup.providerSessionId,
+        }, context);
+        await context.storage.updateEnvironment(environment.id, {
+          startupAgentSession: undefined,
+        });
+        nativeSessions += 1;
+      }
       for (const session of await context.storage.listNativeAgentSessions()) {
         if (session.origin !== "interactive-native") continue;
         const prefix = `env-${session.environmentId}:`;

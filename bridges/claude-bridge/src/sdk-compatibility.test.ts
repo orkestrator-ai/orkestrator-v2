@@ -282,6 +282,83 @@ describe("Claude Agent SDK runtime compatibility", () => {
     }
   }, 15_000);
 
+  test("keeps streaming input open across a result while a background process runs", async () => {
+    const packageRoot = join(import.meta.dir, "..");
+    const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-background-contract-"));
+    const executable = join(fixtureDir, "fake-claude");
+    const markerFile = join(fixtureDir, "background-marker.txt");
+    await copyFile(
+      join(import.meta.dir, "testing", "fake-background-task-cli.ts"),
+      executable,
+    );
+    await chmod(executable, 0o755);
+
+    try {
+      const probe = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `
+            import { query } from "@anthropic-ai/claude-agent-sdk";
+            let releaseInput;
+            async function* input() {
+              yield {
+                type: "user",
+                message: { role: "user", content: [{ type: "text", text: "background contract" }] },
+                parent_tool_use_id: null,
+              };
+              await new Promise((resolve) => { releaseInput = resolve; });
+            }
+            const request = query({
+              prompt: input(),
+              options: {
+                pathToClaudeCodeExecutable: process.env.CLAUDE_SDK_CONTRACT_EXECUTABLE,
+                permissionMode: "bypassPermissions",
+                allowDangerouslySkipPermissions: true,
+                maxTurns: 1,
+              },
+            });
+            let resultSeen = false;
+            let taskCompleted = false;
+            for await (const message of request) {
+              if (message.type === "result") resultSeen = true;
+              if (
+                message.type === "system"
+                && message.subtype === "task_notification"
+                && message.status === "completed"
+              ) {
+                taskCompleted = true;
+                releaseInput?.();
+              }
+            }
+            console.log(JSON.stringify({ resultSeen, taskCompleted }));
+          `,
+        ],
+        {
+          cwd: packageRoot,
+          env: {
+            ...process.env,
+            CLAUDE_SDK_CONTRACT_EXECUTABLE: executable,
+            CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile,
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(probe.stdout).text(),
+        new Response(probe.stderr).text(),
+        probe.exited,
+      ]);
+      expect(exitCode, stderr).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({ resultSeen: true, taskCompleted: true });
+      expect(await readFile(markerFile, "utf8")).toBe("completed");
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("contract fixture records one response and refuses to run unconfigured", async () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-fixture-"));
     const fixture = join(import.meta.dir, "testing", "fake-ask-user-question-cli.ts");

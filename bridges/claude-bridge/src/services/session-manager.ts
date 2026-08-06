@@ -2358,6 +2358,29 @@ interface BackgroundTaskLaunch {
   description?: string;
 }
 
+const PROVISIONAL_BACKGROUND_TASK_PREFIX = "pending-bash:";
+
+function provisionalBackgroundTaskId(toolUseId: string): string {
+  return `${PROVISIONAL_BACKGROUND_TASK_PREFIX}${toolUseId}`;
+}
+
+function backgroundTaskIdFromToolResultContent(content: unknown): string | undefined {
+  const text = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content
+        .filter((block): block is { type: "text"; text: string } =>
+          block !== null
+          && typeof block === "object"
+          && (block as { type?: unknown }).type === "text"
+          && typeof (block as { text?: unknown }).text === "string")
+        .map((block) => block.text)
+        .join("\n")
+      : "";
+  const match = text.match(/(?:Command running in background with ID|Background task ID):\s*([A-Za-z0-9_-]+)/i);
+  return persistedTaskIdentifier(match?.[1]);
+}
+
 /**
  * Recover the synchronous launch edge carried by a tool result.
  *
@@ -2373,21 +2396,17 @@ function backgroundTaskLaunchFromSdkUserMessage(
   toolTracker: ToolTracker,
 ): BackgroundTaskLaunch | undefined {
   const structuredResult = message.tool_use_result;
-  if (
-    structuredResult === null
-    || typeof structuredResult !== "object"
-    || Array.isArray(structuredResult)
-  ) {
-    return undefined;
-  }
-  const structuredResultRecord = structuredResult as Record<string, unknown>;
-  const id = persistedTaskIdentifier(structuredResultRecord.backgroundTaskId);
-  if (!id) return undefined;
+  const structuredResultRecord =
+    structuredResult !== null
+    && typeof structuredResult === "object"
+    && !Array.isArray(structuredResult)
+      ? structuredResult as Record<string, unknown>
+      : undefined;
 
   const content = (
     message.message as { content?: unknown } | undefined
   )?.content;
-  const toolResultIds: string[] = [];
+  const toolResults: Array<{ toolUseId: string; content?: unknown }> = [];
   if (Array.isArray(content)) {
     for (const block of content) {
       if (
@@ -2404,15 +2423,15 @@ function backgroundTaskLaunchFromSdkUserMessage(
         // process. Count it as an invalid candidate rather than silently
         // discarding it and correlating some other block in the same message.
         if (!toolUseId || resultBlock.is_error === true) return undefined;
-        toolResultIds.push(toolUseId);
+        toolResults.push({ toolUseId, content: (block as { content?: unknown }).content });
       }
     }
   }
   // `tool_use_result` describes exactly one invocation. Correlation is a
   // security boundary here because MCP and dynamic tools may return arbitrary
   // objects whose field names can collide with the built-in Bash result.
-  if (toolResultIds.length !== 1) return undefined;
-  const toolUseId = toolResultIds[0];
+  if (toolResults.length !== 1) return undefined;
+  const [{ toolUseId, content: toolResultContent }] = toolResults;
   const tool = toolTracker.getTool(toolUseId);
   if (tool?.toolName !== "Bash") {
     return undefined;
@@ -2425,13 +2444,23 @@ function backgroundTaskLaunchFromSdkUserMessage(
       : undefined;
   const hasBackgroundIntent =
     toolArgs?.run_in_background === true
-    || structuredResultRecord.backgroundedByUser === true
+    || structuredResultRecord?.backgroundedByUser === true
     || (
-      typeof structuredResultRecord.timedOutAfterMs === "number"
+      typeof structuredResultRecord?.timedOutAfterMs === "number"
       && Number.isFinite(structuredResultRecord.timedOutAfterMs)
       && structuredResultRecord.timedOutAfterMs >= 0
     );
   if (!hasBackgroundIntent) return undefined;
+
+  // `tool_use_result` is the preferred provider-authored source. Some CLI/SDK
+  // combinations have omitted that optional field from the stream while still
+  // sending the built-in Bash tool_result label. Parsing is deliberately done
+  // only after exact correlation with a tracked built-in Bash invocation and
+  // explicit background intent; arbitrary MCP/dynamic tool text never reaches
+  // this fallback.
+  const id = persistedTaskIdentifier(structuredResultRecord?.backgroundTaskId)
+    ?? backgroundTaskIdFromToolResultContent(toolResultContent);
+  if (!id) return undefined;
 
   const description = persistedTaskText(toolArgs?.description)
     ?? persistedTaskText(toolArgs?.command)
@@ -2444,6 +2473,46 @@ function backgroundTaskLaunchFromSdkUserMessage(
     toolUseId,
     ...(description ? { description } : {}),
   };
+}
+
+function provisionalBackgroundTaskLaunchesFromAssistantMessage(
+  message: unknown,
+): BackgroundTaskLaunch[] {
+  const content = (
+    message as { message?: { content?: unknown } } | undefined
+  )?.message?.content;
+  if (!Array.isArray(content)) return [];
+
+  const launches: BackgroundTaskLaunch[] = [];
+  for (const block of content) {
+    if (
+      !block
+      || typeof block !== "object"
+      || (block as { type?: unknown }).type !== "tool_use"
+      || (block as { name?: unknown }).name !== "Bash"
+    ) {
+      continue;
+    }
+    const toolUseId = persistedTaskIdentifier((block as { id?: unknown }).id);
+    const input = (block as { input?: unknown }).input;
+    if (
+      !toolUseId
+      || !input
+      || typeof input !== "object"
+      || Array.isArray(input)
+      || (input as { run_in_background?: unknown }).run_in_background !== true
+    ) {
+      continue;
+    }
+    const args = input as Record<string, unknown>;
+    launches.push({
+      id: provisionalBackgroundTaskId(toolUseId),
+      toolUseId,
+      description: persistedTaskText(args.description)
+        ?? persistedTaskText(args.command),
+    });
+  }
+  return launches;
 }
 
 function persistedTaskStatus(
@@ -3548,10 +3617,21 @@ function recordBackgroundTaskLaunch(
   launch: BackgroundTaskLaunch,
   control: NonNullable<SessionState["queryControl"]>,
 ): void {
-  const previous = session.backgroundTasks?.[launch.id];
+  const provisionalId = launch.toolUseId
+    ? provisionalBackgroundTaskId(launch.toolUseId)
+    : undefined;
+  const provisional = provisionalId && provisionalId !== launch.id
+    ? session.backgroundTasks?.[provisionalId]
+    : undefined;
+  const previous = session.backgroundTasks?.[launch.id] ?? provisional;
   const status = previous?.status ?? "running";
+  const nextTasks = { ...(session.backgroundTasks ?? {}) };
+  if (provisionalId && provisionalId !== launch.id) {
+    delete nextTasks[provisionalId];
+    session.backgroundTaskControls?.delete(provisionalId);
+  }
   session.backgroundTasks = boundBackgroundTaskHistory({
-    ...(session.backgroundTasks ?? {}),
+    ...nextTasks,
     [launch.id]: {
       id: launch.id,
       toolUseId: launch.toolUseId ?? previous?.toolUseId,
@@ -4528,6 +4608,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   let queryStarted = false;
   let closeSdkInput: (() => void) | undefined;
   let finishTurnInputForThisTurn: (() => void) | undefined;
+  let turnReleasedToBackgroundTasks = false;
   // Hoisted out of the `try` so the error path can still publish whatever the
   // coalescing window was holding. Null until the streaming state it closes
   // over exists, which is everything before the SDK query is created.
@@ -4618,17 +4699,56 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         data: { completionBlockedByBackgroundTasks: blocked },
       });
     };
+    const hasLiveTaskOwnedByThisQuery = () => Object.values(
+      session.backgroundTasks ?? {},
+    ).some((task) =>
+      LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
+      && session.backgroundTaskControls?.get(task.id) === queryIteratorControl
+    );
+    const scheduleTitleGeneration = () => {
+      const isDefaultTitle = session.title === `Session ${session.id.slice(-6)}`;
+      if (isDefaultTitle && !options?._isReprompt && !session.titleGenerationPending) {
+        session.titleGenerationPending = true;
+        void generateAndSetSessionTitle(sessionId, prompt);
+      }
+    };
+    const releaseCompletedTurnToBackgroundTasks = () => {
+      if (turnReleasedToBackgroundTasks || !ownsActiveTurn()) return;
+      turnReleasedToBackgroundTasks = true;
+      scheduleTitleGeneration();
+      session.status = "idle";
+      session.turnStartedAt = undefined;
+      session.abortController = undefined;
+      session.completionBlockedByBackgroundTasks = false;
+      if (session.queryControl === queryIteratorControl) {
+        session.queryControl = undefined;
+      }
+      if (dispatchRequestId) {
+        recordPromptDispatch(sessionId, dispatchRequestId, "already-processed");
+      }
+      eventEmitter.emit({
+        type: "session.idle",
+        sessionId,
+        data: {
+          success: true,
+          backgroundTasksRunning: true,
+          completionBlockedByBackgroundTasks: false,
+        },
+      });
+    };
     const finishTurnInputIfSettled = () => {
       if (!receivedResult) return;
-      if (!ownsActiveTurn()) {
-        heldSdkPrompt.close();
+      if (hasLiveTaskOwnedByThisQuery()) {
+        // The model turn is complete, but its CLI process owns work that must
+        // survive the response boundary. Publish idle so a follow-up turn can
+        // start, retain this query through backgroundTaskControls, and keep its
+        // input open until the last task owned by this process settles.
+        setCompletionBlockedByBackgroundTasks(false);
+        releaseCompletedTurnToBackgroundTasks();
         return;
       }
-      const hasLiveTask = Object.values(session.backgroundTasks ?? {}).some((task) =>
-        LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
-      );
-      setCompletionBlockedByBackgroundTasks(hasLiveTask);
-      if (!hasLiveTask) heldSdkPrompt.close();
+      setCompletionBlockedByBackgroundTasks(false);
+      heldSdkPrompt.close();
     };
     finishTurnInputForThisTurn = finishTurnInputIfSettled;
     session.finishTurnInputIfSettled = finishTurnInputIfSettled;
@@ -5695,6 +5815,18 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             string,
             NonNullable<SessionState["queryControl"]>
           >();
+          // The SDK documents this level signal as per-process. A follow-up
+          // turn can therefore publish its own empty set while an older CLI is
+          // still running a background Bash task. Preserve every live member
+          // owned by another control; only this query's slice is replaced.
+          for (const [id, task] of Object.entries(session.backgroundTasks ?? {})) {
+            if (!LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) continue;
+            const owner = previousControls?.get(id);
+            if (owner && owner !== queryIterator) {
+              replacement[id] = task;
+              replacementControls.set(id, owner);
+            }
+          }
           for (const entry of taskMessage.tasks) {
             const id = entry?.task_id;
             if (typeof id !== "string" || id.length === 0) continue;
@@ -5713,8 +5845,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
               isBackgrounded: previous?.isBackgrounded ?? true,
               startedAt: previous?.startedAt ?? Date.now(),
             };
-            const owner = previousControls?.get(id) ?? queryIterator;
-            replacementControls.set(id, owner);
+            replacementControls.set(id, queryIterator);
           }
           session.backgroundTasks = boundBackgroundTaskHistory(replacement);
           session.backgroundTaskControls =
@@ -5754,6 +5885,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           activeTaskIds,
           taskRegistry
         );
+
+        // Establish liveness from the invocation itself. The provider can emit
+        // the turn result before its Bash tool_result or task lifecycle frames;
+        // waiting for either of those edges recreates the stdin-close race that
+        // kills the just-launched process. The provisional id is replaced by
+        // the provider task id as soon as either later edge supplies it.
+        for (const launch of provisionalBackgroundTaskLaunchesFromAssistantMessage(message)) {
+          recordBackgroundTaskLaunch(session, launch, queryIterator);
+        }
 
         // Update active Task tracking - add new Tasks
         for (const taskId of newTaskIds) {
@@ -6113,12 +6253,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // idle edge or clear the new turn's controller.
     if (!ownsActiveTurn()) return;
 
-    // Generate a session title from the first user message if title is still the default
-    const isDefaultTitle = session.title === `Session ${session.id.slice(-6)}`;
-    if (isDefaultTitle && !options?._isReprompt && !session.titleGenerationPending) {
-      session.titleGenerationPending = true;
-      void generateAndSetSessionTitle(sessionId, prompt);
-    }
+    scheduleTitleGeneration();
 
     session.status = "idle";
     session.turnStartedAt = undefined;

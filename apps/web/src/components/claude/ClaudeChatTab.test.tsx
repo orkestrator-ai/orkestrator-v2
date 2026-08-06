@@ -5852,7 +5852,7 @@ describe("ClaudeChatTab", () => {
       expect(screen.queryByTestId("claude-background-task-hold")).toBeNull();
     });
 
-    test("does not show a hold card for live tasks unless the response is ready", async () => {
+    test("shows retained live tasks even after the session returns to idle", async () => {
       mockGetSession.mockResolvedValue(serverSession({
         completionBlockedByBackgroundTasks: false,
       }) as any);
@@ -5862,7 +5862,7 @@ describe("ClaudeChatTab", () => {
         expect(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)?.["task-1"]?.status)
           .toBe("running"),
       );
-      expect(screen.queryByTestId("claude-background-task-hold")).toBeNull();
+      expect(screen.getByTestId("claude-background-task-hold")).toBeTruthy();
     });
 
     test("rehydrates a named terminal TaskStop row after the tab remounts", async () => {

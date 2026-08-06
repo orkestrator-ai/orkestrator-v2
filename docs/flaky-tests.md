@@ -5,6 +5,17 @@ but pass when their owning file is rerun alone. A single failure is not treated
 as a flake until that isolated rerun passes. Resolved entries remain here with
 their root cause, fix, and verification history.
 
+## `ActionBar toolbar interactions > opens global, Docker, repository, and environment settings` (`apps/web/src/components/layout/ActionBar.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-08-06
+- **Original command:** `bun run test` (workspace web group: `bun test src --parallel=2`)
+- **Worker configuration:** Bun reported `2x PARALLEL` for the web package while the root, bridge, and protocol groups ran concurrently
+- **Failure:** The test failed in the aggregate web suite after 1440.56ms; the precise matcher text was not retained because the group's buffered output was dominated by a separate 173 MB DOM assertion dump
+- **Suite counts:** 5,328 total, 5,325 passed, 2 failed, 1 skipped
+- **Isolated rerun:** `bun test --cwd apps/web src/components/layout/ActionBar.test.tsx` -> 143 passed, 0 failed in 12.86s; the affected test passed in 957.68ms
+- **Hypothesis:** The failure is load-sensitive: this test performs four asynchronous dialog lookups with Testing Library's one-second default wait, failed after roughly that boundary while all aggregate groups were active, and passed just below the boundary without competing suites. The exact lookup that timed out was not preserved, so no narrower cause is claimed yet.
+
 ## `keeps a restored session usable when best-effort backend adoption fails` (`apps/web/src/components/codex/CodexChatTab.test.tsx`)
 
 - **Status:** open

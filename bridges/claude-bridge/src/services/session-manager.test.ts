@@ -5451,6 +5451,40 @@ describe("session titles", () => {
     expect(getSession(session.id)?.titleGenerationPending).toBe(false);
   });
 
+  test("starts first-turn title generation when the response releases to background work", async () => {
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("/claude"));
+    const { child, complete } = createMockChildProcess({
+      stdout: "Background-safe title\n",
+      defer: true,
+    });
+    mockSpawn.mockImplementationOnce(() => child as never);
+
+    const session = createSession();
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "keep this task running");
+    const call = await nextQueryCall();
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "background-title-task",
+      description: "Finish after the response",
+    });
+    call.push({ type: "result", subtype: "success" });
+
+    await waitFor(() => session.status === "idle" && session.titleGenerationPending === true);
+    complete();
+    await waitFor(() => session.title === "Background-safe title");
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "background-title-task",
+      status: "completed",
+    });
+    call.finish();
+    await promptPromise;
+  });
+
   test("does not overwrite an explicit title that begins with Session", async () => {
     const session = createSession("Session planning notes");
     track(session.id);
@@ -8277,7 +8311,7 @@ async function inspectDuringTurn(
 }
 
 describe("background task reducer", () => {
-  test("keeps streaming input and running status open until background agents settle", async () => {
+  test("releases the completed turn while retaining its background runtime", async () => {
     const created = createSession("held input");
     track(created.id);
     const { events, stop } = captureEvents();
@@ -8324,8 +8358,8 @@ describe("background task reducer", () => {
       );
 
       expect(inputClosed).toBe(false);
-      expect(getSession(created.id)?.status).toBe("running");
-      expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(true);
+      expect(getSession(created.id)?.status).toBe("idle");
+      expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
 
       call.push({
         type: "system",
@@ -8342,9 +8376,8 @@ describe("background task reducer", () => {
         return typeof data.completionBlockedByBackgroundTasks === "boolean"
           ? [data.completionBlockedByBackgroundTasks]
           : [];
-      })).toEqual([false, true, false]);
-      // The bridge remains authoritative until the provider stream itself ends.
-      expect(getSession(created.id)?.status).toBe("running");
+      })).toEqual([false, false]);
+      expect(getSession(created.id)?.status).toBe("idle");
 
       call.finish();
       await promptPromise;
@@ -8416,7 +8449,7 @@ describe("background task reducer", () => {
     }
   });
 
-  test("closes the old held input when turn ownership changes before task settlement", async () => {
+  test("keeps the retained input open when a later turn takes ownership", async () => {
     let resolveUsage!: (value: unknown) => void;
     let usageRequestStarted = false;
     queryControlOverrides.getContextUsage = mock(() => {
@@ -8455,9 +8488,22 @@ describe("background task reducer", () => {
     created.abortController = replacementController;
     staleSettlement!();
 
-    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    let inputClosed = false;
+    void inputCompletion.then(() => {
+      inputClosed = true;
+    });
+    await Bun.sleep(0);
+    expect(inputClosed).toBe(false);
     expect(created.completionBlockedByBackgroundTasks).toBe(false);
     resolveUsage({ totalTokens: 2, maxTokens: 200_000, percentage: 0.001 });
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-superseded",
+      status: "completed",
+    });
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
     await promptPromise;
     expect(created.abortController).toBe(replacementController);
 
@@ -8467,10 +8513,10 @@ describe("background task reducer", () => {
     created.status = "idle";
   });
 
-  test("aborting an established hold publishes the cleared hold on the idle edge", async () => {
-    const created = createSession("abort established hold");
+  test("deleting a session closes its retained background runtime", async () => {
+    const created = createSession("delete retained background runtime");
     track(created.id);
-    const { events, stop } = captureEvents();
+    const { stop } = captureEvents();
     const promptPromise = sendPrompt(created.id, "delegate then abort");
     const call = await nextQueryCall();
     try {
@@ -8488,25 +8534,18 @@ describe("background task reducer", () => {
           "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
         },
       });
-      await waitFor(() => created.completionBlockedByBackgroundTasks === true);
+      await waitFor(() => created.status === "idle");
 
-      expect(abortSession(created.id)).toBe(true);
-      expect(created.completionBlockedByBackgroundTasks).toBe(false);
-      expect(events).toContainEqual({
-        type: "session.idle",
-        sessionId: created.id,
-        data: {
-          aborted: true,
-          completionBlockedByBackgroundTasks: false,
-        },
-      });
+      expect(deleteSession(created.id)).toBe(true);
+      call.finish();
       await promptPromise;
+      expect(getSession(created.id)).toBeUndefined();
     } finally {
       stop();
     }
   });
 
-  test("clears an established completion hold when the provider stream fails", async () => {
+  test("settles retained tasks when their provider stream fails", async () => {
     const created = createSession("failed held result");
     track(created.id);
     const promptPromise = sendPrompt(created.id, "delegate then fail");
@@ -8526,14 +8565,13 @@ describe("background task reducer", () => {
         "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
       },
     });
-    await waitFor(() =>
-      getSession(created.id)?.completionBlockedByBackgroundTasks === true
-    );
+    await waitFor(() => getSession(created.id)?.status === "idle");
 
     call.fail(new Error("provider stream disconnected"));
     await expect(promptPromise).rejects.toThrow("provider stream disconnected");
-    expect(getSession(created.id)?.status).toBe("error");
+    expect(getSession(created.id)?.status).toBe("idle");
     expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
+    expect(getSession(created.id)?.backgroundTasks?.["agent-failed"]?.status).toBe("killed");
   });
 
   test("keeps streaming input open when a Bash launch precedes delayed lifecycle events", async () => {
@@ -8612,7 +8650,7 @@ describe("background task reducer", () => {
       isBackgrounded: true,
     });
     expect(inputClosed).toBe(false);
-    expect(getSession(created.id)?.status).toBe("running");
+    expect(getSession(created.id)?.status).toBe("idle");
 
     // A late level edge enriches/reconciles the provisional launch without
     // closing the turn or losing correlation.
@@ -8647,6 +8685,136 @@ describe("background task reducer", () => {
     expect(getSession(created.id)?.backgroundTasks?.["bash-task-1"]?.status).toBe(
       "completed",
     );
+  });
+
+  test("holds from Bash intent before result and recovers an omitted structured task id", async () => {
+    const created = createSession("provisional background launch");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "start the suite in the background");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-provisional-bash",
+        content: [{
+          type: "tool_use",
+          id: "bash-tool-provisional",
+          name: "Bash",
+          input: {
+            command: "bun run test",
+            description: "Run tests provisionally",
+            run_in_background: true,
+          },
+        }],
+      },
+    });
+    call.push({
+      type: "result",
+      subtype: "success",
+      usage: { input_tokens: 1, output_tokens: 1 },
+      modelUsage: {
+        "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
+      },
+    });
+    await waitFor(() => getSession(created.id)?.status === "idle");
+
+    expect(inputClosed).toBe(false);
+    expect(
+      getSession(created.id)?.backgroundTasks?.["pending-bash:bash-tool-provisional"],
+    ).toMatchObject({
+      toolUseId: "bash-tool-provisional",
+      status: "running",
+    });
+
+    // The live CLI has occasionally omitted SDKUserMessage.tool_use_result.
+    // Exact built-in Bash correlation makes its provider result label a safe
+    // fallback and replaces the provisional id without a liveness gap.
+    call.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "bash-tool-provisional",
+          content: "Command running in background with ID: bash-task-fallback",
+        }],
+      },
+      parent_tool_use_id: null,
+    });
+    await waitFor(() =>
+      getSession(created.id)?.backgroundTasks?.["bash-task-fallback"]?.status === "running"
+    );
+    expect(
+      getSession(created.id)?.backgroundTasks?.["pending-bash:bash-tool-provisional"],
+    ).toBeUndefined();
+    expect(inputClosed).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "bash-task-fallback",
+      tool_use_id: "bash-tool-provisional",
+      status: "completed",
+    });
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
+    await promptPromise;
+  });
+
+  test("a follow-up query cannot erase tasks owned by the retained runtime", async () => {
+    const created = createSession("retained runtime followed by another turn");
+    track(created.id);
+    const firstPrompt = sendPrompt(created.id, "start background work");
+    const firstCall = await nextQueryCall();
+    const firstInput = (firstCall.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await firstInput.next()).done).toBe(false);
+    let firstInputClosed = false;
+    const firstInputCompletion = firstInput.next().then((result) => {
+      firstInputClosed = result.done === true;
+      return result;
+    });
+
+    firstCall.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "old-runtime-task",
+      description: "Owned by the first CLI",
+    });
+    firstCall.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+
+    const secondPrompt = sendPrompt(created.id, "continue while it runs");
+    const secondCall = await nextQueryCall();
+    secondCall.push({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [],
+    });
+    secondCall.push({ type: "result", subtype: "success" });
+    secondCall.finish();
+    await secondPrompt;
+
+    expect(created.backgroundTasks?.["old-runtime-task"]?.status).toBe("running");
+    expect(firstInputClosed).toBe(false);
+
+    firstCall.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "old-runtime-task",
+      status: "completed",
+    });
+    expect(await firstInputCompletion).toEqual({ done: true, value: undefined });
+    firstCall.finish();
+    await firstPrompt;
+    expect(created.backgroundTasks?.["old-runtime-task"]?.status).toBe("completed");
   });
 
   test.each([
@@ -8753,7 +8921,12 @@ describe("background task reducer", () => {
       },
     ]);
 
-    expect(session.backgroundTasks).toBeUndefined();
+    expect(session.backgroundTasks).toEqual({
+      "pending-bash:bash-malformed-launch": expect.objectContaining({
+        id: "pending-bash:bash-malformed-launch",
+        status: "killed",
+      }),
+    });
   });
 
   test.each([
@@ -8809,7 +8982,13 @@ describe("background task reducer", () => {
       },
     ]);
 
-    expect(session.backgroundTasks).toBeUndefined();
+    expect(session.backgroundTasks?.["ambiguous-task"]).toBeUndefined();
+    expect(session.backgroundTasks).toEqual({
+      "pending-bash:bash-ambiguous": expect.objectContaining({
+        id: "pending-bash:bash-ambiguous",
+        status: "killed",
+      }),
+    });
   });
 
   test.each([
@@ -9401,7 +9580,7 @@ describe("stopBackgroundTask", () => {
     await finish();
   });
 
-  test("stopping the last task of a held turn clears the hold and lets the turn finish", async () => {
+  test("stopping the last retained task closes its runtime and leaves the session idle", async () => {
     const stopTask = mock(async (_taskId: string) => {});
     queryControlOverrides.stopTask = stopTask;
 
@@ -9429,7 +9608,10 @@ describe("stopBackgroundTask", () => {
           "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
         },
       });
-      await waitFor(() => session.completionBlockedByBackgroundTasks === true);
+      await waitFor(() =>
+        session.status === "idle"
+        && session.backgroundTasks?.["task-held"]?.status === "running"
+      );
 
       expect(await stopBackgroundTask(session.id, "task-held")).toEqual({ ok: true });
       expect(stopTask).toHaveBeenCalledWith("task-held");
@@ -9441,11 +9623,9 @@ describe("stopBackgroundTask", () => {
         return typeof data.completionBlockedByBackgroundTasks === "boolean"
           ? [data.completionBlockedByBackgroundTasks]
           : [];
-      })).toEqual([false, true, false]);
+      })).toEqual([false, false]);
 
-      // Closing held input allows Claude to end its stream; the bridge remains
-      // running until that authoritative provider edge arrives.
-      expect(session.status).toBe("running");
+      expect(session.status).toBe("idle");
       call.finish();
       await promptPromise;
       expect(session.status).toBe("idle");

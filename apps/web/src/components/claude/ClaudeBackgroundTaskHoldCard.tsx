@@ -20,7 +20,7 @@ function taskLabel(task: ClaudeBackgroundTask): string {
 
 /**
  * Explains the otherwise-confusing state where Claude has produced its answer
- * but intentionally remains running so real background work can continue.
+ * while real background work continues in the retained provider runtime.
  */
 export function ClaudeBackgroundTaskHoldCard({
   tasks,
@@ -79,11 +79,11 @@ export function ClaudeBackgroundTaskHoldCard({
   return (
     <BlockingPromptCard
       title={`Response ready · ${count} background ${noun} still running`}
-      description="Claude will finish this turn when these tasks stop. Stop only tasks that were created for waiting."
+      description="The response is complete and Claude is preserving these tasks across turns. Stop only tasks that no longer need to run."
       icon={<Clock3 className="h-4 w-4" />}
       error={stopError?.message ?? null}
       arrivalAnnouncement="Claude's response is ready, but background tasks are still running."
-      aria-label="Claude background tasks keeping the turn open"
+      aria-label="Claude background tasks continuing after the response"
       data-testid="claude-background-task-hold"
     >
       <div className="max-h-44 divide-y divide-border/70 overflow-y-auto">

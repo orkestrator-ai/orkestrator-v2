@@ -871,12 +871,6 @@ export function ClaudeChatTab({
       [sessionKey],
     ),
   );
-  const completionBlockedByBackgroundTasks = useClaudeStore(
-    useCallback(
-      (state) => state.completionBlockedByBackgroundTasks.get(sessionKey) === true,
-      [sessionKey],
-    ),
-  );
   const liveBackgroundTasks = useMemo(
     () => Object.values(backgroundTasks).filter(
       (task) => task.status === "pending" || task.status === "running" || task.status === "paused",
@@ -2970,7 +2964,6 @@ export function ClaudeChatTab({
       }
       pinnedAccessory={
         session
-        && completionBlockedByBackgroundTasks
         && liveBackgroundTasks.length > 0 ? (
           <ClaudeBackgroundTaskHoldCard
             tasks={liveBackgroundTasks}

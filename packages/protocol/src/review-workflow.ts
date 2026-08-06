@@ -949,15 +949,17 @@ export function buildReviewBody(opts: ReviewBodyOptions): string {
    - Bullet points describing the changes
 7. Do NOT reference Claude or add an agent as a contributor.
 8. Do NOT use \`--no-verify\` or skip any hooks.
-9. Record the immutable head and base commits with \`git rev-parse HEAD\` and \`git rev-parse origin/${targetBranch}^{commit}\`.`
+9. Record the immutable head and base commits with \`git rev-parse HEAD\` and \`git rev-parse origin/${targetBranch}^{commit}\`.
+10. Run \`git status --porcelain\` again. If any path remains, do not validate in this checkout: use an isolated temporary worktree pinned to the captured head, or record validation as not run and explain why.`
     : `## Step 1: Establish the read-only review snapshot
 
 The preceding build stage is responsible for committing the change. Do not modify files or create another commit during this review.
 
 1. Run \`git status --porcelain\` and record every remaining path.
-2. If task-related work is uncommitted, record that as a limitation; do not stage or commit it from this read-only review.
+2. If any path remains, do not run validation in the current checkout because uncommitted files would change its inputs. Do not stage or commit those files from this read-only review.
 3. Record the immutable head and base commits with \`git rev-parse HEAD\` and \`git rev-parse origin/${targetBranch}^{commit}\`.
-4. Use those fixed commits for the entire review so validation and analysis examine the same source.`;
+4. Use those fixed commits for the entire review so validation and analysis examine the same source.
+5. Run validation only in a clean checkout at the captured head or in an isolated temporary worktree pinned to that head. If neither is available, record validation as not run and set the verdict to not ready.`;
 
   const outputSection = outputFormat === "structured"
     ? `## Output contract
@@ -1044,12 +1046,13 @@ ${preparationSection}
 ## Step 2: Run Tests
 
 Plan validation for the fixed head commit, then start it before detailed code analysis when the provider can run it independently:
-1. Identify the project's test runner and repository-specific validation guidance.
-2. Run the relevant full test suite, typechecking, and build validation exactly once for this head commit.
-3. Reuse a supplied validation result only when it identifies the same immutable head, exact command, configuration, environment, and toolchain. Otherwise run the command.
-4. For a non-trivial validation workload, use one native worker to run validation while the primary reviewer begins Step 3. Otherwise run it directly.
-5. If any tests fail, record every available failure with the test name, file, and error message.
-6. Await all validation before producing the final report.
+1. Enforce the snapshot precondition from Step 1 before running any validation command.
+2. Identify the project's test runner and repository-specific validation guidance.
+3. Run the relevant full test suite, typechecking, and build validation exactly once for this head commit.
+4. Reuse a supplied validation result only when it identifies the same immutable head, exact command, configuration, environment, and toolchain. Otherwise run the command.
+5. For a non-trivial validation workload, use one native worker to run validation while the primary reviewer begins Step 3. Otherwise run it directly.
+6. If any tests fail, record every available failure with the test name, file, and error message.
+7. Await all validation before producing the final report.
 
 ## Step 3: Code Review
 

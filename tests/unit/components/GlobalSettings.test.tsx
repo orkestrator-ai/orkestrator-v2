@@ -830,6 +830,59 @@ describe("GlobalSettings", () => {
     });
   });
 
+  test("calls onSaveSuccess after a fully successful save", async () => {
+    let resolveSaveSuccess: (() => void) | undefined;
+    const saveSucceeded = new Promise<void>((resolve) => {
+      resolveSaveSuccess = resolve;
+    });
+    const onSaveSuccess = mock(() => resolveSaveSuccess?.());
+    render(<GlobalSettings activeSection="review" onSaveSuccess={onSaveSuccess} />);
+
+    fireEvent.change(screen.getByLabelText("Review instruction"), {
+      target: { value: "Review the committed snapshot." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await act(async () => {
+      await saveSucceeded;
+    });
+    expect(onSaveSuccess).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not call onSaveSuccess after persistence fails", async () => {
+    const onSaveSuccess = mock(() => {});
+    mockUpdateGlobalConfig.mockRejectedValueOnce(new Error("disk full"));
+    render(<GlobalSettings activeSection="review" onSaveSuccess={onSaveSuccess} />);
+
+    fireEvent.change(screen.getByLabelText("Review instruction"), {
+      target: { value: "Review the committed snapshot." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to save settings",
+      { description: "disk full" },
+    ));
+    expect(onSaveSuccess).not.toHaveBeenCalled();
+  });
+
+  test("does not call onSaveSuccess when credential propagation fails", async () => {
+    const onSaveSuccess = mock(() => {});
+    mockPropagateGithubCredentialsToContainers.mockRejectedValueOnce(
+      new Error("container unavailable"),
+    );
+    render(<GlobalSettings activeSection="general" onSaveSuccess={onSaveSuccess} />);
+
+    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Settings saved, but containers were not updated",
+      { description: "container unavailable. Save Changes to retry." },
+    ));
+    expect(onSaveSuccess).not.toHaveBeenCalled();
+  });
+
   test("resets a saved custom review instruction to the built-in default", async () => {
     useConfigStore.setState((state) => ({
       config: {
@@ -890,8 +943,27 @@ describe("GlobalSettings", () => {
     });
 
     expect(screen.getByText("Review instruction must be 100,000 characters or fewer.")).toBeTruthy();
+    expect(screen.queryByText(/Long review instructions are repeated across review passes/))
+      .toBeNull();
+    expect(instruction.getAttribute("aria-describedby"))
+      .not.toContain("review-instruction-warning");
     expect(instruction.getAttribute("aria-invalid")).toBe("true");
     expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("does not warn at the inclusive recommended-length boundary", async () => {
+    render(<GlobalSettings activeSection="review" />);
+    await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
+    const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
+
+    fireEvent.change(instruction, {
+      target: { value: "x".repeat(REVIEW_INSTRUCTION_RECOMMENDED_LENGTH) },
+    });
+
+    expect(screen.queryByText(/Long review instructions are repeated across review passes/))
+      .toBeNull();
+    expect(instruction.getAttribute("aria-describedby"))
+      .not.toContain("review-instruction-warning");
   });
 
   test("warns about long review instructions without blocking legacy values", async () => {
@@ -903,11 +975,22 @@ describe("GlobalSettings", () => {
       target: { value: "x".repeat(REVIEW_INSTRUCTION_RECOMMENDED_LENGTH + 1) },
     });
 
-    expect(screen.getByText(/Long review instructions are repeated across review passes/))
-      .toBeTruthy();
+    const warning = screen.getByText(/Long review instructions are repeated across review passes/);
+    expect(warning.textContent).toContain(
+      `${REVIEW_INSTRUCTION_RECOMMENDED_LENGTH.toLocaleString()} characters or fewer`,
+    );
+    expect(instruction.getAttribute("aria-describedby"))
+      .toContain("review-instruction-warning");
+    expect(warning.id).toBe("review-instruction-warning");
     expect(instruction.getAttribute("aria-invalid")).toBeNull();
     expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled)
       .toBe(false);
+
+    fireEvent.change(instruction, { target: { value: "Short review instruction." } });
+    expect(screen.queryByText(/Long review instructions are repeated across review passes/))
+      .toBeNull();
+    expect(instruction.getAttribute("aria-describedby"))
+      .not.toContain("review-instruction-warning");
   });
 
   test("reports custom instructions that do not use the target branch token", async () => {

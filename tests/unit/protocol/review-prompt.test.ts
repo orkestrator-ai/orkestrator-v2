@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
   getReviewInstructionValidationError,
+  getReviewPromptValidationError,
   parseReviewInstruction,
+  parseReviewPrompt,
   REVIEW_INSTRUCTION_MAX_LENGTH,
   ReviewInstructionValidationError,
+  ReviewPromptValidationError,
 } from "../../../packages/protocol/src/review-prompt";
 
 describe("review instruction protocol validation", () => {
@@ -38,5 +41,13 @@ describe("review instruction protocol validation", () => {
 
     expect(packageJson.exports?.["./review-instruction"]).toBe("./src/review-prompt.ts");
     expect(packageJson.exports?.["./review-prompt"]).toBe("./src/review-prompt.ts");
+  });
+
+  test("keeps deprecated validation aliases behaviorally compatible", () => {
+    expect(ReviewPromptValidationError).toBe(ReviewInstructionValidationError);
+    expect(getReviewPromptValidationError).toBe(getReviewInstructionValidationError);
+    expect(parseReviewPrompt).toBe(parseReviewInstruction);
+    expect(parseReviewPrompt("Review main.")).toBe("Review main.");
+    expect(() => parseReviewPrompt("   ")).toThrow(ReviewPromptValidationError);
   });
 });

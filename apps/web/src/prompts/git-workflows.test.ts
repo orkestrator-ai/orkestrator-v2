@@ -24,6 +24,14 @@ describe("createReviewPrompt", () => {
     expect(result).toContain("node_modules");
   });
 
+  test("establishes the snapshot before the shared review workflow", () => {
+    const result = createReviewPrompt("main");
+
+    expect(result.indexOf("Begin by running the git commands required to establish the review snapshot."))
+      .toBeLessThan(result.indexOf("## Security and instruction hierarchy"));
+    expect(result).toContain("If any path remains, do not validate in this checkout");
+  });
+
   test("includes prompt-injection defence", () => {
     const result = createReviewPrompt("main");
     expect(result).toContain("Security and instruction hierarchy");

@@ -609,6 +609,13 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const reviewInstructionApproxTokens = Math.ceil(reviewInstruction.length / 4);
   const reviewInstructionIsLong =
     reviewInstruction.length > REVIEW_INSTRUCTION_RECOMMENDED_LENGTH;
+  const reviewInstructionWarningVisible =
+    reviewInstructionIsLong && !reviewInstructionValidationError;
+  const reviewInstructionDescribedBy = [
+    "review-instruction-description",
+    "review-instruction-status",
+    reviewInstructionWarningVisible ? "review-instruction-warning" : null,
+  ].filter(Boolean).join(" ");
 
   const renderReview = () => (
     <div className="max-w-3xl space-y-5">
@@ -659,7 +666,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
         <Textarea
           id="review-instruction"
-          aria-describedby="review-instruction-description review-instruction-status"
+          aria-describedby={reviewInstructionDescribedBy}
           aria-invalid={reviewInstructionValidationError ? true : undefined}
           value={reviewInstruction}
           onChange={(event) => setReviewInstruction(event.target.value)}
@@ -682,10 +689,13 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         </div>
       </div>
 
-      {reviewInstructionIsLong && !reviewInstructionValidationError && (
-        <p className="flex items-start gap-1.5 text-xs text-amber-300">
+      {reviewInstructionWarningVisible && (
+        <p
+          id="review-instruction-warning"
+          className="flex items-start gap-1.5 text-xs text-amber-300"
+        >
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          Long review instructions are repeated across review passes and can slow reviews. Keeping them under {REVIEW_INSTRUCTION_RECOMMENDED_LENGTH.toLocaleString()} characters is recommended; legacy values remain supported.
+          Long review instructions are repeated across review passes and can slow reviews. Keeping them to {REVIEW_INSTRUCTION_RECOMMENDED_LENGTH.toLocaleString()} characters or fewer is recommended; legacy values remain supported.
         </p>
       )}
 

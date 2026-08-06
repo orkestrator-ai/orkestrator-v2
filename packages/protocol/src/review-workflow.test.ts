@@ -956,7 +956,24 @@ describe("review body assembly", () => {
 
     expect(body).toContain("## Step 1: Establish the read-only review snapshot");
     expect(body).toContain("Do not modify files or create another commit");
+    expect(body).toContain("If any path remains, do not run validation in the current checkout");
+    expect(body).toContain("isolated temporary worktree pinned to that head");
+    expect(body).toContain("record validation as not run and set the verdict to not ready");
+    expect(body).toContain("Enforce the snapshot precondition from Step 1");
     expect(body).not.toContain("Create one rollback commit");
+  });
+
+  test("keeps interactive validation pinned to the committed snapshot", () => {
+    const body = buildReviewBody({
+      targetBranch: "main",
+      preparationMode: "commit",
+      outputFormat: "markdown",
+      allowClarifyingQuestions: true,
+    });
+
+    expect(body).toContain("Run `git status --porcelain` again");
+    expect(body).toContain("If any path remains, do not validate in this checkout");
+    expect(body).toContain("isolated temporary worktree pinned to the captured head");
   });
 
   test("a hostile branch cannot reach the prompt through the looped-review path", () => {

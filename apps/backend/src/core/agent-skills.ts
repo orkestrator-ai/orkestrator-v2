@@ -99,11 +99,16 @@ function homeDir(): string {
 }
 
 function codexHome(): string {
+  // A synthetic home must be a complete isolation boundary. In particular,
+  // Codex commonly sets CODEX_HOME for the process running the test suite.
+  if (homeOverride !== undefined) return path.join(homeOverride, ".codex");
   const override = process.env.CODEX_HOME?.trim();
   return override ? path.resolve(override) : path.join(homeDir(), ".codex");
 }
 
 function opencodeConfigHome(): string {
+  // See codexHome(): tests must not escape into the host's XDG config tree.
+  if (homeOverride !== undefined) return path.join(homeOverride, ".config", "opencode");
   const xdg = process.env.XDG_CONFIG_HOME?.trim();
   return xdg ? path.join(path.resolve(xdg), "opencode") : path.join(homeDir(), ".config", "opencode");
 }
@@ -196,7 +201,39 @@ async function codexEnabledPlugins(configPath: string): Promise<Array<{ plugin: 
   return enabled;
 }
 
-/** Newest-looking version directory for a cached plugin, or undefined if there is none. */
+interface RankedVersion {
+  kind: "release" | "prerelease" | "fallback";
+  numbers: number[];
+  prerelease: string;
+}
+
+function rankVersionDir(name: string): RankedVersion {
+  const version = /^v?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(name);
+  if (!version) return { kind: "fallback", numbers: [], prerelease: name };
+  return {
+    kind: version[2] ? "prerelease" : "release",
+    numbers: version[1]!.split(".").map(Number),
+    prerelease: version[2] ?? "",
+  };
+}
+
+function compareVersionDirs(a: string, b: string): number {
+  const left = rankVersionDir(a);
+  const right = rankVersionDir(b);
+  const kindRank = { release: 2, prerelease: 1, fallback: 0 } as const;
+  const kindDifference = kindRank[right.kind] - kindRank[left.kind];
+  if (kindDifference !== 0) return kindDifference;
+
+  const parts = Math.max(left.numbers.length, right.numbers.length);
+  for (let index = 0; index < parts; index += 1) {
+    const difference = (right.numbers[index] ?? 0) - (left.numbers[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+
+  return right.prerelease.localeCompare(left.prerelease, undefined, { numeric: true });
+}
+
+/** Newest released version directory for a cached plugin, or the best fallback. */
 async function newestChildDir(parent: string): Promise<string | undefined> {
   let entries: string[];
   try {
@@ -207,9 +244,9 @@ async function newestChildDir(parent: string): Promise<string | undefined> {
     return undefined;
   }
   if (entries.length === 0) return undefined;
-  // Version directories sort usefully; `local`/`unknown` fall to the end so a
-  // real version wins when both are present.
-  const ranked = entries.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  // Prefer any release over prereleases and non-version cache markers such as
+  // `local`/`unknown`; compare versions numerically within each category.
+  const ranked = entries.sort(compareVersionDirs);
   return path.join(parent, ranked[0]!);
 }
 
@@ -248,7 +285,8 @@ async function rootSpecsFor(provider: AgentSkillProvider): Promise<RootSpec[]> {
         ? path.join(process.env.PROGRAMDATA || "C:\\ProgramData", "ClaudeCode", "skills")
         : "/etc/claude-code/skills";
     return [
-      { path: managed, scope: "admin" },
+      // Fixed machine roots would make synthetic-home tests inspect the host.
+      ...(homeOverride !== undefined ? [] : [{ path: managed, scope: "admin" as const }]),
       { path: path.join(home, ".claude", "skills"), scope: "user" },
       ...(await claudePluginRoots()),
     ];
@@ -257,7 +295,9 @@ async function rootSpecsFor(provider: AgentSkillProvider): Promise<RootSpec[]> {
   if (provider === "codex") {
     const codex = codexHome();
     return [
-      ...(process.platform === "win32" ? [] : [{ path: "/etc/codex/skills", scope: "admin" as const }]),
+      ...(process.platform === "win32" || homeOverride !== undefined
+        ? []
+        : [{ path: "/etc/codex/skills", scope: "admin" as const }]),
       { path: path.join(codex, "skills"), scope: "user", skip: [".system"] },
       { path: agentsSkills, scope: "shared" },
       { path: path.join(codex, "skills", ".system"), scope: "system" },
@@ -482,11 +522,29 @@ export async function readAgentSkillFile(
   });
   if (!allowed) throw new Error("Refusing to read a file outside the agent skill directories");
 
-  const buffer = await fs.readFile(normalized);
-  const truncated = buffer.byteLength > MAX_SKILL_FILE_BYTES;
+  // Read one byte past the display limit to detect truncation without ever
+  // allocating or loading the complete (user-controlled) file.
+  const handle = await fs.open(normalized, "r");
+  const buffer = Buffer.alloc(MAX_SKILL_FILE_BYTES + 1);
+  let bytesRead = 0;
+  try {
+    while (bytesRead < buffer.byteLength) {
+      const result = await handle.read(
+        buffer,
+        bytesRead,
+        buffer.byteLength - bytesRead,
+        bytesRead,
+      );
+      if (result.bytesRead === 0) break;
+      bytesRead += result.bytesRead;
+    }
+  } finally {
+    await handle.close();
+  }
+  const truncated = bytesRead > MAX_SKILL_FILE_BYTES;
   return {
     path: filePath,
-    content: buffer.subarray(0, MAX_SKILL_FILE_BYTES).toString("utf8"),
+    content: buffer.subarray(0, Math.min(bytesRead, MAX_SKILL_FILE_BYTES)).toString("utf8"),
     truncated,
   };
 }

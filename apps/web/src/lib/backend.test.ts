@@ -86,6 +86,8 @@ const {
   updateEnvironmentAgentSettings,
   writeInitialPromptAttachments,
   applyPaneLayoutIntent,
+  listAgentSkills,
+  readAgentSkill,
 } = backendWrappers;
 
 afterEach(() => {
@@ -106,6 +108,32 @@ describe("backend setup wrappers", () => {
     expect(invokeMock.mock.calls).toEqual([
       ["set_environment_setup_complete", { environmentId: "env-1", complete: true }],
     ]);
+  });
+
+  test("forwards agent skill list and read payloads and propagates their results", async () => {
+    const scan = {
+      provider: "codex" as const,
+      roots: [],
+      skills: [],
+      errors: [],
+    };
+    invokeMock.mockResolvedValueOnce(scan);
+
+    await expect(listAgentSkills("codex")).resolves.toBe(scan);
+    expect(invokeMock).toHaveBeenLastCalledWith("list_agent_skills", { provider: "codex" });
+
+    const file = { path: "/skills/example/SKILL.md", content: "# Example", truncated: false };
+    invokeMock.mockResolvedValueOnce(file);
+
+    await expect(readAgentSkill("claude", file.path)).resolves.toBe(file);
+    expect(invokeMock).toHaveBeenLastCalledWith("read_agent_skill", {
+      provider: "claude",
+      filePath: file.path,
+    });
+
+    const failure = new Error("skill read failed");
+    invokeMock.mockRejectedValueOnce(failure);
+    await expect(readAgentSkill("opencode", file.path)).rejects.toBe(failure);
   });
 
   test("passes explicit tri-state PR metadata to the backend", async () => {

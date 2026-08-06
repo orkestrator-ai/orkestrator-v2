@@ -68,6 +68,8 @@ interface ProviderState {
   scan?: AgentSkillScan;
   loading: boolean;
   error?: string;
+  /** Changes after every successful scan, even when the file paths do not. */
+  revision?: number;
 }
 
 export function SkillsSettings() {
@@ -103,12 +105,23 @@ export function SkillsSettings() {
     try {
       const scan = await backend.listAgentSkills(target);
       if (scanTokens.current[target] !== token) return;
-      setStates((prev) => ({ ...prev, [target]: { scan, loading: false } }));
+      setStates((prev) => ({
+        ...prev,
+        [target]: {
+          scan,
+          loading: false,
+          revision: (prev[target]?.revision ?? 0) + 1,
+        },
+      }));
     } catch (err) {
       if (scanTokens.current[target] !== token) return;
       setStates((prev) => ({
         ...prev,
-        [target]: { loading: false, error: err instanceof Error ? err.message : String(err) },
+        [target]: {
+          ...prev[target],
+          loading: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
       }));
     }
   }, []);
@@ -136,13 +149,14 @@ export function SkillsSettings() {
     filtered.find((skill) => skill.id === selectedId) ?? filtered[0];
 
   useEffect(() => {
+    const token = fileToken.current + 1;
+    fileToken.current = token;
     if (!selected) {
       setFile(null);
       setFileError(null);
+      setFileLoading(false);
       return;
     }
-    const token = fileToken.current + 1;
-    fileToken.current = token;
     setFileLoading(true);
     setFileError(null);
 
@@ -158,7 +172,7 @@ export function SkillsSettings() {
         setFileError(err instanceof Error ? err.message : String(err));
         setFileLoading(false);
       });
-  }, [provider, selected?.filePath]);
+  }, [provider, selected?.filePath, state.revision]);
 
   const copyPath = useCallback(async () => {
     if (!selected) return;
@@ -168,6 +182,15 @@ export function SkillsSettings() {
       setTimeout(() => setCopied(false), 1500);
     } catch {
       toast.error("Could not copy the path to the clipboard");
+    }
+  }, [selected]);
+
+  const revealSkill = useCallback(async () => {
+    if (!selected) return;
+    try {
+      await backend.revealInFileManager(selected.filePath);
+    } catch {
+      toast.error("Could not reveal the skill in the file manager");
     }
   }, [selected]);
 
@@ -197,9 +220,15 @@ export function SkillsSettings() {
         </Tabs>
       </div>
 
-      <div className="flex min-h-0 flex-1 gap-4 rounded-md border border-zinc-800">
+      <div
+        data-testid="skills-panes"
+        className="flex min-h-0 flex-1 flex-col gap-4 rounded-md border border-zinc-800 md:flex-row"
+      >
         {/* Skill list */}
-        <div className="flex w-[17rem] shrink-0 flex-col border-r border-zinc-800">
+        <div
+          data-testid="skills-list-pane"
+          className="flex h-56 w-full shrink-0 flex-col border-b border-zinc-800 md:h-auto md:w-[17rem] md:border-b-0 md:border-r"
+        >
           <div className="flex items-center gap-2 border-b border-zinc-800 p-2">
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -224,12 +253,18 @@ export function SkillsSettings() {
             </Button>
           </div>
 
+          {state.error && state.scan && (
+            <p role="alert" className="border-b border-zinc-800 px-3 py-2 text-xs text-destructive">
+              Refresh failed: {state.error}
+            </p>
+          )}
+
           <ScrollArea className="min-h-0 flex-1">
             {state.loading && !state.scan ? (
               <div className="flex items-center justify-center py-10">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </div>
-            ) : state.error ? (
+            ) : state.error && !state.scan ? (
               <p className="p-3 text-xs text-destructive">{state.error}</p>
             ) : filtered.length === 0 ? (
               <p className="p-3 text-xs text-muted-foreground">
@@ -342,8 +377,8 @@ export function SkillsSettings() {
                     size="icon"
                     className="h-7 w-7 text-muted-foreground hover:text-foreground"
                     onClick={() => void copyPath()}
-                    aria-label="Copy skill path"
-                    title="Copy skill path"
+                    aria-label={copied ? "Skill path copied" : "Copy skill path"}
+                    title={copied ? "Skill path copied" : "Copy skill path"}
                   >
                     {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
                   </Button>
@@ -351,7 +386,7 @@ export function SkillsSettings() {
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                    onClick={() => backend.revealInFileManager(selected.filePath).catch(() => {})}
+                    onClick={() => void revealSkill()}
                     aria-label="Reveal skill in file manager"
                     title="Reveal in file manager"
                   >

@@ -53,6 +53,12 @@ import {
   resolveComparisonRef,
   type EnvironmentDiffStatsSnapshot,
 } from "@orkestrator/protocol/diff-stats";
+import {
+  isAgentSkillProvider,
+  readAgentSkillFile,
+  scanAgentSkills,
+  type AgentSkillProvider,
+} from "./agent-skills.js";
 import { DiffStatsService } from "./diff-stats-service.js";
 import {
   PrMonitorService,
@@ -985,6 +991,13 @@ function asOptionalAgentInteractionPolicy(
   if (value === undefined) return undefined;
   if (!isAgentInteractionPolicy(value)) {
     throw new Error("Expected interactionPolicy to be a valid agent interaction policy");
+  }
+  return value;
+}
+
+function asAgentSkillProvider(value: unknown): AgentSkillProvider {
+  if (!isAgentSkillProvider(value)) {
+    throw new Error("Expected provider to be claude, codex or opencode");
   }
   return value;
 }
@@ -9270,6 +9283,18 @@ export function createCommandRegistry(
     };
   });
   register("get_codex_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/codex-bridge.log 2>/dev/null || true"));
+
+  register("list_agent_skills", async (args) => {
+    assertOnlyKeys(args, ["provider"], "list_agent_skills argument");
+    return scanAgentSkills(asAgentSkillProvider(args.provider));
+  });
+  register("read_agent_skill", async (args) => {
+    assertOnlyKeys(args, ["provider", "filePath"], "read_agent_skill argument");
+    return readAgentSkillFile(
+      asAgentSkillProvider(args.provider),
+      asString(args.filePath, "filePath"),
+    );
+  });
 
   register("has_claude_credentials", () => pathExists(homePath(".claude", ".credentials.json")).then(async (exists) => exists || pathExists(homePath(".claude.json"))));
   register("get_credential_status", async (_args, context) => ({

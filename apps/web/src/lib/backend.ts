@@ -1247,6 +1247,60 @@ export async function checkOpencodeCli(): Promise<boolean> {
   return invoke<boolean>("check_opencode_cli");
 }
 
+// --- Agent Skills ---
+
+export const AGENT_SKILL_PROVIDERS = ["claude", "codex", "opencode"] as const;
+export type AgentSkillProvider = (typeof AGENT_SKILL_PROVIDERS)[number];
+export type AgentSkillScope = "admin" | "user" | "shared" | "system" | "plugin";
+
+export interface AgentSkillRoot {
+  path: string;
+  label: string;
+  scope: AgentSkillScope;
+  plugin?: string;
+  exists: boolean;
+  skillCount: number;
+}
+
+export interface AgentSkill {
+  id: string;
+  name: string;
+  description: string;
+  filePath: string;
+  location: string;
+  scope: AgentSkillScope;
+  plugin?: string;
+  /** A higher-precedence root exposes the same skill name. */
+  shadowed: boolean;
+}
+
+export interface AgentSkillScan {
+  provider: AgentSkillProvider;
+  roots: AgentSkillRoot[];
+  /** Already sorted by name; the backend owns the ordering. */
+  skills: AgentSkill[];
+  errors: Array<{ path: string; message: string }>;
+}
+
+export interface AgentSkillFile {
+  path: string;
+  content: string;
+  truncated: boolean;
+}
+
+/** List every skill the given agent can load from its user-level skill roots */
+export async function listAgentSkills(provider: AgentSkillProvider): Promise<AgentSkillScan> {
+  return invoke<AgentSkillScan>("list_agent_skills", { provider });
+}
+
+/** Read one SKILL.md; the backend rejects paths outside the agent's skill roots */
+export async function readAgentSkill(
+  provider: AgentSkillProvider,
+  filePath: string,
+): Promise<AgentSkillFile> {
+  return invoke<AgentSkillFile>("read_agent_skill", { provider, filePath });
+}
+
 /** Check if the Codex CLI binary is installed and available */
 export async function checkCodexCli(): Promise<boolean> {
   return invoke<boolean>("check_codex_cli");

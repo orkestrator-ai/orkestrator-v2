@@ -181,6 +181,20 @@ const seedContainerSetupCommands = (environmentId = "env-hidden") => {
     setupPhase: "running",
   });
 };
+const seedUnboundSetupTab = () => {
+  usePaneLayoutStore.setState((state) => ({
+    environments: new Map(state.environments).set("env-hidden", {
+      root: {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+        activeTabId: "default",
+      },
+      activePaneId: "default",
+      containerId: "container-hidden",
+    }),
+  }));
+};
 
 mock.module("@/lib/setup-commands", () => ({
   ...realSetupCommandsSnapshot,
@@ -4066,20 +4080,11 @@ describe("TerminalContainer", () => {
     });
   });
 
-  test("keeps an unbound setup tab intact when backend session binding fails", async () => {
-    getEnvironmentSetupSessionMock.mockRejectedValueOnce(new Error("bind unavailable"));
-    usePaneLayoutStore.setState((state) => ({
-      environments: new Map(state.environments).set("env-hidden", {
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [{ id: "default", type: "plain", isSetupTab: true }],
-          activeTabId: "default",
-        },
-        activePaneId: "default",
-        containerId: "container-hidden",
-      }),
-    }));
+  test("keeps an unbound setup tab intact while backend session binding retries", async () => {
+    awaitEnvironmentSetupSessionMock
+      .mockRejectedValueOnce(new Error("bind unavailable"))
+      .mockImplementationOnce(() => new Promise(() => {}));
+    seedUnboundSetupTab();
     useEnvironmentStore.setState((state) => ({
       ...state,
     }));
@@ -4096,8 +4101,8 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
-    });
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
+    }, { timeout: 2_000 });
     expect(
       useTerminalSessionStore.getState().sessions.get(
         createSessionKey("container-hidden", "default", "env-hidden"),
@@ -4106,6 +4111,91 @@ describe("TerminalContainer", () => {
     expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
       { id: "default", type: "plain", isSetupTab: true },
     ]);
+  });
+
+  test("retries a transient setup-session lookup failure without a reconnect", async () => {
+    awaitEnvironmentSetupSessionMock
+      .mockRejectedValueOnce(new Error("temporary bridge failure"))
+      .mockResolvedValueOnce({
+        environmentId: "env-hidden",
+        sessionId: "env-hidden:setup",
+        startedAt: "2026-08-05T00:00:00.000Z",
+        running: true,
+        terminalRunning: true,
+      });
+    seedUnboundSetupTab();
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
+      expect(
+        useTerminalSessionStore.getState().sessions.get(
+          createSessionKey("container-hidden", "default", "env-hidden"),
+        )?.sessionId,
+      ).toBe("env-hidden:setup");
+    }, { timeout: 2_000 });
+  });
+
+  test("settles an unavailable setup session after the bounded retry budget", async () => {
+    awaitEnvironmentSetupSessionMock
+      .mockRejectedValueOnce(new Error("bridge unavailable 1"))
+      .mockRejectedValueOnce(new Error("bridge unavailable 2"))
+      .mockRejectedValueOnce(new Error("bridge unavailable 3"));
+    seedUnboundSetupTab();
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(3);
+      expect(
+        usePaneLayoutStore.getState().getAllTabs("env-hidden")
+          .some((tab) => tab.isSetupTab),
+      ).toBe(false);
+    }, { timeout: 2_000 });
+  });
+
+  test("cancels a pending setup-session retry when unmounted", async () => {
+    awaitEnvironmentSetupSessionMock.mockRejectedValueOnce(new Error("bridge unavailable"));
+    seedUnboundSetupTab();
+
+    const rendered = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {});
+    rendered.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 350));
+
+    expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
   });
 
   test("retries a transient setup-session lookup failure on stream reconnect", async () => {
@@ -4123,18 +4213,7 @@ describe("TerminalContainer", () => {
         running: true,
         terminalRunning: true,
       });
-    usePaneLayoutStore.setState((state) => ({
-      environments: new Map(state.environments).set("env-hidden", {
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [{ id: "default", type: "plain", isSetupTab: true }],
-          activeTabId: "default",
-        },
-        activePaneId: "default",
-        containerId: "container-hidden",
-      }),
-    }));
+    seedUnboundSetupTab();
 
     render(
       <TerminalProvider>
@@ -4159,6 +4238,125 @@ describe("TerminalContainer", () => {
         )?.sessionId,
       ).toBe("env-hidden:setup");
     }, { timeout: 2_000 });
+  });
+
+  test("does not lose a reconnect while a failed setup-session lookup is in flight", async () => {
+    let reconnect: (() => void) | undefined;
+    let rejectLookup: ((error: Error) => void) | undefined;
+    listenMock.mockImplementation(async (event: string, handler: () => void) => {
+      if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) reconnect = handler;
+      return () => undefined;
+    });
+    awaitEnvironmentSetupSessionMock
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectLookup = reject;
+      }))
+      .mockResolvedValueOnce({
+        environmentId: "env-hidden",
+        sessionId: "env-hidden:setup",
+        startedAt: "2026-08-05T00:00:00.000Z",
+        running: true,
+        terminalRunning: true,
+      });
+    seedUnboundSetupTab();
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+      expect(reconnect).toBeDefined();
+      expect(rejectLookup).toBeDefined();
+    });
+    act(() => reconnect?.());
+    await act(async () => {
+      rejectLookup?.(new Error("bridge disconnected during lookup"));
+    });
+
+    await waitFor(() => {
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
+      expect(
+        useTerminalSessionStore.getState().sessions.get(
+          createSessionKey("container-hidden", "default", "env-hidden"),
+        )?.sessionId,
+      ).toBe("env-hidden:setup");
+    }, { timeout: 2_000 });
+  });
+
+  test("continues setup-session binding when the reconnect listener rejects", async () => {
+    listenMock.mockRejectedValueOnce(new Error("listener unavailable"));
+    awaitEnvironmentSetupSessionMock.mockResolvedValueOnce({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      startedAt: "2026-08-05T00:00:00.000Z",
+      running: true,
+      terminalRunning: true,
+    });
+    seedUnboundSetupTab();
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(listenMock).toHaveBeenCalledWith(
+        NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+        expect.any(Function),
+      );
+      expect(
+        useTerminalSessionStore.getState().sessions.get(
+          createSessionKey("container-hidden", "default", "env-hidden"),
+        )?.sessionId,
+      ).toBe("env-hidden:setup");
+    });
+  });
+
+  test("releases a reconnect listener that resolves after unmount", async () => {
+    const release = mock(() => undefined);
+    let resolveListener: ((release: () => void) => void) | undefined;
+    listenMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveListener = resolve;
+    }));
+
+    const rendered = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(listenMock).toHaveBeenCalledWith(
+        NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+        expect.any(Function),
+      );
+      expect(resolveListener).toBeDefined();
+    });
+    rendered.unmount();
+    await act(async () => {
+      resolveListener?.(release);
+    });
+
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   test("rehydrates a running backend setup session for a local environment", async () => {

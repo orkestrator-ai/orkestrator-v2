@@ -2880,6 +2880,113 @@ describe("build pipeline commands", () => {
       await expect(invoke("get_build_pipeline", { pipelineId: "p1" })).resolves.toBeNull();
     });
   });
+
+  test("clears every task pipeline before updating the task and deduplicates the linked id", async () => {
+    const operations: string[] = [];
+    const remove = mock(async (pipelineId: string) => {
+      operations.push(`remove:${pipelineId}`);
+    });
+    const supervisor = {
+      remove,
+    } as unknown as NonNullable<CommandContext["buildPipelines"]>;
+
+    await withCommands(async (invoke, storage) => {
+      const task = await storage.addKanbanTask("proj-1", "Build task", "");
+      await storage.updateKanbanTask(task.id, {
+        environmentId: "e1",
+        buildPipelineId: "pipeline-linked",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+      });
+      await storage.saveBuildPipeline("pipeline-linked", "proj-1", "e1", 1, {
+        taskId: task.id,
+      });
+      await storage.saveBuildPipeline("pipeline-secondary", "proj-1", "e1", 1, {
+        taskId: task.id,
+      });
+      await storage.saveBuildPipeline("pipeline-unrelated", "proj-1", "e1", 1, {
+        taskId: "another-task",
+      });
+
+      const updateKanbanTask = storage.updateKanbanTask.bind(storage);
+      const updateSpy = spyOn(storage, "updateKanbanTask").mockImplementation(
+        async (taskId, updates, expectedProjectId) => {
+          operations.push(`update:${taskId}`);
+          return updateKanbanTask(taskId, updates, expectedProjectId);
+        },
+      );
+
+      const result = await invoke("clear_task_build_status", {
+        taskId: task.id,
+      }) as {
+        task: { id: string; environmentId?: string; buildPipelineId?: string; prUrl?: string };
+        removedPipelineIds: string[];
+      };
+
+      expect(result.removedPipelineIds).toEqual([
+        "pipeline-linked",
+        "pipeline-secondary",
+      ]);
+      expect(result.task).toMatchObject({ id: task.id, prUrl: "" });
+      expect(result.task.environmentId).toBeUndefined();
+      expect(result.task.buildPipelineId).toBeUndefined();
+      expect(remove.mock.calls.map(([pipelineId]) => pipelineId)).toEqual([
+        "pipeline-linked",
+        "pipeline-secondary",
+      ]);
+      expect(operations).toEqual([
+        "remove:pipeline-linked",
+        "remove:pipeline-secondary",
+        `update:${task.id}`,
+      ]);
+      expect(updateSpy).toHaveBeenCalledWith(task.id, {
+        environmentId: undefined,
+        buildPipelineId: undefined,
+        prUrl: "",
+        prState: undefined,
+      });
+    }, { buildPipelines: supervisor });
+  });
+
+  test("falls back to storage deletion when the build-pipeline supervisor is unavailable", async () => {
+    await withCommands(async (invoke, storage) => {
+      const task = await storage.addKanbanTask("proj-1", "Stored build task", "");
+      await storage.updateKanbanTask(task.id, {
+        buildPipelineId: "pipeline-stored",
+      });
+      await storage.saveBuildPipeline("pipeline-stored", "proj-1", "e1", 1, {
+        taskId: task.id,
+      });
+
+      const operations: string[] = [];
+      const deleteBuildPipeline = storage.deleteBuildPipeline.bind(storage);
+      const deleteSpy = spyOn(storage, "deleteBuildPipeline").mockImplementation(
+        async (pipelineId) => {
+          operations.push(`delete:${pipelineId}`);
+          await deleteBuildPipeline(pipelineId);
+        },
+      );
+      const updateKanbanTask = storage.updateKanbanTask.bind(storage);
+      spyOn(storage, "updateKanbanTask").mockImplementation(
+        async (taskId, updates, expectedProjectId) => {
+          operations.push(`update:${taskId}`);
+          return updateKanbanTask(taskId, updates, expectedProjectId);
+        },
+      );
+
+      const result = await invoke("clear_task_build_status", {
+        taskId: task.id,
+      }) as { removedPipelineIds: string[] };
+
+      expect(result.removedPipelineIds).toEqual(["pipeline-stored"]);
+      expect(deleteSpy).toHaveBeenCalledWith("pipeline-stored");
+      expect(operations).toEqual([
+        "delete:pipeline-stored",
+        `update:${task.id}`,
+      ]);
+      expect(await storage.getBuildPipeline("pipeline-stored")).toBeNull();
+    });
+  });
 });
 
 describe("set_environment_unread", () => {

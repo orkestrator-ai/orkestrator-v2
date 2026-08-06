@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createSessionKey } from "@/lib/utils";
 import type {
@@ -9,6 +9,13 @@ import type {
   CodexSessionStatusLookupResult,
 } from "@/lib/codex-client";
 import { useCodexStore } from "@/stores/codexStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import {
+  listen,
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+  type NativeEvent,
+} from "@/lib/native/events";
+import type { Environment } from "@/types";
 import {
   createCodexBackgroundSynchronizer,
   type CodexBackgroundSyncDependencies,
@@ -19,6 +26,27 @@ const ENVIRONMENT_ID = "background-env";
 const SESSION_KEY = createSessionKey(ENVIRONMENT_ID, "codex-tab");
 const SESSION_ID = "session-background";
 const CLIENT = { baseUrl: "http://127.0.0.1:9999" } as CodexClient;
+const mockListen = listen as ReturnType<typeof mock>;
+type EventHandler = (event: NativeEvent<unknown>) => void;
+
+function environment(agentActivityState: "working" | "waiting" | "idle"): Environment {
+  return {
+    id: ENVIRONMENT_ID,
+    projectId: "project-1",
+    name: "Background",
+    branch: "feature/background",
+    environmentType: "local",
+    containerId: null,
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: "2026-07-28T17:53:20.000Z",
+    networkAccessMode: "restricted",
+    order: 0,
+    agentActivityState,
+  };
+}
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -129,6 +157,8 @@ function seedLoadingSession(
 }
 
 beforeEach(() => {
+  mockListen.mockReset();
+  mockListen.mockImplementation(() => Promise.resolve(() => {}));
   useCodexStore.setState({
     clients: new Map(),
     sessions: new Map(),
@@ -138,6 +168,12 @@ beforeEach(() => {
     sessionPhase: new Map(),
     contextUsage: new Map(),
     unconfirmedDispatches: new Map(),
+  });
+  useEnvironmentStore.setState({
+    environments: [],
+    isLoading: false,
+    error: null,
+    deletingEnvironments: new Set(),
   });
 });
 
@@ -221,6 +257,72 @@ describe("Codex background synchronization", () => {
 
     expect(statusCalls).toBe(0);
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    synchronizer.dispose();
+  });
+
+  test("retries transient activity and pending failures while waiting", async () => {
+    seedLoadingSession();
+    let activityCalls = 0;
+    let approvalCalls = 0;
+    const recoveredApproval = approval("recovered");
+    const synchronizer = createCodexBackgroundSynchronizer({
+      retryDelaysMs: [1],
+      dependencies: {
+        ...dependencies({
+          kind: "found",
+          session: { status: "running", phase: "running" },
+        }),
+        lookupSessionActivity: async () => {
+          activityCalls += 1;
+          return activityCalls === 1
+            ? { kind: "unavailable" as const, error: new Error("offline") }
+            : { kind: "found" as const, activity: "waiting" as const };
+        },
+        fetchPendingApprovals: async () => {
+          approvalCalls += 1;
+          if (approvalCalls === 1) throw new Error("pending unavailable");
+          return [recoveredApproval];
+        },
+      },
+    });
+
+    await synchronizer.reconcileNow();
+    await waitFor(() => expect(approvalCalls).toBe(2));
+
+    expect(activityCalls).toBe(3);
+    expect(useCodexStore.getState().pendingApprovals.get(SESSION_KEY))
+      .toEqual([recoveredApproval]);
+    synchronizer.dispose();
+  });
+
+  test("retries an unavailable terminal status without another event", async () => {
+    seedLoadingSession();
+    let statusCalls = 0;
+    const synchronizer = createCodexBackgroundSynchronizer({
+      retryDelaysMs: [1],
+      dependencies: {
+        ...dependencies({ kind: "missing" }, [toolMessage("success")]),
+        lookupSessionStatus: async () => {
+          statusCalls += 1;
+          if (statusCalls === 1) {
+            return { kind: "unavailable", error: new Error("restarting") };
+          }
+          return {
+            kind: "found",
+            session: { status: "idle", phase: "idle" },
+          };
+        },
+      },
+    });
+
+    await synchronizer.reconcileNow();
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading)
+        .toBe(false);
+    });
+
+    expect(statusCalls).toBe(3);
+    synchronizer.dispose();
   });
 
   test("rehydrates pending input while a background turn is running", async () => {
@@ -582,8 +684,12 @@ describe("Codex background synchronization", () => {
       } else {
         expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(true);
         expect(state.sessionPhase.get(SESSION_KEY)).toBe("running");
-        expect(state.pendingApprovals.get(SESSION_KEY))
-          .toEqual([approval(scenario.name)]);
+        if (scenario.name === "unavailable") {
+          expect(state.pendingApprovals.get(SESSION_KEY))
+            .toEqual([approval(scenario.name)]);
+        } else {
+          expect(state.pendingApprovals.has(SESSION_KEY)).toBe(false);
+        }
       }
       synchronizer.dispose();
     }
@@ -691,6 +797,7 @@ describe("Codex background synchronization", () => {
     expect(session?.isLoading).toBe(true);
     expect(session?.title).toBe("Live title");
     expect(session?.messages[0]?.parts[0]?.toolState).toBe("pending");
+    synchronizer.dispose();
   });
 
   test("disposal rejects a terminal confirmation already in flight", async () => {
@@ -744,13 +851,17 @@ describe("Codex background synchronization", () => {
     const approvals = new Promise<CodexApproval[]>((resolve) => {
       resolveApprovals = resolve;
     });
+    let approvalCalls = 0;
     const synchronizer = createCodexBackgroundSynchronizer({
       dependencies: {
         ...dependencies({
           kind: "found",
           session: { status: "running", phase: "running" },
         }),
-        fetchPendingApprovals: async () => approvals,
+        fetchPendingApprovals: async () => {
+          approvalCalls += 1;
+          return approvals;
+        },
       },
     });
     const liveApproval: CodexApproval = {
@@ -768,12 +879,40 @@ describe("Codex background synchronization", () => {
     };
 
     const pending = synchronizer.reconcileNow();
+    await waitFor(() => expect(approvalCalls).toBe(1));
     useCodexStore.getState().addPendingApproval(SESSION_KEY, liveApproval);
     resolveApprovals?.([]);
     await pending;
 
     expect(useCodexStore.getState().pendingApprovals.get(SESSION_KEY))
       .toEqual([liveApproval]);
+  });
+
+  test("authoritative pending snapshots clear stale cards and replace disjoint cards", async () => {
+    seedLoadingSession();
+    useCodexStore.getState().setPendingApprovals(SESSION_KEY, [approval("stale")]);
+    useCodexStore.getState().setPendingInteractions(
+      SESSION_KEY,
+      [interaction("stale")],
+    );
+    const currentInteraction = interaction("current");
+    const synchronizer = createCodexBackgroundSynchronizer({
+      dependencies: dependencies(
+        {
+          kind: "found",
+          session: { status: "running", phase: "running" },
+        },
+        [],
+        [],
+        [currentInteraction],
+      ),
+    });
+
+    await synchronizer.reconcileNow();
+
+    expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false);
+    expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY))
+      .toEqual([currentInteraction]);
   });
 
   test("clears stale pending input before idle unlock despite delayed snapshots", async () => {
@@ -882,6 +1021,7 @@ describe("Codex background synchronization", () => {
       error: "existing",
     });
     expect(state.sessionPhase.get(SESSION_KEY)).toBe("running");
+    synchronizer.dispose();
   });
 
   test("applies explicit and default terminal errors", async () => {
@@ -928,6 +1068,7 @@ describe("Codex background synchronization", () => {
 
     expect(attempts).toBe(2);
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    synchronizer.dispose();
   });
 
   test("unlocks ordinary terminal turns when transcript hydration fails", async () => {
@@ -1014,7 +1155,7 @@ describe("Codex background synchronization", () => {
     });
   });
 
-  test("keeps an ambiguous turn loading until transcript settlement can retry", async () => {
+  test("retries transcript settlement for an ambiguous turn without another event", async () => {
     const optimistic = optimisticMessage();
     seedLoadingSession(undefined, [toolMessage("pending"), optimistic]);
     useCodexStore.getState().setUnconfirmedDispatch(SESSION_KEY, {
@@ -1026,6 +1167,7 @@ describe("Codex background synchronization", () => {
     useCodexStore.getState().setPendingInteractions(SESSION_KEY, [interaction("stale")]);
     let transcriptAttempts = 0;
     const synchronizer = createCodexBackgroundSynchronizer({
+      retryDelaysMs: [1],
       dependencies: {
         ...dependencies({
           kind: "found",
@@ -1051,7 +1193,10 @@ describe("Codex background synchronization", () => {
     expect(state.pendingApprovals.has(SESSION_KEY)).toBe(false);
     expect(state.pendingInteractions.has(SESSION_KEY)).toBe(false);
 
-    await synchronizer.reconcileNow();
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading)
+        .toBe(false);
+    });
 
     state = useCodexStore.getState();
     expect(transcriptAttempts).toBe(2);
@@ -1059,6 +1204,7 @@ describe("Codex background synchronization", () => {
     expect(state.sessions.get(SESSION_KEY)?.messages.map((message) => message.id))
       .not.toContain(optimistic.id);
     expect(state.unconfirmedDispatches.get(SESSION_KEY)?.retryable).toBe(true);
+    synchronizer.dispose();
   });
 
   test("preserves an unconfirmed dispatch and reports terminal error when its transcript fails", async () => {
@@ -1097,6 +1243,7 @@ describe("Codex background synchronization", () => {
     });
     expect(state.sessions.get(SESSION_KEY)?.messages.map((message) => message.id))
       .toContain(optimistic.id);
+    synchronizer.dispose();
   });
 
   test("ignores a blank title and accepts zero-valued context usage", async () => {
@@ -1151,6 +1298,7 @@ describe("Codex background synchronization", () => {
     expect(useCodexStore.getState().pendingApprovals.get(SESSION_KEY))
       .toEqual([currentApproval]);
     expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
+    approvalSynchronizer.dispose();
 
     const interactionSynchronizer = createCodexBackgroundSynchronizer({
       dependencies: {
@@ -1170,23 +1318,29 @@ describe("Codex background synchronization", () => {
       .toEqual([currentApproval]);
     expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY))
       .toEqual([currentInteraction]);
+    interactionSynchronizer.dispose();
   });
 
   test("does not overwrite a newer live interaction with an older snapshot", async () => {
     seedLoadingSession();
     const interactions = deferred<CodexInteraction[]>();
+    let interactionCalls = 0;
     const synchronizer = createCodexBackgroundSynchronizer({
       dependencies: {
         ...dependencies({
           kind: "found",
           session: { status: "running", phase: "running" },
         }),
-        fetchPendingInteractions: async () => interactions.promise,
+        fetchPendingInteractions: async () => {
+          interactionCalls += 1;
+          return interactions.promise;
+        },
       },
     });
     const liveInteraction = interaction("live");
 
     const pending = synchronizer.reconcileNow();
+    await waitFor(() => expect(interactionCalls).toBe(1));
     useCodexStore.getState().addPendingInteraction(SESSION_KEY, liveInteraction);
     interactions.resolve([]);
     await pending;
@@ -1371,6 +1525,7 @@ describe("Codex background synchronization", () => {
     });
     expect(useCodexStore.getState().sessions.get(clientlessKey)?.isLoading).toBe(true);
     expect(useCodexStore.getState().sessions.get(malformedKey)?.isLoading).toBe(true);
+    synchronizer.dispose();
   });
 
   test("the hook performs an initial snapshot without a polling timer", async () => {
@@ -1420,6 +1575,157 @@ describe("Codex background synchronization", () => {
     } finally {
       cleanup();
       window.setInterval = originalSetInterval;
+    }
+  });
+
+  test("environment, native activity, and reconnect edges trigger filtered reconciliation", async () => {
+    seedLoadingSession();
+    useEnvironmentStore.getState().setEnvironments([environment("working")]);
+    const handlers = new Map<string, EventHandler>();
+    mockListen.mockImplementation((eventName: string, handler: EventHandler) => {
+      handlers.set(eventName, handler);
+      return Promise.resolve(() => handlers.delete(eventName));
+    });
+    let activityCalls = 0;
+    const hook = renderHook(() => useCodexBackgroundSync({
+      dependencies: {
+        ...dependencies({
+          kind: "found",
+          session: { status: "running", phase: "running" },
+        }),
+        lookupSessionActivity: async () => {
+          activityCalls += 1;
+          return { kind: "found", activity: "waiting" };
+        },
+      },
+    }));
+    await waitFor(() => expect(activityCalls).toBe(1));
+
+    act(() => handlers.get("native-agent-session-activity")?.({
+      payload: { environment_id: ENVIRONMENT_ID, state: "working" },
+    }));
+    await act(async () => undefined);
+    expect(activityCalls).toBe(1);
+
+    act(() => handlers.get("native-agent-session-activity")?.({
+      payload: { environment_id: ENVIRONMENT_ID, state: "waiting" },
+    }));
+    await waitFor(() => expect(activityCalls).toBe(2));
+
+    act(() => useEnvironmentStore.getState().setEnvironments([
+      environment("waiting"),
+    ]));
+    await waitFor(() => expect(activityCalls).toBe(3));
+
+    act(() => useEnvironmentStore.getState().setEnvironments([
+      environment("working"),
+    ]));
+    await act(async () => undefined);
+    expect(activityCalls).toBe(3);
+    act(() => useEnvironmentStore.getState().setEnvironments([
+      environment("idle"),
+    ]));
+    await waitFor(() => expect(activityCalls).toBe(4));
+
+    act(() => handlers.get(NATIVE_EVENT_STREAM_CONNECTED_EVENT)?.({
+      payload: undefined,
+    }));
+    await waitFor(() => expect(activityCalls).toBe(5));
+
+    hook.unmount();
+    await act(async () => undefined);
+    expect(handlers.size).toBe(0);
+  });
+
+  test("queues a trailing pass when a terminal activity edge lands in flight", async () => {
+    seedLoadingSession();
+    const handlers = new Map<string, EventHandler>();
+    mockListen.mockImplementation((eventName: string, handler: EventHandler) => {
+      handlers.set(eventName, handler);
+      return Promise.resolve(() => handlers.delete(eventName));
+    });
+    const firstActivity = deferred<{
+      kind: "found";
+      activity: "working";
+    }>();
+    let activityCalls = 0;
+    const hook = renderHook(() => useCodexBackgroundSync({
+      dependencies: {
+        ...dependencies({
+          kind: "found",
+          session: { status: "running", phase: "running" },
+        }),
+        lookupSessionActivity: async () => {
+          activityCalls += 1;
+          if (activityCalls === 1) return firstActivity.promise;
+          return { kind: "found", activity: "waiting" };
+        },
+      },
+    }));
+    await waitFor(() => expect(activityCalls).toBe(1));
+
+    act(() => handlers.get("native-agent-session-activity")?.({
+      payload: { environment_id: ENVIRONMENT_ID, state: "waiting" },
+    }));
+    firstActivity.resolve({ kind: "found", activity: "working" });
+    await waitFor(() => expect(activityCalls).toBe(2));
+
+    hook.unmount();
+  });
+
+  test("handles listener rejection and releases listeners that resolve after unmount", async () => {
+    const releases: string[] = [];
+    const registrations = new Map<string, ReturnType<typeof deferred<() => void>>>();
+    mockListen.mockImplementation((eventName: string) => {
+      if (eventName === NATIVE_EVENT_STREAM_CONNECTED_EVENT) {
+        return Promise.reject(new Error("listener unavailable"));
+      }
+      const registration = deferred<() => void>();
+      registrations.set(eventName, registration);
+      return registration.promise;
+    });
+
+    const hook = renderHook(() => useCodexBackgroundSync());
+    await act(async () => undefined);
+    hook.unmount();
+    registrations.get("native-agent-session-activity")?.resolve(() => {
+      releases.push("activity");
+    });
+    await waitFor(() => expect(releases).toEqual(["activity"]));
+  });
+
+  test("clears a scheduled retry timer on unmount", async () => {
+    seedLoadingSession();
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const cleared: unknown[] = [];
+    globalThis.setTimeout = ((callback: TimerHandler, delay?: number) => {
+      void callback;
+      expect(delay).toBe(25);
+      return 919;
+    }) as unknown as typeof globalThis.setTimeout;
+    globalThis.clearTimeout = ((timer: unknown) => {
+      cleared.push(timer);
+    }) as typeof globalThis.clearTimeout;
+
+    try {
+      const hook = renderHook(() => useCodexBackgroundSync({
+        retryDelaysMs: [25],
+        dependencies: {
+          ...dependencies({ kind: "missing" }),
+          lookupSessionActivity: async () => ({
+            kind: "unavailable",
+            error: new Error("offline"),
+          }),
+        },
+      }));
+      await act(async () => undefined);
+      hook.unmount();
+      expect(cleared).toContain(919);
+    } finally {
+      cleanup();
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
     }
   });
 });

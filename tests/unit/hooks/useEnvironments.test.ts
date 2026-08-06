@@ -2038,6 +2038,43 @@ describe("useEnvironments", () => {
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
   });
 
+  test("reconciles an environment targeted only by its startup agent session", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: true,
+      setupPhase: "ready",
+      pendingAgentLaunch: false,
+      startupAgentSession: {
+        tabId: "startup-agent",
+        agent: "codex",
+        style: "native",
+        status: "running",
+        providerSessionId: "session-1",
+      },
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
+    mockGetEnvironment.mockResolvedValue({
+      ...environment,
+      startupAgentSession: {
+        ...environment.startupAgentSession!,
+        status: "error",
+        error: "Agent session stopped",
+      },
+    });
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.startupAgentSession)
+      .toMatchObject({
+        providerSessionId: "session-1",
+        status: "error",
+        error: "Agent session stopped",
+      });
+  });
+
   test("leaves the store untouched when the snapshot read returns nothing", async () => {
     const environment = createMockEnvironment({
       id: "env-1",

@@ -77,4 +77,34 @@ describe("backend-owned activity projection", () => {
     });
     second.unmount();
   });
+
+  test("projects environment-store updates while the observer stays mounted", async () => {
+    useEnvironmentStore.setState({
+      environments: [{
+        id: "env-a",
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "2026-08-04T10:00:00.000Z",
+      }] as never,
+    });
+    const observer = renderHook(() => useGlobalActivityMonitor());
+    await act(async () => undefined);
+    expect(useAgentActivityStore.getState().containerStates).toEqual({
+      "env-a": "working",
+    });
+
+    act(() => {
+      useEnvironmentStore.setState({
+        environments: [{
+          id: "env-b",
+          agentActivityState: "waiting",
+          agentActivityUpdatedAt: "2026-08-04T10:01:00.000Z",
+        }] as never,
+      });
+    });
+
+    expect(useAgentActivityStore.getState().containerStates).toEqual({
+      "env-b": "waiting",
+    });
+    observer.unmount();
+  });
 });

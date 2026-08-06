@@ -4,6 +4,48 @@ function panelContaining(page: Page, child: Locator): Locator {
   return page.locator('[data-slot="tabs-content"]').filter({ has: child });
 }
 
+async function expectCompactAgentConfigurationAt(page: Page, width: number) {
+  await page.setViewportSize({ width, height: 900 });
+
+  const dialog = page.getByRole("dialog");
+  const agentGroup = page.getByRole("radiogroup", { name: "Default Agent" });
+  const agentButtons = agentGroup.getByRole("radio");
+  const model = page.locator("#agent-model");
+  const reasoningEffort = page.locator("#agent-reasoning-effort");
+  const [dialogBox, agentBox, modelBox, reasoningBox, buttonBoxes] = await Promise.all([
+    dialog.boundingBox(),
+    agentGroup.boundingBox(),
+    model.boundingBox(),
+    reasoningEffort.boundingBox(),
+    agentButtons.evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const box = button.getBoundingClientRect();
+        return { width: box.width };
+      }),
+    ),
+  ]);
+
+  expect(dialogBox).not.toBeNull();
+  expect(agentBox).not.toBeNull();
+  expect(modelBox).not.toBeNull();
+  expect(reasoningBox).not.toBeNull();
+  expect(buttonBoxes).toHaveLength(3);
+
+  const buttonWidth = buttonBoxes.reduce((total, button) => total + button.width, 0);
+  // Three 2rem buttons plus the control's gaps, padding, and border should fit
+  // tightly. The former stretched 10rem control is intentionally too wide.
+  expect(agentBox!.width).toBeGreaterThanOrEqual(buttonWidth);
+  expect(agentBox!.width).toBeLessThanOrEqual(buttonWidth + 20);
+  expect(agentBox!.x + agentBox!.width).toBeLessThanOrEqual(modelBox!.x);
+  expect(modelBox!.x + modelBox!.width).toBeLessThanOrEqual(reasoningBox!.x);
+  expect(reasoningBox!.x + reasoningBox!.width).toBeLessThanOrEqual(
+    dialogBox!.x + dialogBox!.width,
+  );
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+  ).toBe(true);
+}
+
 test("mobile sections have one visible panel, preserve values, and stay within the viewport", async ({
   page,
 }, testInfo) => {
@@ -153,4 +195,14 @@ test("desktop hides the mobile tablist while exposing every configuration sectio
   await expect(tabList).toBeHidden();
   await expect(setupPanel).toHaveCSS("display", "contents");
   await expect(setupPanel).toHaveCSS("animation-name", "none");
+});
+
+test("desktop shrink-wraps the agent selector without overlapping adjacent controls", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop project only");
+  await page.goto("/");
+
+  await expectCompactAgentConfigurationAt(page, 700);
+  await expectCompactAgentConfigurationAt(page, 640);
 });

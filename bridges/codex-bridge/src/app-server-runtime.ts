@@ -3641,11 +3641,11 @@ export class AppServerRuntime {
         // Overload is the sole definite rejection: app-server guarantees the
         // turn did not run. Persist that fact throughout the delay so a bridge
         // shutdown cannot erase the only evidence that reusing this id is safe.
-        await this.journal.markRetryable(requestId);
         // Generation recovery clears an unmaterialized context's `messages`
         // property when it detaches the dead thread. Retain the actual array
-        // before the delay, during which a generation change can complete.
+        // before the first await, during which a generation change can complete.
         const retryMessages = context.messages;
+        await this.journal.markRetryable(requestId);
         await new Promise((resolve) => setTimeout(
           resolve,
           this.options.initialPromptRetryDelayMs ?? DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
@@ -3700,9 +3700,27 @@ export class AppServerRuntime {
           };
         }
         const staleContext = context;
-        const reboundContext = await this.ensureAttached(session.id);
+        let reboundContext = await this.ensureAttached(session.id);
+        // The replacement child can still be inside supervisor startup when the
+        // delay expires. In that case the wait above observes the prior settled
+        // recovery; ensureAttached is the RPC that finishes startup and publishes
+        // the new generation event. Wait again, then discard any context that
+        // recovery detached while that RPC was in flight.
+        await this.generationRecovery;
+        reboundContext = this.registry.getThreadForSession(session.id);
         if (reboundContext) {
           context = reboundContext;
+          // Recovery can win the race and create the replacement canonical
+          // context before this retry resumes. That context may have hydrated an
+          // empty, not-yet-materialized rollout, so carry the optimistic exchange
+          // just as the explicit thread/start path below does. Merge by id in
+          // case re-attachment did recover part of the same transcript.
+          if (context.messages !== retryMessages) {
+            const reboundMessageIds = new Set(context.messages.map((message) => message.id));
+            context.messages.push(
+              ...retryMessages.filter((message) => !reboundMessageIds.has(message.id)),
+            );
+          }
         } else {
           let thread;
           try {

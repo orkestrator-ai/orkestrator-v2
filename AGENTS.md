@@ -334,6 +334,22 @@ bun run --cwd apps/desktop typecheck   # Electron TypeScript type checking
 bun run --cwd apps/backend typecheck   # Backend TypeScript type checking
 ```
 
+### Flaky Test Tracking
+
+Keep [`docs/flake-tests.md`](docs/flake-tests.md) current whenever test behavior
+shows a credible flake. If a test fails in the normal aggregate or parallel suite
+but passes when its owning file is rerun alone, add or update its entry in that
+document in the same change. Record the exact test name and file, the original
+command and worker configuration, the failure message and duration when
+available, suite counts, the isolated rerun command and result, the observation
+date, and any evidence-backed hypothesis or reproduction notes.
+
+Do not call a test flaky merely because it failed once: run the owning file alone
+first and preserve both results. Do not hide a flake by deleting, skipping, or
+loosening the test. When a flake is fixed, update its existing entry with the
+root cause, fix reference, and stress or parallel verification, then mark it
+resolved instead of silently removing its history.
+
 ### Parallelism
 
 The suite is dominated by I/O waits (tests that boot real backend processes, bind

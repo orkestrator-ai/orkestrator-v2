@@ -253,6 +253,24 @@ export function CodexChatTab({
   const [initialPromptSent, setInitialPromptSent] = useState(false);
   const [dismissedPlanReviewMessageId, setDismissedPlanReviewMessageId] = useState<string | null>(null);
   const [isPlanTransitionPending, setIsPlanTransitionPending] = useState(false);
+  /**
+   * Provider identity this mount may expose for dispatch.
+   *
+   * Cached sessions seed this identity so the connected shell does not flicker.
+   * Their adoption promise is also registered in `adoptionBarrierRef`, which every
+   * prompt/queue path awaits before touching the bridge. New and resumed sessions
+   * publish this identity only after their strict adoption succeeds.
+   */
+  const [dispatchReadySessionId, setDispatchReadySessionId] = useState<string | null>(() =>
+    useCodexStore
+      .getState()
+      .sessions.get(createSessionKey(environmentId, tabId))
+      ?.sessionId ?? null
+  );
+  const adoptionBarrierRef = useRef<{
+    sessionId: string;
+    promise: Promise<void>;
+  } | null>(null);
   const lastInitTimeRef = useRef(0);
   const isInitializedRef = useRef(false);
   /** Set when an interrupt is accepted; cleared when the turn actually ends. */
@@ -276,6 +294,7 @@ export function CodexChatTab({
   const interactionSnapshotSequenceRef = useRef(0);
   const interactionActivitySequenceRef = useRef(0);
   const forkInFlightRef = useRef(false);
+  const resumeInFlightRef = useRef(false);
   const [forkInFlight, setForkInFlight] = useState(false);
 
   const reconcileSessionStateRef = useRef<
@@ -366,15 +385,40 @@ export function CodexChatTab({
    * break the reconnect the user is watching.
    */
   const adoptRestoredSession = useCallback(
-    async (providerSessionId: string) => {
+    async (
+      providerSessionId: string,
+      replacedProviderSessionId?: string,
+    ) => {
+      const input = {
+        environmentId,
+        agent: "codex" as const,
+        logicalSessionKey: sessionKey,
+        providerSessionId,
+      };
       try {
-        await adoptNativeAgentSession({
-          environmentId,
-          agent: "codex",
-          logicalSessionKey: sessionKey,
-          providerSessionId,
-        });
+        await adoptNativeAgentSession(input);
       } catch (error) {
+        if (
+          replacedProviderSessionId
+          && replacedProviderSessionId !== providerSessionId
+        ) {
+          try {
+            // A stale fast reconnect can finish after the pane projects a newer
+            // provider. Repair that precise A -> B transition without allowing B
+            // to overwrite an unrelated concurrent C.
+            await adoptNativeAgentSession({
+              ...input,
+              expectedProviderSessionId: replacedProviderSessionId,
+            });
+            return;
+          } catch (replacementError) {
+            console.warn(
+              "[CodexChatTab] Failed to adopt the restored session:",
+              replacementError,
+            );
+            return;
+          }
+        }
         console.warn("[CodexChatTab] Failed to adopt the restored session:", error);
       }
     },
@@ -405,8 +449,20 @@ export function CodexChatTab({
         logicalSessionKey: sessionKey,
         providerSessionId,
       };
+      const adoptWithAmbiguousRetry = async (
+        adoptionInput: typeof input & { expectedProviderSessionId?: string },
+      ) => {
+        try {
+          await adoptNativeAgentSession(adoptionInput);
+        } catch {
+          // The backend may have committed before its response was lost. Repeating
+          // the identical request is safe: the provider id is the idempotency key,
+          // while an actual competing mapping still fails its CAS fence.
+          await adoptNativeAgentSession(adoptionInput);
+        }
+      };
       try {
-        await adoptNativeAgentSession(input);
+        await adoptWithAmbiguousRetry(input);
       } catch (error) {
         if (
           !replacedProviderSessionId
@@ -414,13 +470,28 @@ export function CodexChatTab({
         ) {
           throw error;
         }
-        await adoptNativeAgentSession({
+        await adoptWithAmbiguousRetry({
           ...input,
           expectedProviderSessionId: replacedProviderSessionId,
         });
       }
     },
     [environmentId, sessionKey],
+  );
+  const trackSessionAdoption = useCallback(
+    async (sessionId: string, operation: () => Promise<void>) => {
+      const promise = operation();
+      const barrier = { sessionId, promise };
+      adoptionBarrierRef.current = barrier;
+      try {
+        await promise;
+      } finally {
+        if (adoptionBarrierRef.current === barrier) {
+          adoptionBarrierRef.current = null;
+        }
+      }
+    },
+    [],
   );
   const config = useConfigStore((state) => state.config);
   const setConfig = useConfigStore((state) => state.setConfig);
@@ -463,6 +534,13 @@ export function CodexChatTab({
   );
   const session = useCodexStore(
     useCallback((state) => state.sessions.get(sessionKey), [sessionKey]),
+  );
+  const sessionDispatchReady = Boolean(
+    connectionState === "connected"
+    && client
+    && session?.sessionId
+    && dispatchReadySessionId === session.sessionId
+    && (!projectedSessionId || projectedSessionId === session.sessionId),
   );
   const sessionPhase = useCodexStore(
     useCallback((state) => state.sessionPhase.get(sessionKey), [sessionKey]),
@@ -931,6 +1009,21 @@ export function CodexChatTab({
       attachments: CodexAttachment[],
       logicalRequestId?: string,
     ): Promise<CodexDispatchResult> => {
+      const activeSessionId = useCodexStore
+        .getState()
+        .sessions.get(sessionKey)?.sessionId;
+      const adoptionBarrier = adoptionBarrierRef.current;
+      if (activeSessionId && adoptionBarrier?.sessionId === activeSessionId) {
+        await adoptionBarrier.promise;
+      }
+      if (
+        !sessionDispatchReady
+        || !activeSessionId
+        || useCodexStore.getState().sessions.get(sessionKey)?.sessionId
+          !== activeSessionId
+        || (projectedSessionId && projectedSessionId !== activeSessionId)
+      ) return "rejected";
+
       // Steering is a client-side action on the current turn. It neither starts
       // a new turn nor carries handoff history, so route it before prompt-only
       // guards and before invalidating an authoritative status reconcile.
@@ -1193,6 +1286,8 @@ export function CodexChatTab({
       session?.sessionId,
       session?.messages.length,
       sessionKey,
+      sessionDispatchReady,
+      projectedSessionId,
       setSessionError,
       setSessionLoading,
     ],
@@ -1204,6 +1299,21 @@ export function CodexChatTab({
 
   const handleQueue = useCallback(
     async (text: string, attachments: CodexAttachment[]) => {
+      const activeSessionId = useCodexStore
+        .getState()
+        .sessions.get(sessionKey)?.sessionId;
+      const adoptionBarrier = adoptionBarrierRef.current;
+      if (activeSessionId && adoptionBarrier?.sessionId === activeSessionId) {
+        await adoptionBarrier.promise;
+      }
+      if (
+        !sessionDispatchReady
+        || !activeSessionId
+        || useCodexStore.getState().sessions.get(sessionKey)?.sessionId
+          !== activeSessionId
+        || (projectedSessionId && projectedSessionId !== activeSessionId)
+      ) return false;
+
       const submittedSessionId = useCodexStore
         .getState()
         .sessions.get(sessionKey)?.sessionId;
@@ -1232,7 +1342,9 @@ export function CodexChatTab({
       selectedMode,
       selectedModel,
       selectedReasoningEffort,
+      sessionDispatchReady,
       sessionKey,
+      projectedSessionId,
     ],
   );
 
@@ -1367,6 +1479,7 @@ export function CodexChatTab({
     isInitializedRef.current = false;
     lastInitTimeRef.current = 0;
     setConnectionState("connecting");
+    setDispatchReadySessionId(null);
     setErrorMessage(null);
     if (!preserveSession) {
       updateTabNativeSessionId(tabId, undefined, environmentId);
@@ -1388,83 +1501,110 @@ export function CodexChatTab({
 
   const handleResumeSession = useCallback(
     async (threadId: string) => {
-      if (!client) return;
+      if (!client || resumeInFlightRef.current) return;
 
-      const resumed = await resumeSession(client, {
-        threadId,
-        model: selectedModel,
-        modelReasoningEffort: selectedReasoningEffort,
-        mode: selectedMode,
-        fastMode: fastModeEnabled,
-      });
-
-      if (!resumed) {
-        console.error("[CodexChatTab] Failed to resume session");
-        return;
-      }
-
+      const replacedSessionId = useCodexStore
+        .getState()
+        .sessions.get(sessionKey)?.sessionId;
+      resumeInFlightRef.current = true;
+      setDispatchReadySessionId(null);
+      let adoptionCommitted = false;
       try {
+        const resumed = await resumeSession(client, {
+          threadId,
+          model: selectedModel,
+          modelReasoningEffort: selectedReasoningEffort,
+          mode: selectedMode,
+          fastMode: fastModeEnabled,
+        });
+
+        if (!resumed) {
+          console.error("[CodexChatTab] Failed to resume session");
+          return;
+        }
+
+        if (
+          useCodexStore.getState().sessions.get(sessionKey)?.sessionId
+          !== replacedSessionId
+        ) {
+          toast.error("Failed to resume Codex session", {
+            description: "The active Codex session changed while the resume was in progress.",
+          });
+          return;
+        }
+
         await adoptCreatedSession(
           resumed.session.sessionId,
-          session?.sessionId,
+          replacedSessionId,
         );
+        adoptionCommitted = true;
+
+        // Invalidate every request tied to the previous bridge session before
+        // publishing the new identity. This includes manual reconciles, whose
+        // completion deliberately ignores ordinary live-event invalidation.
+        reconcileSequenceRef.current += 1;
+        manualReconcileSequenceRef.current += 1;
+        approvalSnapshotSequenceRef.current += 1;
+        approvalActivitySequenceRef.current += 1;
+        interactionSnapshotSequenceRef.current += 1;
+        interactionActivitySequenceRef.current += 1;
+        refreshControllerRef.current = createCodexSessionRefreshController();
+
+        // The tab key is stable across resume, while approvals/interactions are
+        // bridge-session scoped. Replace the session and clear both collections
+        // atomically so no render can post an old request to the resumed session.
+        const withdrawnInteractionDraftKeys = (
+          useCodexStore.getState().pendingInteractions.get(sessionKey) ?? []
+        ).map((interaction) =>
+          codexInteractionDraftKey(sessionKey, interaction.interactionId)
+        );
+        useCodexStore.setState((state) => {
+          const sessions = new Map(state.sessions);
+          sessions.set(sessionKey, {
+            sessionId: resumed.session.sessionId,
+            messages: resumed.messages,
+            isLoading: false,
+            title: resumed.session.title,
+          });
+          const pendingApprovals = new Map(state.pendingApprovals);
+          pendingApprovals.delete(sessionKey);
+          const pendingInteractions = new Map(state.pendingInteractions);
+          pendingInteractions.delete(sessionKey);
+          const sessionPhase = new Map(state.sessionPhase);
+          sessionPhase.delete(sessionKey);
+          const contextUsage = new Map(state.contextUsage);
+          contextUsage.delete(sessionKey);
+          return {
+            sessions,
+            pendingApprovals,
+            pendingInteractions,
+            sessionPhase,
+            contextUsage,
+          };
+        });
+        usePromptDraftStore
+          .getState()
+          .clearDrafts(withdrawnInteractionDraftKeys);
+        updateTabNativeSessionId(tabId, resumed.session.sessionId, environmentId);
+        clearTabAgentHandoff(tabId, environmentId);
+        setDispatchReadySessionId(resumed.session.sessionId);
+        setResumeDialogOpen(false);
       } catch (error) {
         console.error("[CodexChatTab] Failed to adopt resumed session:", error);
         toast.error("Failed to resume Codex session", {
           description: error instanceof Error ? error.message : undefined,
         });
-        return;
+      } finally {
+        resumeInFlightRef.current = false;
+        if (
+          !adoptionCommitted
+          && replacedSessionId
+          && useCodexStore.getState().sessions.get(sessionKey)?.sessionId
+            === replacedSessionId
+        ) {
+          setDispatchReadySessionId(replacedSessionId);
+        }
       }
-
-      // Invalidate every request tied to the previous bridge session before
-      // publishing the new identity. This includes manual reconciles, whose
-      // completion deliberately ignores ordinary live-event invalidation.
-      reconcileSequenceRef.current += 1;
-      manualReconcileSequenceRef.current += 1;
-      approvalSnapshotSequenceRef.current += 1;
-      approvalActivitySequenceRef.current += 1;
-      interactionSnapshotSequenceRef.current += 1;
-      interactionActivitySequenceRef.current += 1;
-      refreshControllerRef.current = createCodexSessionRefreshController();
-
-      // The tab key is stable across resume, while approvals/interactions are
-      // bridge-session scoped. Replace the session and clear both collections
-      // atomically so no render can post an old request to the resumed session.
-      const withdrawnInteractionDraftKeys = (
-        useCodexStore.getState().pendingInteractions.get(sessionKey) ?? []
-      ).map((interaction) =>
-        codexInteractionDraftKey(sessionKey, interaction.interactionId)
-      );
-      useCodexStore.setState((state) => {
-        const sessions = new Map(state.sessions);
-        sessions.set(sessionKey, {
-          sessionId: resumed.session.sessionId,
-          messages: resumed.messages,
-          isLoading: false,
-          title: resumed.session.title,
-        });
-        const pendingApprovals = new Map(state.pendingApprovals);
-        pendingApprovals.delete(sessionKey);
-        const pendingInteractions = new Map(state.pendingInteractions);
-        pendingInteractions.delete(sessionKey);
-        const sessionPhase = new Map(state.sessionPhase);
-        sessionPhase.delete(sessionKey);
-        const contextUsage = new Map(state.contextUsage);
-        contextUsage.delete(sessionKey);
-        return {
-          sessions,
-          pendingApprovals,
-          pendingInteractions,
-          sessionPhase,
-          contextUsage,
-        };
-      });
-      usePromptDraftStore
-        .getState()
-        .clearDrafts(withdrawnInteractionDraftKeys);
-      updateTabNativeSessionId(tabId, resumed.session.sessionId, environmentId);
-      clearTabAgentHandoff(tabId, environmentId);
-      setResumeDialogOpen(false);
     },
     [
       client,
@@ -1478,7 +1618,6 @@ export function CodexChatTab({
       tabId,
       updateTabNativeSessionId,
       environmentId,
-      session?.sessionId,
     ],
   );
 
@@ -1634,8 +1773,12 @@ export function CodexChatTab({
           && cachedSession?.sessionId
           && (!projectedSessionId || cachedSession.sessionId === projectedSessionId)
         ) {
-          await adoptRestoredSession(cachedSession.sessionId);
+          await trackSessionAdoption(
+            cachedSession.sessionId,
+            () => adoptRestoredSession(cachedSession.sessionId),
+          );
           if (!mounted) return;
+          setDispatchReadySessionId(cachedSession.sessionId);
           acknowledgeInitialLaunchOptions();
           console.debug("[CodexChatTab] Fast reconnect - reusing existing client and session", {
             tabId,
@@ -1700,8 +1843,15 @@ export function CodexChatTab({
             if (restoredStatus) {
               const restoredMessages = await getSessionMessages(cachedClient, projectedSessionId);
               if (!mounted) return;
-              await adoptRestoredSession(projectedSessionId);
+              await trackSessionAdoption(
+                projectedSessionId,
+                () => adoptRestoredSession(
+                  projectedSessionId,
+                  cachedSession?.sessionId,
+                ),
+              );
               if (!mounted) return;
+              setDispatchReadySessionId(projectedSessionId);
               setSession(sessionKey, {
                 sessionId: projectedSessionId,
                 messages: restoredMessages,
@@ -1730,8 +1880,12 @@ export function CodexChatTab({
             clientSessionKey: sessionKey,
           });
           if (!mounted) return;
-          await adoptCreatedSession(created.sessionId, projectedSessionId);
+          await trackSessionAdoption(
+            created.sessionId,
+            () => adoptCreatedSession(created.sessionId, projectedSessionId),
+          );
           if (!mounted) return;
+          setDispatchReadySessionId(created.sessionId);
 
           isInitializedRef.current = true;
           setSession(sessionKey, {
@@ -1887,8 +2041,15 @@ export function CodexChatTab({
         if (existingSessionId && existingStatus) {
           const messages = await getSessionMessages(nextClient, existingSessionId);
           if (!mounted) return;
-          await adoptRestoredSession(existingSessionId);
+          await trackSessionAdoption(
+            existingSessionId,
+            () => adoptRestoredSession(
+              existingSessionId,
+              existingSession?.sessionId,
+            ),
+          );
           if (!mounted) return;
+          setDispatchReadySessionId(existingSessionId);
           if (existingSession?.sessionId === existingSessionId) {
             // Preserve client-only transcript parts when reconnecting the same
             // identity; setMessages performs the store's normal merge.
@@ -1930,8 +2091,12 @@ export function CodexChatTab({
             clientSessionKey: sessionKey,
           });
           if (!mounted) return;
-          await adoptCreatedSession(created.sessionId, existingSessionId);
+          await trackSessionAdoption(
+            created.sessionId,
+            () => adoptCreatedSession(created.sessionId, existingSessionId),
+          );
           if (!mounted) return;
+          setDispatchReadySessionId(created.sessionId);
           setSession(sessionKey, {
             sessionId: created.sessionId,
             messages: [],
@@ -2011,6 +2176,7 @@ export function CodexChatTab({
     seedInitialFastMode,
     setupPending,
     tabId,
+    trackSessionAdoption,
     updateTabNativeSessionId,
   ]);
 
@@ -3056,6 +3222,7 @@ export function CodexChatTab({
       || initialPromptSent
       || initialPromptDispatchClaimed
       || setupPending
+      || !sessionDispatchReady
     ) {
       return;
     }
@@ -3111,6 +3278,7 @@ export function CodexChatTab({
     initialPromptSent,
     setupPending,
     session?.sessionId,
+    sessionDispatchReady,
     tabId,
   ]);
 
@@ -3156,7 +3324,7 @@ export function CodexChatTab({
       scrollToBottom={scrollToBottom}
       scrollProps={scrollProps}
       virtuosoRef={virtuosoRef}
-      onResumeClick={client ? () => setResumeDialogOpen(true) : undefined}
+      onResumeClick={sessionDispatchReady ? () => setResumeDialogOpen(true) : undefined}
       // h-32 ≈ compose bar; h-80 adds room for the plan card (~230px) above it
       bottomSpacerClassName={showPlanModeCard ? "h-80" : "h-32"}
       messageActions={(message) => {
@@ -3195,7 +3363,7 @@ export function CodexChatTab({
         ) : null
       }
       pinnedAccessory={
-        showPlanModeCard ? (
+        showPlanModeCard && sessionDispatchReady ? (
           <CodexPlanModeCard
             className="mx-0 my-0"
             isSubmitting={isPlanTransitionPending}
@@ -3218,7 +3386,7 @@ export function CodexChatTab({
           selectedReasoningEffort={selectedReasoningEffort}
           slashCommands={slashCommands}
           settingsLocked={session?.isLoading ?? false}
-          disabled={!handoff.ready || !session?.sessionId}
+          disabled={!handoff.ready || !session?.sessionId || !sessionDispatchReady}
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}
           onSend={async (text, attachments) => {

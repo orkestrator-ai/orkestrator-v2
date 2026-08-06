@@ -323,6 +323,15 @@ export interface SessionState {
    * older provider processes addressable until their tasks settle.
    */
   backgroundTaskControls?: Map<string, ClaudeQueryControl>;
+  /**
+   * Built-in Bash calls whose tool result has not arrived yet.
+   *
+   * These are deliberately not exposed as background tasks: a foreground
+   * command is only a candidate until its provider-authored result says it was
+   * backgrounded. Retaining the owning control here prevents a result frame
+   * that races ahead of that evidence from closing the CLI's stdin.
+   */
+  backgroundTaskCandidates?: Map<string, ClaudeQueryControl>;
 }
 
 export interface SessionRateLimitWindow {

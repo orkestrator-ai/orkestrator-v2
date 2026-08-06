@@ -13,10 +13,22 @@ const tasks: ClaudeBackgroundTask[] = [
 describe("ClaudeBackgroundTaskHoldCard", () => {
   test("explains the hold and offers a targeted stop for every live task", () => {
     render(
-      <ClaudeBackgroundTaskHoldCard tasks={tasks} onStopTask={async () => true} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={tasks}
+        responseInProgress={false}
+        onStopTask={async () => true}
+      />,
     );
 
     expect(screen.getByText("Response ready · 2 background tasks still running")).toBeTruthy();
+    expect(screen.getByText(
+      "The response is complete and Claude is preserving these tasks across turns. Stop only tasks that no longer need to run.",
+    )).toBeTruthy();
+    expect(
+      screen.getByRole("group", {
+        name: "Claude background tasks continuing after the response",
+      }),
+    ).toBeTruthy();
     expect(screen.getByText("Wait for final review agent")).toBeTruthy();
     expect(screen.getByText("Run the test suite")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Stop Wait for final review agent" })).toBeTruthy();
@@ -25,7 +37,11 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
 
   test("uses singular task wording without changing its live-region announcement", () => {
     const { rerender } = render(
-      <ClaudeBackgroundTaskHoldCard tasks={[tasks[0]!]} onStopTask={async () => true} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={[tasks[0]!]}
+        responseInProgress={false}
+        onStopTask={async () => true}
+      />,
     );
 
     expect(screen.getByText("Response ready · 1 background task still running")).toBeTruthy();
@@ -35,10 +51,63 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
     );
 
     rerender(
-      <ClaudeBackgroundTaskHoldCard tasks={tasks} onStopTask={async () => true} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={tasks}
+        responseInProgress={false}
+        onStopTask={async () => true}
+      />,
     );
     expect(screen.getByText("Response ready · 2 background tasks still running")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe(announcement.textContent);
+  });
+
+  test("uses neutral status copy while Claude is still responding", () => {
+    render(
+      <ClaudeBackgroundTaskHoldCard
+        tasks={[tasks[0]!]}
+        responseInProgress
+        onStopTask={async () => true}
+      />,
+    );
+
+    expect(screen.getByText("Response in progress · 1 background task running")).toBeTruthy();
+    expect(screen.getByText(
+      "Claude is still responding while these tasks run. Stop only tasks that no longer need to run.",
+    )).toBeTruthy();
+    expect(screen.queryByText(/The response is complete/)).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Claude is still responding while background tasks are running.",
+    );
+    expect(
+      screen.getByRole("group", {
+        name: "Claude background tasks running during the response",
+      }),
+    ).toBeTruthy();
+  });
+
+  test("does not claim completion when the response ended with an error", () => {
+    render(
+      <ClaudeBackgroundTaskHoldCard
+        tasks={[tasks[0]!]}
+        responseInProgress={false}
+        responseFailed
+        onStopTask={async () => true}
+      />,
+    );
+
+    expect(screen.getByText("Response ended · 1 background task still running")).toBeTruthy();
+    expect(screen.getByText(
+      "Claude's response ended with an error while these tasks continue. Stop only tasks that no longer need to run.",
+    )).toBeTruthy();
+    expect(screen.queryByText(/The response is complete/)).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Claude's response ended with an error, but background tasks are still running.",
+    );
+    expect(
+      screen.getByRole("group", {
+        name: "Claude background tasks continuing after a response error",
+      }),
+    ).toBeTruthy();
   });
 
   test("disables one task while its stop request is pending", async () => {
@@ -47,7 +116,11 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
       () => new Promise<boolean>((resolve) => { resolveStop = resolve; }),
     );
     const { rerender } = render(
-      <ClaudeBackgroundTaskHoldCard tasks={[tasks[0]!]} onStopTask={onStopTask} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={[tasks[0]!]}
+        responseInProgress={false}
+        onStopTask={onStopTask}
+      />,
     );
 
     const button = screen.getByRole("button", { name: "Stop Wait for final review agent" });
@@ -64,13 +137,23 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
       expect(button.hasAttribute("disabled")).toBe(true);
     });
 
-    rerender(<ClaudeBackgroundTaskHoldCard tasks={[]} onStopTask={onStopTask} />);
+    rerender(
+      <ClaudeBackgroundTaskHoldCard
+        tasks={[]}
+        responseInProgress={false}
+        onStopTask={onStopTask}
+      />,
+    );
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "Stop Wait for final review agent" }))
         .toBeNull();
     });
     rerender(
-      <ClaudeBackgroundTaskHoldCard tasks={[tasks[0]!]} onStopTask={onStopTask} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={[tasks[0]!]}
+        responseInProgress={false}
+        onStopTask={onStopTask}
+      />,
     );
     await waitFor(() => {
       expect(
@@ -83,7 +166,11 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
   test("makes a failed targeted stop retryable", async () => {
     const onStopTask = mock(async () => false);
     render(
-      <ClaudeBackgroundTaskHoldCard tasks={[tasks[0]!]} onStopTask={onStopTask} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={[tasks[0]!]}
+        responseInProgress={false}
+        onStopTask={onStopTask}
+      />,
     );
 
     fireEvent.click(
@@ -106,7 +193,11 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
       throw new Error("bridge disconnected");
     });
     render(
-      <ClaudeBackgroundTaskHoldCard tasks={[tasks[0]!]} onStopTask={onStopTask} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={[tasks[0]!]}
+        responseInProgress={false}
+        onStopTask={onStopTask}
+      />,
     );
 
     fireEvent.click(
@@ -127,7 +218,11 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
   test("clears a failed stop error when that task leaves the authoritative list", async () => {
     const onStopTask = mock(async () => false);
     const { rerender } = render(
-      <ClaudeBackgroundTaskHoldCard tasks={tasks} onStopTask={onStopTask} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={tasks}
+        responseInProgress={false}
+        onStopTask={onStopTask}
+      />,
     );
 
     fireEvent.click(
@@ -136,7 +231,11 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
 
     rerender(
-      <ClaudeBackgroundTaskHoldCard tasks={[tasks[1]!]} onStopTask={onStopTask} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={[tasks[1]!]}
+        responseInProgress={false}
+        onStopTask={onStopTask}
+      />,
     );
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
@@ -150,7 +249,11 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
       return new Promise<boolean>((resolve) => { resolveRetry = resolve; });
     });
     render(
-      <ClaudeBackgroundTaskHoldCard tasks={[tasks[0]!]} onStopTask={onStopTask} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={[tasks[0]!]}
+        responseInProgress={false}
+        onStopTask={onStopTask}
+      />,
     );
 
     const button = screen.getByRole("button", { name: "Stop Wait for final review agent" });
@@ -175,7 +278,11 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
       }),
     );
     const { rerender } = render(
-      <ClaudeBackgroundTaskHoldCard tasks={tasks} onStopTask={onStopTask} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={tasks}
+        responseInProgress={false}
+        onStopTask={onStopTask}
+      />,
     );
 
     const waitButton = screen.getByRole("button", {
@@ -192,10 +299,18 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
     });
 
     rerender(
-      <ClaudeBackgroundTaskHoldCard tasks={[tasks[1]!]} onStopTask={onStopTask} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={[tasks[1]!]}
+        responseInProgress={false}
+        onStopTask={onStopTask}
+      />,
     );
     rerender(
-      <ClaudeBackgroundTaskHoldCard tasks={tasks} onStopTask={onStopTask} />,
+      <ClaudeBackgroundTaskHoldCard
+        tasks={tasks}
+        responseInProgress={false}
+        onStopTask={onStopTask}
+      />,
     );
 
     await waitFor(() => {
@@ -217,6 +332,7 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
     render(
       <ClaudeBackgroundTaskHoldCard
         tasks={[{ id: "task-without-label", description: "   ", status: "running" }]}
+        responseInProgress={false}
         onStopTask={async () => true}
       />,
     );

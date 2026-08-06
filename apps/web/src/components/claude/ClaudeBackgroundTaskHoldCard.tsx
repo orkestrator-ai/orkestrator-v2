@@ -6,6 +6,8 @@ import type { ClaudeBackgroundTask } from "@/lib/claude-client";
 
 interface ClaudeBackgroundTaskHoldCardProps {
   tasks: ClaudeBackgroundTask[];
+  responseInProgress: boolean;
+  responseFailed?: boolean;
   onStopTask: (taskId: string) => Promise<boolean>;
 }
 
@@ -19,11 +21,13 @@ function taskLabel(task: ClaudeBackgroundTask): string {
 }
 
 /**
- * Explains the otherwise-confusing state where Claude has produced its answer
- * while real background work continues in the retained provider runtime.
+ * Keeps provider-owned background work visible and stoppable both while
+ * Claude is responding and after the response releases the session to idle.
  */
 export function ClaudeBackgroundTaskHoldCard({
   tasks,
+  responseInProgress,
+  responseFailed = false,
   onStopTask,
 }: ClaudeBackgroundTaskHoldCardProps) {
   const [stoppingTaskIds, setStoppingTaskIds] = useState<Set<string>>(
@@ -75,15 +79,35 @@ export function ClaudeBackgroundTaskHoldCard({
 
   const count = tasks.length;
   const noun = count === 1 ? "task" : "tasks";
+  const title = responseInProgress
+    ? `Response in progress · ${count} background ${noun} running`
+    : responseFailed
+      ? `Response ended · ${count} background ${noun} still running`
+      : `Response ready · ${count} background ${noun} still running`;
+  const description = responseInProgress
+    ? "Claude is still responding while these tasks run. Stop only tasks that no longer need to run."
+    : responseFailed
+      ? "Claude's response ended with an error while these tasks continue. Stop only tasks that no longer need to run."
+      : "The response is complete and Claude is preserving these tasks across turns. Stop only tasks that no longer need to run.";
+  const arrivalAnnouncement = responseInProgress
+    ? "Claude is still responding while background tasks are running."
+    : responseFailed
+      ? "Claude's response ended with an error, but background tasks are still running."
+      : "Claude's response is ready, but background tasks are still running.";
+  const ariaLabel = responseInProgress
+    ? "Claude background tasks running during the response"
+    : responseFailed
+      ? "Claude background tasks continuing after a response error"
+      : "Claude background tasks continuing after the response";
 
   return (
     <BlockingPromptCard
-      title={`Response ready · ${count} background ${noun} still running`}
-      description="The response is complete and Claude is preserving these tasks across turns. Stop only tasks that no longer need to run."
+      title={title}
+      description={description}
       icon={<Clock3 className="h-4 w-4" />}
       error={stopError?.message ?? null}
-      arrivalAnnouncement="Claude's response is ready, but background tasks are still running."
-      aria-label="Claude background tasks continuing after the response"
+      arrivalAnnouncement={arrivalAnnouncement}
+      aria-label={ariaLabel}
       data-testid="claude-background-task-hold"
     >
       <div className="max-h-44 divide-y divide-border/70 overflow-y-auto">

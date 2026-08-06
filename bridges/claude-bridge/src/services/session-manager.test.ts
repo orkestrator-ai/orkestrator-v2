@@ -7383,9 +7383,16 @@ describe("evictIdleHydratedTranscripts", () => {
       },
     };
 
+    const candidate = await hydratedIdleSession();
+    markStale(candidate);
+    candidate.backgroundTaskCandidates = new Map([
+      ["bash-candidate", { close: () => undefined }],
+    ]);
+
     expect(evictIdleHydratedTranscripts()).toEqual([]);
     expect(controlled.messages.length).toBeGreaterThan(0);
     expect(running.messages.length).toBeGreaterThan(0);
+    expect(candidate.messages.length).toBeGreaterThan(0);
   });
 
   test("keeps a transcript referenced by a pending question", async () => {
@@ -8311,6 +8318,32 @@ async function inspectDuringTurn(
 }
 
 describe("background task reducer", () => {
+  test("fails closed when unresolved Bash candidate state exceeds its bound", async () => {
+    const created = createSession("bounded Bash candidates");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "run too many commands");
+    const call = await nextQueryCall();
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-too-many-bash-candidates",
+        content: Array.from({ length: 129 }, (_, index) => ({
+          type: "tool_use",
+          id: `bash-candidate-${index}`,
+          name: "Bash",
+          input: { command: `printf ${index}` },
+        })),
+      },
+    });
+    call.finish();
+
+    await expect(promptPromise).rejects.toThrow(
+      "Claude emitted more than 128 unresolved Bash calls in one session",
+    );
+    expect(created.backgroundTaskCandidates).toBeUndefined();
+    expect(created.backgroundTasks).toBeUndefined();
+  });
+
   test("releases the completed turn while retaining its background runtime", async () => {
     const created = createSession("held input");
     track(created.id);
@@ -8769,6 +8802,350 @@ describe("background task reducer", () => {
     await promptPromise;
   });
 
+  test("fails and releases a provisional Bash task when its correlated result fails", async () => {
+    const created = createSession("failed provisional background launch");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "start background work");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-failed-provisional",
+        content: [{
+          type: "tool_use",
+          id: "bash-failed-provisional",
+          name: "Bash",
+          input: { command: "bun run test", run_in_background: true },
+        }],
+      },
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+    expect(inputClosed).toBe(false);
+
+    call.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "bash-failed-provisional",
+          content: "command failed",
+          is_error: true,
+        }],
+      },
+      tool_use_result: { backgroundTaskId: "must-not-launch" },
+    });
+    await waitFor(() => inputClosed);
+    expect(created.backgroundTasks?.["pending-bash:bash-failed-provisional"]).toMatchObject({
+      status: "failed",
+      error: "The Bash invocation failed before its background task was confirmed",
+    });
+    expect(created.backgroundTasks?.["must-not-launch"]).toBeUndefined();
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+
+    call.finish();
+    await promptPromise;
+  });
+
+  test("rekeys multiple provisional Bash tasks from lifecycle-only evidence", async () => {
+    const created = createSession("multiple lifecycle launches");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "start two background commands");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-two-provisionals",
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-provisional-one",
+            name: "Bash",
+            input: {
+              command: "bun run test",
+              description: "First command",
+              run_in_background: true,
+            },
+          },
+          {
+            type: "tool_use",
+            id: "bash-provisional-two",
+            name: "Bash",
+            input: {
+              command: "bun run build",
+              description: "Second command",
+              run_in_background: true,
+            },
+          },
+        ],
+      },
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+    expect(Object.keys(created.backgroundTasks ?? {}).sort()).toEqual([
+      "pending-bash:bash-provisional-one",
+      "pending-bash:bash-provisional-two",
+    ]);
+    expect(inputClosed).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "provider-task-one",
+      tool_use_id: "bash-provisional-one",
+    });
+    await waitFor(() => created.backgroundTasks?.["provider-task-one"] !== undefined);
+    expect(created.backgroundTasks?.["pending-bash:bash-provisional-one"]).toBeUndefined();
+    expect(created.backgroundTasks?.["provider-task-one"]).toMatchObject({
+      toolUseId: "bash-provisional-one",
+      description: "First command",
+      status: "running",
+    });
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "provider-task-two",
+      tool_use_id: "bash-provisional-two",
+      status: "completed",
+    });
+    await waitFor(() => created.backgroundTasks?.["provider-task-two"]?.status === "completed");
+    expect(created.backgroundTasks?.["pending-bash:bash-provisional-two"]).toBeUndefined();
+    expect(created.backgroundTasks?.["provider-task-two"]).toMatchObject({
+      toolUseId: "bash-provisional-two",
+      description: "Second command",
+      status: "completed",
+    });
+    expect(inputClosed).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "provider-task-one",
+      tool_use_id: "bash-provisional-one",
+      status: "completed",
+    });
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
+    await promptPromise;
+  });
+
+  test.each(["task_progress", "task_updated"])(
+    "rekeys a provisional Bash task when %s is the first lifecycle edge",
+    async (subtype) => {
+      const { session, finish } = await inspectDuringTurn(
+        [
+          {
+            type: "assistant",
+            message: {
+              id: `assistant-${subtype}`,
+              content: [{
+                type: "tool_use",
+                id: `tool-${subtype}`,
+                name: "Bash",
+                input: {
+                  command: "bun run test",
+                  description: `${subtype} command`,
+                  run_in_background: true,
+                },
+              }],
+            },
+          },
+          {
+            type: "system",
+            subtype,
+            task_id: `task-${subtype}`,
+            tool_use_id: `tool-${subtype}`,
+            patch: { status: "running" },
+          },
+        ],
+        (state) => state.backgroundTasks?.[`task-${subtype}`] !== undefined,
+      );
+
+      expect(session.backgroundTasks?.[`pending-bash:tool-${subtype}`]).toBeUndefined();
+      expect(session.backgroundTasks?.[`task-${subtype}`]).toMatchObject({
+        toolUseId: `tool-${subtype}`,
+        description: `${subtype} command`,
+        status: "running",
+      });
+      await finish();
+    },
+  );
+
+  test.each([
+    [
+      "manual structured evidence",
+      "Command was manually backgrounded by user with ID: manual-task",
+      { backgroundedByUser: true, backgroundTaskId: "manual-task" },
+      "manual-task",
+    ],
+    [
+      "the canonical timeout label",
+      "Command did not complete within its 120s timeout and was moved to the background (ID: timeout-task). Output is being written.",
+      undefined,
+      "timeout-task",
+    ],
+    [
+      "array-form text blocks",
+      [{ type: "text", text: "Command running in background with ID: array-task" }],
+      undefined,
+      "array-task",
+    ],
+    [
+      "the alternate task id label",
+      "Background task ID: alternate-task",
+      undefined,
+      "alternate-task",
+    ],
+  ])("retains a foreground Bash candidate until delayed %s arrives", async (
+    _label,
+    content,
+    toolUseResult,
+    taskId,
+  ) => {
+    const created = createSession(`delayed ${taskId}`);
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "run a command");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({
+      type: "assistant",
+      message: {
+        id: `assistant-${taskId}`,
+        content: [{
+          type: "tool_use",
+          id: `tool-${taskId}`,
+          name: "Bash",
+          input: { command: "bun run test" },
+        }],
+      },
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+    expect(created.backgroundTasks).toBeUndefined();
+    expect(inputClosed).toBe(false);
+
+    call.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: `tool-${taskId}`,
+          content,
+        }],
+      },
+      ...(toolUseResult === undefined ? {} : { tool_use_result: toolUseResult }),
+    });
+    await waitFor(() => created.backgroundTasks?.[taskId]?.status === "running");
+    expect(inputClosed).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: taskId,
+      tool_use_id: `tool-${taskId}`,
+      status: "completed",
+    });
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
+    await promptPromise;
+  });
+
+  test.each([
+    ["manual backgrounding", { backgroundedByUser: true }],
+    ["timeout backgrounding", { timedOutAfterMs: 120_000 }],
+  ])("retains missing-id %s evidence until lifecycle supplies the id", async (
+    _label,
+    toolUseResult,
+  ) => {
+    const created = createSession("missing background task id");
+    track(created.id);
+    const promptPromise = sendPrompt(created.id, "run a command");
+    const call = await nextQueryCall();
+    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    expect((await input.next()).done).toBe(false);
+    let inputClosed = false;
+    const inputCompletion = input.next().then((result) => {
+      inputClosed = result.done === true;
+      return result;
+    });
+
+    call.push({
+      type: "assistant",
+      message: {
+        id: "assistant-missing-background-id",
+        content: [{
+          type: "tool_use",
+          id: "tool-missing-background-id",
+          name: "Bash",
+          input: { command: "bun run test" },
+        }],
+      },
+    });
+    call.push({ type: "result", subtype: "success" });
+    await waitFor(() => created.status === "idle");
+    call.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "tool-missing-background-id",
+          content: "Backgrounding acknowledged without an id",
+        }],
+      },
+      tool_use_result: toolUseResult,
+    });
+    await Bun.sleep(0);
+    expect(created.backgroundTasks).toBeUndefined();
+    expect(inputClosed).toBe(false);
+
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "late-lifecycle-task",
+      tool_use_id: "tool-missing-background-id",
+      description: "Late lifecycle task",
+    });
+    await waitFor(() => created.backgroundTasks?.["late-lifecycle-task"]?.status === "running");
+    expect(inputClosed).toBe(false);
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "late-lifecycle-task",
+      tool_use_id: "tool-missing-background-id",
+      status: "completed",
+    });
+    expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    call.finish();
+    await promptPromise;
+  });
+
   test("a follow-up query cannot erase tasks owned by the retained runtime", async () => {
     const created = createSession("retained runtime followed by another turn");
     track(created.id);
@@ -8882,6 +9259,36 @@ describe("background task reducer", () => {
     expect(session.backgroundTasks).toBeUndefined();
   });
 
+  test("does not parse an embedded background label from ordinary Bash output", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        message: {
+          id: "assistant-foreground-doc-output",
+          content: [{
+            type: "tool_use",
+            id: "foreground-doc-output",
+            name: "Bash",
+            input: { command: "printf docs" },
+          }],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "foreground-doc-output",
+            content: "the docs say Command running in background with ID: fake-task",
+          }],
+        },
+      },
+    ]);
+
+    expect(session.backgroundTasks).toBeUndefined();
+  });
+
   test.each([
     ["null structured output", null],
     ["array structured output", [{ backgroundTaskId: "array-task" }]],
@@ -8961,7 +9368,7 @@ describe("background task reducer", () => {
       "an invalid correlated result id",
       [{ type: "tool_result", tool_use_id: "bad\nid", content: "invalid" }],
     ],
-  ])("rejects a Bash launch with %s", async (_label, content) => {
+  ])("rejects a Bash launch with %s", async (label, content) => {
     const { session } = await runPromptWithMessages([
       {
         type: "assistant",
@@ -8986,7 +9393,7 @@ describe("background task reducer", () => {
     expect(session.backgroundTasks).toEqual({
       "pending-bash:bash-ambiguous": expect.objectContaining({
         id: "pending-bash:bash-ambiguous",
-        status: "killed",
+        status: label === "a failed correlated result block" ? "failed" : "killed",
       }),
     });
   });
@@ -9580,6 +9987,62 @@ describe("stopBackgroundTask", () => {
     await finish();
   });
 
+  test.each([
+    ["completed", "completed", false],
+    ["failed", "failed", true],
+  ] as const)(
+    "preserves a natural %s notification that races a pending stop",
+    async (_label, notificationStatus, rejectStop) => {
+      let resolveStop!: () => void;
+      let rejectStopRequest!: (error: Error) => void;
+      let stopCalled = false;
+      queryControlOverrides.stopTask = mock(() => {
+        stopCalled = true;
+        return new Promise<void>((resolve, reject) => {
+          resolveStop = resolve;
+          rejectStopRequest = reject;
+        });
+      });
+
+      const session = createSession(`stop race ${notificationStatus}`);
+      track(session.id);
+      const promptPromise = sendPrompt(session.id, "start then stop");
+      const call = await nextQueryCall();
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "stop-race-task",
+        description: "Natural terminal state wins",
+      });
+      await waitFor(() => session.backgroundTasks?.["stop-race-task"]?.status === "running");
+
+      const stopPromise = stopBackgroundTask(session.id, "stop-race-task");
+      await waitFor(() => stopCalled);
+      call.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "stop-race-task",
+        status: notificationStatus,
+        ...(notificationStatus === "failed" ? { summary: "natural failure" } : {}),
+      });
+      await waitFor(() => session.backgroundTasks?.["stop-race-task"]?.status === notificationStatus);
+
+      if (rejectStop) {
+        rejectStopRequest(new Error("stop transport closed after notification"));
+      } else {
+        resolveStop();
+      }
+      expect(await stopPromise).toEqual({ ok: true });
+      expect(session.backgroundTasks?.["stop-race-task"]).toMatchObject({
+        status: notificationStatus,
+        ...(notificationStatus === "failed" ? { error: "natural failure" } : {}),
+      });
+
+      call.finish();
+      await promptPromise;
+    },
+  );
+
   test("stopping the last retained task closes its runtime and leaves the session idle", async () => {
     const stopTask = mock(async (_taskId: string) => {});
     queryControlOverrides.stopTask = stopTask;
@@ -9753,6 +10216,19 @@ describe("stopBackgroundTask", () => {
     await Promise.resolve();
     expect(close).toHaveBeenCalledTimes(1);
     expect(getSession(session.id)).toBeUndefined();
+  });
+
+  test("deletion closes a control retained only by an unresolved Bash candidate", async () => {
+    const session = createSession("candidate-only control");
+    track(session.id);
+    const close = mock(async () => {});
+    session.backgroundTaskCandidates = new Map([
+      ["candidate-tool", { close }],
+    ]);
+
+    expect(deleteSession(session.id)).toBe(true);
+    await waitFor(() => close.mock.calls.length === 1);
+    expect(session.backgroundTaskCandidates).toBeUndefined();
   });
 
   test("releases the control handle once every task has settled", async () => {

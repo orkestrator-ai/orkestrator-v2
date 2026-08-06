@@ -5,6 +5,7 @@ import { createInterface } from "node:readline";
 
 const markerFile = process.env.CLAUDE_SDK_BACKGROUND_MARKER_FILE;
 if (!markerFile) process.exit(2);
+const childMode = process.env.CLAUDE_SDK_BACKGROUND_CHILD_MODE ?? "complete";
 
 const taskId = "contract-background-task";
 const toolUseId = "contract-background-tool";
@@ -18,7 +19,13 @@ function write(message: unknown): void {
 }
 
 lines.on("line", (line) => {
-  const message = JSON.parse(line) as Record<string, unknown>;
+  let message: Record<string, unknown>;
+  try {
+    message = JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    process.stderr.write("Malformed JSON input\n");
+    process.exit(3);
+  }
   if (message.type === "control_request") {
     const request = message.request as Record<string, unknown>;
     if (request?.subtype === "initialize") {
@@ -45,10 +52,10 @@ lines.on("line", (line) => {
   const sessionId = typeof message.session_id === "string"
     ? message.session_id
     : "contract-background-session";
-  const child = spawn(process.execPath, [
-    "-e",
-    `await Bun.sleep(150); await Bun.write(process.env.CLAUDE_SDK_BACKGROUND_MARKER_FILE, "completed")`,
-  ], {
+  const childScript = childMode === "fail"
+    ? "process.exit(17)"
+    : `await Bun.sleep(150); await Bun.write(process.env.CLAUDE_SDK_BACKGROUND_MARKER_FILE, "completed")`;
+  const child = spawn(process.execPath, ["-e", childScript], {
     env: { ...process.env, CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile },
     stdio: "ignore",
   });
@@ -126,14 +133,16 @@ lines.on("line", (line) => {
 
   child.once("exit", async (code) => {
     childFinished = true;
-    if (stdinEnded || code !== 0) return;
+    if (stdinEnded) return;
     write({
       type: "system",
       subtype: "task_notification",
       task_id: taskId,
       tool_use_id: toolUseId,
-      status: "completed",
-      summary: "Contract task completed",
+      status: code === 0 ? "completed" : "failed",
+      summary: code === 0
+        ? "Contract task completed"
+        : `Contract task failed with exit code ${code ?? "unknown"}`,
       session_id: sessionId,
       uuid: "00000000-0000-4000-8000-000000000014",
     });

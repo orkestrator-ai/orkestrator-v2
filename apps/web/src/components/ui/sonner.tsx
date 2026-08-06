@@ -6,17 +6,30 @@ import {
   TriangleAlertIcon,
 } from "lucide-react"
 import { useEffect, useRef } from "react"
-import { Toaster as Sonner, toast, type ToasterProps, type ToastT } from "sonner"
+import {
+  Toaster as Sonner,
+  toast,
+  type ToasterProps,
+  type ToastT,
+  type ToastToDismiss,
+} from "sonner"
 
 import { cn } from "@/lib/utils"
 
 const DEFAULT_POSITION = "bottom-right"
+const TOAST_SELECTOR = "[data-sonner-toast]"
 
-function getClickedToastId(
-  toastElement: HTMLElement,
-  toasterId: string | undefined,
-  defaultPosition: NonNullable<ToasterProps["position"]>,
-): ToastT["id"] | undefined {
+type ToastId = ToastT["id"]
+
+function isToast(toastItem: ToastT | ToastToDismiss): toastItem is ToastT {
+  return !("dismiss" in toastItem)
+}
+
+function belongsToToaster(toastItem: ToastT, toasterId: string | undefined): boolean {
+  return toasterId ? toastItem.toasterId === toasterId : !toastItem.toasterId
+}
+
+function getToastElementPosition(toastElement: HTMLElement): string | undefined {
   const index = Number(toastElement.dataset.index)
   const { xPosition, yPosition } = toastElement.dataset
 
@@ -24,39 +37,127 @@ function getClickedToastId(
     return undefined
   }
 
-  const position = `${yPosition}-${xPosition}`
-  const matchingToasts = toast
+  return `${yPosition}-${xPosition}`
+}
+
+function associateRenderedToasts(
+  toaster: HTMLElement,
+  toasterId: string | undefined,
+  defaultPosition: NonNullable<ToasterProps["position"]>,
+  toastIdsByElement: WeakMap<HTMLElement, ToastId>,
+): void {
+  const elementsByPosition = new Map<string, HTMLElement[]>()
+
+  for (const toastElement of toaster.querySelectorAll<HTMLElement>(TOAST_SELECTOR)) {
+    const position = getToastElementPosition(toastElement)
+    if (!position) continue
+
+    const elements = elementsByPosition.get(position) ?? []
+    elements.push(toastElement)
+    elementsByPosition.set(position, elements)
+  }
+
+  const toastIdsByPosition = new Map<string, ToastId[]>()
+  const activeToasts = toast
     .getToasts()
-    .filter((item): item is ToastT => !("dismiss" in item))
-    .filter((item) => (toasterId ? item.toasterId === toasterId : !item.toasterId))
-    .filter((item) => (item.position ?? defaultPosition) === position)
+    .filter(isToast)
+    .filter((toastItem) => belongsToToaster(toastItem, toasterId))
     .reverse()
 
-  return matchingToasts[index]?.id
+  for (const toastItem of activeToasts) {
+    const position = toastItem.position ?? defaultPosition
+    const toastIds = toastIdsByPosition.get(position) ?? []
+    toastIds.push(toastItem.id)
+    toastIdsByPosition.set(position, toastIds)
+  }
+
+  for (const [position, elements] of elementsByPosition) {
+    elements.sort((left, right) => Number(left.dataset.index) - Number(right.dataset.index))
+
+    const alreadyAssociatedIds = new Set(
+      elements
+        .map((toastElement) => toastIdsByElement.get(toastElement))
+        .filter((toastId): toastId is ToastId => toastId !== undefined),
+    )
+    const unassociatedIds = (toastIdsByPosition.get(position) ?? []).filter(
+      (toastId) => !alreadyAssociatedIds.has(toastId),
+    )
+    const unassociatedElements = elements.filter(
+      (toastElement) =>
+        toastElement.dataset.removed !== "true" && !toastIdsByElement.has(toastElement),
+    )
+
+    // ToastState is updated synchronously while Sonner renders subscriber
+    // updates on timers. Wait until this position's DOM has caught up rather
+    // than attaching a newer store ID to an older element from a partial render.
+    if (unassociatedElements.length !== unassociatedIds.length) continue
+
+    for (const [index, toastElement] of unassociatedElements.entries()) {
+      const toastId = unassociatedIds[index]
+      if (toastId !== undefined) toastIdsByElement.set(toastElement, toastId)
+    }
+  }
 }
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const toasterRef = useRef<HTMLElement>(null)
+  const toastIdsByElement = useRef(new WeakMap<HTMLElement, ToastId>())
   const defaultPosition = props.position ?? DEFAULT_POSITION
 
   useEffect(() => {
     const toaster = toasterRef.current
     if (!toaster) return
 
+    const synchronizeToastIds = () => {
+      associateRenderedToasts(toaster, props.id, defaultPosition, toastIdsByElement.current)
+    }
+
+    const dismissToastElement = (toastElement: HTMLElement) => {
+      synchronizeToastIds()
+      const toastId = toastIdsByElement.current.get(toastElement)
+
+      // Sonner 2.0.7 treats dismiss(0) as dismiss-all. Until that upstream API
+      // can target zero safely, leave this one toast in place instead of
+      // removing every notification.
+      if (toastId === undefined || toastId === 0) return
+      toast.dismiss(toastId)
+    }
+
     const dismissClickedToast = (event: MouseEvent) => {
       if (!(event.target instanceof Element)) return
 
-      const toastElement = event.target.closest<HTMLElement>("[data-sonner-toast]")
+      const toastElement = event.target.closest<HTMLElement>(TOAST_SELECTOR)
       if (!toastElement || !toaster.contains(toastElement)) return
 
-      const toastId = getClickedToastId(toastElement, props.id, defaultPosition)
-      if (toastId !== undefined) toast.dismiss(toastId)
+      dismissToastElement(toastElement)
+    }
+
+    const dismissToastWithKeyboard = (event: KeyboardEvent) => {
+      if (event.repeat || (event.key !== "Enter" && event.key !== " ")) return
+      if (!(event.target instanceof HTMLElement) || !event.target.matches(TOAST_SELECTOR)) return
+      if (!toaster.contains(event.target)) return
+
+      event.preventDefault()
+      dismissToastElement(event.target)
     }
 
     // Capture the click so custom toast content cannot accidentally prevent the
     // tap-to-dismiss behavior. Nested actions still receive and handle the click.
+    synchronizeToastIds()
+    const observer = new MutationObserver(synchronizeToastIds)
+    observer.observe(toaster, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-index", "data-x-position", "data-y-position", "data-removed"],
+    })
     toaster.addEventListener("click", dismissClickedToast, true)
-    return () => toaster.removeEventListener("click", dismissClickedToast, true)
+    toaster.addEventListener("keydown", dismissToastWithKeyboard, true)
+    return () => {
+      observer.disconnect()
+      toaster.removeEventListener("click", dismissClickedToast, true)
+      toaster.removeEventListener("keydown", dismissToastWithKeyboard, true)
+    }
   }, [defaultPosition, props.id])
 
   return (

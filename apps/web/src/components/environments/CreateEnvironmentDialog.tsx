@@ -1071,7 +1071,7 @@ export function CreateEnvironmentDialog({
                 </Label>
               </div>
             </div>
-            <div className="grid grid-cols-1 gap-3 rounded-xl border border-border/70 bg-zinc-950/45 p-3 sm:grid-cols-[10rem_minmax(0,1fr)_minmax(9rem,0.55fr)]">
+            <div className="grid grid-cols-1 gap-3 rounded-xl border border-border/70 bg-zinc-950/45 p-3 sm:grid-cols-[max-content_minmax(0,1fr)_minmax(9rem,max-content)]">
               <div className="grid grid-rows-[1rem_2.25rem] gap-1.5">
                 <Label className="text-xs font-normal leading-4 text-muted-foreground">
                   Agent
@@ -1079,7 +1079,7 @@ export function CreateEnvironmentDialog({
                 <div
                   role="radiogroup"
                   aria-label="Default Agent"
-                  className="flex h-9 items-center gap-1 rounded-md border border-input bg-input/30 p-1"
+                  className="flex h-9 w-fit items-center gap-1 rounded-md border border-input bg-input/30 p-1"
                 >
                   {([
                     {

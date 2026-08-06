@@ -1985,11 +1985,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   </TabsList>
                 </Tabs>
               </>
-            ) : repoName && !isGrid ? (
-              <span className="whitespace-nowrap text-sm font-medium text-foreground">
-                {repoName}
-              </span>
-            ) : !isGrid ? (
+            ) : !isGrid && !selectedEnvironment ? (
               <span className="whitespace-nowrap text-sm text-muted-foreground">
                 Select an environment to get started
               </span>

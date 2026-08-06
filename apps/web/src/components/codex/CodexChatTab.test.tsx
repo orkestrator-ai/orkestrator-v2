@@ -213,6 +213,7 @@ const mockAdoptNativeAgentSession = mock(async (input: {
   agent: string;
   logicalSessionKey: string;
   providerSessionId: string;
+  expectedProviderSessionId?: string;
 }) => ({
   id: `adopted-${input.logicalSessionKey}`,
   environmentId: input.environmentId,
@@ -1000,6 +1001,28 @@ describe("CodexChatTab", () => {
     }
   });
 
+  test("aborting an installed reconnect delay clears its timer", async () => {
+    const controller = new AbortController();
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const timerHandle = 8675309 as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutSpy = mock(() => timerHandle);
+    const clearTimeoutSpy = mock(() => {});
+    globalThis.setTimeout = setTimeoutSpy as unknown as typeof setTimeout;
+    globalThis.clearTimeout = clearTimeoutSpy as unknown as typeof clearTimeout;
+
+    try {
+      const delay = waitForCodexReconnectDelay(controller.signal, 60_000);
+      expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
+      controller.abort();
+      await delay;
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(timerHandle);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+    }
+  });
+
   beforeEach(() => {
     cleanup();
     claimedPromptHeads.clear();
@@ -1204,6 +1227,35 @@ describe("CodexChatTab", () => {
     expect(mockCreateClient).not.toHaveBeenCalled();
     expect(useCodexStore.getState().clients.get(ENVIRONMENT_ID)).toBeUndefined();
     expect(useCodexStore.getState().serverStatus.get(ENVIRONMENT_ID)).toBeUndefined();
+  });
+
+  test("waits for setup to finish before initializing the cached session", async () => {
+    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+      setupPhase: "running",
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(
+      await screen.findByText("Codex will connect automatically once setup finishes"),
+    ).toBeTruthy();
+    expect(mockAdoptNativeAgentSession).not.toHaveBeenCalled();
+    expect(mockCheckHealth).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
+
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
+        setupPhase: "ready",
+      });
+    });
+
+    await waitFor(() => {
+      expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith(
+        expect.objectContaining({ providerSessionId: SESSION_ID }),
+      );
+      expect(mockCheckHealth).toHaveBeenCalledWith(MOCK_CLIENT);
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
   test("renders a friendly catalog label for the backend-confirmed assistant model", async () => {
@@ -2035,6 +2087,55 @@ describe("CodexChatTab", () => {
     expect(restoredTab?.codexNativeData?.sessionId).toBe(restoredSessionId);
   });
 
+  test("registers a newly created warm session with backend activity", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      sessions: new Map(),
+    }));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        expect.objectContaining({ clientSessionKey: SESSION_KEY }),
+      );
+      expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith({
+        environmentId: ENVIRONMENT_ID,
+        agent: "codex",
+        logicalSessionKey: SESSION_KEY,
+        providerSessionId: SESSION_ID,
+      });
+    });
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+      SESSION_ID,
+    );
+  });
+
+  test("fails a new warm session after bounded adoption retries", async () => {
+    const adoptionError = new Error("activity adoption unavailable");
+    useCodexStore.setState((state) => ({
+      ...state,
+      sessions: new Map(),
+    }));
+    mockAdoptNativeAgentSession.mockRejectedValue(adoptionError);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    expect(await screen.findByText("activity adoption unavailable")).toBeTruthy();
+    expect(mockAdoptNativeAgentSession).toHaveBeenCalledTimes(2);
+    expect(mockAdoptNativeAgentSession.mock.calls[0]?.[0]).toEqual(
+      mockAdoptNativeAgentSession.mock.calls[1]?.[0],
+    );
+    expect(useCodexStore.getState().sessions.has(SESSION_KEY)).toBe(false);
+  });
+
   test("adopts a backend startup session projected after an empty session was cached", async () => {
     const startupTabId = "startup-agent";
     const startupSessionKey = createSessionKey(ENVIRONMENT_ID, startupTabId);
@@ -2154,6 +2255,7 @@ describe("CodexChatTab", () => {
           sessionId: restoredSessionId,
           messages: [restoredMessage],
         });
+        expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false);
       });
       expect(mockCreateSession).not.toHaveBeenCalled();
       expect(screen.queryByText("Connection Failed")).toBeNull();
@@ -2223,6 +2325,9 @@ describe("CodexChatTab", () => {
       turnId: "backend-startup-turn",
     });
     mockGetSessionMessages.mockResolvedValue([restoredMessage]);
+    mockAdoptNativeAgentSession.mockRejectedValueOnce(
+      new Error("existing activity mapping"),
+    );
 
     render(
       <CodexChatTab
@@ -2246,7 +2351,70 @@ describe("CodexChatTab", () => {
       projectedSessionId,
       { throwOnError: true },
     );
+    expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith({
+      environmentId: ENVIRONMENT_ID,
+      agent: "codex",
+      logicalSessionKey: SESSION_KEY,
+      providerSessionId: projectedSessionId,
+      expectedProviderSessionId: temporarySessionId,
+    });
     expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("keeps a projected restored session usable when its CAS repair loses", async () => {
+    const projectedSessionId = "projected-after-cached-codex";
+    const replacementError = new Error("concurrent activity mapping won");
+    const originalWarn = console.warn;
+    const consoleWarn = mock(() => {});
+    console.warn = consoleWarn as unknown as typeof console.warn;
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
+    mockAdoptNativeAgentSession.mockImplementation(async (input) => {
+      if (input.providerSessionId === projectedSessionId) {
+        throw replacementError;
+      }
+      return { providerSessionId: input.providerSessionId } as any;
+    });
+
+    try {
+      render(
+        <CodexChatTab
+          tabId={TAB_ID}
+          data={createData({ sessionId: projectedSessionId })}
+          isActive
+        />,
+      );
+
+      await waitFor(() => {
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+          projectedSessionId,
+        );
+        expect(consoleWarn).toHaveBeenCalledWith(
+          "[CodexChatTab] Failed to adopt the restored session:",
+          replacementError,
+        );
+      });
+      const projectedCalls = mockAdoptNativeAgentSession.mock.calls
+        .map(([input]) => input)
+        .filter((input) => input.providerSessionId === projectedSessionId);
+      expect(projectedCalls).toEqual([
+        {
+          environmentId: ENVIRONMENT_ID,
+          agent: "codex",
+          logicalSessionKey: SESSION_KEY,
+          providerSessionId: projectedSessionId,
+        },
+        {
+          environmentId: ENVIRONMENT_ID,
+          agent: "codex",
+          logicalSessionKey: SESSION_KEY,
+          providerSessionId: projectedSessionId,
+          expectedProviderSessionId: SESSION_ID,
+        },
+      ]);
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   test("keeps a restored session on transient status failure and succeeds on retry", async () => {
@@ -2362,6 +2530,165 @@ describe("CodexChatTab", () => {
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.codexNativeData?.sessionId)
         .toBe("resumed-codex");
     });
+  });
+
+  test("keeps the old session suspended until resumed adoption is durable", async () => {
+    const resumedAdoption = deferred<any>();
+    mockResumeSession.mockResolvedValue({
+      session: { sessionId: "resumed-codex", title: "Resumed" },
+      messages: [],
+    });
+    mockAdoptNativeAgentSession.mockImplementation((input) =>
+      input.providerSessionId === "resumed-codex"
+        ? resumedAdoption.promise
+        : Promise.resolve({ providerSessionId: input.providerSessionId } as any)
+    );
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    const resumeChoice = await screen.findByTestId("codex-resume-choice");
+    fireEvent.click(resumeChoice);
+    fireEvent.click(resumeChoice);
+
+    await waitFor(() => {
+      expect(mockResumeSession).toHaveBeenCalledTimes(1);
+      expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith(
+        expect.objectContaining({ providerSessionId: "resumed-codex" }),
+      );
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(true);
+    });
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(SESSION_ID);
+
+    await act(async () => {
+      resumedAdoption.resolve({ providerSessionId: "resumed-codex" });
+      await resumedAdoption.promise;
+    });
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+        "resumed-codex",
+      );
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false);
+    });
+  });
+
+  test("recovers a resumed session when the CAS response is lost", async () => {
+    let resumedAttempt = 0;
+    mockResumeSession.mockResolvedValue({
+      session: { sessionId: "resumed-codex", title: "Resumed" },
+      messages: [],
+    });
+    mockAdoptNativeAgentSession.mockImplementation(async (input) => {
+      if (input.providerSessionId !== "resumed-codex") {
+        return { providerSessionId: input.providerSessionId } as any;
+      }
+      resumedAttempt += 1;
+      if (resumedAttempt < 4) {
+        throw new Error(
+          resumedAttempt === 3 ? "CAS response was lost" : "mapping already exists",
+        );
+      }
+      return { providerSessionId: input.providerSessionId } as any;
+    });
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(await screen.findByTestId("codex-resume-choice"));
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+        "resumed-codex",
+      );
+    });
+    const resumedCalls = mockAdoptNativeAgentSession.mock.calls
+      .map(([input]) => input)
+      .filter((input) => input.providerSessionId === "resumed-codex");
+    expect(resumedCalls).toHaveLength(4);
+    const createInput = resumedCalls[0]!;
+    expect(createInput).not.toHaveProperty("expectedProviderSessionId");
+    expect(resumedCalls[1]).toEqual(createInput);
+    expect(resumedCalls[2]).toEqual({
+      ...createInput,
+      expectedProviderSessionId: SESSION_ID,
+    });
+    expect(resumedCalls[3]).toEqual(resumedCalls[2]);
+  });
+
+  test("keeps the old session usable after a definitive resumed-adoption collision", async () => {
+    mockToastError.mockClear();
+    mockResumeSession.mockResolvedValue({
+      session: { sessionId: "resumed-codex", title: "Resumed" },
+      messages: [],
+    });
+    mockAdoptNativeAgentSession.mockImplementation(async (input) => {
+      if (input.providerSessionId === "resumed-codex") {
+        throw new Error("another session won the mapping");
+      }
+      return { providerSessionId: input.providerSessionId } as any;
+    });
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(await screen.findByTestId("codex-resume-choice"));
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Failed to resume Codex session",
+        { description: "another session won the mapping" },
+      );
+      expect(screen.getByTestId("codex-send").hasAttribute("disabled")).toBe(false);
+    });
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(SESSION_ID);
+    expect(screen.getByTestId("codex-resume-choice")).toBeTruthy();
+    const resumedCalls = mockAdoptNativeAgentSession.mock.calls
+      .map(([input]) => input)
+      .filter((input) => input.providerSessionId === "resumed-codex");
+    expect(resumedCalls).toHaveLength(4);
+    expect(resumedCalls[2]?.expectedProviderSessionId).toBe(SESSION_ID);
+    expect(resumedCalls[3]).toEqual(resumedCalls[2]);
+  });
+
+  test("does not publish a resume after the active session changes", async () => {
+    const resumed = deferred<any>();
+    mockToastError.mockClear();
+    mockResumeSession.mockImplementationOnce(() => resumed.promise);
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(await screen.findByTestId("codex-resume-choice"));
+    await waitFor(() => expect(mockResumeSession).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      useCodexStore.getState().setSession(SESSION_KEY, {
+        sessionId: "newer-codex",
+        messages: [],
+        isLoading: false,
+      });
+    });
+    await act(async () => {
+      resumed.resolve({
+        session: { sessionId: "losing-resume", title: "Stale resume" },
+        messages: [],
+      });
+      await resumed.promise;
+    });
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Failed to resume Codex session",
+        {
+          description: "The active Codex session changed while the resume was in progress.",
+        },
+      );
+    });
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+      "newer-codex",
+    );
+    expect(
+      mockAdoptNativeAgentSession.mock.calls.some(
+        ([input]) => input.providerSessionId === "losing-resume",
+      ),
+    ).toBe(false);
   });
 
   test("clears old requests and ignores delayed rehydration after resume", async () => {
@@ -6023,6 +6350,134 @@ describe("CodexChatTab", () => {
         SESSION_ID,
         initialPrompt,
         expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
+      );
+    });
+  });
+
+  test("adopts an inactive tab's new session before dispatching its prompt", async () => {
+    const initialPrompt = "Run the background activity audit";
+    const adoption = deferred<any>();
+    seedPaneLayout(initialPrompt);
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    mockAdoptNativeAgentSession.mockImplementationOnce(() => adoption.promise);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalled();
+      expect(mockAdoptNativeAgentSession).toHaveBeenCalledWith({
+        environmentId: ENVIRONMENT_ID,
+        agent: "codex",
+        logicalSessionKey: SESSION_KEY,
+        providerSessionId: SESSION_ID,
+      });
+    });
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    await act(async () => {
+      adoption.resolve({ providerSessionId: SESSION_ID });
+      await adoption.promise;
+    });
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        SESSION_ID,
+        initialPrompt,
+        expect.objectContaining({ requestId: expect.any(String) }),
+      );
+    });
+  });
+
+  test("holds a cached session's initial prompt behind restored adoption", async () => {
+    const initialPrompt = "Audit the cached background session";
+    const adoption = deferred<any>();
+    seedPaneLayout(initialPrompt);
+    mockAdoptNativeAgentSession.mockImplementationOnce(() => adoption.promise);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+      />,
+    );
+
+    await waitFor(() => expect(mockAdoptNativeAgentSession).toHaveBeenCalled());
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    await act(async () => {
+      adoption.resolve({ providerSessionId: SESSION_ID });
+      await adoption.promise;
+    });
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        SESSION_ID,
+        initialPrompt,
+        expect.objectContaining({ requestId: expect.any(String) }),
+      );
+    });
+  });
+
+  test("holds a manual cached-session send until restored adoption settles", async () => {
+    const adoption = deferred<any>();
+    mockAdoptNativeAgentSession.mockImplementationOnce(() => adoption.promise);
+    composeText = "Send only after activity adoption";
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockAdoptNativeAgentSession).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+
+    await act(async () => {
+      adoption.resolve({ providerSessionId: SESSION_ID });
+      await adoption.promise;
+    });
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        SESSION_ID,
+        composeText,
+        expect.any(Object),
+      );
+    });
+  });
+
+  test("holds a cached-session queue action until restored adoption settles", async () => {
+    const adoption = deferred<any>();
+    mockAdoptNativeAgentSession.mockImplementationOnce(() => adoption.promise);
+    composeText = "Queue only after activity adoption";
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockAdoptNativeAgentSession).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("codex-queue"));
+    expect(useCodexStore.getState().messageQueue.has(SESSION_KEY)).toBe(false);
+
+    await act(async () => {
+      adoption.resolve({ providerSessionId: SESSION_ID });
+      await adoption.promise;
+    });
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().messageQueue.get(SESSION_KEY)?.[0]?.text).toBe(
+        composeText,
       );
     });
   });

@@ -7168,23 +7168,31 @@ Enter to confirm · Esc to cancel
     );
 
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
+    await waitFor(() => expect(subscribeMock).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: /Yes, I accept/ }));
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
       expectSelectionAnswer(1);
-      expect(screen.queryByText("Claude is asking for a choice")).toBeNull();
+      expect(
+        useClaudeTmuxStore.getState().getTab("tab-1").observation.prompt,
+      ).toBeNull();
     });
-    await act(async () => {
-      subscribedHandler?.({
+    const repeatedObservation = generatedObservation(await capturePaneMock(), 2);
+    act(() => {
+      if (!subscribedHandler) throw new Error("tmux subscription was not established");
+      subscribedHandler({
         kind: "observation",
         tab_id: "tab-1",
         environment_id: "env-1",
         session_id: "session-1",
-        observation: generatedObservation(await capturePaneMock(), 2),
+        observation: repeatedObservation,
       });
     });
-    expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
+    expect(
+      useClaudeTmuxStore.getState().getTab("tab-1").observation,
+    ).toEqual(repeatedObservation);
+    expect(screen.getByText("Claude is asking for a choice")).toBeTruthy();
   });
 
   test("sends each digit for multi-digit numbered confirmation options", async () => {

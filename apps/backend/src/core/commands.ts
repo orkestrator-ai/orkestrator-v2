@@ -10471,6 +10471,28 @@ export function createCommandRegistry(
       knownDigest,
     );
   });
+  /**
+   * Authoritative uncommitted-path list for one environment, for callers that
+   * need the fact itself rather than a diff to render.
+   *
+   * The build pipeline reads this before its review stage: the build stage is
+   * only *asked* to commit, so without an observation here a review would have
+   * to re-derive the worktree state from inside the agent turn and could
+   * silently skip validation when the build left work behind.
+   */
+  register("get_environment_uncommitted_paths", async ({ environmentId }, context) => {
+    const environment = await context.storage.getEnvironment(
+      asString(environmentId, "environmentId"),
+    );
+    if (!environment) throw new Error("Environment not found");
+    const runner = createEnvironmentCommandRunner(environment);
+    const output = await runner(
+      "git",
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      30_000,
+    );
+    return { paths: parseGitPorcelainPaths(output) };
+  });
   register("get_file_tree", async ({ containerId, knownDigest }) => {
     const output = await dockerExec(asString(containerId, "containerId"), "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type l -prune -o -type f -printf '%P\\n' | head -5000");
     return conditionalSnapshot(

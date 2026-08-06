@@ -5,6 +5,13 @@
  */
 export const REVIEW_INSTRUCTION_MAX_LENGTH = 100_000;
 
+/**
+ * Legacy instructions may exceed this, so it is advisory rather than a
+ * validation boundary. Keeping new instructions concise reduces repeated
+ * context cost, especially across looped-review discovery passes.
+ */
+export const REVIEW_INSTRUCTION_RECOMMENDED_LENGTH = 8_000;
+
 export class ReviewInstructionValidationError extends Error {
   constructor(message: string) {
     super(message);

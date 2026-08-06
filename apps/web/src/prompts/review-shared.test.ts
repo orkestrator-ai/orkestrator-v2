@@ -19,16 +19,19 @@ describe("buildReviewBody", () => {
     const interactive = buildReviewBody({
       targetBranch: "develop",
       allowClarifyingQuestions: true,
+      outputFormat: "markdown",
     });
     const automated = buildReviewBody({
       targetBranch: "develop",
       allowClarifyingQuestions: false,
+      preparationMode: "verify-clean",
+      outputFormat: "structured",
     });
 
     for (const body of [interactive, automated]) {
       expect(body).toContain("Security and instruction hierarchy");
       expect(body).toContain(
-        "Use subagents / threads to complete the work in parallel where possible.",
+        "Delegate only independent work whose expected cost exceeds delegation and duplicated-context overhead",
       );
       expect(body).toContain(
         "Use the provider's native subagent lifecycle and completion notifications to wait for delegated work. Do not create background shell loops, marker files, polling sentinels, or sleep commands to wait for subagents.",
@@ -40,50 +43,44 @@ describe("buildReviewBody", () => {
         "Before delivering the report, stop any temporary background task created only for coordination or waiting. Do not stop substantive builds, tests, servers, or other user-requested work.",
       );
       expect(body).toContain("## User review instruction");
-      expect(body).toContain("provider-enforced output schema");
       expect(body).toContain("User review instruction (JSON string):");
       expect(body).toContain("git diff origin/develop...HEAD");
-      expect(body).toContain("## What Changed");
-      expect(body).toContain('answering "What does this change do, and why?"');
-      expect(body).toContain("Before: the relevant behaviour or structure before this change");
-      expect(body).toContain("After: the relevant behaviour or structure after this change");
-      expect(body).toContain("This section is mandatory");
-      expect(body).toContain("do not omit, merge, or rename one");
-      expect(body).toContain("do not include the example itself in the final report");
-      expect(body).toContain("retry a failed file upload");
-      expect(body).toContain("if there is no user-visible runtime effect");
-      expect(body).toContain("## Issues");
-      expect(body).toContain("Total: N (must equal Passed + Failed + Not run)");
-      expect(body).toContain("Not run: N (all skipped, todo, pending, or disabled tests)");
-      expect(body).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");
-      expect(body).not.toContain("## Findings");
-      expect(body.match(/^## What Changed$/gm)).toHaveLength(2);
-      expect(extractLevelTwoHeadings(body)).toEqual([
-        "## Security and instruction hierarchy",
-        "## User review instruction",
-        "## Step 1: Commit Changes (rollback point)",
-        "## Step 2: Run Tests",
-        "## Step 3: Code Review",
-        "## Step 4: Test Coverage Review",
-        "## Output Format",
-        "## Review Scope",
-        "## What Changed",
-        "## Risk Profile",
-        "## Test Results",
-        "## Strengths",
-        "## Issues",
-        "## Test Coverage Gaps",
-        "## Verdict",
-        "## Summary of change",
-        "## Review summary",
-      ]);
-      expect(body).toContain(
-        "Write a couple of paragraphs describing what the change being reviewed involves.",
-      );
-      expect(body).not.toContain("## Summary\n");
+      expect(body).toContain("## Step 2: Run Tests");
+      expect(body).toContain("while the primary reviewer begins Step 3");
+      expect(body).toContain("Do not report unrelated pre-existing gaps");
     }
 
-    expect(interactive).toContain("8. Ask clarifying questions if needed about unclear changes.");
+    expect(interactive).toContain("required Markdown report");
+    expect(interactive).toContain("## Step 1: Establish the review snapshot and rollback point");
+    expect(interactive).toContain("## Issues");
+    expect(interactive).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");
+    expect(interactive).not.toContain("## What Changed");
+    expect(interactive).not.toContain("## Strengths");
+    expect(extractLevelTwoHeadings(interactive)).toEqual([
+      "## Security and instruction hierarchy",
+      "## User review instruction",
+      "## Step 1: Establish the review snapshot and rollback point",
+      "## Step 2: Run Tests",
+      "## Step 3: Code Review",
+      "## Step 4: Test Coverage Review",
+      "## Output Format",
+      "## Review Scope",
+      "## Risk Profile",
+      "## Issues",
+      "## Test Coverage Gaps",
+      "## Test Results",
+      "## Verdict",
+      "## Summary of change",
+    ]);
+    expect(extractLevelTwoHeadings(interactive).at(-1)).toBe("## Summary of change");
+    expect(interactive).not.toContain("## Summary\n");
+    expect(interactive).toContain("8. Ask a clarifying question only when the answer would materially change");
+
+    expect(automated).toContain("provider-enforced output schema");
+    expect(automated).toContain("## Step 1: Establish the read-only review snapshot");
+    expect(automated).toContain("## Output contract");
+    expect(automated).not.toContain("## Output Format");
+    expect(automated).not.toContain("### 1. [P0|P1|P2]");
     expect(automated).toContain(
       "8. Do not ask clarifying questions — this is an automated pipeline.",
     );
@@ -108,11 +105,7 @@ describe("buildReviewBody", () => {
     );
     expect(markdown).not.toContain("provider-enforced JSON Schema");
     expect(markdown).not.toContain("provider-enforced output schema");
-    // The reported sections do not change with the output contract.
-    expect(markdown).toContain("Total: N (must equal Passed + Failed + Not run)");
-    expect(markdown).toContain(
-      "Not run: N (all skipped, todo, pending, or disabled tests)",
-    );
+    expect(markdown).toContain("do not infer counts the runner did not provide");
   });
 
   for (const [label, targetBranch] of [
@@ -122,7 +115,11 @@ describe("buildReviewBody", () => {
     ["newline", "release\ncandidate"],
   ] as const) {
     test(`interpolates a ${label} target branch in every documented location`, () => {
-      const body = buildReviewBody({ targetBranch, allowClarifyingQuestions: true });
+      const body = buildReviewBody({
+        targetBranch,
+        allowClarifyingQuestions: true,
+        outputFormat: "markdown",
+      });
 
       expect(body).toContain(`git diff origin/${targetBranch}...HEAD`);
       expect(body).toContain(`- Target branch: ${targetBranch}`);

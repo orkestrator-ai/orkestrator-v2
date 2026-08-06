@@ -33,6 +33,7 @@ import { getGatewayTokenValidationError } from "@/lib/gateway-token";
 import {
   getReviewInstructionValidationError,
   REVIEW_INSTRUCTION_MAX_LENGTH,
+  REVIEW_INSTRUCTION_RECOMMENDED_LENGTH,
 } from "@orkestrator/protocol/review-instruction";
 import { useTimedCopyFeedback } from "@/hooks";
 import {
@@ -605,6 +606,16 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
   const isUsingDefaultReviewInstruction = reviewInstruction === DEFAULT_REVIEW_INSTRUCTION;
   const reviewInstructionValidationError = getReviewInstructionValidationError(reviewInstruction);
+  const reviewInstructionApproxTokens = Math.ceil(reviewInstruction.length / 4);
+  const reviewInstructionIsLong =
+    reviewInstruction.length > REVIEW_INSTRUCTION_RECOMMENDED_LENGTH;
+  const reviewInstructionWarningVisible =
+    reviewInstructionIsLong && !reviewInstructionValidationError;
+  const reviewInstructionDescribedBy = [
+    "review-instruction-description",
+    "review-instruction-status",
+    reviewInstructionWarningVisible ? "review-instruction-warning" : null,
+  ].filter(Boolean).join(" ");
 
   const renderReview = () => (
     <div className="max-w-3xl space-y-5">
@@ -655,7 +666,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
         <Textarea
           id="review-instruction"
-          aria-describedby="review-instruction-description review-instruction-status"
+          aria-describedby={reviewInstructionDescribedBy}
           aria-invalid={reviewInstructionValidationError ? true : undefined}
           value={reviewInstruction}
           onChange={(event) => setReviewInstruction(event.target.value)}
@@ -671,9 +682,22 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           className="flex items-center justify-between gap-4 border-t border-zinc-800 bg-zinc-900/40 px-4 py-2 font-mono text-[10px] text-muted-foreground"
         >
           <span>{reviewInstruction.includes(REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN) ? "Target branch token active" : "No dynamic target branch token"}</span>
-          <span>{reviewInstruction.length.toLocaleString()} / {REVIEW_INSTRUCTION_MAX_LENGTH.toLocaleString()} characters</span>
+          <span>
+            {reviewInstruction.length.toLocaleString()} / {REVIEW_INSTRUCTION_MAX_LENGTH.toLocaleString()} characters
+            {` · ~${reviewInstructionApproxTokens.toLocaleString()} tokens`}
+          </span>
         </div>
       </div>
+
+      {reviewInstructionWarningVisible && (
+        <p
+          id="review-instruction-warning"
+          className="flex items-start gap-1.5 text-xs text-amber-300"
+        >
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          Long review instructions are repeated across review passes and can slow reviews. Keeping them to {REVIEW_INSTRUCTION_RECOMMENDED_LENGTH.toLocaleString()} characters or fewer is recommended; legacy values remain supported.
+        </p>
+      )}
 
       {reviewInstructionValidationError && (
         <p className="flex items-start gap-1.5 text-xs text-destructive">

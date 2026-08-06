@@ -35,23 +35,59 @@ export function buildPrompt(pipeline: BuildPipeline, notes: string): string {
   ].filter(Boolean).join("\n\n");
 }
 
+/**
+ * What the backend observed in the environment worktree when the review stage
+ * started. The build stage is only asked to commit, never forced to, so this is
+ * the pipeline's own evidence rather than something the reviewer re-derives.
+ */
+export type ReviewWorktreeSnapshot =
+  | { status: "clean" }
+  | { status: "dirty"; paths: string[] }
+  | { status: "unknown"; reason: string };
+
+/** Keeps a pathological worktree from crowding out the rest of the prompt. */
+export const MAX_REPORTED_UNCOMMITTED_PATHS = 50;
+
+export function worktreeSnapshotSection(
+  snapshot: ReviewWorktreeSnapshot,
+): string {
+  if (snapshot.status === "clean") {
+    return "**Authoritative worktree state**: the backend confirmed the environment worktree was clean when this review started. Treat validation at the captured head as safe to run in place.";
+  }
+  if (snapshot.status === "unknown") {
+    return `**Authoritative worktree state**: the backend could not determine the worktree state (${snapshot.reason}). Establish it yourself in Step 1 and record it as a limitation.`;
+  }
+  const shown = snapshot.paths.slice(0, MAX_REPORTED_UNCOMMITTED_PATHS);
+  const omitted = snapshot.paths.length - shown.length;
+  return [
+    "**Authoritative worktree state**: the backend observed uncommitted paths when this review started, so the preceding build stage did not commit everything. Apply the Step 1 rule to decide whether they block validation, and record them as a limitation either way.",
+    // Path text comes from the repository, so it is untrusted: fence it as code
+    // rather than letting a crafted filename render as prompt markup.
+    ...shown.map((filePath) => `- \`${filePath.replaceAll("`", "'")}\``),
+    omitted > 0 ? `- …and ${omitted} more uncommitted ${omitted === 1 ? "path" : "paths"}.` : "",
+  ].filter(Boolean).join("\n");
+}
+
 export function reviewPrompt(
   pipeline: BuildPipeline,
   notes: string,
   targetBranch: string,
   reviewInstruction?: string,
+  worktree: ReviewWorktreeSnapshot = { status: "unknown", reason: "not probed" },
 ): string {
   return [
-    "You are performing an automated commit and code review workflow for this ticket. Execute the fixed steps in order.",
+    "You are performing an automated read-only code review for this ticket. Fix the review snapshot first, then overlap independent validation and analysis where supported.",
     ticketContext(pipeline.taskSnapshot),
     notes ? `**Project Notes**:\n${notes}` : "",
+    worktreeSnapshotSection(worktree),
     buildReviewBody({
       targetBranch,
       reviewInstruction,
+      preparationMode: "verify-clean",
       allowClarifyingQuestions: false,
       outputFormat: "structured",
     }),
-    "The provider enforces the structured review schema. Do not modify files after the rollback commit created by Step 1.",
+    "The provider enforces the structured review schema. This review is read-only; do not modify files or create commits.",
     "Begin by running the git commands required to understand the current state.",
   ].filter(Boolean).join("\n\n");
 }

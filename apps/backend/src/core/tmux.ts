@@ -3929,6 +3929,21 @@ export class ClaudeStatePollManager {
       poll.lastState === "working"
       || poll.lastState === ""
     );
+    // The turn-end edge as *this* transport sees it, which is deliberately not
+    // `isAgentTurnEndTransition` from the native path. There, a bridge reports
+    // `waiting` for a turn that is parked on an approval and still live, so only
+    // idle ends a turn. Here the Stop hook writes `waiting`, so `waiting` is the
+    // ordinary end of a Claude tmux turn. Do not unify the two: the same word
+    // means "still running" on one transport and "finished" on the other.
+    //
+    // Unlike `completedTurn` this deliberately excludes the `lastState === ""`
+    // cold start. An armed recheck is a durable, user-initiated intent worth
+    // honouring across a restart, but a first observation of waiting/idle is a
+    // turn that ended before this poll existed — probing it would cost one `gh`
+    // call per running Claude tmux container on every backend start, which is
+    // the standing per-environment cost the probe exists to avoid.
+    const endedTurn = (state === "idle" || state === "waiting")
+      && poll.lastState === "working";
     poll.lastState = state;
     poll.stale = false;
     if (completedTurn) {
@@ -3939,11 +3954,41 @@ export class ClaudeStatePollManager {
         );
       });
     }
+    // Independent of the armed gate above: a Claude tmux agent can run
+    // `gh pr create` itself, and an environment with no stored PR carries no
+    // polling timer that would ever notice. Transition-only, because this poll
+    // runs about once a second per container.
+    if (endedTurn) this.probeForAgentCreatedPullRequest(poll, environment.id);
     poll.context.emit(`claude-state-${containerId}`, {
       container_id: containerId,
       state,
       occurred_at: persistedTerminal.updatedAt,
     });
+  }
+
+  /**
+   * Fire-and-forget one-shot PR discovery for a Claude tmux turn that ended.
+   *
+   * Never awaited: this poll loop owes the renderer a `claude-state-*` frame,
+   * and GitHub being slow or absent must not delay or cancel it. A hook that
+   * throws synchronously is caught for the same reason.
+   */
+  private probeForAgentCreatedPullRequest(
+    poll: ClaudeStatePoll,
+    environmentId: string,
+  ): void {
+    const warn = (error: unknown): void => {
+      console.warn(
+        `[tmux] Failed to probe for an agent-created PR in ${environmentId}:`,
+        error instanceof Error ? error.message : error,
+      );
+    };
+    try {
+      void Promise.resolve(poll.context.probeAgentCreatedPullRequest?.(environmentId))
+        .catch(warn);
+    } catch (error) {
+      warn(error);
+    }
   }
 }
 

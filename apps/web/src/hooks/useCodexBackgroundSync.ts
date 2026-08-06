@@ -33,10 +33,32 @@ export interface CodexBackgroundSyncDependencies {
 }
 
 export interface CodexBackgroundSynchronizerOptions {
+  /**
+   * Injected for tests. `useCodexBackgroundSync` keys its effect on this
+   * object's identity, so a caller must hoist it rather than pass a literal —
+   * otherwise every render disposes and recreates the synchronizer.
+   */
   dependencies?: CodexBackgroundSyncDependencies;
   /** Retry delays for transient authoritative-read failures. */
   retryDelaysMs?: readonly number[];
+  /**
+   * Level-triggered floor between authoritative passes while any session is
+   * still loading. `0` disables it.
+   */
+  safetyIntervalMs?: number;
 }
+
+/**
+ * A bridge that answers 404 on the non-touching activity route is either older
+ * than the route or not the bridge we think it is. Neither is recoverable from
+ * the renderer, so the turn stays locked, but the user is told why instead of
+ * watching a silent spinner.
+ */
+export const CODEX_ACTIVITY_UNSUPPORTED_ERROR =
+  "This Codex bridge does not support the session activity endpoint. "
+  + "Restart the environment to reconnect.";
+
+const DEFAULT_SAFETY_INTERVAL_MS = 30_000;
 
 const DEFAULT_DEPENDENCIES: CodexBackgroundSyncDependencies = {
   lookupSessionActivity,
@@ -130,9 +152,14 @@ export function createCodexBackgroundSynchronizer(
   const retryDelaysMs = options.retryDelaysMs?.length
     ? options.retryDelaysMs
     : [1_000, 2_000, 5_000, 15_000, 30_000];
+  const safetyIntervalMs = options.safetyIntervalMs ?? DEFAULT_SAFETY_INTERVAL_MS;
   const statusRequests = new Map<string, Promise<boolean>>();
   const pendingRequests = new Map<string, Promise<boolean>>();
   const terminalTargets = new Set<string>();
+  // Consecutive `unsupported` activity answers per target. A 404 is retried
+  // rather than trusted — a stale port bound by an unrelated process answers
+  // the same way — but a bridge that never recovers must surface an error.
+  const unsupportedActivityStreaks = new Map<string, number>();
   let reconcileRequest: Promise<void> | undefined;
   let trailingReconcileRequested = false;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -220,6 +247,7 @@ export function createCodexBackgroundSynchronizer(
         target.client,
         target.sessionId,
       );
+      if (activity?.kind !== "unsupported") unsupportedActivityStreaks.delete(id);
       if (activity?.kind === "missing") {
         if (!disposed && isCurrentTurn(target)) finishMissingSession(target, id);
         return false;
@@ -238,8 +266,21 @@ export function createCodexBackgroundSynchronizer(
       }
       // The activity route is the non-touching authority used by backend
       // supervisors. A bridge that predates it is outside the supported rolling
-      // upgrade window; polling /status would keep an idle thread attached.
-      if (activity?.kind === "unsupported") return false;
+      // upgrade window; polling /status would keep an idle thread attached, so
+      // this retries the same route rather than falling back. A 404 is not
+      // evidence that the turn ended, so the turn stays locked either way —
+      // but once the retry ladder is spent, say so instead of spinning.
+      if (activity?.kind === "unsupported") {
+        const streak = (unsupportedActivityStreaks.get(id) ?? 0) + 1;
+        unsupportedActivityStreaks.set(id, streak);
+        if (streak > retryDelaysMs.length && !disposed && isCurrentTurn(target)) {
+          useCodexStore.getState().setSessionError(
+            target.sessionKey,
+            CODEX_ACTIVITY_UNSUPPORTED_ERROR,
+          );
+        }
+        return true;
+      }
       const lookup = await dependencies.lookupSessionStatus(
         target.client,
         target.sessionId,
@@ -331,13 +372,15 @@ export function createCodexBackgroundSynchronizer(
         target.client,
         target.sessionId,
       );
-      if (
-        disposed
-        || !isCurrentTurn(target)
-        || rendererChangedAfterTerminalStatus()
-      ) {
+      if (disposed) return false;
+      if (!isCurrentTurn(target) || rendererChangedAfterTerminalStatus()) {
+        // Same reasoning as the pre-confirmation check above, which this used
+        // to contradict by returning "settled". Aborting here discards a
+        // terminal status that was already observed, so the turn is still
+        // locked and nothing else guarantees another authoritative read.
+        // Re-poll rather than leaving it that way.
         terminalTargets.delete(id);
-        return false;
+        return true;
       }
       if (confirmation.kind === "unavailable") {
         terminalTargets.delete(id);
@@ -425,6 +468,9 @@ export function createCodexBackgroundSynchronizer(
     for (const id of terminalTargets) {
       if (!currentTargetIds.has(id)) terminalTargets.delete(id);
     }
+    for (const id of unsupportedActivityStreaks.keys()) {
+      if (!currentTargetIds.has(id)) unsupportedActivityStreaks.delete(id);
+    }
     // Resolve activity/status before pending input for each session. This
     // prevents an older approvals snapshot from racing ahead of a turn-state
     // correction and erasing a newer live card. Sessions still reconcile in
@@ -454,6 +500,18 @@ export function createCodexBackgroundSynchronizer(
     } else {
       retryAttempt = 0;
       clearRetryTimer();
+      // A successful read is not on its own enough to stop watching. Codex has
+      // no renderer-side stall detector left, and a half-open event stream
+      // produces neither an error nor an event, so no edge would ever
+      // re-trigger a pass. This level-triggered floor is the detector of last
+      // resort. Only loading sessions are targets, so an idle app still runs
+      // no timer at all.
+      if (safetyIntervalMs > 0 && currentTargets().length > 0) {
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined;
+          void reconcileNow();
+        }, safetyIntervalMs);
+      }
     }
   };
 
@@ -466,19 +524,36 @@ export function createCodexBackgroundSynchronizer(
       if (queueIfRunning) trailingReconcileRequested = true;
       return reconcileRequest;
     }
-    const request = (async () => {
-      do {
-        trailingReconcileRequested = false;
-        await runReconcile();
-        // An activity/reconnect edge received during the HTTP pass may be the
-        // only notification that its snapshot just became stale. Consume one
-        // queued trailing pass before releasing the coalesced request.
-        if (trailingReconcileRequested) clearRetryTimer();
-      } while (!disposed && trailingReconcileRequested);
-    })().finally(() => {
-      if (reconcileRequest === request) reconcileRequest = undefined;
+    let settle!: () => void;
+    let fail!: (error: unknown) => void;
+    const request = new Promise<void>((resolve, reject) => {
+      settle = resolve;
+      fail = reject;
     });
     reconcileRequest = request;
+    void (async () => {
+      let failure: { error: unknown } | undefined;
+      try {
+        do {
+          trailingReconcileRequested = false;
+          await runReconcile();
+          // An activity/reconnect edge received during the HTTP pass may be the
+          // only notification that its snapshot just became stale. Consume one
+          // queued trailing pass before releasing the coalesced request.
+          if (trailingReconcileRequested) clearRetryTimer();
+        } while (!disposed && trailingReconcileRequested);
+      } catch (error) {
+        failure = { error };
+      }
+      // Released here rather than in a trailing `.finally()`. The loop
+      // condition is evaluated before this promise settles, so an edge landing
+      // in that gap would set `trailingReconcileRequested` on a request that
+      // can no longer consume it — silently losing the edge the trailing pass
+      // exists to catch.
+      if (reconcileRequest === request) reconcileRequest = undefined;
+      if (failure) fail(failure.error);
+      else settle();
+    })();
     return request;
   };
 
@@ -494,6 +569,7 @@ export function createCodexBackgroundSynchronizer(
       trailingReconcileRequested = false;
       retryAttempt = 0;
       terminalTargets.clear();
+      unsupportedActivityStreaks.clear();
     },
   };
 }
@@ -503,23 +579,30 @@ export function useCodexBackgroundSync(
   options?: CodexBackgroundSynchronizerOptions,
 ): void {
   const dependencies = options?.dependencies;
-  const retryDelaysMs = options?.retryDelaysMs;
+  // Keyed on the contents, not the array identity. Callers naturally pass an
+  // inline literal, and depending on its identity would dispose and recreate
+  // the synchronizer on every render — cancelling each in-flight retry before
+  // its timer could ever fire.
+  const retryDelaysKey = options?.retryDelaysMs?.join(",");
+  const safetyIntervalMs = options?.safetyIntervalMs;
   useEffect(() => {
     const synchronizer = createCodexBackgroundSynchronizer({
       dependencies,
-      retryDelaysMs,
+      retryDelaysMs: retryDelaysKey ? retryDelaysKey.split(",").map(Number) : undefined,
+      safetyIntervalMs,
     });
     const unsubscribeEnvironment = useEnvironmentStore.subscribe((current, previous) => {
       const before = new Map(previous.environments.map((environment) => [
         environment.id,
         environment.agentActivityState,
       ]));
+      // Any departure from `working` is the edge, including the field being
+      // absent: `agentActivityState` is optional, so a snapshot that simply
+      // omits it is not evidence the turn is still running, and narrowing this
+      // to an explicit idle/waiting would silently drop that transition.
       if (current.environments.some((environment) =>
         before.get(environment.id) === "working"
-        && (
-          environment.agentActivityState === "idle"
-          || environment.agentActivityState === "waiting"
-        )
+        && environment.agentActivityState !== "working"
       )) {
         void synchronizer.reconcileAfterCurrent();
       }
@@ -564,5 +647,5 @@ export function useCodexBackgroundSync(
       unsubscribeEnvironment();
       synchronizer.dispose();
     };
-  }, [dependencies, retryDelaysMs]);
+  }, [dependencies, retryDelaysKey, safetyIntervalMs]);
 }

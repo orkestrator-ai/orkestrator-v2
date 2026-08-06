@@ -598,16 +598,6 @@ export function ClaudeChatTab({
   }, [session?.sessionId, pendingPlanApprovalsMap]);
 
   /**
-   * True only while the user's own refresh is in flight.
-   *
-   * A manual refresh is slow — it forces the model catalog, which makes the
-   * bridge respawn model discovery and a synchronous `claude --version` — so a
-   * background reconcile that lands mid-flight would mutate the store under it
-   * and turn the user's click into a "session changed while refreshing" error.
-   */
-  const manualRefreshInFlightRef = useRef(false);
-
-  /**
    * Rehydrate this session's question and plan-approval cards from the bridge.
    *
    * `GET /session/:id/questions` and `/plan-approvals` are the authoritative
@@ -863,28 +853,12 @@ export function ClaudeChatTab({
     syncPendingPrompts,
   ]);
 
-  const refreshSessionFromServer = useCallback(
-    async (options: RefreshSessionOptions = {}) => {
-      if (!options.manual) {
-        await applyServerSessionSnapshot(options);
-        return;
-      }
-      manualRefreshInFlightRef.current = true;
-      try {
-        await applyServerSessionSnapshot(options);
-      } finally {
-        manualRefreshInFlightRef.current = false;
-      }
-    },
-    [applyServerSessionSnapshot],
-  );
-
   useManualSessionRefresh({
     refreshRequestId,
     isReady:
       connectionState === "connected" && !!client && !!session?.sessionId,
     agentLabel: "Claude",
-    refresh: refreshSessionFromServer,
+    refresh: applyServerSessionSnapshot,
   });
 
 
@@ -1294,6 +1268,11 @@ export function ClaudeChatTab({
         }
         const hostPort = readiness.port;
         const authToken = readiness.authToken;
+        // `awaitBridgeReady` can block for the full readiness timeout. Anything
+        // resolved after this tab unmounted — or after a newer initialization
+        // superseded this one — must not be written back into the
+        // environment-scoped store.
+        if (!isCurrentInitialization()) return;
 
         setServerStatus(environmentId, {
           running: true,

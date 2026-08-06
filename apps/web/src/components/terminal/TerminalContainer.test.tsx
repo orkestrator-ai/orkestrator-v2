@@ -31,12 +31,76 @@ import { requestTerminalBrowserTab } from "@/lib/terminal-links";
 import * as realDndKitCore from "@dnd-kit/core";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
+import * as realNativeEvents from "@/lib/native/events";
 import {
   listen,
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
 } from "@/lib/native/events";
 
 const LEGACY_SELECTION_STORAGE_KEY = "orkestrator.pane-selection.v1";
+
+// Mirrors the production constants in TerminalContainer.tsx. They are module
+// private there, so the tests keep their own copy rather than widening the
+// component's public surface for a test.
+const SETUP_SESSION_BIND_RETRY_DELAY_MS = 250;
+const MAX_SETUP_SESSION_BIND_ATTEMPTS = 3;
+
+type SwallowedTimer = { handle: number; delay: number; fire: () => void };
+
+/**
+ * Deterministic timer control for the setup-session bind retries.
+ *
+ * `swallowDelays` names the exact delays this probe takes ownership of: those
+ * timers are recorded and handed back for the test to fire explicitly, and are
+ * never armed for real. Every other `setTimeout` — React's, happy-dom's,
+ * `waitFor`'s — passes straight through, so the probe never asserts on, or
+ * interferes with, timers it does not own.
+ */
+function installTimerProbe(swallowDelays: number[] = []) {
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const swallow = new Set(swallowDelays);
+  const delays: number[] = [];
+  const swallowed: SwallowedTimer[] = [];
+  const cleared: unknown[] = [];
+  let nextHandle = 900_001;
+
+  globalThis.setTimeout = ((callback: TimerHandler, delay?: number, ...args: unknown[]) => {
+    const scheduledDelay = typeof delay === "number" ? delay : 0;
+    delays.push(scheduledDelay);
+    if (swallow.has(scheduledDelay)) {
+      const handle = nextHandle;
+      nextHandle += 1;
+      swallowed.push({
+        handle,
+        delay: scheduledDelay,
+        fire: () => {
+          if (typeof callback === "function") callback();
+        },
+      });
+      return handle;
+    }
+    return Reflect.apply(originalSetTimeout, globalThis, [callback, delay, ...args]) as never;
+  }) as unknown as typeof globalThis.setTimeout;
+
+  globalThis.clearTimeout = ((handle: unknown) => {
+    cleared.push(handle);
+    if (swallowed.some((timer) => timer.handle === handle)) return;
+    Reflect.apply(originalClearTimeout, globalThis, [handle]);
+  }) as typeof globalThis.clearTimeout;
+
+  return {
+    /** Every delay passed to `setTimeout` while the probe was installed. */
+    delays,
+    /** Only the timers whose delay the probe was asked to own. */
+    swallowed,
+    cleared,
+    restore() {
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+    },
+  };
+}
 
 function writeStoredPaneSelection(
   environmentId: string,
@@ -51,8 +115,15 @@ function writeStoredPaneSelection(
 const realBackendSnapshot = { ...realBackend };
 const realSetupCommandsSnapshot = { ...realSetupCommands };
 const realDndKitCoreSnapshot = { ...realDndKitCore };
+// `@/lib/native/events` is mocked once in tests/setup.ts and shared with every
+// other suite. Snapshot it here so `afterAll` can put the module back, and
+// remember the default `listen` behaviour that setup.ts installed so the
+// `listenMock.mockReset()` in `beforeEach` cannot leak an implementation-less
+// mock into a file that runs after this one.
+const realNativeEventsSnapshot = { ...realNativeEvents };
 const originalOrkestrator = window.orkestrator;
 const listenMock = listen as ReturnType<typeof mock>;
+const defaultListenImplementation = () => Promise.resolve(() => {});
 
 type DndContextHarnessProps = {
   children: ReactNode;
@@ -181,19 +252,22 @@ const seedContainerSetupCommands = (environmentId = "env-hidden") => {
     setupPhase: "running",
   });
 };
-const seedUnboundSetupTab = () => {
+const seedUnboundSetupTabFor = (environmentId: string, containerId: string) => {
   usePaneLayoutStore.setState((state) => ({
-    environments: new Map(state.environments).set("env-hidden", {
+    environments: new Map(state.environments).set(environmentId, {
       root: {
         kind: "leaf",
         id: "default",
-        tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+        tabs: [{ id: "default", type: "plain" as const, isSetupTab: true }],
         activeTabId: "default",
       },
       activePaneId: "default",
-      containerId: "container-hidden",
+      containerId,
     }),
   }));
+};
+const seedUnboundSetupTab = () => {
+  seedUnboundSetupTabFor("env-hidden", "container-hidden");
 };
 
 mock.module("@/lib/setup-commands", () => ({
@@ -280,6 +354,9 @@ describe("TerminalContainer", () => {
     mock.module("@/lib/setup-commands", () => realSetupCommandsSnapshot);
     mock.module("@/lib/backend", () => realBackendSnapshot);
     mock.module("@dnd-kit/core", () => realDndKitCoreSnapshot);
+    listenMock.mockReset();
+    listenMock.mockImplementation(defaultListenImplementation);
+    mock.module("@/lib/native/events", () => realNativeEventsSnapshot);
   });
 
   beforeEach(() => {
@@ -3903,6 +3980,142 @@ describe("TerminalContainer", () => {
     });
   });
 
+  test("keeps the newly selected environment's panes when switching environments", async () => {
+    // App.tsx renders TerminalContainer without a `key`, so selecting a
+    // different environment reuses this instance and changes environmentId and
+    // containerId together. That is an environment switch, not a container
+    // restart: the environment being switched *to* has been working in the
+    // background and must not be reset out from under the user.
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments)
+        .set("env-hidden", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [{ id: "hidden-tab", type: "plain" as const }],
+            activeTabId: "hidden-tab",
+          },
+          activePaneId: "default",
+          containerId: "container-hidden",
+        })
+        .set("env-visible", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "visible-tab", type: "plain" as const },
+              { id: "visible-agent-tab", type: "codex" as const },
+            ],
+            activeTabId: "visible-agent-tab",
+          },
+          activePaneId: "default",
+          containerId: "container-visible",
+        }),
+    }));
+    // Setup is still running for env-visible, so the pending launch stays parked
+    // rather than being consumed by the launch effect the moment it is selected.
+    // Anything that clears it here is the reset, which is what is under test.
+    useEnvironmentStore.getState().updateEnvironment("env-visible", { setupPhase: "running" });
+    useClaudeOptionsStore.setState({
+      options: {},
+      pendingNativeLaunches: {
+        "env-visible": {
+          containerId: "container-visible",
+          environmentId: "env-visible",
+          targetPaneId: "default",
+          agentType: "codex",
+          launchMode: "native",
+        },
+      },
+    });
+
+    const { rerender } = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toHaveLength(1);
+    });
+
+    rerender(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+        />
+      </TerminalProvider>,
+    );
+
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-visible").map((tab) => tab.id),
+    ).toEqual(["visible-tab", "visible-agent-tab"]);
+    expect(
+      usePaneLayoutStore.getState().environments.get("env-visible")?.containerId,
+    ).toBe("container-visible");
+    expect(
+      useClaudeOptionsStore.getState().getPendingNativeLaunch("env-visible"),
+    ).toBeDefined();
+  });
+
+  test("resets panes when the container id changes within one environment", async () => {
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-hidden", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "hidden-tab", type: "plain" as const },
+            { id: "hidden-agent-tab", type: "codex" as const },
+          ],
+          activeTabId: "hidden-tab",
+        },
+        activePaneId: "default",
+        containerId: "container-hidden",
+      }),
+    }));
+
+    const { rerender } = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toHaveLength(2);
+    });
+
+    // A genuine restart: same environment, new container. The old tabs point at
+    // PTYs that no longer exist, so they still have to go.
+    rerender(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-restarted"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    expect(
+      usePaneLayoutStore.getState().getAllTabs("env-hidden").map((tab) => tab.id),
+    ).not.toContain("hidden-agent-tab");
+  });
+
   test("clears a pending native launch when the container id changes", async () => {
     useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
     useConfigStore.setState((state) => ({
@@ -4177,23 +4390,33 @@ describe("TerminalContainer", () => {
     awaitEnvironmentSetupSessionMock.mockRejectedValueOnce(new Error("bridge unavailable"));
     seedUnboundSetupTab();
 
-    const rendered = render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
+    // The retry callback's only effect is a `setState` that React discards on an
+    // unmounted tree, so "the retry never ran" is true whether or not the
+    // lifecycle cleanup cancelled it. Assert on the scheduled handle instead.
+    const timers = installTimerProbe([SETUP_SESSION_BIND_RETRY_DELAY_MS]);
+    try {
+      const rendered = render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-hidden"
+            containerId="container-hidden"
+            isContainerRunning
+            isActive={false}
+          />
+        </TerminalProvider>,
+      );
 
-    await waitFor(() => {
-      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
-    });
-    await act(async () => {});
-    rendered.unmount();
-    await new Promise((resolve) => setTimeout(resolve, 350));
+      await waitFor(() => {
+        expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+        expect(timers.swallowed).toHaveLength(1);
+      });
+
+      rendered.unmount();
+
+      expect(timers.cleared).toContain(timers.swallowed[0]!.handle);
+    } finally {
+      timers.restore();
+    }
 
     expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
   });
@@ -4215,29 +4438,39 @@ describe("TerminalContainer", () => {
       });
     seedUnboundSetupTab();
 
-    render(
-      <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId="container-hidden"
-          isContainerRunning
-          isActive={false}
-        />
-      </TerminalProvider>,
-    );
+    // Own the ordinary backoff timer so it can never fire. Without this the
+    // 250ms retry produces the same second lookup, and the test stays green
+    // even with the whole reconnect listener deleted.
+    const timers = installTimerProbe([SETUP_SESSION_BIND_RETRY_DELAY_MS]);
+    try {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-hidden"
+            containerId="container-hidden"
+            isContainerRunning
+            isActive={false}
+          />
+        </TerminalProvider>,
+      );
 
-    await waitFor(() => {
-      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
-    });
-    act(() => reconnect?.());
-    await waitFor(() => {
-      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
-      expect(
-        useTerminalSessionStore.getState().sessions.get(
-          createSessionKey("container-hidden", "default", "env-hidden"),
-        )?.sessionId,
-      ).toBe("env-hidden:setup");
-    }, { timeout: 2_000 });
+      await waitFor(() => {
+        expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+        expect(timers.swallowed).toHaveLength(1);
+        expect(reconnect).toBeDefined();
+      });
+      act(() => reconnect?.());
+      await waitFor(() => {
+        expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
+        expect(
+          useTerminalSessionStore.getState().sessions.get(
+            createSessionKey("container-hidden", "default", "env-hidden"),
+          )?.sessionId,
+        ).toBe("env-hidden:setup");
+      }, { timeout: 2_000 });
+    } finally {
+      timers.restore();
+    }
   });
 
   test("does not lose a reconnect while a failed setup-session lookup is in flight", async () => {
@@ -4277,9 +4510,22 @@ describe("TerminalContainer", () => {
       expect(rejectLookup).toBeDefined();
     });
     act(() => reconnect?.());
-    await act(async () => {
-      rejectLookup?.(new Error("bridge disconnected during lookup"));
-    });
+
+    // The reconnect landed while the lookup was still in flight, so the retry
+    // the failure schedules must be immediate rather than the ordinary backoff:
+    // the reconnect generation moved on under it. Owning only the backoff delay
+    // makes "no 250ms timer was scheduled" the falsifiable assertion.
+    const timers = installTimerProbe([SETUP_SESSION_BIND_RETRY_DELAY_MS]);
+    try {
+      await act(async () => {
+        rejectLookup?.(new Error("bridge disconnected during lookup"));
+      });
+
+      expect(timers.swallowed).toEqual([]);
+      expect(timers.delays).toContain(0);
+    } finally {
+      timers.restore();
+    }
 
     await waitFor(() => {
       expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
@@ -4357,6 +4603,325 @@ describe("TerminalContainer", () => {
     });
 
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  test("clears pending setup-session retries and binds the new environment when the environment id changes", async () => {
+    awaitEnvironmentSetupSessionMock
+      .mockRejectedValueOnce(new Error("bridge unavailable"))
+      .mockResolvedValueOnce({
+        environmentId: "env-visible",
+        sessionId: "env-visible:setup",
+        startedAt: "2026-08-05T00:00:00.000Z",
+        running: true,
+        terminalRunning: true,
+      });
+    seedUnboundSetupTab();
+    seedUnboundSetupTabFor("env-visible", "container-visible");
+
+    const timers = installTimerProbe([SETUP_SESSION_BIND_RETRY_DELAY_MS]);
+    try {
+      const { rerender } = render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-hidden"
+            containerId="container-hidden"
+            isContainerRunning
+            isActive={false}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
+        expect(timers.swallowed).toHaveLength(1);
+      });
+
+      // A changed environment id is a lifecycle boundary, not an unmount: the
+      // component keeps its refs, so the retry armed for the old environment has
+      // to be cancelled here or it fires against the new one.
+      rerender(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive={false}
+          />
+        </TerminalProvider>,
+      );
+
+      expect(timers.cleared).toContain(timers.swallowed[0]!.handle);
+
+      await waitFor(() => {
+        expect(
+          useTerminalSessionStore.getState().sessions.get(
+            createSessionKey("container-visible", "default", "env-visible"),
+          )?.sessionId,
+        ).toBe("env-visible:setup");
+      });
+      expect(
+        useTerminalSessionStore.getState().sessions.get(
+          createSessionKey("container-hidden", "default", "env-hidden"),
+        ),
+      ).toBeUndefined();
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
+      expect(timers.swallowed).toHaveLength(1);
+    } finally {
+      timers.restore();
+    }
+  });
+
+  test("does not bind a setup session that resolves after the environment id changed", async () => {
+    let resolveLookup: ((session: EnvironmentSetupSession) => void) | undefined;
+    awaitEnvironmentSetupSessionMock.mockImplementationOnce(
+      () => new Promise<EnvironmentSetupSession>((resolve) => {
+        resolveLookup = resolve;
+      }),
+    );
+    seedUnboundSetupTab();
+
+    const { rerender } = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+      expect(resolveLookup).toBeDefined();
+    });
+
+    rerender(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await act(async () => {
+      resolveLookup?.({
+        environmentId: "env-hidden",
+        sessionId: "env-hidden:setup",
+        startedAt: "2026-08-05T00:00:00.000Z",
+        running: true,
+        terminalRunning: true,
+      });
+    });
+
+    // The lookup belongs to a lifecycle the component has already left; writing
+    // its result would resurrect a session key for an environment this container
+    // no longer renders.
+    expect(
+      useTerminalSessionStore.getState().sessions.get(
+        createSessionKey("container-hidden", "default", "env-hidden"),
+      ),
+    ).toBeUndefined();
+    expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not schedule a setup-session retry that fails after the environment id changed", async () => {
+    let rejectLookup: ((error: Error) => void) | undefined;
+    awaitEnvironmentSetupSessionMock.mockImplementationOnce(
+      () => new Promise<EnvironmentSetupSession>((_resolve, reject) => {
+        rejectLookup = reject;
+      }),
+    );
+    seedUnboundSetupTab();
+
+    const { rerender } = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+      expect(rejectLookup).toBeDefined();
+    });
+
+    rerender(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    const timers = installTimerProbe([SETUP_SESSION_BIND_RETRY_DELAY_MS]);
+    try {
+      await act(async () => {
+        rejectLookup?.(new Error("bridge lost during environment change"));
+      });
+
+      expect(timers.swallowed).toEqual([]);
+    } finally {
+      timers.restore();
+    }
+
+    expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+    // The stale failure must not settle the old environment's tab either: a
+    // settled tab with no session is what stale-tab cleanup retires.
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+      { id: "default", type: "plain", isSetupTab: true },
+    ]);
+  });
+
+  test("a stale setup-session bind does not release the in-flight entry of a newer bind for the same tab", async () => {
+    let reconnect: (() => void) | undefined;
+    listenMock.mockImplementation(async (event: string, handler: () => void) => {
+      if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) reconnect = handler;
+      return () => undefined;
+    });
+    let rejectStaleLookup: ((error: Error) => void) | undefined;
+    awaitEnvironmentSetupSessionMock
+      .mockImplementationOnce(() => new Promise<EnvironmentSetupSession>((_resolve, reject) => {
+        rejectStaleLookup = reject;
+      }))
+      .mockImplementationOnce(() => new Promise<EnvironmentSetupSession>(() => {}));
+    // Setup is running for both environments, so pane-layout hydration leaves
+    // the seeded setup tabs alone and the second bind stays genuinely unbound.
+    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
+    useEnvironmentStore.getState().updateEnvironment("env-visible", { setupPhase: "running" });
+    seedUnboundSetupTab();
+    seedUnboundSetupTabFor("env-visible", "container-visible");
+
+    const { rerender } = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+      expect(rejectStaleLookup).toBeDefined();
+    });
+
+    // Both environments use the tab id "default", so the stale bind and the new
+    // one key the same in-flight entry.
+    rerender(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
+      expect(reconnect).toBeDefined();
+    });
+
+    // The stale bind settles last. Its `finally` only owns the in-flight entry
+    // while the request token still matches; deleting the newer bind's entry
+    // would let the next rebind start a duplicate concurrent lookup.
+    await act(async () => {
+      rejectStaleLookup?.(new Error("stale bridge failure"));
+    });
+
+    act(() => reconnect?.());
+    await act(async () => {});
+
+    expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("grants a fresh setup-session retry budget when a reconnect follows an exhausted one", async () => {
+    // Setup is still running, so stale-tab cleanup leaves the unbound setup tab
+    // in place after the first budget is exhausted and a reconnect can reach it.
+    useEnvironmentStore.getState().updateEnvironment("env-hidden", { setupPhase: "running" });
+    let reconnect: (() => void) | undefined;
+    listenMock.mockImplementation(async (event: string, handler: () => void) => {
+      if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) reconnect = handler;
+      return () => undefined;
+    });
+    for (let attempt = 0; attempt < MAX_SETUP_SESSION_BIND_ATTEMPTS * 2; attempt += 1) {
+      awaitEnvironmentSetupSessionMock.mockRejectedValueOnce(
+        new Error(`bridge unavailable ${attempt + 1}`),
+      );
+    }
+    seedUnboundSetupTab();
+
+    const timers = installTimerProbe([
+      SETUP_SESSION_BIND_RETRY_DELAY_MS,
+      SETUP_SESSION_BIND_RETRY_DELAY_MS * 2,
+    ]);
+    const fireNextBackoff = async (index: number) => {
+      await waitFor(() => expect(timers.swallowed).toHaveLength(index + 1));
+      await act(async () => {
+        timers.swallowed[index]!.fire();
+      });
+    };
+
+    try {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-hidden"
+            containerId="container-hidden"
+            isContainerRunning
+            isActive={false}
+          />
+        </TerminalProvider>,
+      );
+
+      await fireNextBackoff(0);
+      await fireNextBackoff(1);
+      await waitFor(() => {
+        expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(
+          MAX_SETUP_SESSION_BIND_ATTEMPTS,
+        );
+      });
+      expect(timers.swallowed.map((timer) => timer.delay)).toEqual([
+        SETUP_SESSION_BIND_RETRY_DELAY_MS,
+        SETUP_SESSION_BIND_RETRY_DELAY_MS * 2,
+      ]);
+
+      // Exhaustion drops the attempt counter for the tab, so the reconnect that
+      // follows starts a whole new budget rather than staying exhausted. The
+      // first delay proves it: 250ms is attempt 1 of a fresh budget, not a
+      // continuation of the old one.
+      act(() => reconnect?.());
+      await fireNextBackoff(2);
+      await fireNextBackoff(3);
+
+      await waitFor(() => {
+        expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(
+          MAX_SETUP_SESSION_BIND_ATTEMPTS * 2,
+        );
+      });
+      expect(timers.swallowed.map((timer) => timer.delay)).toEqual([
+        SETUP_SESSION_BIND_RETRY_DELAY_MS,
+        SETUP_SESSION_BIND_RETRY_DELAY_MS * 2,
+        SETUP_SESSION_BIND_RETRY_DELAY_MS,
+        SETUP_SESSION_BIND_RETRY_DELAY_MS * 2,
+      ]);
+    } finally {
+      timers.restore();
+    }
   });
 
   test("rehydrates a running backend setup session for a local environment", async () => {
@@ -5934,6 +6499,45 @@ describe("TerminalContainer", () => {
         expect(rightPane.tabs.some((tab) => tab.type === "browser")).toBe(false);
         expect(environment.activePaneId).toBe("left");
       });
+    });
+
+    test("ignores a native preview link whose source tab is missing or is not a browser tab", async () => {
+      let openLinkListener:
+        | ((event: { tabId: string; url: string }) => void)
+        | undefined;
+      window.orkestrator = {
+        listen: (event: string, callback: (payload: unknown) => void) => {
+          if (event === "browser-preview-open-link") {
+            openLinkListener = callback as (payload: { tabId: string; url: string }) => void;
+          }
+          return () => undefined;
+        },
+      } as never;
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => expect(openLinkListener).toBeDefined());
+      const before = usePaneLayoutStore.getState().environments.get("env-visible");
+      act(() => {
+        // "visible-tab" exists but is a plain terminal, and "missing-tab" has no
+        // pane at all. A preview link only ever originates from a browser tab.
+        openLinkListener?.({ tabId: "visible-tab", url: "http://localhost:3000/docs" });
+        openLinkListener?.({ tabId: "missing-tab", url: "http://localhost:3000/docs" });
+      });
+
+      expect(usePaneLayoutStore.getState().environments.get("env-visible")).toEqual(before);
+      expect(
+        usePaneLayoutStore.getState().getAllTabs("env-visible").some((tab) => tab.type === "browser"),
+      ).toBe(false);
     });
 
     test("ignores terminal links for other environments or missing source tabs without mutating panes", async () => {

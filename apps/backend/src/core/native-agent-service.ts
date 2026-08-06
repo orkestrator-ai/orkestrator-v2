@@ -112,6 +112,30 @@ function isValidInteractionMetadata(input: {
     === (policyMode === "unattended");
 }
 
+/** One session's observed activity change, as reported to `onActivityTransition`. */
+export interface NativeAgentActivityTransition {
+  environmentId: string;
+  sessionKey: string;
+  providerSessionId: string;
+  previousState?: AgentActivityState;
+  state: AgentActivityState;
+}
+
+/**
+ * Whether a transition means an agent turn just ended in this backend.
+ *
+ * Shared with the composition root so one-shot PR discovery hangs off exactly
+ * this edge. A first observation (no previous state) is a backend restart or a
+ * newly adopted session, not a turn that finished here, and `working`/`waiting`
+ * are both live turns that have now stopped.
+ */
+export function isAgentTurnEndTransition(
+  transition: Pick<NativeAgentActivityTransition, "previousState" | "state">,
+): boolean {
+  return transition.state === "idle"
+    && (transition.previousState === "working" || transition.previousState === "waiting");
+}
+
 export interface NativeAgentServiceOptions {
   provider?: (
     input: EnsureNativeAgentSessionInput,
@@ -133,13 +157,7 @@ export interface NativeAgentServiceOptions {
   onInteractionObservation?: (
     observation: AgentInteractionObservation,
   ) => void | Promise<void>;
-  onActivityTransition?: (event: {
-    environmentId: string;
-    sessionKey: string;
-    providerSessionId: string;
-    previousState?: AgentActivityState;
-    state: AgentActivityState;
-  }) => void;
+  onActivityTransition?: (event: NativeAgentActivityTransition) => void;
 }
 
 export interface AgentInteractionObservation {

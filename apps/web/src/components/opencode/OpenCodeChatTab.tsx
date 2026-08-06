@@ -1315,6 +1315,10 @@ export function OpenCodeChatTab({
         }
         const hostPort = readiness.port;
         const authToken = readiness.authToken;
+        // `awaitBridgeReady` can block for the full readiness timeout. Anything
+        // resolved after this tab unmounted must not be written back into the
+        // environment-scoped store.
+        if (!mounted) return;
 
         setServerStatus(environmentId, {
           running: true,

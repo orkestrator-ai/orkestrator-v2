@@ -111,11 +111,7 @@ const mockForkOpenCodeSession = mock<
     _messageId?: string,
   ) => Promise<{ id: string; title?: string }>
 >(async () => ({ id: "fork-session", title: "OpenCode fork" }));
-const mockStartOpenCodeServer = mock(async () => ({ hostPort: 9999, authToken: "opencode-secret" }));
-const mockGetOpenCodeServerStatus = mock(async () => ({ running: true, hostPort: 9999, authToken: "opencode-secret" }));
 const mockGetOpenCodeServerLog = mock(async () => "");
-const mockStartLocalOpencodeServer = mock(async () => ({ running: true, port: 9999, pid: 1234, authToken: "opencode-secret" }));
-const mockGetLocalOpencodeServerStatus = mock(async () => ({ running: true, port: 9999, pid: 1234, authToken: "opencode-secret" }));
 const mockResolveSlashCommandDirectory = mock(() => undefined as string | undefined);
 const mockShouldLoadSlashCommands = mock(() => false);
 const mockGetNativeSlashCommands = mock((commands: any[]) => commands);
@@ -340,14 +336,10 @@ mock.module("@/lib/backend", () => ({
       useOpenCodeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
     )),
   getAgentHandoff: mockGetAgentHandoff,
-  startOpenCodeServer: mockStartOpenCodeServer,
-  getOpenCodeServerStatus: mockGetOpenCodeServerStatus,
   getOpenCodeServerLog: mockGetOpenCodeServerLog,
   getOpencodeModelPreferences: mockGetOpencodeModelPreferences,
   getCachedOpenCodeModelCatalog: mockGetCachedOpenCodeModelCatalog,
   cacheOpenCodeModelCatalog: mockCacheOpenCodeModelCatalog,
-  startLocalOpencodeServer: mockStartLocalOpencodeServer,
-  getLocalOpencodeServerStatus: mockGetLocalOpencodeServerStatus,
   renameEnvironmentFromPrompt: mockRenameEnvironmentFromPrompt,
 }));
 
@@ -928,16 +920,8 @@ describe("OpenCodeChatTab", () => {
       id: "fork-session",
       title: "OpenCode fork",
     }));
-    mockStartOpenCodeServer.mockReset();
-    mockStartOpenCodeServer.mockResolvedValue({ hostPort: 9999, authToken: "opencode-secret" });
-    mockGetOpenCodeServerStatus.mockReset();
-    mockGetOpenCodeServerStatus.mockResolvedValue({ running: true, hostPort: 9999, authToken: "opencode-secret" });
     mockGetOpenCodeServerLog.mockReset();
     mockGetOpenCodeServerLog.mockResolvedValue("");
-    mockStartLocalOpencodeServer.mockReset();
-    mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 9999, pid: 1234, authToken: "opencode-secret" });
-    mockGetLocalOpencodeServerStatus.mockReset();
-    mockGetLocalOpencodeServerStatus.mockResolvedValue({ running: true, port: 9999, pid: 1234, authToken: "opencode-secret" });
     mockResolveSlashCommandDirectory.mockReset();
     mockResolveSlashCommandDirectory.mockReturnValue(undefined);
     mockShouldLoadSlashCommands.mockReset();
@@ -985,7 +969,7 @@ describe("OpenCodeChatTab", () => {
     mock.restore();
   });
 
-  test("uses backend bridge readiness without invoking the legacy OpenCode startup path", async () => {
+  test("resolves the OpenCode bridge port from backend readiness", async () => {
     useOpenCodeStore.setState({ clients: new Map(), sessions: new Map() });
     mockAwaitBridgeReady.mockResolvedValue({
       status: "ready",
@@ -997,8 +981,12 @@ describe("OpenCodeChatTab", () => {
 
     await waitFor(() => expect(mockEnsureNativeAgentSession).toHaveBeenCalled());
     expect(mockAwaitBridgeReady).toHaveBeenCalledWith(ENVIRONMENT_ID, "opencode");
-    expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
-    expect(mockStartOpenCodeServer).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(mockCreateClient).toHaveBeenCalledWith(
+        "http://127.0.0.1:7778",
+        undefined,
+        "ready-token",
+      ));
   });
 
   test.each([
@@ -1014,8 +1002,38 @@ describe("OpenCodeChatTab", () => {
     render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
     expect(await screen.findByText(`Error: ${message}`)).toBeTruthy();
-    expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
-    expect(mockStartOpenCodeServer).not.toHaveBeenCalled();
+    expect(mockCreateClient).not.toHaveBeenCalled();
+  });
+
+  test("does not install the bridge client when readiness resolves after unmount", async () => {
+    // `awaitBridgeReady` can block for the full readiness timeout. A tab that
+    // is gone by the time it resolves must not write the client or the server
+    // status into the environment-scoped store.
+    useOpenCodeStore.setState({
+      clients: new Map(),
+      sessions: new Map(),
+      serverStatus: new Map(),
+    });
+    const readiness = deferred<{
+      status: "ready";
+      port: number;
+      authToken: string;
+    }>();
+    mockAwaitBridgeReady.mockImplementationOnce(() => readiness.promise);
+
+    const view = render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockAwaitBridgeReady).toHaveBeenCalled());
+
+    view.unmount();
+
+    await act(async () => {
+      readiness.resolve({ status: "ready", port: 7781, authToken: "late-token" });
+      await readiness.promise;
+    });
+
+    expect(mockCreateClient).not.toHaveBeenCalled();
+    expect(useOpenCodeStore.getState().clients.get(ENVIRONMENT_ID)).toBeUndefined();
+    expect(useOpenCodeStore.getState().serverStatus.get(ENVIRONMENT_ID)).toBeUndefined();
   });
 
   test("handles a subscription that returns no event stream", async () => {
@@ -1478,7 +1496,7 @@ describe("OpenCodeChatTab", () => {
         agentHandoffId={handoffId}
       />,
     );
-    expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
+    expect(mockAwaitBridgeReady).not.toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -7325,7 +7343,7 @@ describe("OpenCodeChatTab", () => {
         );
       });
       expect(mockGetCachedOpenCodeModelCatalog).toHaveBeenCalledWith("project-1");
-      expect(mockStartOpenCodeServer).not.toHaveBeenCalled();
+      expect(mockAwaitBridgeReady).not.toHaveBeenCalled();
     });
 
     test("keeps the cached catalog when the live refresh is empty", async () => {

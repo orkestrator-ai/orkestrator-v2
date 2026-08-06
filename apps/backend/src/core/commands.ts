@@ -209,6 +209,15 @@ export type CommandContext = {
   featurePlanning?: FeaturePlanningService;
   /** Backend-owned notification emitted by exact agent turn lifecycles. */
   notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
+  /**
+   * One-shot PR discovery for an environment whose agent just ended a turn.
+   *
+   * Separate from {@link CommandContext.notifyAgentTurnCompleted}, which only
+   * acts on a durably armed conflict recheck. This one runs for every ended
+   * turn, because an agent that ran `gh pr create` itself is not something any
+   * durable intent could have predicted.
+   */
+  probeAgentCreatedPullRequest?: (environmentId: string) => Promise<void>;
 };
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
@@ -10942,6 +10951,29 @@ export function createCommandRegistry(
     if (!environment?.prRecheckAfterAgentCompletionArmedAt) return;
     await syncPrMonitorTracking(context);
     prMonitorService.requestCheck(id);
+  });
+  /**
+   * One-shot PR discovery for an environment whose agent just ended a turn.
+   *
+   * `syncPrMonitorTracking` only polls environments that already have a stored
+   * PR or a pending mode, so an agent that runs `gh pr create` itself would
+   * otherwise never be discovered — and giving every environment a standing
+   * timer to catch that would cost a `gh` call per environment per interval
+   * forever. Probing the working→idle edge instead costs one call per completed
+   * turn, and a probe that finds nothing leaves no entry and emits nothing.
+   *
+   * Internal: driven by the backend's own agent-idle edge (see
+   * `OrkestratorBackend`'s `onActivityTransition` wiring), never by a renderer.
+   */
+  register("pr_monitor_probe_environment", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    const id = asString(args.environmentId, "environmentId");
+    prMonitorEmit = context.emit;
+    prMonitorStorage = context.storage;
+    prMonitorContext = context;
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment) return;
+    prMonitorService.probe(environmentToPrMonitorTarget(environment));
   });
 
   register("start_local_opencode_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "opencode"));

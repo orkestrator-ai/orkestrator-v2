@@ -24,6 +24,19 @@ import {
  * merge-pending after "Merge"). Environments with neither are not polled — the
  * agent-idle probe ({@link PrMonitorService.probe}) discovers agent-created PRs
  * without a standing timer per environment.
+ *
+ * The probe is driven by the backend's own agent-idle edges, not by a renderer.
+ * Both supervision paths reach the `pr_monitor_probe_environment` command:
+ * `OrkestratorBackend` from a native agent session's working/waiting → idle
+ * transition, and `ClaudeStatePollManager` from a Claude tmux working →
+ * waiting/idle transition. (The two differ on `waiting` on purpose: a bridge
+ * reports it for a live turn parked on an approval, while the tmux Stop hook
+ * writes it when the turn is over.)
+ *
+ * Both fire on the transition rather than on each ended-state reading: the
+ * native sweep re-reads idle every two seconds and the tmux poll every second
+ * per container, so a probe per reading would be a `gh` call per idle
+ * environment per tick.
  */
 
 export interface PrMonitorTarget {

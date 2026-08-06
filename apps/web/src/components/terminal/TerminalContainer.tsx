@@ -522,6 +522,7 @@ export function TerminalContainer({
   // Track the initial prompt to pass to the first tab
   const initialPromptRef = useRef<string | undefined>(undefined);
   const previousContainerIdRef = useRef<string | null>(null);
+  const previousEnvironmentIdRef = useRef<string | null>(null);
   const isSavingInitialPromptAttachmentsRef = useRef(false);
   const setupSessionBindInFlightRef = useRef(new Map<string, symbol>());
   const setupSessionBindSettledTabsRef = useRef(new Set<string>());
@@ -1333,15 +1334,29 @@ export function TerminalContainer({
   }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupPhase, backendSetupRunning, claudeOptions, initialize, addTab, environmentId, currentEnvState, hydrationStatus, beginHydration, finishHydration, opencodeMode, claudeMode, claudeNativeBackend, codexMode, setPendingNativeLaunch, setOptions, worktreePath, hasBoundSetupSession, bindBackendSetupSession, setupSessionBindNonce]);
 
   // Reset pane layout when container changes within the same environment
-  // (e.g., container was stopped and restarted with a new ID)
+  // (e.g., container was stopped and restarted with a new ID).
+  //
+  // The environment is part of the comparison, not just the container. This
+  // component is rendered without a `key` (App.tsx), so selecting a different
+  // environment reuses the same instance and changes `environmentId` and
+  // `containerId` in the same commit. Comparing containers alone read that as a
+  // restart and reset the environment the user had just selected — destroying
+  // the panes, terminals and pending launch of an environment that was working
+  // in the background. A cross-environment change is never a restart.
   useEffect(() => {
-    if (previousContainerIdRef.current !== null && previousContainerIdRef.current !== containerId) {
+    const isSameEnvironment = previousEnvironmentIdRef.current === environmentId;
+    if (
+      isSameEnvironment
+      && previousContainerIdRef.current !== null
+      && previousContainerIdRef.current !== containerId
+    ) {
       console.debug("[TerminalContainer] Container changed for environment:", environmentId, "resetting panes");
       reset(environmentId);
       setHasAppliedClaudeOptions(false);
       clearPendingNativeLaunch(environmentId);
     }
     previousContainerIdRef.current = containerId;
+    previousEnvironmentIdRef.current = environmentId;
   }, [containerId, environmentId, reset, clearPendingNativeLaunch]);
 
   // Reset pane layout when the container stops.

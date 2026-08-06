@@ -3812,6 +3812,107 @@ describe("ClaudeStatePollManager", () => {
     unarmed.manager.shutdown("container-poll");
   });
 
+  test("probes for an agent-created PR on an unarmed terminal turn end", async () => {
+    // The regression this whole path exists for: nothing is armed and no PR is
+    // stored, so the monitor is not polling this environment at all. A Claude
+    // tmux agent that ran `gh pr create` itself would otherwise never be seen.
+    for (const endState of ["waiting", "idle"] as const) {
+      const harness = createPollHarness({ states: ["working", endState] });
+      const probe = mock(async () => undefined);
+      const notifyAgentTurnCompleted = mock(async () => undefined);
+      harness.context.probeAgentCreatedPullRequest = probe;
+      harness.context.notifyAgentTurnCompleted = notifyAgentTurnCompleted;
+
+      harness.manager.start("container-poll", harness.context);
+      await waitFor(() => harness.emitted.length === 1);
+      expect(probe).not.toHaveBeenCalled();
+
+      harness.scheduled[0]!();
+      await waitFor(() => probe.mock.calls.length === 1);
+      expect(probe).toHaveBeenCalledWith("env-poll");
+      // The armed-only notification is a separate concern and stays gated.
+      expect(notifyAgentTurnCompleted).not.toHaveBeenCalled();
+      harness.manager.shutdown("container-poll");
+    }
+  });
+
+  test("probes once per ended terminal turn, never per poll", async () => {
+    const harness = createPollHarness({
+      states: ["working", "waiting", "waiting", "waiting", "working", "idle"],
+    });
+    const probe = mock(async () => undefined);
+    harness.context.probeAgentCreatedPullRequest = probe;
+
+    harness.manager.start("container-poll", harness.context);
+    await waitFor(() => harness.emitted.length === 1);
+    harness.scheduled[0]!();
+    await waitFor(() => probe.mock.calls.length === 1);
+
+    // This poll runs about once a second per container; re-reading the same
+    // ended state is not a new turn and must not be a new `gh` call.
+    for (let tick = 0; tick < 2; tick += 1) {
+      harness.scheduled[0]!();
+      await delay(0);
+    }
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(harness.emitted).toHaveLength(2);
+
+    // A new turn that ends is a new probe.
+    harness.scheduled[0]!();
+    await waitFor(() => harness.emitted.length === 3);
+    harness.scheduled[0]!();
+    await waitFor(() => probe.mock.calls.length === 2);
+    harness.manager.shutdown("container-poll");
+  });
+
+  test("does not probe a first observation of an already-ended terminal state", async () => {
+    // A poll that starts up and immediately reads `waiting` is looking at a turn
+    // that ended before this backend existed. Probing it would be one `gh` call
+    // per running Claude tmux container on every backend start.
+    for (const initialState of ["waiting", "idle"] as const) {
+      const harness = createPollHarness({ states: [initialState] });
+      const probe = mock(async () => undefined);
+      harness.context.probeAgentCreatedPullRequest = probe;
+
+      harness.manager.start("container-poll", harness.context);
+      await waitFor(() => harness.emitted.length === 1);
+      await delay(0);
+      expect(probe).not.toHaveBeenCalled();
+      harness.manager.shutdown("container-poll");
+    }
+  });
+
+  test("a failing PR probe neither stops the poll loop nor suppresses its state emit", async () => {
+    const harness = createPollHarness({
+      states: ["working", "waiting", "working", "waiting", "working", "waiting"],
+    });
+    let attempts = 0;
+    const probe = mock((): Promise<void> => {
+      attempts += 1;
+      // A synchronous throw is the harsher case: it happens before any promise
+      // exists to attach a rejection handler to.
+      if (attempts === 1) throw new Error("probe unavailable");
+      if (attempts === 2) return Promise.reject(new Error("probe rejected"));
+      return Promise.resolve();
+    });
+    harness.context.probeAgentCreatedPullRequest = probe;
+
+    harness.manager.start("container-poll", harness.context);
+    await waitFor(() => harness.emitted.length === 1);
+    for (let expectedEmits = 2; expectedEmits <= 6; expectedEmits += 1) {
+      harness.scheduled[0]!();
+      await waitFor(() => harness.emitted.length === expectedEmits);
+    }
+
+    await waitFor(() => probe.mock.calls.length === 3);
+    expect(attempts).toBe(3);
+    // The renderer still received every state frame, including the ones whose
+    // probe failed.
+    expect(harness.emitted.map(({ payload }) => (payload as { state: string }).state))
+      .toEqual(["working", "waiting", "working", "waiting", "working", "waiting"]);
+    harness.manager.shutdown("container-poll");
+  });
+
   test("continues polling after a terminal completion notification rejects", async () => {
     const harness = createPollHarness({ states: ["working", "waiting", "working", "waiting"] });
     harness.environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";

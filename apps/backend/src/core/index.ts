@@ -17,7 +17,10 @@ import { AgentToolsServer } from "./agent-tools.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 import { BuildPipelineService } from "./build-pipeline-service.js";
-import { NativeAgentService } from "./native-agent-service.js";
+import {
+  isAgentTurnEndTransition,
+  NativeAgentService,
+} from "./native-agent-service.js";
 import { LoopedReviewService } from "./looped-review-service.js";
 import { FeaturePlanningService } from "./feature-planning.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
@@ -94,6 +97,11 @@ export class OrkestratorBackend {
       if (!handler) return;
       await handler({ environmentId }, context);
     };
+    context.probeAgentCreatedPullRequest = async (environmentId: string) => {
+      const handler = this.commands.get("pr_monitor_probe_environment");
+      if (!handler) return;
+      await handler({ environmentId }, context);
+    };
     this.context = context;
     const interactionMonitorMode =
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
@@ -116,6 +124,18 @@ export class OrkestratorBackend {
             previous_state: event.previousState,
             state: event.state,
           });
+          // An agent that just ended a turn may have run `gh pr create` itself,
+          // and an environment with no stored PR carries no polling timer that
+          // would ever notice. Probe once here rather than standing one up.
+          //
+          // This deliberately hangs off the *transition*, not the observation:
+          // the activity sweep reports idle every two seconds, so probing every
+          // idle reading would be a `gh` call per idle environment per sweep.
+          // A first observation (`previousState === undefined`) is a backend
+          // restart or a newly adopted session, not a turn that ended here.
+          if (isAgentTurnEndTransition(event)) {
+            this.probeForAgentCreatedPullRequest(event.environmentId, context);
+          }
         },
       },
     );
@@ -173,6 +193,27 @@ export class OrkestratorBackend {
     this.reapTmuxRuntimes =
       options.startupReapers?.claudeTmuxRuntimes
       ?? reapOrphanedClaudeTmuxRuntimes;
+  }
+
+  /**
+   * Fire-and-forget one-shot PR discovery after an agent turn ended.
+   *
+   * Deliberately not awaited: the activity sweep that produced this edge must
+   * not slow down, or fail, because GitHub is slow. The probe itself is
+   * idempotent — an environment already being monitored just gets its next
+   * check brought forward.
+   */
+  private probeForAgentCreatedPullRequest(
+    environmentId: string,
+    context: CommandContext,
+  ): void {
+    void Promise.resolve(context.probeAgentCreatedPullRequest?.(environmentId))
+      .catch((error: unknown) => {
+        console.warn(
+          `[backend] Failed to probe for an agent-created PR in ${environmentId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      });
   }
 
   async init(): Promise<void> {

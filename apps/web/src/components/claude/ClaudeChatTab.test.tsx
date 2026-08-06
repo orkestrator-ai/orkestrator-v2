@@ -101,53 +101,10 @@ const mockSubscribeToEvents = mock(
   (_client: unknown, _signal?: AbortSignal): AsyncIterable<ClaudeEvent> =>
     abortableEmptyEventStream(_signal),
 );
-// The tab refuses to build a client without a bridge token, so every server
-// mock hands one back exactly as the real commands do.
+// The tab refuses to build a client without a bridge token, so the readiness
+// mock hands one back exactly as the real command does.
 const BRIDGE_AUTH_TOKEN = "claude-bridge-token";
-const mockStartClaudeServer = mock(
-  async (): Promise<{ hostPort: number; authToken?: string }> => ({
-    hostPort: 9999,
-    authToken: BRIDGE_AUTH_TOKEN,
-  }),
-);
-const mockGetClaudeServerStatus = mock(
-  async (): Promise<{
-    running: boolean;
-    hostPort: number | null;
-    authToken?: string;
-  }> => ({
-    running: true,
-    hostPort: 9999,
-    authToken: BRIDGE_AUTH_TOKEN,
-  }),
-);
 const mockGetClaudeServerLog = mock(async () => "");
-const mockStartLocalClaudeServer = mock(
-  async (): Promise<{
-    running: boolean;
-    port: number;
-    pid: number;
-    authToken?: string;
-  }> => ({
-    running: true,
-    port: 9999,
-    pid: 1234,
-    authToken: BRIDGE_AUTH_TOKEN,
-  }),
-);
-const mockGetLocalClaudeServerStatus = mock(
-  async (): Promise<{
-    running: boolean;
-    port: number | null;
-    pid: number | null;
-    authToken?: string;
-  }> => ({
-    running: true,
-    port: 9999,
-    pid: 1234,
-    authToken: BRIDGE_AUTH_TOKEN,
-  }),
-);
 const mockReadFileBase64 = mock(async () => "chat-local-base64");
 const mockReadContainerFileBase64 = mock(async () => "chat-container-base64");
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
@@ -371,11 +328,7 @@ mock.module("@/lib/backend", () => ({
       useClaudeStore.getState().getQueuedMessages(queueSessionKey(queueKey)),
     )),
   getAgentHandoff: mockGetAgentHandoff,
-  startClaudeServer: mockStartClaudeServer,
-  getClaudeServerStatus: mockGetClaudeServerStatus,
   getClaudeServerLog: mockGetClaudeServerLog,
-  startLocalClaudeServer: mockStartLocalClaudeServer,
-  getLocalClaudeServerStatus: mockGetLocalClaudeServerStatus,
   getClaudeModelCatalog: mockGetClaudeModelCatalog,
   renameEnvironmentFromPrompt: mockRenameEnvironmentFromPrompt,
   readFileBase64: mockReadFileBase64,
@@ -838,33 +791,8 @@ describe("ClaudeChatTab", () => {
       port: 9999,
       authToken: BRIDGE_AUTH_TOKEN,
     });
-    mockStartClaudeServer.mockReset();
-    mockStartClaudeServer.mockImplementation(async () => ({
-      hostPort: 9999,
-      authToken: BRIDGE_AUTH_TOKEN,
-    }));
-    mockGetClaudeServerStatus.mockReset();
-    mockGetClaudeServerStatus.mockImplementation(async () => ({
-      running: true,
-      hostPort: 9999,
-      authToken: BRIDGE_AUTH_TOKEN,
-    }));
     mockGetClaudeServerLog.mockReset();
     mockGetClaudeServerLog.mockImplementation(async () => "");
-    mockStartLocalClaudeServer.mockReset();
-    mockStartLocalClaudeServer.mockImplementation(async () => ({
-      running: true,
-      port: 9999,
-      pid: 1234,
-      authToken: BRIDGE_AUTH_TOKEN,
-    }));
-    mockGetLocalClaudeServerStatus.mockReset();
-    mockGetLocalClaudeServerStatus.mockImplementation(async () => ({
-      running: true,
-      port: 9999,
-      pid: 1234,
-      authToken: BRIDGE_AUTH_TOKEN,
-    }));
     mockForkClaudeSession.mockClear();
     mockForkClaudeSession.mockImplementation(async () => ({
       sessionId: "claude-fork",
@@ -880,7 +808,7 @@ describe("ClaudeChatTab", () => {
     lastVirtualizedFind = null;
   });
 
-  test("uses backend bridge readiness without invoking the legacy Claude startup path", async () => {
+  test("resolves the Claude bridge port from backend readiness", async () => {
     useClaudeStore.setState({ clients: new Map(), sessions: new Map() });
     mockAwaitBridgeReady.mockResolvedValue({
       status: "ready",
@@ -892,8 +820,11 @@ describe("ClaudeChatTab", () => {
 
     await waitFor(() => expect(mockEnsureNativeAgentSession).toHaveBeenCalled());
     expect(mockAwaitBridgeReady).toHaveBeenCalledWith(ENVIRONMENT_ID, "claude");
-    expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
-    expect(mockStartClaudeServer).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(useClaudeStore.getState().serverStatus.get(ENVIRONMENT_ID)).toMatchObject({
+        running: true,
+        hostPort: 7777,
+      }));
   });
 
   test.each([
@@ -909,8 +840,37 @@ describe("ClaudeChatTab", () => {
     render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
     expect(await screen.findByText(message)).toBeTruthy();
-    expect(mockGetClaudeServerStatus).not.toHaveBeenCalled();
-    expect(mockStartClaudeServer).not.toHaveBeenCalled();
+    expect(useClaudeStore.getState().clients.get(ENVIRONMENT_ID)).toBeUndefined();
+  });
+
+  test("does not install the bridge client when readiness resolves after unmount", async () => {
+    // `awaitBridgeReady` can block for the full readiness timeout. A tab that
+    // is gone by the time it resolves must not write the client or the server
+    // status into the environment-scoped store.
+    useClaudeStore.setState({
+      clients: new Map(),
+      sessions: new Map(),
+      serverStatus: new Map(),
+    });
+    const readiness = deferred<{
+      status: "ready";
+      port: number;
+      authToken: string;
+    }>();
+    mockAwaitBridgeReady.mockImplementationOnce(() => readiness.promise);
+
+    const view = render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockAwaitBridgeReady).toHaveBeenCalled());
+
+    view.unmount();
+
+    await act(async () => {
+      readiness.resolve({ status: "ready", port: 7781, authToken: "late-token" });
+      await readiness.promise;
+    });
+
+    expect(useClaudeStore.getState().clients.get(ENVIRONMENT_ID)).toBeUndefined();
+    expect(useClaudeStore.getState().serverStatus.get(ENVIRONMENT_ID)).toBeUndefined();
   });
 
   test("renders a friendly catalog label for the backend-confirmed assistant model", async () => {

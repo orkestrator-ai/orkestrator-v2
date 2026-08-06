@@ -1692,6 +1692,10 @@ export function CodexChatTab({
         }
         const port = readiness.port;
         const authToken = readiness.authToken;
+        // `awaitBridgeReady` can block for the full readiness timeout. Anything
+        // resolved after this tab unmounted must not be written back into the
+        // environment-scoped store.
+        if (!mounted) return;
 
         setServerStatus(environmentId, { running: true, hostPort: port });
         const nextClient = createClient(`http://127.0.0.1:${port}`, authToken);

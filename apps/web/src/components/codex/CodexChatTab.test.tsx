@@ -188,26 +188,6 @@ const mockResumeSession = mock(async () => null as null | {
 });
 const mockCheckHealth = mock(async () => true);
 const mockGetCodexServerLog = mock(async () => "");
-const mockGetCodexServerStatus = mock(async () => ({
-  running: true,
-  hostPort: 9999,
-  authToken: "container-test-token",
-}));
-const mockGetLocalCodexServerStatus = mock(async () => ({
-  running: true,
-  port: 9999,
-  pid: 1234,
-  authToken: "local-test-token",
-}));
-const mockStartCodexServer = mock(async () => ({
-  hostPort: 9999,
-  authToken: "container-start-token",
-}));
-const mockStartLocalCodexServer = mock(async () => ({
-  port: 9999,
-  pid: 1234,
-  authToken: "local-start-token",
-}));
 const mockCacheAgentModelCatalog = mock(async () => ({ schemaVersion: 1 as const }));
 const mockGetModels = mock(async (): Promise<{
   models: CodexModel[];
@@ -375,11 +355,7 @@ mock.module("@/lib/backend", () => ({
     )),
   getAgentHandoff: mockGetAgentHandoff,
   getCodexServerLog: mockGetCodexServerLog,
-  getCodexServerStatus: mockGetCodexServerStatus,
-  getLocalCodexServerStatus: mockGetLocalCodexServerStatus,
   renameEnvironmentFromPrompt: mockRenameEnvironmentFromPrompt,
-  startCodexServer: mockStartCodexServer,
-  startLocalCodexServer: mockStartLocalCodexServer,
   updateGlobalConfig: mockUpdateGlobalConfig,
 }));
 
@@ -1126,30 +1102,6 @@ describe("CodexChatTab", () => {
     mockCheckHealth.mockResolvedValue(true);
     mockGetCodexServerLog.mockReset();
     mockGetCodexServerLog.mockResolvedValue("");
-    mockGetCodexServerStatus.mockReset();
-    mockGetCodexServerStatus.mockResolvedValue({
-      running: true,
-      hostPort: 9999,
-      authToken: "container-test-token",
-    });
-    mockGetLocalCodexServerStatus.mockReset();
-    mockGetLocalCodexServerStatus.mockResolvedValue({
-      running: true,
-      port: 9999,
-      pid: 1234,
-      authToken: "local-test-token",
-    });
-    mockStartCodexServer.mockReset();
-    mockStartCodexServer.mockResolvedValue({
-      hostPort: 9999,
-      authToken: "container-start-token",
-    });
-    mockStartLocalCodexServer.mockReset();
-    mockStartLocalCodexServer.mockResolvedValue({
-      port: 9999,
-      pid: 1234,
-      authToken: "local-start-token",
-    });
     mockCacheAgentModelCatalog.mockClear();
     mockGetModels.mockReset();
     mockGetModels.mockResolvedValue({
@@ -1189,7 +1141,7 @@ describe("CodexChatTab", () => {
     mock.restore();
   });
 
-  test("uses backend bridge readiness without invoking the legacy Codex startup path", async () => {
+  test("resolves the Codex bridge port from backend readiness", async () => {
     useCodexStore.setState({ clients: new Map(), sessions: new Map() });
     mockAwaitBridgeReady.mockResolvedValue({
       status: "ready",
@@ -1201,8 +1153,10 @@ describe("CodexChatTab", () => {
 
     await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
     expect(mockAwaitBridgeReady).toHaveBeenCalledWith(ENVIRONMENT_ID, "codex");
-    expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
-    expect(mockStartCodexServer).not.toHaveBeenCalled();
+    expect(mockCreateClient).toHaveBeenCalledWith(
+      "http://127.0.0.1:7779",
+      "ready-token",
+    );
   });
 
   test.each([
@@ -1218,8 +1172,38 @@ describe("CodexChatTab", () => {
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
 
     expect(await screen.findByText(message)).toBeTruthy();
-    expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
-    expect(mockStartCodexServer).not.toHaveBeenCalled();
+    expect(mockCreateClient).not.toHaveBeenCalled();
+  });
+
+  test("does not install the bridge client when readiness resolves after unmount", async () => {
+    // `awaitBridgeReady` can block for the full readiness timeout. A tab that
+    // is gone by the time it resolves must not write the client or the server
+    // status into the environment-scoped store.
+    useCodexStore.setState({
+      clients: new Map(),
+      sessions: new Map(),
+      serverStatus: new Map(),
+    });
+    const readiness = deferred<{
+      status: "ready";
+      port: number;
+      authToken: string;
+    }>();
+    mockAwaitBridgeReady.mockImplementationOnce(() => readiness.promise);
+
+    const view = render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockAwaitBridgeReady).toHaveBeenCalled());
+
+    view.unmount();
+
+    await act(async () => {
+      readiness.resolve({ status: "ready", port: 7781, authToken: "late-token" });
+      await readiness.promise;
+    });
+
+    expect(mockCreateClient).not.toHaveBeenCalled();
+    expect(useCodexStore.getState().clients.get(ENVIRONMENT_ID)).toBeUndefined();
+    expect(useCodexStore.getState().serverStatus.get(ENVIRONMENT_ID)).toBeUndefined();
   });
 
   test("renders a friendly catalog label for the backend-confirmed assistant model", async () => {
@@ -1719,7 +1703,7 @@ describe("CodexChatTab", () => {
         agentHandoffId={handoffId}
       />,
     );
-    expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
+    expect(mockAwaitBridgeReady).not.toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -2523,7 +2507,7 @@ describe("CodexChatTab", () => {
     );
 
     await waitFor(() => {
-      expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
+      expect(mockAwaitBridgeReady).not.toHaveBeenCalled();
     });
     const tab = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)
       .find((candidate) => candidate.id === TAB_ID);
@@ -3464,13 +3448,15 @@ describe("CodexChatTab", () => {
 
   test("defers active hydration until a cold connection becomes ready", async () => {
     const external = createMessage("connected-later-external", "Started before connect");
-    const bridgeStatus = deferred<{
-      running: boolean;
-      hostPort: number;
+    const bridgeReady = deferred<{
+      status: "ready";
+      port: number;
       authToken: string;
     }>();
     useCodexStore.setState({ clients: new Map(), sessions: new Map() });
-    mockGetCodexServerStatus.mockImplementationOnce(() => bridgeStatus.promise);
+    // The cold connection is gated on backend readiness, which is what defers
+    // hydration: nothing may reach the transcript until this resolves.
+    mockAwaitBridgeReady.mockImplementationOnce(() => bridgeReady.promise);
     mockLookupSessionStatus.mockResolvedValue({
       kind: "found",
       session: { status: "running", phase: "running" },
@@ -3488,13 +3474,18 @@ describe("CodexChatTab", () => {
     );
     view.rerender(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
 
+    // While readiness is pending nothing may hydrate: no client, no transcript.
+    await act(async () => { await Promise.resolve(); });
+    expect(mockGetSessionMessages).not.toHaveBeenCalled();
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toBeUndefined();
+
     await act(async () => {
-      bridgeStatus.resolve({
-        running: true,
-        hostPort: 9999,
+      bridgeReady.resolve({
+        status: "ready",
+        port: 9999,
         authToken: "container-test-token",
       });
-      await bridgeStatus.promise;
+      await bridgeReady.promise;
     });
 
     await waitFor(() => {

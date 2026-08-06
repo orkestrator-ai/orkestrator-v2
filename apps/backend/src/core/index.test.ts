@@ -67,6 +67,79 @@ test("activity transition events omit backend-only provider session identifiers"
   await backend.shutdown();
 });
 
+test("probes for an agent-created PR on the backend's own agent-idle edge", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-idle-probe-"));
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    agentTools: fakeAgentTools(),
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  });
+  try {
+    expect(backend.hasCommand("pr_monitor_probe_environment")).toBe(true);
+    const internal = backend as unknown as {
+      context: { storage: StorageService };
+      nativeAgents: {
+        options: {
+          onActivityTransition?: (event: Record<string, unknown>) => void;
+        };
+      };
+    };
+    const transition = internal.nativeAgents.options.onActivityTransition;
+    // The probe's first act is reading the environment it was asked about, so
+    // this counts probes without letting a real `gh` run.
+    const getEnvironment = spyOn(internal.context.storage, "getEnvironment");
+    const session = { sessionKey: "private-key", providerSessionId: "private-provider" };
+
+    // A first observation is a restart or an adopted session, not a turn that
+    // ended here; a turn that just started is not a completion either. Neither
+    // may cost a `gh` call.
+    transition?.({ environmentId: "env-1", ...session, state: "idle" });
+    transition?.({
+      environmentId: "env-1",
+      ...session,
+      previousState: "idle",
+      state: "working",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(getEnvironment).not.toHaveBeenCalled();
+
+    transition?.({
+      environmentId: "env-1",
+      ...session,
+      previousState: "working",
+      state: "idle",
+    });
+    await waitForCondition(
+      () => getEnvironment.mock.calls.length === 1,
+      "the ended turn to probe once",
+    );
+    expect(getEnvironment).toHaveBeenLastCalledWith("env-1");
+
+    // A parked turn that is finally released ends the turn too.
+    transition?.({
+      environmentId: "env-1",
+      ...session,
+      previousState: "waiting",
+      state: "idle",
+    });
+    await waitForCondition(
+      () => getEnvironment.mock.calls.length === 2,
+      "the released turn to probe once",
+    );
+    expect(getEnvironment).toHaveBeenCalledTimes(2);
+  } finally {
+    await backend.shutdown().catch(() => undefined);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("wires observe-only monitoring and its adoption kill switch from the environment", async () => {
   const observeKey = "ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY";
   const killSwitchKey = "ORKESTRATOR_AGENT_INTERACTION_MONITOR_KILL_SWITCH";
@@ -364,11 +437,18 @@ test("reports registered commands and routes agent completion through the regist
       context: {
         storage: StorageService;
         notifyAgentTurnCompleted: (environmentId: string) => Promise<void>;
+        probeAgentCreatedPullRequest: (environmentId: string) => Promise<void>;
       };
     };
     const getEnvironment = spyOn(internal.context.storage, "getEnvironment");
     await internal.context.notifyAgentTurnCompleted("missing-env");
     expect(getEnvironment).toHaveBeenCalledWith("missing-env");
+
+    // The tmux poll loop reaches the probe through this hook rather than
+    // importing the registry, so it has to route the same way.
+    await internal.context.probeAgentCreatedPullRequest("missing-env");
+    expect(getEnvironment).toHaveBeenCalledTimes(2);
+    expect(getEnvironment).toHaveBeenLastCalledWith("missing-env");
   } finally {
     await backend.shutdown().catch(() => undefined);
     await fs.rm(dataDir, { recursive: true, force: true });

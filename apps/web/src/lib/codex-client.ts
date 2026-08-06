@@ -1158,8 +1158,9 @@ export async function lookupSessionActivity(
   try {
     const response = await fetchCodex(client, `/session/${sessionId}/activity`);
     // Older bridges predate this non-touching route. A 404 cannot mean the
-    // session is missing because current bridges report that in-band; let the
-    // caller fall back to the legacy status endpoint instead.
+    // session is missing because current bridges report that in-band, so this
+    // is reported as its own kind rather than as `missing`. Callers must not
+    // fall back to `/status`: polling that route keeps an idle thread attached.
     if (response.status === 404) return { kind: "unsupported" };
     if (!response.ok) throw new Error(`Failed to get Codex session activity: HTTP ${response.status}`);
     const body = await response.json() as { activity?: unknown };

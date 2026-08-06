@@ -3702,9 +3702,27 @@ export class AppServerRuntime {
           };
         }
         const staleContext = context;
-        const reboundContext = await this.ensureAttached(session.id);
+        let reboundContext = await this.ensureAttached(session.id);
+        // The replacement child can still be inside supervisor startup when the
+        // delay expires. In that case the wait above observes the prior settled
+        // recovery; ensureAttached is the RPC that finishes startup and publishes
+        // the new generation event. Wait again, then discard any context that
+        // recovery detached while that RPC was in flight.
+        await this.generationRecovery;
+        reboundContext = this.registry.getThreadForSession(session.id);
         if (reboundContext) {
           context = reboundContext;
+          // Recovery can win the race and create the replacement canonical
+          // context before this retry resumes. That context may have hydrated an
+          // empty, not-yet-materialized rollout, so carry the optimistic exchange
+          // just as the explicit thread/start path below does. Merge by id in
+          // case re-attachment did recover part of the same transcript.
+          if (context.messages !== retryMessages) {
+            const reboundMessageIds = new Set(context.messages.map((message) => message.id));
+            context.messages.push(
+              ...retryMessages.filter((message) => !reboundMessageIds.has(message.id)),
+            );
+          }
         } else {
           let thread;
           try {

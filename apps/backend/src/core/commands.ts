@@ -7836,139 +7836,193 @@ function comparableProjectPath(value: string): string {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
+async function canonicalProjectPath(value: string): Promise<string> {
+  const resolved = path.resolve(value);
+  const missingSegments: string[] = [];
+  let existingAncestor = resolved;
+
+  while (true) {
+    try {
+      await fs.lstat(existingAncestor);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = path.dirname(existingAncestor);
+      if (parent === existingAncestor) throw error;
+      missingSegments.unshift(path.basename(existingAncestor));
+      existingAncestor = parent;
+    }
+  }
+
+  return path.join(await fs.realpath(existingAncestor), ...missingSegments);
+}
+
 async function createProjectFromScratch(
   requestedPath: string,
   storage: StorageService,
   run: typeof runCommand,
 ): Promise<Project> {
   const projectPath = resolveNewProjectPath(requestedPath);
-  const projectPathKey = comparableProjectPath(projectPath);
-  const existingProjects = await storage.loadProjects();
-  if (existingProjects.some((project) => (
-    project.localPath !== null
-    && comparableProjectPath(project.localPath) === projectPathKey
-  ))) {
-    throw new Error(`A project already uses this local path: ${projectPath}`);
+  const repositoryName = path.basename(projectPath);
+  if (repositoryName.startsWith("-")) {
+    throw new Error("Project folder name cannot begin with a dash");
   }
+  const projectPathKey = comparableProjectPath(await canonicalProjectPath(projectPath));
 
-  let createdDirectory = false;
-  let attemptedGitInit = false;
-  let createdRemote = false;
-
-  try {
-    let stats;
-    try {
-      stats = await fs.lstat(projectPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      const firstCreatedPath = await fs.mkdir(projectPath, { recursive: true });
-      createdDirectory = firstCreatedPath !== undefined;
-      stats = await fs.lstat(projectPath);
-    }
-
-    if (stats.isSymbolicLink() || !stats.isDirectory()) {
-      throw new Error("Project path must be a directory and cannot be a symbolic link");
-    }
-    if ((await fs.readdir(projectPath)).length > 0) {
-      throw new Error("Project path must be new or an empty directory");
-    }
-
-    try {
-      attemptedGitInit = true;
-      await run("git", ["-C", projectPath, "init", "-b", "main"], {
-        timeoutMs: 30_000,
-      });
-    } catch (error) {
-      const detail = error instanceof CommandFailedError && error.executableMissing
-        ? "Git is not installed or available on PATH"
-        : conciseError(error);
-      throw new Error(`Could not initialize the Git repository: ${detail}`);
-    }
-
-    try {
-      await run("git", [
-        "-C",
-        projectPath,
-        "-c",
-        "user.name=Orkestrator",
-        "-c",
-        "user.email=projects@orkestrator.local",
-        "commit",
-        "--allow-empty",
-        "--no-gpg-sign",
-        "-m",
-        "Initial commit",
-      ], { timeoutMs: 30_000 });
-    } catch (error) {
-      throw new Error(`Could not create the initial Git commit: ${conciseError(error)}`);
-    }
-
-    const repositoryName = path.basename(projectPath);
-    try {
-      await run("gh", [
-        "repo",
-        "create",
-        repositoryName,
-        "--private",
-        `--source=${projectPath}`,
-        "--remote=origin",
-        "--push",
-      ], { timeoutMs: 120_000 });
-      createdRemote = true;
-    } catch (error) {
-      const detail = error instanceof CommandFailedError && error.executableMissing
-        ? "GitHub CLI is not installed. Install gh and run `gh auth login`, then retry"
-        : conciseError(error);
-      throw new Error(`Could not create the private GitHub repository: ${detail}`);
-    }
-
-    const { stdout } = await run(
-      "git",
-      ["-C", projectPath, "remote", "get-url", "origin"],
-      { timeoutMs: 10_000 },
-    );
-    const gitUrl = stdout.trim();
-    if (!gitUrl) throw new Error("GitHub CLI did not configure the origin remote");
-
-    return await storage.addProject(createProject(gitUrl, projectPath));
-  } catch (error) {
-    if (!createdRemote) {
-      if (createdDirectory) {
-        try {
-          const cleanupStats = await fs.lstat(projectPath);
-          if (cleanupStats.isDirectory() && !cleanupStats.isSymbolicLink()) {
-            const entries = await fs.readdir(projectPath);
-            if (entries.every((entry) => entry === ".git")) {
-              await fs.rm(projectPath, { recursive: true, force: true });
-            } else if (attemptedGitInit && entries.includes(".git")) {
-              await fs.rm(path.join(projectPath, ".git"), { recursive: true, force: true });
-            }
-          }
-        } catch {
-          // Rollback is best effort; retain the original actionable failure.
-        }
-      } else if (attemptedGitInit) {
-        try {
-          const cleanupStats = await fs.lstat(projectPath);
-          if (cleanupStats.isDirectory() && !cleanupStats.isSymbolicLink()) {
-            const entries = await fs.readdir(projectPath);
-            if (entries.includes(".git")) {
-              await fs.rm(path.join(projectPath, ".git"), { recursive: true, force: true });
-            }
-          }
-        } catch {
-          // Rollback is best effort; retain the original actionable failure.
-        }
+  return storage.withProjectCreationLock(projectPathKey, async () => {
+    const existingProjects = await storage.loadProjects();
+    for (const project of existingProjects) {
+      if (project.localPath === null) continue;
+      let existingPathKey: string;
+      try {
+        existingPathKey = comparableProjectPath(await canonicalProjectPath(project.localPath));
+      } catch {
+        existingPathKey = comparableProjectPath(project.localPath);
+      }
+      if (existingPathKey === projectPathKey) {
+        throw new Error(`A project already uses this local path: ${projectPath}`);
       }
     }
-    if (createdRemote) {
-      throw new Error(
-        "The local and private GitHub repositories were created, but Orkestrator could not add the project. "
-        + `Add the existing repository instead. ${conciseError(error)}`,
+
+    let createdDirectory = false;
+    let attemptedGitInit = false;
+    const remote = { state: "none" as "none" | "ambiguous" | "created" };
+
+    try {
+      let stats;
+      try {
+        stats = await fs.lstat(projectPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        const firstCreatedPath = await fs.mkdir(projectPath, { recursive: true });
+        createdDirectory = firstCreatedPath !== undefined;
+        stats = await fs.lstat(projectPath);
+      }
+
+      if (stats.isSymbolicLink() || !stats.isDirectory()) {
+        throw new Error("Project path must be a directory and cannot be a symbolic link");
+      }
+      if ((await fs.readdir(projectPath)).length > 0) {
+        throw new Error("Project path must be new or an empty directory");
+      }
+
+      try {
+        attemptedGitInit = true;
+        await run("git", ["-C", projectPath, "init", "-b", "main"], {
+          timeoutMs: 30_000,
+        });
+      } catch (error) {
+        const detail = error instanceof CommandFailedError && error.executableMissing
+          ? "Git is not installed or available on PATH"
+          : conciseError(error);
+        throw new Error(`Could not initialize the Git repository: ${detail}`);
+      }
+
+      try {
+        await run("git", [
+          "-C",
+          projectPath,
+          "-c",
+          "user.name=Orkestrator",
+          "-c",
+          "user.email=projects@orkestrator.local",
+          "commit",
+          "--allow-empty",
+          "--no-gpg-sign",
+          "-m",
+          "Initial commit",
+        ], { timeoutMs: 30_000 });
+      } catch (error) {
+        throw new Error(`Could not create the initial Git commit: ${conciseError(error)}`);
+      }
+
+      try {
+        // A timeout or transport error may arrive after GitHub accepted the API
+        // request. Mark the outcome ambiguous before invoking gh so rollback
+        // never deletes the only recoverable local repository in that case.
+        remote.state = "ambiguous";
+        await run("gh", [
+          "repo",
+          "create",
+          repositoryName,
+          "--private",
+          `--source=${projectPath}`,
+          "--remote=origin",
+        ], {
+          timeoutMs: 120_000,
+        });
+        remote.state = "created";
+      } catch (error) {
+        if (error instanceof CommandFailedError && error.executableMissing) {
+          remote.state = "none";
+          throw new Error(
+            "Could not create the private GitHub repository: GitHub CLI is not installed. "
+            + "Install gh and run `gh auth login`, then retry",
+          );
+        }
+        throw new Error(`Could not create the private GitHub repository: ${conciseError(error)}`);
+      }
+
+      const { stdout } = await run(
+        "git",
+        ["-C", projectPath, "remote", "get-url", "origin"],
+        { timeoutMs: 10_000 },
       );
+      const gitUrl = stdout.trim();
+      if (!gitUrl) throw new Error("Could not verify the origin remote");
+
+      await run(
+        "git",
+        ["-C", projectPath, "push", "--set-upstream", "origin", "main"],
+        { timeoutMs: 120_000 },
+      );
+
+      return await storage.addProject(createProject(gitUrl, projectPath));
+    } catch (error) {
+      if (remote.state === "none") {
+        if (createdDirectory) {
+          try {
+            const cleanupStats = await fs.lstat(projectPath);
+            if (cleanupStats.isDirectory() && !cleanupStats.isSymbolicLink()) {
+              const entries = await fs.readdir(projectPath);
+              if (entries.every((entry) => entry === ".git")) {
+                await fs.rm(projectPath, { recursive: true, force: true });
+              } else if (attemptedGitInit && entries.includes(".git")) {
+                await fs.rm(path.join(projectPath, ".git"), { recursive: true, force: true });
+              }
+            }
+          } catch {
+            // Rollback is best effort; retain the original actionable failure.
+          }
+        } else if (attemptedGitInit) {
+          try {
+            const cleanupStats = await fs.lstat(projectPath);
+            if (cleanupStats.isDirectory() && !cleanupStats.isSymbolicLink()) {
+              const entries = await fs.readdir(projectPath);
+              if (entries.includes(".git")) {
+                await fs.rm(path.join(projectPath, ".git"), { recursive: true, force: true });
+              }
+            }
+          } catch {
+            // Rollback is best effort; retain the original actionable failure.
+          }
+        }
+      }
+      if (remote.state === "created") {
+        throw new Error(
+          "The local and private GitHub repositories were created, but Orkestrator could not finish setup. "
+          + `Add the existing repository instead. ${conciseError(error)}`,
+        );
+      }
+      if (remote.state === "ambiguous") {
+        throw new Error(
+          "The local Git repository was preserved because GitHub may have created the private repository. "
+          + `Check GitHub before retrying. ${conciseError(error)}`,
+        );
+      }
+      throw error;
     }
-    throw error;
-  }
+  });
 }
 
 export function createCommandRegistry(

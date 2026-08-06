@@ -48,6 +48,7 @@ export function AddProjectDialog({
   const [error, setError] = useState<string | null>(null);
   const [isValidUrl, setIsValidUrl] = useState<boolean | null>(null);
   const validationRequestRef = useRef(0);
+  const submissionInFlightRef = useRef(false);
 
   const resetForm = useCallback(() => {
     validationRequestRef.current += 1;
@@ -153,6 +154,8 @@ export function AddProjectDialog({
     async (event: React.FormEvent) => {
       event.preventDefault();
 
+      if (submissionInFlightRef.current) return;
+
       if (source === "existing") {
         if (!gitUrl.trim()) {
           setError("Git URL is required");
@@ -167,6 +170,7 @@ export function AddProjectDialog({
         return;
       }
 
+      submissionInFlightRef.current = true;
       setIsLoading(true);
       setError(null);
       try {
@@ -185,6 +189,7 @@ export function AddProjectDialog({
               : "Failed to add project",
         );
       } finally {
+        submissionInFlightRef.current = false;
         setIsLoading(false);
       }
     },

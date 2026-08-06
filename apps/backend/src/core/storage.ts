@@ -1570,6 +1570,8 @@ export class StorageService {
   /** Process identity: client revision knowledge never crosses this boundary. */
   private readonly resourceGeneration = randomBytes(16).toString("hex");
   private writeQueue = Promise.resolve();
+  private projectMutationQueue: Promise<unknown> = Promise.resolve();
+  private readonly projectCreationMutationQueues = new Map<string, Promise<unknown>>();
   private environmentMutationQueue: Promise<unknown> = Promise.resolve();
   private configMutationQueue: Promise<unknown> = Promise.resolve();
   private openCodeModelCatalogMutationQueue: Promise<unknown> = Promise.resolve();
@@ -1950,6 +1952,58 @@ export class StorageService {
     return next;
   }
 
+  /**
+   * Serializes every projects.json read-modify-write in this process and across
+   * backend processes sharing the same data directory.
+   */
+  private enqueueProjectMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.projectsFile(),
+        "project storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.projectMutationQueue.then(run, run);
+    this.projectMutationQueue = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  /**
+   * Reserves one canonical local path for the complete repository creation
+   * transaction. The hashed lock filename avoids putting user paths in storage
+   * or logs while still coordinating backend processes that share dataDir.
+   */
+  async withProjectCreationLock<T>(
+    canonicalProjectPath: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const key = createHash("sha256").update(canonicalProjectPath).digest("hex");
+    const target = this.file(path.join("project-creation-locks", key));
+    const previous = this.projectCreationMutationQueues.get(key) ?? Promise.resolve();
+    const run = async () => {
+      const release = await this.acquireMutationLock(target, "project creation");
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = previous.then(run, run);
+    const settled = next.then(() => undefined, () => undefined);
+    this.projectCreationMutationQueues.set(key, settled);
+    void settled.finally(() => {
+      if (this.projectCreationMutationQueues.get(key) === settled) {
+        this.projectCreationMutationQueues.delete(key);
+      }
+    });
+    return next;
+  }
+
   private enqueueConfigMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
       const release = await this.acquireConfigMutationLock();
@@ -2310,23 +2364,28 @@ export class StorageService {
   }
 
   async addProject(project: Project): Promise<Project> {
-    const projects = await this.loadProjects();
-    if (projects.some((candidate) => candidate.gitUrl === project.gitUrl)) {
-      throw new Error(`Duplicate project URL: ${project.gitUrl}`);
-    }
+    const added = await this.enqueueProjectMutation(async () => {
+      const projects = await this.loadProjects();
+      if (projects.some((candidate) => candidate.gitUrl === project.gitUrl)) {
+        throw new Error(`Duplicate project URL: ${project.gitUrl}`);
+      }
 
-    project.order = Math.max(-1, ...projects.map((item) => item.order)) + 1;
-    projects.push(project);
-    await this.saveJson(this.projectsFile(), projects);
+      project.order = Math.max(-1, ...projects.map((item) => item.order)) + 1;
+      projects.push(project);
+      await this.saveJson(this.projectsFile(), projects);
+      return project;
+    });
     this.announce("project", project.id);
-    return project;
+    return added;
   }
 
   async removeProject(projectId: string): Promise<void> {
-    const projects = await this.loadProjects();
-    const filtered = projects.filter((project) => project.id !== projectId);
-    if (filtered.length === projects.length) throw new Error(`Project not found: ${projectId}`);
-    await this.saveJson(this.projectsFile(), filtered);
+    await this.enqueueProjectMutation(async () => {
+      const projects = await this.loadProjects();
+      const filtered = projects.filter((project) => project.id !== projectId);
+      if (filtered.length === projects.length) throw new Error(`Project not found: ${projectId}`);
+      await this.saveJson(this.projectsFile(), filtered);
+    });
     await this.deleteComposeDraftsByProject(projectId);
     this.announce("project", projectId);
   }
@@ -2336,32 +2395,38 @@ export class StorageService {
   }
 
   async updateProject(projectId: string, updates: Partial<Pick<Project, "name" | "localPath">>): Promise<Project> {
-    const projects = await this.loadProjects();
-    const project = projects.find((candidate) => candidate.id === projectId);
-    if (!project) throw new Error(`Project not found: ${projectId}`);
-    if (typeof updates.name === "string") project.name = updates.name;
-    if ("localPath" in updates) project.localPath = updates.localPath ?? null;
-    await this.saveJson(this.projectsFile(), projects);
+    const project = await this.enqueueProjectMutation(async () => {
+      const projects = await this.loadProjects();
+      const project = projects.find((candidate) => candidate.id === projectId);
+      if (!project) throw new Error(`Project not found: ${projectId}`);
+      if (typeof updates.name === "string") project.name = updates.name;
+      if ("localPath" in updates) project.localPath = updates.localPath ?? null;
+      await this.saveJson(this.projectsFile(), projects);
+      return project;
+    });
     this.announce("project", projectId);
     return project;
   }
 
   async reorderProjects(projectIds: string[]): Promise<Project[]> {
-    const projects = await this.loadProjects();
-    const provided = new Set(projectIds);
-    for (const [index, id] of projectIds.entries()) {
-      const project = projects.find((candidate) => candidate.id === id);
-      if (project) project.order = index;
-    }
+    const projects = await this.enqueueProjectMutation(async () => {
+      const projects = await this.loadProjects();
+      const provided = new Set(projectIds);
+      for (const [index, id] of projectIds.entries()) {
+        const project = projects.find((candidate) => candidate.id === id);
+        if (project) project.order = index;
+      }
 
-    let order = projectIds.length;
-    for (const project of projects) {
-      if (!provided.has(project.id)) project.order = order++;
-    }
+      let order = projectIds.length;
+      for (const project of projects) {
+        if (!provided.has(project.id)) project.order = order++;
+      }
 
-    await this.saveJson(this.projectsFile(), projects);
+      await this.saveJson(this.projectsFile(), projects);
+      return projects.sort((a, b) => a.order - b.order);
+    });
     for (const project of projects) this.announce("project", project.id);
-    return projects.sort((a, b) => a.order - b.order);
+    return projects;
   }
 
   async loadEnvironments(): Promise<Environment[]> {

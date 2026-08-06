@@ -137,6 +137,27 @@ same readiness assertion.
 
 Status: monitoring; not reproduced in the normal aggregate suite.
 
+### `Electron backend command registry > backend-owned diff statistics > invalidates the shared file-list cache after local revert and delete`
+
+- Test file: `tests/unit/electron/commands.test.ts:6345`
+- Aggregate command: `bun run test` (root group:
+  `bun test tests --parallel=4`)
+- Aggregate result: 3,685 passed, 1 skipped, 10 failed; nine failures were
+  deterministic UI regressions from the reviewed change and this was the only
+  unrelated failure.
+- Failed duration: 3,397.10 ms
+- Failure: `Timed out waiting for changed file to be cached again`.
+- Isolated command: `bun test tests/unit/electron/commands.test.ts`
+- Isolated result: 362 passed, 1 skipped, 0 failed; the target passed in
+  195.34 ms.
+
+The aggregate failure exhausted the test's cache-repopulation deadline while
+the same behavior completed quickly in isolation. This is consistent with
+aggregate scheduling or filesystem-watcher latency, but no narrower root cause
+has yet been reproduced.
+
+Status: open; passed in isolation after failing in the normal parallel suite.
+
 ## Final aggregate verification
 
 The final `bun run test` completed successfully on 2026-08-06:

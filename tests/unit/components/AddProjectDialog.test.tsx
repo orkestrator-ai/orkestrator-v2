@@ -43,17 +43,18 @@ describe("AddProjectDialog", () => {
     window.orkestratorGateway = originalGateway;
   });
 
-  test("caps the dialog width at 6xl", () => {
+  test("caps the dialog width at 2xl", () => {
     render(
       <AddProjectDialog
         open
         onOpenChange={() => {}}
         onAdd={async () => {}}
+        onCreate={async () => {}}
         validateGitUrl={async () => true}
       />
     );
 
-    expect(screen.getByRole("dialog").className).toContain("sm:max-w-6xl");
+    expect(screen.getByRole("dialog").className).toContain("sm:max-w-2xl");
   });
 
   test("detects the Git remote for a path entered in a browser client", async () => {
@@ -66,11 +67,12 @@ describe("AddProjectDialog", () => {
         open
         onOpenChange={() => {}}
         onAdd={async () => {}}
+        onCreate={async () => {}}
         validateGitUrl={validateGitUrl}
       />
     );
 
-    fireEvent.change(screen.getByLabelText(/Local Path/), {
+    fireEvent.change(screen.getByLabelText(/Local path/i), {
       target: { value: "/srv/repos/project" },
     });
     fireEvent.click(screen.getByRole("button", {
@@ -83,7 +85,7 @@ describe("AddProjectDialog", () => {
     expect(openDialogMock).toHaveBeenCalledWith({
       directory: true,
       multiple: false,
-      title: "Select Repository Directory",
+      title: "Select repository directory",
       defaultPath: "/srv/repos/project",
     });
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
@@ -105,7 +107,7 @@ describe("AddProjectDialog", () => {
     await waitFor(() => {
       expect(getGitRemoteUrlMock).toHaveBeenCalledWith("/Users/alice/project");
     });
-    expect((screen.getByLabelText(/Local Path/) as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText(/Local path/i) as HTMLInputElement).value).toBe(
       "/Users/alice/project"
     );
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
@@ -115,7 +117,7 @@ describe("AddProjectDialog", () => {
 
   test("does not inspect the typed path when the native picker is cancelled", async () => {
     renderDialog();
-    fireEvent.change(screen.getByLabelText(/Local Path/), {
+    fireEvent.change(screen.getByLabelText(/Local path/i), {
       target: { value: "/Users/alice/project" },
     });
     fireEvent.click(screen.getByRole("button", {
@@ -242,6 +244,35 @@ describe("AddProjectDialog", () => {
     expect(screen.getByText("Enter a valid Git URL (SSH or HTTPS format)")).toBeTruthy();
   });
 
+  test("shows a generic message for a non-Error URL validation failure", async () => {
+    renderDialog({
+      validateGitUrl: mock(async () => {
+        throw "failed";
+      }),
+    });
+
+    fireEvent.change(screen.getByLabelText(/Git URL/i), {
+      target: { value: "https://github.com/acme/project.git" },
+    });
+
+    expect(await screen.findByText("Failed to validate Git URL")).toBeTruthy();
+  });
+
+  test("does not add an existing project with an empty Git URL", async () => {
+    const onAdd = mock(async () => undefined);
+    renderDialog({ onAdd });
+    const submitButton = screen.getByRole("button", { name: "Add project" });
+
+    expect((submitButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(submitButton.closest("form")!);
+
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Git URL is required",
+    );
+    expect(onAdd).not.toHaveBeenCalled();
+  });
+
   test("submits trimmed values and resets after success", async () => {
     const onAdd = mock(async () => undefined);
     const onOpenChange = mock(() => undefined);
@@ -249,11 +280,11 @@ describe("AddProjectDialog", () => {
     fireEvent.change(screen.getByLabelText(/Git URL/), {
       target: { value: "  https://github.com/acme/project.git  " },
     });
-    fireEvent.change(screen.getByLabelText(/Local Path/), {
+    fireEvent.change(screen.getByLabelText(/Local path/i), {
       target: { value: "  /Users/alice/project  " },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Add Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
 
     await waitFor(() => expect(onAdd).toHaveBeenCalledWith(
       "https://github.com/acme/project.git",
@@ -261,7 +292,7 @@ describe("AddProjectDialog", () => {
     ));
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText(/Local Path/) as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText(/Local path/i) as HTMLInputElement).value).toBe("");
   });
 
   test("keeps the dialog state and shows a generic non-Error submission failure", async () => {
@@ -274,13 +305,31 @@ describe("AddProjectDialog", () => {
       target: { value: "https://github.com/acme/project.git" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Add Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
 
     expect(await screen.findByText("Failed to add project")).toBeTruthy();
     expect(onOpenChange).not.toHaveBeenCalled();
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
       "https://github.com/acme/project.git"
     );
+  });
+
+  test("shows an existing-project Error message and omits a blank local path", async () => {
+    const onAdd = mock(async (_gitUrl: string, localPath?: string) => {
+      expect(localPath).toBeUndefined();
+      throw new Error("repository already exists");
+    });
+    renderDialog({ onAdd });
+    fireEvent.change(screen.getByLabelText(/Git URL/i), {
+      target: { value: "https://github.com/acme/project.git" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "repository already exists",
+    );
+    expect(onAdd).toHaveBeenCalledWith("https://github.com/acme/project.git", undefined);
   });
 
   test("blocks submission after URL validation reports invalid", async () => {
@@ -291,7 +340,7 @@ describe("AddProjectDialog", () => {
     });
     await screen.findByText("Enter a valid Git URL (SSH or HTTPS format)");
 
-    fireEvent.click(screen.getByRole("button", { name: "Add Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
 
     expect(await screen.findByText("Invalid Git URL format")).toBeTruthy();
     expect(onAdd).not.toHaveBeenCalled();
@@ -303,7 +352,7 @@ describe("AddProjectDialog", () => {
     fireEvent.change(screen.getByLabelText(/Git URL/), {
       target: { value: "https://github.com/acme/project.git" },
     });
-    fireEvent.change(screen.getByLabelText(/Local Path/), {
+    fireEvent.change(screen.getByLabelText(/Local path/i), {
       target: { value: "/Users/alice/project" },
     });
 
@@ -311,9 +360,226 @@ describe("AddProjectDialog", () => {
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText(/Local Path/) as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText(/Local path/i) as HTMLInputElement).value).toBe("");
+  });
+
+  test("selects a scratch project path with the native picker", async () => {
+    openDialogMock.mockResolvedValue("/Users/alice/new-project");
+    renderDialog();
+    selectScratchTab();
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose an empty project folder" }));
+
+    await waitFor(() => expect(openDialogMock).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+      title: "Choose an empty project folder",
+      defaultPath: undefined,
+    }));
+    expect((screen.getByLabelText(/Project path/i) as HTMLInputElement).value).toBe(
+      "/Users/alice/new-project",
+    );
+  });
+
+  test("uses the typed scratch path when the gateway picker has no native result", async () => {
+    window.orkestratorGateway = { enabled: true };
+    renderDialog();
+    selectScratchTab();
+    fireEvent.change(screen.getByLabelText(/Project path/i), {
+      target: { value: "  /srv/projects/new-project  " },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose an empty project folder" }));
+
+    await waitFor(() => expect(openDialogMock).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+      title: "Choose an empty project folder",
+      defaultPath: "/srv/projects/new-project",
+    }));
+    expect((screen.getByLabelText(/Project path/i) as HTMLInputElement).value).toBe(
+      "/srv/projects/new-project",
+    );
+  });
+
+  test("preserves the typed scratch path when the native picker is cancelled", async () => {
+    renderDialog();
+    selectScratchTab();
+    fireEvent.change(screen.getByLabelText(/Project path/i), {
+      target: { value: "/Users/alice/new-project" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose an empty project folder" }));
+
+    await waitFor(() => expect(openDialogMock).toHaveBeenCalledTimes(1));
+    expect((screen.getByLabelText(/Project path/i) as HTMLInputElement).value).toBe(
+      "/Users/alice/new-project",
+    );
+  });
+
+  test("logs a scratch directory picker failure and preserves the entered path", async () => {
+    const originalConsoleError = console.error;
+    const consoleErrorMock = mock(() => undefined);
+    console.error = consoleErrorMock as typeof console.error;
+
+    try {
+      openDialogMock.mockRejectedValue(new Error("picker failed"));
+      renderDialog();
+      selectScratchTab();
+      fireEvent.change(screen.getByLabelText(/Project path/i), {
+        target: { value: "/Users/alice/new-project" },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Choose an empty project folder" }));
+
+      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
+        "Failed to open directory picker:",
+        expect.any(Error),
+      ));
+      expect((screen.getByLabelText(/Project path/i) as HTMLInputElement).value).toBe(
+        "/Users/alice/new-project",
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("submits a trimmed scratch path and resets to the existing tab", async () => {
+    const onCreate = mock(async () => undefined);
+    const onOpenChange = mock(() => undefined);
+    renderDialog({ onCreate, onOpenChange });
+    selectScratchTab();
+    fireEvent.change(screen.getByLabelText(/Project path/i), {
+      target: { value: "  /Users/alice/new-project  " },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith("/Users/alice/new-project"));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.getByRole("tab", { name: "Existing repository" }).getAttribute("data-state"))
+      .toBe("active");
+    expect((screen.getByLabelText(/Git URL/i) as HTMLInputElement).value).toBe("");
+  });
+
+  test("clears errors when switching source tabs", async () => {
+    renderDialog({
+      onCreate: mock(async () => {
+        throw new Error("creation failed");
+      }),
+    });
+    selectScratchTab();
+    fireEvent.change(screen.getByLabelText(/Project path/i), {
+      target: { value: "/Users/alice/new-project" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("creation failed");
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Existing repository" }), { button: 0 });
+
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  test("clears a scratch creation error when the project path changes", async () => {
+    renderDialog({
+      onCreate: mock(async () => {
+        throw new Error("creation failed");
+      }),
+    });
+    selectScratchTab();
+    const pathInput = screen.getByLabelText(/Project path/i);
+    fireEvent.change(pathInput, { target: { value: "/Users/alice/new-project" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+
+    fireEvent.change(pathInput, { target: { value: "/Users/alice/another-project" } });
+
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  test("shows a generic message for a non-Error scratch creation failure", async () => {
+    const onCreate = mock(async () => {
+      throw "failed";
+    });
+    const onOpenChange = mock(() => undefined);
+    renderDialog({ onCreate, onOpenChange });
+    selectScratchTab();
+    fireEvent.change(screen.getByLabelText(/Project path/i), {
+      target: { value: "/Users/alice/new-project" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Failed to create project");
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  test("does not create a project from a whitespace-only scratch path", async () => {
+    const onCreate = mock(async () => undefined);
+    renderDialog({ onCreate });
+    selectScratchTab();
+    fireEvent.change(screen.getByLabelText(/Project path/i), {
+      target: { value: "   " },
+    });
+    const submitButton = screen.getByRole("button", { name: "Create project" });
+
+    expect((submitButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(submitButton.closest("form")!);
+
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Project path is required",
+    );
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
+  test("ignores duplicate scratch submissions while creation is pending", async () => {
+    let resolveCreation!: () => void;
+    const onCreate = mock(() => new Promise<void>((resolve) => {
+      resolveCreation = resolve;
+    }));
+    const onOpenChange = mock(() => undefined);
+    renderDialog({ onCreate, onOpenChange });
+    selectScratchTab();
+    fireEvent.change(screen.getByLabelText(/Project path/i), {
+      target: { value: "/Users/alice/new-project" },
+    });
+    const submitButton = screen.getByRole("button", { name: "Create project" });
+    const form = submitButton.closest("form");
+    expect(form).not.toBeNull();
+
+    fireEvent.submit(form!);
+    fireEvent.submit(form!);
+
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect((submitButton as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => resolveCreation());
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  test("invalidates pending URL validation when the dialog closes", async () => {
+    let resolveValidation!: (valid: boolean) => void;
+    const validateGitUrl = mock(() => new Promise<boolean>((resolve) => {
+      resolveValidation = resolve;
+    }));
+    const onOpenChange = mock(() => undefined);
+    renderDialog({ validateGitUrl, onOpenChange });
+    fireEvent.change(screen.getByLabelText(/Git URL/i), {
+      target: { value: "https://github.com/acme/project.git" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => resolveValidation(false));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect((screen.getByLabelText(/Git URL/i) as HTMLInputElement).value).toBe("");
+    expect(screen.queryByText("Enter a valid Git URL (SSH or HTTPS format)")).toBeNull();
   });
 });
+
+function selectScratchTab() {
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Create new" }), { button: 0 });
+}
 
 function renderDialog(overrides: Partial<React.ComponentProps<typeof AddProjectDialog>> = {}) {
   return render(
@@ -321,6 +587,7 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof AddProjectD
       open
       onOpenChange={() => {}}
       onAdd={async () => {}}
+      onCreate={async () => {}}
       validateGitUrl={async () => true}
       {...overrides}
     />

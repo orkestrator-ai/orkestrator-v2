@@ -10,23 +10,12 @@ import { KanbanBoard } from "@/components/kanban";
 import { ProjectLauncher } from "@/components/projects";
 import { TerminalProvider } from "@/contexts";
 import {
-  getAllLeaves,
   useUIStore,
   useEnvironmentStore,
   useConfigStore,
   useClaudeOptionsStore,
-  usePaneLayoutStore,
 } from "@/stores";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useProjectStore } from "@/stores/projectStore";
-import { useClaudeStore } from "@/stores/claudeStore";
-import {
-  getEnvironmentIdFromClaudeTmuxStateKey,
-  useClaudeTmuxStore,
-} from "@/stores/claudeTmuxStore";
-import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
-import { getBackgroundProcessingEnvironments } from "@/lib/background-pipelines";
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
@@ -39,8 +28,6 @@ import {
 } from "@/lib/build-pipeline-persistence";
 import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistence";
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
-import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
-import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
 import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, getEnvironment, getResourceRevisionManifest, syncAllEnvironmentsWithDocker } from "@/lib/backend";
@@ -61,8 +48,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import type { Environment } from "@/types";
-
-const NO_BACKGROUND_SETUP = new Set<string>();
 
 /**
  * Setup can fail after Docker has successfully created and started the
@@ -183,102 +168,6 @@ function App() {
   const selectedEnvironment = selectedEnvironmentId
     ? environments.find((env) => env.id === selectedEnvironmentId) ?? null
     : null;
-  const pendingNativeLaunches = useClaudeOptionsStore((state) => state.pendingNativeLaunches);
-  // Only a running environment can act on a durable launch, so only a running
-  // one earns a background mount. This matches the target selection in
-  // reconcileEnvironmentSetupSnapshots; a stopped environment has its intent
-  // cleared by the backend rather than waiting here.
-  const durablePendingAgentLaunchEnvironmentIds = useMemo(
-    () => environments
-      .filter((environment) =>
-        environment.status === "running"
-        && (
-          environment.pendingAgentLaunch
-          || environment.startupAgentSession !== undefined
-        )
-      )
-      .map((environment) => environment.id),
-    [environments],
-  );
-  const paneLayoutEnvironments = usePaneLayoutStore((state) => state.environments);
-  const pendingInitialPromptEnvironmentIds = useMemo(() => {
-    const environmentIds: string[] = [];
-    for (const [environmentId, paneState] of paneLayoutEnvironments) {
-      const hasPendingInitialPrompt = getAllLeaves(paneState.root)
-        .some((leaf) => leaf.tabs.some((tab) => !!tab.initialPrompt?.trim()));
-      if (hasPendingInitialPrompt) {
-        environmentIds.push(environmentId);
-      }
-    }
-    return environmentIds;
-  }, [paneLayoutEnvironments]);
-
-  // Loading agent sessions across Claude/Codex/OpenCode/tmux keep their
-  // environment mounted so SSE subscriptions and watchdog polls can advance
-  // even when the user has navigated elsewhere. Queues are deliberately absent:
-  // the backend drains them, so a queued prompt is no reason to mount anything.
-  const claudeSessions = useClaudeStore((state) => state.sessions);
-  const codexSessions = useCodexStore((state) => state.sessions);
-  const openCodeSessions = useOpenCodeStore((state) => state.sessions);
-  const claudeTmuxTabs = useClaudeTmuxStore((state) => state.tabs);
-  const loadingNativeSessionEnvironmentIds = useMemo(() => {
-    const environmentIds = new Set<string>();
-    const sessionMaps = [claudeSessions, codexSessions, openCodeSessions];
-    for (const sessionMap of sessionMaps) {
-      for (const [sessionKey, session] of sessionMap) {
-        if (!session.isLoading) continue;
-        const environmentId = getEnvironmentIdFromSessionKey(sessionKey);
-        if (environmentId) {
-          environmentIds.add(environmentId);
-        }
-      }
-    }
-    for (const [stateKey, tab] of claudeTmuxTabs) {
-      const hasPendingHooks =
-        tab.pendingApprovals.length > 0 ||
-        tab.pendingQuestions.length > 0 ||
-        tab.pendingPlans.length > 0 ||
-        tab.pendingPermissions.length > 0 ||
-        tab.pendingElicitations.length > 0;
-      if (!tab.busy && !hasPendingHooks) continue;
-      const environmentId =
-        tab.environmentId ?? getEnvironmentIdFromClaudeTmuxStateKey(stateKey);
-      if (environmentId) {
-        environmentIds.add(environmentId);
-      }
-    }
-    return Array.from(environmentIds);
-  }, [claudeSessions, codexSessions, openCodeSessions, claudeTmuxTabs]);
-  // Environments with frontend-owned background concerns that aren't currently
-  // visible. Build pipelines are intentionally absent: the backend supervises
-  // them even when no renderer exists.
-  const pipelines = useBuildPipelineStore((state) => state.pipelines);
-  const loopedReviews = useLoopedReviewStore((state) => state.workflows);
-  const backgroundProcessingEnvironments = useMemo(
-    () => getBackgroundProcessingEnvironments(
-      pipelines,
-      environments,
-      selectedEnvironmentId,
-      NO_BACKGROUND_SETUP,
-      Object.keys(pendingNativeLaunches),
-      pendingInitialPromptEnvironmentIds,
-      loadingNativeSessionEnvironmentIds,
-      [],
-      loopedReviews.values(),
-      durablePendingAgentLaunchEnvironmentIds,
-    ),
-    [
-      pipelines,
-      environments,
-      selectedEnvironmentId,
-      pendingNativeLaunches,
-      pendingInitialPromptEnvironmentIds,
-      loadingNativeSessionEnvironmentIds,
-      loopedReviews,
-      durablePendingAgentLaunchEnvironmentIds,
-    ],
-  );
-
   const refreshDockerAvailability = useCallback(async (source: "startup" | "retry") => {
     const available = await checkDocker();
     console.log(`[App] Docker ${source} check:`, available);
@@ -642,9 +531,6 @@ function App() {
     [clearClaudeOptions, config.global.defaultAgent, getEnvironmentById, setClaudeOptions, startEnvironment]
   );
 
-  // Stable no-op callbacks for hidden frontend-owned background environments.
-  const noop = useCallback(() => {}, []);
-
   const handleCreateScriptFromOverlay = useCallback(
     async (environmentId: string, initialPrompt: string) => {
       const environment = getEnvironmentById(environmentId);
@@ -697,36 +583,6 @@ function App() {
             />
           )}
 
-          {/* Background pipeline environments: kept mounted (but hidden) so their
-              SSE subscriptions and pipeline-advancement effects continue running
-              even when the user navigates to a different project or kanban view.
-              `invisible` (visibility:hidden) stops the browser painting the
-              off-screen xterms while keeping layout intact, so fit-addon
-              measurements stay valid; `display:none` would zero them out.
-              PersistentTerminal refits and refreshes on reveal (isActive /
-              isEnvironmentVisible effects), so nothing stays blank when an
-              environment is brought back on screen. */}
-          {backgroundProcessingEnvironments.length > 0 && (
-            <div
-              data-testid="background-terminal-host"
-              className="pointer-events-none invisible fixed left-[-10000px] top-0 h-[720px] w-[1280px] overflow-hidden opacity-0"
-              aria-hidden="true"
-            >
-              {backgroundProcessingEnvironments.map((environment) => (
-                <TerminalContainer
-                  key={`bg-pipeline-${environment.id}`}
-                  environmentId={environment.id}
-                  containerId={environment.containerId ?? null}
-                  isContainerRunning={isEnvironmentContainerAvailable(environment)}
-                  isContainerCreating={environment.status === "creating"}
-                  isActive={false}
-                  className="h-full"
-                  onStartContainer={noop}
-                  onCreateScript={noop}
-                />
-              ))}
-            </div>
-          )}
         </AppShell>
         <Toaster />
         <ErrorDetailsDialog />

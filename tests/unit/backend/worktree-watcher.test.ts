@@ -237,17 +237,35 @@ describe("startWorktreeWatcher", () => {
   test("observes a real file write", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ork-watch-"));
     let changes = 0;
+    let resolveChange!: () => void;
+    const changeObserved = new Promise<void>((resolve) => {
+      resolveChange = resolve;
+    });
     const watcher = startWorktreeWatcher({
       worktreePath: directory,
       settleMs: 50,
-      onChange: () => { changes += 1; },
+      onChange: () => {
+        changes += 1;
+        resolveChange();
+      },
     });
     cleanups.push(() => watcher.close());
 
     if (!watcher.watching) return;
 
-    await fs.writeFile(path.join(directory, "created.ts"), "export const a = 1;\n");
-    await waitForSettle(250);
+    const deadline = Date.now() + 2_000;
+    let attempt = 0;
+    while (changes === 0 && Date.now() < deadline) {
+      await fs.writeFile(
+        path.join(directory, `created-${attempt}.ts`),
+        `export const value = ${attempt};\n`,
+      );
+      attempt += 1;
+      await Promise.race([
+        changeObserved,
+        new Promise<void>((resolve) => setTimeout(resolve, 75)),
+      ]);
+    }
 
     expect(changes).toBeGreaterThan(0);
   });

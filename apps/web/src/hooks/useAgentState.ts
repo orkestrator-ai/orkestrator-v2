@@ -1,8 +1,7 @@
-// Hook for monitoring agent activity state at the tab level.
-// Container-level state (for sidebar icons) and polling lifecycle are
-// handled globally by useGlobalActivityMonitor in App.tsx.
+// Tab-level state is a presentation projection of the backend tmux monitor.
+// Environment-level activity and the polling lifecycle remain backend-owned.
 import { useEffect, useRef } from "react";
-import { listen, UnlistenFn } from "@/lib/native/events";
+import { listen, type UnlistenFn } from "@/lib/native/events";
 import {
   useAgentActivityStore,
   type AgentActivityState,
@@ -13,14 +12,6 @@ interface AgentStateEvent {
   state: string;
 }
 
-/**
- * Hook to monitor agent activity state for a terminal tab.
- * Listens for Electron events and updates tab-level state only.
- * Polling and container-level state are managed by useGlobalActivityMonitor.
- *
- * @param containerId - The Docker container ID to monitor (null to disable)
- * @param tabId - The terminal tab ID to associate state with
- */
 export function useAgentState(
   containerId: string | null,
   tabId: string
@@ -51,16 +42,14 @@ export function useAgentState(
           unlistenRef.current = unlisten;
         }
       })
-      .catch((e) => {
-        console.error("Failed to listen for agent state events:", e);
+      .catch((error) => {
+        console.error("Failed to listen for agent state events:", error);
       });
 
     return () => {
       disposed = true;
-      if (unlistenRef.current) {
-        unlistenRef.current();
-        unlistenRef.current = null;
-      }
+      unlistenRef.current?.();
+      unlistenRef.current = null;
       removeTabState(tabId);
     };
   }, [containerId, tabId, setTabState, removeTabState]);

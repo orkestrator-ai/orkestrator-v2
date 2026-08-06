@@ -1381,7 +1381,6 @@ function createSessionObject(
     createdAt: now,
     lastActivityAt: now,
     order: 0,
-    hasLaunchedCommand: false,
   };
 }
 

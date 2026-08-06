@@ -5,28 +5,7 @@
  */
 import { useEffect } from "react";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import {
-  useAgentActivityStore,
-  type AgentActivityState,
-} from "@/stores/agentActivityStore";
-
-export function isEnvironmentActivityTransition(
-  previousState: AgentActivityState,
-  newState: AgentActivityState,
-): boolean {
-  if (previousState === newState) return false;
-  return newState === "working"
-    || newState === "waiting"
-    || (previousState === "working" && newState === "idle");
-}
-
-export function isEnvironmentCompletionTransition(
-  previousState: AgentActivityState,
-  newState: AgentActivityState,
-): boolean {
-  return previousState === "working"
-    && (newState === "idle" || newState === "waiting");
-}
+import { useAgentActivityStore } from "@/stores/agentActivityStore";
 
 export function useGlobalActivityMonitor(): void {
   const environments = useEnvironmentStore((state) => state.environments);

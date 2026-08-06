@@ -3641,11 +3641,13 @@ export class AppServerRuntime {
         // Overload is the sole definite rejection: app-server guarantees the
         // turn did not run. Persist that fact throughout the delay so a bridge
         // shutdown cannot erase the only evidence that reusing this id is safe.
-        await this.journal.markRetryable(requestId);
-        // Generation recovery clears an unmaterialized context's `messages`
-        // property when it detaches the dead thread. Retain the actual array
-        // before the delay, during which a generation change can complete.
+        // Generation recovery can start as soon as the failed request exposes a
+        // dead child. It clears an unmaterialized context's `messages` property
+        // when detaching that thread, so retain the actual array before the first
+        // await in this recovery path. Capturing it after the journal write left
+        // a race where the replacement turn ran with an empty local transcript.
         const retryMessages = context.messages;
+        await this.journal.markRetryable(requestId);
         await new Promise((resolve) => setTimeout(
           resolve,
           this.options.initialPromptRetryDelayMs ?? DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
@@ -3700,9 +3702,27 @@ export class AppServerRuntime {
           };
         }
         const staleContext = context;
-        const reboundContext = await this.ensureAttached(session.id);
+        let reboundContext = await this.ensureAttached(session.id);
+        // The replacement child can still be inside supervisor startup when the
+        // delay expires. In that case the wait above observes the prior settled
+        // recovery; ensureAttached is the RPC that finishes startup and publishes
+        // the new generation event. Wait again, then discard any context that
+        // recovery detached while that RPC was in flight.
+        await this.generationRecovery;
+        reboundContext = this.registry.getThreadForSession(session.id);
         if (reboundContext) {
           context = reboundContext;
+          // Recovery can win the race and create the replacement canonical
+          // context before this retry resumes. That context may have hydrated an
+          // empty, not-yet-materialized rollout, so carry the optimistic exchange
+          // just as the explicit thread/start path below does. Merge by id in
+          // case re-attachment did recover part of the same transcript.
+          if (context.messages !== retryMessages) {
+            const reboundMessageIds = new Set(context.messages.map((message) => message.id));
+            context.messages.push(
+              ...retryMessages.filter((message) => !reboundMessageIds.has(message.id)),
+            );
+          }
         } else {
           let thread;
           try {
@@ -3734,17 +3754,27 @@ export class AppServerRuntime {
             confirmedModelForTurn = thread.model;
             assistantMessage.modelId = thread.model;
           }
+        }
+        // Close the overlap window before the first await below, exactly as the
+        // main dispatch path does. Recovery leaves a re-attached thread `idle`
+        // with `turnStartedAt` cleared, so this also restores the busy state a
+        // shared tab needs to see; `starting` reports `running`.
+        context.dispatchInFlight = true;
+        this.registry.setPhase(context, "starting");
+        if (context !== staleContext) {
+          // Only the replacement-thread branch above can reach this today: every
+          // path that removes a thread from the registry also clears the session
+          // binding, so `ensureAttached` returns undefined rather than a second
+          // context. Kept as a guard rather than an assertion because the cost is
+          // one identity check, and a future rebind would otherwise silently lose
+          // the optimistic exchange published before the rejected dispatch.
           context.messages = retryMessages;
-          context.dispatchInFlight = true;
-          this.registry.setPhase(context, "starting");
           const replacementState = this.stateFor(context.threadId);
           replacementState.publishedMessageId = assistantMessage.id;
           replacementState.publishedParts = [];
           replacementState.publishedModelId = assistantMessage.modelId;
           await this.persistSession(session);
         }
-        context.dispatchInFlight = true;
-        this.registry.setPhase(context, "starting");
         await this.journal.markPrepared({
           requestId,
           bridgeSessionId: session.id,

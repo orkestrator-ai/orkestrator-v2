@@ -2287,10 +2287,6 @@ printf '%s\\n' '{}' > "$out"
         },
         context,
       ),
-      await commands.get("set_environment_setup_complete")?.(
-        { environmentId: environment.id, complete: false },
-        context,
-      ),
       await commands.get("update_port_mappings")?.(
         { environmentId: environment.id, portMappings: [] },
         context,
@@ -2458,59 +2454,6 @@ printf '%s\\n' '{}' > "$out"
     )).resolves.toBeUndefined();
   });
 
-  test("records only newer environment activity timestamps", async () => {
-    const environment = createEnvironment({
-      lastActivityAt: "2026-07-22T10:00:00.000Z",
-    });
-    const { context, updates } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    const activityUpdate = await commands.get("record_environment_activity")?.(
-      { environmentId: environment.id, occurredAt: "2026-07-23T10:00:00.000Z" },
-      context,
-    ) as Record<string, unknown>;
-    expect(activityUpdate).toMatchObject({
-      id: environment.id,
-      lastActivityAt: "2026-07-23T10:00:00.000Z",
-    });
-    expect(Object.keys(activityUpdate).sort()).toEqual([
-      "agentActivityState",
-      "agentActivityUpdatedAt",
-      "hasUnreadWork",
-      "id",
-      "lastActivityAt",
-    ]);
-    expect(updates).toEqual([{ lastActivityAt: "2026-07-23T10:00:00.000Z" }]);
-
-    await expect(commands.get("record_environment_activity")?.(
-      { environmentId: environment.id, occurredAt: "2026-07-21T10:00:00.000Z" },
-      context,
-    )).resolves.toMatchObject({
-      id: environment.id,
-      lastActivityAt: "2026-07-23T10:00:00.000Z",
-    });
-    expect(updates).toHaveLength(1);
-
-    await expect(commands.get("record_environment_activity")?.(
-      { environmentId: environment.id, occurredAt: "2026-07-23T10:00:00.000Z" },
-      context,
-    )).resolves.toMatchObject({
-      id: environment.id,
-      lastActivityAt: "2026-07-23T10:00:00.000Z",
-    });
-    expect(updates).toHaveLength(1);
-
-    await expect(commands.get("record_environment_activity")?.(
-      { environmentId: environment.id, occurredAt: "not-a-date" },
-      context,
-    )).rejects.toThrow("occurredAt must be a valid ISO timestamp");
-
-    await expect(commands.get("record_environment_activity")?.(
-      { environmentId: "missing", occurredAt: "2026-07-24T10:00:00.000Z" },
-      context,
-    )).rejects.toThrow("Environment not found: missing");
-  });
-
   test("preserves container identity when Docker status reconciliation fails transiently", async () => {
     const environment = createEnvironment({
       status: "running",
@@ -2554,22 +2497,6 @@ exit 1
     expect(environment.containerId).toBeNull();
     expect(environment.status).toBe("stopped");
     expect(updates).toContainEqual({ status: "stopped", containerId: null });
-  });
-
-  test("returns container workspace setup command from the backend setup plan", async () => {
-    const environment = createEnvironment({
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    const setupCommands = await commands.get("get_setup_commands")?.({ environmentId: environment.id }, context) as string[];
-    expect(setupCommands).toHaveLength(1);
-    expect(setupCommands[0]).toContain("/usr/local/bin/workspace-setup.sh");
-    expect(setupCommands[0]).toContain("flock");
   });
 
   test("runs inactive container setup in the backend and persists completion", async () => {
@@ -2888,7 +2815,7 @@ exit 0
       )).rejects.toThrow("Container is not running");
 
       expect(
-        await commands.get("get_environment_setup_session")?.(
+        await commands.get("await_environment_setup_session")?.(
           { environmentId: environment.id },
           context,
         ),
@@ -2955,7 +2882,7 @@ exit 0
       )).rejects.toThrow("PTY spawn unavailable");
 
       expect(
-        await commands.get("get_environment_setup_session")?.(
+        await commands.get("await_environment_setup_session")?.(
           { environmentId: environment.id },
           context,
         ),
@@ -3017,7 +2944,7 @@ exit 0
     )).rejects.toThrow(`Local environment worktree does not exist: ${missingWorktreePath}`);
 
     expect(
-      await commands.get("get_environment_setup_session")?.(
+      await commands.get("await_environment_setup_session")?.(
         { environmentId: environment.id },
         context,
       ),
@@ -3462,7 +3389,7 @@ exit 0
     });
   }, ASYNC_TEST_BUDGET_MS);
 
-  test("reports backend setup session state via get_environment_setup_session", async () => {
+  test("reports backend setup session state via await_environment_setup_session", async () => {
     const environment = createEnvironment({
       id: "env-container-setup-session",
       environmentType: "containerized",
@@ -3475,7 +3402,7 @@ exit 0
     const commands = createCommandRegistry();
 
     expect(
-      await commands.get("get_environment_setup_session")?.({ environmentId: environment.id }, context),
+      await commands.get("await_environment_setup_session")?.({ environmentId: environment.id }, context),
     ).toBeNull();
 
     await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
@@ -3485,7 +3412,7 @@ exit 0
       ) as Promise<Environment>;
       await waitForPtyProcessCount(1);
 
-      const runningSession = await commands.get("get_environment_setup_session")?.(
+      const runningSession = await commands.get("await_environment_setup_session")?.(
         { environmentId: environment.id },
         context,
       );
@@ -3499,7 +3426,7 @@ exit 0
       ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
       await setupPromise;
 
-      const completedSession = await commands.get("get_environment_setup_session")?.(
+      const completedSession = await commands.get("await_environment_setup_session")?.(
         { environmentId: environment.id },
         context,
       );
@@ -3513,7 +3440,7 @@ exit 0
 
       ptyProcesses[0]?.emitExit({ exitCode: 0 });
       expect(
-        await commands.get("get_environment_setup_session")?.(
+        await commands.get("await_environment_setup_session")?.(
           { environmentId: environment.id },
           context,
         ),
@@ -3565,7 +3492,7 @@ exit 0
       await setupPromise;
 
       expect(
-        await commands.get("get_environment_setup_session")?.({ environmentId: environment.id }, context),
+        await commands.get("await_environment_setup_session")?.({ environmentId: environment.id }, context),
       ).not.toBeNull();
 
       await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
@@ -3577,7 +3504,7 @@ exit 0
       expect(context.storage.deletePaneLayout).toHaveBeenCalledWith(environment.id);
 
       expect(
-        await commands.get("get_environment_setup_session")?.({ environmentId: environment.id }, context),
+        await commands.get("await_environment_setup_session")?.({ environmentId: environment.id }, context),
       ).toBeNull();
       const buffer = await commands.get("get_terminal_output_buffer")?.(
         { sessionId: setupSessionId },
@@ -3970,117 +3897,6 @@ exit 0
     expect(snapshot.output.charCodeAt(0)).not.toBe(0xde00);
     expect(Buffer.from(snapshot.output, "utf8").toString("utf8")).toBe(snapshot.output);
   }, ASYNC_TEST_BUDGET_MS);
-
-  // The renderer calls this *after* setup ran, so a HEAD read here could already
-  // include commits made by repository-controlled setup commands. Recording that
-  // as the creation commit is worse than recording nothing, because the UI trusts
-  // it silently; the backend-managed path is what captures the real baseline.
-  test("marks setup complete from the frontend without capturing a post-setup baseline", async () => {
-    const environment = createEnvironment({
-      id: "env-container-frontend-complete",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(`#!/bin/sh
-printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
-if [ "$1" = "inspect" ]; then
-  printf 'running\\n'
-  exit 0
-fi
-if [ "$1" = "exec" ]; then
-  case "$*" in
-    *ORKESTRATOR_SETUP_CAPABILITIES*)
-      printf '\\036ORKESTRATOR_PREPARE_SUPPORTED\\037'
-      exit 0
-      ;;
-    *--prepare-only*)
-      printf '\\036ORKESTRATOR_PREPARE_OK\\037'
-      exit 0
-      ;;
-    *rev-parse*)
-      printf '2222222222222222222222222222222222222222\\n'
-      ;;
-  esac
-  exit 0
-fi
-exit 0
-`, async (logs) => {
-      const updated = await commands.get("set_environment_setup_complete")?.(
-        { environmentId: environment.id, complete: true },
-        context,
-      ) as Environment;
-
-      expect(updated.setupScriptsComplete).toBe(true);
-      expect(updated.createdFromCommit).toBeUndefined();
-      // No log file at all: the handler never shelled out to the container, so it
-      // cannot have run the preparation phase or read a post-setup HEAD.
-      expect(existsSync(logs.all)).toBe(false);
-    });
-  });
-
-  // Fire-and-forget from the renderer (markSetupScriptsComplete only logs on
-  // rejection), so failing here would silently re-run setup on every later start.
-  test("marks setup complete even when the container is unreachable", async () => {
-    const environment = createEnvironment({
-      id: "env-container-commit-fail",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(`#!/bin/sh
-if [ "$1" = "inspect" ]; then
-  printf 'exited\\n'
-  exit 0
-fi
-if [ "$1" = "exec" ]; then
-  printf 'container gone\\n' >&2
-  exit 1
-fi
-exit 0
-`, async () => {
-      const updated = await commands.get("set_environment_setup_complete")?.(
-        { environmentId: environment.id, complete: true },
-        context,
-      ) as Environment;
-
-      expect(updated.setupScriptsComplete).toBe(true);
-      expect(updated.createdFromCommit).toBeUndefined();
-      expect(environment.setupScriptsComplete).toBe(true);
-    });
-  });
-
-  test("clears the setup-complete flag without touching the baseline", async () => {
-    const environment = createEnvironment({
-      id: "env-container-uncomplete",
-      environmentType: "containerized",
-      setupScriptsComplete: true,
-      createdFromCommit: "3333333333333333333333333333333333333333",
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    const updated = await commands.get("set_environment_setup_complete")?.(
-      { environmentId: environment.id, complete: false },
-      context,
-    ) as Environment;
-
-    expect(updated.setupScriptsComplete).toBe(false);
-    expect(updated.createdFromCommit).toBe("3333333333333333333333333333333333333333");
-  });
 
   test("syncs the host gh auth token after starting a newly created container", async () => {
     const environment = createEnvironment({
@@ -7965,7 +7781,7 @@ exit 0
           commands.get("get_terminal_session")?.({ sessionId: setupSessionId }, context),
         ).toEqual({ id: setupSessionId, running: true, bootstrapped: false });
         expect(
-          await commands.get("get_environment_setup_session")?.(
+          await commands.get("await_environment_setup_session")?.(
             { environmentId: environment.id },
             context,
           ),
@@ -7997,7 +7813,7 @@ exit 0
       commands.get("get_terminal_session")?.({ sessionId: unknownSessionId }, context),
     ).toEqual({ id: unknownSessionId, running: false, bootstrapped: false });
     expect(
-      await commands.get("get_environment_setup_session")?.(
+      await commands.get("await_environment_setup_session")?.(
         { environmentId: "env-unknown-setup-session" },
         context,
       ),
@@ -8044,7 +7860,7 @@ exit 0
 
       // A session opened for preparation must not be left claiming to be running
       // with no process behind it.
-      const session = await commands.get("get_environment_setup_session")?.(
+      const session = await commands.get("await_environment_setup_session")?.(
         { environmentId: environment.id },
         context,
       ) as { running: boolean; success?: boolean; error?: string };
@@ -8209,7 +8025,7 @@ exit 0
         context,
       )).rejects.toThrow("Container is not running");
 
-      const session = await commands.get("get_environment_setup_session")?.(
+      const session = await commands.get("await_environment_setup_session")?.(
         { environmentId: environment.id },
         context,
       ) as { running: boolean; success?: boolean };
@@ -16262,11 +16078,6 @@ describe("storage-backed command delegation", () => {
     expect(storage.updateSession).toHaveBeenLastCalledWith("session-1", { name: "Shell" });
     await commands.get("rename_session")?.({ sessionId: "session-1", name: null }, context);
     expect(storage.updateSession).toHaveBeenLastCalledWith("session-1", { name: undefined });
-    await commands.get("set_session_has_launched_command")?.(
-      { sessionId: "session-1", hasLaunched: true },
-      context,
-    );
-    expect(storage.updateSession).toHaveBeenLastCalledWith("session-1", { hasLaunchedCommand: true });
     await commands.get("save_session_buffer")?.({ sessionId: "session-1", buffer: "saved output" }, context);
     expect(storage.saveSessionBuffer).toHaveBeenCalledWith("session-1", "saved output");
     await expect(commands.get("load_session_buffer")?.({ sessionId: "session-1" }, context))
@@ -16334,13 +16145,12 @@ describe("storage-backed command delegation", () => {
     });
   });
 
-  test("unlinks a task even when one build-pipeline cleanup fails", async () => {
+  test("keeps the task linked when build-pipeline cleanup fails", async () => {
     const task = {
       id: "task-1",
       projectId: "project-1",
       buildPipelineId: "pipeline-linked",
     };
-    const updated = { ...task, environmentId: undefined, buildPipelineId: undefined };
     const storage = {
       getKanbanTask: mock(async () => task),
       listBuildPipelines: mock(async () => [
@@ -16360,17 +16170,12 @@ describe("storage-backed command delegation", () => {
     await expect(createCommandRegistry().get("clear_task_build_status")?.(
       { taskId: "task-1" },
       context,
-    )).resolves.toEqual({
-      task: updated,
-      removedPipelineIds: ["pipeline-linked"],
-      failedPipelineIds: ["pipeline-stale"],
-    });
-    expect(storage.updateKanbanTask).toHaveBeenCalledWith("task-1", {
-      environmentId: undefined,
-      buildPipelineId: undefined,
-      prUrl: "",
-      prState: undefined,
-    });
+    )).rejects.toThrow("cleanup failed");
+    expect(remove.mock.calls.map(([pipelineId]) => pipelineId)).toEqual([
+      "pipeline-linked",
+      "pipeline-stale",
+    ]);
+    expect(storage.updateKanbanTask).not.toHaveBeenCalled();
   });
 
   test("delegates remaining environment, Kanban, notes, and feature-plan handlers", async () => {

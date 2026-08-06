@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Z_FULLSCREEN_POPOVER, Z_FULLSCREEN_SURFACE } from "@/constants/z-index";
 import { cn } from "@/lib/utils";
 
 export interface SettingsMenuItem {
@@ -69,7 +70,10 @@ export function FullscreenSettingsLayout({
       role="dialog"
       aria-modal="true"
       aria-label={title}
-      className="fixed inset-0 z-[60] flex flex-col bg-black md:top-7 md:flex-row [&_input]:bg-zinc-900 [&_textarea]:bg-zinc-900 [&_[data-slot=select-trigger]]:bg-zinc-900"
+      className={cn(
+        "fixed inset-0 flex flex-col bg-black md:top-7 md:flex-row [&_input]:bg-zinc-900 [&_textarea]:bg-zinc-900 [&_[data-slot=select-trigger]]:bg-zinc-900",
+        Z_FULLSCREEN_SURFACE
+      )}
     >
       {/* Sidebar */}
       <div className="hidden shrink-0 flex-col border-b border-white/5 md:flex md:w-56 md:border-b-0 md:border-r">
@@ -117,7 +121,7 @@ export function FullscreenSettingsLayout({
             <SelectContent
               position="popper"
               align="start"
-              className="z-[70] w-[min(20rem,calc(100vw-2rem))]"
+              className={cn(Z_FULLSCREEN_POPOVER, "w-[min(20rem,calc(100vw-2rem))]")}
             >
               {menuItems.map((item) => (
                 <SelectItem key={item.id} value={item.id} textValue={item.label} className="min-h-10">

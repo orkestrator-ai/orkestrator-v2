@@ -335,7 +335,7 @@ printf "continued"
       const rootResult = runShell(
         codexCopyHelperHarness(`
 copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
-printf "continued"
+printf "root-continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -347,7 +347,7 @@ printf "continued"
       expect(rootResult.stdout).toContain(
         "Warning: Skipping Codex file with symlinked destination: auth.json",
       );
-      expect(rootResult.stdout).toEndWith("continued");
+      expect(rootResult.stdout).toContain("root-continued");
       expect(() => statSync(join(external, "auth.json"))).toThrow();
 
       const parentDestination = join(dir, "parent-destination");
@@ -359,7 +359,7 @@ printf "continued"
         codexCopyHelperHarness(`
 copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" plugins/config.toml
 copy_codex_directory "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" plugins/cache
-printf "continued"
+printf "parent-continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -374,7 +374,7 @@ printf "continued"
       expect(parentResult.stdout).toContain(
         "Warning: Skipping Codex directory with symlinked destination: plugins/cache",
       );
-      expect(parentResult.stdout).toEndWith("continued");
+      expect(parentResult.stdout).toContain("parent-continued");
       expect(() => statSync(join(linkedParentTarget, "config.toml"))).toThrow();
       expect(() => statSync(join(linkedParentTarget, "cache"))).toThrow();
 
@@ -390,7 +390,7 @@ printf "continued"
         codexCopyHelperHarness(`
 copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" auth.json
 copy_codex_file "$CODEX_TEST_SOURCE" "$CODEX_TEST_DESTINATION" config.toml
-printf "continued"
+printf "leaf-continued"
 `),
         {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -405,7 +405,7 @@ printf "continued"
       expect(leafResult.stdout).toContain(
         "Warning: Skipping Codex file with symlinked destination: config.toml",
       );
-      expect(leafResult.stdout).toEndWith("continued");
+      expect(leafResult.stdout).toContain("leaf-continued");
       expect(readFileSync(linkedAuthTarget, "utf8")).toBe("workload data\n");
       expect(readFileSync(linkedConfigTarget, "utf8")).toBe("workload config\n");
     });

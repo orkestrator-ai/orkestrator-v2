@@ -9,9 +9,8 @@ interface UseStalledTurnWatchdogOptions {
   /** Authoritative refetch of session state and messages. */
   reconcile: () => Promise<unknown>;
   /**
-   * Optional extra throttle consulted on each tick. Codex uses this to defer to
-   * its refresh controller so the watchdog does not fight a refresh that is
-   * already scheduled.
+   * Optional extra throttle consulted on each tick so a provider-specific
+   * refresh controller can suppress duplicate work.
    */
   shouldReconcile?: () => boolean;
   /**
@@ -36,18 +35,18 @@ interface UseStalledTurnWatchdogOptions {
    * `staleAfterMs + intervalMs` loop for the whole quiet stretch of a turn.
    */
   minReconcileIntervalMs?: number;
-  /** Poll period. Defaults to one second, matching Codex's watchdog. */
+  /** Poll period. Defaults to one second. */
   intervalMs?: number;
 }
 
-/** Matches Codex's `CODEX_SESSION_STALE_AFTER_MS`. */
+/** Default quiet period before a provider turn is considered stalled. */
 export const DEFAULT_TURN_STALE_AFTER_MS = 1500;
 
 /**
  * Default floor between two successful reconciles.
  *
- * `DEFAULT_TURN_STALE_AFTER_MS` was tuned for detection latency, not for poll
- * cost: at 1.5s a Claude tab that reconciles once re-arms itself and issues
+ * `DEFAULT_TURN_STALE_AFTER_MS` is tuned for detection latency, not for poll
+ * cost: at 1.5s a tab that reconciles once re-arms itself and issues
  * roughly four bridge GETs — including the full transcript — every couple of
  * seconds until the turn ends. Ten seconds still recovers a genuinely dropped
  * frame quickly while making the steady-state cost negligible.
@@ -57,10 +56,9 @@ export const DEFAULT_MIN_RECONCILE_INTERVAL_MS = 10_000;
 /**
  * Poll for a turn that has stopped reporting.
  *
- * SSE is the primary channel, but a dropped frame — a reconnect, a tab that was
- * unmounted mid-turn — leaves the composer disabled forever with no way back
- * except a manual refresh. `AGENTS.md` requires that the UI be able to catch up
- * from status/transcript APIs when events are missed; only Codex did.
+ * SSE is the primary channel. OpenCode does not expose the revisioned replay
+ * protocol used by the bundled Claude and Codex bridges, so its mounted view
+ * retains this bounded recovery poll against authoritative session APIs.
  *
  * Two independent throttles apply. `staleAfterMs` decides when a quiet turn
  * counts as stalled at all, and `minReconcileIntervalMs` caps how often a stall
@@ -68,8 +66,9 @@ export const DEFAULT_MIN_RECONCILE_INTERVAL_MS = 10_000;
  * re-checked. A *failed* reconcile is not throttled: it changed nothing, so the
  * next tick retries.
  *
- * Deliberately not gated on `isActive`: a background environment is exactly the
- * case where frames get missed, so the watchdog must run for hidden mounts too.
+ * Deliberately not gated on `isActive`: switching panes inside a mounted
+ * environment must not suspend its recovery path. Environment-level background
+ * ownership remains in the backend; remounting rehydrates authoritative state.
  */
 export function useStalledTurnWatchdog({
   agentLabel,

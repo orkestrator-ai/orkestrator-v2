@@ -52,16 +52,37 @@ describe("InitializationLogs", () => {
 
   test("shows an initial failure and recovers on a later poll", async () => {
     const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const originalSetInterval = globalThis.setInterval;
+    let runPoll: (() => void) | undefined;
+    globalThis.setInterval = ((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (timeout === 5 && typeof handler === "function") {
+        runPoll = () => handler(...args);
+        return 1 as unknown as ReturnType<typeof setInterval>;
+      }
+      return originalSetInterval(handler, timeout, ...args);
+    }) as typeof globalThis.setInterval;
     getContainerLogsMock
       .mockRejectedValueOnce(new Error("daemon unavailable"))
       .mockResolvedValueOnce("container ready");
-    render(<InitializationLogs containerId="container-1" pollIntervalMs={5} />);
 
-    await waitFor(() => expect(screen.getByText(/Failed to load container logs/)).toBeTruthy());
+    try {
+      render(<InitializationLogs containerId="container-1" pollIntervalMs={5} />);
 
-    await waitFor(() => expect(screen.getByText("container ready")).toBeTruthy());
-    expect(screen.queryByText(/Failed to load container logs/)).toBeNull();
-    consoleError.mockRestore();
+      await waitFor(() => expect(screen.getByText(/Failed to load container logs/)).toBeTruthy());
+      expect(runPoll).toBeDefined();
+      await act(async () => runPoll?.());
+
+      await waitFor(() => expect(screen.getByText("container ready")).toBeTruthy());
+      expect(screen.queryByText(/Failed to load container logs/)).toBeNull();
+    } finally {
+      cleanup();
+      globalThis.setInterval = originalSetInterval;
+      consoleError.mockRestore();
+    }
   });
 
   test("preserves the last snapshot across a transient polling failure", async () => {

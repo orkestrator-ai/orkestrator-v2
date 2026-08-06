@@ -127,19 +127,16 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
 
   clearTaskBuildStatus: async (taskId) => {
     try {
-      const { task: updated, failedPipelineIds } = await clearTaskBuildStatus(taskId);
+      const { task: updated } = await clearTaskBuildStatus(taskId);
       useBuildPipelineStore.getState().removePipelinesForTask(taskId);
       set((state) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }));
-      if (failedPipelineIds.length > 0) {
-        toast.warning("Some build pipeline data could not be removed", {
-          description:
-            "The task was unlinked, but its build environment may need clearing manually.",
-        });
-      }
     } catch (error) {
       console.error("[KanbanStore] Failed to clear task build status:", error);
+      toast.error("Could not clear build status", {
+        description: "The task is still linked, so it is safe to retry.",
+      });
     }
   },
 

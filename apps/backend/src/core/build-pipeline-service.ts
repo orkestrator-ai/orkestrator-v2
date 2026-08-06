@@ -64,6 +64,7 @@ import {
   resolveConflictsPrompt,
   reviewPrompt,
   verificationPrompt,
+  type ReviewWorktreeSnapshot,
 } from "./build-pipeline-prompts.js";
 
 type CommandInvoker = <T>(
@@ -1426,6 +1427,41 @@ export class BuildPipelineService {
     }
   }
 
+  /**
+   * Observes the worktree the review is about to read.
+   *
+   * The build stage is only *asked* to commit, so a review that re-derived this
+   * inside its own turn could quietly decide the tree was dirty and skip
+   * validation. Probing here makes the state the pipeline's own evidence.
+   *
+   * A probe failure is never fatal: the review still runs and is told to
+   * establish the state itself and record it as a limitation.
+   */
+  private async reviewWorktreeSnapshot(
+    pipeline: BuildPipeline,
+  ): Promise<ReviewWorktreeSnapshot> {
+    try {
+      const result = await this.invoke<{ paths?: unknown }>(
+        "get_environment_uncommitted_paths",
+        { environmentId: pipeline.environmentId },
+      );
+      const paths = result?.paths;
+      if (!Array.isArray(paths) || paths.some((entry) => typeof entry !== "string")) {
+        return { status: "unknown", reason: "the worktree probe returned an unusable result" };
+      }
+      return paths.length === 0
+        ? { status: "clean" }
+        : { status: "dirty", paths: paths as string[] };
+    } catch (error) {
+      // The message can quote repository paths, so only the error class name is
+      // kept, and only after stripping anything that is not a bare identifier.
+      const name = error instanceof Error
+        ? error.name.replace(/[^A-Za-z0-9_]/g, "").slice(0, 40)
+        : "";
+      return { status: "unknown", reason: name ? `probe failed (${name})` : "probe failed" };
+    }
+  }
+
   private async findLinkedEnvironment(
     pipeline: Pick<BuildPipeline, "id" | "projectId">,
   ): Promise<Environment | undefined> {
@@ -1740,6 +1776,7 @@ export class BuildPipelineService {
           notes,
           target,
           config.global.reviewInstruction,
+          await this.reviewWorktreeSnapshot(pipeline),
         ),
         schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
         images: pipeline.taskSnapshot.images,

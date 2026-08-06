@@ -58,6 +58,14 @@ async function waitUntil(
   }
 }
 
+function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 async function captureConsoleErrors(
   work: (errors: unknown[][]) => Promise<void>,
 ): Promise<unknown[][]> {
@@ -3225,7 +3233,7 @@ describe("at-most-once dispatch", () => {
     });
   });
 
-  test("a delayed retry rebinds to the replacement engine generation", async () => {
+  test("a retry preserves optimistic messages when restart races the retryable journal write", async () => {
     let attempts = 0;
     const h = await harness({
       "turn/start": () => {
@@ -3237,17 +3245,30 @@ describe("at-most-once dispatch", () => {
         }
         return { turn: { id: "turn-after-restart" } };
       },
-    }, { initialPromptRetryDelayMs: 80 });
+    }, { initialPromptRetryDelayMs: 0 });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const requestId = "initial-prompt:env-1:tab-restarted-delay";
+    const retryableWriteStarted = deferredSignal();
+    const allowRetryableWrite = deferredSignal();
+    const journal = h.runtime.getJournal();
+    const markRetryable = journal.markRetryable.bind(journal);
+    journal.markRetryable = async (candidateRequestId) => {
+      retryableWriteStarted.resolve();
+      await allowRetryableWrite.promise;
+      await markRetryable(candidateRequestId);
+    };
 
     const pending = h.runtime.prompt(sessionId, {
       prompt: "start on the replacement child",
       requestId,
       attachments: [],
     });
-    await waitUntil(() => attempts === 1, "first initial prompt attempt did not run");
-    await h.engine.getSupervisor().restartNow("restart during retry delay");
+    await retryableWriteStarted.promise;
+    try {
+      await h.engine.getSupervisor().restartNow("restart during retryable journal write");
+    } finally {
+      allowRetryableWrite.resolve();
+    }
 
     expect(await pending).toMatchObject({
       ok: true,

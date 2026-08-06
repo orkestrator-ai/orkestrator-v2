@@ -3641,11 +3641,13 @@ export class AppServerRuntime {
         // Overload is the sole definite rejection: app-server guarantees the
         // turn did not run. Persist that fact throughout the delay so a bridge
         // shutdown cannot erase the only evidence that reusing this id is safe.
-        await this.journal.markRetryable(requestId);
-        // Generation recovery clears an unmaterialized context's `messages`
-        // property when it detaches the dead thread. Retain the actual array
-        // before the delay, during which a generation change can complete.
+        // Generation recovery can start as soon as the failed request exposes a
+        // dead child. It clears an unmaterialized context's `messages` property
+        // when detaching that thread, so retain the actual array before the first
+        // await in this recovery path. Capturing it after the journal write left
+        // a race where the replacement turn ran with an empty local transcript.
         const retryMessages = context.messages;
+        await this.journal.markRetryable(requestId);
         await new Promise((resolve) => setTimeout(
           resolve,
           this.options.initialPromptRetryDelayMs ?? DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,

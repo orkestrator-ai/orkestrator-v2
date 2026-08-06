@@ -70,6 +70,7 @@ const {
   cancelFeaturePlanning,
   claimFeaturePlanBuild,
   createFeaturePlan,
+  createProjectFromScratch,
   getFeaturePlanningSnapshot,
   getFeaturePlans,
   retryFeaturePlanning,
@@ -109,6 +110,16 @@ describe("backend setup wrappers", () => {
         hasMergeConflicts: null,
       }],
     ]);
+  });
+
+  test("passes a scratch project target path to the backend", async () => {
+    invokeMock.mockResolvedValue({ id: "project-1" });
+
+    await createProjectFromScratch("/Users/dev/Projects/new-app");
+
+    expect(invokeMock).toHaveBeenCalledWith("create_project_from_scratch", {
+      localPath: "/Users/dev/Projects/new-app",
+    });
   });
 
   test("persists the durable post-setup agent launch flag", async () => {

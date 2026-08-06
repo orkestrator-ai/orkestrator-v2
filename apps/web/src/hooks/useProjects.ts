@@ -114,6 +114,28 @@ export function useProjects() {
     [addProjectToStore, setLoading, setError]
   );
 
+  const createProjectFromScratch = useCallback(
+    async (localPath: string) => {
+      invalidateProjectSnapshots();
+      setLoading(true);
+      setError(null);
+      try {
+        const project = await backend.createProjectFromScratch(localPath);
+        addProjectToStore(project);
+        toast.success("Project created", { description: project.name });
+        return project;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to create project";
+        setError(message);
+        toast.error("Failed to create project", { description: message });
+        throw new Error(message);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [addProjectToStore, setLoading, setError]
+  );
+
   const removeProject = useCallback(
     async (projectId: string) => {
       invalidateProjectSnapshots();
@@ -191,6 +213,7 @@ export function useProjects() {
     error,
     loadProjects,
     addProject,
+    createProjectFromScratch,
     removeProject,
     updateProject,
     reorderProjects,

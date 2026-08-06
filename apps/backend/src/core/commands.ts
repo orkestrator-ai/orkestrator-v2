@@ -45,6 +45,7 @@ import {
   type OpenCodeModelCatalogEntry,
   type PersistedLoopedReviewWorkflow,
   type PortMapping,
+  type Project,
   type PrState,
   type SessionStatus,
   type SessionType,
@@ -7817,9 +7818,165 @@ async function refreshClaudeModelCatalog(
   return snapshot;
 }
 
+function resolveNewProjectPath(value: string): string {
+  const trimmed = value.trim();
+  if (!path.isAbsolute(trimmed)) {
+    throw new Error("Project path must be an absolute path");
+  }
+  const resolved = path.resolve(trimmed);
+  const repositoryName = path.basename(resolved);
+  if (!repositoryName || resolved === path.parse(resolved).root) {
+    throw new Error("Project path must name a folder, not a filesystem root");
+  }
+  return resolved;
+}
+
+function comparableProjectPath(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+async function createProjectFromScratch(
+  requestedPath: string,
+  storage: StorageService,
+  run: typeof runCommand,
+): Promise<Project> {
+  const projectPath = resolveNewProjectPath(requestedPath);
+  const projectPathKey = comparableProjectPath(projectPath);
+  const existingProjects = await storage.loadProjects();
+  if (existingProjects.some((project) => (
+    project.localPath !== null
+    && comparableProjectPath(project.localPath) === projectPathKey
+  ))) {
+    throw new Error(`A project already uses this local path: ${projectPath}`);
+  }
+
+  let createdDirectory = false;
+  let attemptedGitInit = false;
+  let createdRemote = false;
+
+  try {
+    let stats;
+    try {
+      stats = await fs.lstat(projectPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const firstCreatedPath = await fs.mkdir(projectPath, { recursive: true });
+      createdDirectory = firstCreatedPath !== undefined;
+      stats = await fs.lstat(projectPath);
+    }
+
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      throw new Error("Project path must be a directory and cannot be a symbolic link");
+    }
+    if ((await fs.readdir(projectPath)).length > 0) {
+      throw new Error("Project path must be new or an empty directory");
+    }
+
+    try {
+      attemptedGitInit = true;
+      await run("git", ["-C", projectPath, "init", "-b", "main"], {
+        timeoutMs: 30_000,
+      });
+    } catch (error) {
+      const detail = error instanceof CommandFailedError && error.executableMissing
+        ? "Git is not installed or available on PATH"
+        : conciseError(error);
+      throw new Error(`Could not initialize the Git repository: ${detail}`);
+    }
+
+    try {
+      await run("git", [
+        "-C",
+        projectPath,
+        "-c",
+        "user.name=Orkestrator",
+        "-c",
+        "user.email=projects@orkestrator.local",
+        "commit",
+        "--allow-empty",
+        "--no-gpg-sign",
+        "-m",
+        "Initial commit",
+      ], { timeoutMs: 30_000 });
+    } catch (error) {
+      throw new Error(`Could not create the initial Git commit: ${conciseError(error)}`);
+    }
+
+    const repositoryName = path.basename(projectPath);
+    try {
+      await run("gh", [
+        "repo",
+        "create",
+        repositoryName,
+        "--private",
+        `--source=${projectPath}`,
+        "--remote=origin",
+        "--push",
+      ], { timeoutMs: 120_000 });
+      createdRemote = true;
+    } catch (error) {
+      const detail = error instanceof CommandFailedError && error.executableMissing
+        ? "GitHub CLI is not installed. Install gh and run `gh auth login`, then retry"
+        : conciseError(error);
+      throw new Error(`Could not create the private GitHub repository: ${detail}`);
+    }
+
+    const { stdout } = await run(
+      "git",
+      ["-C", projectPath, "remote", "get-url", "origin"],
+      { timeoutMs: 10_000 },
+    );
+    const gitUrl = stdout.trim();
+    if (!gitUrl) throw new Error("GitHub CLI did not configure the origin remote");
+
+    return await storage.addProject(createProject(gitUrl, projectPath));
+  } catch (error) {
+    if (!createdRemote) {
+      if (createdDirectory) {
+        try {
+          const cleanupStats = await fs.lstat(projectPath);
+          if (cleanupStats.isDirectory() && !cleanupStats.isSymbolicLink()) {
+            const entries = await fs.readdir(projectPath);
+            if (entries.every((entry) => entry === ".git")) {
+              await fs.rm(projectPath, { recursive: true, force: true });
+            } else if (attemptedGitInit && entries.includes(".git")) {
+              await fs.rm(path.join(projectPath, ".git"), { recursive: true, force: true });
+            }
+          }
+        } catch {
+          // Rollback is best effort; retain the original actionable failure.
+        }
+      } else if (attemptedGitInit) {
+        try {
+          const cleanupStats = await fs.lstat(projectPath);
+          if (cleanupStats.isDirectory() && !cleanupStats.isSymbolicLink()) {
+            const entries = await fs.readdir(projectPath);
+            if (entries.includes(".git")) {
+              await fs.rm(path.join(projectPath, ".git"), { recursive: true, force: true });
+            }
+          }
+        } catch {
+          // Rollback is best effort; retain the original actionable failure.
+        }
+      }
+    }
+    if (createdRemote) {
+      throw new Error(
+        "The local and private GitHub repositories were created, but Orkestrator could not add the project. "
+        + `Add the existing repository instead. ${conciseError(error)}`,
+      );
+    }
+    throw error;
+  }
+}
+
 export function createCommandRegistry(
   options: {
     claudeStatePolls?: ClaudeStatePollManager;
+    projectCreation?: {
+      runCommand?: typeof runCommand;
+    };
     tabTeardown?: {
       peekBridge?: (
         environment: Environment,
@@ -7841,6 +7998,7 @@ export function createCommandRegistry(
   }>();
   const validatedClaudeModelCatalogs = new Set<string>();
   const extensionDiscoveryCache = createExtensionDiscoveryCache();
+  const runProjectCreationCommand = options.projectCreation?.runCommand ?? runCommand;
 
   const conditionalManifestSnapshot = async <T>(
     args: JsonRecord,
@@ -7924,6 +8082,14 @@ export function createCommandRegistry(
     conditionalManifestSnapshot(args, storage, "project", () => storage.loadProjects())
   );
   register("add_project", ({ gitUrl, localPath }, { storage }) => storage.addProject(createProject(asString(gitUrl, "gitUrl"), asOptionalString(localPath))));
+  register("create_project_from_scratch", (args, { storage }) => {
+    assertOnlyKeys(args, ["localPath"], "arguments");
+    return createProjectFromScratch(
+      asNonBlankString(args.localPath, "localPath"),
+      storage,
+      runProjectCreationCommand,
+    );
+  });
   register("remove_project", ({ projectId }, { storage }) => storage.removeProject(asString(projectId, "projectId")));
   register("get_project", ({ projectId }, { storage }) => storage.getProject(asString(projectId, "projectId")));
   register("update_project", ({ projectId, updates }, { storage }) => storage.updateProject(asString(projectId, "projectId"), parseUpdateObject(updates)));

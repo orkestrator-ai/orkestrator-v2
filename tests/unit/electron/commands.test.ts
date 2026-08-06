@@ -90,6 +90,9 @@ const {
   toClientEnvironment,
 } = await import("../../../apps/backend/src/core/commands");
 const { CommandFailedError } = await import("../../../apps/backend/src/core/shell");
+const { setAgentSkillsHomeForTesting } = await import(
+  "../../../apps/backend/src/core/agent-skills"
+);
 
 const tempDirs: string[] = [];
 const SETUP_DONE_OSC = "\u001b]9999;setup_done\u0007";
@@ -1045,6 +1048,7 @@ afterEach(async () => {
   try {
     await shutdownLocalServers();
   } finally {
+    setAgentSkillsHomeForTesting(undefined);
     shutdownDiffStatsTracking();
     // Commands like set_environment_pr arm PR monitoring as a side effect;
     // dropping the entries here keeps a scheduled poll from spawning `gh`
@@ -1063,6 +1067,65 @@ afterEach(async () => {
 afterAll(async () => {
   const commands = createCommandRegistry();
   await commands.get("stop_local_codex_server_cmd")?.({ environmentId: "env-local" }, createContext(createEnvironment()).context);
+});
+
+describe("agent skill commands", () => {
+  test("lists and reads skills through the validated command boundary", async () => {
+    const home = await createTempDir("ork-electron-agent-skills-");
+    const skillDirectory = path.join(home, ".claude", "skills", "example");
+    const skillPath = path.join(skillDirectory, "SKILL.md");
+    await fs.mkdir(skillDirectory, { recursive: true });
+    await fs.writeFile(skillPath, "---\nname: example\ndescription: Example skill\n---\n# Example\n");
+    setAgentSkillsHomeForTesting(home);
+
+    const commands = createCommandRegistry();
+    const { context } = createContext(createEnvironment());
+    const scan = await commands.get("list_agent_skills")?.({ provider: "claude" }, context) as {
+      skills: Array<{ name: string; filePath: string }>;
+    };
+
+    expect(scan.skills).toHaveLength(1);
+    expect(scan.skills[0]).toMatchObject({ name: "example", filePath: skillPath });
+    await expect(commands.get("read_agent_skill")?.(
+      { provider: "claude", filePath: skillPath },
+      context,
+    )).resolves.toMatchObject({ path: skillPath, content: expect.stringContaining("# Example") });
+  });
+
+  test("rejects malformed agent skill command arguments before filesystem access", async () => {
+    const home = await createTempDir("ork-electron-agent-skills-invalid-");
+    setAgentSkillsHomeForTesting(home);
+    const commands = createCommandRegistry();
+    const { context } = createContext(createEnvironment());
+
+    await expect(commands.get("list_agent_skills")?.(
+      { provider: "claude", unexpected: true },
+      context,
+    )).rejects.toThrow("Unexpected list_agent_skills argument field");
+    await expect(commands.get("list_agent_skills")?.(
+      { provider: "other" },
+      context,
+    )).rejects.toThrow("Expected provider to be claude, codex or opencode");
+    await expect(commands.get("read_agent_skill")?.(
+      { provider: "claude" },
+      context,
+    )).rejects.toThrow("Expected filePath to be a string");
+    await expect(commands.get("read_agent_skill")?.(
+      { provider: "claude", filePath: "/tmp/SKILL.md", unexpected: true },
+      context,
+    )).rejects.toThrow("Unexpected read_agent_skill argument field");
+    await expect(commands.get("read_agent_skill")?.(
+      { provider: "claude", filePath: path.join(home, "outside", "SKILL.md") },
+      context,
+    )).rejects.toThrow("outside the agent skill directories");
+    await expect(commands.get("read_agent_skill")?.(
+      {
+        provider: "claude",
+        filePath: path.join(home, ".claude", "skills", "missing", "SKILL.md"),
+      },
+      context,
+    )).rejects.toThrow(/ENOENT/);
+  });
 });
 
 // These helpers are the failure reporting path for most of the async tests in

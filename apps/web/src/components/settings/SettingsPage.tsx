@@ -11,9 +11,11 @@ import {
   FlaskConical,
   Globe2,
   Eye,
+  Sparkles,
 } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
+import { SkillsSettings } from "./SkillsSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 
 const MENU_ITEMS: SettingsMenuItem[] = [
@@ -22,6 +24,7 @@ const MENU_ITEMS: SettingsMenuItem[] = [
   { id: "claude", label: "Claude", icon: <ClaudeIcon className="h-4 w-4" /> },
   { id: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-4 w-4" /> },
   { id: "codex", label: "Codex", icon: <CodexIcon className="h-4 w-4 text-emerald-400" /> },
+  { id: "skills", label: "Skills", icon: <Sparkles className="h-4 w-4" /> },
   { id: "terminal", label: "Terminal", icon: <Terminal className="h-4 w-4" /> },
   { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
   { id: "web-client", label: "Web client", icon: <Globe2 className="h-4 w-4" /> },
@@ -68,7 +71,11 @@ export function SettingsPage({ open, onOpenChange }: SettingsPageProps) {
       menuItems={MENU_ITEMS}
     >
       {(activeSection) =>
-        isLoading && !initialLoadDone ? (
+        // Skills is a read-only browser of the host's skill directories, not a
+        // config form, so it bypasses GlobalSettings and its Reset/Save bar.
+        activeSection === "skills" ? (
+          <SkillsSettings />
+        ) : isLoading && !initialLoadDone ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>

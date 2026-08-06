@@ -7,6 +7,8 @@ import { defaultConfig } from "../../../apps/backend/src/core/storage";
 
 import * as realGlobalSettings from "../../../apps/web/src/components/settings/GlobalSettings";
 const realGlobalSettingsSnapshot = { ...realGlobalSettings };
+import * as realSkillsSettings from "../../../apps/web/src/components/settings/SkillsSettings";
+const realSkillsSettingsSnapshot = { ...realSkillsSettings };
 import * as previousFullscreenSettingsLayout from "../../../apps/web/src/components/settings/FullscreenSettingsLayout";
 const previousFullscreenSettingsLayoutSnapshot = { ...previousFullscreenSettingsLayout };
 
@@ -17,6 +19,9 @@ mock.module("../../../apps/web/src/components/settings/GlobalSettings", () => ({
       <button onClick={onSaveSuccess}>finish save</button>
     </div>
   ),
+}));
+mock.module("../../../apps/web/src/components/settings/SkillsSettings", () => ({
+  SkillsSettings: () => <div data-testid="skills-settings">Skills browser</div>,
 }));
 mock.module("../../../apps/web/src/components/settings/FullscreenSettingsLayout", () => ({
   FullscreenSettingsLayout: ({
@@ -47,6 +52,7 @@ const originalConsoleError = console.error;
 
 afterAll(() => {
   mock.module("../../../apps/web/src/components/settings/GlobalSettings", () => realGlobalSettingsSnapshot);
+  mock.module("../../../apps/web/src/components/settings/SkillsSettings", () => realSkillsSettingsSnapshot);
   mock.module("../../../apps/web/src/components/settings/FullscreenSettingsLayout", () => previousFullscreenSettingsLayoutSnapshot);
 });
 
@@ -93,6 +99,38 @@ describe("SettingsPage", () => {
     resolveConfig(defaultConfig());
     expect(await screen.findByTestId("active-settings-section")).toBeTruthy();
     expect(container.querySelector(".animate-spin")).toBeNull();
+  });
+
+  test("opens the read-only Skills browser without waiting for config or rendering GlobalSettings", async () => {
+    invokeMock.mockImplementationOnce(() => new Promise(() => undefined));
+
+    const { container } = render(<SettingsPage open onOpenChange={() => undefined} />);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
+    expect(container.querySelector(".animate-spin")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Skills" }));
+
+    expect(screen.getByTestId("skills-settings")).toBeTruthy();
+    expect(screen.queryByTestId("active-settings-section")).toBeNull();
+    expect(container.querySelector(".animate-spin")).toBeNull();
+  });
+
+  test("returns to GlobalSettings after leaving Skills once config resolves", async () => {
+    let resolveConfig!: (config: ReturnType<typeof defaultConfig>) => void;
+    invokeMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveConfig = resolve as typeof resolveConfig;
+    }));
+
+    render(<SettingsPage open onOpenChange={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Skills" }));
+    expect(screen.getByTestId("skills-settings")).toBeTruthy();
+
+    resolveConfig(defaultConfig());
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+    expect(await screen.findByTestId("active-settings-section")).toBeTruthy();
+    expect(screen.queryByTestId("skills-settings")).toBeNull();
   });
 
   test("reuses a successful initial load when the page is reopened", async () => {

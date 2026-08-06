@@ -7,7 +7,10 @@ import {
   type CSSProperties,
 } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
-import { createMarkdownExtensions } from "./tiptap-extensions";
+import {
+  createMarkdownExtensions,
+  splitMarkdownFrontmatter,
+} from "./tiptap-extensions";
 
 const STORE_SYNC_DELAY_MS = 300;
 
@@ -38,6 +41,9 @@ export const TiptapMarkdownEditor = forwardRef<
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
   const onParseErrorRef = useRef(onParseError);
+  const { frontmatter, body } = splitMarkdownFrontmatter(markdown);
+  const frontmatterRef = useRef(frontmatter);
+  frontmatterRef.current = frontmatter;
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -56,7 +62,7 @@ export const TiptapMarkdownEditor = forwardRef<
       syncTimerRef.current = null;
     }
 
-    const currentMarkdown = currentEditor.getMarkdown();
+    const currentMarkdown = frontmatterRef.current + currentEditor.getMarkdown();
     hasPendingChangesRef.current = false;
     onChangeRef.current(currentMarkdown);
     return currentMarkdown;
@@ -68,7 +74,7 @@ export const TiptapMarkdownEditor = forwardRef<
 
   const editor = useEditor({
     extensions: createMarkdownExtensions(),
-    content: markdown,
+    content: body,
     contentType: "markdown",
     enableContentCheck: true,
     immediatelyRender: false,
@@ -124,7 +130,9 @@ export const TiptapMarkdownEditor = forwardRef<
           syncTimerRef.current = null;
         }
         hasPendingChangesRef.current = false;
-        onChangeRef.current(destroyedEditor.getMarkdown());
+        onChangeRef.current(
+          frontmatterRef.current + destroyedEditor.getMarkdown(),
+        );
       }
       editorRef.current = null;
     },

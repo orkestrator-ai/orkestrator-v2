@@ -36,7 +36,67 @@ const RICH_MARKDOWN_TOKEN_TYPES = new Set([
   "url",
 ]);
 
-const FRONTMATTER_PATTERN = /^(?:\uFEFF)?(?:---|\+\+\+)\r?\n[\s\S]*?\r?\n(?:---|\+\+\+|\.\.\.)[ \t]*(?:\r?\n|$)/;
+const YAML_FRONTMATTER_PATTERN =
+  /^(?:\uFEFF)?---[ \t]*(?:\r\n|\n|\r)[\s\S]*?^(?:---|\.\.\.)[ \t]*$/m;
+const TOML_FRONTMATTER_PATTERN =
+  /^(?:\uFEFF)?\+\+\+[ \t]*(?:\r\n|\n|\r)[\s\S]*?^\+\+\+[ \t]*$/m;
+
+export interface MarkdownFrontmatterSplit {
+  /** The exact leading frontmatter and spacing before the document body. */
+  frontmatter: string;
+  body: string;
+}
+
+/**
+ * Separate leading YAML or TOML frontmatter from the Markdown body without
+ * normalizing any source bytes. Frontmatter is metadata rather than rendered
+ * document content, so the rich editor retains it outside ProseMirror and
+ * prepends it again when serializing an edit.
+ */
+export function splitMarkdownFrontmatter(
+  markdown: string,
+): MarkdownFrontmatterSplit {
+  const match =
+    YAML_FRONTMATTER_PATTERN.exec(markdown) ??
+    TOML_FRONTMATTER_PATTERN.exec(markdown);
+
+  if (!match) {
+    return { frontmatter: "", body: markdown };
+  }
+
+  let bodyStart = match[0].length;
+
+  // Preserve the closing delimiter's line ending and any fully blank lines,
+  // but leave indentation on the first content line in the Markdown body.
+  while (bodyStart < markdown.length) {
+    const lineEnding = markdown.startsWith("\r\n", bodyStart)
+      ? "\r\n"
+      : markdown[bodyStart] === "\n" || markdown[bodyStart] === "\r"
+        ? markdown[bodyStart]
+        : null;
+    if (!lineEnding) break;
+
+    bodyStart += lineEnding.length;
+    const whitespaceStart = bodyStart;
+    while (markdown[bodyStart] === " " || markdown[bodyStart] === "\t") {
+      bodyStart += 1;
+    }
+
+    const nextLineIsBlank =
+      bodyStart === markdown.length ||
+      markdown[bodyStart] === "\n" ||
+      markdown[bodyStart] === "\r";
+    if (!nextLineIsBlank) {
+      bodyStart = whitespaceStart;
+      break;
+    }
+  }
+
+  return {
+    frontmatter: markdown.slice(0, bodyStart),
+    body: markdown.slice(bodyStart),
+  };
+}
 
 // Tiptap's default Code mark excludes every other mark. Markdown permits
 // inline code inside emphasis and links, so allow those combinations in the
@@ -126,16 +186,10 @@ export function assessMarkdownForRichEditing(
   markdown: string,
 ): MarkdownRichEditingAssessment {
   try {
-    if (FRONTMATTER_PATTERN.test(markdown)) {
-      return {
-        safe: false,
-        reason:
-          "This file uses Markdown constructs that Rendered mode cannot preserve. Continue editing in Raw mode.",
-      };
-    }
+    const { body } = splitMarkdownFrontmatter(markdown);
 
     const unsupported = new Set<string>();
-    findUnsupportedTokenTypes(marked.lexer(markdown, { gfm: true }), unsupported);
+    findUnsupportedTokenTypes(marked.lexer(body, { gfm: true }), unsupported);
 
     if (unsupported.size > 0) {
       return {
@@ -148,7 +202,7 @@ export function assessMarkdownForRichEditing(
     // Token types can be supported individually while still producing an
     // invalid combination for the configured ProseMirror schema. Validate the
     // actual Markdown projection so preflight and editor creation agree.
-    validateMarkdownSchema(markdown);
+    validateMarkdownSchema(body);
 
     return { safe: true, reason: null };
   } catch {

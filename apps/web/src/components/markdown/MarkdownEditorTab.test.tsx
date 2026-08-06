@@ -200,6 +200,37 @@ describe("MarkdownEditorTab", () => {
       .toBe("active");
   });
 
+  test("starts frontmatter documents in Rendered mode", async () => {
+    const markdown = [
+      "---",
+      "name: angela-search-scrape",
+      "description: Use Angela's production Search & Scrape API.",
+      "---",
+      "",
+      "# Angela Search & Scrape",
+    ].join("\n");
+    seedMarkdown(markdown);
+
+    render(
+      <MarkdownEditorTab
+        tabId={TAB_ID}
+        filePath="SKILL.md"
+        initialContent={markdown}
+        language="markdown"
+        isActive
+        isSaving={false}
+        onSave={mock(async () => true)}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Angela Search & Scrape" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Rendered" }).getAttribute("data-state"))
+      .toBe("active");
+    expect(screen.queryByText(/cannot preserve/i)).toBeNull();
+  });
+
   test("starts lossy Markdown in raw mode and blocks Rendered mode", () => {
     const unsupported = "Paragraph\n\n[^1]: footnote";
     seedMarkdown(unsupported);

@@ -6,6 +6,7 @@ import { marked } from "marked";
 import {
   assessMarkdownForRichEditing,
   createMarkdownExtensions,
+  splitMarkdownFrontmatter,
 } from "./tiptap-extensions";
 
 let editor: Editor | null = null;
@@ -188,7 +189,7 @@ describe("Markdown Tiptap extensions", () => {
     });
   });
 
-  test("rejects footnotes, raw HTML, and frontmatter that would be lossy", () => {
+  test("rejects footnotes and raw HTML that would be lossy", () => {
     expect(
       assessMarkdownForRichEditing("Paragraph\n\n[^1]: footnote"),
     ).toMatchObject({ safe: false });
@@ -197,11 +198,30 @@ describe("Markdown Tiptap extensions", () => {
         "<details><summary>More</summary>Body</details>",
       ),
     ).toMatchObject({ safe: false });
-    expect(
-      assessMarkdownForRichEditing(
-        "---\ntitle: Hello\ntags:\n  - one\n---\n\n# Page",
-      ),
-    ).toMatchObject({ safe: false });
+  });
+
+  test("accepts supported Markdown with YAML or TOML frontmatter", () => {
+    for (const markdown of [
+      "---\ntitle: Hello\ntags:\n  - one\n---\n\n# Page",
+      "+++\ntitle = \"Hello\"\n+++\n\n# Page",
+      "---\r\ntitle: Hello\r\n...\r\n\r\n# Page",
+    ]) {
+      expect(assessMarkdownForRichEditing(markdown)).toEqual({
+        safe: true,
+        reason: null,
+      });
+    }
+  });
+
+  test("splits frontmatter without normalizing delimiters or body indentation", () => {
+    const markdown =
+      "\uFEFF---\r\nname: angela-search-scrape\r\ndescription: Angela's API\r\n---\r\n\r\n  indented body";
+
+    expect(splitMarkdownFrontmatter(markdown)).toEqual({
+      frontmatter:
+        "\uFEFF---\r\nname: angela-search-scrape\r\ndescription: Angela's API\r\n---\r\n\r\n",
+      body: "  indented body",
+    });
   });
 
   test("rejects Markdown when tokenization fails", () => {

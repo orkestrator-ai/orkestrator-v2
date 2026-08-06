@@ -112,6 +112,39 @@ describe("TiptapMarkdownEditor", () => {
     );
   });
 
+  test("preserves leading frontmatter when serializing a rendered edit", async () => {
+    const onChange = mock((_markdown: string) => {});
+    const frontmatter = [
+      "---",
+      "name: angela-search-scrape",
+      "description: Use Angela's production API.",
+      "---",
+      "",
+      "",
+    ].join("\n");
+
+    render(
+      <TiptapMarkdownEditor
+        markdown={`${frontmatter}# Original\n\nBody`}
+        fontFamily="Fira Code"
+        fontSize={14}
+        onChange={onChange}
+        onSave={() => {}}
+      />,
+    );
+
+    const editor = await screen.findByTestId("tiptap-markdown-editor");
+    expect(screen.getByRole("heading", { name: "Original" })).toBeTruthy();
+    expect(editor.textContent).not.toContain("angela-search-scrape");
+
+    editor.innerHTML = "<h1>Updated</h1><p>Body</p>";
+    fireEvent.input(editor, { data: "Updated", inputType: "insertText" });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith(`${frontmatter}# Updated\n\nBody`);
+    });
+  });
+
   test("flushes a pending rich edit on save", async () => {
     const onChange = mock((_markdown: string) => {});
     const onSave = mock((_markdownOverride?: string) => {});

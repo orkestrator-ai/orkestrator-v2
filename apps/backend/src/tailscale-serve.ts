@@ -200,7 +200,7 @@ export class TailscaleServeManager {
   async stop(): Promise<void> {
     const httpsPort = this.activeHttpsPort;
     if (httpsPort === null) return;
-    await this.run(this.executable, ["serve", `--https=${httpsPort}`, "off"]);
+    await this.run(this.executable, ["serve", "--yes", `--https=${httpsPort}`, "off"]);
     this.activeHttpsPort = null;
   }
 
@@ -230,6 +230,7 @@ export class TailscaleServeManager {
     for (const handlerPath of handlerPaths) {
       const args = [
         "serve",
+        "--yes",
         `--https=${httpsPort}`,
         ...(handlerPath === "/" ? [] : [`--set-path=${handlerPath}`]),
         "off",
@@ -257,7 +258,7 @@ export class TailscaleServeManager {
         `Refusing to remove a changed Tailscale Serve configuration on HTTPS port ${httpsPort}`,
       );
     }
-    await this.run(this.executable, ["serve", `--https=${httpsPort}`, "off"]);
+    await this.run(this.executable, ["serve", "--yes", `--https=${httpsPort}`, "off"]);
     if (this.activeHttpsPort === httpsPort) this.activeHttpsPort = null;
     return true;
   }

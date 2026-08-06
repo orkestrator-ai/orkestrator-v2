@@ -72,7 +72,7 @@ describe("Tailscale Serve manager", () => {
         command: "/opt/tailscale",
         args: ["serve", "--bg", "--yes", "--https=8443", "http://127.0.0.1:34121"],
       },
-      { command: "/opt/tailscale", args: ["serve", "--https=8443", "off"] },
+      { command: "/opt/tailscale", args: ["serve", "--yes", "--https=8443", "off"] },
     ]);
   });
 
@@ -118,9 +118,9 @@ describe("Tailscale Serve manager", () => {
     await expect(manager.clearHttpsPort(443)).resolves.toBeUndefined();
     expect(runMock.mock.calls.map((call) => call[1])).toEqual([
       ["serve", "status", "--json"],
-      ["serve", "--https=443", "--set-path=/api", "off"],
-      ["serve", "--https=443", "--set-path=/docs", "off"],
-      ["serve", "--https=443", "off"],
+      ["serve", "--yes", "--https=443", "--set-path=/api", "off"],
+      ["serve", "--yes", "--https=443", "--set-path=/docs", "off"],
+      ["serve", "--yes", "--https=443", "off"],
     ]);
 
     await expect(manager.clearHttpsPort(0)).rejects.toThrow("Invalid Tailscale Serve HTTPS port");
@@ -200,7 +200,7 @@ describe("Tailscale Serve manager", () => {
 
     expect(calls).toEqual([
       ["serve", "status", "--json"],
-      ["serve", "--https=443", "off"],
+      ["serve", "--yes", "--https=443", "off"],
     ]);
   });
 
@@ -252,7 +252,7 @@ describe("Tailscale Serve manager", () => {
 
     await expect(manager.stopOwned(41234, 8443)).resolves.toBe(true);
     await expect(manager.stopOwned(41234, 8443)).resolves.toBe(false);
-    expect(run).toHaveBeenCalledWith("tailscale", ["serve", "--https=8443", "off"]);
+    expect(run).toHaveBeenCalledWith("tailscale", ["serve", "--yes", "--https=8443", "off"]);
   });
 
   test("allows unrelated existing listeners", async () => {
@@ -364,7 +364,7 @@ describe("Tailscale Serve manager", () => {
     await writeFile(executable, `#!/bin/sh
 if [ "$2" = "status" ] && [ "$3" = "--json" ]; then
   printf '{}'
-elif [ "$2" = "--https=443" ] && [ "$3" = "off" ]; then
+elif [ "$2" = "--yes" ] && [ "$3" = "--https=443" ] && [ "$4" = "off" ]; then
   exit 0
 else
   printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'

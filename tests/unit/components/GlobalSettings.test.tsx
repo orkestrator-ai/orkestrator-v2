@@ -388,6 +388,8 @@ describe("GlobalSettings", () => {
 
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/removes the existing HTTPS listener on port 443/)).toBeTruthy();
+    expect(dialog.className).toContain("z-[80]");
+    expect(document.querySelector('[data-slot="alert-dialog-overlay"]')?.className).toContain("z-[80]");
     fireEvent.click(within(dialog).getByRole("button", { name: "Reset Tailscale Serve" }));
 
     await waitFor(() => expect(mockResetWebClientServe).toHaveBeenCalledTimes(1));

@@ -83,7 +83,11 @@ function createDefaultReviewPrompt(
   reviewInstruction?: unknown,
 ): string {
   return [
-    "You are performing a commit and code review workflow. Execute the steps in order.",
+    "You are performing a commit and code review workflow. Fix the review snapshot first, then overlap independent validation and analysis where supported.",
+    "",
+    "If issues are found and the user asks to fix them, run typechecking and build validation again as appropriate for the project.",
+    "",
+    "Begin by running the git commands required to establish the review snapshot.",
     "",
     buildReviewBody({
       targetBranch,
@@ -91,10 +95,6 @@ function createDefaultReviewPrompt(
       allowClarifyingQuestions: true,
       outputFormat: "markdown",
     }),
-    "",
-    "If issues are found and the user asks to fix them, run typechecking and build validation again as appropriate for the project.",
-    "",
-    "Begin by running the git commands to understand the current state.",
   ].join("\n");
 }
 

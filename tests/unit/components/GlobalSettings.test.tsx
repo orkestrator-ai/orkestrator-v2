@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { mockWriteText } from "../../mocks/clipboard";
-import { REVIEW_INSTRUCTION_MAX_LENGTH } from "../../../packages/protocol/src/review-prompt";
+import {
+  REVIEW_INSTRUCTION_MAX_LENGTH,
+  REVIEW_INSTRUCTION_RECOMMENDED_LENGTH,
+} from "../../../packages/protocol/src/review-prompt";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 
 const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
@@ -891,6 +894,22 @@ describe("GlobalSettings", () => {
     expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  test("warns about long review instructions without blocking legacy values", async () => {
+    render(<GlobalSettings activeSection="review" />);
+    await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
+    const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
+
+    fireEvent.change(instruction, {
+      target: { value: "x".repeat(REVIEW_INSTRUCTION_RECOMMENDED_LENGTH + 1) },
+    });
+
+    expect(screen.getByText(/Long review instructions are repeated across review passes/))
+      .toBeTruthy();
+    expect(instruction.getAttribute("aria-invalid")).toBeNull();
+    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled)
+      .toBe(false);
+  });
+
   test("reports custom instructions that do not use the target branch token", async () => {
     render(<GlobalSettings activeSection="review" />);
     await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
@@ -899,7 +918,9 @@ describe("GlobalSettings", () => {
     fireEvent.change(instruction, { target: { value: "Review the current diff." } });
 
     expect(screen.getByText("No dynamic target branch token")).toBeTruthy();
-    expect(screen.getByText(`24 / ${REVIEW_INSTRUCTION_MAX_LENGTH.toLocaleString()} characters`)).toBeTruthy();
+    expect(screen.getByText(
+      `24 / ${REVIEW_INSTRUCTION_MAX_LENGTH.toLocaleString()} characters · ~6 tokens`,
+    )).toBeTruthy();
   });
 
   test("saves non-default editor and agent selections", async () => {

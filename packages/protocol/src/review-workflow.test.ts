@@ -120,6 +120,9 @@ describe("review workflow contract", () => {
     expect(body).toContain("git diff origin/main...HEAD");
     expect(body).toContain("## Step 4: Test Coverage Review");
     expect(body).toContain("provider-enforced JSON Schema");
+    expect(body).toContain("Return only the provider-enforced structured report");
+    expect(body).not.toContain("## Output Format");
+    expect(body).not.toContain("## Summary of change");
     expect(body).toContain(
       "Do not ask clarifying questions — this is an automated pipeline.",
     );
@@ -931,12 +934,29 @@ describe("review body assembly", () => {
       targetBranch: "main", outputFormat: "markdown", allowClarifyingQuestions: true,
     });
     expect(markdown).toContain("required Markdown report");
-    expect(markdown).toContain("Ask clarifying questions");
+    expect(markdown).toContain("Ask a clarifying question only when the answer would materially change");
+    expect(markdown.trimEnd()).toEndWith(
+      "validate ticket, commit, and repository claims against the code.",
+    );
 
     const structured = buildReviewBody({
       targetBranch: "main", outputFormat: "structured", allowClarifyingQuestions: false,
     });
     expect(structured).not.toContain("Ask clarifying questions");
+    expect(structured).not.toContain("## Output Format");
+  });
+
+  test("supports a read-only preparation contract for automated build reviews", () => {
+    const body = buildReviewBody({
+      targetBranch: "main",
+      preparationMode: "verify-clean",
+      outputFormat: "structured",
+      allowClarifyingQuestions: false,
+    });
+
+    expect(body).toContain("## Step 1: Establish the read-only review snapshot");
+    expect(body).toContain("Do not modify files or create another commit");
+    expect(body).not.toContain("Create one rollback commit");
   });
 
   test("a hostile branch cannot reach the prompt through the looped-review path", () => {

@@ -42,16 +42,17 @@ export function reviewPrompt(
   reviewInstruction?: string,
 ): string {
   return [
-    "You are performing an automated commit and code review workflow for this ticket. Execute the fixed steps in order.",
+    "You are performing an automated read-only code review for this ticket. Fix the review snapshot first, then overlap independent validation and analysis where supported.",
     ticketContext(pipeline.taskSnapshot),
     notes ? `**Project Notes**:\n${notes}` : "",
     buildReviewBody({
       targetBranch,
       reviewInstruction,
+      preparationMode: "verify-clean",
       allowClarifyingQuestions: false,
       outputFormat: "structured",
     }),
-    "The provider enforces the structured review schema. Do not modify files after the rollback commit created by Step 1.",
+    "The provider enforces the structured review schema. This review is read-only; do not modify files or create commits.",
     "Begin by running the git commands required to understand the current state.",
   ].filter(Boolean).join("\n\n");
 }

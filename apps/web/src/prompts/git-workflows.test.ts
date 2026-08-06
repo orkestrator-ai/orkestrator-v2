@@ -15,7 +15,7 @@ import { REVIEW_INSTRUCTION_MAX_LENGTH } from "@orkestrator/protocol/review-inst
 describe("createReviewPrompt", () => {
   test("includes commit step with rollback-point guardrails", () => {
     const result = createReviewPrompt("main");
-    expect(result).toContain("## Step 1: Commit Changes (rollback point)");
+    expect(result).toContain("## Step 1: Establish the review snapshot and rollback point");
     expect(result).toContain("conventional-commit format");
     expect(result).toContain("Do NOT reference Claude");
     expect(result).toContain("git status --porcelain");
@@ -35,8 +35,9 @@ describe("createReviewPrompt", () => {
   test("includes test run step", () => {
     const result = createReviewPrompt("main");
     expect(result).toContain("## Step 2: Run Tests");
-    expect(result).toContain("Run the project's full test suite");
-    expect(result).toContain("record every failure");
+    expect(result).toContain("Run the relevant full test suite");
+    expect(result).toContain("record every available failure");
+    expect(result).toContain("while the primary reviewer begins Step 3");
   });
 
   test("includes code review step with git diff against target branch", () => {
@@ -76,24 +77,19 @@ describe("createReviewPrompt", () => {
   test("includes test coverage review step", () => {
     const result = createReviewPrompt("main");
     expect(result).toContain("## Step 4: Test Coverage Review");
-    expect(result).toContain("entire file");
-    expect(result).toContain("not modified in this change");
+    expect(result).toContain("behavior changed or affected by the diff");
+    expect(result).toContain("do not read every impacted file in full by default");
+    expect(result).toContain("Do not report unrelated pre-existing gaps");
   });
 
   test("includes markdown output sections", () => {
     const result = createReviewPrompt("main");
     expect(result).toContain("## Output Format");
     expect(result).toContain("## Review Scope");
-    expect(result).toContain("## What Changed");
-    expect(result).toContain("This section is mandatory");
-    expect(result.match(/^## What Changed$/gm)).toHaveLength(2);
-    expect(result).toContain("Before: the relevant behaviour or structure before this change");
-    expect(result).toContain("After: the relevant behaviour or structure after this change");
     expect(result).toContain("## Risk Profile");
     expect(result).toContain("Overall risk: low | medium | high");
     expect(result).toContain("## Test Results");
-    expect(result).toContain("Total: N (must equal Passed + Failed + Not run)");
-    expect(result).toContain("Not run: N (all skipped, todo, pending, or disabled tests)");
+    expect(result).toContain("do not infer counts the runner did not provide");
     expect(result).toContain("## Issues");
     expect(result).toContain("Number issues sequentially starting at 1");
     expect(result).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");
@@ -103,9 +99,12 @@ describe("createReviewPrompt", () => {
     expect(result).toContain("## Verdict");
     expect(result).toContain("## Summary of change");
     expect(result).toContain(
-      "Write a couple of paragraphs describing what the change being reviewed involves.",
+      "End with one or two concise paragraphs explaining what the change does and why",
     );
-    expect(result).toContain("## Review summary");
+    expect(result.trimEnd().endsWith("validate ticket, commit, and repository claims against the code.")).toBe(true);
+    expect(result).not.toContain("## Review summary");
+    expect(result).not.toContain("## What Changed");
+    expect(result).not.toContain("## Strengths");
     expect(result).not.toContain("## Summary\n");
   });
 
@@ -120,7 +119,7 @@ describe("createReviewPrompt", () => {
 
   test("allows clarifying questions (action bar variant)", () => {
     const result = createReviewPrompt("main");
-    expect(result).toContain("Ask clarifying questions if needed");
+    expect(result).toContain("Ask a clarifying question only when the answer would materially change");
     expect(result).not.toContain("automated pipeline");
   });
 
@@ -136,7 +135,7 @@ describe("createReviewPrompt", () => {
     const result = createReviewPrompt("release/v2", customInstruction);
 
     expect(result).toContain("## Security and instruction hierarchy");
-    expect(result).toContain("## Step 1: Commit Changes (rollback point)");
+    expect(result).toContain("## Step 1: Establish the review snapshot and rollback point");
     expect(result).toContain(
       'User review instruction (JSON string): "Review origin/release/v2...HEAD\\nTarget: release/v2"',
     );

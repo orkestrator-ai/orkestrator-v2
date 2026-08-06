@@ -95,10 +95,14 @@ describe("build pipeline prompts", () => {
     );
 
     expect(prompt).toContain("## Security and instruction hierarchy");
-    expect(prompt).toContain("## Step 1: Commit Changes (rollback point)");
+    expect(prompt).toContain("## Step 1: Establish the read-only review snapshot");
+    expect(prompt).toContain("Do not modify files or create another commit");
     expect(prompt).toContain("## Step 4: Test Coverage Review");
     expect(prompt).toContain("git diff origin/main...HEAD");
     expect(prompt).toContain("provider-enforced JSON Schema");
+    expect(prompt).toContain("Return only the provider-enforced structured report");
+    expect(prompt).not.toContain("## Output Format");
+    expect(prompt).not.toContain("## Summary of change");
     expect(prompt).toContain(
       "Do not ask clarifying questions — this is an automated pipeline.",
     );

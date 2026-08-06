@@ -134,6 +134,12 @@ describe("backend setup wrappers", () => {
     const failure = new Error("skill read failed");
     invokeMock.mockRejectedValueOnce(failure);
     await expect(readAgentSkill("opencode", file.path)).rejects.toBe(failure);
+
+    // The Skills pane renders the scan rejection, so swallowing it here would
+    // show an empty directory list instead of the reason it is empty.
+    const scanFailure = new Error("skill scan failed");
+    invokeMock.mockRejectedValueOnce(scanFailure);
+    await expect(listAgentSkills("claude")).rejects.toBe(scanFailure);
   });
 
   test("passes explicit tri-state PR metadata to the backend", async () => {

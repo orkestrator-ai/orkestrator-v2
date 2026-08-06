@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ImgHTMLAttributes } from "react";
 import {
   AlertTriangle,
   Check,
@@ -9,6 +9,7 @@ import {
   Search,
 } from "lucide-react";
 import { toast } from "sonner";
+import type { Components } from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -52,17 +53,56 @@ const TAB_TRIGGER_CLASSES =
  */
 const PANE_HEIGHT_CLASSES = "h-[calc(100dvh-80px)] md:h-[calc(100dvh-124px)]";
 
+/** Long enough that a typed word filters once, short enough to feel instant. */
+const FILTER_DEBOUNCE_MS = 150;
+
+const COPY_CONFIRM_MS = 1500;
+
 /**
  * Strips YAML frontmatter before rendering.
  *
  * remark reads `---\nname: x\n---` as a setext heading, so leaving it in turns
  * the metadata block into an enormous H2 above the actual document. Raw mode
  * still shows the file untouched.
+ *
+ * The opening fence tolerates trailing spaces and an empty body because real
+ * SKILL.md files have both, and the backend's `parseSkillFrontmatter` treats an
+ * empty block as frontmatter too — the two must not disagree about where the
+ * document starts.
  */
 export function stripFrontmatter(content: string): string {
-  const match = /^﻿?---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(content);
+  const match =
+    /^\uFEFF?---[ \t]*\r?\n(?:[\s\S]*?\r?\n)?(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(content);
   return match ? content.slice(match[0].length) : content;
 }
+
+/** `//host/x.png` and any scheme other than `data:` reaches the network. */
+function isRemoteImageSrc(src: string | undefined): boolean {
+  if (!src) return false;
+  if (src.startsWith("//")) return true;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(src);
+  return scheme ? scheme[1]!.toLowerCase() !== "data" : false;
+}
+
+/**
+ * A skill is often supplied by a plugin or a marketplace rather than written by
+ * the user, so `![](https://attacker.example/px.png)` would disclose the
+ * viewer's IP and a "read this skill" signal the moment the pane opens. Local
+ * and `data:` images still render.
+ */
+function SkillMarkdownImage({ src, alt, title }: ImgHTMLAttributes<HTMLImageElement>) {
+  if (isRemoteImageSrc(typeof src === "string" ? src : undefined)) {
+    return (
+      <span className="text-xs text-muted-foreground">
+        {alt || "Image"} <em>(remote image blocked)</em>
+      </span>
+    );
+  }
+  return <img src={src} alt={alt} title={title} />;
+}
+
+/** Module-level so `MessageMarkdown`'s memo on `content` still holds. */
+const SKILL_MARKDOWN_COMPONENTS: Components = { img: SkillMarkdownImage };
 
 interface ProviderState {
   scan?: AgentSkillScan;
@@ -77,10 +117,12 @@ export function SkillsSettings() {
   const [states, setStates] = useState<Record<string, ProviderState>>({});
   const [selectedByProvider, setSelectedByProvider] = useState<Record<string, string>>({});
   const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
   const [rawMode, setRawMode] = useState(false);
   const [file, setFile] = useState<backend.AgentSkillFile | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [fileRetry, setFileRetry] = useState(0);
   const [copied, setCopied] = useState(false);
 
   /**
@@ -90,6 +132,7 @@ export function SkillsSettings() {
    */
   const scanTokens = useRef<Record<string, number>>({});
   const fileToken = useRef(0);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /**
    * Rescans on every tab visit rather than caching: skills are files on disk
@@ -130,23 +173,37 @@ export function SkillsSettings() {
     void loadProvider(provider);
   }, [provider, loadProvider]);
 
+  /**
+   * The input stays controlled, but the list only refilters once typing pauses:
+   * the head of the filtered list feeds the selection below, so an undebounced
+   * query costs an IPC round trip and a disk read on every keystroke.
+   */
+  useEffect(() => {
+    const timer = setTimeout(() => setAppliedQuery(query), FILTER_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [query]);
+
   const state = states[provider] ?? { loading: true };
   const skills = useMemo(() => state.scan?.skills ?? [], [state.scan]);
 
+  const needle = appliedQuery.trim().toLowerCase();
   const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
     if (!needle) return skills;
     return skills.filter((skill) =>
       skill.name.toLowerCase().includes(needle)
       || skill.location.toLowerCase().includes(needle)
       || skill.description.toLowerCase().includes(needle));
-  }, [skills, query]);
+  }, [skills, needle]);
 
-  // Selection falls back to the first visible skill so the detail pane is never
-  // blank while the list has content.
+  /**
+   * Resolved against the *unfiltered* list: an explicit selection must survive a
+   * filter that excludes it, because re-targeting to `filtered[0]` would swap the
+   * detail pane and refire the read below while the user is still typing.
+   * Falling back to the first visible skill keeps the pane from starting blank.
+   */
   const selectedId = selectedByProvider[provider];
   const selected: AgentSkill | undefined =
-    filtered.find((skill) => skill.id === selectedId) ?? filtered[0];
+    skills.find((skill) => skill.id === selectedId) ?? filtered[0];
 
   useEffect(() => {
     const token = fileToken.current + 1;
@@ -172,14 +229,28 @@ export function SkillsSettings() {
         setFileError(err instanceof Error ? err.message : String(err));
         setFileLoading(false);
       });
-  }, [provider, selected?.filePath, state.revision]);
+  }, [provider, selected?.filePath, state.revision, fileRetry]);
+
+  /**
+   * The confirmation is pane-scoped, so a timer armed for one skill would leave
+   * the next skill's button reading "copied", and a second copy would have its
+   * confirmation cancelled by the first copy's timer.
+   */
+  useEffect(() => {
+    setCopied(false);
+    return () => {
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = null;
+    };
+  }, [selected?.filePath]);
 
   const copyPath = useCallback(async () => {
     if (!selected) return;
     try {
       await navigator.clipboard.writeText(selected.filePath);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      copyTimer.current = setTimeout(() => setCopied(false), COPY_CONFIRM_MS);
     } catch {
       toast.error("Could not copy the path to the clipboard");
     }
@@ -220,15 +291,9 @@ export function SkillsSettings() {
         </Tabs>
       </div>
 
-      <div
-        data-testid="skills-panes"
-        className="flex min-h-0 flex-1 flex-col gap-4 rounded-md border border-zinc-800 md:flex-row"
-      >
+      <div className="flex min-h-0 flex-1 flex-col gap-4 rounded-md border border-zinc-800 md:flex-row">
         {/* Skill list */}
-        <div
-          data-testid="skills-list-pane"
-          className="flex h-56 w-full shrink-0 flex-col border-b border-zinc-800 md:h-auto md:w-[17rem] md:border-b-0 md:border-r"
-        >
+        <div className="flex h-56 w-full shrink-0 flex-col border-b border-zinc-800 md:h-auto md:w-[17rem] md:border-b-0 md:border-r">
           <div className="flex items-center gap-2 border-b border-zinc-800 p-2">
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -322,9 +387,21 @@ export function SkillsSettings() {
             )}
           </ScrollArea>
 
+          {/* Gated on a completed scan: before one lands the counts are all
+              zero, which reads as a definitive "no skills, no directories"
+              rather than "not looked yet". */}
           <div className="border-t border-zinc-800 px-3 py-1.5 text-[10px] text-muted-foreground">
-            {skills.length} skill{skills.length === 1 ? "" : "s"} · {presentRoots} of{" "}
-            {state.scan?.roots.length ?? 0} directories present
+            {state.scan ? (
+              <>
+                {needle && `${filtered.length} of `}
+                {skills.length} skill{skills.length === 1 ? "" : "s"} · {presentRoots} of{" "}
+                {state.scan.roots.length} directories present
+              </>
+            ) : state.loading ? (
+              "Scanning…"
+            ) : (
+              "Scan failed"
+            )}
           </div>
         </div>
 
@@ -401,7 +478,19 @@ export function SkillsSettings() {
                     <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                   </div>
                 ) : fileError ? (
-                  <p className="text-xs text-destructive">{fileError}</p>
+                  /* Nothing else re-reads the same path, so without this the
+                     obvious recovery — clicking the skill again — is a no-op. */
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs text-destructive">{fileError}</p>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => setFileRetry((attempt) => attempt + 1)}
+                    >
+                      Retry
+                    </Button>
+                  </div>
                 ) : file ? (
                   <>
                     {file.truncated && (
@@ -415,7 +504,11 @@ export function SkillsSettings() {
                         {file.content}
                       </pre>
                     ) : (
-                      <MessageMarkdown content={stripFrontmatter(file.content)} enableBreaks={false} />
+                      <MessageMarkdown
+                        content={stripFrontmatter(file.content)}
+                        components={SKILL_MARKDOWN_COMPONENTS}
+                        enableBreaks={false}
+                      />
                     )}
                   </>
                 ) : null}

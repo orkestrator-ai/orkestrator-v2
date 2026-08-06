@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,6 +81,56 @@ describe("parseSkillFrontmatter", () => {
 
   test("returns nothing when there is no frontmatter", () => {
     expect(parseSkillFrontmatter("# Just a heading\n")).toEqual({});
+  });
+
+  test("stops at a closing delimiter carrying trailing whitespace", () => {
+    // Editors emit a trailing space and YAML allows it; an exact `=== "---"`
+    // check walked past it and let the body overwrite the real keys.
+    expect(parseSkillFrontmatter("---\nname: real\n--- \ndescription: from the body\n"))
+      .toEqual({ name: "real" });
+  });
+
+  test("accepts a closing delimiter of ...", () => {
+    expect(parseSkillFrontmatter("---\nname: real\n...\ndescription: from the body\n"))
+      .toEqual({ name: "real" });
+  });
+
+  test("accepts an opening delimiter carrying trailing whitespace", () => {
+    expect(parseSkillFrontmatter("--- \nname: real\n---\n")).toEqual({ name: "real" });
+  });
+
+  test("reports nothing when the frontmatter is never closed", () => {
+    // With no boundary there is nothing to distinguish metadata from prose, so
+    // the caller should fall back to the directory name instead.
+    expect(parseSkillFrontmatter("---\nname: real\ndescription: also real\n")).toEqual({});
+  });
+
+  test("treats an empty frontmatter block as present but empty", () => {
+    expect(parseSkillFrontmatter("---\n---\n# Body\n")).toEqual({});
+  });
+
+  test("reads CRLF files", () => {
+    expect(parseSkillFrontmatter("---\r\nname: alpha\r\ndescription: d\r\n---\r\n# A\r\n"))
+      .toEqual({ name: "alpha", description: "d" });
+  });
+
+  test("skips a byte-order mark", () => {
+    expect(parseSkillFrontmatter("﻿---\nname: alpha\n---\n")).toEqual({ name: "alpha" });
+  });
+
+  test("handles every block scalar indicator", () => {
+    for (const indicator of ["|", "|-", "|+", ">", ">-", "|2"]) {
+      expect(parseSkillFrontmatter(`---\nname: a\ndescription: ${indicator}\n  one\n  two\n---\n`))
+        .toEqual({ name: "a", description: "one two" });
+    }
+  });
+
+  test("ignores a key with no value", () => {
+    expect(parseSkillFrontmatter("---\nname:\ndescription: d\n---\n")).toEqual({ description: "d" });
+  });
+
+  test("ignores keys it does not care about", () => {
+    expect(parseSkillFrontmatter("---\nlicense: MIT\nname: a\n---\n")).toEqual({ name: "a" });
   });
 });
 
@@ -416,9 +467,337 @@ describe("scanAgentSkills", () => {
     const scan = await scanAgentSkills("claude");
 
     expect(scan.roots).toHaveLength(5);
-    expect(scan.roots.map((root) => root.skillCount)).toEqual([500, 500, 500, 500, 500]);
+    // `skillCount` reports what was actually listed, so the four roots that fill
+    // the 2,000 cap show 500 each and the fifth — entirely dropped — shows none.
+    expect(scan.roots.map((root) => root.skillCount)).toEqual([500, 500, 500, 500, 0]);
     expect(scan.skills).toHaveLength(2_000);
+    // Every root held 501 entries and the last was cut off by the cap, so none
+    // of them is reported as complete.
+    expect(scan.roots.every((root) => root.truncated)).toBe(true);
   }, 20_000);
+
+  test("a complete root is not reported as truncated", async () => {
+    await writeSkill(join(home, ".claude", "skills"), "only-one");
+
+    const scan = await scanAgentSkills("claude");
+
+    expect(scan.roots.find((root) => root.exists)).toMatchObject({
+      skillCount: 1,
+      truncated: false,
+    });
+  });
+
+  test("skill counts sum to the number of skills listed", async () => {
+    const shared = join(home, ".agents", "skills");
+    await writeSkill(shared, "dual");
+    const claudeSkills = join(home, ".claude", "skills");
+    await mkdir(claudeSkills, { recursive: true });
+    await symlink(join(shared, "dual"), join(claudeSkills, "dual"), "dir");
+    await writeSkill(claudeSkills, "solo");
+
+    const scan = await scanAgentSkills("opencode");
+
+    // The symlinked copy is deduped away, so the shared root must not still
+    // claim it — a count that disagrees with the list beside it is a lie.
+    expect(scan.roots.reduce((total, root) => total + root.skillCount, 0))
+      .toBe(scan.skills.length);
+  });
+
+  test("caps a runaway description rather than returning the whole frontmatter", async () => {
+    const dir = join(home, ".claude", "skills", "verbose");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "SKILL.md"),
+      `---\nname: verbose\ndescription: ${"x".repeat(4_000)}\n---\n\n# Verbose\n`,
+    );
+
+    const scan = await scanAgentSkills("claude");
+
+    expect(scan.skills[0]?.description).toHaveLength(512);
+  });
+
+  test("clamps a description without splitting an emoji", async () => {
+    const dir = join(home, ".claude", "skills", "emoji");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "SKILL.md"),
+      `---\nname: emoji\ndescription: ${"🚀".repeat(600)}\n---\n`,
+    );
+
+    const description = (await scanAgentSkills("claude")).skills[0]!.description;
+
+    // 512 code points, each two UTF-16 units — and no lone surrogate at the end.
+    expect(Array.from(description)).toHaveLength(512);
+    expect(description.endsWith("🚀")).toBe(true);
+  });
+
+  test("a file where a skill root should be is absent, not an error", async () => {
+    await mkdir(join(home, ".claude"), { recursive: true });
+    await writeFile(join(home, ".claude", "skills"), "not a directory");
+
+    const scan = await scanAgentSkills("claude");
+
+    expect(scan.skills).toEqual([]);
+    expect(scan.errors).toEqual([]);
+    expect(scan.roots.every((root) => !root.exists)).toBe(true);
+  });
+
+  test("shadowing is case-insensitive, matching how the agents resolve names", async () => {
+    await writeSkill(join(home, ".claude", "skills"), "Dup");
+    await writeSkill(join(home, ".agents", "skills"), "dup");
+
+    const scan = await scanAgentSkills("opencode");
+
+    expect(scan.skills.map((skill) => [skill.name, skill.shadowed])).toEqual([
+      ["Dup", false],
+      ["dup", true],
+    ]);
+  });
+
+  test("a FIFO named SKILL.md is reported, not waited on", async () => {
+    const dir = join(home, ".claude", "skills", "trap");
+    await mkdir(dir, { recursive: true });
+    if (spawnSync("mkfifo", [join(dir, "SKILL.md")]).status !== 0) return;
+    await writeSkill(join(home, ".claude", "skills"), "real");
+
+    // Opening a FIFO blocks until a writer appears; before this was guarded the
+    // scan never resolved at all, so the assertion that matters is that we get
+    // here with a result.
+    const scan = await scanAgentSkills("claude");
+
+    expect(scan.skills.map((skill) => skill.name)).toEqual(["real"]);
+    expect(scan.errors).toHaveLength(1);
+    expect(scan.errors[0]?.path).toBe("~/.claude/skills/trap/SKILL.md");
+  });
+});
+
+describe("Codex plugin discovery", () => {
+  let home: string;
+
+  const writeSkill = async (dir: string, name: string) => {
+    await mkdir(join(dir, name), { recursive: true });
+    await writeFile(join(dir, name, "SKILL.md"), `---\nname: ${name}\ndescription: d\n---\n`);
+  };
+
+  const writeConfig = async (body: string) => {
+    await mkdir(join(home, ".codex"), { recursive: true });
+    await writeFile(join(home, ".codex", "config.toml"), body);
+  };
+
+  const cachedPlugin = (marketplace: string, plugin: string, version = "1.0.0") =>
+    join(home, ".codex", "plugins", "cache", marketplace, plugin, version, "skills");
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "ork-skills-codex-"));
+    setAgentSkillsHomeForTesting(home);
+  });
+
+  afterEach(async () => {
+    setAgentSkillsHomeForTesting(undefined);
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("an enabled plugin is found despite TOML comments", async () => {
+    await writeSkill(cachedPlugin("market", "noted"), "noted-skill");
+    await writeConfig([
+      "# plugins the user has turned on",
+      '[plugins."noted@market"] # from the marketplace',
+      "enabled = true # keep this on",
+      "",
+    ].join("\n"));
+
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
+      .toEqual(["noted-skill"]);
+  });
+
+  test("reads the inline-table form of an enabled plugin", async () => {
+    await writeSkill(cachedPlugin("market", "inline"), "inline-skill");
+    await writeConfig('[plugins]\n"inline@market" = { enabled = true }\n');
+
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
+      .toEqual(["inline-skill"]);
+  });
+
+  test("an inline table that is not enabled stays off", async () => {
+    await writeSkill(cachedPlugin("market", "inline"), "inline-skill");
+    await writeConfig('[plugins]\n"inline@market" = { enabled = false }\n');
+
+    expect((await scanAgentSkills("codex")).skills).toEqual([]);
+  });
+
+  test("lists every enabled plugin, not just the first", async () => {
+    await writeSkill(cachedPlugin("market", "one"), "one-skill");
+    await writeSkill(cachedPlugin("market", "two"), "two-skill");
+    await writeConfig([
+      '[plugins."one@market"]',
+      "enabled = true",
+      '[plugins."two@market"]',
+      "enabled = true",
+      "",
+    ].join("\n"));
+
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
+      .toEqual(["one-skill", "two-skill"]);
+  });
+
+  test("enabled survives other keys between it and its table header", async () => {
+    await writeSkill(cachedPlugin("market", "late"), "late-skill");
+    await writeConfig('[plugins."late@market"]\nversion = "1.2.3"\nenabled = true\n');
+
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
+      .toEqual(["late-skill"]);
+  });
+
+  test("a nested subtable does not enable its parent plugin", async () => {
+    await writeSkill(cachedPlugin("market", "nested"), "nested-skill");
+    await writeConfig('[plugins."nested@market".env]\nenabled = true\n');
+
+    expect((await scanAgentSkills("codex")).skills).toEqual([]);
+  });
+
+  test("a plugin id that escapes the cache root is refused", async () => {
+    // The id becomes a path segment, so `..` would not merely point the scan
+    // elsewhere — it would add that directory to the roots `readAgentSkillFile`
+    // accepts, widening this module's read allowlist from a config file.
+    const outside = join(home, "outside", "x", "1.0.0", "skills");
+    await writeSkill(outside, "loot");
+    await writeConfig('[plugins."x@../../../outside"]\nenabled = true\n');
+
+    const scan = await scanAgentSkills("codex");
+
+    expect(scan.skills).toEqual([]);
+    expect(scan.roots.every((root) => root.scope !== "plugin")).toBe(true);
+    await expect(readAgentSkillFile("codex", join(outside, "loot", "SKILL.md")))
+      .rejects.toThrow(/outside the agent skill directories/);
+  });
+
+  test("a plugin id containing a separator is refused", async () => {
+    await writeConfig('[plugins."x@market/nested"]\nenabled = true\n');
+
+    const scan = await scanAgentSkills("codex");
+
+    expect(scan.roots.every((root) => root.scope !== "plugin")).toBe(true);
+  });
+
+  test("prefers the numerically newer prerelease, not the lexically larger one", async () => {
+    const plugin = join(home, ".codex", "plugins", "cache", "market", "plugin");
+    await writeSkill(join(plugin, "2.0.0-beta.2", "skills"), "older-beta");
+    await writeSkill(join(plugin, "2.0.0-beta.10", "skills"), "newer-beta");
+    await writeConfig('[plugins."plugin@market"]\nenabled = true\n');
+
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
+      .toEqual(["newer-beta"]);
+  });
+
+  test("understands v-prefixed and build-metadata cache directories", async () => {
+    const plugin = join(home, ".codex", "plugins", "cache", "market", "plugin");
+    await writeSkill(join(plugin, "v1.10.0+build.5", "skills"), "newest");
+    await writeSkill(join(plugin, "v1.9.0", "skills"), "older");
+    await writeConfig('[plugins."plugin@market"]\nenabled = true\n');
+
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
+      .toEqual(["newest"]);
+  });
+
+  test("picks deterministically between non-version cache markers", async () => {
+    const plugin = join(home, ".codex", "plugins", "cache", "market", "plugin");
+    await writeSkill(join(plugin, "local", "skills"), "local-cache");
+    await writeSkill(join(plugin, "unknown", "skills"), "unknown-cache");
+    await writeConfig('[plugins."plugin@market"]\nenabled = true\n');
+
+    // Neither marker is a version, so the order is arbitrary — but it must be
+    // stable, or the listed skill would change between scans.
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
+      .toEqual(["unknown-cache"]);
+  });
+
+  test("an enabled plugin whose cache holds no directories is skipped", async () => {
+    const plugin = join(home, ".codex", "plugins", "cache", "market", "plugin");
+    await mkdir(plugin, { recursive: true });
+    await writeFile(join(plugin, "notes.txt"), "only a file here");
+    await writeConfig('[plugins."plugin@market"]\nenabled = true\n');
+
+    const scan = await scanAgentSkills("codex");
+
+    expect(scan.roots.every((root) => root.scope !== "plugin")).toBe(true);
+  });
+});
+
+describe("Claude plugin discovery", () => {
+  let home: string;
+
+  const writeManifest = async (manifest: unknown) => {
+    await mkdir(join(home, ".claude", "plugins"), { recursive: true });
+    await writeFile(
+      join(home, ".claude", "plugins", "installed_plugins.json"),
+      typeof manifest === "string" ? manifest : JSON.stringify(manifest),
+    );
+  };
+
+  const writeSkill = async (dir: string, name: string) => {
+    await mkdir(join(dir, name), { recursive: true });
+    await writeFile(join(dir, name, "SKILL.md"), `---\nname: ${name}\ndescription: d\n---\n`);
+  };
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "ork-skills-claude-plugins-"));
+    setAgentSkillsHomeForTesting(home);
+  });
+
+  afterEach(async () => {
+    setAgentSkillsHomeForTesting(undefined);
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("uses only the first install of a plugin id", async () => {
+    const first = join(home, "install-a");
+    const second = join(home, "install-b");
+    await writeSkill(join(first, "skills"), "from-first");
+    await writeSkill(join(second, "skills"), "from-second");
+    await writeManifest({
+      plugins: { "dup@market": [{ installPath: first }, { installPath: second }] },
+    });
+
+    // Later entries are other scopes of the same plugin, not other plugins.
+    expect((await scanAgentSkills("claude")).skills.map((skill) => skill.name))
+      .toEqual(["from-first"]);
+  });
+
+  test("falls back to the whole key when it carries no marketplace", async () => {
+    const installPath = join(home, "plain");
+    await writeSkill(join(installPath, "skills"), "plain-skill");
+    await writeManifest({ plugins: { "no-marketplace": [{ installPath }] } });
+
+    expect((await scanAgentSkills("claude")).skills[0]).toMatchObject({
+      plugin: "no-marketplace",
+      scope: "plugin",
+    });
+  });
+
+  test("refuses a relative installPath rather than resolving it against the cwd", async () => {
+    await writeManifest({ plugins: { "rel@market": [{ installPath: "../../etc" }] } });
+
+    const scan = await scanAgentSkills("claude");
+
+    expect(scan.roots.every((root) => root.scope !== "plugin")).toBe(true);
+  });
+
+  test("ignores a manifest whose shape is wrong", async () => {
+    await writeManifest([{ installPath: join(home, "nope") }]);
+
+    expect((await scanAgentSkills("claude")).roots.every((root) => root.scope !== "plugin"))
+      .toBe(true);
+  });
+
+  test("ignores invalid JSON without listing a plugin root", async () => {
+    await writeSkill(join(home, ".claude", "skills"), "personal");
+    await writeManifest("{invalid");
+
+    const scan = await scanAgentSkills("claude");
+
+    expect(scan.skills.map((skill) => skill.name)).toEqual(["personal"]);
+    expect(scan.roots.every((root) => root.scope !== "plugin")).toBe(true);
+  });
 });
 
 describe("readAgentSkillFile", () => {
@@ -555,5 +934,51 @@ describe("readAgentSkillFile", () => {
     const filePath = join(home, ".claude", "skills", "missing", "SKILL.md");
 
     await expect(readAgentSkillFile("claude", filePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("refuses a sibling directory that merely shares the root's prefix", async () => {
+    const dir = join(home, ".claude", "skills-evil", "alpha");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "SKILL.md"), "secret");
+
+    // `~/.claude/skills-evil` starts with `~/.claude/skills`; only the trailing
+    // separator in the prefix test keeps it out.
+    await expect(readAgentSkillFile("claude", join(dir, "SKILL.md")))
+      .rejects.toThrow(/outside the agent skill directories/);
+  });
+
+  test("refuses a FIFO rather than blocking on it", async () => {
+    const dir = join(home, ".claude", "skills", "trap");
+    await mkdir(dir, { recursive: true });
+    if (spawnSync("mkfifo", [join(dir, "SKILL.md")]).status !== 0) return;
+
+    await expect(readAgentSkillFile("claude", join(dir, "SKILL.md")))
+      .rejects.toThrow(/regular file/);
+  });
+
+  test("refuses a directory named SKILL.md", async () => {
+    const dir = join(home, ".claude", "skills", "odd", "SKILL.md");
+    await mkdir(dir, { recursive: true });
+
+    await expect(readAgentSkillFile("claude", dir)).rejects.toThrow(/regular file/);
+  });
+
+  test("returns the normalised path it actually read", async () => {
+    const dir = join(home, ".claude", "skills", "alpha");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "SKILL.md"), "# Alpha\n");
+
+    const file = await readAgentSkillFile("claude", join(dir, ".", "SKILL.md"));
+
+    expect(file.path).toBe(join(dir, "SKILL.md"));
+  });
+
+  test("reads an empty skill file", async () => {
+    const dir = join(home, ".claude", "skills", "empty");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "SKILL.md"), "");
+
+    await expect(readAgentSkillFile("claude", join(dir, "SKILL.md")))
+      .resolves.toMatchObject({ content: "", truncated: false });
   });
 });

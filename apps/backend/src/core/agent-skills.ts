@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 
 /**
  * Read-only discovery of the agent skills installed on the host.
@@ -40,7 +41,10 @@ export interface AgentSkillRoot {
   /** Set for plugin roots; the plugin the skills are bundled with. */
   plugin?: string;
   exists: boolean;
+  /** How many of this root's skills the scan actually listed, after dedupe and capping. */
   skillCount: number;
+  /** Set when the root held more entries than the scan was willing to read. */
+  truncated: boolean;
 }
 
 export interface AgentSkill {
@@ -82,6 +86,22 @@ const MAX_SKILLS_PER_PROVIDER = 2_000;
 const FRONTMATTER_READ_BYTES = 16 * 1024;
 /** The detail pane renders one SKILL.md; anything past this is elided. */
 const MAX_SKILL_FILE_BYTES = 1024 * 1024;
+/**
+ * The list clamps descriptions to two lines, but frontmatter is user-controlled
+ * and a block scalar can fill the whole 16KiB head. Without this a provider with
+ * 2,000 skills could answer one `list_agent_skills` call with ~31MB of JSON.
+ */
+const MAX_DESCRIPTION_CHARS = 512;
+
+/**
+ * Clamps a description without splitting a surrogate pair — descriptions are
+ * prose and routinely contain emoji, and half a pair renders as a replacement
+ * character rather than being invisibly dropped.
+ */
+function clampDescription(value: string): string {
+  if (value.length <= MAX_DESCRIPTION_CHARS) return value;
+  return Array.from(value).slice(0, MAX_DESCRIPTION_CHARS).join("");
+}
 
 /**
  * Test-only home override. `os.homedir()` ignores `$HOME` under Bun, so tests
@@ -129,6 +149,26 @@ interface RootSpec {
   skip?: readonly string[];
 }
 
+/**
+ * Plugin and marketplace ids become path segments, and they arrive from files
+ * this module does not own (`config.toml`, `installed_plugins.json`). A segment
+ * containing a separator or `..` would not just point the scan somewhere else —
+ * it would add that directory to the roots `readAgentSkillFile` accepts, turning
+ * a marketplace id into a widening of this module's read allowlist.
+ */
+function isSafePathSegment(value: string): boolean {
+  if (!value || value === "." || value === "..") return false;
+  return !value.includes("/") && !value.includes("\\") && !value.includes(path.sep);
+}
+
+/** True when `target` is `parent` itself or sits underneath it. */
+function isInside(parent: string, target: string): boolean {
+  const root = path.normalize(parent);
+  const normalized = path.normalize(target);
+  if (normalized === root) return true;
+  return normalized.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+}
+
 async function readJsonFile(filePath: string): Promise<unknown> {
   try {
     return JSON.parse(await fs.readFile(filePath, "utf8"));
@@ -155,6 +195,10 @@ async function claudePluginRoots(): Promise<RootSpec[]> {
     for (const install of installs) {
       const installPath = (install as { installPath?: unknown } | null)?.installPath;
       if (typeof installPath !== "string" || !installPath) continue;
+      // A plugin legitimately installs anywhere, so the path is not confined to
+      // a cache root the way Codex's is — but it must still be a real absolute
+      // location rather than a relative fragment resolved against our cwd.
+      if (!path.isAbsolute(installPath)) continue;
       roots.push({
         path: path.join(installPath, "skills"),
         scope: "plugin",
@@ -182,18 +226,33 @@ async function codexEnabledPlugins(configPath: string): Promise<Array<{ plugin: 
 
   const enabled: Array<{ plugin: string; marketplace: string }> = [];
   let current: { plugin: string; marketplace: string } | null = null;
+  let inPluginsTable = false;
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
-    const header = /^\[plugins\."([^"@]+)@([^"]+)"\]$/.exec(trimmed);
+    // A trailing `# comment` is ordinary TOML; anchoring to end-of-line without
+    // allowing one silently dropped every plugin whose entry carried a note.
+    const header = /^\[plugins\."([^"@]+)@([^"]+)"\][ \t]*(?:#.*)?$/.exec(trimmed);
     if (header) {
       current = { plugin: header[1]!, marketplace: header[2]! };
+      inPluginsTable = false;
       continue;
     }
     if (trimmed.startsWith("[")) {
       current = null;
+      inPluginsTable = /^\[plugins\][ \t]*(?:#.*)?$/.test(trimmed);
       continue;
     }
-    if (current && /^enabled\s*=\s*true$/.test(trimmed)) {
+    // `[plugins]` with inline tables: `"id@market" = { enabled = true }`.
+    const inline = inPluginsTable
+      ? /^"([^"@]+)@([^"]+)"[ \t]*=[ \t]*\{([^}]*)\}[ \t]*(?:#.*)?$/.exec(trimmed)
+      : null;
+    if (inline) {
+      if (/(?:^|,)\s*enabled\s*=\s*true\s*(?:,|$)/.test(inline[3]!)) {
+        enabled.push({ plugin: inline[1]!, marketplace: inline[2]! });
+      }
+      continue;
+    }
+    if (current && /^enabled\s*=\s*true[ \t]*(?:#.*)?$/.test(trimmed)) {
       enabled.push(current);
       current = null;
     }
@@ -255,7 +314,13 @@ async function codexPluginRoots(home: string): Promise<RootSpec[]> {
   const cacheRoot = path.join(home, "plugins", "cache");
   const roots: RootSpec[] = [];
   for (const { plugin, marketplace } of enabled) {
-    const versionDir = await newestChildDir(path.join(cacheRoot, marketplace, plugin));
+    if (!isSafePathSegment(plugin) || !isSafePathSegment(marketplace)) continue;
+    const pluginCache = path.join(cacheRoot, marketplace, plugin);
+    // Belt and braces: the segment check above already blocks an escape, but the
+    // consequence of one is a wider read allowlist, so confirm the result landed
+    // where we meant it to rather than trusting the check alone.
+    if (!isInside(cacheRoot, pluginCache)) continue;
+    const versionDir = await newestChildDir(pluginCache);
     if (!versionDir) continue;
     roots.push({ path: path.join(versionDir, "skills"), scope: "plugin", plugin });
   }
@@ -313,6 +378,16 @@ async function rootSpecsFor(provider: AgentSkillProvider): Promise<RootSpec[]> {
 }
 
 /**
+ * YAML allows trailing whitespace on the closing fence, and editors emit it. An
+ * exact `=== "---"` check walked straight past it into the body, which then
+ * overwrote the real keys — so the terminator is matched on the trimmed line.
+ */
+function isFrontmatterTerminator(line: string): boolean {
+  const trimmed = line.trimEnd();
+  return trimmed === "---" || trimmed === "...";
+}
+
+/**
  * Pulls `name` and `description` out of a SKILL.md's YAML frontmatter.
  *
  * Deliberately not a YAML parser: skills only need two scalar keys, and they
@@ -321,14 +396,18 @@ async function rootSpecsFor(provider: AgentSkillProvider): Promise<RootSpec[]> {
  */
 export function parseSkillFrontmatter(head: string): { name?: string; description?: string } {
   const normalized = head.replace(/^\uFEFF/, "");
-  if (!/^---\r?\n/.test(normalized)) return {};
+  if (!/^---[ \t]*\r?\n/.test(normalized)) return {};
 
   const lines = normalized.split(/\r?\n/).slice(1);
   const result: { name?: string; description?: string } = {};
+  let closed = false;
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
-    if (line === "---" || line === "...") break;
+    if (isFrontmatterTerminator(line)) {
+      closed = true;
+      break;
+    }
 
     const match = /^([A-Za-z0-9_-]+):[ \t]*(.*)$/.exec(line);
     if (!match) continue;
@@ -342,7 +421,7 @@ export function parseSkillFrontmatter(head: string): { name?: string; descriptio
       let cursor = index + 1;
       for (; cursor < lines.length; cursor += 1) {
         const next = lines[cursor]!;
-        if (next === "---" || next === "...") break;
+        if (isFrontmatterTerminator(next)) break;
         if (next.trim() !== "" && !/^\s/.test(next)) break;
         body.push(next.trim());
       }
@@ -358,12 +437,35 @@ export function parseSkillFrontmatter(head: string): { name?: string; descriptio
     if (value) result[key] = value;
   }
 
-  return result;
+  // Without a closing delimiter there is no boundary between metadata and prose,
+  // so body text would be reported as the skill's name and description. Report
+  // nothing instead and let the caller fall back to the directory name.
+  return closed ? result : {};
+}
+
+/**
+ * Opens a path only once the handle is known to be a regular file.
+ *
+ * A skills tree is user-controlled, and `open` on a FIFO blocks until a writer
+ * appears — with no timeout, one named pipe called `SKILL.md` would hang the
+ * whole scan and leak the command's promise. `O_NONBLOCK` makes the open return
+ * immediately, and stat-ing the *handle* rather than the path leaves no window
+ * between the check and the open.
+ */
+async function openRegularFile(filePath: string): Promise<FileHandle> {
+  const handle = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  try {
+    if (!(await handle.stat()).isFile()) throw new Error("Not a regular file");
+    return handle;
+  } catch (error) {
+    await handle.close().catch(() => {});
+    throw error;
+  }
 }
 
 /** Reads only the head of a file — SKILL.md bodies can be tens of kilobytes. */
 async function readHead(filePath: string, bytes: number): Promise<string> {
-  const handle = await fs.open(filePath, "r");
+  const handle = await openRegularFile(filePath);
   try {
     const buffer = Buffer.alloc(bytes);
     const { bytesRead } = await handle.read(buffer, 0, bytes, 0);
@@ -386,6 +488,39 @@ async function isDirectory(target: string): Promise<boolean> {
 /** Internal shape: `realPath` collapses duplicate roots and never leaves this module. */
 type ScannedSkill = Omit<AgentSkill, "shadowed"> & { realPath: string };
 
+/**
+ * Streams a root's candidate skill directories, stopping at the cap.
+ *
+ * `opendir` rather than `readdir` so an enormous directory costs a bounded read
+ * instead of materialising every entry only to slice it away afterwards.
+ */
+async function readRootEntries(spec: RootSpec): Promise<{ names: string[]; truncated: boolean }> {
+  const names: string[] = [];
+  let truncated = false;
+  const dir = await fs.opendir(spec.path);
+  try {
+    for await (const entry of dir) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      if (spec.skip?.includes(entry.name)) continue;
+      if (names.length >= MAX_ENTRIES_PER_ROOT) {
+        truncated = true;
+        break;
+      }
+      names.push(entry.name);
+    }
+  } finally {
+    // Breaking out of `for await` already closes the handle, and Bun's second
+    // `close()` returns undefined rather than a promise — so this has to guard
+    // against both a throw and a non-thenable, not just a rejection.
+    try {
+      await dir.close();
+    } catch {
+      // Already closed by the iterator.
+    }
+  }
+  return { names, truncated };
+}
+
 async function scanRoot(
   spec: RootSpec,
   errors: Array<{ path: string; message: string }>,
@@ -398,15 +533,14 @@ async function scanRoot(
     ...(spec.plugin ? { plugin: spec.plugin } : {}),
     exists: false,
     skillCount: 0,
+    truncated: false,
   };
 
   let entries: string[];
   try {
-    entries = (await fs.readdir(spec.path, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
-      .map((entry) => entry.name)
-      .filter((name) => !spec.skip?.includes(name))
-      .slice(0, MAX_ENTRIES_PER_ROOT);
+    const listing = await readRootEntries(spec);
+    entries = listing.names;
+    root.truncated = listing.truncated;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     // A root that simply is not there is the normal case, not an error.
@@ -437,7 +571,7 @@ async function scanRoot(
     skills.push({
       id: filePath,
       name: frontmatter.name?.trim() || name,
-      description: frontmatter.description ?? "",
+      description: clampDescription(frontmatter.description ?? ""),
       filePath,
       location: displayPath(skillDir),
       scope: spec.scope,
@@ -449,7 +583,9 @@ async function scanRoot(
     });
   }
 
-  root.skillCount = skills.length;
+  // `skillCount` is finalised by the caller: dedupe and the per-provider cap can
+  // both drop entries this root found, and a count that disagrees with the list
+  // beside it is worse than no count at all.
   return { root, skills };
 }
 
@@ -463,9 +599,15 @@ export async function scanAgentSkills(provider: AgentSkillProvider): Promise<Age
   const skills: AgentSkill[] = [];
   // `specs` is already highest-precedence-first, so the first sighting of a name
   // is the one the agent actually loads and every later one is shadowed.
-  for (const { skills: rootSkills } of results) {
+  for (const { root, skills: rootSkills } of results) {
+    let listed = 0;
     for (const skill of rootSkills) {
-      if (skills.length >= MAX_SKILLS_PER_PROVIDER) break;
+      // The cap stops the listing, but every root past it still has to say so —
+      // otherwise a root the user can see skills in reports a confident zero.
+      if (skills.length >= MAX_SKILLS_PER_PROVIDER) {
+        root.truncated = true;
+        break;
+      }
       // One file reachable through two roots is one skill, not two.
       if (seenFiles.has(skill.realPath)) continue;
       seenFiles.add(skill.realPath);
@@ -474,7 +616,9 @@ export async function scanAgentSkills(provider: AgentSkillProvider): Promise<Age
       const { realPath: _realPath, ...rest } = skill;
       skills.push({ ...rest, shadowed: seenNames.has(key) });
       seenNames.add(key);
+      listed += 1;
     }
+    root.skillCount = listed;
   }
 
   // Alphabetical by name; within a duplicated name the copy that actually loads
@@ -516,18 +660,21 @@ export async function readAgentSkillFile(
   if (path.basename(normalized) !== "SKILL.md") throw new Error("Expected filePath to be a SKILL.md");
 
   const specs = await rootSpecsFor(provider);
-  const allowed = specs.some((spec) => {
-    const root = path.normalize(spec.path);
-    return normalized.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
-  });
+  // The separator is load-bearing: without it `~/.claude/skills-evil/x/SKILL.md`
+  // would pass as a prefix match on `~/.claude/skills`.
+  const allowed = specs.some((spec) => isInside(spec.path, normalized));
   if (!allowed) throw new Error("Refusing to read a file outside the agent skill directories");
 
-  // Read one byte past the display limit to detect truncation without ever
-  // allocating or loading the complete (user-controlled) file.
-  const handle = await fs.open(normalized, "r");
-  const buffer = Buffer.alloc(MAX_SKILL_FILE_BYTES + 1);
+  const handle = await openRegularFile(normalized);
+  let buffer: Buffer;
   let bytesRead = 0;
   try {
+    // Read one byte past the display limit to detect truncation without ever
+    // loading the complete (user-controlled) file, and size the allocation from
+    // the handle so an ordinary two-kilobyte skill does not cost a megabyte.
+    const size = (await handle.stat()).size;
+    const capacity = Math.min(size + 1, MAX_SKILL_FILE_BYTES + 1);
+    buffer = Buffer.alloc(capacity);
     while (bytesRead < buffer.byteLength) {
       const result = await handle.read(
         buffer,
@@ -543,7 +690,7 @@ export async function readAgentSkillFile(
   }
   const truncated = bytesRead > MAX_SKILL_FILE_BYTES;
   return {
-    path: filePath,
+    path: normalized,
     content: buffer.subarray(0, Math.min(bytesRead, MAX_SKILL_FILE_BYTES)).toString("utf8"),
     truncated,
   };

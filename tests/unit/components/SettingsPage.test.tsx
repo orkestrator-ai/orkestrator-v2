@@ -116,6 +116,23 @@ describe("SettingsPage", () => {
     expect(container.querySelector(".animate-spin")).toBeNull();
   });
 
+  test("returns to GlobalSettings after leaving Skills once config resolves", async () => {
+    let resolveConfig!: (config: ReturnType<typeof defaultConfig>) => void;
+    invokeMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveConfig = resolve as typeof resolveConfig;
+    }));
+
+    render(<SettingsPage open onOpenChange={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Skills" }));
+    expect(screen.getByTestId("skills-settings")).toBeTruthy();
+
+    resolveConfig(defaultConfig());
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+    expect(await screen.findByTestId("active-settings-section")).toBeTruthy();
+    expect(screen.queryByTestId("skills-settings")).toBeNull();
+  });
+
   test("reuses a successful initial load when the page is reopened", async () => {
     const { rerender } = render(<SettingsPage open onOpenChange={() => undefined} />);
     await screen.findByTestId("active-settings-section");

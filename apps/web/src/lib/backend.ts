@@ -1259,7 +1259,14 @@ export interface AgentSkillRoot {
   scope: AgentSkillScope;
   plugin?: string;
   exists: boolean;
+  /** How many of this root's skills the scan listed, after dedupe and capping. */
   skillCount: number;
+  /**
+   * The root held more entries than the scan was willing to read. Optional
+   * because this is a wire shape: a backend older than the field simply omits
+   * it, and an absent flag means the same thing as `false`.
+   */
+  truncated?: boolean;
 }
 
 export interface AgentSkill {

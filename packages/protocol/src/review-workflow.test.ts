@@ -23,6 +23,7 @@ import {
   REVIEW_WORKFLOW_FAILURE_KINDS,
   type LoopedReviewWorkflow,
 } from "./review-workflow";
+import { REVIEW_VERDICTS } from "./structured-review/types";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "./agent-interactions";
 import { REVIEW_INSTRUCTION_MAX_LENGTH } from "./review-prompt";
 
@@ -956,9 +957,7 @@ describe("review body assembly", () => {
 
     expect(body).toContain("## Step 1: Establish the read-only review snapshot");
     expect(body).toContain("Do not modify files or create another commit");
-    expect(body).toContain("If any path remains, do not run validation in the current checkout");
     expect(body).toContain("isolated temporary worktree pinned to that head");
-    expect(body).toContain("record validation as not run and set the verdict to not ready");
     expect(body).toContain("Enforce the snapshot precondition from Step 1");
     expect(body).not.toContain("Create one rollback commit");
   });
@@ -972,8 +971,89 @@ describe("review body assembly", () => {
     });
 
     expect(body).toContain("Run `git status --porcelain` again");
-    expect(body).toContain("If any path remains, do not validate in this checkout");
     expect(body).toContain("isolated temporary worktree pinned to the captured head");
+  });
+
+  // A blanket "any remaining path blocks validation" rule fights the same
+  // step's instruction to deliberately leave unrelated files uncommitted, so an
+  // ordinary stray file would silently downgrade every review to "not
+  // validated". Both modes must scope the blocker to validation inputs.
+  for (
+    const [label, preparationMode, outputFormat] of [
+      ["interactive", "commit", "markdown"],
+      ["automated", "verify-clean", "structured"],
+    ] as const
+  ) {
+    test(`scopes the ${label} validation blocker to validation-affecting paths`, () => {
+      const body = buildReviewBody({
+        targetBranch: "main",
+        preparationMode,
+        outputFormat,
+        allowClarifyingQuestions: preparationMode === "commit",
+      });
+
+      expect(body).toContain(
+        "blocks validation only when it can change validation inputs: any tracked path, or an untracked path under a source, test, build, or configuration location",
+      );
+      // The unscoped forms this replaced. Their return would restore the bug.
+      expect(body).not.toContain("If any path remains, do not validate in this checkout");
+      expect(body).not.toContain(
+        "If any path remains, do not run validation in the current checkout",
+      );
+    });
+  }
+
+  test("does not name a verdict value the output contract cannot express", () => {
+    const body = buildReviewBody({
+      targetBranch: "main",
+      preparationMode: "verify-clean",
+      outputFormat: "structured",
+      allowClarifyingQuestions: false,
+    });
+
+    // The structured verdict is a provider-enforced enum, so the prompt must
+    // not instruct a literal the model is unable to emit.
+    expect(body).toContain(
+      "report the not-ready verdict value defined by the required output format",
+    );
+    for (const forbidden of ["verdict to not ready", "verdict to \"not ready\""]) {
+      expect(body).not.toContain(forbidden);
+    }
+    expect(REVIEW_VERDICTS).not.toContain("not ready" as never);
+  });
+
+  test("every verdict literal the prompt names is a member of REVIEW_VERDICTS", () => {
+    const body = buildReviewBody({
+      targetBranch: "main",
+      preparationMode: "commit",
+      outputFormat: "markdown",
+      allowClarifyingQuestions: true,
+    });
+
+    // The Markdown contract spells the enum out; anything it lists must exist.
+    const line = body.split("\n").find((entry) => entry.startsWith("- Ready:"));
+    expect(line).toBeTruthy();
+    const named = line!.slice("- Ready:".length).split("|").map((part) => part.trim());
+    expect(named.length).toBeGreaterThan(0);
+    for (const verdict of named) {
+      expect(REVIEW_VERDICTS).toContain(verdict as (typeof REVIEW_VERDICTS)[number]);
+    }
+  });
+
+  test("commit mode does not contradict its own leave-uncommitted instruction", () => {
+    const body = buildReviewBody({
+      targetBranch: "main",
+      preparationMode: "commit",
+      outputFormat: "markdown",
+      allowClarifyingQuestions: true,
+    });
+
+    expect(body).toContain(
+      "If a file looks suspicious or unrelated, leave it uncommitted",
+    );
+    expect(body).toContain(
+      "A path you deliberately left uncommitted under step 5 is expected and does not by itself block validation.",
+    );
   });
 
   test("a hostile branch cannot reach the prompt through the looped-review path", () => {

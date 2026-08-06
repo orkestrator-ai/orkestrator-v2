@@ -180,6 +180,7 @@ async function withService(
         hasMergeConflicts: boolean | null;
       } | null;
       failCommands: Set<string>;
+      uncommittedPaths: string[];
       kanbanTasks: Map<string, {
         id: string;
         status: string;
@@ -234,6 +235,7 @@ async function withService(
       hasMergeConflicts: boolean | null;
     } | null,
     failCommands: new Set<string>(),
+    uncommittedPaths: [] as string[],
     kanbanTasks,
   };
   const invoke = async <T>(
@@ -246,6 +248,9 @@ async function withService(
     }
     if (command === "detect_pr_local" || command === "detect_pr") {
       return controls.detection as T;
+    }
+    if (command === "get_environment_uncommitted_paths") {
+      return { paths: [...controls.uncommittedPaths] } as T;
     }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
@@ -1009,6 +1014,58 @@ describe("BuildPipelineService", () => {
         error: "Build cancelled",
         controller: "backend",
       });
+    });
+  });
+
+  // The build stage is only asked to commit. Without the backend's own probe a
+  // review would re-derive the worktree state inside its turn and could quietly
+  // decide it was dirty and skip validation altogether.
+  test("tells the review stage the backend saw a clean worktree", async () => {
+    await withService(async (service, storage, provider, invocations, controls) => {
+      controls.uncommittedPaths = [];
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+
+      expect((await pipeline(storage, started.id)).phase).toBe("reviewing");
+      expect(invocations).toContainEqual({
+        command: "get_environment_uncommitted_paths",
+        args: { environmentId: "env-1" },
+      });
+      const review = provider.sent.at(-1)!;
+      expect(review.prompt).toContain(
+        "the backend confirmed the environment worktree was clean when this review started",
+      );
+    });
+  });
+
+  test("names the paths the build stage left uncommitted in the review prompt", async () => {
+    await withService(async (service, storage, provider, _invocations, controls) => {
+      controls.uncommittedPaths = ["src/forgotten.ts", "src/forgotten.test.ts"];
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+
+      const review = provider.sent.at(-1)!;
+      expect(review.prompt).toContain(
+        "the preceding build stage did not commit everything",
+      );
+      expect(review.prompt).toContain("- `src/forgotten.ts`");
+      expect(review.prompt).toContain("- `src/forgotten.test.ts`");
+    });
+  });
+
+  test("still reviews when the worktree probe fails", async () => {
+    await withService(async (service, storage, provider, _invocations, controls) => {
+      controls.failCommands.add("get_environment_uncommitted_paths");
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+
+      // A probe failure must not fail the pipeline; the reviewer is told to
+      // establish the state itself instead.
+      expect((await pipeline(storage, started.id)).phase).toBe("reviewing");
+      const review = provider.sent.at(-1)!;
+      expect(review.prompt).toContain("could not determine the worktree state");
+      expect(review.prompt).toContain("record it as a limitation");
+      expect(review.prompt).not.toContain("confirmed the environment worktree was clean");
     });
   });
 

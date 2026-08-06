@@ -29,7 +29,19 @@ describe("createReviewPrompt", () => {
 
     expect(result.indexOf("Begin by running the git commands required to establish the review snapshot."))
       .toBeLessThan(result.indexOf("## Security and instruction hierarchy"));
-    expect(result).toContain("If any path remains, do not validate in this checkout");
+    expect(result).toContain(
+      "blocks validation only when it can change validation inputs",
+    );
+  });
+
+  test("keeps the follow-up fix instruction ahead of the shared workflow", () => {
+    const result = createReviewPrompt("main");
+    const followUp =
+      "If issues are found and the user asks to fix them, run typechecking and build validation again as appropriate for the project.";
+
+    expect(result).toContain(followUp);
+    expect(result.indexOf(followUp))
+      .toBeLessThan(result.indexOf("## Security and instruction hierarchy"));
   });
 
   test("includes prompt-injection defence", () => {

@@ -12,6 +12,7 @@ import {
   parseStructuredReviewReport,
   REVIEW_FINDING_POOL_JSON_SCHEMA,
   REVIEW_RECONCILIATION_JSON_SCHEMA,
+  REVIEW_VERDICTS,
   ReviewContractValidationError,
   safeParseReviewFindingPool,
   safeParseReviewReconciliation,
@@ -491,14 +492,14 @@ describe("structured review report contract", () => {
     expect(
       STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.properties
         .confidence,
-    ).toEqual({ type: "integer", minimum: 0, maximum: 100 });
+    ).toMatchObject({ type: "integer", minimum: 0, maximum: 100 });
     expect(
       STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.required,
     ).toContain("alternativeFixes");
     expect(
       STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.properties
         .alternativeFixes,
-    ).toEqual({
+    ).toMatchObject({
       anyOf: [
         { type: "array", items: { type: "string" } },
         { type: "null" },
@@ -514,6 +515,58 @@ describe("structured review report contract", () => {
       STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.testResults.properties.notRun,
     ).toMatchObject({ type: "integer", minimum: 0 });
     expect(() => JSON.stringify(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA)).not.toThrow();
+  });
+
+  // The structured prompt deliberately omits the long Markdown output template,
+  // so the schema is the only place the automated reviewer learns what these
+  // fields mean. A field without a description ships as a bare name.
+  test("describes every top-level report section in the schema itself", () => {
+    const properties = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties as Record<
+      string,
+      { description?: unknown; properties?: Record<string, { description?: unknown }> }
+    >;
+
+    for (const section of STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.required) {
+      const schema = properties[section];
+      expect(schema).toBeTruthy();
+      const described = typeof schema.description === "string"
+        && schema.description.length > 0;
+      const childrenDescribed = schema.properties !== undefined
+        && Object.values(schema.properties).some((child) =>
+          typeof child.description === "string" && child.description.length > 0
+        );
+      expect(described || childrenDescribed).toBe(true);
+    }
+  });
+
+  test("describes the issue and coverage-gap fields the fix agent consumes", () => {
+    const issue = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items
+      .properties as Record<string, { description?: unknown }>;
+
+    for (const field of ["description", "evidence", "suggestion", "verification"]) {
+      expect(typeof issue[field]?.description).toBe("string");
+      expect((issue[field]!.description as string).length).toBeGreaterThan(0);
+    }
+    expect(issue.confidence?.description).toContain("75");
+    expect(issue.severity?.description).toContain("P0");
+
+    const gap = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.testCoverageGaps
+      .items.properties as Record<string, { description?: unknown }>;
+    expect(gap.untestedBehavior?.description).toContain(
+      "Do not report unrelated pre-existing gaps",
+    );
+  });
+
+  test("describes the verdict enum without naming a value outside it", () => {
+    const verdict = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.verdict
+      .properties.ready;
+
+    expect(verdict.enum).toEqual(REVIEW_VERDICTS);
+    const description = verdict.description as string;
+    for (const value of REVIEW_VERDICTS) {
+      expect(description).toContain(`"${value}"`);
+    }
+    expect(description).toContain("validation could not be run");
   });
 
   test("keeps optional alternative fixes ergonomic after strict wire validation", () => {

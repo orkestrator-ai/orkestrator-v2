@@ -950,16 +950,17 @@ export function buildReviewBody(opts: ReviewBodyOptions): string {
 7. Do NOT reference Claude or add an agent as a contributor.
 8. Do NOT use \`--no-verify\` or skip any hooks.
 9. Record the immutable head and base commits with \`git rev-parse HEAD\` and \`git rev-parse origin/${targetBranch}^{commit}\`.
-10. Run \`git status --porcelain\` again. If any path remains, do not validate in this checkout: use an isolated temporary worktree pinned to the captured head, or record validation as not run and explain why.`
+10. Run \`git status --porcelain\` again and record every remaining path. A path you deliberately left uncommitted under step 5 is expected and does not by itself block validation.
+11. A remaining path blocks validation only when it can change validation inputs: any tracked path, or an untracked path under a source, test, build, or configuration location. If none remains, validate in place at the captured head. If one remains, do not validate in this checkout: use an isolated temporary worktree pinned to the captured head, or record validation as not run and explain why.`
     : `## Step 1: Establish the read-only review snapshot
 
 The preceding build stage is responsible for committing the change. Do not modify files or create another commit during this review.
 
-1. Run \`git status --porcelain\` and record every remaining path.
-2. If any path remains, do not run validation in the current checkout because uncommitted files would change its inputs. Do not stage or commit those files from this read-only review.
+1. Run \`git status --porcelain\` and record every remaining path. If the authoritative worktree state above already reports this, reconcile against it and report any disagreement as a limitation rather than re-deriving it.
+2. A remaining path blocks validation only when it can change validation inputs: any tracked path, or an untracked path under a source, test, build, or configuration location. Do not stage or commit any remaining path from this read-only review.
 3. Record the immutable head and base commits with \`git rev-parse HEAD\` and \`git rev-parse origin/${targetBranch}^{commit}\`.
 4. Use those fixed commits for the entire review so validation and analysis examine the same source.
-5. Run validation only in a clean checkout at the captured head or in an isolated temporary worktree pinned to that head. If neither is available, record validation as not run and set the verdict to not ready.`;
+5. If no blocking path remains, validate in place at the captured head. If one does, run validation in a clean checkout at the captured head or in an isolated temporary worktree pinned to that head; if neither is available, record validation as not run, record the blocking paths as a limitation, and report the not-ready verdict value defined by the required output format.`;
 
   const outputSection = outputFormat === "structured"
     ? `## Output contract

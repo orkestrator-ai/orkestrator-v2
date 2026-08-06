@@ -963,7 +963,31 @@ describe("GlobalSettings", () => {
     expect(screen.queryByText(/Long review instructions are repeated across review passes/))
       .toBeNull();
     expect(instruction.getAttribute("aria-describedby"))
-      .not.toContain("review-instruction-warning");
+      .toBe("review-instruction-description review-instruction-status");
+  });
+
+  test("keeps every described-by target present in the document", async () => {
+    // Asserting only that the warning id appears would let a regression drop
+    // the description and status ids, leaving the field partly unannounced.
+    render(<GlobalSettings activeSection="review" />);
+    await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
+    const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
+
+    for (
+      const value of [
+        "Short review instruction.",
+        "x".repeat(REVIEW_INSTRUCTION_RECOMMENDED_LENGTH + 1),
+      ]
+    ) {
+      fireEvent.change(instruction, { target: { value } });
+      const ids = instruction.getAttribute("aria-describedby")!.split(" ");
+      expect(ids).toContain("review-instruction-description");
+      expect(ids).toContain("review-instruction-status");
+      expect(new Set(ids).size).toBe(ids.length);
+      for (const id of ids) {
+        expect(document.getElementById(id)).toBeTruthy();
+      }
+    }
   });
 
   test("warns about long review instructions without blocking legacy values", async () => {
@@ -980,7 +1004,7 @@ describe("GlobalSettings", () => {
       `${REVIEW_INSTRUCTION_RECOMMENDED_LENGTH.toLocaleString()} characters or fewer`,
     );
     expect(instruction.getAttribute("aria-describedby"))
-      .toContain("review-instruction-warning");
+      .toBe("review-instruction-description review-instruction-status review-instruction-warning");
     expect(warning.id).toBe("review-instruction-warning");
     expect(instruction.getAttribute("aria-invalid")).toBeNull();
     expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled)

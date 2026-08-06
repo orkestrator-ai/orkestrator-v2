@@ -534,4 +534,59 @@ done
       context,
     )).toThrow("Expected environmentId to be a string");
   });
+
+  // The build pipeline reads this before its review stage, so "clean" and
+  // "dirty" have to be distinguishable against a real Git worktree rather than
+  // inferred from a diff meant for rendering.
+  test("reports the uncommitted paths of a local environment worktree", async () => {
+    const root = await createTempDir("ork-commands-io-uncommitted-");
+    const git = async (...args: string[]) => {
+      await runCommand("git", args, { cwd: root, timeoutMs: 30_000 });
+    };
+    await git("init", "--initial-branch=main");
+    await git("config", "user.email", "test@example.com");
+    await git("config", "user.name", "Test");
+    await fs.writeFile(path.join(root, "committed.ts"), "export const a = 1;\n");
+    await git("add", "committed.ts");
+    await git("commit", "-m", "seed");
+
+    const context = createContext({
+      id: "env-1",
+      environmentType: "local",
+      worktreePath: root,
+    });
+    const commands = createCommandRegistry();
+    const read = () => commands.get("get_environment_uncommitted_paths")?.(
+      { environmentId: "env-1" },
+      context,
+    ) as Promise<{ paths: string[] }>;
+
+    await expect(read()).resolves.toEqual({ paths: [] });
+
+    await fs.writeFile(path.join(root, "untracked.ts"), "export const b = 2;\n");
+    await fs.writeFile(path.join(root, "committed.ts"), "export const a = 2;\n");
+    const dirty = await read();
+    expect([...dirty.paths].sort()).toEqual(["committed.ts", "untracked.ts"]);
+
+    await git("add", "-A");
+    // Staged-but-uncommitted still counts: the commit has not happened.
+    expect((await read()).paths.sort()).toEqual(["committed.ts", "untracked.ts"]);
+
+    await git("commit", "-m", "rest");
+    await expect(read()).resolves.toEqual({ paths: [] });
+  });
+
+  test("rejects an unknown environment rather than reporting a clean worktree", async () => {
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("get_environment_uncommitted_paths")?.(
+      { environmentId: "missing" },
+      createContext(null),
+    )).rejects.toThrow("Environment not found");
+    // The handler is async, so a bad argument surfaces as a rejection.
+    await expect(commands.get("get_environment_uncommitted_paths")?.(
+      { environmentId: 1 },
+      createContext(null),
+    )).rejects.toThrow("Expected environmentId to be a string");
+  });
 });

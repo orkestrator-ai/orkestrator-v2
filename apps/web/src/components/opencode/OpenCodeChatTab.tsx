@@ -78,14 +78,10 @@ import {
 } from "@/lib/opencode-client";
 import { extractContextUsage } from "@/lib/context-usage";
 import {
-  startOpenCodeServer,
-  getOpenCodeServerStatus,
   getOpenCodeServerLog,
   getOpencodeModelPreferences,
   getCachedOpenCodeModelCatalog,
   cacheOpenCodeModelCatalog,
-  startLocalOpencodeServer,
-  getLocalOpencodeServerStatus,
   adoptNativeAgentSession,
   ensureNativeAgentSession,
   awaitBridgeReady,
@@ -1313,97 +1309,16 @@ export function OpenCodeChatTab({
         setConnectionState("connecting");
         setErrorMessage(null);
 
-        let hostPort: number | null = null;
-        let authToken: string | undefined;
-
-        if (typeof awaitBridgeReady === "function") {
-          const readiness = await awaitBridgeReady(environmentId, "opencode");
-          if (readiness && readiness.status !== "ready") {
-            throw Object.assign(new Error(readiness.error.message), readiness.error);
-          }
-          if (readiness) {
-            hostPort = readiness.port;
-            authToken = readiness.authToken;
-          }
+        const readiness = await awaitBridgeReady(environmentId, "opencode");
+        if (readiness.status !== "ready") {
+          throw Object.assign(new Error(readiness.error.message), readiness.error);
         }
-
-        if (!hostPort && isLocal) {
-          // Local environment - use local server commands
-          let localStatus;
-          try {
-            localStatus = await getLocalOpencodeServerStatus(environmentId);
-          } catch (error) {
-            throw error;
-          }
-
-          if (!localStatus.running) {
-            let result;
-            try {
-              result = await startLocalOpencodeServer(environmentId);
-            } catch (error) {
-              throw error;
-            }
-            localStatus = {
-              running: true,
-              port: result.port,
-              pid: result.pid,
-              authToken: result.authToken,
-            };
-          }
-
-          if (!mounted) return;
-
-          if (!localStatus.port) {
-            throw new Error("Local server started but no port available");
-          }
-
-          hostPort = localStatus.port;
-          authToken = localStatus.authToken;
-        } else if (!hostPort) {
-          // Containerized environment - use container server commands
-          if (!containerId) {
-            throw new Error(
-              "Container ID is required for containerized environments",
-            );
-          }
-
-          let status;
-          try {
-            status = await getOpenCodeServerStatus(containerId);
-          } catch (error) {
-            throw error;
-          }
-
-          if (!status.running) {
-            let result;
-            try {
-              result = await startOpenCodeServer(containerId);
-            } catch (error) {
-              throw error;
-            }
-            status = {
-              running: true,
-              hostPort: result.hostPort,
-              authToken: result.authToken,
-            };
-          }
-
-          if (!mounted) return;
-
-          if (!status.hostPort) {
-            throw new Error("Server started but no port available");
-          }
-
-          hostPort = status.hostPort;
-          authToken = status.authToken;
-        }
-
-        if (!hostPort) {
-          throw new Error("Failed to get server port");
-        }
-        if (!authToken) {
-          throw new Error("OpenCode server did not return an authentication credential");
-        }
+        const hostPort = readiness.port;
+        const authToken = readiness.authToken;
+        // `awaitBridgeReady` can block for the full readiness timeout. Anything
+        // resolved after this tab unmounted must not be written back into the
+        // environment-scoped store.
+        if (!mounted) return;
 
         setServerStatus(environmentId, {
           running: true,

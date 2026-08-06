@@ -45,7 +45,6 @@ import {
   CLAUDE_TMUX_EVENT,
   answerSelectionPrompt,
   answerPreToolUse,
-  capturePane,
   createInteractiveTerminal,
   detachInteractiveTerminal,
   getPendingHooks,
@@ -140,11 +139,9 @@ describe("claude-tmux-client invoke wrappers", () => {
 
   test("scoped commands always include environmentId", async () => {
     await getStatus("default", "env-2");
-    await capturePane("default", "env-2");
     await submit("default", "go", "env-2");
 
     expect(calls.map((call) => call.args)).toEqual([
-      { tabId: "default", environmentId: "env-2" },
       { tabId: "default", environmentId: "env-2" },
       { tabId: "default", environmentId: "env-2", text: "go" },
     ]);
@@ -254,12 +251,6 @@ describe("claude-tmux-client invoke wrappers", () => {
         optionIndex: 2,
       },
     });
-  });
-
-  test("capturePane invokes the capture command with tabId and environmentId", async () => {
-    await capturePane("tab-1", "env-1");
-    expect(calls[0]!.cmd).toBe("claude_tmux_capture_pane");
-    expect(calls[0]!.args).toEqual({ tabId: "tab-1", environmentId: "env-1" });
   });
 
   test("resize forwards cols/rows as numbers and environmentId", async () => {

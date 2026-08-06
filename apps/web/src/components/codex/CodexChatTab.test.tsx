@@ -188,26 +188,6 @@ const mockResumeSession = mock(async () => null as null | {
 });
 const mockCheckHealth = mock(async () => true);
 const mockGetCodexServerLog = mock(async () => "");
-const mockGetCodexServerStatus = mock(async () => ({
-  running: true,
-  hostPort: 9999,
-  authToken: "container-test-token",
-}));
-const mockGetLocalCodexServerStatus = mock(async () => ({
-  running: true,
-  port: 9999,
-  pid: 1234,
-  authToken: "local-test-token",
-}));
-const mockStartCodexServer = mock(async () => ({
-  hostPort: 9999,
-  authToken: "container-start-token",
-}));
-const mockStartLocalCodexServer = mock(async () => ({
-  port: 9999,
-  pid: 1234,
-  authToken: "local-start-token",
-}));
 const mockCacheAgentModelCatalog = mock(async () => ({ schemaVersion: 1 as const }));
 const mockGetModels = mock(async (): Promise<{
   models: CodexModel[];
@@ -376,11 +356,7 @@ mock.module("@/lib/backend", () => ({
     )),
   getAgentHandoff: mockGetAgentHandoff,
   getCodexServerLog: mockGetCodexServerLog,
-  getCodexServerStatus: mockGetCodexServerStatus,
-  getLocalCodexServerStatus: mockGetLocalCodexServerStatus,
   renameEnvironmentFromPrompt: mockRenameEnvironmentFromPrompt,
-  startCodexServer: mockStartCodexServer,
-  startLocalCodexServer: mockStartLocalCodexServer,
   updateGlobalConfig: mockUpdateGlobalConfig,
 }));
 
@@ -1062,7 +1038,11 @@ describe("CodexChatTab", () => {
     mockGetAgentHandoff.mockReset();
     mockGetAgentHandoff.mockResolvedValue(null);
     mockAwaitBridgeReady.mockReset();
-    mockAwaitBridgeReady.mockResolvedValue(null);
+    mockAwaitBridgeReady.mockResolvedValue({
+      status: "ready",
+      port: 9999,
+      authToken: "codex-secret",
+    });
     mockSendPrompt.mockClear();
     mockSendPrompt.mockImplementation(async () => ({ status: "processing" }));
     mockGetSessionMessages.mockClear();
@@ -1145,30 +1125,6 @@ describe("CodexChatTab", () => {
     mockCheckHealth.mockResolvedValue(true);
     mockGetCodexServerLog.mockReset();
     mockGetCodexServerLog.mockResolvedValue("");
-    mockGetCodexServerStatus.mockReset();
-    mockGetCodexServerStatus.mockResolvedValue({
-      running: true,
-      hostPort: 9999,
-      authToken: "container-test-token",
-    });
-    mockGetLocalCodexServerStatus.mockReset();
-    mockGetLocalCodexServerStatus.mockResolvedValue({
-      running: true,
-      port: 9999,
-      pid: 1234,
-      authToken: "local-test-token",
-    });
-    mockStartCodexServer.mockReset();
-    mockStartCodexServer.mockResolvedValue({
-      hostPort: 9999,
-      authToken: "container-start-token",
-    });
-    mockStartLocalCodexServer.mockReset();
-    mockStartLocalCodexServer.mockResolvedValue({
-      port: 9999,
-      pid: 1234,
-      authToken: "local-start-token",
-    });
     mockCacheAgentModelCatalog.mockClear();
     mockGetModels.mockReset();
     mockGetModels.mockResolvedValue({
@@ -1208,7 +1164,7 @@ describe("CodexChatTab", () => {
     mock.restore();
   });
 
-  test("uses backend bridge readiness without invoking the legacy Codex startup path", async () => {
+  test("resolves the Codex bridge port from backend readiness", async () => {
     useCodexStore.setState({ clients: new Map(), sessions: new Map() });
     mockAwaitBridgeReady.mockResolvedValue({
       status: "ready",
@@ -1220,8 +1176,10 @@ describe("CodexChatTab", () => {
 
     await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
     expect(mockAwaitBridgeReady).toHaveBeenCalledWith(ENVIRONMENT_ID, "codex");
-    expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
-    expect(mockStartCodexServer).not.toHaveBeenCalled();
+    expect(mockCreateClient).toHaveBeenCalledWith(
+      "http://127.0.0.1:7779",
+      "ready-token",
+    );
   });
 
   test.each([
@@ -1237,8 +1195,38 @@ describe("CodexChatTab", () => {
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
 
     expect(await screen.findByText(message)).toBeTruthy();
-    expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
-    expect(mockStartCodexServer).not.toHaveBeenCalled();
+    expect(mockCreateClient).not.toHaveBeenCalled();
+  });
+
+  test("does not install the bridge client when readiness resolves after unmount", async () => {
+    // `awaitBridgeReady` can block for the full readiness timeout. A tab that
+    // is gone by the time it resolves must not write the client or the server
+    // status into the environment-scoped store.
+    useCodexStore.setState({
+      clients: new Map(),
+      sessions: new Map(),
+      serverStatus: new Map(),
+    });
+    const readiness = deferred<{
+      status: "ready";
+      port: number;
+      authToken: string;
+    }>();
+    mockAwaitBridgeReady.mockImplementationOnce(() => readiness.promise);
+
+    const view = render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => expect(mockAwaitBridgeReady).toHaveBeenCalled());
+
+    view.unmount();
+
+    await act(async () => {
+      readiness.resolve({ status: "ready", port: 7781, authToken: "late-token" });
+      await readiness.promise;
+    });
+
+    expect(mockCreateClient).not.toHaveBeenCalled();
+    expect(useCodexStore.getState().clients.get(ENVIRONMENT_ID)).toBeUndefined();
+    expect(useCodexStore.getState().serverStatus.get(ENVIRONMENT_ID)).toBeUndefined();
   });
 
   test("waits for setup to finish before initializing the cached session", async () => {
@@ -1767,7 +1755,7 @@ describe("CodexChatTab", () => {
         agentHandoffId={handoffId}
       />,
     );
-    expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
+    expect(mockAwaitBridgeReady).not.toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -1784,7 +1772,7 @@ describe("CodexChatTab", () => {
       expect.anything(),
       expect.objectContaining({ clientSessionKey: SESSION_KEY }),
     );
-    expect(mockGetCodexServerStatus).toHaveBeenCalledTimes(1);
+    expect(mockAwaitBridgeReady).toHaveBeenCalledTimes(1);
   });
 
   test("does not append a handoff bootstrap to a restored destination transcript", async () => {
@@ -2788,7 +2776,10 @@ describe("CodexChatTab", () => {
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "high",
     });
-    mockGetCodexServerStatus.mockRejectedValueOnce(new Error("container bridge unavailable"));
+    mockAwaitBridgeReady.mockResolvedValueOnce({
+      status: "failed",
+      error: { message: "container bridge unavailable", retryable: true },
+    });
 
     render(
       <CodexChatTab
@@ -2843,165 +2834,11 @@ describe("CodexChatTab", () => {
     );
 
     await waitFor(() => {
-      expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
+      expect(mockAwaitBridgeReady).not.toHaveBeenCalled();
     });
     const tab = usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)
       .find((candidate) => candidate.id === TAB_ID);
     expect(tab?.initialAgentModel).toBe("gpt-5.6-sol");
-  });
-
-  test("surfaces cold initialization errors with the container bridge log and retries", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    mockGetCodexServerStatus.mockRejectedValueOnce(new Error("container bridge unavailable"));
-    mockGetCodexServerLog.mockResolvedValueOnce("sanitized bridge diagnostics");
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-    expect(await screen.findByText("container bridge unavailable")).toBeTruthy();
-    expect(mockGetCodexServerLog).toHaveBeenCalledWith(CONTAINER_ID);
-
-    // The log sits behind a toggle, as it does for Claude and OpenCode, rather
-    // than being dumped into the error screen unconditionally.
-    fireEvent.click(screen.getByRole("button", { name: "Show Log" }));
-    expect(screen.getByText("sanitized bridge diagnostics")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
-    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
-    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(SESSION_ID);
-  });
-
-  test("surfaces a generic health-wrapper start failure without spending a retry", async () => {
-    /*
-     * The backend wraps *every* bridge child failure in this wording, permanent
-     * ones included, and appends the child's log. Retrying it would delay the
-     * real error by the full backoff while the same broken child is restarted.
-     */
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date().toISOString(),
-    });
-    mockGetCodexServerStatus.mockResolvedValue({
-      running: false,
-      hostPort: 9999,
-      authToken: "stale-status-token",
-    });
-    mockStartCodexServer.mockRejectedValue(
-      new Error(
-        "Server on port 9999 did not become healthy\nbridge dependency is temporarily unavailable",
-      ),
-    );
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-    expect(await screen.findByText(/did not become healthy/)).toBeTruthy();
-    expect(mockStartCodexServer).toHaveBeenCalledTimes(1);
-    expect(mockCreateSession).not.toHaveBeenCalled();
-  });
-
-  test("surfaces a missing container id immediately even for a new environment", async () => {
-    const retryTimers = installAcceleratedConnectionRetryTimers();
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date().toISOString(),
-    });
-
-    try {
-      render(
-        <CodexChatTab
-          tabId={TAB_ID}
-          data={createData({ containerId: undefined })}
-          isActive
-        />,
-      );
-
-      await act(async () => {
-        await retryTimers.settle();
-      });
-      retryTimers.restore();
-      expect(await screen.findByText("Container ID is required for containerized Codex"))
-        .toBeTruthy();
-      expect(retryTimers.delays).toEqual([]);
-      expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
-      expect(mockCreateSession).not.toHaveBeenCalled();
-    } finally {
-      retryTimers.restore();
-    }
-  });
-
-  test("surfaces missing bridge authentication immediately even for a new environment", async () => {
-    const retryTimers = installAcceleratedConnectionRetryTimers();
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date().toISOString(),
-    });
-    mockGetCodexServerStatus.mockResolvedValueOnce({
-      running: true,
-      hostPort: 9999,
-      authToken: undefined as any,
-    });
-    mockStartCodexServer.mockResolvedValueOnce({
-      hostPort: 9999,
-      authToken: undefined as any,
-    });
-
-    try {
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      await act(async () => {
-        await retryTimers.settle();
-      });
-      retryTimers.restore();
-      expect(await screen.findByText("Failed to resolve Codex bridge authentication"))
-        .toBeTruthy();
-      expect(retryTimers.delays).toEqual([]);
-      expect(mockStartCodexServer).toHaveBeenCalledTimes(1);
-      expect(mockCreateSession).not.toHaveBeenCalled();
-    } finally {
-      retryTimers.restore();
-    }
-  });
-
-  test("does not automatically retry an ambiguous session creation failure", async () => {
-    const retryTimers = installAcceleratedConnectionRetryTimers();
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      createdAt: new Date().toISOString(),
-    });
-    mockCreateSession.mockRejectedValueOnce(new Error("create response was lost"));
-
-    try {
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      await act(async () => {
-        await retryTimers.settle();
-      });
-      retryTimers.restore();
-      expect(await screen.findByText("create response was lost")).toBeTruthy();
-      expect(mockCreateSession).toHaveBeenCalledTimes(1);
-      expect(retryTimers.delays).toEqual([]);
-    } finally {
-      retryTimers.restore();
-    }
   });
 
   test("uses the generic message for a non-Error initialization failure", async () => {
@@ -3020,170 +2857,6 @@ describe("CodexChatTab", () => {
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: /Retry/i })).toBeTruthy();
     expect(useCodexStore.getState().sessions.has(SESSION_KEY)).toBe(false);
-  });
-
-  test("reports local initialization errors without requesting a container log", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      setupPhase: "ready",
-    });
-    mockGetLocalCodexServerStatus.mockRejectedValueOnce("local bridge offline");
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
-
-    expect(await screen.findByText("local bridge offline")).toBeTruthy();
-    expect(mockGetCodexServerLog).not.toHaveBeenCalled();
-  });
-
-  test("starts a stopped local bridge and uses its credentials to create the session", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      setupPhase: "ready",
-    });
-    mockGetLocalCodexServerStatus.mockResolvedValueOnce({
-      running: false,
-      port: null,
-      pid: null,
-      authToken: undefined,
-    } as any);
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
-
-    await waitFor(() => {
-      expect(mockStartLocalCodexServer).toHaveBeenCalledWith(ENVIRONMENT_ID);
-      expect(mockCreateClient).toHaveBeenCalledWith(
-        "http://127.0.0.1:9999",
-        "local-start-token",
-      );
-      expect(mockCreateSession).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  test("surfaces a rejected local bridge start without creating a client or session", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    mockGetLocalCodexServerStatus.mockResolvedValueOnce({
-      running: false,
-      port: null,
-      pid: null,
-      authToken: undefined,
-    } as any);
-    mockStartLocalCodexServer.mockRejectedValueOnce(
-      new Error("local bridge start failed"),
-    );
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
-
-    expect(await screen.findByText("local bridge start failed")).toBeTruthy();
-    expect(mockStartLocalCodexServer).toHaveBeenCalledWith(ENVIRONMENT_ID);
-    expect(mockCreateClient).not.toHaveBeenCalled();
-    expect(mockCreateSession).not.toHaveBeenCalled();
-    expect(mockGetCodexServerLog).not.toHaveBeenCalled();
-  });
-
-  test("connects to an already-running local bridge without restarting it", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      setupPhase: "ready",
-    });
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
-
-    await waitFor(() => {
-      expect(mockGetLocalCodexServerStatus).toHaveBeenCalledWith(ENVIRONMENT_ID);
-      expect(mockCreateClient).toHaveBeenCalledWith(
-        "http://127.0.0.1:9999",
-        "local-test-token",
-      );
-      expect(mockCreateSession).toHaveBeenCalled();
-      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(SESSION_ID);
-    });
-    expect(mockStartLocalCodexServer).not.toHaveBeenCalled();
-  });
-
-  test("waits on a running local bridge whose ready port is still being committed", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    useEnvironmentStore.getState().updateEnvironment(ENVIRONMENT_ID, {
-      setupPhase: "ready",
-    });
-    mockGetLocalCodexServerStatus.mockResolvedValueOnce({
-      running: true,
-      port: null,
-      pid: 1234,
-      authToken: "local-start-token",
-    } as any);
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
-
-    await waitFor(() => {
-      expect(mockStartLocalCodexServer).toHaveBeenCalledWith(ENVIRONMENT_ID);
-      expect(mockCreateClient).toHaveBeenCalledWith(
-        "http://127.0.0.1:9999",
-        "local-start-token",
-      );
-      expect(mockCreateSession).toHaveBeenCalledTimes(1);
-    });
-    expect(screen.queryByText("Failed to resolve Codex bridge port")).toBeNull();
-  });
-
-  test("fails cold container initialization without a container id", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-
-    render(
-      <CodexChatTab
-        tabId={TAB_ID}
-        data={createData({ containerId: undefined })}
-        isActive
-      />,
-    );
-
-    expect(
-      await screen.findByText("Container ID is required for containerized Codex"),
-    ).toBeTruthy();
-    expect(mockGetCodexServerStatus).not.toHaveBeenCalled();
-    expect(mockStartCodexServer).not.toHaveBeenCalled();
-    expect(mockCreateSession).not.toHaveBeenCalled();
-  });
-
-  test("constructs a cold container client with the bridge status token", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-    await waitFor(() => {
-      expect(mockCreateClient).toHaveBeenCalledWith(
-        "http://127.0.0.1:9999",
-        "container-test-token",
-      );
-    });
-    expect(mockStartCodexServer).not.toHaveBeenCalled();
   });
 
   test("adopts the authoritative cold catalog and seeds the default mode", async () => {
@@ -3282,49 +2955,6 @@ describe("CodexChatTab", () => {
     }
   });
 
-  test("reports a cold-start status that does not resolve a bridge port", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    mockGetCodexServerStatus.mockResolvedValueOnce({
-      running: true,
-      hostPort: null as any,
-      authToken: "container-test-token",
-    });
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-    expect(await screen.findByText("Failed to resolve Codex bridge port")).toBeTruthy();
-    expect(mockCreateClient).not.toHaveBeenCalled();
-    expect(mockCreateSession).not.toHaveBeenCalled();
-  });
-
-  test("reports a cold-start bridge restart that does not return authentication", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    mockGetCodexServerStatus.mockResolvedValueOnce({
-      running: true,
-      hostPort: 9999,
-      authToken: undefined as any,
-    });
-    mockStartCodexServer.mockResolvedValueOnce({
-      hostPort: 9999,
-      authToken: undefined as any,
-    });
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-    expect(await screen.findByText("Failed to resolve Codex bridge authentication")).toBeTruthy();
-    expect(mockStartCodexServer).toHaveBeenCalledWith(CONTAINER_ID);
-    expect(mockCreateClient).not.toHaveBeenCalled();
-    expect(mockCreateSession).not.toHaveBeenCalled();
-  });
-
   test("reports a failed cold-start health check before creating a session", async () => {
     useCodexStore.setState((state) => ({
       ...state,
@@ -3354,99 +2984,6 @@ describe("CodexChatTab", () => {
     expect(mockCheckHealth).toHaveBeenCalledWith(MOCK_CLIENT);
     expect(mockGetModels).not.toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();
-  });
-
-  test("uses the generic initialization message for a non-Error rejection", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    mockGetModels.mockRejectedValueOnce({ code: "catalog-unavailable" });
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-    expect(await screen.findByText("Failed to initialize Codex")).toBeTruthy();
-    expect(mockCreateSession).not.toHaveBeenCalled();
-  });
-
-  test("keeps the initialization error visible when reading the bridge log fails", async () => {
-    const originalError = console.error;
-    const consoleError = mock(() => {});
-    console.error = consoleError as unknown as typeof console.error;
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    mockGetCodexServerStatus.mockRejectedValueOnce(new Error("bridge status failed"));
-    mockGetCodexServerLog.mockRejectedValueOnce(new Error("log unavailable"));
-
-    try {
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      expect(await screen.findByText("bridge status failed")).toBeTruthy();
-      await waitFor(() => {
-        expect(consoleError).toHaveBeenCalledWith(
-          "[CodexChatTab] Failed to fetch server log:",
-          expect.objectContaining({ message: "log unavailable" }),
-        );
-      });
-      expect(screen.getByRole("button", { name: /Retry/i })).toBeTruthy();
-    } finally {
-      console.error = originalError;
-    }
-  });
-
-  test("restarts a legacy running bridge whose status has no auth token", async () => {
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    mockGetCodexServerStatus.mockResolvedValueOnce({
-      running: true,
-      hostPort: 9999,
-      authToken: undefined as any,
-    });
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-    await waitFor(() => {
-      expect(mockStartCodexServer).toHaveBeenCalledWith(CONTAINER_ID);
-      expect(mockCreateClient).toHaveBeenCalledWith(
-        "http://127.0.0.1:9999",
-        "container-start-token",
-      );
-    });
-  });
-
-  test("keeps the initialization error when fetching the container log also fails", async () => {
-    const originalError = console.error;
-    const logError = new Error("log unavailable");
-    const consoleError = mock(() => {});
-    console.error = consoleError as unknown as typeof console.error;
-    useCodexStore.setState((state) => ({
-      ...state,
-      clients: new Map(),
-      sessions: new Map(),
-    }));
-    mockGetCodexServerStatus.mockRejectedValueOnce(new Error("bridge unavailable"));
-    mockGetCodexServerLog.mockRejectedValueOnce(logError);
-
-    try {
-      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-
-      expect(await screen.findByText("bridge unavailable")).toBeTruthy();
-      await waitFor(() => {
-        expect(consoleError).toHaveBeenCalledWith(
-          "[CodexChatTab] Failed to fetch server log:",
-          logError,
-        );
-      });
-    } finally {
-      console.error = originalError;
-    }
   });
 
   test("turns a failed cached-client health check into a reconnectable error", async () => {
@@ -3508,7 +3045,10 @@ describe("CodexChatTab", () => {
       clients: new Map(),
       sessions: new Map(),
     }));
-    mockGetCodexServerStatus.mockRejectedValueOnce(new Error("container bridge unavailable"));
+    mockAwaitBridgeReady.mockResolvedValueOnce({
+      status: "failed",
+      error: { message: "container bridge unavailable", retryable: true },
+    });
 
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
 
@@ -4235,13 +3775,15 @@ describe("CodexChatTab", () => {
 
   test("defers active hydration until a cold connection becomes ready", async () => {
     const external = createMessage("connected-later-external", "Started before connect");
-    const bridgeStatus = deferred<{
-      running: boolean;
-      hostPort: number;
+    const bridgeReady = deferred<{
+      status: "ready";
+      port: number;
       authToken: string;
     }>();
     useCodexStore.setState({ clients: new Map(), sessions: new Map() });
-    mockGetCodexServerStatus.mockImplementationOnce(() => bridgeStatus.promise);
+    // The cold connection is gated on backend readiness, which is what defers
+    // hydration: nothing may reach the transcript until this resolves.
+    mockAwaitBridgeReady.mockImplementationOnce(() => bridgeReady.promise);
     mockLookupSessionStatus.mockResolvedValue({
       kind: "found",
       session: { status: "running", phase: "running" },
@@ -4259,13 +3801,18 @@ describe("CodexChatTab", () => {
     );
     view.rerender(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
 
+    // While readiness is pending nothing may hydrate: no client, no transcript.
+    await act(async () => { await Promise.resolve(); });
+    expect(mockGetSessionMessages).not.toHaveBeenCalled();
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toBeUndefined();
+
     await act(async () => {
-      bridgeStatus.resolve({
-        running: true,
-        hostPort: 9999,
+      bridgeReady.resolve({
+        status: "ready",
+        port: 9999,
         authToken: "container-test-token",
       });
-      await bridgeStatus.promise;
+      await bridgeReady.promise;
     });
 
     await waitFor(() => {
@@ -5873,33 +5420,6 @@ describe("CodexChatTab", () => {
     expect(mockGetSessionMessages).toHaveBeenCalledTimes(1);
   });
 
-  test("watchdog refreshes a loading turn after activity becomes stale", async () => {
-    installTimerHarness(10_000);
-    let finishEvents!: () => void;
-    const finishPromise = new Promise<void>((resolve) => {
-      finishEvents = resolve;
-    });
-    mockGetSessionStatus.mockResolvedValue({ status: "running" });
-    mockSubscribeToEvents.mockImplementation(() => (async function* () {
-      await finishPromise;
-    })() as any);
-    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
-    await waitFor(() => expect(mockGetSessionStatus).toHaveBeenCalled());
-    mockGetSessionStatus.mockClear();
-    mockLookupSessionStatus.mockClear();
-    mockGetSessionMessages.mockClear();
-
-    mockedNow = 11_600;
-    act(() => intervalCallback?.());
-
-    await waitFor(() => {
-      expect(mockLookupSessionStatus).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
-    });
-    finishEvents();
-  });
-
   test("Escape aborts only an active foreground turn without modifiers", async () => {
     mockGetSessionStatus.mockResolvedValue({ status: "running" });
     useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
@@ -7148,68 +6668,6 @@ describe("CodexChatTab", () => {
     expect(mockSendPrompt).not.toHaveBeenCalled();
   });
 
-  test("watchdog reconciles an idle backend-owned startup after activity becomes stale", async () => {
-    installTimerHarness(10_000);
-    const startupTabId = "startup-agent";
-    const startupSessionKey = createSessionKey(ENVIRONMENT_ID, startupTabId);
-    const backendMessage = createMessage("watchdog-startup", "Recovered by watchdog");
-    const streamAborted = deferred<void>();
-    useEnvironmentStore.setState((state) => ({
-      ...state,
-      environments: state.environments.map((environment) =>
-        environment.id === ENVIRONMENT_ID
-          ? { ...environment, pendingAgentLaunch: true, setupScriptsComplete: true }
-          : environment
-      ),
-    }));
-    useCodexStore.setState((state) => ({
-      ...state,
-      sessions: new Map([[startupSessionKey, {
-        sessionId: SESSION_ID,
-        messages: [],
-        isLoading: false,
-        title: "Agent Session",
-      }]]),
-    }));
-    mockLookupSessionStatus.mockResolvedValue({
-      kind: "unavailable",
-      error: new Error("startup status has not materialized"),
-    });
-    mockSubscribeToEvents.mockImplementation(
-      (_client: unknown, signal?: AbortSignal) => (async function* () {
-        await waitForAbort(signal);
-        streamAborted.resolve();
-      })(),
-    );
-
-    render(
-      <CodexChatTab
-        tabId={startupTabId}
-        data={createData({ sessionId: SESSION_ID })}
-        isActive={false}
-      />,
-    );
-    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
-    mockLookupSessionStatus.mockClear();
-    mockGetSessionMessages.mockClear();
-    mockLookupSessionStatus.mockResolvedValue({
-      kind: "found",
-      session: { status: "running", phase: "running", title: "Agent Session" },
-    });
-    mockGetSessionMessages.mockResolvedValue([backendMessage]);
-
-    mockedNow = 11_600;
-    act(() => intervalCallback?.());
-
-    await waitFor(() => {
-      expect(mockLookupSessionStatus).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
-      expect(useCodexStore.getState().sessions.get(startupSessionKey)).toMatchObject({
-        isLoading: true,
-        messages: [backendMessage],
-      });
-    });
-  });
-
   test("ordinary idle startup sessions do not subscribe or arm the watchdog", async () => {
     installTimerHarness(10_000);
     const startupTabId = "startup-agent";
@@ -8277,48 +7735,6 @@ describe("CodexChatTab", () => {
     expect(screen.getByTestId("codex-stop")).toBeTruthy();
   });
 
-  test("settles an unresolved ambiguous prompt when recovery reports idle later", async () => {
-    /**
-     * Regression: when the send path's own reconcile could not conclude, nothing
-     * resolved the optimistic message. A later watchdog reconcile unlocked the
-     * session and cleared the error, leaving a user message in the transcript
-     * that Codex had never received.
-     */
-    composeText = "Lost during a bridge restart";
-    mockSendPrompt.mockResolvedValue({
-      outcome: "unknown",
-      requestId: "ambiguous-request",
-    });
-
-    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
-    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
-    mockLookupSessionStatus.mockResolvedValue({
-      kind: "unavailable",
-      error: new Error("offline"),
-    });
-
-    fireEvent.click(screen.getByTestId("codex-send"));
-    await waitFor(() => {
-      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
-    });
-
-    // The bridge comes back and is authoritatively idle without the prompt.
-    mockGetSessionMessages.mockResolvedValue([]);
-    mockLookupSessionStatus.mockResolvedValue({
-      kind: "found",
-      session: { status: "idle", title: "Recovered" },
-    });
-
-    await waitFor(() => {
-      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
-      expect(session?.isLoading).toBe(false);
-      expect(session?.error).toBe(
-        "Could not confirm whether Codex received the prompt. You can send it again safely.",
-      );
-      expect(session?.messages.some((message) => message.role === "user")).toBe(false);
-    }, { timeout: 5_000 });
-  });
-
   test("reuses a durable background-recovery key for the same safe retry", async () => {
     composeText = "Retry the background prompt safely";
     const requestId = "background-retry-request";
@@ -9246,7 +8662,7 @@ describe("CodexChatTab", () => {
       // queued prompt away.
       seedEnvironment("review-table");
       useCodexStore.setState((state) => ({ ...state, clients: new Map(), sessions: new Map() }));
-      mockGetCodexServerStatus.mockImplementation(() => new Promise(() => {}));
+      mockAwaitBridgeReady.mockImplementation(() => new Promise(() => {}));
       seedQueuedPrompt(useCodexStore.getState(),
         SESSION_KEY,
         queueEntry({ id: "row-1", text: "Queued before connect" }),

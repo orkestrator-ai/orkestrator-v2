@@ -209,12 +209,21 @@ export type CommandContext = {
   featurePlanning?: FeaturePlanningService;
   /** Backend-owned notification emitted by exact agent turn lifecycles. */
   notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
+  /**
+   * One-shot PR discovery for an environment whose agent just ended a turn.
+   *
+   * Separate from {@link CommandContext.notifyAgentTurnCompleted}, which only
+   * acts on a durably armed conflict recheck. This one runs for every ended
+   * turn, because an agent that ran `gh pr create` itself is not something any
+   * durable intent could have predicted.
+   */
+  probeAgentCreatedPullRequest?: (environmentId: string) => Promise<void>;
 };
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
 
 type TerminalSessionConfig =
-  | {
+  ({
     kind: "container";
     containerId: string;
     cols: number;
@@ -230,7 +239,7 @@ type TerminalSessionConfig =
     cols: number;
     rows: number;
     trackEnvironmentActivity?: boolean;
-  };
+  }) & { bootstrapped?: boolean };
 
 const terminalProcesses = new Map<string, PtyProcess>();
 const terminalSessionConfigs = new Map<string, TerminalSessionConfig>();
@@ -259,8 +268,6 @@ const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalActivityArmed = new Set<string>();
 const terminalActivityGenerations = new Map<string, number>();
 const terminalActivityCompletions = new Map<string, number>();
-/** Auto-launch latch belongs to the backend PTY lifetime, not a React mount. */
-const bootstrappedTerminalSessions = new Set<string>();
 type TerminalActivityCompletionState = {
   id: string;
   generation: number;
@@ -889,27 +896,6 @@ async function syncPrMonitorTracking(context: CommandContext): Promise<void> {
     });
   prMonitorSyncQueue = operation;
   await operation;
-}
-
-/**
- * One-shot discovery when an agent goes idle: it may have just created a PR
- * the backend knows nothing about. Fire-and-forget by design — the activity
- * command that triggers it must not fail because GitHub is slow.
- */
-function probePrMonitorEnvironment(environmentId: string, context: CommandContext): void {
-  prMonitorEmit = context.emit;
-  prMonitorStorage = context.storage;
-  prMonitorContext = context;
-  void (async () => {
-    const environment = await context.storage.getEnvironment(environmentId);
-    if (!environment) return;
-    prMonitorService.probe(environmentToPrMonitorTarget(environment));
-  })().catch((error) => {
-    console.warn(
-      `[pr-monitor] Failed to probe environment ${environmentId}:`,
-      error instanceof Error ? error.message : error,
-    );
-  });
 }
 
 async function reconcileConfirmedMerge(
@@ -3029,21 +3015,6 @@ function toClientEnvironmentSetupStartResult(
   };
 }
 
-export type EnvironmentActivityUpdate = Pick<
-  Environment,
-  "id" | "lastActivityAt" | "hasUnreadWork" | "agentActivityState" | "agentActivityUpdatedAt"
->;
-
-function toEnvironmentActivityUpdate(environment: Environment): EnvironmentActivityUpdate {
-  return {
-    id: environment.id,
-    lastActivityAt: environment.lastActivityAt,
-    hasUnreadWork: environment.hasUnreadWork,
-    agentActivityState: environment.agentActivityState,
-    agentActivityUpdatedAt: environment.agentActivityUpdatedAt,
-  };
-}
-
 function conditionalSnapshot<T>(value: T, knownDigest: unknown): T | {
   unchanged: boolean;
   digest: string;
@@ -3350,9 +3321,13 @@ function resolveLocalShellPath(): string {
 }
 
 function rememberTerminalSession(id: string, config: TerminalSessionConfig): string {
-  terminalSessionConfigs.set(id, config);
+  terminalSessionConfigs.set(id, { ...config, bootstrapped: false });
   ensureTerminalOutputGeneration(id);
   return id;
+}
+
+function isTerminalBootstrapped(id: string): boolean {
+  return terminalSessionConfigs.get(id)?.bootstrapped === true;
 }
 
 function stableTerminalKey(
@@ -3650,7 +3625,8 @@ function cleanupTerminalSession(
   // Bootstrap ownership belongs to one concrete PTY lifetime. Stable tabs keep
   // their identity and replay buffer across a natural shell exit, but the
   // replacement PTY must be allowed to receive its launch command once.
-  bootstrappedTerminalSessions.delete(id);
+  const retainedConfig = terminalSessionConfigs.get(id);
+  if (retainedConfig) retainedConfig.bootstrapped = false;
   if (retainStableState) return;
 
   terminalSessionConfigs.delete(id);
@@ -8556,85 +8532,6 @@ export function createCommandRegistry(
     void syncPrMonitorTracking(context).catch(() => undefined);
   });
   register("get_environment_pr_url", async ({ environmentId }, { storage }) => (await storage.getEnvironment(asString(environmentId, "environmentId")))?.prUrl ?? null);
-  register("record_environment_activity", async ({ environmentId, occurredAt }, { storage }) => {
-    const id = asString(environmentId, "environmentId");
-    const activityAt = asString(occurredAt, "occurredAt");
-    return toEnvironmentActivityUpdate(
-      await storage.recordEnvironmentActivity(id, activityAt),
-    );
-  });
-  register("set_environment_agent_activity", async ({
-    environmentId,
-    state,
-    occurredAt,
-    observerId,
-  }, context) => {
-    const activityState = asString(state, "state");
-    if (
-      activityState !== "idle"
-      && activityState !== "working"
-      && activityState !== "waiting"
-    ) {
-      throw new Error("state must be idle, working, or waiting");
-    }
-    const environment = await context.storage.setEnvironmentAgentActivity(
-      asString(environmentId, "environmentId"),
-      activityState,
-      asString(occurredAt, "occurredAt"),
-      "frontend",
-      observerId === undefined
-        ? undefined
-        : asString(observerId, "observerId"),
-    );
-    // An agent that just went idle may have created or merged a PR the backend
-    // has not seen yet; probe once rather than keep a standing poller.
-    if (activityState === "idle") {
-      probePrMonitorEnvironment(asString(environmentId, "environmentId"), context);
-    }
-    return toEnvironmentActivityUpdate(environment);
-  });
-  register("record_environment_completion", async ({ environmentId, occurredAt }, { storage }) => {
-    const id = asString(environmentId, "environmentId");
-    const activityAt = asString(occurredAt, "occurredAt");
-    return toEnvironmentActivityUpdate(
-      await storage.recordEnvironmentCompletion(id, activityAt),
-    );
-  });
-  register("set_environment_setup_complete", async ({ environmentId, complete }, context) => {
-    const id = asString(environmentId, "environmentId");
-    const shouldComplete = asBoolean(complete);
-    if (!shouldComplete) {
-      return toClientEnvironment(
-        await context.storage.updateEnvironment(id, {
-          setupScriptsComplete: false,
-          setupPhase: "pending",
-          setupOverride: false,
-        }),
-      );
-    }
-    const environment = await context.storage.getEnvironment(id);
-    if (!environment) throw new Error(`Environment not found: ${id}`);
-    // Deliberately does not capture a baseline. The renderer calls this *after*
-    // setup ran, so any HEAD read here could already contain commits made by
-    // repository-controlled setup commands — a wrong baseline is worse than none,
-    // since the UI silently trusts it. The backend-managed path captures the real
-    // one before setup starts; this only records that setup finished, and must
-    // stay infallible because the caller is fire-and-forget and only logs.
-    if (!environment.createdFromCommit) {
-      console.warn(
-        `[setup] Marking setup complete for ${id} without a creation commit; `
-        + "diff stats will compare against the repository base branch.",
-      );
-    }
-    return toClientEnvironment(
-      await context.storage.updateEnvironment(id, {
-        setupScriptsComplete: true,
-        setupPhase: "ready",
-        setupOverride: false,
-        setupCompletedAt: new Date().toISOString(),
-      }),
-    );
-  });
   register("override_environment_setup", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
     const current = await context.storage.getEnvironment(id);
@@ -8680,8 +8577,11 @@ export function createCommandRegistry(
       await startEnvironmentSetup(environment, context),
     );
   });
-  register("get_environment_setup_session", async ({ environmentId }, context) => {
-    const id = asString(environmentId, "environmentId");
+  const getEnvironmentSetupSessionSnapshot = async (
+    environmentId: string,
+    context: CommandContext,
+  ) => {
+    const id = environmentId;
     const session = environmentSetupSessions.get(id);
     if (!session) {
       const environment = await context.storage.getEnvironment(id);
@@ -8718,19 +8618,16 @@ export function createCommandRegistry(
       bufferChars: terminalOutputBufferLength(session.sessionId),
     });
     return payload;
-  });
+  };
   register("await_environment_setup_session", async ({ environmentId, timeoutMs }, context) => {
     const id = asString(environmentId, "environmentId");
-    const timeout = asNumber(timeoutMs, "timeoutMs");
+    const timeout = timeoutMs === undefined ? 0 : asNumber(timeoutMs, "timeoutMs");
     if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > 60_000) {
       throw new Error("timeoutMs must be an integer between 0 and 60000");
     }
     const deadline = Date.now() + timeout;
     while (true) {
-      const snapshot = await commands.get("get_environment_setup_session")?.(
-        { environmentId: id },
-        context,
-      );
+      const snapshot = await getEnvironmentSetupSessionSnapshot(id, context);
       if (snapshot) return snapshot;
       const environment = await context.storage.getEnvironment(id);
       if (
@@ -8742,12 +8639,6 @@ export function createCommandRegistry(
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-  });
-  register("get_setup_commands", async ({ environmentId }, { storage }) => {
-    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
-    if (!environment) return null;
-    const setupCommands = await readEnvironmentSetupCommands(environment);
-    return setupCommands.length > 0 ? setupCommands : null;
   });
   register("update_port_mappings", ({ environmentId, portMappings }, { storage }) =>
     storage.updateEnvironment(
@@ -9334,7 +9225,6 @@ export function createCommandRegistry(
   register("delete_session", ({ sessionId }, { storage }) => storage.removeSession(asString(sessionId, "sessionId")));
   register("delete_sessions_by_environment", ({ environmentId }, { storage }) => storage.removeSessionsByEnvironment(asString(environmentId, "environmentId")));
   register("rename_session", ({ sessionId, name }, { storage }) => storage.updateSession(asString(sessionId, "sessionId"), { name: typeof name === "string" ? name : undefined }));
-  register("set_session_has_launched_command", ({ sessionId, hasLaunched }, { storage }) => storage.updateSession(asString(sessionId, "sessionId"), { hasLaunchedCommand: asBoolean(hasLaunched) }));
   register("disconnect_environment_sessions", ({ environmentId }, { storage }) => storage.disconnectEnvironmentSessions(asString(environmentId, "environmentId")));
   register("save_session_buffer", ({ sessionId, buffer }, { storage }) => storage.saveSessionBuffer(asString(sessionId, "sessionId"), asString(buffer, "buffer")));
   register("load_session_buffer", ({ sessionId }, { storage }) => storage.loadSessionBuffer(asString(sessionId, "sessionId")));
@@ -9910,19 +9800,14 @@ export function createCommandRegistry(
       })
       .map((record) => record.id));
     if (task.buildPipelineId) pipelineIds.add(task.buildPipelineId);
-    const failedPipelineIds: string[] = [];
-    await Promise.all(Array.from(pipelineIds, async (pipelineId) => {
-      try {
-        if (context.buildPipelines) await context.buildPipelines.remove(pipelineId);
-        else await context.storage.deleteBuildPipeline(pipelineId);
-      } catch {
-        // Unlinking the task is the authoritative user request. Cleanup may
-        // fail when an environment has already disappeared, so report the
-        // affected IDs without blocking the durable task update or exposing
-        // provider error details to the renderer.
-        failedPipelineIds.push(pipelineId);
-      }
-    }));
+    // Keep the task linked until every pipeline is gone. The link is the
+    // durable retry marker: after any failure the same idempotent command sees
+    // the remaining records and continues, while the UI never claims cleanup
+    // succeeded with live work left behind.
+    for (const pipelineId of pipelineIds) {
+      if (context.buildPipelines) await context.buildPipelines.remove(pipelineId);
+      else await context.storage.deleteBuildPipeline(pipelineId);
+    }
     const updated = await context.storage.updateKanbanTask(id, {
       environmentId: undefined,
       buildPipelineId: undefined,
@@ -9931,10 +9816,7 @@ export function createCommandRegistry(
     });
     return {
       task: updated,
-      removedPipelineIds: [...pipelineIds].filter(
-        (pipelineId) => !failedPipelineIds.includes(pipelineId),
-      ),
-      failedPipelineIds,
+      removedPipelineIds: [...pipelineIds],
     };
   });
 
@@ -10214,7 +10096,7 @@ export function createCommandRegistry(
       return {
         sessionId: existingId,
         created: false,
-        bootstrapped: bootstrappedTerminalSessions.has(existingId),
+        bootstrapped: isTerminalBootstrapped(existingId),
       };
     }
     if (existingId) explicitlyCloseTerminalSession(existingId);
@@ -10310,25 +10192,27 @@ export function createCommandRegistry(
         bufferChars: terminalOutputBuffers.get(id)?.length ?? 0,
       });
     }
-    return { id, running, bootstrapped: bootstrappedTerminalSessions.has(id) };
+    return { id, running, bootstrapped: isTerminalBootstrapped(id) };
   });
   register("bootstrap_terminal_session", ({ sessionId, data }, context) => {
     const id = asString(sessionId, "sessionId");
     const terminalData = asString(data, "data");
-    if (bootstrappedTerminalSessions.has(id)) {
+    if (isTerminalBootstrapped(id)) {
       return { bootstrapped: true, delivered: false, duplicate: true };
     }
     const terminalProcess = terminalProcesses.get(id);
     if (!terminalProcess) {
       return { bootstrapped: false, delivered: false, duplicate: false };
     }
-    bootstrappedTerminalSessions.add(id);
+    const config = terminalSessionConfigs.get(id);
+    if (!config) return { bootstrapped: false, delivered: false, duplicate: false };
+    config.bootstrapped = true;
     try {
       terminalProcess.write(terminalData);
       recordTerminalInputActivity(id, terminalData, context);
       return { bootstrapped: true, delivered: true, duplicate: false };
     } catch (error) {
-      bootstrappedTerminalSessions.delete(id);
+      config.bootstrapped = false;
       throw error;
     }
   });
@@ -10421,7 +10305,7 @@ export function createCommandRegistry(
       return {
         sessionId: existingId,
         created: false,
-        bootstrapped: bootstrappedTerminalSessions.has(existingId),
+        bootstrapped: isTerminalBootstrapped(existingId),
       };
     }
     if (existingId) explicitlyCloseTerminalSession(existingId);
@@ -11067,6 +10951,29 @@ export function createCommandRegistry(
     if (!environment?.prRecheckAfterAgentCompletionArmedAt) return;
     await syncPrMonitorTracking(context);
     prMonitorService.requestCheck(id);
+  });
+  /**
+   * One-shot PR discovery for an environment whose agent just ended a turn.
+   *
+   * `syncPrMonitorTracking` only polls environments that already have a stored
+   * PR or a pending mode, so an agent that runs `gh pr create` itself would
+   * otherwise never be discovered — and giving every environment a standing
+   * timer to catch that would cost a `gh` call per environment per interval
+   * forever. Probing the working→idle edge instead costs one call per completed
+   * turn, and a probe that finds nothing leaves no entry and emits nothing.
+   *
+   * Internal: driven by the backend's own agent-idle edge (see
+   * `OrkestratorBackend`'s `onActivityTransition` wiring), never by a renderer.
+   */
+  register("pr_monitor_probe_environment", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId"], "arguments");
+    const id = asString(args.environmentId, "environmentId");
+    prMonitorEmit = context.emit;
+    prMonitorStorage = context.storage;
+    prMonitorContext = context;
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment) return;
+    prMonitorService.probe(environmentToPrMonitorTarget(environment));
   });
 
   register("start_local_opencode_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "opencode"));

@@ -9,7 +9,6 @@ import {
 } from "@/hooks/useManualSessionRefresh";
 import type { QueueDispatchOutcome } from "@/lib/prompt-queue-persistence";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
-import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { createUuid } from "@/lib/uuid";
@@ -64,11 +63,7 @@ import {
 } from "@/lib/context-usage";
 import { parseBackendTurnStartedAt } from "@/lib/session-timer";
 import {
-  startClaudeServer,
-  getClaudeServerStatus,
   getClaudeServerLog,
-  startLocalClaudeServer,
-  getLocalClaudeServerStatus,
   getClaudeModelCatalog,
   adoptNativeAgentSession,
   ensureNativeAgentSession,
@@ -603,16 +598,6 @@ export function ClaudeChatTab({
   }, [session?.sessionId, pendingPlanApprovalsMap]);
 
   /**
-   * True only while the user's own refresh is in flight.
-   *
-   * A manual refresh is slow — it forces the model catalog, which makes the
-   * bridge respawn model discovery and a synchronous `claude --version` — so a
-   * background reconcile that lands mid-flight would mutate the store under it
-   * and turn the user's click into a "session changed while refreshing" error.
-   */
-  const manualRefreshInFlightRef = useRef(false);
-
-  /**
    * Rehydrate this session's question and plan-approval cards from the bridge.
    *
    * `GET /session/:id/questions` and `/plan-approvals` are the authoritative
@@ -868,46 +853,14 @@ export function ClaudeChatTab({
     syncPendingPrompts,
   ]);
 
-  const refreshSessionFromServer = useCallback(
-    async (options: RefreshSessionOptions = {}) => {
-      if (!options.manual) {
-        await applyServerSessionSnapshot(options);
-        return;
-      }
-      manualRefreshInFlightRef.current = true;
-      try {
-        await applyServerSessionSnapshot(options);
-      } finally {
-        manualRefreshInFlightRef.current = false;
-      }
-    },
-    [applyServerSessionSnapshot],
-  );
-
   useManualSessionRefresh({
     refreshRequestId,
     isReady:
       connectionState === "connected" && !!client && !!session?.sessionId,
     agentLabel: "Claude",
-    refresh: refreshSessionFromServer,
+    refresh: applyServerSessionSnapshot,
   });
 
-  useStalledTurnWatchdog({
-    agentLabel: "Claude",
-    isLoading: session?.isLoading ?? false,
-    isReady:
-      connectionState === "connected" && !!client && !!session?.sessionId,
-    // Every SSE frame replaces the session object, so a session reference that
-    // stops changing is exactly the stall this watchdog exists to catch.
-    activitySignal: session,
-    // Explicitly background: no forced model-catalog reload, and superseded by
-    // any newer refresh rather than superseding the user's own.
-    reconcile: () => refreshSessionFromServer({ manual: false }),
-    // Stand down entirely while the user's refresh is running. That pass is slow
-    // enough (forced model catalog → `claude --version` on the same bridge) that
-    // a reconcile landing mid-flight would fail it with "session changed".
-    shouldReconcile: () => !manualRefreshInFlightRef.current,
-  });
 
   // Memoize messages separately to provide stable reference for child components
   // This prevents unnecessary recalculations when other session properties change
@@ -1309,96 +1262,17 @@ export function ClaudeChatTab({
         setConnectionState("connecting");
         setErrorMessage(null);
 
-        let hostPort: number | null = null;
-        let authToken: string | undefined;
-
-        if (typeof awaitBridgeReady === "function") {
-          const readiness = await awaitBridgeReady(environmentId, "claude");
-          if (readiness && readiness.status !== "ready") {
-            throw Object.assign(new Error(readiness.error.message), readiness.error);
-          }
-          if (readiness) {
-            hostPort = readiness.port;
-            authToken = readiness.authToken;
-          }
+        const readiness = await awaitBridgeReady(environmentId, "claude");
+        if (readiness.status !== "ready") {
+          throw Object.assign(new Error(readiness.error.message), readiness.error);
         }
-
-        if (!hostPort && isLocal) {
-          // Local environment - use local server commands
-          let localStatus;
-          try {
-            localStatus = await getLocalClaudeServerStatus(environmentId);
-          } catch (error) {
-            throw error;
-          }
-          console.debug("[ClaudeChatTab] Local server status:", localStatus.running);
-
-          if (!localStatus.running || !localStatus.authToken) {
-            console.debug("[ClaudeChatTab] Starting local Claude server...");
-            let result;
-            try {
-              result = await startLocalClaudeServer(environmentId);
-            } catch (error) {
-              throw error;
-            }
-            localStatus = {
-              running: true,
-              port: result.port,
-              pid: result.pid,
-              authToken: result.authToken,
-            };
-          }
-
-          if (!isCurrentInitialization()) return;
-
-          if (!localStatus.port) {
-            throw new Error("Local server started but no port available");
-          }
-
-          hostPort = localStatus.port;
-          authToken = localStatus.authToken;
-        } else if (!hostPort) {
-          // Containerized environment - use container server commands
-          if (!containerId) {
-            throw new Error("Container ID is required for containerized environments");
-          }
-
-          let status;
-          try {
-            status = await getClaudeServerStatus(containerId);
-          } catch (error) {
-            throw error;
-          }
-          console.debug("[ClaudeChatTab] Container server status:", status.running);
-
-          if (!status.running || !status.authToken) {
-            console.debug("[ClaudeChatTab] Starting container Claude server...");
-            let result;
-            try {
-              result = await startClaudeServer(containerId);
-            } catch (error) {
-              throw error;
-            }
-            status = {
-              running: true,
-              hostPort: result.hostPort,
-              authToken: result.authToken,
-            };
-          }
-
-          if (!isCurrentInitialization()) return;
-
-          if (!status.hostPort) {
-            throw new Error("Server started but no port available");
-          }
-
-          hostPort = status.hostPort;
-          authToken = status.authToken;
-        }
-
-        if (!authToken) {
-          throw new Error("Failed to resolve Claude bridge authentication");
-        }
+        const hostPort = readiness.port;
+        const authToken = readiness.authToken;
+        // `awaitBridgeReady` can block for the full readiness timeout. Anything
+        // resolved after this tab unmounted — or after a newer initialization
+        // superseded this one — must not be written back into the
+        // environment-scoped store.
+        if (!isCurrentInitialization()) return;
 
         setServerStatus(environmentId, {
           running: true,
@@ -1890,9 +1764,8 @@ export function ClaudeChatTab({
           // Transcript and status are mandatory — without them there is nothing
           // to reconcile. The two interaction lists are optional: letting a
           // transient 500 on `/questions` reject the whole reconcile leaves the
-          // transcript, status, title *and* the other list stale, with no retry
-          // and no watchdog (`useStalledTurnWatchdog` is gated on `isLoading`,
-          // which a skipped reconcile leaves false).
+          // transcript, status, title *and* the other list stale. Optional
+          // endpoints therefore cannot veto the authoritative core snapshot.
           const coreReconcile = Promise.all([
             getSession(bridgeClient, sessionId),
             getSessionMessages(bridgeClient, sessionId, { throwOnError: true }),

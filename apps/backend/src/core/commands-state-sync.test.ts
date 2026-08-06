@@ -2,7 +2,6 @@ import { describe, expect, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { isPrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
 import {
@@ -2881,198 +2880,112 @@ describe("build pipeline commands", () => {
       await expect(invoke("get_build_pipeline", { pipelineId: "p1" })).resolves.toBeNull();
     });
   });
-});
 
-describe("set_environment_agent_activity", () => {
-  test("persists agent activity and rejects malformed command arguments", async () => {
-    await withCommands(async (invoke) => {
-      const occurredAt = "2026-07-27T12:00:00.000Z";
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt,
-        observerId: "renderer-observer-1",
-      })).resolves.toMatchObject({
-        agentActivityState: "working",
-        agentActivityUpdatedAt: occurredAt,
-      });
-
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "busy",
-        occurredAt,
-      })).rejects.toThrow("state must be idle, working, or waiting");
-
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: 42,
-        state: "working",
-        occurredAt,
-      })).rejects.toThrow("Expected environmentId to be a string");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: 42,
-        occurredAt,
-      })).rejects.toThrow("Expected state to be a string");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt: 42,
-      })).rejects.toThrow("Expected occurredAt to be a string");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt,
-        observerId: 42,
-      })).rejects.toThrow("Expected observerId to be a string");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt,
-        observerId: "",
-      })).rejects.toThrow("observerId must be a non-blank string");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt: "invalid",
-      })).rejects.toThrow("occurredAt must be a valid ISO timestamp");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt: "+275760-09-13T00:00:00.000Z",
-      })).rejects.toThrow("occurredAt must not be more than 5 minutes in the future");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "missing",
-        state: "working",
-        occurredAt,
-      })).rejects.toThrow("Environment not found: missing");
+  test("clears every task pipeline before updating the task and deduplicates the linked id", async () => {
+    const operations: string[] = [];
+    const remove = mock(async (pipelineId: string) => {
+      operations.push(`remove:${pipelineId}`);
     });
-  });
+    const supervisor = {
+      remove,
+    } as unknown as NonNullable<CommandContext["buildPipelines"]>;
 
-  test("ignores a caller-supplied source so a renderer cannot forge backend observations", async () => {
-    // The `claude-terminal` source is what the backend poller writes, and the
-    // aggregate lets any `working` source pin the environment. A renderer that
-    // could name its own source could impersonate the poller.
     await withCommands(async (invoke, storage) => {
-      await invoke("set_environment_agent_activity", {
+      const task = await storage.addKanbanTask("proj-1", "Build task", "");
+      await storage.updateKanbanTask(task.id, {
         environmentId: "e1",
-        state: "working",
-        occurredAt: "2026-07-27T12:00:00.000Z",
-        observerId: "renderer-observer-1",
-        source: "claude-terminal",
+        buildPipelineId: "pipeline-linked",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+      });
+      await storage.saveBuildPipeline("pipeline-linked", "proj-1", "e1", 1, {
+        taskId: task.id,
+      });
+      await storage.saveBuildPipeline("pipeline-secondary", "proj-1", "e1", 1, {
+        taskId: task.id,
+      });
+      await storage.saveBuildPipeline("pipeline-unrelated", "proj-1", "e1", 1, {
+        taskId: "another-task",
       });
 
-      const environment = await storage.getEnvironment("e1");
-      expect(environment?.agentActivitySources).toEqual({});
-      expect(environment?.frontendAgentActivityObservers).toMatchObject({
-        [createHash("sha256").update("renderer-observer-1").digest("hex")]: {
-          state: "working",
-          updatedAt: "2026-07-27T12:00:00.000Z",
-          leaseExpiresAt: expect.any(String),
+      const updateKanbanTask = storage.updateKanbanTask.bind(storage);
+      const updateSpy = spyOn(storage, "updateKanbanTask").mockImplementation(
+        async (taskId, updates, expectedProjectId) => {
+          operations.push(`update:${taskId}`);
+          return updateKanbanTask(taskId, updates, expectedProjectId);
         },
+      );
+
+      const result = await invoke("clear_task_build_status", {
+        taskId: task.id,
+      }) as {
+        task: { id: string; environmentId?: string; buildPipelineId?: string; prUrl?: string };
+        removedPipelineIds: string[];
+      };
+
+      expect(result.removedPipelineIds).toEqual([
+        "pipeline-linked",
+        "pipeline-secondary",
+      ]);
+      expect(result.task).toMatchObject({ id: task.id, prUrl: "" });
+      expect(result.task.environmentId).toBeUndefined();
+      expect(result.task.buildPipelineId).toBeUndefined();
+      expect(remove.mock.calls.map(([pipelineId]) => pipelineId)).toEqual([
+        "pipeline-linked",
+        "pipeline-secondary",
+      ]);
+      expect(operations).toEqual([
+        "remove:pipeline-linked",
+        "remove:pipeline-secondary",
+        `update:${task.id}`,
+      ]);
+      expect(updateSpy).toHaveBeenCalledWith(task.id, {
+        environmentId: undefined,
+        buildPipelineId: undefined,
+        prUrl: "",
+        prState: undefined,
       });
-      expect(environment?.agentActivitySources)
-        .not.toHaveProperty("claude-terminal");
-    });
-  });
-});
-
-describe("claude state polling commands", () => {
-  function createTestPollManager() {
-    const scheduled: Array<() => void> = [];
-    const cancelled: unknown[] = [];
-    const manager = new ClaudeStatePollManager({
-      readState: async () => "idle",
-      schedule: (callback) => {
-        scheduled.push(callback);
-        return callback;
-      },
-      cancel: (timer) => cancelled.push(timer),
-      now: () => "2026-07-27T12:00:00.000Z",
-    });
-    return { manager, scheduled, cancelled };
-  }
-
-  const runningContainerEnvironment = {
-    status: "running",
-    environmentType: "containerized",
-    containerId: "container-1",
-  };
-
-  test("requires a subscription token on both sides of the lease", async () => {
-    // Both arguments became required with the lease. A caller on an older
-    // bundle would hard-error here rather than silently polling forever, so the
-    // contract is worth pinning explicitly.
-    const { manager, scheduled, cancelled } = createTestPollManager();
-    await withCommands(async (invoke) => {
-      await expect(invoke("start_claude_state_polling", {
-        containerId: "container-1",
-      })).rejects.toThrow("Expected subscriptionId to be a string");
-      await expect(invoke("stop_claude_state_polling", {
-        containerId: "container-1",
-      })).rejects.toThrow("Expected subscriptionId to be a string");
-      await expect(invoke("start_claude_state_polling", {
-        subscriptionId: "sub-1",
-      })).rejects.toThrow("Expected containerId to be a string");
-
-      // A rejected registration must not have started anything.
-      expect(scheduled).toHaveLength(0);
-      expect(cancelled).toHaveLength(0);
-    }, { claudeStatePolls: manager, environment: runningContainerEnvironment });
+    }, { buildPipelines: supervisor });
   });
 
-  test("starts one poll per container and keeps it while the environment runs", async () => {
-    const { manager, scheduled, cancelled } = createTestPollManager();
+  test("falls back to storage deletion when the build-pipeline supervisor is unavailable", async () => {
     await withCommands(async (invoke, storage) => {
-      await invoke("start_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-1",
+      const task = await storage.addKanbanTask("proj-1", "Stored build task", "");
+      await storage.updateKanbanTask(task.id, {
+        buildPipelineId: "pipeline-stored",
       });
-      await invoke("start_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-2",
-      });
-      // Registration is idempotent per container, not per subscriber.
-      expect(scheduled).toHaveLength(1);
-
-      await invoke("stop_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-1",
-      });
-      await invoke("stop_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-2",
-      });
-      // Polling is backend-owned: losing every renderer does not stop it,
-      // because detecting activity while nothing is mounted is the point.
-      expect(cancelled).toHaveLength(0);
-
-      await storage.updateEnvironment("e1", { status: "stopped" });
-      await invoke("stop_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-2",
-      });
-      expect(cancelled).toHaveLength(1);
-    }, { claudeStatePolls: manager, environment: runningContainerEnvironment });
-  });
-
-  test("records the polled state on the environment it belongs to", async () => {
-    const { manager } = createTestPollManager();
-    await withCommands(async (invoke, storage) => {
-      await invoke("start_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-1",
+      await storage.saveBuildPipeline("pipeline-stored", "proj-1", "e1", 1, {
+        taskId: task.id,
       });
 
-      const deadline = Date.now() + 2_000;
-      let recorded = await storage.getEnvironment("e1");
-      while (!recorded?.agentActivitySources?.["claude-terminal"]) {
-        if (Date.now() > deadline) throw new Error("timed out waiting for poll");
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        recorded = await storage.getEnvironment("e1");
-      }
+      const operations: string[] = [];
+      const deleteBuildPipeline = storage.deleteBuildPipeline.bind(storage);
+      const deleteSpy = spyOn(storage, "deleteBuildPipeline").mockImplementation(
+        async (pipelineId) => {
+          operations.push(`delete:${pipelineId}`);
+          await deleteBuildPipeline(pipelineId);
+        },
+      );
+      const updateKanbanTask = storage.updateKanbanTask.bind(storage);
+      spyOn(storage, "updateKanbanTask").mockImplementation(
+        async (taskId, updates, expectedProjectId) => {
+          operations.push(`update:${taskId}`);
+          return updateKanbanTask(taskId, updates, expectedProjectId);
+        },
+      );
 
-      expect(recorded.agentActivitySources!["claude-terminal"]).toMatchObject({
-        state: "idle",
-      });
-      await storage.updateEnvironment("e1", { status: "stopped" });
-      await invoke("stop_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-1",
-      });
-    }, { claudeStatePolls: manager, environment: runningContainerEnvironment });
+      const result = await invoke("clear_task_build_status", {
+        taskId: task.id,
+      }) as { removedPipelineIds: string[] };
+
+      expect(result.removedPipelineIds).toEqual(["pipeline-stored"]);
+      expect(deleteSpy).toHaveBeenCalledWith("pipeline-stored");
+      expect(operations).toEqual([
+        "delete:pipeline-stored",
+        `update:${task.id}`,
+      ]);
+      expect(await storage.getBuildPipeline("pipeline-stored")).toBeNull();
+    });
   });
 });
 
@@ -3132,13 +3045,11 @@ describe("set_environment_unread", () => {
       const first = "2026-01-01T00:00:00.000Z";
       const second = "2026-01-01T00:00:01.000Z";
 
-      await expect(invoke("record_environment_completion", {
-        environmentId: "e1", occurredAt: first,
-      })).resolves.toMatchObject({ lastActivityAt: first, hasUnreadWork: true });
+      await expect(storage.recordEnvironmentCompletion("e1", first))
+        .resolves.toMatchObject({ lastActivityAt: first, hasUnreadWork: true });
 
-      await expect(invoke("record_environment_completion", {
-        environmentId: "e1", occurredAt: second,
-      })).resolves.toMatchObject({ lastActivityAt: second, hasUnreadWork: true });
+      await expect(storage.recordEnvironmentCompletion("e1", second))
+        .resolves.toMatchObject({ lastActivityAt: second, hasUnreadWork: true });
 
       await expect(invoke("set_environment_unread", {
         environmentId: "e1",
@@ -3153,9 +3064,7 @@ describe("set_environment_unread", () => {
       await seedEnvironment(storage);
       const completion = "2026-01-01T00:00:00.000Z";
 
-      await invoke("record_environment_completion", {
-        environmentId: "e1", occurredAt: completion,
-      });
+      await storage.recordEnvironmentCompletion("e1", completion);
       await expect(invoke("set_environment_unread", {
         environmentId: "e1",
         unread: false,
@@ -3182,16 +3091,15 @@ describe("set_environment_unread", () => {
     await withCommands(async (invoke, storage) => {
       await seedEnvironment(storage);
       const newest = "2026-01-01T00:00:01.000Z";
-      await invoke("record_environment_completion", {
-        environmentId: "e1", occurredAt: newest,
-      });
+      await storage.recordEnvironmentCompletion("e1", newest);
       await invoke("set_environment_unread", {
         environmentId: "e1", unread: false, expectedLastActivityAt: newest,
       });
 
-      await expect(invoke("record_environment_completion", {
-        environmentId: "e1", occurredAt: "2026-01-01T00:00:00.000Z",
-      })).resolves.toMatchObject({ lastActivityAt: newest, hasUnreadWork: false });
+      await expect(storage.recordEnvironmentCompletion(
+        "e1",
+        "2026-01-01T00:00:00.000Z",
+      )).resolves.toMatchObject({ lastActivityAt: newest, hasUnreadWork: false });
     });
   });
 });

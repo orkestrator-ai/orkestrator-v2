@@ -15,7 +15,6 @@ import {
   codexInteractionDraftKey,
   usePromptDraftStore,
 } from "@/stores/promptDraftStore";
-import { useStalledTurnWatchdog } from "@/hooks/useStalledTurnWatchdog";
 import { useAgentHandoff } from "@/hooks/useAgentHandoff";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -68,11 +67,7 @@ import {
   awaitBridgeReady,
   cacheAgentModelCatalog,
   getCodexServerLog,
-  getCodexServerStatus,
-  getLocalCodexServerStatus,
   renameEnvironmentFromPrompt,
-  startCodexServer,
-  startLocalCodexServer,
   updateGlobalConfig,
 } from "@/lib/backend";
 import {
@@ -1906,81 +1901,16 @@ export function CodexChatTab({
         setConnectionState("connecting");
         setErrorMessage(null);
 
-        let port: number | null = null;
-        let authToken: string | undefined;
-        if (typeof awaitBridgeReady === "function") {
-          const readiness = await awaitBridgeReady(environmentId, "codex");
-          if (readiness && readiness.status !== "ready") {
-            throw Object.assign(new Error(readiness.error.message), readiness.error);
-          }
-          if (readiness) {
-            port = readiness.port;
-            authToken = readiness.authToken;
-          }
+        const readiness = await awaitBridgeReady(environmentId, "codex");
+        if (readiness.status !== "ready") {
+          throw Object.assign(new Error(readiness.error.message), readiness.error);
         }
-        if (!port && isLocal) {
-          let status;
-          try {
-            status = await getLocalCodexServerStatus(environmentId);
-          } catch (error) {
-            throw error;
-          }
-          // A concurrent backend/native-agent startup can own a live child and
-          // token before its ready port has been committed. Reissuing start is
-          // safe and joins the backend's per-environment lifecycle queue, so
-          // wait for that in-flight startup instead of treating its intermediate
-          // status snapshot as a permanent connection failure.
-          if (!status.running || !status.port || !status.authToken) {
-            let result;
-            try {
-              result = await startLocalCodexServer(environmentId);
-            } catch (error) {
-              throw error;
-            }
-            status = {
-              running: true,
-              port: result.port,
-              pid: result.pid,
-              authToken: result.authToken,
-            };
-          }
-          if (!mounted) return;
-          port = status.port;
-          authToken = status.authToken;
-        } else if (!port) {
-          if (!containerId) {
-            throw new Error("Container ID is required for containerized Codex");
-          }
-          let status;
-          try {
-            status = await getCodexServerStatus(containerId);
-          } catch (error) {
-            throw error;
-          }
-          if (!status.running || !status.authToken) {
-            let result;
-            try {
-              result = await startCodexServer(containerId);
-            } catch (error) {
-              throw error;
-            }
-            status = {
-              running: true,
-              hostPort: result.hostPort,
-              authToken: result.authToken,
-            };
-          }
-          if (!mounted) return;
-          port = status.hostPort;
-          authToken = status.authToken;
-        }
-
-        if (!port) {
-          throw new Error("Failed to resolve Codex bridge port");
-        }
-        if (!authToken) {
-          throw new Error("Failed to resolve Codex bridge authentication");
-        }
+        const port = readiness.port;
+        const authToken = readiness.authToken;
+        // `awaitBridgeReady` can block for the full readiness timeout. Anything
+        // resolved after this tab unmounted must not be written back into the
+        // environment-scoped store.
+        if (!mounted) return;
 
         setServerStatus(environmentId, { running: true, hostPort: port });
         const nextClient = createClient(`http://127.0.0.1:${port}`, authToken);
@@ -3200,18 +3130,6 @@ export function CodexChatTab({
     upsertMessage,
     patchMessage,
   ]);
-
-  // Watchdog poll for stalled turns. Mirrors the SSE gate above so it also
-  // covers the short interval where the backend owns the startup prompt but
-  // the renderer has not observed the turn-start frame yet.
-  useStalledTurnWatchdog({
-    agentLabel: "Codex",
-    isLoading: shouldTrackRunningCodexSession,
-    isReady:
-      connectionState === "connected" && !!client && !!session?.sessionId,
-    reconcile: () => reconcileSessionState({ forceRefreshMessages: true }),
-    shouldReconcile: () => refreshControllerRef.current.shouldRefresh(),
-  });
 
   useEffect(() => {
     if (

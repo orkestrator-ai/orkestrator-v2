@@ -386,7 +386,6 @@ export interface Session {
   /** Display order within the environment (lower = higher in list) */
   order: number;
   /** Whether the auto-launch command (e.g., claude) was executed */
-  hasLaunchedCommand?: boolean;
 }
 
 // Configuration types

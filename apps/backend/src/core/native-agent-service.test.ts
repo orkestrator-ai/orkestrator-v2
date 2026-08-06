@@ -25,6 +25,7 @@ import {
 } from "./build-pipeline-provider.js";
 import type { Environment } from "./models.js";
 import {
+  isAgentTurnEndTransition,
   NativeAgentService,
   nativeAgentSessionStorageKey,
   type AgentInteractionObservation,
@@ -1965,6 +1966,61 @@ describe("NativeAgentService", () => {
           state: "waiting",
         },
       ]);
+    });
+  });
+
+  test("signals the agent-idle PR probe edge once per ended turn", async () => {
+    let activityState: ProviderActivityState = "working";
+    const { provider } = createProviderStub("codex", {
+      activity: async () => activityState,
+    });
+    const probedEnvironmentIds: string[] = [];
+    // Exactly what the composition root does with this callback, so a repeated
+    // idle sweep cannot turn into a repeated `gh` call.
+    const onActivityTransition: NonNullable<
+      NativeAgentServiceOptions["onActivityTransition"]
+    > = (event) => {
+      if (isAgentTurnEndTransition(event)) probedEnvironmentIds.push(event.environmentId);
+    };
+
+    await withService({
+      prefix: "orkestrator-native-idle-probe-edge-",
+      provider: async () => provider,
+      onActivityTransition,
+    }, async ({ storage, service }) => {
+      // An environment with no agent activity at all is never probed: the
+      // sweep observes nothing and reports no transition.
+      await service.reconcileAgentActivity();
+      expect(probedEnvironmentIds).toEqual([]);
+
+      await storage.adoptNativeAgentSession({
+        key: nativeAgentSessionStorageKey("env-1", "codex", "tab-1"),
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "tab-1",
+        providerSessionId: "provider-1",
+      });
+
+      await service.reconcileAgentActivity();
+      await service.reconcileAgentActivity();
+      expect(probedEnvironmentIds).toEqual([]);
+
+      activityState = "idle";
+      await service.reconcileAgentActivity();
+      expect(probedEnvironmentIds).toEqual(["env-1"]);
+
+      // The sweep re-reads idle every two seconds forever after. None of those
+      // readings is a completed turn.
+      await service.reconcileAgentActivity();
+      await service.reconcileAgentActivity();
+      expect(probedEnvironmentIds).toEqual(["env-1"]);
+
+      // A new turn that ends is a new probe.
+      activityState = "working";
+      await service.reconcileAgentActivity();
+      activityState = "idle";
+      await service.reconcileAgentActivity();
+      expect(probedEnvironmentIds).toEqual(["env-1", "env-1"]);
     });
   });
 

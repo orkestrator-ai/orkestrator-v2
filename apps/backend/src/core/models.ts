@@ -329,7 +329,6 @@ export interface Session {
   lastActivityAt: string;
   name?: string;
   order: number;
-  hasLaunchedCommand?: boolean;
 }
 
 /** Version 2 makes pane and tab selection authoritative in this record. */

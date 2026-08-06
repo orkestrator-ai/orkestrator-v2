@@ -310,10 +310,6 @@ export async function answerSelectionPrompt(
   });
 }
 
-export async function capturePane(tabId: string, environmentId: string): Promise<string> {
-  return invoke<string>("claude_tmux_capture_pane", { tabId, environmentId });
-}
-
 export async function resize(
   tabId: string,
   cols: number,

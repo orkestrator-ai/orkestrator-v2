@@ -12,7 +12,7 @@ import {
 
 afterEach(() => {
   useAgentActivityStore.setState({
-    tabStates: {}, containerStates: {}, containerStateUpdatedAt: {}, containerRefCounts: {},
+    tabStates: {}, containerStates: {}, containerStateUpdatedAt: {},
   });
   useErrorDialogStore.setState({ error: null });
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
@@ -22,24 +22,18 @@ afterEach(() => {
 });
 
 describe("agentActivityStore", () => {
-  test("tracks per-tab presentation state and mounted container references", () => {
+  test("tracks per-tab presentation state", () => {
     const store = useAgentActivityStore.getState();
 
     expect(store.getTabState("missing")).toBe("idle");
     expect(store.getContainerState("missing")).toBe("idle");
 
     store.setTabState("tab-1", "working");
-    store.incrementContainerRef("env-1");
-    store.incrementContainerRef("env-1");
-    store.decrementContainerRef("env-1");
 
     expect(useAgentActivityStore.getState().getTabState("tab-1")).toBe("working");
-    expect(useAgentActivityStore.getState().containerRefCounts["env-1"]).toBe(1);
 
     store.removeTabState("tab-1");
-    store.decrementContainerRef("env-1");
     expect(useAgentActivityStore.getState().getTabState("tab-1")).toBe("idle");
-    expect(useAgentActivityStore.getState().containerRefCounts["env-1"]).toBeUndefined();
   });
 
   test("replaces the projection from complete backend-owned snapshots", () => {

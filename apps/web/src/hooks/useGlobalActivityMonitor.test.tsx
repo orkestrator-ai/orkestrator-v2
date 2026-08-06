@@ -2,11 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import {
-  isEnvironmentActivityTransition,
-  isEnvironmentCompletionTransition,
-  useGlobalActivityMonitor,
-} from "./useGlobalActivityMonitor";
+import { useGlobalActivityMonitor } from "./useGlobalActivityMonitor";
 
 describe("backend-owned activity projection", () => {
   beforeEach(() => {
@@ -14,7 +10,6 @@ describe("backend-owned activity projection", () => {
       tabStates: {},
       containerStates: {},
       containerStateUpdatedAt: {},
-      containerRefCounts: {},
     });
     useEnvironmentStore.setState({ environments: [] });
   });
@@ -49,14 +44,6 @@ describe("backend-owned activity projection", () => {
     });
   });
 
-  test("classifies backend transition edges", () => {
-    expect(isEnvironmentActivityTransition("idle", "working")).toBe(true);
-    expect(isEnvironmentActivityTransition("working", "idle")).toBe(true);
-    expect(isEnvironmentActivityTransition("waiting", "idle")).toBe(false);
-    expect(isEnvironmentCompletionTransition("working", "waiting")).toBe(true);
-    expect(isEnvironmentCompletionTransition("idle", "waiting")).toBe(false);
-  });
-
   test("rehydrates the latest backend snapshot after the observer remounts", async () => {
     useEnvironmentStore.setState({
       environments: [{
@@ -89,5 +76,35 @@ describe("backend-owned activity projection", () => {
       "env-b": "waiting",
     });
     second.unmount();
+  });
+
+  test("projects environment-store updates while the observer stays mounted", async () => {
+    useEnvironmentStore.setState({
+      environments: [{
+        id: "env-a",
+        agentActivityState: "working",
+        agentActivityUpdatedAt: "2026-08-04T10:00:00.000Z",
+      }] as never,
+    });
+    const observer = renderHook(() => useGlobalActivityMonitor());
+    await act(async () => undefined);
+    expect(useAgentActivityStore.getState().containerStates).toEqual({
+      "env-a": "working",
+    });
+
+    act(() => {
+      useEnvironmentStore.setState({
+        environments: [{
+          id: "env-b",
+          agentActivityState: "waiting",
+          agentActivityUpdatedAt: "2026-08-04T10:01:00.000Z",
+        }] as never,
+      });
+    });
+
+    expect(useAgentActivityStore.getState().containerStates).toEqual({
+      "env-b": "waiting",
+    });
+    observer.unmount();
   });
 });

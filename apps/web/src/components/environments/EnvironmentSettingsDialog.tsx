@@ -42,6 +42,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { cn } from "@/lib/utils";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "@/components/settings/FullscreenSettingsLayout";
 import * as backend from "@/lib/backend";
@@ -1010,7 +1011,10 @@ export function EnvironmentSettingsDialog({
 
       {/* Restart confirmation dialog */}
       <AlertDialog open={showRestartConfirm} onOpenChange={setShowRestartConfirm}>
-        <AlertDialogContent>
+        <AlertDialogContent
+          className={Z_FULLSCREEN_DIALOG}
+          overlayClassName={Z_FULLSCREEN_DIALOG}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Container Recreate Required</AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">

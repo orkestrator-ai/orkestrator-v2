@@ -79,6 +79,16 @@ mock.module("@/lib/backend", () => ({
 
 const { GlobalSettings } = await import("../../../apps/web/src/components/settings/GlobalSettings");
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("GlobalSettings", () => {
   const setSavedCodexMaxConcurrentThreads = (value: number) => {
     useConfigStore.setState((state) => ({
@@ -388,11 +398,39 @@ describe("GlobalSettings", () => {
 
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/removes the existing HTTPS listener on port 443/)).toBeTruthy();
+    // The load-bearing property is that the component default is *gone*: if
+    // tailwind-merge ever stopped collapsing them, `z-50 … z-[80]` would still
+    // satisfy a `toContain` check while the rendered layer became dependent on
+    // stylesheet order.
+    const overlay = document.querySelector('[data-slot="alert-dialog-overlay"]');
+    expect(dialog.className).toContain("z-[80]");
+    expect(dialog.className).not.toContain("z-50");
+    expect(overlay?.className).toContain("z-[80]");
+    expect(overlay?.className).not.toContain("z-50");
     fireEvent.click(within(dialog).getByRole("button", { name: "Reset Tailscale Serve" }));
 
     await waitFor(() => expect(mockResetWebClientServe).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByText("Running")).toBeTruthy());
     expect(mockToastSuccess).toHaveBeenCalledWith("Tailscale Serve reset");
+  });
+
+  test("cancels a Tailscale Serve reset without invoking the destructive command", async () => {
+    window.orkestratorGateway = undefined;
+    mockGetWebClientStatus.mockResolvedValueOnce({
+      enabled: true,
+      running: false,
+      url: null,
+      error: "Existing HTTPS listener",
+      resetAvailable: true,
+    });
+    render(<GlobalSettings activeSection="web-client" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Reset Tailscale Serve" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(mockResetWebClientServe).not.toHaveBeenCalled();
   });
 
   test("keeps a resettable Serve conflict retryable after a transient reset failure", async () => {
@@ -627,6 +665,74 @@ describe("GlobalSettings", () => {
       }));
     });
     expect(mockGetGatewayTokenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  test("ignores stale status and token loads after switching away and back", async () => {
+    const firstStatus = deferred<{
+      enabled: boolean; running: boolean; url: string | null; error: string | null; resetAvailable: boolean;
+    }>();
+    const secondStatus = deferred<{
+      enabled: boolean; running: boolean; url: string | null; error: string | null; resetAvailable: boolean;
+    }>();
+    const firstToken = deferred<{ token: string; editable: boolean; source: "file" }>();
+    const secondToken = deferred<{ token: string; editable: boolean; source: "file" }>();
+    mockGetWebClientStatus
+      .mockImplementationOnce(() => firstStatus.promise)
+      .mockImplementationOnce(() => secondStatus.promise);
+    mockGetGatewayTokenSettings
+      .mockImplementationOnce(() => firstToken.promise)
+      .mockImplementationOnce(() => secondToken.promise);
+
+    const view = render(<GlobalSettings activeSection="web-client" />);
+    view.rerender(<GlobalSettings activeSection="general" />);
+    view.rerender(<GlobalSettings activeSection="web-client" />);
+
+    await act(async () => {
+      secondStatus.resolve({
+        enabled: true,
+        running: true,
+        url: "https://new.example.ts.net/",
+        error: null,
+        resetAvailable: false,
+      });
+      secondToken.resolve({ token: "new-gateway-token-123456", editable: true, source: "file" });
+      await Promise.resolve();
+    });
+    expect(await screen.findByDisplayValue("new-gateway-token-123456")).toBeTruthy();
+    expect(screen.getByText("Running")).toBeTruthy();
+
+    await act(async () => {
+      firstStatus.resolve({
+        enabled: true,
+        running: false,
+        url: null,
+        error: "stale status",
+        resetAvailable: false,
+      });
+      firstToken.resolve({ token: "stale-gateway-token", editable: true, source: "file" });
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("stale status")).toBeNull();
+    expect(screen.queryByDisplayValue("stale-gateway-token")).toBeNull();
+    expect(screen.getByDisplayValue("new-gateway-token-123456")).toBeTruthy();
+  });
+
+  test("discards pending web client results after unmount", async () => {
+    const status = deferred<{
+      enabled: boolean; running: boolean; url: string | null; error: string | null; resetAvailable: boolean;
+    }>();
+    const token = deferred<{ token: string; editable: boolean; source: "file" }>();
+    mockGetWebClientStatus.mockImplementationOnce(() => status.promise);
+    mockGetGatewayTokenSettings.mockImplementationOnce(() => token.promise);
+    const view = render(<GlobalSettings activeSection="web-client" />);
+    view.unmount();
+
+    await act(async () => {
+      status.resolve({ enabled: true, running: true, url: null, error: null, resetAvailable: false });
+      token.resolve({ token: "late-gateway-token", editable: true, source: "file" });
+      await Promise.resolve();
+    });
+    expect(screen.queryByDisplayValue("late-gateway-token")).toBeNull();
   });
 
   test("shows unavailable and status-fetch errors", async () => {
@@ -956,6 +1062,71 @@ describe("GlobalSettings", () => {
     expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
   });
 
+  test("keeps persisted settings and the PAT edit retryable when token storage fails", async () => {
+    const originalConsoleError = console.error;
+    console.error = mock(() => undefined);
+    mockSetGitHubToken.mockRejectedValueOnce(new Error("keychain unavailable"));
+    try {
+      render(<GlobalSettings activeSection="general" />);
+      fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+      const token = screen.getByLabelText("GitHub token") as HTMLInputElement;
+      fireEvent.change(token, { target: { value: "replacement-token" } });
+      fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
+        target: { value: ".env.local" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+        "Failed to save settings",
+        { description: "keychain unavailable" },
+      ));
+      expect(useConfigStore.getState().config.global.envFilePatterns).toEqual([".env.local"]);
+      expect(useConfigStore.getState().config.global.useHostGitHubCredentials).toBe(false);
+      expect(token.value).toBe("replacement-token");
+      expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(false);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("discards a failed PAT edit on Reset instead of resurrecting it later", async () => {
+    const originalConsoleError = console.error;
+    console.error = mock(() => undefined);
+    mockSetGitHubToken.mockRejectedValueOnce(new Error("keychain unavailable"));
+    try {
+      render(<GlobalSettings activeSection="general" />);
+      fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+      const token = screen.getByLabelText("GitHub token") as HTMLInputElement;
+      fireEvent.change(token, { target: { value: "discarded-token" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+        "Failed to save settings",
+        { description: "keychain unavailable" },
+      ));
+      expect(token.value).toBe("discarded-token");
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
+      expect(token.value).toBe("");
+
+      // Any later external config change re-runs the `[global]` sync effect. A
+      // retained edit would be restored here, putting a token the user threw
+      // away back in the field — and back into the next save.
+      await act(async () => {
+        useConfigStore.getState().setConfig({
+          ...useConfigStore.getState().config,
+          global: {
+            ...useConfigStore.getState().config.global,
+            debugLogging: !useConfigStore.getState().config.global.debugLogging,
+          },
+        });
+        await Promise.resolve();
+      });
+      expect((screen.getByLabelText("GitHub token") as HTMLInputElement).value).toBe("");
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
   test("switches from a configured PAT to host credentials without replacing the PAT", async () => {
     useConfigStore.setState((state) => ({
       config: {
@@ -1016,6 +1187,30 @@ describe("GlobalSettings", () => {
     expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.")).toBeNull();
   });
 
+  test("saves terminal font and scrollback selections", async () => {
+    render(<GlobalSettings activeSection="terminal" />);
+
+    const font = screen.getByRole("combobox");
+    fireEvent.keyDown(font, { key: "ArrowDown" });
+    const listbox = await screen.findByRole("listbox");
+    const option = screen.getByRole("option", { name: "JetBrains Mono" });
+    fireEvent.pointerDown(option, { pointerType: "mouse" });
+    fireEvent.pointerUp(option, { pointerType: "mouse" });
+    await waitFor(() => expect(font.textContent).toContain("JetBrains Mono"));
+    fireEvent.animationEnd(listbox);
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    const scrollback = screen.getAllByRole("slider")[1]!;
+    fireEvent.keyDown(scrollback, { key: "ArrowRight" });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalAppearance: expect.objectContaining({ fontFamily: "JetBrains Mono" }),
+        terminalScrollback: 5100,
+      }),
+    ));
+  });
+
   test("blocks saves for invalid domains and terminal colors", () => {
     const { container, rerender } = render(<GlobalSettings activeSection="network" />);
     fireEvent.change(screen.getByPlaceholderText(/github\.com/), { target: { value: "not a domain" } });
@@ -1041,6 +1236,51 @@ describe("GlobalSettings", () => {
         })
       );
     });
+  });
+
+  test("saves the Claude native backend selection", async () => {
+    render(<GlobalSettings activeSection="claude" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Tmux/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ claudeNativeBackend: "tmux" }),
+    ));
+  });
+
+  test("trims and deduplicates environment patterns and allowed domains", async () => {
+    const view = render(<GlobalSettings activeSection="general" />);
+    // Env patterns are filenames, so `.ENV` is a different pattern from `.env`
+    // and must survive; domains are DNS names, so case is irrelevant there.
+    fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
+      target: { value: " .env , .env.local, .env, .ENV,  " },
+    });
+    view.rerender(<GlobalSettings activeSection="network" />);
+    fireEvent.change(screen.getByPlaceholderText(/github\.com/), {
+      target: { value: " Example.com\napi.example.com\nexample.com\nEXAMPLE.COM\n " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        envFilePatterns: [".env", ".env.local", ".ENV"],
+        // First spelling typed wins, in first-occurrence order.
+        allowedDomains: ["Example.com", "api.example.com"],
+      }),
+    ));
+  });
+
+  test("calls onSaveSuccess only after the success delay", async () => {
+    const onSaveSuccess = mock(() => undefined);
+    render(<GlobalSettings activeSection="codex" onSaveSuccess={onSaveSuccess} />);
+    fireEvent.click(screen.getByRole("switch", { name: "Codex fast mode for new native tabs" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Settings saved"));
+    expect(onSaveSuccess).not.toHaveBeenCalled();
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 550)));
+    expect(onSaveSuccess).toHaveBeenCalledTimes(1);
   });
 
   test("preserves the tmux Claude model preference when saving unrelated settings", async () => {
@@ -1329,6 +1569,30 @@ describe("GlobalSettings", () => {
     ));
     expect(mockToastSuccess).not.toHaveBeenCalledWith("Settings saved");
     expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("truncates long GitHub credential propagation failure details", async () => {
+    mockPropagateGithubCredentialsToContainers.mockResolvedValueOnce({
+      updated: [],
+      failed: [
+        ["environment-1", "failed one"],
+        ["environment-2", "failed two"],
+        ["environment-3", "failed three"],
+        ["environment-4", "failed four"],
+        ["environment-5", "failed five"],
+      ],
+    });
+    render(<GlobalSettings activeSection="general" />);
+    fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Settings saved, but some containers were not updated",
+      {
+        description:
+          "Failed: environment-1: failed one; environment-2: failed two; environment-3: failed three; and 2 more. Save Changes to retry.",
+      },
+    ));
   });
 
   test("reports complete GitHub credential propagation failures and retries on save", async () => {

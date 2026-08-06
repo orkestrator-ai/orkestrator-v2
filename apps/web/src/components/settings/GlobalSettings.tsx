@@ -58,6 +58,7 @@ import {
   isValidHexColor,
   getPreviewColors,
 } from "@/constants/terminal";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
@@ -170,6 +171,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [isTesting, setIsTesting] = useState(false);
   const [testResults, setTestResults] = useState<DomainTestResult[] | null>(null);
   const webClientStatusRequestRef = useRef(0);
+  const pendingGitHubCredentialEditRef = useRef<{
+    token: string;
+    clear: boolean;
+  } | null>(null);
 
   // Sync local state when config changes in the store
   useEffect(() => {
@@ -178,8 +183,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setEnvPatterns(global.envFilePatterns.join(", "));
     setAnthropicApiKey(global.anthropicApiKey || "");
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
-    setGithubToken("");
-    setClearGithubToken(false);
+    setGithubToken(pendingGitHubCredentialEditRef.current?.token ?? "");
+    setClearGithubToken(pendingGitHubCredentialEditRef.current?.clear ?? false);
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
     setDefaultAgent(global.defaultAgent || "claude");
@@ -362,15 +367,21 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const patterns = envPatterns
+      // Filenames are case-sensitive, so these dedupe exactly.
+      const patterns = [...new Set(envPatterns
         .split(",")
         .map((p) => p.trim())
-        .filter((p) => p.length > 0);
+        .filter((p) => p.length > 0))];
 
-      const domains = allowedDomains
-        .split("\n")
-        .map((d) => d.trim())
-        .filter((d) => d.length > 0);
+      // DNS is not case-sensitive, so `example.com` and `Example.com` are one
+      // allowed domain. The first spelling the user typed is the one kept.
+      const domains: string[] = [];
+      const seenDomains = new Set<string>();
+      for (const domain of allowedDomains.split("\n").map((d) => d.trim())) {
+        if (domain.length === 0 || seenDomains.has(domain.toLowerCase())) continue;
+        seenDomains.add(domain.toLowerCase());
+        domains.push(domain);
+      }
 
       const newGlobal: {
         containerResources: { cpuCores: number; memoryGb: number };
@@ -445,11 +456,22 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       const githubTokenChanged = clearGithubToken || nextGitHubToken.length > 0;
       const githubCredentialChanged = githubCredentialSourceChanged || githubTokenChanged;
       if (githubTokenChanged) {
+        // Persisted non-secret settings are already authoritative at this point.
+        // Preserve the credential edit across that store sync until its separate
+        // keychain/file write succeeds, so a partial failure remains retryable.
+        pendingGitHubCredentialEditRef.current = {
+          token: githubToken,
+          clear: clearGithubToken,
+        };
+      }
+      setConfig(newConfig);
+      if (githubTokenChanged) {
         newConfig = await backend.setGitHubToken(
           clearGithubToken ? null : nextGitHubToken,
         );
+        pendingGitHubCredentialEditRef.current = null;
+        setConfig(newConfig);
       }
-      setConfig(newConfig);
 
       if (!window.orkestratorGateway?.enabled) {
         try {
@@ -519,6 +541,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
       setGithubToken("");
       setClearGithubToken(false);
+      pendingGitHubCredentialEditRef.current = null;
       setHasChanges(githubCredentialPropagationFailed);
       setSaveSuccess(!githubCredentialPropagationFailed);
       if (!githubCredentialPropagationFailed) {
@@ -542,6 +565,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setGithubToken("");
     setClearGithubToken(false);
+    // Reset is an explicit discard. Without this the retained edit would be
+    // restored by the `[global]` sync effect on the next external config change,
+    // resurrecting a token — or a pending clear — the user just threw away.
+    pendingGitHubCredentialEditRef.current = null;
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
     setDefaultAgent(global.defaultAgent || "claude");
@@ -1585,7 +1612,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
                         Reset Tailscale Serve
                       </Button>
                     </AlertDialogTrigger>
-                    <AlertDialogContent>
+                    <AlertDialogContent
+                      className={Z_FULLSCREEN_DIALOG}
+                      overlayClassName={Z_FULLSCREEN_DIALOG}
+                    >
                       <AlertDialogHeader>
                         <AlertDialogTitle>Reset Tailscale Serve?</AlertDialogTitle>
                         <AlertDialogDescription>

@@ -108,19 +108,39 @@ function expectedProxyTarget(targetPort: number): string {
   return `http://127.0.0.1:${targetPort}`;
 }
 
-function ownedServeUrl(status: ServeStatus, targetPort: number, httpsPort: number): string | null {
-  const expectedTarget = expectedProxyTarget(targetPort);
+/**
+ * The root handler on `httpsPort`, if one exists.
+ *
+ * This manager only ever claims `/`, so its presence — independent of what it
+ * proxies to — is what separates "someone else's listener" from "a listener
+ * whose root mount is free to claim".
+ */
+function rootHandler(
+  status: ServeStatus,
+  httpsPort: number,
+): { hostPort: string; proxy: unknown } | null {
   for (const [hostPort, server] of Object.entries(status.Web ?? {})) {
     const separator = hostPort.lastIndexOf(":");
     if (separator < 0 || Number.parseInt(hostPort.slice(separator + 1), 10) !== httpsPort) continue;
-    if (server?.Handlers?.["/"]?.Proxy !== expectedTarget) continue;
-    try {
-      return `${new URL(`https://${hostPort}`).origin}/`;
-    } catch {
-      return null;
-    }
+    const handler = server?.Handlers?.["/"];
+    if (!handler) continue;
+    return { hostPort, proxy: handler.Proxy };
   }
   return null;
+}
+
+function hasRootHandler(status: ServeStatus, httpsPort: number): boolean {
+  return rootHandler(status, httpsPort) !== null;
+}
+
+function ownedServeUrl(status: ServeStatus, targetPort: number, httpsPort: number): string | null {
+  const handler = rootHandler(status, httpsPort);
+  if (!handler || handler.proxy !== expectedProxyTarget(targetPort)) return null;
+  try {
+    return `${new URL(`https://${handler.hostPort}`).origin}/`;
+  } catch {
+    return null;
+  }
 }
 
 function commandError(error: unknown): string {
@@ -130,7 +150,7 @@ function commandError(error: unknown): string {
 }
 
 export class TailscaleServeManager {
-  private activeHttpsPort: number | null = null;
+  private activeServe: { targetPort: number; httpsPort: number } | null = null;
 
   constructor(
     private readonly executable = "tailscale",
@@ -159,10 +179,25 @@ export class TailscaleServeManager {
     if (configuredPort(status, httpsPort)) {
       const existingUrl = ownedServeUrl(status, targetPort, httpsPort);
       if (options.adoptExisting && existingUrl) {
-        this.activeHttpsPort = httpsPort;
+        this.activeServe = { targetPort, httpsPort };
         return existingUrl;
       }
-      throw new TailscaleServeConflictError(httpsPort, hasHttpsListener(status, httpsPort));
+      // Teardown removes only `/`, so a port the user also serves other paths
+      // from keeps its TCP entry after this manager has released it. Treating
+      // that as a conflict would make enable → disable → enable fail, and the
+      // only remedy offered — a full reset — would delete exactly the handlers
+      // scoped teardown exists to protect. Claim the free root mount instead.
+      //
+      // Narrow on purpose: an occupied `/`, a non-HTTPS listener, or a listener
+      // with no handlers at all is still someone else's. Only the shape this
+      // manager's own teardown leaves behind — an HTTPS listener held open by
+      // handlers that are not `/` — is claimable.
+      const claimableRemainder = hasHttpsListener(status, httpsPort)
+        && !hasRootHandler(status, httpsPort)
+        && httpsHandlerPaths(status, httpsPort).length > 0;
+      if (!claimableRemainder) {
+        throw new TailscaleServeConflictError(httpsPort, hasHttpsListener(status, httpsPort));
+      }
     }
 
     const args = [
@@ -179,7 +214,7 @@ export class TailscaleServeManager {
     } catch (error) {
       throw new Error(`Unable to configure Tailscale Serve: ${commandError(error)}`);
     }
-    this.activeHttpsPort = httpsPort;
+    this.activeServe = { targetPort, httpsPort };
 
     let url = extractTailscaleServeUrl(`${result.stdout}\n${result.stderr}`);
     if (!url) {
@@ -198,10 +233,9 @@ export class TailscaleServeManager {
   }
 
   async stop(): Promise<void> {
-    const httpsPort = this.activeHttpsPort;
-    if (httpsPort === null) return;
-    await this.run(this.executable, ["serve", `--https=${httpsPort}`, "off"]);
-    this.activeHttpsPort = null;
+    const activeServe = this.activeServe;
+    if (!activeServe) return;
+    await this.stopOwned(activeServe.targetPort, activeServe.httpsPort);
   }
 
   async clearHttpsPort(httpsPort = 443): Promise<void> {
@@ -218,7 +252,7 @@ export class TailscaleServeManager {
     }
 
     if (!configuredPort(status, httpsPort)) {
-      if (this.activeHttpsPort === httpsPort) this.activeHttpsPort = null;
+      if (this.activeServe?.httpsPort === httpsPort) this.activeServe = null;
       return;
     }
     if (!hasHttpsListener(status, httpsPort)) {
@@ -230,6 +264,7 @@ export class TailscaleServeManager {
     for (const handlerPath of handlerPaths) {
       const args = [
         "serve",
+        "--yes",
         `--https=${httpsPort}`,
         ...(handlerPath === "/" ? [] : [`--set-path=${handlerPath}`]),
         "off",
@@ -240,7 +275,7 @@ export class TailscaleServeManager {
         throw new Error(`Unable to reset Tailscale Serve handler ${handlerPath}: ${commandError(error)}`);
       }
     }
-    if (this.activeHttpsPort === httpsPort) this.activeHttpsPort = null;
+    if (this.activeServe?.httpsPort === httpsPort) this.activeServe = null;
   }
 
   async stopOwned(targetPort: number, httpsPort = 443): Promise<boolean> {
@@ -248,17 +283,61 @@ export class TailscaleServeManager {
     try {
       existingStatus = await this.run(this.executable, ["serve", "status", "--json"]);
     } catch (error) {
-      throw new Error(`Unable to inspect Tailscale Serve configuration: ${commandError(error)}`);
+      // Ownership cannot be revalidated. When this process configured exactly
+      // this listener the root handler is still known to be ours, and refusing
+      // here would exit leaving a public HTTPS endpoint proxying to a port that
+      // is about to disappear. Without that proof, fail closed.
+      if (!this.ownsActiveServe(targetPort, httpsPort)) {
+        throw new Error(`Unable to inspect Tailscale Serve configuration: ${commandError(error)}`);
+      }
+      await this.removeRootHandler(httpsPort);
+      this.clearActiveServe(targetPort, httpsPort);
+      return true;
     }
     const status = parseServeStatus(existingStatus.stdout);
-    if (!configuredPort(status, httpsPort)) return false;
+    // Either the whole listener is gone, or scoped teardown already removed the
+    // root handler and only the user's other paths keep the TCP entry alive.
+    // Both mean there is nothing of ours left to remove, which keeps repeated
+    // teardown idempotent instead of throwing "changed configuration".
+    if (!configuredPort(status, httpsPort) || !hasRootHandler(status, httpsPort)) {
+      this.clearActiveServe(targetPort, httpsPort);
+      return false;
+    }
     if (!ownedServeUrl(status, targetPort, httpsPort)) {
       throw new Error(
         `Refusing to remove a changed Tailscale Serve configuration on HTTPS port ${httpsPort}`,
       );
     }
-    await this.run(this.executable, ["serve", `--https=${httpsPort}`, "off"]);
-    if (this.activeHttpsPort === httpsPort) this.activeHttpsPort = null;
+    await this.removeRootHandler(httpsPort);
+    this.clearActiveServe(targetPort, httpsPort);
     return true;
+  }
+
+  /** True when this process configured exactly this listener and still holds it. */
+  private ownsActiveServe(targetPort: number, httpsPort: number): boolean {
+    return this.activeServe?.targetPort === targetPort
+      && this.activeServe.httpsPort === httpsPort;
+  }
+
+  private clearActiveServe(targetPort: number, httpsPort: number): void {
+    if (this.ownsActiveServe(targetPort, httpsPort)) this.activeServe = null;
+  }
+
+  /**
+   * Removes only the root proxy. Other paths on the same HTTPS listener may
+   * belong to the user and must survive managed shutdown.
+   */
+  private async removeRootHandler(httpsPort: number): Promise<void> {
+    try {
+      await this.run(this.executable, [
+        "serve",
+        "--yes",
+        `--https=${httpsPort}`,
+        "--set-path=/",
+        "off",
+      ]);
+    } catch (error) {
+      throw new Error(`Unable to remove owned Tailscale Serve handler: ${commandError(error)}`);
+    }
   }
 }

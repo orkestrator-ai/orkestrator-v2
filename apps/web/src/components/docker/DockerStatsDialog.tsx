@@ -23,6 +23,7 @@ import {
   X,
   Link2,
 } from "lucide-react";
+import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "@/components/settings/FullscreenSettingsLayout";
 import type { DockerSystemStats, ContainerInfo, SystemPruneResult } from "@/lib/backend";
@@ -377,7 +378,10 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
 
       {/* Cleanup Confirmation Dialog */}
       <AlertDialog open={showCleanupConfirm} onOpenChange={setShowCleanupConfirm}>
-        <AlertDialogContent>
+        <AlertDialogContent
+          className={Z_FULLSCREEN_DIALOG}
+          overlayClassName={Z_FULLSCREEN_DIALOG}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Clean Up Orphaned Containers?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -410,7 +414,10 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
         setShowPruneConfirm(open);
         if (!open) setPruneVolumes(false);
       }}>
-        <AlertDialogContent>
+        <AlertDialogContent
+          className={Z_FULLSCREEN_DIALOG}
+          overlayClassName={Z_FULLSCREEN_DIALOG}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Clean Up Docker Resources?</AlertDialogTitle>
             <AlertDialogDescription asChild>
@@ -467,7 +474,10 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
           setReattachName("");
         }
       }}>
-        <AlertDialogContent>
+        <AlertDialogContent
+          className={Z_FULLSCREEN_DIALOG}
+          overlayClassName={Z_FULLSCREEN_DIALOG}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Reattach Container to Project</AlertDialogTitle>
             <AlertDialogDescription asChild>
@@ -493,7 +503,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                     <SelectTrigger id="project-select">
                       <SelectValue placeholder="Choose a project..." />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className={Z_FULLSCREEN_DIALOG_POPOVER}>
                       {projects.map((project) => (
                         <SelectItem key={project.id} value={project.id}>
                           {project.name}

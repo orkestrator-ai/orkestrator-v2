@@ -3287,6 +3287,48 @@ describe("at-most-once dispatch", () => {
       .toEqual(["user", "assistant"]);
   });
 
+  test("never exposes an idle replacement context while a retry is still dispatching", async () => {
+    let attempts = 0;
+    const h = await harness({
+      "turn/start": () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        }
+        return { turn: { id: "turn-after-restart" } };
+      },
+    }, { initialPromptRetryDelayMs: 80 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    // The replacement context is attached, then persisted, then dispatched. If
+    // the busy flags are set after that store write rather than before it, a
+    // `/review` or `/compact` arriving in the gap passes `assertNoActiveTurn`
+    // and registers its own accumulator over a turn that is about to start.
+    const internals = h.runtime as unknown as {
+      persistSession: (session: unknown) => Promise<void>;
+    };
+    const realPersistSession = internals.persistSession.bind(h.runtime);
+    const observedDuringRetry: Array<string | undefined> = [];
+    internals.persistSession = async (session: unknown) => {
+      if (attempts >= 1) observedDuringRetry.push(h.runtime.getStatus(sessionId)?.status);
+      return realPersistSession(session);
+    };
+
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "start on the replacement child",
+      requestId: "initial-prompt:env-1:tab-busy-window",
+      attachments: [],
+    });
+    await waitUntil(() => attempts === 1, "first initial prompt attempt did not run");
+    await h.engine.getSupervisor().restartNow("restart during retry delay");
+    expect(await pending).toMatchObject({ ok: true });
+
+    expect(observedDuringRetry.length).toBeGreaterThan(0);
+    expect(observedDuringRetry.every((status) => status === "running")).toBe(true);
+  });
+
   test("a no-id replacement thread settles the stale retry and remains reusable", async () => {
     let turnAttempts = 0;
     let threadStarts = 0;

@@ -782,7 +782,7 @@ describe("App background processing mounts", () => {
     }
   });
 
-  test("hydrates looped reviews for environments and retains their background host", async () => {
+  test("hydrates looped reviews without retaining a background terminal host", async () => {
     const background = makeEnvironment("env-looped", "project-2");
     resetStores({
       environments: [
@@ -819,9 +819,9 @@ describe("App background processing mounts", () => {
     await waitFor(() => {
       expect(useLoopedReviewStore.getState().workflows.get(workflow.id))
         .toMatchObject({ backendRevision: 2, phase: "preparing" });
-      expect(screen.getByTestId("terminal-env-looped")).toBeTruthy();
     });
     expect(mockListLoopedReviewWorkflows).toHaveBeenCalledWith("env-looped");
+    expect(screen.queryByTestId("terminal-env-looped")).toBeNull();
   });
 
   test("routes the empty selection to the launcher and forwards environment operations", async () => {
@@ -991,7 +991,7 @@ describe("App background processing mounts", () => {
     expect(screen.queryByTestId("terminal-env-sibling")).toBeNull();
   });
 
-  test("keeps off-screen environments with a pending native launch mounted", async () => {
+  test("does not mount off-screen environments for renderer launch projections", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
@@ -1011,13 +1011,11 @@ describe("App background processing mounts", () => {
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("terminal-env-pending-launch")).toBeTruthy();
-    });
-    expect(screen.getByTestId("terminal-env-pending-launch").getAttribute("data-active")).toBe("false");
+    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
+    expect(screen.queryByTestId("terminal-env-pending-launch")).toBeNull();
   });
 
-  test("keeps a durable launch mounted after the renderer's transient state is lost", async () => {
+  test("does not mount off-screen environments for durable launch intents", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
@@ -1032,13 +1030,11 @@ describe("App background processing mounts", () => {
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("terminal-env-durable-launch")).toBeTruthy();
-    });
-    expect(screen.getByTestId("terminal-env-durable-launch").getAttribute("data-active")).toBe("false");
+    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
+    expect(screen.queryByTestId("terminal-env-durable-launch")).toBeNull();
   });
 
-  test("keeps a backend-created startup session mounted until its tab is persisted", async () => {
+  test("does not mount off-screen environments for backend startup sessions", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
@@ -1061,16 +1057,12 @@ describe("App background processing mounts", () => {
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("terminal-env-startup-session")).toBeTruthy();
-    });
-    expect(
-      screen.getByTestId("terminal-env-startup-session").getAttribute("data-active"),
-    ).toBe("false");
+    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
+    expect(screen.queryByTestId("terminal-env-startup-session")).toBeNull();
   });
 
   test.each(["starting", "error"] as const)(
-    "keeps a backend-owned %s startup session mounted without a pending flag",
+    "does not mount an off-screen environment for a backend-owned %s startup session",
     async (status) => {
       resetStores({
         environments: [
@@ -1095,14 +1087,8 @@ describe("App background processing mounts", () => {
 
       render(<App />);
 
-      await waitFor(() => {
-        expect(screen.getByTestId(`terminal-env-startup-${status}`)).toBeTruthy();
-      });
-      expect(
-        screen
-          .getByTestId(`terminal-env-startup-${status}`)
-          .getAttribute("data-active"),
-      ).toBe("false");
+      await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
+      expect(screen.queryByTestId(`terminal-env-startup-${status}`)).toBeNull();
     },
   );
 
@@ -1130,7 +1116,7 @@ describe("App background processing mounts", () => {
     expect(screen.queryByTestId("terminal-env-stopped-launch")).toBeNull();
   });
 
-  test("keeps off-screen environments with a pending tab initialPrompt mounted", async () => {
+  test("does not mount off-screen environments for pending tab prompts", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
@@ -1172,10 +1158,8 @@ describe("App background processing mounts", () => {
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("terminal-env-pending-prompt")).toBeTruthy();
-    });
-    expect(screen.getByTestId("terminal-env-pending-prompt").getAttribute("data-active")).toBe("false");
+    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
+    expect(screen.queryByTestId("terminal-env-pending-prompt")).toBeNull();
   });
 
   test("does not mount an off-screen environment merely because prompts are queued", async () => {
@@ -1253,7 +1237,7 @@ describe("App background processing mounts", () => {
     expect(screen.queryByTestId("terminal-env-queued-opencode")).toBeNull();
   });
 
-  test("keeps off-screen environments with a loading native session mounted until idle", async () => {
+  test("does not mount off-screen environments for loading native sessions", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
@@ -1279,33 +1263,11 @@ describe("App background processing mounts", () => {
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("terminal-env-loading-codex")).toBeTruthy();
-    });
-    expect(screen.getByTestId("terminal-env-loading-codex").getAttribute("data-active")).toBe("false");
-
-    // Once the session reports idle, the env should no longer be mounted as background.
-    act(() => {
-      useCodexStore.setState({
-        sessions: new Map([
-          [
-            sessionKey,
-            {
-              sessionId: "sess-loading",
-              messages: [],
-              isLoading: false,
-            } as any,
-          ],
-        ]),
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("terminal-env-loading-codex")).toBeNull();
-    });
+    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
+    expect(screen.queryByTestId("terminal-env-loading-codex")).toBeNull();
   });
 
-  test("keeps off-screen environments with a busy tmux session mounted until idle", async () => {
+  test("does not mount off-screen environments for busy tmux sessions", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
@@ -1324,21 +1286,11 @@ describe("App background processing mounts", () => {
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("terminal-env-busy-tmux")).toBeTruthy();
-    });
-    expect(screen.getByTestId("terminal-env-busy-tmux").getAttribute("data-active")).toBe("false");
-
-    act(() => {
-      useClaudeTmuxStore.getState().setBusy(stateKey, false);
-    });
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("terminal-env-busy-tmux")).toBeNull();
-    });
+    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
+    expect(screen.queryByTestId("terminal-env-busy-tmux")).toBeNull();
   });
 
-  test("keeps off-screen environments with a pending tmux hook mounted while waiting", async () => {
+  test("does not mount off-screen environments for pending tmux hooks", async () => {
     resetStores({
       environments: [
         makeEnvironment("env-visible", "project-1"),
@@ -1363,10 +1315,8 @@ describe("App background processing mounts", () => {
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("terminal-env-waiting-tmux")).toBeTruthy();
-    });
-    expect(screen.getByTestId("terminal-env-waiting-tmux").getAttribute("data-active")).toBe("false");
+    await waitFor(() => expect(screen.getByTestId("terminal-env-visible")).toBeTruthy());
+    expect(screen.queryByTestId("terminal-env-waiting-tmux")).toBeNull();
   });
 });
 

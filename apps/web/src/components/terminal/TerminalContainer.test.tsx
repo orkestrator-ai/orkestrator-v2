@@ -31,6 +31,10 @@ import { requestTerminalBrowserTab } from "@/lib/terminal-links";
 import * as realDndKitCore from "@dnd-kit/core";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
+import {
+  listen,
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+} from "@/lib/native/events";
 
 const LEGACY_SELECTION_STORAGE_KEY = "orkestrator.pane-selection.v1";
 
@@ -48,6 +52,7 @@ const realBackendSnapshot = { ...realBackend };
 const realSetupCommandsSnapshot = { ...realSetupCommands };
 const realDndKitCoreSnapshot = { ...realDndKitCore };
 const originalOrkestrator = window.orkestrator;
+const listenMock = listen as ReturnType<typeof mock>;
 
 type DndContextHarnessProps = {
   children: ReactNode;
@@ -273,6 +278,8 @@ describe("TerminalContainer", () => {
     rectIntersectionMock.mockReturnValue([]);
     closestCenterMock.mockReset();
     closestCenterMock.mockReturnValue([]);
+    listenMock.mockReset();
+    listenMock.mockResolvedValue(() => undefined);
 
     usePaneLayoutStore.setState({
       environments: new Map([
@@ -4101,7 +4108,12 @@ describe("TerminalContainer", () => {
     ]);
   });
 
-  test("retries a transient setup-session lookup failure without a remount", async () => {
+  test("retries a transient setup-session lookup failure on stream reconnect", async () => {
+    let reconnect: (() => void) | undefined;
+    listenMock.mockImplementation(async (event: string, handler: () => void) => {
+      if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) reconnect = handler;
+      return () => undefined;
+    });
     awaitEnvironmentSetupSessionMock
       .mockRejectedValueOnce(new Error("temporary bridge failure"))
       .mockResolvedValueOnce({
@@ -4135,6 +4147,10 @@ describe("TerminalContainer", () => {
       </TerminalProvider>,
     );
 
+    await waitFor(() => {
+      expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+    });
+    act(() => reconnect?.());
     await waitFor(() => {
       expect(awaitEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
       expect(

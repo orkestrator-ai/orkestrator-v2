@@ -29,7 +29,6 @@ import type {
   WebClientStatus,
   RepositoryConfig,
   EnvironmentStatus,
-  AgentActivityState,
   NetworkAccessMode,
   DomainTestResult,
   PreferredEditor,
@@ -152,52 +151,6 @@ export async function reorderEnvironments(projectId: string, environmentIds: str
 
 export async function getEnvironment(environmentId: string): Promise<Environment | null> {
   return invoke<Environment | null>("get_environment", { environmentId });
-}
-
-export type EnvironmentActivityUpdate = Pick<
-  Environment,
-  | "id"
-  | "lastActivityAt"
-  | "hasUnreadWork"
-  | "agentActivityState"
-  | "agentActivityUpdatedAt"
->;
-
-/** Persist the latest prompt/completion activity for activity-based sorting. */
-export async function recordEnvironmentActivity(
-  environmentId: string,
-  occurredAt: string,
-): Promise<EnvironmentActivityUpdate> {
-  return invoke<EnvironmentActivityUpdate>(
-    "record_environment_activity",
-    { environmentId, occurredAt },
-  );
-}
-
-/** Persist the aggregate agent state for cross-frontend synchronization. */
-export async function setEnvironmentAgentActivity(
-  environmentId: string,
-  state: AgentActivityState,
-  occurredAt: string,
-  observerId: string,
-): Promise<EnvironmentActivityUpdate> {
-  return invoke<EnvironmentActivityUpdate>("set_environment_agent_activity", {
-    environmentId,
-    state,
-    occurredAt,
-    observerId,
-  });
-}
-
-/** Atomically records a completed turn and marks its environment unread. */
-export async function recordEnvironmentCompletion(
-  environmentId: string,
-  occurredAt: string,
-): Promise<EnvironmentActivityUpdate> {
-  return invoke<EnvironmentActivityUpdate>(
-    "record_environment_completion",
-    { environmentId, occurredAt },
-  );
 }
 
 export async function createEnvironment(
@@ -428,12 +381,6 @@ export async function getTerminalOutputSnapshot(
     // Accept older desktop backends during rolling upgrades.
     truncated: (value as { truncated?: boolean }).truncated ?? false,
   };
-}
-
-export async function getEnvironmentSetupSession(
-  environmentId: string
-): Promise<EnvironmentSetupSession | null> {
-  return invoke<EnvironmentSetupSession | null>("get_environment_setup_session", { environmentId });
 }
 
 export async function awaitEnvironmentSetupSession(
@@ -754,13 +701,6 @@ export async function setEnvironmentPr(
   return invoke<Environment>("set_environment_pr", { environmentId, prUrl, prState, hasMergeConflicts });
 }
 
-export async function setEnvironmentSetupComplete(
-  environmentId: string,
-  complete: boolean
-): Promise<Environment> {
-  return invoke<Environment>("set_environment_setup_complete", { environmentId, complete });
-}
-
 export async function overrideEnvironmentSetup(environmentId: string): Promise<Environment> {
   return invoke<Environment>("override_environment_setup", { environmentId });
 }
@@ -771,14 +711,6 @@ export async function runEnvironmentSetup(environmentId: string): Promise<Enviro
 
 export async function ensureEnvironmentSetup(environmentId: string): Promise<EnsureEnvironmentSetupResult> {
   return invoke<EnsureEnvironmentSetupResult>("ensure_environment_setup", { environmentId });
-}
-
-/**
- * Read-only fetch of a local environment's setupLocal commands from its
- * orkestrator-ai.json. Returns null for non-local envs or when no commands.
- */
-export async function getSetupCommands(environmentId: string): Promise<string[] | null> {
-  return invoke<string[] | null>("get_setup_commands", { environmentId });
 }
 
 /** Detect PR URL and state for the environment's branch (uses --head to check correct branch) */
@@ -999,20 +931,6 @@ export async function propagateGithubCredentialsToContainers(): Promise<Propagat
 
 // --- OpenCode Server Commands ---
 
-export interface OpenCodeServerStartResult {
-  hostPort: number;
-  wasRunning: boolean;
-  /** Per-process HTTP Basic password minted by the backend. */
-  authToken: string;
-}
-
-export interface OpenCodeServerStatus {
-  running: boolean;
-  hostPort: number | null;
-  /** Present only when the running server accepted the persisted credential. */
-  authToken?: string;
-}
-
 export type OpenCodeModelRef =
   | string
   | {
@@ -1042,21 +960,6 @@ export interface OpenCodeModelCatalogSnapshot {
   catalogVersion: string;
   updatedAt: string;
   models: CachedOpenCodeModel[];
-}
-
-/** Start the OpenCode server in a container */
-export async function startOpenCodeServer(containerId: string): Promise<OpenCodeServerStartResult> {
-  return invoke<OpenCodeServerStartResult>("start_opencode_server", { containerId });
-}
-
-/** Stop the OpenCode server in a container */
-export async function stopOpenCodeServer(containerId: string): Promise<void> {
-  return invoke("stop_opencode_server", { containerId });
-}
-
-/** Get the status of the OpenCode server in a container */
-export async function getOpenCodeServerStatus(containerId: string): Promise<OpenCodeServerStatus> {
-  return invoke<OpenCodeServerStatus>("get_opencode_server_status", { containerId });
 }
 
 /** Get the OpenCode server log from a container (for debugging) */
@@ -1130,45 +1033,6 @@ export async function cacheOpenCodeModelCatalog(
 
 // --- Claude Bridge Server Commands ---
 
-export interface ClaudeServerStartResult {
-  hostPort: number;
-  wasRunning: boolean;
-  authToken: string;
-}
-
-export interface ClaudeServerStatus {
-  running: boolean;
-  hostPort: number | null;
-  authToken?: string;
-}
-
-export interface CodexServerStartResult {
-  hostPort: number;
-  wasRunning: boolean;
-  authToken: string;
-}
-
-export interface CodexServerStatus {
-  running: boolean;
-  hostPort: number | null;
-  authToken?: string;
-}
-
-/** Start the Claude bridge server in a container */
-export async function startClaudeServer(containerId: string): Promise<ClaudeServerStartResult> {
-  return invoke<ClaudeServerStartResult>("start_claude_server", { containerId });
-}
-
-/** Stop the Claude bridge server in a container */
-export async function stopClaudeServer(containerId: string): Promise<void> {
-  return invoke("stop_claude_server", { containerId });
-}
-
-/** Get the status of the Claude bridge server in a container */
-export async function getClaudeServerStatus(containerId: string): Promise<ClaudeServerStatus> {
-  return invoke<ClaudeServerStatus>("get_claude_server_status", { containerId });
-}
-
 /** Get the Claude bridge server log from a container (for debugging) */
 export async function getClaudeServerLog(containerId: string): Promise<string> {
   return invoke<string>("get_claude_server_log", { containerId });
@@ -1183,21 +1047,6 @@ export async function getClaudeModelCatalog(
     environmentId,
     forceRefresh,
   });
-}
-
-/** Start the Codex bridge server in a container */
-export async function startCodexServer(containerId: string): Promise<CodexServerStartResult> {
-  return invoke<CodexServerStartResult>("start_codex_server", { containerId });
-}
-
-/** Stop the Codex bridge server in a container */
-export async function stopCodexServer(containerId: string): Promise<void> {
-  return invoke("stop_codex_server", { containerId });
-}
-
-/** Get the status of the Codex bridge server in a container */
-export async function getCodexServerStatus(containerId: string): Promise<CodexServerStatus> {
-  return invoke<CodexServerStatus>("get_codex_server_status", { containerId });
 }
 
 /** Get the Codex bridge server log from a container (for debugging) */
@@ -1322,22 +1171,6 @@ export async function updateEnvironmentAllowedDomains(
   domains: string[]
 ): Promise<Environment> {
   return invoke<Environment>("update_environment_allowed_domains", { environmentId, domains });
-}
-
-// --- Claude State Commands ---
-
-export async function startClaudeStatePolling(
-  containerId: string,
-  subscriptionId: string,
-): Promise<void> {
-  return invoke("start_claude_state_polling", { containerId, subscriptionId });
-}
-
-export async function stopClaudeStatePolling(
-  containerId: string,
-  subscriptionId: string,
-): Promise<void> {
-  return invoke("stop_claude_state_polling", { containerId, subscriptionId });
 }
 
 // --- Editor Commands ---
@@ -1879,14 +1712,6 @@ export async function renameSession(
   return invoke<Session>("rename_session", { sessionId, name });
 }
 
-/** Update whether a session has launched its command (e.g., Claude) */
-export async function setSessionHasLaunchedCommand(
-  sessionId: string,
-  hasLaunched: boolean
-): Promise<Session> {
-  return invoke<Session>("set_session_has_launched_command", { sessionId, hasLaunched });
-}
-
 /** Mark all sessions for an environment as disconnected */
 export async function disconnectEnvironmentSessions(
   environmentId: string
@@ -2322,7 +2147,6 @@ export async function deleteBuildPipeline(pipelineId: string): Promise<void> {
 export async function clearTaskBuildStatus(taskId: string): Promise<{
   task: KanbanTask;
   removedPipelineIds: string[];
-  failedPipelineIds: string[];
 }> {
   return invoke("clear_task_build_status", { taskId });
 }
@@ -2609,88 +2433,21 @@ export async function pruneAgentHandoffs(
 
 // --- Local Server Commands (for local/worktree environments) ---
 
-export interface LocalServerStartResult {
-  port: number;
-  pid: number;
-  wasRunning: boolean;
-  /** Per-process renderer credential for all native servers. */
-  authToken?: string;
-}
-
-export interface LocalServerStatus {
-  running: boolean;
-  port: number | null;
-  pid: number | null;
-  /** Per-process renderer credential for all native servers. */
-  authToken?: string;
-}
-
 /** Join the backend-owned startup wait for one environment/provider pair. */
 export async function awaitBridgeReady(
   environmentId: string,
   agent: AgentBridgeKind,
   timeoutMs = 60_000,
-): Promise<AwaitBridgeReadyResult | null> {
+): Promise<AwaitBridgeReadyResult> {
   const result = await invoke<unknown>("await_bridge_ready", {
     environmentId,
     agent,
     timeoutMs,
   });
-  // Keep a narrow compatibility path for older desktop hosts (and embedded
-  // web test hosts) that acknowledge an unknown command without a payload.
-  // A present but malformed payload is still treated as a protocol error.
-  if (result === undefined) {
-    return null;
-  }
   if (!isAwaitBridgeReadyResult(result)) {
     throw new Error("Backend returned an invalid bridge readiness result");
   }
   return result;
-}
-
-/** Start the local OpenCode server for a local environment */
-export async function startLocalOpencodeServer(environmentId: string): Promise<LocalServerStartResult> {
-  return invoke<LocalServerStartResult>("start_local_opencode_server_cmd", { environmentId });
-}
-
-/** Stop the local OpenCode server for a local environment */
-export async function stopLocalOpencodeServer(environmentId: string): Promise<void> {
-  return invoke("stop_local_opencode_server_cmd", { environmentId });
-}
-
-/** Get the status of the local OpenCode server for a local environment */
-export async function getLocalOpencodeServerStatus(environmentId: string): Promise<LocalServerStatus> {
-  return invoke<LocalServerStatus>("get_local_opencode_server_status", { environmentId });
-}
-
-/** Start the local Claude-bridge server for a local environment */
-export async function startLocalClaudeServer(environmentId: string): Promise<LocalServerStartResult> {
-  return invoke<LocalServerStartResult>("start_local_claude_server_cmd", { environmentId });
-}
-
-/** Stop the local Claude-bridge server for a local environment */
-export async function stopLocalClaudeServer(environmentId: string): Promise<void> {
-  return invoke("stop_local_claude_server_cmd", { environmentId });
-}
-
-/** Get the status of the local Claude-bridge server for a local environment */
-export async function getLocalClaudeServerStatus(environmentId: string): Promise<LocalServerStatus> {
-  return invoke<LocalServerStatus>("get_local_claude_server_status", { environmentId });
-}
-
-/** Start the local Codex bridge server for a local environment */
-export async function startLocalCodexServer(environmentId: string): Promise<LocalServerStartResult> {
-  return invoke<LocalServerStartResult>("start_local_codex_server_cmd", { environmentId });
-}
-
-/** Stop the local Codex bridge server for a local environment */
-export async function stopLocalCodexServer(environmentId: string): Promise<void> {
-  return invoke("stop_local_codex_server_cmd", { environmentId });
-}
-
-/** Get the status of the local Codex bridge server for a local environment */
-export async function getLocalCodexServerStatus(environmentId: string): Promise<LocalServerStatus> {
-  return invoke<LocalServerStatus>("get_local_codex_server_status", { environmentId });
 }
 
 // --- Local Terminal Commands (for local/worktree environments) ---

@@ -1771,22 +1771,6 @@ function permissionModeFromPane(snapshot: string): string | undefined {
   return undefined;
 }
 
-/**
- * How long a pane capture may be reused. Long enough that several renderers
- * polling the same session share one spawn, short enough that nobody sees a
- * pane that is visibly behind.
- */
-export const CAPTURE_PANE_CACHE_MS = 200;
-
-/** What `claude_tmux_capture_pane` answers when the caller supplied a hash. */
-export type PaneCaptureResult =
-  | { unchanged: true; hash: string }
-  | { unchanged: false; hash: string; text: string };
-
-export function paneHash(text: string): string {
-  return createHash("sha256").update(text).digest("hex").slice(0, 32);
-}
-
 /** The `exec` surface the thinking-display probe needs, so it can be tested without a backend. */
 type ProbeExec = (args: string[], stdin?: string, timeoutMs?: number) => Promise<ExecOutput>;
 
@@ -1886,8 +1870,6 @@ class TmuxSession {
   private completionGeneration = 0;
   private permissionMode = "bypassPermissions";
   private fastMode: boolean | null = null;
-  private paneCache: { text: string; hash: string; capturedAt: number } | undefined;
-  private paneCaptureInFlight: Promise<{ text: string; hash: string; capturedAt: number }> | undefined;
   private readonly observationGeneration = randomUUID();
   private observation: TmuxAgentObservation = {
     generation: this.observationGeneration,
@@ -2563,7 +2545,6 @@ class TmuxSession {
    */
   async sendKeysAndRefresh(keys: string[]): Promise<void> {
     await this.sendKeys(keys);
-    this.paneCache = undefined;
     this.forceNextObservation = true;
     this.nextObservationAt = 0;
   }
@@ -2595,7 +2576,6 @@ class TmuxSession {
   }): Promise<void> {
     await this.inputMutex.runExclusive(async () => {
       const markPromptForRefresh = (): void => {
-        this.paneCache = undefined;
         this.forceNextObservation = true;
         this.nextObservationAt = 0;
       };
@@ -2642,7 +2622,6 @@ class TmuxSession {
         keys = [...Array.from({ length: Math.abs(delta) }, () => navKey), "Enter"];
       }
       await this.sendKeysUnlocked(keys);
-      this.paneCache = undefined;
       this.forceNextObservation = true;
       this.nextObservationAt = 0;
     });
@@ -2899,47 +2878,6 @@ class TmuxSession {
     const out = await this.backend.exec(args);
     if (out.status !== 0) throw new Error(out.stderr || "tmux capture-pane failed");
     return out.stdout;
-  }
-
-  /**
-   * The capture served to `claude_tmux_capture_pane`.
-   *
-   * Renderers poll this every 500-3000ms and several tabs can be watching one
-   * session, so identical captures are coalesced inside a short window rather
-   * than spawning `tmux capture-pane` per caller. A caller that remembers the
-   * hash of what it already has gets an `unchanged` answer instead of the full
-   * pane text; callers that pass nothing keep receiving the plain string.
-   *
-   * Deliberately not used by the internal capture paths: the mode-switch wait
-   * loop polls at 100ms and must never see a cached pane.
-   */
-  async capturePaneForRequest(knownHash?: string): Promise<string | PaneCaptureResult> {
-    const captured = await this.recentPaneCapture();
-    if (knownHash === undefined) return captured.text;
-    return knownHash === captured.hash
-      ? { unchanged: true, hash: captured.hash }
-      : { unchanged: false, hash: captured.hash, text: captured.text };
-  }
-
-  /**
-   * The cached capture, or one shared spawn if it is stale. Concurrent callers
-   * join the in-flight capture rather than each starting their own.
-   */
-  private async recentPaneCapture(): Promise<{ text: string; hash: string; capturedAt: number }> {
-    const cached = this.paneCache;
-    if (cached && Date.now() - cached.capturedAt <= CAPTURE_PANE_CACHE_MS) return cached;
-    if (!this.paneCaptureInFlight) {
-      this.paneCaptureInFlight = this.capturePane()
-        .then((text) => {
-          const entry = { text, hash: paneHash(text), capturedAt: Date.now() };
-          this.paneCache = entry;
-          return entry;
-        })
-        .finally(() => {
-          this.paneCaptureInFlight = undefined;
-        });
-    }
-    return await this.paneCaptureInFlight;
   }
 
   async resize(cols: number, rows: number): Promise<void> {
@@ -3767,7 +3705,6 @@ type ClaudeStatePoll = {
   lastState: string;
   failedReads: number;
   stale: boolean;
-  subscribers: Set<string>;
   active: boolean;
   pollRequested: boolean;
   inFlight?: Promise<void>;
@@ -3837,13 +3774,10 @@ export class ClaudeStatePollManager {
   start(
     containerId: string,
     context: CommandContext,
-    subscriptionId = "legacy",
   ): void {
     const existing = this.polls.get(containerId);
     if (existing) {
-      existing.subscribers.add(subscriptionId);
-      // Adopt the newest caller's context. The first registrant's may belong to
-      // a connection that has since gone away; a later one is at least as live.
+      // Adopt the newest backend context after a supervisor reconciliation.
       existing.context = context;
       return;
     }
@@ -3852,7 +3786,6 @@ export class ClaudeStatePollManager {
       lastState: "",
       failedReads: 0,
       stale: false,
-      subscribers: new Set([subscriptionId]),
       active: true,
       pollRequested: false,
       context,
@@ -3869,37 +3802,11 @@ export class ClaudeStatePollManager {
     for (const environment of environments) {
       if (environment.status !== "running" || !environment.containerId) continue;
       running.add(environment.containerId);
-      this.start(environment.containerId, context, "backend");
+      this.start(environment.containerId, context);
     }
     for (const containerId of this.polls.keys()) {
       if (!running.has(containerId)) this.shutdown(containerId);
     }
-  }
-
-  async stop(containerId: string, subscriptionId = "legacy"): Promise<void> {
-    const poll = this.polls.get(containerId);
-    if (!poll) return;
-    poll.subscribers.delete(subscriptionId);
-    // Polling is backend-owned once started so activity remains authoritative
-    // while every renderer is inactive. A release only removes that client's
-    // lease, and another client's lease still keeps it alive.
-    if (poll.subscribers.size > 0) return;
-    // A running environment keeps polling even with no lease at all: the whole
-    // point is that activity is detected while no renderer is mounted.
-    // `poll()` retires it when the environment leaves `running`.
-    let environment: Environment | undefined;
-    try {
-      environment = (await poll.context.storage.loadEnvironments()).find(
-        (candidate) => candidate.containerId === containerId,
-      );
-    } catch {
-      // Storage is unreadable, so whether this container is still running is
-      // unknown. Keeping the poll costs one read per second; retiring one that
-      // is still live would silently stop detecting activity.
-      return;
-    }
-    if (environment?.status === "running") return;
-    this.deactivate(containerId, poll);
   }
 
   /**
@@ -4065,19 +3972,6 @@ export function registerTmuxBackendCommands(
   // Tests inject a manager so the polling commands can be exercised without a
   // Docker daemon; production keeps the single process-wide instance.
   const claudeStatePolls = options.claudeStatePolls ?? defaultClaudeStatePolls;
-  register("start_claude_state_polling", ({ containerId, subscriptionId }, context) => {
-    claudeStatePolls.start(
-      asString(containerId, "containerId"),
-      context,
-      asString(subscriptionId, "subscriptionId"),
-    );
-  });
-  register("stop_claude_state_polling", ({ containerId, subscriptionId }) => {
-    return claudeStatePolls.stop(
-      asString(containerId, "containerId"),
-      asString(subscriptionId, "subscriptionId"),
-    );
-  });
   register("reconcile_claude_state_polling", (_args, context) =>
     claudeStatePolls.reconcile(context),
   );
@@ -4223,12 +4117,6 @@ export function registerTmuxBackendCommands(
       asBoolean(planMode, "planMode"),
       context,
     ),
-  );
-  // `knownHash` is optional: without it the answer is the plain pane text a
-  // caller has always received, so an older renderer keeps working unchanged.
-  register("claude_tmux_capture_pane", ({ tabId, environmentId, knownHash }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId"))
-      .capturePaneForRequest(asOptionalString(knownHash)),
   );
   register("claude_tmux_resize", ({ tabId, cols, rows, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).resize(

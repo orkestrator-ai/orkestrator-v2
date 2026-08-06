@@ -47,25 +47,18 @@ const {
   addGitHubIssueComment,
   updateGitHubIssueComment,
   postGitHubCompletionComment,
-  getSetupCommands,
   getAgentModelCatalogCache,
   getGatewayTokenSettings,
   getWebClientStatus,
   postLinearCompletionComment,
   openInBrowser,
   propagateGithubCredentialsToContainers,
-  recordEnvironmentActivity,
-  recordEnvironmentCompletion,
-  setEnvironmentAgentActivity,
-  startClaudeStatePolling,
-  stopClaudeStatePolling,
   runEnvironmentSetup,
   resetWebClientServe,
   savePaneLayout,
   setWebClientEnabled,
   setGatewayToken,
   setGitHubToken,
-  setEnvironmentSetupComplete,
   setEnvironmentUnread,
   setEnvironmentPendingAgentLaunch,
   setEnvironmentInitialPrompt,
@@ -98,14 +91,6 @@ describe("backend setup wrappers", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockResolvedValue(undefined);
-  });
-
-  test("calls the setup-complete Electron command with the expected payload", async () => {
-    await setEnvironmentSetupComplete("env-1", true);
-
-    expect(invokeMock.mock.calls).toEqual([
-      ["set_environment_setup_complete", { environmentId: "env-1", complete: true }],
-    ]);
   });
 
   test("passes explicit tri-state PR metadata to the backend", async () => {
@@ -257,17 +242,6 @@ describe("backend setup wrappers", () => {
         initialPrompt: "Inspect the diagram",
         initialPromptAttachments: attachments,
       }],
-    ]);
-  });
-
-  test("calls the get-setup-commands Electron command with the environment id", async () => {
-    invokeMock.mockResolvedValue(["bun install"]);
-
-    const commands = await getSetupCommands("env-1");
-
-    expect(commands).toEqual(["bun install"]);
-    expect(invokeMock.mock.calls).toEqual([
-      ["get_setup_commands", { environmentId: "env-1" }],
     ]);
   });
 
@@ -523,59 +497,6 @@ describe("backend setup wrappers", () => {
     await expect(getEnvironmentSnapshots("project-1")).resolves.toEqual([]);
     expect(invokeMock.mock.calls).toEqual([
       ["get_environment_snapshots", { projectId: "project-1" }],
-    ]);
-  });
-
-  test("records environment activity with the supplied occurrence time", async () => {
-    const occurredAt = "2026-07-23T11:12:13.000Z";
-    await recordEnvironmentActivity("env-1", occurredAt);
-
-    expect(invokeMock.mock.calls).toEqual([
-      ["record_environment_activity", { environmentId: "env-1", occurredAt }],
-    ]);
-  });
-
-  test("persists aggregate agent activity with its observation time", async () => {
-    const occurredAt = "2026-07-23T11:12:13.500Z";
-    await setEnvironmentAgentActivity(
-      "env-1",
-      "waiting",
-      occurredAt,
-      "observer-1",
-    );
-
-    expect(invokeMock.mock.calls).toEqual([
-      ["set_environment_agent_activity", {
-        environmentId: "env-1",
-        state: "waiting",
-        occurredAt,
-        observerId: "observer-1",
-      }],
-    ]);
-  });
-
-  test("uses an idempotent subscription token for Claude state polling", async () => {
-    await startClaudeStatePolling("container-1", "subscription-1");
-    await stopClaudeStatePolling("container-1", "subscription-1");
-
-    expect(invokeMock.mock.calls).toEqual([
-      ["start_claude_state_polling", {
-        containerId: "container-1",
-        subscriptionId: "subscription-1",
-      }],
-      ["stop_claude_state_polling", {
-        containerId: "container-1",
-        subscriptionId: "subscription-1",
-      }],
-    ]);
-  });
-
-  test("records completed activity atomically with the supplied occurrence time", async () => {
-    const occurredAt = "2026-07-23T11:12:14.000Z";
-    await recordEnvironmentCompletion("env-1", occurredAt);
-
-    expect(invokeMock.mock.calls).toEqual([
-      ["record_environment_completion", { environmentId: "env-1", occurredAt }],
     ]);
   });
 
@@ -1656,12 +1577,9 @@ describe("backend command wrapper coverage", () => {
       .resolves.toEqual(timedOut);
   });
 
-  test("keeps the legacy empty readiness response but rejects malformed payloads", async () => {
-    invokeMock.mockResolvedValueOnce(undefined);
-    await expect(backendWrappers.awaitBridgeReady("env-legacy", "claude"))
-      .resolves.toBeNull();
-
+  test("rejects empty and malformed readiness payloads", async () => {
     for (const malformed of [
+      undefined,
       null,
       { status: "ready", port: 0, authToken: "token" },
       { status: "ready", port: 4321, authToken: "" },

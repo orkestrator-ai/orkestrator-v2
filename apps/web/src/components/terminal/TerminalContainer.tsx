@@ -47,6 +47,10 @@ import {
   readStoredPaneSelection,
 } from "@/lib/pane-selection-storage";
 import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
+import {
+  listen,
+  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+} from "@/lib/native/events";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
@@ -78,13 +82,6 @@ interface TerminalContainerProps {
   onStartContainer?: (initialPrompt?: string) => void;
   onCreateScript?: (initialPrompt: string) => void;
 }
-
-/**
- * Backoff between retries of a failed backend setup-session lookup, and the
- * point at which the tab is given up on and retired instead of retried forever.
- */
-const SETUP_SESSION_BIND_RETRY_DELAY_MS = 250;
-const MAX_SETUP_SESSION_BIND_ATTEMPTS = 3;
 
 /**
  * Check if a collision ID represents a tab bar or tab (not an edge zone).
@@ -525,11 +522,9 @@ export function TerminalContainer({
   const isSavingInitialPromptAttachmentsRef = useRef(false);
   const setupSessionBindInFlightRef = useRef(new Set<string>());
   const setupSessionBindSettledTabsRef = useRef(new Set<string>());
-  const setupSessionBindAttemptsRef = useRef(new Map<string, number>());
-  const setupSessionBindRetryTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const durableLaunchClearInFlightRef = useRef(false);
   const [setupSessionBindNonce, setSetupSessionBindNonce] = useState(0);
-  const [setupSessionBindRetryNonce, setSetupSessionBindRetryNonce] = useState(0);
+  const [setupSessionReconnectNonce, setSetupSessionReconnectNonce] = useState(0);
 
   const setupSessionKeyForTab = useCallback(
     (tabId: string) => createSessionKey(containerId ?? null, tabId, environmentId),
@@ -565,11 +560,8 @@ export function TerminalContainer({
           tabId,
           key: setupSessionKeyForTab(tabId),
         });
-        const setupSession = typeof backend.awaitEnvironmentSetupSession === "function"
-          ? await backend.awaitEnvironmentSetupSession(environmentId)
-          : await backend.getEnvironmentSetupSession(environmentId);
+        const setupSession = await backend.awaitEnvironmentSetupSession(environmentId);
         lookupSettled = true;
-        setupSessionBindAttemptsRef.current.delete(tabId);
         if (!setupSession?.sessionId) {
           console.info("[setup-terminal] no backend setup session available", {
             environmentId,
@@ -597,23 +589,10 @@ export function TerminalContainer({
         return true;
       } catch (error) {
         console.error("[TerminalContainer] Failed to bind backend setup session:", error);
-        // A failed existence probe is not evidence that the backend-owned setup
-        // session is gone. Retry without requiring a component remount, while
-        // retaining a finite budget so a dead backend cannot pin a blank tab.
-        const attempts = (setupSessionBindAttemptsRef.current.get(tabId) ?? 0) + 1;
-        setupSessionBindAttemptsRef.current.set(tabId, attempts);
-        if (attempts < MAX_SETUP_SESSION_BIND_ATTEMPTS) {
-          const existingTimer = setupSessionBindRetryTimersRef.current.get(tabId);
-          if (existingTimer) clearTimeout(existingTimer);
-          const timer = setTimeout(() => {
-            setupSessionBindRetryTimersRef.current.delete(tabId);
-            setSetupSessionBindRetryNonce((value) => value + 1);
-          }, SETUP_SESSION_BIND_RETRY_DELAY_MS * attempts);
-          setupSessionBindRetryTimersRef.current.set(tabId, timer);
-        } else {
-          lookupSettled = true;
-          setupSessionBindAttemptsRef.current.delete(tabId);
-        }
+        // A transport failure is not evidence that the durable setup session is
+        // absent. Leave the placeholder unsettled; the backend stream's next
+        // connected event retries this snapshot once, without a component-owned
+        // timer or retry budget.
         return false;
       } finally {
         setupSessionBindInFlightRef.current.delete(tabId);
@@ -656,14 +635,24 @@ export function TerminalContainer({
     environmentId,
     hasBoundSetupSession,
     setupPhase,
-    setupSessionBindRetryNonce,
+    setupSessionReconnectNonce,
   ]);
 
-  useEffect(() => () => {
-    for (const timer of setupSessionBindRetryTimersRef.current.values()) {
-      clearTimeout(timer);
-    }
-    setupSessionBindRetryTimersRef.current.clear();
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+      setSetupSessionReconnectNonce((value) => value + 1);
+    }).then((release) => {
+      if (disposed) release();
+      else unlisten = release;
+    }).catch((error) => {
+      console.debug("[setup-terminal] failed to install reconnect listener", error);
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {

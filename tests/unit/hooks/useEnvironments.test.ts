@@ -1991,7 +1991,7 @@ describe("useEnvironments", () => {
     expect(mockGetEnvironment).not.toHaveBeenCalled();
   });
 
-  test("reconciles an environment targeted only by a transient pending native launch", async () => {
+  test("does not let a transient pending native launch select backend reconciliation work", async () => {
     const environment = createMockEnvironment({
       id: "env-1",
       projectId: "project-1",
@@ -2011,17 +2011,11 @@ describe("useEnvironments", () => {
         } as any,
       },
     });
-    mockGetEnvironment.mockResolvedValue({
-      ...environment,
-      setupScriptsComplete: true,
-      setupPhase: "ready",
-    });
-
     await reconcileEnvironmentSetupSnapshots();
 
-    expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
+    expect(mockGetEnvironment).not.toHaveBeenCalled();
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
-      .toBe("ready");
+      .toBe(environment.setupPhase);
   });
 
   test("reconciles an environment targeted only by running setup scripts", async () => {

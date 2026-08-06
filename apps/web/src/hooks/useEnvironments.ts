@@ -367,12 +367,6 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
   }
 
   const environmentStore = useEnvironmentStore.getState();
-  const pendingLaunchEnvironmentIds = new Set([
-    ...Object.keys(useClaudeOptionsStore.getState().pendingNativeLaunches),
-    ...environmentStore.environments
-      .filter((environment) => environment.pendingAgentLaunch)
-      .map((environment) => environment.id),
-  ]);
   const targets = environmentStore.environments.filter((environment) =>
     environment.status === "creating"
     || Boolean(environment.lifecycleError)
@@ -380,7 +374,8 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
       environment.status === "running"
       && (
         environment.setupPhase === "running"
-        || pendingLaunchEnvironmentIds.has(environment.id)
+        || environment.pendingAgentLaunch
+        || environment.startupAgentSession !== undefined
       )
     )
   );

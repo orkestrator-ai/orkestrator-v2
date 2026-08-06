@@ -11,14 +11,13 @@ import type { KanbanTask } from "@/lib/backend";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 // The shared sonner replacement lives in tests/setup.ts; a competing local
 // mock.module for it would leak through Bun's global module cache.
-import { mockToastWarning } from "../../../../tests/mocks/sonner";
+import { mockToastError, mockToastWarning } from "../../../../tests/mocks/sonner";
 import { useBuildPipelineStore } from "./buildPipelineStore";
 
 const realBackendSnapshot = { ...realBackend };
 const clearTaskBuildStatusMock = mock(async (taskId: string) => ({
   task: task({ id: taskId, environmentId: undefined, buildPipelineId: undefined }),
   removedPipelineIds: [] as string[],
-  failedPipelineIds: [] as string[],
 }));
 const getProjectNotesMock = mock(async (_projectId: string) => ({ content: "" }));
 const saveProjectNotesMock = mock(async (_projectId: string, _content: string) => {});
@@ -84,9 +83,9 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
     clearTaskBuildStatusMock.mockImplementation(async (taskId: string) => ({
       task: task({ id: taskId, environmentId: undefined, buildPipelineId: undefined }),
       removedPipelineIds: [],
-      failedPipelineIds: [],
     }));
     mockToastWarning.mockClear();
+    mockToastError.mockClear();
     useKanbanStore.setState({
       tasks: [task()],
       isLoading: false,
@@ -126,11 +125,7 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
     expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
   });
 
-  // Deleting a pipeline cancels it first, and cancelling rethrows when the
-  // agent abort cannot be confirmed — the normal state for a task whose
-  // environment is already gone. Unlinking the task is what the user asked for,
-  // so it must not be held hostage to that cleanup.
-  test("still unlinks the task when an authoritative delete fails", async () => {
+  test("fails closed when authoritative pipeline cleanup fails", async () => {
     const pipeline = buildPipelineFixture({
       id: "pipeline-fail",
       taskId: "task-1",
@@ -142,19 +137,15 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
       pipelines: new Map([[pipeline.id, pipeline]]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
-    clearTaskBuildStatusMock.mockResolvedValueOnce({
-      task: task({ environmentId: undefined, buildPipelineId: undefined }),
-      removedPipelineIds: [],
-      failedPipelineIds: [pipeline.id],
-    });
+    clearTaskBuildStatusMock.mockRejectedValueOnce(new Error("cleanup failed"));
 
     await useKanbanStore.getState().clearTaskBuildStatus("task-1");
 
-    expect(useKanbanStore.getState().tasks[0]?.buildPipelineId).toBeUndefined();
+    expect(useKanbanStore.getState().tasks[0]?.buildPipelineId).toBe(pipeline.id);
     expect(useBuildPipelineStore.getState().pipelines.has("pipeline-fail")).toBe(
-      false,
+      true,
     );
-    expect(mockToastWarning).toHaveBeenCalledTimes(1);
+    expect(mockToastError).toHaveBeenCalledTimes(1);
   });
 
   test("clears the task without warning when every delete succeeds", async () => {

@@ -2,7 +2,6 @@ import { describe, expect, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { isPrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
 import {
@@ -2883,199 +2882,6 @@ describe("build pipeline commands", () => {
   });
 });
 
-describe("set_environment_agent_activity", () => {
-  test("persists agent activity and rejects malformed command arguments", async () => {
-    await withCommands(async (invoke) => {
-      const occurredAt = "2026-07-27T12:00:00.000Z";
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt,
-        observerId: "renderer-observer-1",
-      })).resolves.toMatchObject({
-        agentActivityState: "working",
-        agentActivityUpdatedAt: occurredAt,
-      });
-
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "busy",
-        occurredAt,
-      })).rejects.toThrow("state must be idle, working, or waiting");
-
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: 42,
-        state: "working",
-        occurredAt,
-      })).rejects.toThrow("Expected environmentId to be a string");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: 42,
-        occurredAt,
-      })).rejects.toThrow("Expected state to be a string");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt: 42,
-      })).rejects.toThrow("Expected occurredAt to be a string");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt,
-        observerId: 42,
-      })).rejects.toThrow("Expected observerId to be a string");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt,
-        observerId: "",
-      })).rejects.toThrow("observerId must be a non-blank string");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt: "invalid",
-      })).rejects.toThrow("occurredAt must be a valid ISO timestamp");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt: "+275760-09-13T00:00:00.000Z",
-      })).rejects.toThrow("occurredAt must not be more than 5 minutes in the future");
-      await expect(invoke("set_environment_agent_activity", {
-        environmentId: "missing",
-        state: "working",
-        occurredAt,
-      })).rejects.toThrow("Environment not found: missing");
-    });
-  });
-
-  test("ignores a caller-supplied source so a renderer cannot forge backend observations", async () => {
-    // The `claude-terminal` source is what the backend poller writes, and the
-    // aggregate lets any `working` source pin the environment. A renderer that
-    // could name its own source could impersonate the poller.
-    await withCommands(async (invoke, storage) => {
-      await invoke("set_environment_agent_activity", {
-        environmentId: "e1",
-        state: "working",
-        occurredAt: "2026-07-27T12:00:00.000Z",
-        observerId: "renderer-observer-1",
-        source: "claude-terminal",
-      });
-
-      const environment = await storage.getEnvironment("e1");
-      expect(environment?.agentActivitySources).toEqual({});
-      expect(environment?.frontendAgentActivityObservers).toMatchObject({
-        [createHash("sha256").update("renderer-observer-1").digest("hex")]: {
-          state: "working",
-          updatedAt: "2026-07-27T12:00:00.000Z",
-          leaseExpiresAt: expect.any(String),
-        },
-      });
-      expect(environment?.agentActivitySources)
-        .not.toHaveProperty("claude-terminal");
-    });
-  });
-});
-
-describe("claude state polling commands", () => {
-  function createTestPollManager() {
-    const scheduled: Array<() => void> = [];
-    const cancelled: unknown[] = [];
-    const manager = new ClaudeStatePollManager({
-      readState: async () => "idle",
-      schedule: (callback) => {
-        scheduled.push(callback);
-        return callback;
-      },
-      cancel: (timer) => cancelled.push(timer),
-      now: () => "2026-07-27T12:00:00.000Z",
-    });
-    return { manager, scheduled, cancelled };
-  }
-
-  const runningContainerEnvironment = {
-    status: "running",
-    environmentType: "containerized",
-    containerId: "container-1",
-  };
-
-  test("requires a subscription token on both sides of the lease", async () => {
-    // Both arguments became required with the lease. A caller on an older
-    // bundle would hard-error here rather than silently polling forever, so the
-    // contract is worth pinning explicitly.
-    const { manager, scheduled, cancelled } = createTestPollManager();
-    await withCommands(async (invoke) => {
-      await expect(invoke("start_claude_state_polling", {
-        containerId: "container-1",
-      })).rejects.toThrow("Expected subscriptionId to be a string");
-      await expect(invoke("stop_claude_state_polling", {
-        containerId: "container-1",
-      })).rejects.toThrow("Expected subscriptionId to be a string");
-      await expect(invoke("start_claude_state_polling", {
-        subscriptionId: "sub-1",
-      })).rejects.toThrow("Expected containerId to be a string");
-
-      // A rejected registration must not have started anything.
-      expect(scheduled).toHaveLength(0);
-      expect(cancelled).toHaveLength(0);
-    }, { claudeStatePolls: manager, environment: runningContainerEnvironment });
-  });
-
-  test("starts one poll per container and keeps it while the environment runs", async () => {
-    const { manager, scheduled, cancelled } = createTestPollManager();
-    await withCommands(async (invoke, storage) => {
-      await invoke("start_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-1",
-      });
-      await invoke("start_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-2",
-      });
-      // Registration is idempotent per container, not per subscriber.
-      expect(scheduled).toHaveLength(1);
-
-      await invoke("stop_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-1",
-      });
-      await invoke("stop_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-2",
-      });
-      // Polling is backend-owned: losing every renderer does not stop it,
-      // because detecting activity while nothing is mounted is the point.
-      expect(cancelled).toHaveLength(0);
-
-      await storage.updateEnvironment("e1", { status: "stopped" });
-      await invoke("stop_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-2",
-      });
-      expect(cancelled).toHaveLength(1);
-    }, { claudeStatePolls: manager, environment: runningContainerEnvironment });
-  });
-
-  test("records the polled state on the environment it belongs to", async () => {
-    const { manager } = createTestPollManager();
-    await withCommands(async (invoke, storage) => {
-      await invoke("start_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-1",
-      });
-
-      const deadline = Date.now() + 2_000;
-      let recorded = await storage.getEnvironment("e1");
-      while (!recorded?.agentActivitySources?.["claude-terminal"]) {
-        if (Date.now() > deadline) throw new Error("timed out waiting for poll");
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        recorded = await storage.getEnvironment("e1");
-      }
-
-      expect(recorded.agentActivitySources!["claude-terminal"]).toMatchObject({
-        state: "idle",
-      });
-      await storage.updateEnvironment("e1", { status: "stopped" });
-      await invoke("stop_claude_state_polling", {
-        containerId: "container-1", subscriptionId: "sub-1",
-      });
-    }, { claudeStatePolls: manager, environment: runningContainerEnvironment });
-  });
-});
-
 describe("set_environment_unread", () => {
   async function seedEnvironment(storage: StorageService): Promise<void> {
     if (!await storage.getProject("proj-1")) {
@@ -3132,13 +2938,11 @@ describe("set_environment_unread", () => {
       const first = "2026-01-01T00:00:00.000Z";
       const second = "2026-01-01T00:00:01.000Z";
 
-      await expect(invoke("record_environment_completion", {
-        environmentId: "e1", occurredAt: first,
-      })).resolves.toMatchObject({ lastActivityAt: first, hasUnreadWork: true });
+      await expect(storage.recordEnvironmentCompletion("e1", first))
+        .resolves.toMatchObject({ lastActivityAt: first, hasUnreadWork: true });
 
-      await expect(invoke("record_environment_completion", {
-        environmentId: "e1", occurredAt: second,
-      })).resolves.toMatchObject({ lastActivityAt: second, hasUnreadWork: true });
+      await expect(storage.recordEnvironmentCompletion("e1", second))
+        .resolves.toMatchObject({ lastActivityAt: second, hasUnreadWork: true });
 
       await expect(invoke("set_environment_unread", {
         environmentId: "e1",
@@ -3153,9 +2957,7 @@ describe("set_environment_unread", () => {
       await seedEnvironment(storage);
       const completion = "2026-01-01T00:00:00.000Z";
 
-      await invoke("record_environment_completion", {
-        environmentId: "e1", occurredAt: completion,
-      });
+      await storage.recordEnvironmentCompletion("e1", completion);
       await expect(invoke("set_environment_unread", {
         environmentId: "e1",
         unread: false,
@@ -3182,16 +2984,15 @@ describe("set_environment_unread", () => {
     await withCommands(async (invoke, storage) => {
       await seedEnvironment(storage);
       const newest = "2026-01-01T00:00:01.000Z";
-      await invoke("record_environment_completion", {
-        environmentId: "e1", occurredAt: newest,
-      });
+      await storage.recordEnvironmentCompletion("e1", newest);
       await invoke("set_environment_unread", {
         environmentId: "e1", unread: false, expectedLastActivityAt: newest,
       });
 
-      await expect(invoke("record_environment_completion", {
-        environmentId: "e1", occurredAt: "2026-01-01T00:00:00.000Z",
-      })).resolves.toMatchObject({ lastActivityAt: newest, hasUnreadWork: false });
+      await expect(storage.recordEnvironmentCompletion(
+        "e1",
+        "2026-01-01T00:00:00.000Z",
+      )).resolves.toMatchObject({ lastActivityAt: newest, hasUnreadWork: false });
     });
   });
 });

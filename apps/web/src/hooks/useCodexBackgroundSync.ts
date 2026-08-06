@@ -19,7 +19,7 @@ import {
 } from "@/stores/codexStore";
 
 export interface CodexBackgroundSyncDependencies {
-  lookupSessionActivity?: (
+  lookupSessionActivity: (
     client: CodexClient,
     sessionId: string,
   ) => Promise<CodexSessionActivityLookupResult>;
@@ -43,8 +43,6 @@ const DEFAULT_DEPENDENCIES: CodexBackgroundSyncDependencies = {
   fetchPendingApprovals,
   fetchPendingInteractions,
 };
-
-const SAFETY_RECONCILE_INTERVAL_MS = 30_000;
 
 interface SessionTarget {
   sessionKey: string;
@@ -86,6 +84,24 @@ function clearPendingInput(sessionKey: string): void {
   state.setPendingInteractions(sessionKey, []);
 }
 
+function mergePendingSnapshot<T>(
+  snapshot: readonly T[],
+  existing: readonly T[] | undefined,
+  identity: (value: T) => string,
+): T[] {
+  if (!existing?.length) return [...snapshot];
+  const merged = [...snapshot];
+  const snapshotIds = new Set(snapshot.map(identity));
+  // Pending endpoints currently expose no revision. Preserve cards already
+  // observed from the live stream rather than allowing a potentially older
+  // empty snapshot to withdraw a request the user still needs to answer.
+  // Terminal status remains authoritative and clears all pending input.
+  for (const value of existing) {
+    if (!snapshotIds.has(identity(value))) merged.push(value);
+  }
+  return merged;
+}
+
 function discardUnconfirmedDispatch(sessionKey: string): void {
   const state = useCodexStore.getState();
   const pending = state.unconfirmedDispatches.get(sessionKey);
@@ -119,7 +135,7 @@ function currentTargets(): SessionTarget[] {
  *
  * A foreground `CodexChatTab` owns the low-latency SSE stream, but switching
  * environments may unmount and remount that tab. This app-level synchronizer
- * treats `/status`, `/messages`, `/approvals`, and `/interactions` as the
+ * treats `/activity`, `/status`, `/messages`, `/approvals`, and `/interactions` as the
  * authoritative catch-up path, so missed terminal frames cannot leave the
  * timer, tool cards, or sidebar activity stuck forever.
  */
@@ -171,13 +187,27 @@ export function createCodexBackgroundSynchronizer(
         approvals.status === "fulfilled"
         && state.pendingApprovals.get(target.sessionKey) === approvalsAtStart
       ) {
-        state.setPendingApprovals(target.sessionKey, approvals.value);
+        state.setPendingApprovals(
+          target.sessionKey,
+          mergePendingSnapshot(
+            approvals.value,
+            approvalsAtStart,
+            (approval) => approval.approvalId,
+          ),
+        );
       }
       if (
         interactions.status === "fulfilled"
         && state.pendingInteractions.get(target.sessionKey) === interactionsAtStart
       ) {
-        state.setPendingInteractions(target.sessionKey, interactions.value);
+        state.setPendingInteractions(
+          target.sessionKey,
+          mergePendingSnapshot(
+            interactions.value,
+            interactionsAtStart,
+            (interaction) => interaction.interactionId,
+          ),
+        );
       }
     }).finally(() => {
       if (pendingRequests.get(id) === request) {
@@ -194,26 +224,30 @@ export function createCodexBackgroundSynchronizer(
     if (existing) return existing;
 
     const request: Promise<void> = (async () => {
-      const activity = dependencies.lookupSessionActivity
-        ? await dependencies.lookupSessionActivity(target.client, target.sessionId)
-        : undefined;
+      const activity = await dependencies.lookupSessionActivity(
+        target.client,
+        target.sessionId,
+      );
       if (activity?.kind === "missing") {
         if (!disposed && isCurrentTurn(target)) finishMissingSession(target, id);
         return;
       }
-      // Working and waiting are non-terminal. Pending cards are refreshed by
-      // the parallel request; a full transcript/status read waits for idle.
+      // Working and waiting are non-terminal. Pending cards are refreshed
+      // after this authoritative activity decision.
       if (activity?.kind === "found" && activity.activity !== "idle") return;
       if (activity?.kind === "unavailable") {
         // A transport failure is not evidence that a session is terminal or
-        // missing. Leave state untouched; the safety timer retries this probe.
+        // missing. Leave state untouched; reconnect/activity events retry it.
         console.debug(
           "[CodexBackgroundSync] Activity probe unavailable:",
           activity.error,
         );
         return;
       }
-      // `unsupported` deliberately falls through to the legacy status route.
+      // The activity route is the non-touching authority used by backend
+      // supervisors. A bridge that predates it is outside the supported rolling
+      // upgrade window; polling /status would keep an idle thread attached.
+      if (activity?.kind === "unsupported") return;
       const lookup = await dependencies.lookupSessionStatus(
         target.client,
         target.sessionId,
@@ -239,10 +273,9 @@ export function createCodexBackgroundSynchronizer(
             status.turnStartedAt,
             status.turnId,
           );
-          // The pending-input requests run alongside this status lookup and use
-          // the same target as their generation guard. Advance that guard with
-          // the authoritative correction so their valid snapshots are not
-          // mistaken for results from an older turn.
+          // Pending-input requests use the same target as their generation
+          // guard. Advance it before requesting their snapshot so valid results
+          // are not mistaken for an older turn.
           if (status.turnId !== undefined) target.turnId = status.turnId;
           target.loadingRevision =
             useCodexStore.getState().sessionLoadingRevisions.get(target.sessionKey)
@@ -380,7 +413,7 @@ export function createCodexBackgroundSynchronizer(
             : undefined,
       );
     })().catch((error) => {
-      // A failed authoritative read changes no state; the next interval retries.
+      // A failed authoritative read changes no state; the next backend event retries.
       console.debug("[CodexBackgroundSync] Reconcile failed:", error);
     }).finally(() => {
       if (statusRequests.get(id) === request) {
@@ -399,10 +432,14 @@ export function createCodexBackgroundSynchronizer(
       for (const id of terminalTargets) {
         if (!currentTargetIds.has(id)) terminalTargets.delete(id);
       }
-      const requests = targets.flatMap((target) => [
-        reconcileStatus(target),
-        refreshPending(target),
-      ]);
+      // Resolve activity/status before pending input for each session. This
+      // prevents an older approvals snapshot from racing ahead of a turn-state
+      // correction and erasing a newer live card. Sessions still reconcile in
+      // parallel with one another.
+      const requests = targets.map(async (target) => {
+        await reconcileStatus(target);
+        if (isCurrentTurn(target)) await refreshPending(target);
+      });
       await Promise.all(requests);
     },
     dispose(): void {
@@ -434,7 +471,6 @@ export function useCodexBackgroundSync(
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     let unlistenActivity: (() => void) | undefined;
-    let safetyInterval: number | undefined;
 
     // `listen` registers its handler synchronously before its returned promise
     // waits for stream readiness. Invoke both first, then take the snapshot, so
@@ -465,17 +501,10 @@ export function useCodexBackgroundSync(
       );
     });
     void synchronizer.reconcileNow();
-    // Events are the low-latency path, but this bounded retry ensures a
-    // listener setup race, half-open stream, or transient probe failure can
-    // never strand a loading session indefinitely.
-    safetyInterval = window.setInterval(() => {
-      void synchronizer.reconcileNow();
-    }, SAFETY_RECONCILE_INTERVAL_MS);
     return () => {
       cancelled = true;
       unlisten?.();
       unlistenActivity?.();
-      if (safetyInterval !== undefined) window.clearInterval(safetyInterval);
       unsubscribeEnvironment();
       synchronizer.dispose();
     };

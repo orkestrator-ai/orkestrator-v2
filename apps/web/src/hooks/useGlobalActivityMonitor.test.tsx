@@ -2,11 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import {
-  isEnvironmentActivityTransition,
-  isEnvironmentCompletionTransition,
-  useGlobalActivityMonitor,
-} from "./useGlobalActivityMonitor";
+import { useGlobalActivityMonitor } from "./useGlobalActivityMonitor";
 
 describe("backend-owned activity projection", () => {
   beforeEach(() => {
@@ -14,7 +10,6 @@ describe("backend-owned activity projection", () => {
       tabStates: {},
       containerStates: {},
       containerStateUpdatedAt: {},
-      containerRefCounts: {},
     });
     useEnvironmentStore.setState({ environments: [] });
   });
@@ -47,14 +42,6 @@ describe("backend-owned activity projection", () => {
     expect(useAgentActivityStore.getState().containerStates).toEqual({
       "env-a": "idle",
     });
-  });
-
-  test("classifies backend transition edges", () => {
-    expect(isEnvironmentActivityTransition("idle", "working")).toBe(true);
-    expect(isEnvironmentActivityTransition("working", "idle")).toBe(true);
-    expect(isEnvironmentActivityTransition("waiting", "idle")).toBe(false);
-    expect(isEnvironmentCompletionTransition("working", "waiting")).toBe(true);
-    expect(isEnvironmentCompletionTransition("idle", "waiting")).toBe(false);
   });
 
   test("rehydrates the latest backend snapshot after the observer remounts", async () => {

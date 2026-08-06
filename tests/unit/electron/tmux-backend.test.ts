@@ -9,7 +9,6 @@ import {
   agentToolConnectionTarget,
   boundedInfoEventMessage,
   buildTmuxPaneUpdate,
-  CAPTURE_PANE_CACHE_MS,
   CLAUDE_STATE_POLL_INTERVAL_MS,
   CLAUDE_STATE_READ_TIMEOUT_MS,
   ClaudeStatePollManager,
@@ -31,7 +30,6 @@ import {
   tmuxSessionNamePrefix,
   newestJsonlFindCommand,
   newestJsonlInDir,
-  paneHash,
   parseFreshJsonlFindOutput,
   parsePollSnapshotExecOutput,
   parsePollSnapshotOutput,
@@ -871,13 +869,10 @@ describe("Electron tmux backend command registration", () => {
       "claude_tmux_switch_model",
       "claude_tmux_switch_effort",
       "claude_tmux_switch_plan_mode",
-      "claude_tmux_capture_pane",
       "claude_tmux_resize",
       "claude_tmux_answer_pre_tool_use",
       "claude_tmux_reply_hook",
       "claude_tmux_list_previous_sessions",
-      "start_claude_state_polling",
-      "stop_claude_state_polling",
     ]) {
       expect(handlers.has(name)).toBe(true);
     }
@@ -1457,11 +1452,11 @@ describe("Electron tmux backend command registration", () => {
 
       // The session is forgotten too, so a later command cannot drive a dead tab.
       await expect(
-        invoke(handlers, "claude_tmux_capture_pane", {
+        invoke(handlers, "claude_tmux_status", {
           tabId: "tab-teardown",
           environmentId: environment.id,
         }, context),
-      ).rejects.toThrow("tmux session not running");
+      ).resolves.toBeNull();
     });
   });
 
@@ -2122,7 +2117,7 @@ exit 0
     });
   });
 
-  test("sends text and keys, captures, resizes, rejects blank switches, and answers PreToolUse", async () => {
+  test("sends text and keys, resizes, rejects blank switches, and answers PreToolUse", async () => {
     const handlers = createHandlers();
 
     await withFakeTmuxRuntime(async ({ environment, log, alive, runtimeRoot }) => {
@@ -2150,14 +2145,6 @@ exit 0
 
       await invoke(handlers, "claude_tmux_send_keys", { tabId, environmentId: environment.id, keys: ["Escape", "Enter"] });
       expect(await fs.readFile(log, "utf8")).toContain("-- Escape Enter");
-
-      // tmux sessions launch in bypass mode, which is what the fake pane shows.
-      await expect(invoke(
-        handlers,
-        "claude_tmux_capture_pane",
-        { tabId, environmentId: environment.id },
-      )).resolves.toContain("bypass permissions on");
-      expect(await fs.readFile(log, "utf8")).toContain(`capture-pane -t ${session} -p -J`);
 
       await invoke(handlers, "claude_tmux_resize", { tabId, environmentId: environment.id, cols: 120, rows: 40 });
       expect(await fs.readFile(log, "utf8")).toContain(`resize-window -t ${session} -x 120 -y 40`);
@@ -3888,18 +3875,15 @@ describe("ClaudeStatePollManager", () => {
     harness.manager.shutdown("container-poll");
   });
 
-  test("keeps polling across idempotent subscriber leases until the environment stops", async () => {
+  test("keeps one backend-owned poll across idempotent starts until reconciliation retires it", async () => {
     const harness = createPollHarness({
-      states: ["working", "idle", "working"],
+      states: ["working", "idle"],
     });
 
-    harness.manager.start("container-poll", harness.context, "client-a");
-    harness.manager.start("container-poll", harness.context, "client-a");
-    harness.manager.start("container-poll", harness.context, "client-b");
+    harness.manager.start("container-poll", harness.context);
+    harness.manager.start("container-poll", harness.context);
     await waitFor(() => harness.emitted.length === 1);
 
-    await harness.manager.stop("container-poll", "client-a");
-    await harness.manager.stop("container-poll", "client-a");
     expect(harness.cancelled.size).toBe(0);
     harness.scheduled[0]!();
     await waitFor(() => harness.emitted.length === 2);
@@ -3908,11 +3892,8 @@ describe("ClaudeStatePollManager", () => {
       "idle",
     ]);
 
-    await harness.manager.stop("container-poll", "client-b");
-    expect(harness.cancelled.size).toBe(0);
     harness.environment.status = "stopped";
-    harness.scheduled[0]!();
-    await waitFor(() => harness.cancelled.size === 1);
+    await harness.manager.reconcile(harness.context);
     expect(harness.cancelled.size).toBe(1);
     harness.scheduled[0]!();
     await delay(0);
@@ -3950,15 +3931,14 @@ describe("ClaudeStatePollManager", () => {
     harness.manager.shutdown("container-poll");
   });
 
-  test("discards an in-flight read after the environment stops", async () => {
+  test("discards an in-flight read after backend shutdown", async () => {
     const state = deferred<string>();
     const harness = createPollHarness({
       readState: async () => state.promise,
     });
 
-    harness.manager.start("container-poll", harness.context, "client-a");
-    harness.environment.status = "stopped";
-    await harness.manager.stop("container-poll", "client-a");
+    harness.manager.start("container-poll", harness.context);
+    harness.manager.shutdown("container-poll");
     state.resolve("working");
     await delay(0);
 
@@ -4100,10 +4080,8 @@ describe("ClaudeStatePollManager", () => {
     harness.manager.shutdown("container-poll");
   });
 
-  test("keeps polling when releasing a lease cannot read the environment", async () => {
-    // Storage being unreadable says nothing about whether the container is
-    // still running. Retiring the poll on that guess would silently stop
-    // detecting activity; keeping it costs one read per second.
+  test("keeps polling when backend reconciliation cannot read environments", async () => {
+    // Storage being unreadable is not evidence that the container stopped.
     const harness = createPollHarness({
       states: ["working"],
       loadEnvironments: async () => {
@@ -4111,16 +4089,16 @@ describe("ClaudeStatePollManager", () => {
       },
     });
 
-    harness.manager.start("container-poll", harness.context, "client-a");
-    await expect(harness.manager.stop("container-poll", "client-a"))
-      .resolves.toBeUndefined();
+    harness.manager.start("container-poll", harness.context);
+    await expect(harness.manager.reconcile(harness.context))
+      .rejects.toThrow("storage unavailable");
     expect(harness.cancelled.size).toBe(0);
+    harness.manager.shutdown("container-poll");
   });
 
-  test("releasing an unknown container is a no-op", async () => {
+  test("shutting down an unknown container is a no-op", () => {
     const harness = createPollHarness();
-    await expect(harness.manager.stop("container-never-started", "client-a"))
-      .resolves.toBeUndefined();
+    expect(() => harness.manager.shutdown("container-never-started")).not.toThrow();
     expect(harness.cancelled.size).toBe(0);
   });
 
@@ -4135,8 +4113,8 @@ describe("ClaudeStatePollManager", () => {
         secondEmitted.push({ event, payload }),
     } as unknown as CommandContext;
 
-    harness.manager.start("container-poll", harness.context, "client-a");
-    harness.manager.start("container-poll", secondContext, "client-b");
+    harness.manager.start("container-poll", harness.context);
+    harness.manager.start("container-poll", secondContext);
     await waitFor(() => secondEmitted.length === 1);
 
     expect(harness.emitted).toHaveLength(0);
@@ -4152,7 +4130,7 @@ describe("ClaudeStatePollManager", () => {
     // into a container that is already being torn down.
     const harness = createPollHarness({ states: ["working", "idle"] });
 
-    harness.manager.start("container-poll", harness.context, "client-a");
+    harness.manager.start("container-poll", harness.context);
     await waitFor(() => harness.emitted.length === 1);
     expect(harness.environment.status).toBe("running");
 
@@ -5317,95 +5295,6 @@ describe("previous-session metadata reads", () => {
 });
 
 describe("live session read paths", () => {
-  test("coalesces rapid pane captures and answers an unchanged pane with a marker", async () => {
-    const handlers = createHandlers();
-
-    await withFakeTmuxRuntime(async ({ environment, log }) => {
-      const context = {
-        storage: { getEnvironment: async () => environment },
-        emit: () => undefined,
-        appRoot: "",
-        resourceRoot: "",
-      };
-      const tabId = "tab-capture-cache";
-      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
-
-      const captureCount = async () => (await fs.readFile(log, "utf8"))
-        .split("\n")
-        .filter((line) => line.startsWith("capture-pane"))
-        .length;
-      const before = await captureCount();
-
-      // Two renderers polling the same session inside one window share a spawn.
-      const [first, second] = await Promise.all([
-        invoke(handlers, "claude_tmux_capture_pane", { tabId, environmentId: environment.id }),
-        invoke(handlers, "claude_tmux_capture_pane", { tabId, environmentId: environment.id }),
-      ]) as [string, string];
-      expect(typeof first).toBe("string");
-      expect(second).toBe(first);
-      expect(await captureCount()).toBe(before + 1);
-
-      // A caller that supplies no hash keeps getting the plain pane text, which
-      // is what the renderer does today.
-      await delay(CAPTURE_PANE_CACHE_MS + 50);
-      await expect(invoke(
-        handlers,
-        "claude_tmux_capture_pane",
-        { tabId, environmentId: environment.id },
-      )).resolves.toBe(first);
-
-      await delay(CAPTURE_PANE_CACHE_MS + 50);
-      await expect(invoke(
-        handlers,
-        "claude_tmux_capture_pane",
-        { tabId, environmentId: environment.id, knownHash: paneHash(first) },
-      )).resolves.toEqual({ unchanged: true, hash: paneHash(first) });
-
-      await delay(CAPTURE_PANE_CACHE_MS + 50);
-      await expect(invoke(
-        handlers,
-        "claude_tmux_capture_pane",
-        { tabId, environmentId: environment.id, knownHash: "stale" },
-      )).resolves.toEqual({ unchanged: false, hash: paneHash(first), text: first });
-
-      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
-    });
-  }, 15_000);
-
-  test("a failed pane capture does not wedge every later request", async () => {
-    const handlers = createHandlers();
-
-    await withFakeTmuxRuntime(async ({ environment, alive }) => {
-      const context = {
-        storage: { getEnvironment: async () => environment },
-        emit: () => undefined,
-        appRoot: "",
-        resourceRoot: "",
-      };
-      const tabId = "tab-capture-failure";
-      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
-      const marker = path.join(alive, `${tmuxSessionName(environment.id, tabId)}.fail-capture`);
-
-      // Concurrent callers join one in-flight capture. A rejected capture left
-      // in that slot — or written into the cache — would be handed to every
-      // later request, so one bad spawn would blank the pane permanently.
-      await fs.writeFile(marker, "");
-      await expect(invoke(
-        handlers,
-        "claude_tmux_capture_pane",
-        { tabId, environmentId: environment.id },
-      )).rejects.toThrow("capture failed");
-
-      await fs.rm(marker, { force: true });
-      await expect(invoke(
-        handlers,
-        "claude_tmux_capture_pane",
-        { tabId, environmentId: environment.id },
-      )).resolves.toContain("bypass permissions on");
-
-      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
-    });
-  }, 15_000);
 
   test("sending prompt keys forces an immediate authoritative observation", async () => {
     const handlers = createHandlers();

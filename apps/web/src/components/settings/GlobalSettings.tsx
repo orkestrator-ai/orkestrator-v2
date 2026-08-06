@@ -58,6 +58,7 @@ import {
   isValidHexColor,
   getPreviewColors,
 } from "@/constants/terminal";
+import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
@@ -366,15 +367,21 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      // Filenames are case-sensitive, so these dedupe exactly.
       const patterns = [...new Set(envPatterns
         .split(",")
         .map((p) => p.trim())
         .filter((p) => p.length > 0))];
 
-      const domains = [...new Set(allowedDomains
-        .split("\n")
-        .map((d) => d.trim())
-        .filter((d) => d.length > 0))];
+      // DNS is not case-sensitive, so `example.com` and `Example.com` are one
+      // allowed domain. The first spelling the user typed is the one kept.
+      const domains: string[] = [];
+      const seenDomains = new Set<string>();
+      for (const domain of allowedDomains.split("\n").map((d) => d.trim())) {
+        if (domain.length === 0 || seenDomains.has(domain.toLowerCase())) continue;
+        seenDomains.add(domain.toLowerCase());
+        domains.push(domain);
+      }
 
       const newGlobal: {
         containerResources: { cpuCores: number; memoryGb: number };
@@ -558,6 +565,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
     setGithubToken("");
     setClearGithubToken(false);
+    // Reset is an explicit discard. Without this the retained edit would be
+    // restored by the `[global]` sync effect on the next external config change,
+    // resurrecting a token — or a pending clear — the user just threw away.
+    pendingGitHubCredentialEditRef.current = null;
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
     setDefaultAgent(global.defaultAgent || "claude");
@@ -1601,8 +1612,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
                         Reset Tailscale Serve
                       </Button>
                     </AlertDialogTrigger>
-                    {/* Settings is a fullscreen z-60 surface with z-70 popovers. */}
-                    <AlertDialogContent className="z-[80]" overlayClassName="z-[80]">
+                    <AlertDialogContent
+                      className={Z_FULLSCREEN_DIALOG}
+                      overlayClassName={Z_FULLSCREEN_DIALOG}
+                    >
                       <AlertDialogHeader>
                         <AlertDialogTitle>Reset Tailscale Serve?</AlertDialogTitle>
                         <AlertDialogDescription>

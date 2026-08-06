@@ -3737,11 +3737,19 @@ export class AppServerRuntime {
             assistantMessage.modelId = thread.model;
           }
         }
+        // Close the overlap window before the first await below, exactly as the
+        // main dispatch path does. Recovery leaves a re-attached thread `idle`
+        // with `turnStartedAt` cleared, so this also restores the busy state a
+        // shared tab needs to see; `starting` reports `running`.
+        context.dispatchInFlight = true;
+        this.registry.setPhase(context, "starting");
         if (context !== staleContext) {
-          // Generation recovery can re-attach the session before this retry
-          // resumes. That path is just as much a replacement as starting a new
-          // thread above, and its freshly hydrated context does not contain the
-          // optimistic exchange published before the rejected dispatch.
+          // Only the replacement-thread branch above can reach this today: every
+          // path that removes a thread from the registry also clears the session
+          // binding, so `ensureAttached` returns undefined rather than a second
+          // context. Kept as a guard rather than an assertion because the cost is
+          // one identity check, and a future rebind would otherwise silently lose
+          // the optimistic exchange published before the rejected dispatch.
           context.messages = retryMessages;
           const replacementState = this.stateFor(context.threadId);
           replacementState.publishedMessageId = assistantMessage.id;
@@ -3749,8 +3757,6 @@ export class AppServerRuntime {
           replacementState.publishedModelId = assistantMessage.modelId;
           await this.persistSession(session);
         }
-        context.dispatchInFlight = true;
-        this.registry.setPhase(context, "starting");
         await this.journal.markPrepared({
           requestId,
           bridgeSessionId: session.id,

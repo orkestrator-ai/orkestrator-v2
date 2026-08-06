@@ -398,8 +398,15 @@ describe("GlobalSettings", () => {
 
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/removes the existing HTTPS listener on port 443/)).toBeTruthy();
+    // The load-bearing property is that the component default is *gone*: if
+    // tailwind-merge ever stopped collapsing them, `z-50 … z-[80]` would still
+    // satisfy a `toContain` check while the rendered layer became dependent on
+    // stylesheet order.
+    const overlay = document.querySelector('[data-slot="alert-dialog-overlay"]');
     expect(dialog.className).toContain("z-[80]");
-    expect(document.querySelector('[data-slot="alert-dialog-overlay"]')?.className).toContain("z-[80]");
+    expect(dialog.className).not.toContain("z-50");
+    expect(overlay?.className).toContain("z-[80]");
+    expect(overlay?.className).not.toContain("z-50");
     fireEvent.click(within(dialog).getByRole("button", { name: "Reset Tailscale Serve" }));
 
     await waitFor(() => expect(mockResetWebClientServe).toHaveBeenCalledTimes(1));
@@ -1082,6 +1089,44 @@ describe("GlobalSettings", () => {
     }
   });
 
+  test("discards a failed PAT edit on Reset instead of resurrecting it later", async () => {
+    const originalConsoleError = console.error;
+    console.error = mock(() => undefined);
+    mockSetGitHubToken.mockRejectedValueOnce(new Error("keychain unavailable"));
+    try {
+      render(<GlobalSettings activeSection="general" />);
+      fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
+      const token = screen.getByLabelText("GitHub token") as HTMLInputElement;
+      fireEvent.change(token, { target: { value: "discarded-token" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+        "Failed to save settings",
+        { description: "keychain unavailable" },
+      ));
+      expect(token.value).toBe("discarded-token");
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
+      expect(token.value).toBe("");
+
+      // Any later external config change re-runs the `[global]` sync effect. A
+      // retained edit would be restored here, putting a token the user threw
+      // away back in the field — and back into the next save.
+      await act(async () => {
+        useConfigStore.getState().setConfig({
+          ...useConfigStore.getState().config,
+          global: {
+            ...useConfigStore.getState().config.global,
+            debugLogging: !useConfigStore.getState().config.global.debugLogging,
+          },
+        });
+        await Promise.resolve();
+      });
+      expect((screen.getByLabelText("GitHub token") as HTMLInputElement).value).toBe("");
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
   test("switches from a configured PAT to host credentials without replacing the PAT", async () => {
     useConfigStore.setState((state) => ({
       config: {
@@ -1206,19 +1251,22 @@ describe("GlobalSettings", () => {
 
   test("trims and deduplicates environment patterns and allowed domains", async () => {
     const view = render(<GlobalSettings activeSection="general" />);
+    // Env patterns are filenames, so `.ENV` is a different pattern from `.env`
+    // and must survive; domains are DNS names, so case is irrelevant there.
     fireEvent.change(screen.getByPlaceholderText(".env, .env.local"), {
-      target: { value: " .env , .env.local, .env,  " },
+      target: { value: " .env , .env.local, .env, .ENV,  " },
     });
     view.rerender(<GlobalSettings activeSection="network" />);
     fireEvent.change(screen.getByPlaceholderText(/github\.com/), {
-      target: { value: " example.com\napi.example.com\nexample.com\n " },
+      target: { value: " Example.com\napi.example.com\nexample.com\nEXAMPLE.COM\n " },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
       expect.objectContaining({
-        envFilePatterns: [".env", ".env.local"],
-        allowedDomains: ["example.com", "api.example.com"],
+        envFilePatterns: [".env", ".env.local", ".ENV"],
+        // First spelling typed wins, in first-occurrence order.
+        allowedDomains: ["Example.com", "api.example.com"],
       }),
     ));
   });

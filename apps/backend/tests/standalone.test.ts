@@ -308,23 +308,28 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeServerPath)} "$POR
     temporaryDirectories.push(testDir);
     const executable = path.join(testDir, "tailscale");
     const logFile = path.join(testDir, "calls.log");
+    // Tracks the root mount separately from the user's own `/api` handler, so a
+    // scoped teardown cannot masquerade as a full-listener removal. `/api` also
+    // keeps the TCP entry alive after shutdown, which is the state a restart has
+    // to tolerate.
     await writeFile(executable, `#!/bin/sh
 printf '%s\\n' "$*" >> "$TAILSCALE_TEST_LOG"
 case " $* " in
-  *" off "*) rm -f "$TAILSCALE_TEST_LOG.active"; exit 0 ;;
+  *" --set-path=/ off "*) rm -f "$TAILSCALE_TEST_LOG.root"; exit 0 ;;
+  *" off "*) rm -f "$TAILSCALE_TEST_LOG.root" "$TAILSCALE_TEST_LOG.api"; exit 0 ;;
 esac
 if [ "$*" = "serve status --json" ]; then
-  if [ -f "$TAILSCALE_TEST_LOG.active" ]; then
+  handlers='"/api":{"Proxy":"http://127.0.0.1:9000"}'
+  if [ -f "$TAILSCALE_TEST_LOG.root" ]; then
     port=$(cat "$TAILSCALE_TEST_LOG.port")
-    printf '{"TCP":{"443":{"HTTPS":true}},"Web":{"workstation.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:%s"}}}}}\\n' "$port"
-  else
-    printf '{}\\n'
+    handlers=$(printf '"/":{"Proxy":"http://127.0.0.1:%s"},%s' "$port" "$handlers")
   fi
+  printf '{"TCP":{"443":{"HTTPS":true}},"Web":{"workstation.example.ts.net:443":{"Handlers":{%s}}}}\\n' "$handlers"
   exit 0
 fi
 for arg in "$@"; do last_arg="$arg"; done
 printf '%s' "\${last_arg##*:}" > "$TAILSCALE_TEST_LOG.port"
-touch "$TAILSCALE_TEST_LOG.active"
+touch "$TAILSCALE_TEST_LOG.root"
 printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
 `);
     await chmod(executable, 0o755);
@@ -342,6 +347,18 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     const calls = await readFile(logFile, "utf8");
     expect(calls).toContain("serve --bg --yes --https=443 http://127.0.0.1:");
     expect(calls).toContain("serve --yes --https=443 --set-path=/ off");
+    // The whole-listener form would have taken `/api` with it.
+    expect(calls).not.toContain("serve --yes --https=443 off\n");
+
+    // A second backend must be able to claim the port again even though `/api`
+    // is still holding it open.
+    const restarted = await startBackend(
+      ["--tailscale-serve", "--tailscale-bin", executable],
+      { TAILSCALE_TEST_LOG: logFile },
+    );
+    expect(restarted.readyMessage.browserUrl).toBe("https://workstation.example.ts.net/");
+    restarted.child.kill("SIGTERM");
+    await expect(restarted.child.exited).resolves.toBe(0);
   });
 
   test("exits without a leftover listener when environment-managed Serve setup fails", async () => {

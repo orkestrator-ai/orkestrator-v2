@@ -311,12 +311,20 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeServerPath)} "$POR
     await writeFile(executable, `#!/bin/sh
 printf '%s\\n' "$*" >> "$TAILSCALE_TEST_LOG"
 case " $* " in
-  *" off "*) exit 0 ;;
+  *" off "*) rm -f "$TAILSCALE_TEST_LOG.active"; exit 0 ;;
 esac
 if [ "$*" = "serve status --json" ]; then
-  printf '{}\\n'
+  if [ -f "$TAILSCALE_TEST_LOG.active" ]; then
+    port=$(cat "$TAILSCALE_TEST_LOG.port")
+    printf '{"TCP":{"443":{"HTTPS":true}},"Web":{"workstation.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:%s"}}}}}\\n' "$port"
+  else
+    printf '{}\\n'
+  fi
   exit 0
 fi
+for arg in "$@"; do last_arg="$arg"; done
+printf '%s' "\${last_arg##*:}" > "$TAILSCALE_TEST_LOG.port"
+touch "$TAILSCALE_TEST_LOG.active"
 printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
 `);
     await chmod(executable, 0o755);
@@ -333,7 +341,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
 
     const calls = await readFile(logFile, "utf8");
     expect(calls).toContain("serve --bg --yes --https=443 http://127.0.0.1:");
-    expect(calls).toContain("serve --https=443 off");
+    expect(calls).toContain("serve --yes --https=443 --set-path=/ off");
   });
 
   test("exits without a leftover listener when environment-managed Serve setup fails", async () => {

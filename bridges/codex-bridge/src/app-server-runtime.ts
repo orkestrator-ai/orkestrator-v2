@@ -3736,9 +3736,13 @@ export class AppServerRuntime {
             confirmedModelForTurn = thread.model;
             assistantMessage.modelId = thread.model;
           }
+        }
+        if (context !== staleContext) {
+          // Generation recovery can re-attach the session before this retry
+          // resumes. That path is just as much a replacement as starting a new
+          // thread above, and its freshly hydrated context does not contain the
+          // optimistic exchange published before the rejected dispatch.
           context.messages = retryMessages;
-          context.dispatchInFlight = true;
-          this.registry.setPhase(context, "starting");
           const replacementState = this.stateFor(context.threadId);
           replacementState.publishedMessageId = assistantMessage.id;
           replacementState.publishedParts = [];

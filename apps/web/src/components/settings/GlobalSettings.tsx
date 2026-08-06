@@ -170,6 +170,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [isTesting, setIsTesting] = useState(false);
   const [testResults, setTestResults] = useState<DomainTestResult[] | null>(null);
   const webClientStatusRequestRef = useRef(0);
+  const pendingGitHubCredentialEditRef = useRef<{
+    token: string;
+    clear: boolean;
+  } | null>(null);
 
   // Sync local state when config changes in the store
   useEffect(() => {
@@ -178,8 +182,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setEnvPatterns(global.envFilePatterns.join(", "));
     setAnthropicApiKey(global.anthropicApiKey || "");
     setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
-    setGithubToken("");
-    setClearGithubToken(false);
+    setGithubToken(pendingGitHubCredentialEditRef.current?.token ?? "");
+    setClearGithubToken(pendingGitHubCredentialEditRef.current?.clear ?? false);
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
     setDefaultAgent(global.defaultAgent || "claude");
@@ -362,15 +366,15 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const patterns = envPatterns
+      const patterns = [...new Set(envPatterns
         .split(",")
         .map((p) => p.trim())
-        .filter((p) => p.length > 0);
+        .filter((p) => p.length > 0))];
 
-      const domains = allowedDomains
+      const domains = [...new Set(allowedDomains
         .split("\n")
         .map((d) => d.trim())
-        .filter((d) => d.length > 0);
+        .filter((d) => d.length > 0))];
 
       const newGlobal: {
         containerResources: { cpuCores: number; memoryGb: number };
@@ -445,11 +449,22 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       const githubTokenChanged = clearGithubToken || nextGitHubToken.length > 0;
       const githubCredentialChanged = githubCredentialSourceChanged || githubTokenChanged;
       if (githubTokenChanged) {
+        // Persisted non-secret settings are already authoritative at this point.
+        // Preserve the credential edit across that store sync until its separate
+        // keychain/file write succeeds, so a partial failure remains retryable.
+        pendingGitHubCredentialEditRef.current = {
+          token: githubToken,
+          clear: clearGithubToken,
+        };
+      }
+      setConfig(newConfig);
+      if (githubTokenChanged) {
         newConfig = await backend.setGitHubToken(
           clearGithubToken ? null : nextGitHubToken,
         );
+        pendingGitHubCredentialEditRef.current = null;
+        setConfig(newConfig);
       }
-      setConfig(newConfig);
 
       if (!window.orkestratorGateway?.enabled) {
         try {
@@ -519,6 +534,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
       setGithubToken("");
       setClearGithubToken(false);
+      pendingGitHubCredentialEditRef.current = null;
       setHasChanges(githubCredentialPropagationFailed);
       setSaveSuccess(!githubCredentialPropagationFailed);
       if (!githubCredentialPropagationFailed) {
@@ -1585,7 +1601,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
                         Reset Tailscale Serve
                       </Button>
                     </AlertDialogTrigger>
-                    <AlertDialogContent>
+                    {/* Settings is a fullscreen z-60 surface with z-70 popovers. */}
+                    <AlertDialogContent className="z-[80]" overlayClassName="z-[80]">
                       <AlertDialogHeader>
                         <AlertDialogTitle>Reset Tailscale Serve?</AlertDialogTitle>
                         <AlertDialogDescription>

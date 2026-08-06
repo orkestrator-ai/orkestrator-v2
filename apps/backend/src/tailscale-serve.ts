@@ -130,7 +130,7 @@ function commandError(error: unknown): string {
 }
 
 export class TailscaleServeManager {
-  private activeHttpsPort: number | null = null;
+  private activeServe: { targetPort: number; httpsPort: number } | null = null;
 
   constructor(
     private readonly executable = "tailscale",
@@ -159,7 +159,7 @@ export class TailscaleServeManager {
     if (configuredPort(status, httpsPort)) {
       const existingUrl = ownedServeUrl(status, targetPort, httpsPort);
       if (options.adoptExisting && existingUrl) {
-        this.activeHttpsPort = httpsPort;
+        this.activeServe = { targetPort, httpsPort };
         return existingUrl;
       }
       throw new TailscaleServeConflictError(httpsPort, hasHttpsListener(status, httpsPort));
@@ -179,7 +179,7 @@ export class TailscaleServeManager {
     } catch (error) {
       throw new Error(`Unable to configure Tailscale Serve: ${commandError(error)}`);
     }
-    this.activeHttpsPort = httpsPort;
+    this.activeServe = { targetPort, httpsPort };
 
     let url = extractTailscaleServeUrl(`${result.stdout}\n${result.stderr}`);
     if (!url) {
@@ -198,10 +198,9 @@ export class TailscaleServeManager {
   }
 
   async stop(): Promise<void> {
-    const httpsPort = this.activeHttpsPort;
-    if (httpsPort === null) return;
-    await this.run(this.executable, ["serve", "--yes", `--https=${httpsPort}`, "off"]);
-    this.activeHttpsPort = null;
+    const activeServe = this.activeServe;
+    if (!activeServe) return;
+    await this.stopOwned(activeServe.targetPort, activeServe.httpsPort);
   }
 
   async clearHttpsPort(httpsPort = 443): Promise<void> {
@@ -218,7 +217,7 @@ export class TailscaleServeManager {
     }
 
     if (!configuredPort(status, httpsPort)) {
-      if (this.activeHttpsPort === httpsPort) this.activeHttpsPort = null;
+      if (this.activeServe?.httpsPort === httpsPort) this.activeServe = null;
       return;
     }
     if (!hasHttpsListener(status, httpsPort)) {
@@ -241,7 +240,7 @@ export class TailscaleServeManager {
         throw new Error(`Unable to reset Tailscale Serve handler ${handlerPath}: ${commandError(error)}`);
       }
     }
-    if (this.activeHttpsPort === httpsPort) this.activeHttpsPort = null;
+    if (this.activeServe?.httpsPort === httpsPort) this.activeServe = null;
   }
 
   async stopOwned(targetPort: number, httpsPort = 443): Promise<boolean> {
@@ -252,14 +251,33 @@ export class TailscaleServeManager {
       throw new Error(`Unable to inspect Tailscale Serve configuration: ${commandError(error)}`);
     }
     const status = parseServeStatus(existingStatus.stdout);
-    if (!configuredPort(status, httpsPort)) return false;
+    if (!configuredPort(status, httpsPort)) {
+      if (this.activeServe?.targetPort === targetPort && this.activeServe.httpsPort === httpsPort) {
+        this.activeServe = null;
+      }
+      return false;
+    }
     if (!ownedServeUrl(status, targetPort, httpsPort)) {
       throw new Error(
         `Refusing to remove a changed Tailscale Serve configuration on HTTPS port ${httpsPort}`,
       );
     }
-    await this.run(this.executable, ["serve", "--yes", `--https=${httpsPort}`, "off"]);
-    if (this.activeHttpsPort === httpsPort) this.activeHttpsPort = null;
+    try {
+      // This manager owns only the root proxy. Other paths on the same HTTPS
+      // listener may belong to the user and must survive managed shutdown.
+      await this.run(this.executable, [
+        "serve",
+        "--yes",
+        `--https=${httpsPort}`,
+        "--set-path=/",
+        "off",
+      ]);
+    } catch (error) {
+      throw new Error(`Unable to remove owned Tailscale Serve handler: ${commandError(error)}`);
+    }
+    if (this.activeServe?.targetPort === targetPort && this.activeServe.httpsPort === httpsPort) {
+      this.activeServe = null;
+    }
     return true;
   }
 }

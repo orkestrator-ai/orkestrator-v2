@@ -557,6 +557,69 @@ describe("AddProjectDialog", () => {
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
   });
 
+  test("ignores duplicate existing-project submissions while the add is pending", async () => {
+    let resolveAdd!: () => void;
+    const onAdd = mock(() => new Promise<void>((resolve) => {
+      resolveAdd = resolve;
+    }));
+    const onOpenChange = mock(() => undefined);
+    renderDialog({ onAdd, onOpenChange });
+    fireEvent.change(screen.getByLabelText(/Git URL/i), {
+      target: { value: "https://github.com/acme/project.git" },
+    });
+    const submitButton = screen.getByRole("button", { name: "Add project" });
+    const form = submitButton.closest("form");
+    expect(form).not.toBeNull();
+
+    // Submitting the form bypasses the disabled button, so only the in-flight
+    // ref stops the second request.
+    fireEvent.submit(form!);
+    fireEvent.submit(form!);
+
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    await act(async () => resolveAdd());
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  test("disables the scratch inputs and shows progress while creation is pending", async () => {
+    let resolveCreation!: () => void;
+    const onCreate = mock(() => new Promise<void>((resolve) => {
+      resolveCreation = resolve;
+    }));
+    renderDialog({ onCreate });
+    selectScratchTab();
+    const pathInput = screen.getByLabelText(/Project path/i);
+    fireEvent.change(pathInput, { target: { value: "/Users/alice/new-project" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+
+    await waitFor(() => expect((pathInput as HTMLInputElement).disabled).toBe(true));
+    const browseButton = screen.getByRole("button", { name: "Choose an empty project folder" });
+    expect((browseButton as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => resolveCreation());
+    await waitFor(() => expect((pathInput as HTMLInputElement).disabled).toBe(false));
+  });
+
+  test("allows a retry after a failed scratch submission", async () => {
+    const onCreate = mock(async () => {
+      throw new Error("GitHub authentication failed");
+    });
+    renderDialog({ onCreate });
+    selectScratchTab();
+    fireEvent.change(screen.getByLabelText(/Project path/i), {
+      target: { value: "/Users/alice/new-project" },
+    });
+    const form = screen.getByRole("button", { name: "Create project" }).closest("form");
+
+    fireEvent.submit(form!);
+    expect((await screen.findByRole("alert")).textContent).toContain("GitHub authentication failed");
+
+    // The in-flight guard must clear on failure, or the dialog would be wedged.
+    fireEvent.submit(form!);
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(2));
+  });
+
   test("invalidates pending URL validation when the dialog closes", async () => {
     let resolveValidation!: (valid: boolean) => void;
     const validateGitUrl = mock(() => new Promise<boolean>((resolve) => {

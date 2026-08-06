@@ -1977,7 +1977,16 @@ export class StorageService {
    * Reserves one canonical local path for the complete repository creation
    * transaction. The hashed lock filename avoids putting user paths in storage
    * or logs while still coordinating backend processes that share dataDir.
+   *
+   * The timings are sized for the critical section rather than for a JSON
+   * write: creation spans `git init`, a commit, `gh repo create` and a push,
+   * whose timeouts total 310s. A waiter must therefore outlast a legitimate
+   * holder, and the stale threshold must survive a holder whose event loop
+   * stalls — otherwise two backends enter and one rolls back the other's work.
    */
+  private static readonly PROJECT_CREATION_LOCK_STALE_MS = 90_000;
+  private static readonly PROJECT_CREATION_LOCK_TIMEOUT_MS = 360_000;
+
   async withProjectCreationLock<T>(
     canonicalProjectPath: string,
     operation: () => Promise<T>,
@@ -1986,7 +1995,10 @@ export class StorageService {
     const target = this.file(path.join("project-creation-locks", key));
     const previous = this.projectCreationMutationQueues.get(key) ?? Promise.resolve();
     const run = async () => {
-      const release = await this.acquireMutationLock(target, "project creation");
+      const release = await this.acquireMutationLock(target, "project creation", {
+        staleMs: StorageService.PROJECT_CREATION_LOCK_STALE_MS,
+        acquireTimeoutMs: StorageService.PROJECT_CREATION_LOCK_TIMEOUT_MS,
+      });
       try {
         return await operation();
       } finally {
@@ -2137,13 +2149,24 @@ export class StorageService {
     return next;
   }
 
+  /**
+   * `staleMs` and `acquireTimeoutMs` must both exceed the critical section they
+   * guard. The defaults suit a JSON read-modify-write; a caller that holds the
+   * lock across child processes has to raise them, or a waiter will steal the
+   * lock from a live holder whose event loop merely stalled (machine sleep is
+   * the realistic case) and both will enter at once.
+   */
   private async acquireMutationLock(
     targetPath: string,
     description: string,
+    options: { staleMs?: number; acquireTimeoutMs?: number } = {},
   ): Promise<() => Promise<void>> {
+    const staleMs = options.staleMs ?? 15_000;
+    const acquireTimeoutMs = options.acquireTimeoutMs ?? 20_000;
+    const heartbeatMs = Math.max(1_000, Math.floor(staleMs / 3));
     const lockPath = `${targetPath}.lock`;
     const token = randomUUID();
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + acquireTimeoutMs;
     await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
     while (true) {
@@ -2158,7 +2181,7 @@ export class StorageService {
         }
         const heartbeat = setInterval(() => {
           void handle.utimes(new Date(), new Date()).catch(() => undefined);
-        }, 5_000);
+        }, heartbeatMs);
         heartbeat.unref();
         return async () => {
           clearInterval(heartbeat);
@@ -2170,7 +2193,7 @@ export class StorageService {
         const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
         if (code !== "EEXIST") throw error;
         const stat = await fs.stat(lockPath).catch(() => null);
-        if (stat && Date.now() - stat.mtimeMs > 15_000) {
+        if (stat && Date.now() - stat.mtimeMs > staleMs) {
           await fs.rm(lockPath, { force: true });
           continue;
         }
@@ -2363,12 +2386,22 @@ export class StorageService {
     return projects.sort((a, b) => a.order - b.order);
   }
 
-  async addProject(project: Project): Promise<Project> {
+  /**
+   * `validate` runs inside the projects.json critical section, so a caller that
+   * must reject against the *current* stored set — a duplicate local path, say
+   * — cannot be raced by a concurrent writer between its own check and this
+   * insert.
+   */
+  async addProject(
+    project: Project,
+    validate?: (projects: Project[]) => void | Promise<void>,
+  ): Promise<Project> {
     const added = await this.enqueueProjectMutation(async () => {
       const projects = await this.loadProjects();
       if (projects.some((candidate) => candidate.gitUrl === project.gitUrl)) {
         throw new Error(`Duplicate project URL: ${project.gitUrl}`);
       }
+      if (validate) await validate(projects);
 
       project.order = Math.max(-1, ...projects.map((item) => item.order)) + 1;
       projects.push(project);

@@ -158,6 +158,48 @@ has yet been reproduced.
 
 Status: open; passed in isolation after failing in the normal parallel suite.
 
+### `Electron backend command registry > starting a stopped environment resumes backend PR polling`
+
+- Test file: `tests/unit/electron/commands.test.ts`
+- Aggregate command: `bun run test` (root group: `bun test tests --parallel=4`)
+- Aggregate result: one failure in the root group; every other group passed.
+- Failed duration: 472.36 ms
+- Failure: `expect(received).toContain(expected)` on the resumed polling
+  assertion.
+- Isolated command: `bun test tests/unit/electron/commands.test.ts`
+- Isolated result: 362 passed, 0 failed, twice consecutively; the target also
+  passed when run alone with `-t`.
+- Observed: 2026-08-06.
+
+The same aggregate command run again did not reproduce this failure, and a
+different PR-monitor test failed instead (below). Both assert on an event that
+a background poll has to deliver within the test's window, which is consistent
+with aggregate scheduling latency rather than a defect in either test.
+
+Status: open; passed in isolation and did not recur in a repeat aggregate run.
+
+### `an ended agent turn discovers a pull request the agent created itself`
+
+- Test file: `apps/backend/src/core/pr-monitor-agent-completion.integration.test.ts:203`
+- Aggregate command: `bun run test` (workspace group, backend package)
+- Aggregate result: backend workspace 1,409 tests, 1 failed; every other group
+  passed.
+- Failed duration: 380.34 ms
+- Failure: `expect(received).not.toHaveLength(expected)` — no
+  `PR_MONITOR_CHANGED_EVENT` had been announced when the assertion ran.
+- Isolated command:
+  `bun test --cwd apps/backend src/core/pr-monitor-agent-completion.integration.test.ts`
+- Isolated result: 3 passed, 0 failed, in 803 ms.
+- Observed: 2026-08-06.
+
+Failed in the aggregate run immediately after the `commands.test.ts` PR-polling
+entry above passed in that same run, and vice versa — the two have not failed
+together. Both wait on an announced PR-monitor event, so the shared hypothesis
+is that the announcement can miss the assertion's window under aggregate load.
+No narrower root cause has been reproduced.
+
+Status: open; passed in isolation after failing in the normal parallel suite.
+
 ## Final aggregate verification
 
 The final `bun run test` completed successfully on 2026-08-06:

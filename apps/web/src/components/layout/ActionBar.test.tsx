@@ -2606,6 +2606,47 @@ describe("ActionBar workflow tabs", () => {
     });
   });
 
+  test("reports thrown recovery errors, including non-Error values", async () => {
+    currentWorkspaceReady = true;
+    createTabMock
+      .mockReturnValueOnce(false)
+      .mockImplementationOnce(() => {
+        throw new Error("pane restore exploded");
+      })
+      .mockImplementationOnce(() => {
+        throw "pane unavailable";
+      });
+    cancelLoopedReviewMock.mockImplementationOnce(async () => {
+      throw new Error("provider abort failed");
+    });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
+      "Could not open looped review",
+      expect.objectContaining({
+        description: expect.stringContaining("saved workflow remains available for recovery"),
+      }),
+    ));
+
+    const recoveryToast = toastErrorMock.mock.calls.at(-1)?.[1] as {
+      action?: { label: string; onClick: () => void };
+    };
+    expect(recoveryToast.action?.label).toBe("Open workflow");
+
+    recoveryToast.action?.onClick();
+    expect(toastErrorMock).toHaveBeenLastCalledWith("Could not restore looped review", {
+      description: "pane restore exploded",
+    });
+
+    recoveryToast.action?.onClick();
+    expect(toastErrorMock).toHaveBeenLastCalledWith("Could not restore looped review", {
+      description: "pane unavailable",
+    });
+  });
+
   test("keeps the cancelled snapshot visible when deletion fails", async () => {
     currentWorkspaceReady = true;
     createTabMock.mockReturnValueOnce(false);

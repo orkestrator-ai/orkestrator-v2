@@ -52,16 +52,22 @@ describe("InitializationLogs", () => {
 
   test("shows an initial failure and recovers on a later poll", async () => {
     const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
-    getContainerLogsMock
-      .mockRejectedValueOnce(new Error("daemon unavailable"))
-      .mockResolvedValueOnce("container ready");
-    render(<InitializationLogs containerId="container-1" pollIntervalMs={5} />);
+    try {
+      getContainerLogsMock
+        .mockRejectedValueOnce(new Error("daemon unavailable"))
+        // Keep the recovered snapshot authoritative on later polls. Returning it
+        // only once made the success state a 5 ms transient that `waitFor` could
+        // miss before the default empty response replaced it.
+        .mockResolvedValue("container ready");
+      render(<InitializationLogs containerId="container-1" pollIntervalMs={5} />);
 
-    await waitFor(() => expect(screen.getByText(/Failed to load container logs/)).toBeTruthy());
+      await waitFor(() => expect(screen.getByText(/Failed to load container logs/)).toBeTruthy());
 
-    await waitFor(() => expect(screen.getByText("container ready")).toBeTruthy());
-    expect(screen.queryByText(/Failed to load container logs/)).toBeNull();
-    consoleError.mockRestore();
+      await waitFor(() => expect(screen.getByText("container ready")).toBeTruthy());
+      expect(screen.queryByText(/Failed to load container logs/)).toBeNull();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   test("preserves the last snapshot across a transient polling failure", async () => {

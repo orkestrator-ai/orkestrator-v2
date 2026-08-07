@@ -190,6 +190,19 @@ describe("BuildLaunchDialog", () => {
     expect(onConfirm.mock.calls[0]![0].environmentType).toBe("local");
   });
 
+  test("offers source comments as optional build context when configured", () => {
+    const { onConfirm } = renderDialog({ commentContext: { count: 3 } });
+    const includeComments = screen.getByRole("checkbox", {
+      name: "Include 3 comments in build context",
+    }) as HTMLButtonElement;
+
+    expect(includeComments.getAttribute("data-state")).toBe("checked");
+    fireEvent.click(includeComments);
+    submit();
+
+    expect(onConfirm.mock.calls[0]![0].includeComments).toBe(false);
+  });
+
   test("keeps each step's harness, model and reasoning independent", () => {
     const { onConfirm } = renderDialog();
 

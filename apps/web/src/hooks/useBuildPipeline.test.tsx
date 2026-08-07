@@ -254,6 +254,33 @@ describe("useBuildPipeline", () => {
     expect(input.source).not.toHaveProperty("createdAt");
   });
 
+  test("can omit Linear discussion while retaining issue metadata in build context", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromLinearIssue(
+        {
+          ...linearIssue,
+          comments: [{
+            id: "comment-1",
+            body: "Do not include this discussion",
+            authorName: "Ada",
+            createdAt: "2026-07-29",
+          }],
+        },
+        "project-1",
+        "local",
+        { includeComments: false },
+      );
+    });
+
+    expect((startInput().taskSnapshot as { comments: Array<{ text: string }> }).comments).toEqual([
+      { text: "Linear issue: ENG-42" },
+      { text: "URL: https://linear.example/ENG-42" },
+      { text: "Status: In Progress" },
+    ]);
+  });
+
   test("omits optional Linear context when it is unavailable", async () => {
     const { result } = renderHook(() => useBuildPipeline());
 

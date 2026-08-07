@@ -68,6 +68,7 @@ describe("Linear backend API", () => {
       };
       expect(request.query).toContain("sort: [{ manual: { order: Ascending } }]");
       expect(request.query).toContain("sortOrder");
+      expect(request.query).toContain("priority");
       const pageIndex = request.variables.after ? Number(request.variables.after.replace("cursor-", "")) : 0;
       const nextPage = pageIndex + 1;
 
@@ -83,6 +84,7 @@ describe("Linear backend API", () => {
               state: { name: pageIndex % 2 === 0 ? "Todo" : "Done", type: "unstarted" },
               team: { key: "ENG", name: "Engineering" },
               assignee: { name: "Ada" },
+              priority: 2,
               priorityLabel: "High",
             }],
             pageInfo: {
@@ -99,7 +101,12 @@ describe("Linear backend API", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(pageCount);
     expect(issues).toHaveLength(pageCount);
-    expect(issues[0]).toMatchObject({ identifier: "ENG-25", status: "Done", teamKey: "ENG" });
+    expect(issues[0]).toMatchObject({
+      identifier: "ENG-25",
+      status: "Done",
+      teamKey: "ENG",
+      priority: 2,
+    });
     expect(issues.at(-1)).toMatchObject({ identifier: "ENG-0", status: "Todo" });
   });
 
@@ -216,6 +223,7 @@ describe("Linear backend API", () => {
             updatedAt: "2026-06-28T12:00:00.000Z",
             createdAt: "2026-06-20T12:00:00.000Z",
             url: "https://linear.app/acme/issue/ENG-123",
+            priority: 2,
             priorityLabel: "High",
             state: { name: "Todo", type: "unstarted" },
             team: { key: "ENG", name: "Engineering" },
@@ -234,6 +242,7 @@ describe("Linear backend API", () => {
       identifier: "ENG-123",
       description: "Build the integration",
       sortOrder: 42,
+      priority: 2,
       creatorName: "Grace",
       projectName: "Integrations",
       cycleName: "Cycle 1",

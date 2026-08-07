@@ -250,6 +250,18 @@ describe("pane layout intent persistence", () => {
     },
   });
 
+  const persistedInput = (saved: {
+    version: number;
+    containerId: string | null;
+    activePaneId: string;
+    root: unknown;
+  }): PaneLayoutMergeInput => ({
+    version: saved.version,
+    containerId: saved.containerId,
+    activePaneId: saved.activePaneId,
+    root: saved.root as PaneLayoutMergeInput["root"],
+  });
+
   test("creates an initial local layout and applies explicit selection intent", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = createEnvironment("project-1", { environmentType: "local" });
@@ -277,6 +289,117 @@ describe("pane layout intent persistence", () => {
       );
       expect(selected.revision).toBe(2);
       expect((selected.root as { activeTabId: string }).activeTabId).toBe("tab-b");
+    });
+  });
+
+  test("prevents a delayed setup-tab addition from reclaiming focus after setup", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1", { environmentType: "local" });
+      environment.id = "env-late-setup-tab";
+      await storage.addEnvironment(environment);
+      const initial = await storage.ensureBuildPipelineTab({
+        pipelineId: "pipeline-1",
+        taskId: "task-1",
+        environmentId: environment.id,
+        isLocal: true,
+      });
+      const staleBase = persistedInput(initial);
+      const staleDesired = structuredClone(staleBase);
+      if (staleDesired.root.kind !== "leaf") throw new Error("expected a leaf layout");
+      const staleSetupTab = {
+        id: "setup-terminal",
+        type: "plain",
+        isSetupTab: true,
+      };
+      staleDesired.root.tabs.push(staleSetupTab);
+      staleDesired.root.activeTabId = "setup-terminal";
+
+      await storage.updateEnvironment(environment.id, {
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+      });
+      const buildSelected = await storage.ensureBuildPipelineTab({
+        pipelineId: "pipeline-1",
+        taskId: "task-1",
+        environmentId: environment.id,
+        isLocal: true,
+      });
+      const saved = await storage.applyPaneLayoutIntent(
+        environment.id,
+        staleBase,
+        staleDesired,
+        {
+          activePaneId: "default",
+          activeTabIds: { default: "setup-terminal" },
+        },
+      );
+
+      expect(saved.revision).toBe(buildSelected.revision + 1);
+      expect(saved.root).toMatchObject({
+        kind: "leaf",
+        activeTabId: "build-pipeline-1",
+      });
+      expect((saved.root as { tabs: Array<{ id: string }> }).tabs)
+        .not.toContainEqual(expect.objectContaining({ id: "setup-terminal" }));
+    });
+  });
+
+  test("allows completed setup output that was already durable to be selected", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1", { environmentType: "local" });
+      environment.id = "env-durable-setup-tab";
+      await storage.addEnvironment(environment);
+      const initial = await storage.ensureBuildPipelineTab({
+        pipelineId: "pipeline-1",
+        taskId: "task-1",
+        environmentId: environment.id,
+        isLocal: true,
+      });
+      const beforeSetup = persistedInput(initial);
+      const withSetup = structuredClone(beforeSetup);
+      if (withSetup.root.kind !== "leaf") throw new Error("expected a leaf layout");
+      const setupTab = {
+        id: "setup-terminal",
+        type: "plain",
+        isSetupTab: true,
+      };
+      withSetup.root.tabs.push(setupTab);
+      withSetup.root.activeTabId = "setup-terminal";
+      await storage.applyPaneLayoutIntent(
+        environment.id,
+        beforeSetup,
+        withSetup,
+        { activeTabIds: { default: "setup-terminal" } },
+      );
+
+      await storage.updateEnvironment(environment.id, {
+        setupScriptsComplete: true,
+        setupPhase: "ready",
+      });
+      const buildSelected = await storage.ensureBuildPipelineTab({
+        pipelineId: "pipeline-1",
+        taskId: "task-1",
+        environmentId: environment.id,
+        isLocal: true,
+      });
+      const manualBase = persistedInput(buildSelected);
+      const manuallySelected = structuredClone(manualBase);
+      if (manuallySelected.root.kind !== "leaf") throw new Error("expected a leaf layout");
+      manuallySelected.root.activeTabId = "setup-terminal";
+      const saved = await storage.applyPaneLayoutIntent(
+        environment.id,
+        manualBase,
+        manuallySelected,
+        { activeTabIds: { default: "setup-terminal" } },
+      );
+
+      expect(saved.root).toMatchObject({
+        kind: "leaf",
+        activeTabId: "setup-terminal",
+        tabs: expect.arrayContaining([
+          expect.objectContaining({ id: "setup-terminal", isSetupTab: true }),
+        ]),
+      });
     });
   });
 

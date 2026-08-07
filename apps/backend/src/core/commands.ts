@@ -2631,6 +2631,14 @@ async function generateLoopedReviewPackage(
   );
 
   const hydratedValidation = await Promise.all(validation.map(async (entry) => {
+    // The preparation agent reports `limitation: null` for a command that ran
+    // without one, but the persisted contract is `limitation?: string` and its
+    // guard rejects null. Carrying the null through made the finished package
+    // unpersistable — the whole workflow snapshot failed validation on save and
+    // the round died with a `package` failure that a retry reproduced exactly.
+    const limitation = entry.limitation === null
+      ? {}
+      : { limitation: entry.limitation };
     if (entry.status === "skipped") {
       return {
         command: entry.command,
@@ -2639,7 +2647,7 @@ async function generateLoopedReviewPackage(
         stdout: "",
         stderr: "",
         durationMs: entry.durationMs,
-        limitation: entry.limitation,
+        ...limitation,
       };
     }
     const [stdoutBytes, stderrBytes] = await Promise.all([
@@ -2653,7 +2661,7 @@ async function generateLoopedReviewPackage(
       stdout: decodeValidationOutput(stdoutBytes, entry.stdoutPath!),
       stderr: decodeValidationOutput(stderrBytes, entry.stderrPath!),
       durationMs: entry.durationMs,
-      limitation: entry.limitation,
+      ...limitation,
     };
   }));
 

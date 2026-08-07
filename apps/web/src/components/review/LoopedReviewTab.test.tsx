@@ -334,7 +334,10 @@ describe("LoopedReviewTab content rendering", () => {
     const workflow = loopedReviewFixture({ id: data.workflowId, phase: "discovering" });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
     render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+    // The overview is what a workflow with no report yet follows.
     expect(screen.getAllByText("No pooled findings.").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("tab", { name: /Round 1/ }));
     expect(screen.getByText("No completed passes yet.")).toBeTruthy();
   });
 
@@ -361,6 +364,7 @@ describe("LoopedReviewTab content rendering", () => {
     });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
     render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+    fireEvent.click(screen.getByRole("tab", { name: /Round 1/ }));
 
     expect(screen.getByText("Review package limitations")).toBeTruthy();
     expect(screen.getByText(/no database available/)).toBeTruthy();
@@ -382,6 +386,7 @@ describe("LoopedReviewTab content rendering", () => {
     });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
     render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+    fireEvent.click(screen.getByRole("tab", { name: /Round 1 · Fix/ }));
 
     expect(screen.getByLabelText("Archived findings from round 1")).toBeTruthy();
     expect(screen.getByText("Fix session fix-session-1")).toBeTruthy();

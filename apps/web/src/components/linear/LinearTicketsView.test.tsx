@@ -292,6 +292,7 @@ describe("LinearTicketsView", () => {
         title: "Low ticket",
         status: "Todo",
         priority: 4,
+        prioritySortOrder: 30,
         priorityLabel: "Low",
         createdAt: "2026-06-28T12:00:00.000Z",
         updatedAt: "2026-06-30T12:00:00.000Z",
@@ -302,6 +303,7 @@ describe("LinearTicketsView", () => {
         title: "Urgent ticket",
         status: "Todo",
         priorityLabel: "Urgent",
+        prioritySortOrder: 10,
         createdAt: "2026-06-20T12:00:00.000Z",
         updatedAt: "2026-06-21T12:00:00.000Z",
       },
@@ -312,6 +314,7 @@ describe("LinearTicketsView", () => {
         status: "Todo",
         priority: 2,
         priorityLabel: "High",
+        prioritySortOrder: 20,
         createdAt: "2026-06-30T12:00:00.000Z",
         updatedAt: "2026-06-25T12:00:00.000Z",
       },
@@ -332,12 +335,16 @@ describe("LinearTicketsView", () => {
     renderLinearTicketsView();
 
     await screen.findByText("Urgent ticket");
-    expect(visibleTitles()).toEqual([
-      "Urgent ticket",
-      "High ticket",
-      "Low ticket",
-      "Unprioritized ticket",
-    ]);
+    fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Priority" }));
+    await waitFor(() => {
+      expect(visibleTitles()).toEqual([
+        "Urgent ticket",
+        "High ticket",
+        "Low ticket",
+        "Unprioritized ticket",
+      ]);
+    });
 
     fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
     fireEvent.click(await screen.findByRole("option", { name: "Created date" }));
@@ -360,6 +367,109 @@ describe("LinearTicketsView", () => {
         "Urgent ticket",
       ]);
     });
+  });
+
+  test("uses Linear manual order by default and prioritySortOrder as the priority tie-breaker", async () => {
+    getLinearIssuesMock.mockResolvedValue([
+      {
+        id: "issue-a",
+        identifier: "ENG-A",
+        title: "Alpha ticket",
+        status: "Todo",
+        priority: 2,
+        prioritySortOrder: 30,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "issue-b",
+        identifier: "ENG-B",
+        title: "Beta ticket",
+        status: "Todo",
+        priority: 2,
+        prioritySortOrder: 10,
+        updatedAt: "2026-06-29T12:00:00.000Z",
+      },
+      {
+        id: "issue-c",
+        identifier: "ENG-C",
+        title: "Gamma ticket",
+        status: "Todo",
+        priority: 2,
+        prioritySortOrder: 20,
+        updatedAt: "2026-06-28T12:00:00.000Z",
+      },
+    ]);
+    const visibleTitles = () =>
+      screen.getAllByText(/ ticket$/).map((element) => element.textContent);
+
+    renderLinearTicketsView();
+
+    await screen.findByText("Alpha ticket");
+    expect(screen.getByRole("combobox", { name: "Order Linear tickets by" }).textContent)
+      .toContain("Linear board");
+    expect(visibleTitles()).toEqual(["Alpha ticket", "Beta ticket", "Gamma ticket"]);
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Priority" }));
+    await waitFor(() => {
+      expect(visibleTitles()).toEqual(["Beta ticket", "Gamma ticket", "Alpha ticket"]);
+    });
+  });
+
+  test("orders status groups by Linear workflow type and position", async () => {
+    getLinearIssuesMock.mockResolvedValue([
+      {
+        id: "done",
+        identifier: "ENG-5",
+        title: "Done issue",
+        status: "Done",
+        statusType: "completed",
+        statusPosition: 0,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "review",
+        identifier: "ENG-4",
+        title: "Review issue",
+        status: "Review",
+        statusType: "started",
+        statusPosition: 2,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "backlog",
+        identifier: "ENG-1",
+        title: "Backlog issue",
+        status: "Backlog",
+        statusType: "backlog",
+        statusPosition: 0,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "progress",
+        identifier: "ENG-3",
+        title: "Progress issue",
+        status: "In Progress",
+        statusType: "started",
+        statusPosition: 1,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "todo",
+        identifier: "ENG-2",
+        title: "Todo issue",
+        status: "Todo",
+        statusType: "unstarted",
+        statusPosition: 0,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+    ]);
+
+    renderLinearTicketsView();
+
+    await screen.findByText("Backlog issue");
+    expect(screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent))
+      .toEqual(["Backlog", "Todo", "In Progress", "Review", "Done"]);
   });
 
   test("opens the shared build launcher and starts a configured Linear-backed build", async () => {

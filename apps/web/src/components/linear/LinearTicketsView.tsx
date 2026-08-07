@@ -74,7 +74,7 @@ interface LinearTicketsViewContentProps extends LinearTicketsViewProps {
 }
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
-type IssueOrder = "priority" | "createdAt" | "updatedAt";
+type IssueOrder = "manual" | "priority" | "createdAt" | "updatedAt";
 
 const isStringDraft = (value: unknown): value is string => typeof value === "string";
 const isBlankDraft = (value: string): boolean => value.length === 0;
@@ -114,23 +114,57 @@ const PRIORITY_BY_LABEL: Record<string, number> = {
   low: 4,
 };
 
+const STATUS_TYPE_ORDER: Record<string, number> = {
+  triage: 0,
+  backlog: 1,
+  unstarted: 2,
+  started: 3,
+  completed: 4,
+  canceled: 5,
+  duplicate: 6,
+};
+
+function compareStatusOrder(a: LinearIssueListItem, b: LinearIssueListItem): number {
+  const aTypeOrder = STATUS_TYPE_ORDER[a.statusType ?? ""] ?? Number.MAX_SAFE_INTEGER;
+  const bTypeOrder = STATUS_TYPE_ORDER[b.statusType ?? ""] ?? Number.MAX_SAFE_INTEGER;
+  if (aTypeOrder !== bTypeOrder) return aTypeOrder - bTypeOrder;
+
+  if (
+    a.statusPosition !== undefined
+    && b.statusPosition !== undefined
+    && a.statusPosition !== b.statusPosition
+  ) {
+    return a.statusPosition - b.statusPosition;
+  }
+  if (a.statusPosition !== undefined && b.statusPosition === undefined) return -1;
+  if (a.statusPosition === undefined && b.statusPosition !== undefined) return 1;
+  return a.status.localeCompare(b.status);
+}
+
 function compareIssueOrder(
   a: LinearIssueListItem,
   b: LinearIssueListItem,
   order: IssueOrder,
 ): number {
+  if (order === "manual") return 0;
+
   if (order === "priority") {
     const aPriority = a.priority && a.priority > 0
       ? a.priority
-      : PRIORITY_BY_LABEL[a.priorityLabel?.toLowerCase() ?? ""];
+      : PRIORITY_BY_LABEL[a.priorityLabel?.toLowerCase() ?? ""] ?? 5;
     const bPriority = b.priority && b.priority > 0
       ? b.priority
-      : PRIORITY_BY_LABEL[b.priorityLabel?.toLowerCase() ?? ""];
-    if (aPriority !== undefined && bPriority !== undefined) {
-      return aPriority - bPriority;
+      : PRIORITY_BY_LABEL[b.priorityLabel?.toLowerCase() ?? ""] ?? 5;
+    if (aPriority !== bPriority) return aPriority - bPriority;
+    if (
+      a.prioritySortOrder !== undefined
+      && b.prioritySortOrder !== undefined
+      && a.prioritySortOrder !== b.prioritySortOrder
+    ) {
+      return a.prioritySortOrder - b.prioritySortOrder;
     }
-    if (aPriority !== undefined) return -1;
-    if (bPriority !== undefined) return 1;
+    if (a.prioritySortOrder !== undefined && b.prioritySortOrder === undefined) return -1;
+    if (a.prioritySortOrder === undefined && b.prioritySortOrder !== undefined) return 1;
     return 0;
   }
 
@@ -257,7 +291,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const [issuesState, setIssuesState] = useState<LoadState>("idle");
   const [issuesError, setIssuesError] = useState<string | null>(null);
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set());
-  const [issueOrder, setIssueOrder] = useState<IssueOrder>("priority");
+  const [issueOrder, setIssueOrder] = useState<IssueOrder>("manual");
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
   const [detail, setDetail] = useState<LinearIssueDetail | null>(null);
   const [detailState, setDetailState] = useState<LoadState>("idle");
@@ -348,11 +382,17 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   }, [loadIssues]);
 
   const statusCounts = useMemo(() => {
-    const counts = new Map<string, number>();
+    const counts = new Map<string, { count: number; issue: LinearIssueListItem }>();
     for (const issue of issues) {
-      counts.set(issue.status, (counts.get(issue.status) ?? 0) + 1);
+      const current = counts.get(issue.status);
+      counts.set(issue.status, {
+        count: (current?.count ?? 0) + 1,
+        issue: current?.issue ?? issue,
+      });
     }
-    return Array.from(counts.entries()).sort(([a], [b]) => a.localeCompare(b));
+    return Array.from(counts.entries())
+      .sort(([, a], [, b]) => compareStatusOrder(a.issue, b.issue))
+      .map(([status, entry]) => [status, entry.count] as const);
   }, [issues]);
 
   const filteredIssues = useMemo(() => {
@@ -369,7 +409,8 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
       group.push(issue);
       groups.set(issue.status, group);
     }
-    return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
+    return Array.from(groups.entries()).sort(([, a], [, b]) =>
+      compareStatusOrder(a[0]!, b[0]!));
   }, [filteredIssues, issueOrder]);
 
   const selectedPipeline = selectedIssueId ? getIssuePipeline(pipelines, selectedIssueId) : undefined;
@@ -878,6 +919,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent align="end">
+                    <SelectItem value="manual">Linear board</SelectItem>
                     <SelectItem value="priority">Priority</SelectItem>
                     <SelectItem value="createdAt">Created date</SelectItem>
                     <SelectItem value="updatedAt">Updated date</SelectItem>

@@ -69,6 +69,8 @@ describe("Linear backend API", () => {
       expect(request.query).toContain("sort: [{ manual: { order: Ascending } }]");
       expect(request.query).toContain("sortOrder");
       expect(request.query).toContain("priority");
+      expect(request.query).toContain("prioritySortOrder");
+      expect(request.query).toContain("state { name type position }");
       const pageIndex = request.variables.after ? Number(request.variables.after.replace("cursor-", "")) : 0;
       const nextPage = pageIndex + 1;
 
@@ -81,10 +83,15 @@ describe("Linear backend API", () => {
               title: `Issue ${pageIndex}`,
               sortOrder: pageCount - pageIndex,
               updatedAt: `2026-06-${String(pageCount - pageIndex).padStart(2, "0")}T12:00:00.000Z`,
-              state: { name: pageIndex % 2 === 0 ? "Todo" : "Done", type: "unstarted" },
+              state: {
+                name: pageIndex % 2 === 0 ? "Todo" : "Done",
+                type: "unstarted",
+                position: pageIndex % 2,
+              },
               team: { key: "ENG", name: "Engineering" },
               assignee: { name: "Ada" },
               priority: 2,
+              prioritySortOrder: pageIndex,
               priorityLabel: "High",
             }],
             pageInfo: {
@@ -106,6 +113,8 @@ describe("Linear backend API", () => {
       status: "Done",
       teamKey: "ENG",
       priority: 2,
+      prioritySortOrder: 25,
+      statusPosition: 1,
     });
     expect(issues.at(-1)).toMatchObject({ identifier: "ENG-0", status: "Todo" });
   });

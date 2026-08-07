@@ -2052,6 +2052,94 @@ describe("BuildPipelineService", () => {
     });
   }
 
+  test("persists the provider's session failure detail", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started } = await startBuilding(service, storage);
+      provider.status = async () => {
+        throw new Error(
+          "The codex session failed: stream disconnected before completion",
+        );
+      };
+
+      await service.advanceNow(started.id);
+
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: "The codex session failed: stream disconnected before completion",
+      });
+    });
+  });
+
+  test("retries a failed build stage in a fresh session", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started, session: firstSession } = await startBuilding(
+        service,
+        storage,
+      );
+      provider.status = async () => "error";
+      await service.advanceNow(started.id);
+
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        failureContext: {
+          phase: "building",
+          kind: "stage-transition",
+          sessionId: firstSession.sdkSessionId,
+        },
+        sessions: [expect.objectContaining({
+          sdkSessionId: firstSession.sdkSessionId,
+          status: "error",
+        })],
+      });
+
+      provider.status = async () => "idle";
+      const retried = await service.retryStage(started.id);
+
+      expect(retried).toMatchObject({
+        phase: "building",
+        currentSessionIndex: 1,
+      });
+      expect(retried.error).toBeUndefined();
+      expect(retried.failureContext).toBeUndefined();
+      expect(retried.stageRetryRequested).toBeUndefined();
+      expect(retried.sessions).toHaveLength(2);
+      expect(retried.sessions[0]).toMatchObject({
+        sdkSessionId: firstSession.sdkSessionId,
+        status: "error",
+      });
+      expect(retried.sessions[1]).toMatchObject({
+        phase: "build",
+        status: "running",
+      });
+      expect(retried.sessions[1]?.sdkSessionId)
+        .not.toBe(firstSession.sdkSessionId);
+      expect(provider.sent.at(-1)?.sessionId)
+        .toBe(retried.sessions[1]?.sdkSessionId);
+    });
+  });
+
+  test("rejects failed-stage retry for cancellation and interaction failures", async () => {
+    await withService(async (service, storage) => {
+      const { started } = await startBuilding(service, storage);
+      await service.cancel(started.id);
+      await expect(service.retryStage(started.id)).rejects.toThrow(
+        "no failed stage to retry",
+      );
+
+      await mutateStored(storage, started.id, (candidate) => {
+        candidate.failureContext = {
+          phase: "building",
+          kind: "interactive-request",
+          sessionId: candidate.sessions[0]!.sdkSessionId,
+          requestId: "question-1",
+        };
+      });
+      await expect(service.retryStage(started.id)).rejects.toThrow(
+        "no failed stage to retry",
+      );
+    });
+  });
+
   test("forwards unattended interaction metadata and keeps pending blocked work parked", async () => {
     await withService(async (service, storage, provider) => {
       const started = await service.start(startInput());

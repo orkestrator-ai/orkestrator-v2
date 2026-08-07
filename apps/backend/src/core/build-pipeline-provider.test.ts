@@ -528,6 +528,17 @@ describe("HTTP build pipeline provider", () => {
     }
   });
 
+  test("preserves the bridge failure detail from an errored session", async () => {
+    const { provider } = httpProvider(() => Response.json({
+      status: "error",
+      error: "stream disconnected before completion",
+    }), codexConnection);
+
+    await expect(provider.status("session-1")).rejects.toThrow(
+      "The codex session failed: stream disconnected before completion",
+    );
+  });
+
   test("maps missing and malformed HTTP transcripts to an empty list", async () => {
     const missing = httpProvider(() => new Response(null, { status: 404 }));
     await expect(missing.provider.messages("session-1")).resolves.toEqual([]);

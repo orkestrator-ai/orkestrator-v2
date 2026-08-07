@@ -2064,6 +2064,14 @@ export async function retryBuildPipelineReview(
   });
 }
 
+export async function retryBuildPipelineStage(
+  pipelineId: string,
+): Promise<BackendBuildPipeline> {
+  return invoke<BackendBuildPipeline>("retry_build_pipeline_stage", {
+    pipelineId,
+  });
+}
+
 export async function retryBuildPipelineInteractionFailure(
   pipelineId: string,
 ): Promise<BackendBuildPipeline> {

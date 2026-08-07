@@ -94,6 +94,13 @@ const retryReviewMock = mock(async (pipelineId: string) => ({
   phase: "reviewing" as const,
   backendRevision: 13,
 }));
+const retryStageMock = mock(async (pipelineId: string) => ({
+  ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+  phase: "building" as const,
+  error: undefined,
+  failureContext: undefined,
+  backendRevision: 14,
+}));
 const retryInteractionFailureMock = mock(async (pipelineId: string) => ({
   ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
   phase: "building" as const,
@@ -113,6 +120,7 @@ mock.module("@/lib/backend", () => ({
   cancelBuildPipeline: cancelBuildPipelineMock,
   sendBuildPipelineMessage: sendMessageMock,
   retryBuildPipelineReview: retryReviewMock,
+  retryBuildPipelineStage: retryStageMock,
   retryBuildPipelineInteractionFailure: retryInteractionFailureMock,
   getBuildPipelineConditional: getBuildPipelineConditionalMock,
 }));
@@ -188,6 +196,7 @@ describe("BuildChatTab backend projection", () => {
     cancelBuildPipelineMock.mockClear();
     sendMessageMock.mockClear();
     retryReviewMock.mockClear();
+    retryStageMock.mockClear();
     retryInteractionFailureMock.mockClear();
     mockToastError.mockClear();
     getBuildPipelineConditionalMock.mockClear();
@@ -820,7 +829,7 @@ describe("BuildChatTab presentation", () => {
     expect(warning.textContent).toContain("The active stage is still running");
   });
 
-  test("keeps the error and the review retry for a non-interactive failure", () => {
+  test("keeps the error and offers a retry for the failed stage", async () => {
     renderTab({
       ...reviewed,
       phase: "failed",
@@ -832,9 +841,12 @@ describe("BuildChatTab presentation", () => {
     // Only an interactive-request failure moves the message and the control
     // into the recovery banner; every other failure keeps both here.
     expect(screen.getAllByText("The prompt was never dispatched")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: /Retry Review/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry Review" })).toBeNull();
+    const retry = screen.getByRole("button", { name: "Retry Build Stage" });
     expect(screen.queryByRole("button", { name: "Retry failed build phase" }))
       .toBeNull();
+    fireEvent.click(retry);
+    await waitFor(() => expect(retryStageMock).toHaveBeenCalledWith(reviewed.id));
   });
 
   test("badges no stage that declined nothing", () => {
@@ -1391,6 +1403,7 @@ describe("BuildChatTab agent messaging", () => {
     cleanup();
     sendMessageMock.mockClear();
     retryReviewMock.mockClear();
+    retryStageMock.mockClear();
     mockToastError.mockClear();
     useBuildPipelineStore.setState({
       pipelines: new Map([[running.id, running]]),

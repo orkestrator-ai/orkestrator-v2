@@ -1045,6 +1045,48 @@ export class BuildPipelineService {
     return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }
 
+  /** Starts a fresh attempt for the non-interactive stage that failed. */
+  async retryStage(pipelineId: string): Promise<BuildPipeline> {
+    let rejection: Error | undefined;
+    await this.mutate(pipelineId, (candidate) => {
+      if (
+        candidate.phase !== "failed"
+        || !candidate.failureContext
+        || candidate.failureContext.kind === "interactive-request"
+      ) {
+        rejection = new Error("This build has no failed stage to retry");
+        return;
+      }
+      const phase = candidate.failureContext.phase;
+      candidate.phase = phase;
+      if (sessionPhaseFor(phase)) {
+        candidate.stageRetryRequested = true;
+      } else {
+        delete candidate.stageRetryRequested;
+      }
+      const failedSession = sessionForCurrentPhase(candidate);
+      if (
+        failedSession
+        && failedSession.sdkSessionId === candidate.failureContext.sessionId
+      ) {
+        failedSession.status = "error";
+      }
+      delete candidate.error;
+      delete candidate.failureContext;
+      delete candidate.reconnectAttempt;
+      delete candidate.pendingPromptAttempt;
+      delete candidate.activePromptContext;
+      delete candidate.reviewRetryRequested;
+      delete candidate.interactionRetryRequested;
+      delete candidate.stallWarning;
+      delete candidate.completionCommentStatus;
+      delete candidate.completionCommentError;
+    });
+    if (rejection) throw rejection;
+    await this.runLocked(pipelineId);
+    return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
+  }
+
   async retryInteractionFailure(pipelineId: string): Promise<BuildPipeline> {
     let rejection: Error | undefined;
     await this.mutate(pipelineId, (candidate) => {
@@ -1099,6 +1141,8 @@ export class BuildPipelineService {
       delete pipeline.activePromptContext;
       delete pipeline.pendingUserMessages;
       delete pipeline.reviewRetryRequested;
+      delete pipeline.stageRetryRequested;
+      delete pipeline.interactionRetryRequested;
       delete pipeline.stallWarning;
     });
     // `provider()` records attribution for reconnect handling while a pipeline
@@ -1295,6 +1339,15 @@ export class BuildPipelineService {
       return;
     }
 
+    if (pipeline.stageRetryRequested) {
+      const phase = pipeline.phase as ResumableBuildPhase;
+      const sessionPhase = sessionPhaseFor(phase);
+      if (!sessionPhase) throw new Error(`Cannot retry pipeline phase ${phase}`);
+      delete pipeline.stageRetryRequested;
+      await this.startStage(pipeline, sessionPhase, phase);
+      return;
+    }
+
     if (pipeline.interactionRetryRequested) {
       const phase = pipeline.phase as ResumableBuildPhase;
       const sessionPhase = sessionPhaseFor(phase);
@@ -1345,6 +1398,7 @@ export class BuildPipelineService {
       throw new Error(`The ${session.label.toLowerCase()} is no longer available`);
     }
     if (status === "error") {
+      session.status = "error";
       throw new Error(`The ${session.label.toLowerCase()} failed`);
     }
     if (status === "blocked") {
@@ -3155,6 +3209,8 @@ export class BuildPipelineService {
       kind: "stage-transition",
       sessionId: sessionForCurrentPhase(pipeline)?.sdkSessionId,
     };
+    const failedSession = sessionForCurrentPhase(pipeline);
+    if (failedSession) failedSession.status = "error";
     pipeline.phase = "failed";
     delete pipeline.pendingPromptAttempt;
     delete pipeline.stallWarning;

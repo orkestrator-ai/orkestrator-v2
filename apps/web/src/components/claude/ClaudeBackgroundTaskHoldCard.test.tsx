@@ -110,6 +110,32 @@ describe("ClaudeBackgroundTaskHoldCard", () => {
     ).toBeTruthy();
   });
 
+  // A new turn clears the previous turn's error, so the two flags overlap only
+  // in the window before that lands. Describing the live turn is the honest
+  // read there: the error the user is being shown belongs to a finished turn.
+  test("describes the live turn when a stale error overlaps a new response", () => {
+    render(
+      <ClaudeBackgroundTaskHoldCard
+        tasks={[tasks[0]!]}
+        responseInProgress
+        responseFailed
+        onStopTask={async () => true}
+      />,
+    );
+
+    expect(screen.getByText("Response in progress · 1 background task running")).toBeTruthy();
+    expect(screen.queryByText(/Response ended/)).toBeNull();
+    expect(screen.queryByText(/ended with an error/)).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Claude is still responding while background tasks are running.",
+    );
+    expect(
+      screen.getByRole("group", {
+        name: "Claude background tasks running during the response",
+      }),
+    ).toBeTruthy();
+  });
+
   test("disables one task while its stop request is pending", async () => {
     let resolveStop: ((value: boolean) => void) | undefined;
     const onStopTask = mock(

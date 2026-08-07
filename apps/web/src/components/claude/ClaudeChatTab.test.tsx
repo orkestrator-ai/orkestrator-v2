@@ -6366,6 +6366,40 @@ describe("ClaudeChatTab", () => {
       });
     });
 
+    test("sending a new prompt clears the previous turn's error", async () => {
+      await withChannel(async (channel) => {
+        act(() => {
+          useClaudeStore.getState().setBackgroundTasks(SESSION_KEY, {
+            "bg-1": { id: "bg-1", status: "running", description: "Long build" },
+          });
+        });
+        channel.push({
+          type: "session.error",
+          sessionId: "session-1",
+          data: { error: "Previous turn failed" },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.error).toBe(
+            "Previous turn failed",
+          );
+          expect(screen.getByTestId("claude-background-task-hold").textContent).toContain(
+            "Response ended · 1 background task still running",
+          );
+        });
+
+        // The error belongs to a turn the user has moved on from. Leaving it set
+        // keeps the hold card reporting a failure for the turn now in flight.
+        await submitClaudePrompt("try again");
+
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.error).toBeUndefined();
+          expect(screen.getByTestId("claude-background-task-hold").textContent).toContain(
+            "Response in progress · 1 background task running",
+          );
+        });
+      });
+    });
+
     test("marks a backend-dispatched turn running and removes the stale completion state", async () => {
       const turnStartedAt = Date.parse("2026-08-01T10:15:00.000Z");
       await withChannel(async (channel) => {

@@ -54,7 +54,9 @@ lines.on("line", (line) => {
     : "contract-background-session";
   const childScript = childMode === "fail"
     ? "process.exit(17)"
-    : `await Bun.sleep(150); await Bun.write(process.env.CLAUDE_SDK_BACKGROUND_MARKER_FILE, "completed")`;
+    : childMode === "signal"
+      ? `process.kill(process.pid, "SIGKILL")`
+      : `await Bun.sleep(150); await Bun.write(process.env.CLAUDE_SDK_BACKGROUND_MARKER_FILE, "completed")`;
   const child = spawn(process.execPath, ["-e", childScript], {
     env: { ...process.env, CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile },
     stdio: "ignore",
@@ -131,7 +133,7 @@ lines.on("line", (line) => {
     uuid: "00000000-0000-4000-8000-000000000013",
   });
 
-  child.once("exit", async (code) => {
+  child.once("exit", async (code, signal) => {
     childFinished = true;
     if (stdinEnded) return;
     write({
@@ -140,9 +142,13 @@ lines.on("line", (line) => {
       task_id: taskId,
       tool_use_id: toolUseId,
       status: code === 0 ? "completed" : "failed",
+      // A child killed by a signal reports a null code, so the exit code is not
+      // the whole story and reporting it as "unknown" would lose the cause.
       summary: code === 0
         ? "Contract task completed"
-        : `Contract task failed with exit code ${code ?? "unknown"}`,
+        : code === null
+          ? `Contract task failed with signal ${signal ?? "unknown"}`
+          : `Contract task failed with exit code ${code}`,
       session_id: sessionId,
       uuid: "00000000-0000-4000-8000-000000000014",
     });

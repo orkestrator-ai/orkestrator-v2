@@ -2365,8 +2365,24 @@ function provisionalBackgroundTaskId(toolUseId: string): string {
   return `${PROVISIONAL_BACKGROUND_TASK_PREFIX}${toolUseId}`;
 }
 
-function backgroundTaskIdFromToolResultContent(content: unknown): string | undefined {
-  const text = typeof content === "string"
+const BACKGROUND_TASK_LABEL_BODY =
+  "(?:Command running in background with ID:"
+  + "|Command was manually backgrounded by user with ID:"
+  + "|Command [^\\r\\n]{0,160}\\btimeout and was moved to the background \\(ID:"
+  + "|Background task ID:)\\s*([A-Za-z0-9_-]+)";
+/** Anchored to a line start; used only once provider-authored intent exists. */
+const LINE_LEADING_BACKGROUND_TASK_LABEL = new RegExp(
+  `(?:^|\\n)[ \\t]*${BACKGROUND_TASK_LABEL_BODY}`,
+  "i",
+);
+/** Anchored to the start of the whole result; used to *establish* intent. */
+const EXCLUSIVE_BACKGROUND_TASK_LABEL = new RegExp(
+  `^${BACKGROUND_TASK_LABEL_BODY}`,
+  "i",
+);
+
+function backgroundTaskResultText(content: unknown): string {
+  return typeof content === "string"
     ? content
     : Array.isArray(content)
       ? content
@@ -2378,10 +2394,36 @@ function backgroundTaskIdFromToolResultContent(content: unknown): string | undef
         .map((block) => block.text)
         .join("\n")
       : "";
-  const match = text.match(
-    /(?:^|\n)[ \t]*(?:Command running in background with ID:|Command was manually backgrounded by user with ID:|Command [^\r\n]{0,160}\btimeout and was moved to the background \(ID:|Background task ID:)\s*([A-Za-z0-9_-]+)/i,
+}
+
+function backgroundTaskIdFromToolResultContent(content: unknown): string | undefined {
+  const match = backgroundTaskResultText(content).match(
+    LINE_LEADING_BACKGROUND_TASK_LABEL,
   );
   return persistedTaskIdentifier(match?.[1]);
+}
+
+/**
+ * The provider's backgrounding notice, and nothing else.
+ *
+ * A Bash `tool_result` is the command's own stdout whenever the command ran in
+ * the foreground, so treating a label found *anywhere* in it as evidence lets
+ * ordinary output (`cat` of a file, a build log, a help text) mint a background
+ * task that no provider lifecycle frame will ever settle — which pins the CLI
+ * process and the session's transcript for the lifetime of the bridge. When a
+ * command really is backgrounded the notice replaces the output entirely
+ * ("Output is being written."), so requiring it to be the complete, single-line
+ * result is both the provider's actual shape and the only boundary available
+ * once `tool_use_result` is missing.
+ *
+ * A command whose entire output is exactly this label can still spoof one task.
+ * That residue is accepted: it needs a deliberate `echo`, not incidental output,
+ * and the resulting task is visible and stoppable from the session UI.
+ */
+function exclusiveBackgroundTaskLabelId(content: unknown): string | undefined {
+  const text = backgroundTaskResultText(content).trim();
+  if (text.length === 0 || /[\r\n]/.test(text)) return undefined;
+  return persistedTaskIdentifier(text.match(EXCLUSIVE_BACKGROUND_TASK_LABEL)?.[1]);
 }
 
 interface CorrelatedBashToolResult {
@@ -2421,65 +2463,24 @@ function correlatedBashToolResults(
   return results;
 }
 
-function correlatedBackgroundTaskIntent(
+/**
+ * The id of the single Bash `tool_result` that `tool_use_result` can describe.
+ *
+ * `tool_use_result` is one flat object per message and never names the block it
+ * belongs to, so it may only be read when the message carries exactly one
+ * tool result. Correlation is a security boundary here: MCP and dynamic tools
+ * may return arbitrary objects whose field names collide with the built-in
+ * Bash result. A failed or malformed block disqualifies the whole message
+ * rather than being skipped, which would silently promote some other block.
+ */
+function exclusiveBashToolResultId(
   message: SDKUserMessage,
   toolTracker: ToolTracker,
 ): string | undefined {
-  const results = correlatedBashToolResults(message, toolTracker);
-  if (results.length !== 1 || results[0]!.failed) return undefined;
-  const result = results[0]!;
-  const tool = toolTracker.getTool(result.toolUseId);
-  const toolArgs =
-    tool?.toolArgs
-    && typeof tool.toolArgs === "object"
-    && !Array.isArray(tool.toolArgs)
-      ? tool.toolArgs as Record<string, unknown>
-      : undefined;
-  const structuredResult = message.tool_use_result;
-  const structured =
-    structuredResult
-    && typeof structuredResult === "object"
-    && !Array.isArray(structuredResult)
-      ? structuredResult as Record<string, unknown>
-      : undefined;
-  return toolArgs?.run_in_background === true
-    || structured?.backgroundedByUser === true
-    || (
-      typeof structured?.timedOutAfterMs === "number"
-      && Number.isFinite(structured.timedOutAfterMs)
-      && structured.timedOutAfterMs >= 0
-    )
-    || backgroundTaskIdFromToolResultContent(result.content) !== undefined
-      ? result.toolUseId
-      : undefined;
-}
-
-/**
- * Recover the synchronous launch edge carried by a tool result.
- *
- * Bash returns `backgroundTaskId` in `SDKUserMessage.tool_use_result` before
- * the provider publishes `task_started` / `background_tasks_changed`. Waiting
- * for only those system messages leaves a race where the turn result sees an
- * empty task set, closes streaming input, and the CLI then terminates the
- * background process it owns. The structured result is provider-authored and
- * is the earliest authoritative evidence that the process exists.
- */
-function backgroundTaskLaunchFromSdkUserMessage(
-  message: SDKUserMessage,
-  toolTracker: ToolTracker,
-): BackgroundTaskLaunch | undefined {
-  const structuredResult = message.tool_use_result;
-  const structuredResultRecord =
-    structuredResult !== null
-    && typeof structuredResult === "object"
-    && !Array.isArray(structuredResult)
-      ? structuredResult as Record<string, unknown>
-      : undefined;
-
   const content = (
     message.message as { content?: unknown } | undefined
   )?.content;
-  const toolResults: Array<{ toolUseId: string; content?: unknown }> = [];
+  const toolUseIds: string[] = [];
   if (Array.isArray(content)) {
     for (const block of content) {
       if (
@@ -2492,62 +2493,131 @@ function backgroundTaskLaunchFromSdkUserMessage(
           is_error?: unknown;
         };
         const toolUseId = persistedTaskIdentifier(resultBlock.tool_use_id);
-        // A failed or malformed tool result cannot vouch for a launched
-        // process. Count it as an invalid candidate rather than silently
-        // discarding it and correlating some other block in the same message.
         if (!toolUseId || resultBlock.is_error === true) return undefined;
-        toolResults.push({ toolUseId, content: (block as { content?: unknown }).content });
+        toolUseIds.push(toolUseId);
       }
     }
   }
-  // `tool_use_result` describes exactly one invocation. Correlation is a
-  // security boundary here because MCP and dynamic tools may return arbitrary
-  // objects whose field names can collide with the built-in Bash result.
-  if (toolResults.length !== 1) return undefined;
-  const [{ toolUseId, content: toolResultContent }] = toolResults;
-  const tool = toolTracker.getTool(toolUseId);
-  if (tool?.toolName !== "Bash") {
-    return undefined;
-  }
-  const toolArgs =
-    tool.toolArgs
-    && typeof tool.toolArgs === "object"
-    && !Array.isArray(tool.toolArgs)
-      ? tool.toolArgs as Record<string, unknown>
+  if (toolUseIds.length !== 1) return undefined;
+  const only = toolUseIds[0]!;
+  return toolTracker.getTool(only)?.toolName === "Bash" ? only : undefined;
+}
+
+/** What one correlated Bash tool result says about background work. */
+interface BashToolResultOutcome {
+  toolUseId: string;
+  failed: boolean;
+  /** A background launch that can be published now. */
+  launch?: BackgroundTaskLaunch;
+  /**
+   * Background evidence arrived without a usable task id. The invocation must
+   * stay an unresolved candidate so this query's stdin is held open until a
+   * lifecycle frame supplies the id.
+   */
+  retainCandidate: boolean;
+}
+
+/**
+ * Recover the synchronous launch edge carried by a turn's tool results.
+ *
+ * Bash returns `backgroundTaskId` in `SDKUserMessage.tool_use_result` before
+ * the provider publishes `task_started` / `background_tasks_changed`. Waiting
+ * for only those system messages leaves a race where the turn result sees an
+ * empty task set, closes streaming input, and the CLI then terminates the
+ * background process it owns.
+ *
+ * Every block is judged on its own evidence, because the API delivers parallel
+ * tool calls as several `tool_result` blocks inside one user message. Reading
+ * only the single-block case discarded a real background handoff whenever
+ * Claude ran two commands at once, releasing the candidate and closing stdin —
+ * exactly the race this mechanism exists to prevent.
+ */
+function bashToolResultOutcomes(
+  message: SDKUserMessage,
+  toolTracker: ToolTracker,
+): BashToolResultOutcome[] {
+  const results = correlatedBashToolResults(message, toolTracker);
+  if (results.length === 0) return [];
+
+  const exclusiveToolUseId = exclusiveBashToolResultId(message, toolTracker);
+  const structuredResult = message.tool_use_result;
+  const structuredRecord =
+    structuredResult !== null
+    && typeof structuredResult === "object"
+    && !Array.isArray(structuredResult)
+      ? structuredResult as Record<string, unknown>
       : undefined;
-  const fallbackId = backgroundTaskIdFromToolResultContent(toolResultContent);
-  const hasBackgroundIntent =
-    toolArgs?.run_in_background === true
-    || structuredResultRecord?.backgroundedByUser === true
-    || (
-      typeof structuredResultRecord?.timedOutAfterMs === "number"
-      && Number.isFinite(structuredResultRecord.timedOutAfterMs)
-      && structuredResultRecord.timedOutAfterMs >= 0
-    )
-    || fallbackId !== undefined;
-  if (!hasBackgroundIntent) return undefined;
 
-  // `tool_use_result` is the preferred provider-authored source. Some CLI/SDK
-  // combinations have omitted that optional field from the stream while still
-  // sending the built-in Bash tool_result label. Parsing is deliberately done
-  // only after exact correlation with a tracked built-in Bash invocation; the
-  // anchored provider label is itself authoritative background evidence, while
-  // arbitrary MCP/dynamic tool text never reaches this fallback.
-  const id = persistedTaskIdentifier(structuredResultRecord?.backgroundTaskId)
-    ?? fallbackId;
-  if (!id) return undefined;
-
-  const description = persistedTaskText(toolArgs?.description)
-    ?? persistedTaskText(toolArgs?.command)
-    // `content` is the provider tool label ("Bash") and is the only title
-    // the Claude parsing path currently retains on a normalized invocation.
-    ?? persistedTaskText(tool.content);
-
-  return {
-    id,
-    toolUseId,
-    ...(description ? { description } : {}),
-  };
+  const outcomes: BashToolResultOutcome[] = [];
+  for (const result of results) {
+    if (result.failed) {
+      outcomes.push({
+        toolUseId: result.toolUseId,
+        failed: true,
+        retainCandidate: false,
+      });
+      continue;
+    }
+    // Structured evidence in a batched message cannot be pinned to a block, so
+    // only the per-block label speaks for it there.
+    const structured = exclusiveToolUseId === result.toolUseId
+      ? structuredRecord
+      : undefined;
+    const tool = toolTracker.getTool(result.toolUseId);
+    const toolArgs =
+      tool?.toolArgs
+      && typeof tool.toolArgs === "object"
+      && !Array.isArray(tool.toolArgs)
+        ? tool.toolArgs as Record<string, unknown>
+        : undefined;
+    const providerIntent =
+      toolArgs?.run_in_background === true
+      || structured?.backgroundedByUser === true
+      || (
+        typeof structured?.timedOutAfterMs === "number"
+        && Number.isFinite(structured.timedOutAfterMs)
+        && structured.timedOutAfterMs >= 0
+      );
+    // Provider-authored intent already exists, so the label only has to supply
+    // an id and a line anchor is enough. Without it the label is the *only*
+    // claim that this happened at all, and it must be the whole result.
+    const labelId = providerIntent
+      ? backgroundTaskIdFromToolResultContent(result.content)
+      : exclusiveBackgroundTaskLabelId(result.content);
+    if (!providerIntent && labelId === undefined) {
+      outcomes.push({
+        toolUseId: result.toolUseId,
+        failed: false,
+        retainCandidate: false,
+      });
+      continue;
+    }
+    const id = persistedTaskIdentifier(structured?.backgroundTaskId) ?? labelId;
+    if (!id) {
+      outcomes.push({
+        toolUseId: result.toolUseId,
+        failed: false,
+        retainCandidate: true,
+      });
+      continue;
+    }
+    const description = persistedTaskText(toolArgs?.description)
+      ?? persistedTaskText(toolArgs?.command)
+      // `content` is the provider tool label ("Bash") and is the only title
+      // the Claude parsing path currently retains on a normalized invocation.
+      ?? persistedTaskText(tool?.content);
+    outcomes.push({
+      toolUseId: result.toolUseId,
+      failed: false,
+      retainCandidate: false,
+      launch: {
+        id,
+        toolUseId: result.toolUseId,
+        ...(description ? { description } : {}),
+      },
+    });
+  }
+  return outcomes;
 }
 
 function provisionalBackgroundTaskLaunchesFromAssistantMessage(
@@ -3706,6 +3776,16 @@ const LIVE_BACKGROUND_TASK_STATUSES = new Set<BackgroundTaskSnapshot["status"]>(
   "paused",
 ]);
 
+/**
+ * Track one unresolved Bash invocation, up to a bound.
+ *
+ * Past the bound the invocation is simply not tracked. Throwing here would
+ * propagate out of the message loop into the turn's error path, which marks
+ * the session failed *and* settles every live background task the query owned
+ * — destroying real work to protect a map of at most 128 short strings. Not
+ * tracking degrades to the pre-candidate behaviour for that one command: its
+ * stdin may close early, which is the smaller harm by a wide margin.
+ */
 function registerBackgroundTaskCandidate(
   session: SessionState,
   toolUseId: string,
@@ -3713,9 +3793,11 @@ function registerBackgroundTaskCandidate(
 ): void {
   const candidates = (session.backgroundTaskCandidates ??= new Map());
   if (!candidates.has(toolUseId) && candidates.size >= MAX_BACKGROUND_TASK_CANDIDATES) {
-    throw new Error(
-      `Claude emitted more than ${MAX_BACKGROUND_TASK_CANDIDATES} unresolved Bash calls in one session`,
+    console.warn(
+      "[session-manager] Ignoring an unresolved Bash call past the candidate bound:",
+      { sessionId: session.id, bound: MAX_BACKGROUND_TASK_CANDIDATES },
     );
+    return;
   }
   candidates.set(toolUseId, control);
 }
@@ -6038,7 +6120,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
               isBackgrounded: previous?.isBackgrounded ?? true,
               startedAt: previous?.startedAt ?? Date.now(),
             };
-            replacementControls.set(id, queryIterator);
+            // An id already owned by another live control keeps that owner:
+            // only the process that started a task can stop it, and a control
+            // asked to stop an id it never started answers `ok` without
+            // reaching anything. This query claims genuinely new ids only.
+            replacementControls.set(id, previousControls?.get(id) ?? queryIterator);
           }
           session.backgroundTasks = boundBackgroundTaskHistory(replacement);
           session.backgroundTaskControls =
@@ -6193,29 +6279,18 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         );
 
         const sdkUserMessage = message as SDKUserMessage;
-        const correlatedBashResults = correlatedBashToolResults(
-          sdkUserMessage,
-          toolTracker,
-        );
-        const backgroundLaunch = backgroundTaskLaunchFromSdkUserMessage(
-          sdkUserMessage,
-          toolTracker,
-        );
-        const backgroundIntentToolUseId = correlatedBackgroundTaskIntent(
-          sdkUserMessage,
-          toolTracker,
-        );
-        if (backgroundLaunch) {
-          recordBackgroundTaskLaunch(session, backgroundLaunch, queryIterator);
-        }
-        for (const result of correlatedBashResults) {
-          if (result.toolUseId === backgroundLaunch?.toolUseId) continue;
-          if (result.toolUseId === backgroundIntentToolUseId) continue;
-          takeBackgroundTaskCandidate(session, result.toolUseId);
-          const provisionalId = provisionalBackgroundTaskId(result.toolUseId);
+        let settledProvisionalTask = false;
+        for (const outcome of bashToolResultOutcomes(sdkUserMessage, toolTracker)) {
+          if (outcome.launch) {
+            recordBackgroundTaskLaunch(session, outcome.launch, queryIterator);
+            continue;
+          }
+          if (outcome.retainCandidate) continue;
+          takeBackgroundTaskCandidate(session, outcome.toolUseId);
+          const provisionalId = provisionalBackgroundTaskId(outcome.toolUseId);
           const provisional = session.backgroundTasks?.[provisionalId];
           if (
-            result.failed
+            outcome.failed
             && provisional
             && LIVE_BACKGROUND_TASK_STATUSES.has(provisional.status)
           ) {
@@ -6225,9 +6300,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
               "failed",
               "The Bash invocation failed before its background task was confirmed",
             );
-            emitBackgroundTaskSnapshot(session);
+            settledProvisionalTask = true;
           }
         }
+        if (settledProvisionalTask) emitBackgroundTaskSnapshot(session);
         finishTurnInputIfSettled();
 
         // Update active Task tracking - remove completed Tasks

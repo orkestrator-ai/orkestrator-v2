@@ -387,48 +387,56 @@ describe("Claude Agent SDK runtime compatibility", () => {
       expect(await malformed.exited).toBe(3);
       expect(malformedStderr).toBe("Malformed JSON input\n");
 
-      const failedChild = Bun.spawn([process.execPath, fixture], {
-        env: {
-          ...process.env,
-          CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile,
-          CLAUDE_SDK_BACKGROUND_CHILD_MODE: "fail",
-        },
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      failedChild.stdin.write(`${JSON.stringify({
-        type: "user",
-        session_id: "contract-background-failure-session",
-      })}\n`);
-      await failedChild.stdin.flush();
+      // A child that exits non-zero and one killed by a signal are different
+      // terminal shapes: the second reports a null exit code, so a fixture that
+      // only reads the code cannot describe what actually happened.
+      for (const [childMode, summary] of [
+        ["fail", "Contract task failed with exit code 17"],
+        ["signal", "Contract task failed with signal SIGKILL"],
+      ] as const) {
+        const failedChild = Bun.spawn([process.execPath, fixture], {
+          env: {
+            ...process.env,
+            CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile,
+            CLAUDE_SDK_BACKGROUND_CHILD_MODE: childMode,
+          },
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        failedChild.stdin.write(`${JSON.stringify({
+          type: "user",
+          session_id: `contract-background-${childMode}-session`,
+        })}\n`);
+        await failedChild.stdin.flush();
 
-      const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(failedChild.stdout).text(),
-        new Response(failedChild.stderr).text(),
-        failedChild.exited,
-      ]);
-      expect(exitCode, stderr).toBe(0);
-      const messages = stdout.trim().split("\n").map(
-        (line) => JSON.parse(line) as Record<string, unknown>,
-      );
-      expect(messages).toContainEqual(expect.objectContaining({
-        type: "system",
-        subtype: "task_notification",
-        task_id: "contract-background-task",
-        status: "failed",
-        summary: "Contract task failed with exit code 17",
-      }));
-      expect(messages.at(-1)).toMatchObject({
-        type: "system",
-        subtype: "background_tasks_changed",
-        tasks: [],
-      });
-      expect(await readFile(markerFile, "utf8").catch(() => null)).toBeNull();
+        const [stdout, stderr, exitCode] = await Promise.all([
+          new Response(failedChild.stdout).text(),
+          new Response(failedChild.stderr).text(),
+          failedChild.exited,
+        ]);
+        expect(exitCode, stderr).toBe(0);
+        const messages = stdout.trim().split("\n").map(
+          (line) => JSON.parse(line) as Record<string, unknown>,
+        );
+        expect(messages).toContainEqual(expect.objectContaining({
+          type: "system",
+          subtype: "task_notification",
+          task_id: "contract-background-task",
+          status: "failed",
+          summary,
+        }));
+        expect(messages.at(-1)).toMatchObject({
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [],
+        });
+        expect(await readFile(markerFile, "utf8").catch(() => null)).toBeNull();
+      }
     } finally {
       await rm(fixtureDir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, 20_000);
 
   test("contract fixture records one response and refuses to run unconfigured", async () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-fixture-"));

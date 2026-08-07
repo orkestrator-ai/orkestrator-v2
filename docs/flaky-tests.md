@@ -10,6 +10,17 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `standalone backend service > can own a Tailscale Serve listener and publish its HTTPS URL` (`apps/backend/tests/standalone.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-07
+- **Original command:** `bun run test` (workspace backend group: `bun test src tests --parallel=2`)
+- **Worker configuration:** Two Bun workers in the backend package while the web, web-public, protocol, root, and bridge groups ran concurrently
+- **Failure:** The test exceeded Bun's 5,000 ms timeout (reported duration 5,000.60 ms); Bun also reported an unhandled `Backend exited during startup:` error with empty stderr from `startBackend` and killed three dangling processes
+- **Suite counts:** Backend package: 1,519 tests, 1,518 passed, 1 failed, plus 1 between-test error
+- **Isolated rerun:** `bun test ./tests/standalone.test.ts` from `apps/backend` -> 8 passed, 0 failed; the target passed in 2,159.94 ms
+- **Hypothesis:** The timeout is load-sensitive: the owning file completed in 10.02 seconds and the affected startup/listener test completed well below its five-second budget in isolation, while the failure occurred with every aggregate group active. The empty startup stderr and dangling-process cleanup do not identify which child exited or why, so no narrower cause is claimed yet.
+
 ## `NativeAgentService > rotates fairly beyond the global live-session adoption cap` (`apps/backend/src/core/native-agent-service.test.ts`)
 
 - **Status:** resolved

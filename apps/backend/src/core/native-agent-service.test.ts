@@ -274,6 +274,34 @@ async function addEnvironment(
   });
 }
 
+async function seedLoopedReviewNativeSessions(
+  storage: StorageService,
+  count: number,
+  logicalSessionKeyForIndex: (index: number) => string,
+): Promise<void> {
+  const timestamp = new Date(0).toISOString();
+  const sessions = Object.fromEntries(Array.from({ length: count }, (_, index) => {
+    const logicalSessionKey = logicalSessionKeyForIndex(index);
+    const key = nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey);
+    return [key, {
+      version: 1,
+      key,
+      environmentId: "env-1",
+      agent: "codex",
+      logicalSessionKey,
+      providerSessionId: `provider-${index}`,
+      origin: "looped-review",
+      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }];
+  }));
+  await fs.writeFile(
+    path.join(storage.getDataDir(), "native-agent-sessions.json"),
+    `${JSON.stringify(sessions)}\n`,
+  );
+}
+
 /**
  * Run `body` with `console.warn` captured rather than printed.
  *
@@ -1206,30 +1234,14 @@ describe("NativeAgentService", () => {
         throw new Error("sync telemetry failure");
       },
     }, async ({ storage, service }) => {
-      const timestamp = new Date(0).toISOString();
-      const sessions = Object.fromEntries(Array.from({ length: 520 }, (_, index) => {
-        const logicalSessionKey = `looped-review:workflow:phase-${index}:Review`;
-        const key = nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey);
-        return [key, {
-          version: 1,
-          key,
-          environmentId: "env-1",
-          agent: "codex",
-          logicalSessionKey,
-          providerSessionId: `provider-${index}`,
-          origin: "looped-review",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        }];
-      }));
       // This test exercises the service's 512-request and 64-observation
       // bounds, not StorageService's per-record persistence path. Seeding the
       // valid durable snapshot once avoids 520 serialized rewrites of a growing
       // JSON file, which could exceed Bun's test timeout under aggregate load.
-      await fs.writeFile(
-        path.join(storage.getDataDir(), "native-agent-sessions.json"),
-        JSON.stringify(sessions),
+      await seedLoopedReviewNativeSessions(
+        storage,
+        520,
+        (index) => `looped-review:workflow:phase-${index}:Review`,
       );
       await service.reconcileAgentInteractions();
       expect(internals(service).trackedInteractions.size).toBe(64);
@@ -1644,18 +1656,15 @@ describe("NativeAgentService", () => {
       interactionMonitorMode: "observe-only",
       interactionMonitorMaxSessionsPerEnvironment: 2_000,
     }, async ({ storage, service }) => {
-      for (let index = 0; index < 1_025; index += 1) {
-        const logicalSessionKey = `looped-review:workflow:global-${index}:Review`;
-        await storage.adoptNativeAgentSession({
-          key: nativeAgentSessionStorageKey("env-1", "codex", logicalSessionKey),
-          environmentId: "env-1",
-          agent: "codex",
-          logicalSessionKey,
-          providerSessionId: `provider-${index}`,
-          origin: "looped-review",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        });
-      }
+      // Rotation, not the storage mutation path, is under test. Writing the
+      // equivalent valid snapshot once avoids 1,025 serialized rewrites of a
+      // growing JSON file and keeps aggregate load outside the assertion's
+      // five-second timeout budget.
+      await seedLoopedReviewNativeSessions(
+        storage,
+        1_025,
+        (index) => `looped-review:workflow:global-${index}:Review`,
+      );
       await service.reconcileAgentInteractions();
       expect(visited.has("provider-1024")).toBe(false);
       await service.reconcileAgentInteractions();

@@ -175,6 +175,118 @@ function assertPaneLayoutGeneration(
   }
 }
 
+type MutablePaneLayoutLeaf = {
+  kind: "leaf";
+  id: string;
+  tabs: Array<Record<string, unknown>>;
+  activeTabId: string | null;
+};
+
+function paneLayoutLeaves(root: unknown): MutablePaneLayoutLeaf[] {
+  const leaves: MutablePaneLayoutLeaf[] = [];
+  const visit = (node: unknown): void => {
+    if (!isRecord(node)) return;
+    if (
+      node.kind === "leaf"
+      && typeof node.id === "string"
+      && Array.isArray(node.tabs)
+      && node.tabs.every(isRecord)
+      && (node.activeTabId === null || typeof node.activeTabId === "string")
+    ) {
+      leaves.push(node as MutablePaneLayoutLeaf);
+      return;
+    }
+    if (node.kind === "split" && Array.isArray(node.children)) {
+      for (const child of node.children) visit(child);
+    }
+  };
+  visit(root);
+  return leaves;
+}
+
+/**
+ * Drops a setup tab that was first introduced after setup had already finished.
+ *
+ * The renderer adds and selects its setup tab in one optimistic mutation. A
+ * very short setup can finish before that mutation reaches the backend, after
+ * which the pipeline selects the build tab. Letting the stale mutation rebase
+ * normally would add the obsolete setup tab and let its explicit focus intent
+ * override the newer backend-owned build selection. Tabs that were already
+ * durable remain available so the user can inspect and select completed setup
+ * output later.
+ */
+function suppressLateSetupTabAdditions(
+  layout: PaneLayoutMergeInput,
+  previous: PersistedPaneLayout | undefined,
+): PaneLayoutMergeInput {
+  const previousLeaves = paneLayoutLeaves(previous?.root);
+  const durableSetupTabIds = new Set(
+    previousLeaves.flatMap((leaf) => leaf.tabs.flatMap((tab) =>
+      tab.isSetupTab === true && typeof tab.id === "string" ? [tab.id] : []
+    )),
+  );
+  const root = JSON.parse(JSON.stringify(layout.root)) as PaneLayoutMergeInput["root"];
+  const nextLeaves = paneLayoutLeaves(root);
+  const previousLeavesById = new Map(previousLeaves.map((leaf) => [leaf.id, leaf]));
+  const previousTabsById = new Map(
+    previousLeaves.flatMap((leaf) => leaf.tabs.flatMap((tab) =>
+      typeof tab.id === "string" ? [[tab.id, tab] as const] : []
+    )),
+  );
+  let removedAny = false;
+  let removedGlobalFocus = false;
+
+  for (const leaf of nextLeaves) {
+    const removedIds = new Set(
+      leaf.tabs.flatMap((tab) =>
+        tab.isSetupTab === true
+          && typeof tab.id === "string"
+          && !durableSetupTabIds.has(tab.id)
+          ? [tab.id]
+          : []
+      ),
+    );
+    if (removedIds.size === 0) continue;
+    removedAny = true;
+    const removedActiveTab = leaf.activeTabId !== null && removedIds.has(leaf.activeTabId);
+    leaf.tabs = leaf.tabs.flatMap((tab) => {
+      if (typeof tab.id !== "string" || !removedIds.has(tab.id)) return [tab];
+      const previousTab = previousTabsById.get(tab.id);
+      return previousTab ? [JSON.parse(JSON.stringify(previousTab)) as Record<string, unknown>] : [];
+    });
+    if (!removedActiveTab) continue;
+
+    removedGlobalFocus ||= layout.activePaneId === leaf.id;
+    const remainingIds = new Set(
+      leaf.tabs.flatMap((tab) => typeof tab.id === "string" ? [tab.id] : []),
+    );
+    const previousActiveTabId = previousLeavesById.get(leaf.id)?.activeTabId;
+    const buildTabId = leaf.tabs.find((tab) =>
+      tab.type === "claude-build" && typeof tab.id === "string"
+    )?.id;
+    const firstTabId = leaf.tabs.find((tab) => typeof tab.id === "string")?.id;
+    leaf.activeTabId = previousActiveTabId && remainingIds.has(previousActiveTabId)
+      ? previousActiveTabId
+      : typeof buildTabId === "string"
+        ? buildTabId
+        : typeof firstTabId === "string"
+          ? firstTabId
+          : null;
+  }
+
+  if (!removedAny) return layout;
+  const remainingPaneIds = new Set(nextLeaves.map((leaf) => leaf.id));
+  return {
+    ...layout,
+    root,
+    activePaneId: removedGlobalFocus
+        && previous
+        && remainingPaneIds.has(previous.activePaneId)
+      ? previous.activePaneId
+      : layout.activePaneId,
+  };
+}
+
 export type KanbanTask = {
   id: string;
   projectId: string;
@@ -3715,7 +3827,7 @@ export class StorageService {
       const sameGeneration = previous
         && previous.version === desired.version
         && previous.containerId === desired.containerId;
-      const next = sameGeneration
+      let next = sameGeneration
         ? mergePersistedPaneLayouts(
             base,
             desired,
@@ -3728,6 +3840,13 @@ export class StorageService {
             { selectionIntent },
           )
         : desired;
+      if (
+        environment.setupPhase === "ready"
+        || environment.setupScriptsComplete === true
+        || environment.setupOverride === true
+      ) {
+        next = suppressLateSetupTabAdditions(next, previous);
+      }
       assertPaneLayoutRootWithinBounds(next.root);
       const saved: PersistedPaneLayout = {
         ...next,

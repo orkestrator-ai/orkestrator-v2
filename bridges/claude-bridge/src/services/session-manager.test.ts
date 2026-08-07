@@ -1451,6 +1451,40 @@ describe("session lifecycle", () => {
 // ---------------------------------------------------------------------------
 
 describe("sendPrompt", () => {
+  test("passes the current managed GitHub credential only to the SDK query", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-query-github-env-"));
+    const credentialFile = join(directory, "github-token");
+    const credentialFileEnv = "ORKESTRATOR_GITHUB_CREDENTIAL_FILE";
+    const originalCredentialFile = process.env[credentialFileEnv];
+    const originalGitHubToken = process.env.GITHUB_TOKEN;
+    const originalGhToken = process.env.GH_TOKEN;
+    process.env[credentialFileEnv] = credentialFile;
+    process.env.GITHUB_TOKEN = "stale-bridge-token";
+    process.env.GH_TOKEN = "stale-bridge-token";
+
+    try {
+      await writeFile(credentialFile, "managed-query-token");
+      const { call } = await runPromptWithMessages([
+        { type: "result", subtype: "success" },
+      ]);
+
+      expect(call.options.env).toMatchObject({
+        GITHUB_TOKEN: "managed-query-token",
+        GH_TOKEN: "managed-query-token",
+      });
+      expect(process.env.GITHUB_TOKEN).toBe("stale-bridge-token");
+      expect(process.env.GH_TOKEN).toBe("stale-bridge-token");
+    } finally {
+      if (originalCredentialFile === undefined) delete process.env[credentialFileEnv];
+      else process.env[credentialFileEnv] = originalCredentialFile;
+      if (originalGitHubToken === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = originalGitHubToken;
+      if (originalGhToken === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = originalGhToken;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("happy path: appends user + assistant message, captures sdkSessionId, ends idle", async () => {
     const session = createSession("happy");
     track(session.id);

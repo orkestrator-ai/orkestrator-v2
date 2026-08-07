@@ -11,7 +11,10 @@ import { execFile as execFileCallback } from "node:child_process";
 import { basename, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import type { Input, UserInput } from "../codex-item-types.js";
-import { refreshRuntimeEnvironment } from "../runtime-env.js";
+import {
+  refreshRuntimeEnvironment,
+  runtimeEnvironmentWithoutCredentials,
+} from "../runtime-env.js";
 import { getCodexHomeDir } from "../history/rollout.js";
 import type { PromptAttachmentInput } from "../sessions/thread-registry.js";
 
@@ -238,7 +241,10 @@ export async function runInlinePromptCommand(command: string, cwd: string): Prom
     await refreshRuntimeEnvironment();
     const { stdout, stderr } = await execFile(shell, ["-c", command], {
       cwd,
-      env: process.env,
+      // Repository-defined prompt templates execute outside app-server's
+      // sandbox and approval flow. They need the refreshed tool PATH, but never
+      // the managed GitHub identity reserved for the app-server generation.
+      env: runtimeEnvironmentWithoutCredentials(),
       maxBuffer: 2 * 1024 * 1024,
     });
     const output = stdout.trimEnd() || stderr.trimEnd();

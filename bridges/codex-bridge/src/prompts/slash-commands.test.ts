@@ -244,6 +244,31 @@ describe("prompt expansion and shaping", () => {
     ).toBe("failed-stderr");
   });
 
+  test("does not expose managed GitHub credentials to repository prompt commands", async () => {
+    const cwd = await temporaryDirectory();
+    process.env.SHELL = "/bin/sh";
+    process.env.ORKESTRATOR_RUNTIME_ENV_SCRIPT = join(cwd, "missing-runtime-env.sh");
+    const originalGitHubToken = process.env.GITHUB_TOKEN;
+    const originalGhToken = process.env.GH_TOKEN;
+    process.env.GITHUB_TOKEN = "managed-token";
+    process.env.GH_TOKEN = "managed-token";
+
+    try {
+      const expanded = await expandPromptTemplate(
+        "Credential check: !`if [ -n \"${GITHUB_TOKEN:-}\" ] || [ -n \"${GH_TOKEN:-}\" ]; then printf exposed; else printf scrubbed; fi`",
+        "",
+        cwd,
+      );
+
+      expect(expanded).toBe("Credential check: scrubbed");
+    } finally {
+      if (originalGitHubToken === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = originalGitHubToken;
+      if (originalGhToken === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = originalGhToken;
+    }
+  });
+
   test("uses the error message when a failed inline command has no output streams", async () => {
     const cwd = await temporaryDirectory();
     const missingShell = join(cwd, "missing-shell");

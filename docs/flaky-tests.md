@@ -108,9 +108,9 @@ history rather than two partial ones.
 - **Status:** open
 - **Date observed:** 2026-08-06; recurred 2026-08-07
 - **Original command:** `bun run test` (workspace backend group, `bun test src tests --parallel=2`)
-- **Suite counts:** First observation: 1,409 backend tests, 1 failed; 2026-08-07 recurrences: 1,498 total with 1,497 passed and 1 failed, then 1,498 total with 1,496 passed and 2 failed, while the root, bridge, and protocol groups ran concurrently
-- **Failure:** `expect(received).not.toHaveLength(expected)` because no `PR_MONITOR_CHANGED_EVENT` had been announced; failed durations 380.34 ms and 371.41 ms
-- **Isolated rerun:** `bun test --cwd apps/backend src/core/pr-monitor-agent-completion.integration.test.ts` -> 3 passed, 0 failed in 803 ms after the first observation; `bun test src/core/pr-monitor-agent-completion.integration.test.ts` from `apps/backend` -> 3 passed, 0 failed in 807 ms and 835 ms after the recurrences
+- **Suite counts:** First observation: 1,409 backend tests, 1 failed; 2026-08-07 recurrences: three runs with 1,498 total, 1,497 passed and 1 failed, and one run with 1,498 total, 1,496 passed and 2 failed, while the root, bridge, and protocol groups ran concurrently
+- **Failure:** `expect(received).not.toHaveLength(expected)` because no `PR_MONITOR_CHANGED_EVENT` had been announced; failed durations 380.34 ms, 371.41 ms, 379.76 ms, and 298.54 ms
+- **Isolated rerun:** `bun test --cwd apps/backend src/core/pr-monitor-agent-completion.integration.test.ts` -> 3 passed, 0 failed in 803 ms after the first observation; `bun test src/core/pr-monitor-agent-completion.integration.test.ts` from `apps/backend` -> 3 passed, 0 failed in 807 ms, 835 ms, 494 ms, and 784 ms after the recurrences (latest target duration: 200.85 ms)
 - **Hypothesis:** This and the preceding PR-polling test failed in separate aggregate runs but not together. Both wait on an announced PR-monitor event, so the shared hypothesis is that the event can miss the assertion window under aggregate load; no narrower root cause has been reproduced.
 
 ## `bridge readiness command > keeps retryable local startup races inside the durable wait` (`apps/backend/src/core/commands-state-sync.test.ts:295`)

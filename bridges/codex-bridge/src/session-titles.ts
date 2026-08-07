@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runtimeEnvironmentWithoutCredentials } from "./runtime-env.js";
 
 export const SESSION_TITLE_MODEL = "gpt-5.6-luna";
 export const SESSION_TITLE_REASONING_EFFORT = "low";
@@ -269,12 +270,9 @@ async function runCodexTitleCommand(
     // This hermetic helper cannot execute project tools and does not need the
     // developer's GitHub identity. Keep the managed credential scoped to the
     // real app-server generation that serves user sessions.
-    const environment = { ...process.env };
-    delete environment.GITHUB_TOKEN;
-    delete environment.GH_TOKEN;
     const child = spawn(codexPath, args, {
       detached: process.platform !== "win32",
-      env: environment,
+      env: runtimeEnvironmentWithoutCredentials(),
       stdio: ["pipe", "pipe", "pipe"],
     });
     const stdoutChunks: Buffer[] = [];

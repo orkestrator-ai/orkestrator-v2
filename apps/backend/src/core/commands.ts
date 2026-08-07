@@ -335,6 +335,47 @@ const CONTAINER_INTERACTIVE_SHELL_COMMAND = [
   "orkestrator_source_runtime_env 2>/dev/null || true",
   "exec zsh -l",
 ].join("\n");
+const CONTAINER_GITHUB_CREDENTIAL_FILE = "/tmp/orkestrator-ai/github-token";
+const CLAUDE_GITHUB_CREDENTIAL_FILE_ENV = "ORKESTRATOR_GITHUB_CREDENTIAL_FILE";
+const CLAUDE_GITHUB_ENV_FINGERPRINT_FILE =
+  "/tmp/orkestrator-ai/claude-github-env-fingerprint";
+const CLAUDE_GITHUB_ENV_FINGERPRINT = createHash("sha256")
+  .update("managed-github-query-environment-v1")
+  .digest("hex");
+const OPENCODE_GITHUB_ENV_PLUGIN_PATH = "/home/node/.config/opencode/plugins/orkestrator-github-env.js";
+const OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE =
+  "/tmp/orkestrator-ai/opencode-github-env-plugin-fingerprint";
+
+function buildOpenCodeGitHubEnvironmentPluginSource(
+  credentialFile = CONTAINER_GITHUB_CREDENTIAL_FILE,
+): string {
+  return `import { readFile } from "node:fs/promises";
+
+const credentialFile = ${JSON.stringify(credentialFile)};
+
+export const OrkestratorGitHubEnvironmentPlugin = async () => ({
+  "shell.env": async (_input, output) => {
+    let token = "";
+    try {
+      token = (await readFile(credentialFile, "utf8")).trim();
+    } catch {
+      // Missing or unreadable managed state means no GitHub identity.
+    }
+    if (token) {
+      output.env.GITHUB_TOKEN = token;
+      output.env.GH_TOKEN = token;
+    }
+  },
+});
+`;
+}
+
+const OPENCODE_GITHUB_ENV_PLUGIN_SOURCE =
+  buildOpenCodeGitHubEnvironmentPluginSource();
+const OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT = createHash("sha256")
+  .update(OPENCODE_GITHUB_ENV_PLUGIN_SOURCE)
+  .digest("hex");
+
 function withContainerRuntimeCredential(command: string): string {
   return [
     "source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true",
@@ -7186,16 +7227,21 @@ async function readLocalFileAtBranch(worktreePath: string, filePath: string, bra
 }
 
 function buildSyncContainerGitHubCredentialCommand(
-  credentialFile = "/tmp/orkestrator-ai/github-token",
+  credentialFile = CONTAINER_GITHUB_CREDENTIAL_FILE,
 ): string {
   return `
   set -e
   credential_file=${quoteShell(credentialFile)}
   credential_dir="$(dirname "$credential_file")"
-  mkdir -p "$credential_dir"
   umask 077
-  cat > "$credential_file"
-  chmod 600 "$credential_file"
+  mkdir -p "$credential_dir"
+  credential_tmp="$(mktemp "$credential_dir/.github-token.XXXXXX")"
+  trap 'rm -f "$credential_tmp"' EXIT
+  cat > "$credential_tmp"
+  chmod 600 "$credential_tmp"
+  mv -f "$credential_tmp" "$credential_file"
+  credential_tmp=
+  trap - EXIT
 
   git config --global --list 2>/dev/null |
     grep '^url\\.https://x-access-token:' |
@@ -7414,10 +7460,19 @@ async function startContainerOpenCodeServer(
     ).trim();
     return BRIDGE_TOKEN_PATTERN.test(password) ? password : null;
   };
+  const hasCurrentGitHubEnvironmentPlugin = async (): Promise<boolean> => {
+    const fingerprint = (
+      await dockerExec(
+        containerId,
+        `cat ${OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE} 2>/dev/null || true`,
+      )
+    ).trim();
+    return fingerprint === OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT;
+  };
   const replaceRunningServer = async (): Promise<void> => {
     await dockerExec(
       containerId,
-      "pkill -f '[o]pencode serve' || true; rm -f /tmp/opencode-server-password",
+      `pkill -f '[o]pencode serve' || true; rm -f /tmp/opencode-server-password ${OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE}`,
     );
     await waitForHttpServerExit(hostPort);
   };
@@ -7430,6 +7485,7 @@ async function startContainerOpenCodeServer(
       "/global/health",
       openCodeHealthHeaders(persistedPassword),
     )
+    && await hasCurrentGitHubEnvironmentPlugin()
   ) {
     return { hostPort, wasRunning: true, authToken: persistedPassword };
   }
@@ -7443,9 +7499,14 @@ async function startContainerOpenCodeServer(
 
   const authToken = randomBytes(32).toString("base64url");
   await dockerExecDetached(containerId, `
+    set -e
     cd /workspace
     rm -f /tmp/opencode-serve.log
     umask 077
+    mkdir -p /home/node/.config/opencode/plugins /tmp/orkestrator-ai
+    printf '%s' ${quoteShell(OPENCODE_GITHUB_ENV_PLUGIN_SOURCE)} > ${OPENCODE_GITHUB_ENV_PLUGIN_PATH}
+    chmod 600 ${OPENCODE_GITHUB_ENV_PLUGIN_PATH}
+    printf '%s' ${quoteShell(OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT)} > ${OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE}
     printf '%s' ${quoteShell(authToken)} > /tmp/opencode-server-password
     source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
     orkestrator_source_runtime_env 2>/dev/null || true
@@ -7503,8 +7564,20 @@ async function startContainerClaudeServer(
     ).trim();
     return persisted === expectedAgentToolsFingerprint;
   };
+  const hasCurrentGitHubEnvironment = async (): Promise<boolean> => {
+    const persisted = (
+      await dockerExec(
+        containerId,
+        `cat ${CLAUDE_GITHUB_ENV_FINGERPRINT_FILE} 2>/dev/null || true`,
+      )
+    ).trim();
+    return persisted === CLAUDE_GITHUB_ENV_FINGERPRINT;
+  };
   const replaceRunningBridge = async (port: number): Promise<void> => {
-    await dockerExec(containerId, "pkill -f '[c]laude-bridge/dist/index.js' || true");
+    await dockerExec(
+      containerId,
+      `pkill -f '[c]laude-bridge/dist/index.js' || true; rm -f ${CLAUDE_GITHUB_ENV_FINGERPRINT_FILE}`,
+    );
     await waitForUnhealthy(port);
   };
   const startWithFreshToken = async (): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> => {
@@ -7513,12 +7586,15 @@ async function startContainerClaudeServer(
       cd /workspace
       rm -f /tmp/claude-bridge.log
       umask 077
+      mkdir -p /tmp/orkestrator-ai
       printf '%s' ${quoteShell(authToken)} > /tmp/claude-bridge-token
+      printf '%s' ${quoteShell(CLAUDE_GITHUB_ENV_FINGERPRINT)} > ${CLAUDE_GITHUB_ENV_FINGERPRINT_FILE}
       ${expectedAgentToolsFingerprint
         ? `printf '%s' ${quoteShell(expectedAgentToolsFingerprint)} > /tmp/claude-agent-tools-fingerprint`
         : "rm -f /tmp/claude-agent-tools-fingerprint"}
       source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
       orkestrator_source_runtime_env 2>/dev/null || true
+      export ${CLAUDE_GITHUB_CREDENTIAL_FILE_ENV}=${quoteShell(CONTAINER_GITHUB_CREDENTIAL_FILE)}
       unset GITHUB_TOKEN GH_TOKEN
       export PORT=${CLAUDE_BRIDGE_PORT}
       export HOSTNAME=0.0.0.0
@@ -7546,6 +7622,7 @@ async function startContainerClaudeServer(
     if (
       persistedToken
       && await hasCurrentAgentTools()
+      && await hasCurrentGitHubEnvironment()
       && await checkHttpHealth(
         hostPort,
         "/global/auth-check",
@@ -7569,6 +7646,7 @@ async function startContainerClaudeServer(
   if (
     persistedToken
     && await hasCurrentAgentTools()
+    && await hasCurrentGitHubEnvironment()
     && await checkHttpHealth(
       started.hostPort,
       "/global/auth-check",
@@ -12125,6 +12203,9 @@ export const __testing = {
   buildContainerGitStatusScript,
   parseHeadCommit,
   buildSyncContainerGitHubCredentialCommand,
+  buildOpenCodeGitHubEnvironmentPluginSource,
+  OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
+  CLAUDE_GITHUB_ENV_FINGERPRINT,
   countLocalFileLines,
   establishCreatedFromCommit,
   completeEnvironmentSetup,

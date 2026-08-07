@@ -157,3 +157,14 @@ export function runtimeEnvironmentSnapshot(
 ): NodeJS.ProcessEnv {
   return { ...env };
 }
+
+/** A child environment for bridge helpers that must not receive managed credentials. */
+export function runtimeEnvironmentWithoutCredentials(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const snapshot = runtimeEnvironmentSnapshot(env);
+  for (const name of RUNTIME_ENV_CREDENTIAL_VARIABLES) {
+    delete snapshot[name];
+  }
+  return snapshot;
+}

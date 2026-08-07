@@ -280,9 +280,12 @@ export function useBuildPipeline() {
       issue: LinearIssueDetail,
       projectId: string,
       environmentType: EnvironmentType,
+      options: StartBuildOptions = {},
     ) => startBuildFromTicket(
       linearIssueToTicketInput(issue, projectId),
       environmentType,
+      undefined,
+      options,
     ),
     startBuildFromGitHubIssue: (
       issue: GitHubIssueBuildInput,

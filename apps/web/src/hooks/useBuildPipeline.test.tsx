@@ -439,18 +439,23 @@ describe("useBuildPipeline", () => {
     expect(startInput().agentType).toBe("codex");
   });
 
-  test("the Linear entry point takes neither an override nor step configuration", async () => {
+  test("the Linear entry point carries per-step launcher configuration", async () => {
     const { result } = renderHook(() => useBuildPipeline());
 
-    // Locked in deliberately: Linear builds have no launcher in front of them,
-    // so they resolve their harness from config alone.
+    // The defaulted fourth argument preserves the existing three-argument API
+    // shape while allowing the Linear launcher to configure every stage.
     expect(result.current.startBuildFromLinearIssue.length).toBe(3);
     await act(async () => {
-      await result.current.startBuildFromLinearIssue(linearIssue, "project-1", "local");
+      await result.current.startBuildFromLinearIssue(
+        linearIssue,
+        "project-1",
+        "local",
+        { steps },
+      );
     });
 
-    expect(startInput().steps).toBeUndefined();
-    expect(startInput().agentType).toBe("claude");
+    expect(startInput().steps).toEqual(steps);
+    expect(startInput().agentType).toBe("codex");
   });
 
   test("announces the start and names the reason a start failed", async () => {

@@ -106,12 +106,23 @@ history rather than two partial ones.
 ## `an ended agent turn discovers a pull request the agent created itself` (`apps/backend/src/core/pr-monitor-agent-completion.integration.test.ts:203`)
 
 - **Status:** open
-- **Date observed:** 2026-08-06
-- **Original command:** `bun run test` (workspace backend group)
-- **Suite counts:** 1,409 backend tests, 1 failed; every other group passed
-- **Failure:** `expect(received).not.toHaveLength(expected)` because no `PR_MONITOR_CHANGED_EVENT` had been announced; failed duration 380.34 ms
-- **Isolated rerun:** `bun test --cwd apps/backend src/core/pr-monitor-agent-completion.integration.test.ts` -> 3 passed, 0 failed in 803 ms
+- **Date observed:** 2026-08-06; recurred 2026-08-07
+- **Original command:** `bun run test` (workspace backend group, `bun test src tests --parallel=2`)
+- **Suite counts:** First observation: 1,409 backend tests, 1 failed; 2026-08-07 recurrences: 1,498 total with 1,497 passed and 1 failed, then 1,498 total with 1,496 passed and 2 failed, while the root, bridge, and protocol groups ran concurrently
+- **Failure:** `expect(received).not.toHaveLength(expected)` because no `PR_MONITOR_CHANGED_EVENT` had been announced; failed durations 380.34 ms and 371.41 ms
+- **Isolated rerun:** `bun test --cwd apps/backend src/core/pr-monitor-agent-completion.integration.test.ts` -> 3 passed, 0 failed in 803 ms after the first observation; `bun test src/core/pr-monitor-agent-completion.integration.test.ts` from `apps/backend` -> 3 passed, 0 failed in 807 ms and 835 ms after the recurrences
 - **Hypothesis:** This and the preceding PR-polling test failed in separate aggregate runs but not together. Both wait on an announced PR-monitor event, so the shared hypothesis is that the event can miss the assertion window under aggregate load; no narrower root cause has been reproduced.
+
+## `bridge readiness command > keeps retryable local startup races inside the durable wait` (`apps/backend/src/core/commands-state-sync.test.ts:295`)
+
+- **Status:** open
+- **Date observed:** 2026-08-07
+- **Original command:** `bun run test` (workspace backend group, `bun test src tests --parallel=2`)
+- **Worker configuration:** Two Bun workers in the backend package while the root, bridge, and protocol groups ran concurrently
+- **Suite counts:** 1,498 backend tests, 1,496 passed, 2 failed; the other failure was the independently tracked PR-monitor flake above
+- **Failure:** Expected the caller-deadline timeout with `retryAfterMs: 1000`, but received the environment-startup-deadline timeout with `retryAfterMs: 500`; failed duration 1001.78 ms
+- **Isolated rerun:** `bun test src/core/commands-state-sync.test.ts` from `apps/backend` -> 93 passed, 0 failed with 432 assertions in 8.40 s; the target passed in 1006.90 ms
+- **Hypothesis:** The shared readiness probe and the per-caller timeout are both scheduled from the same 1,000 ms deadline. Under aggregate scheduling the shared probe's retry loop can settle first and expose its environment-startup timeout; in isolation the caller timer settles first and returns the contract asserted by the test. This ordering race is visible in the two deadline paths in `await_bridge_ready`, but no production fix was attempted in this unrelated review change.
 
 ## `container runtime environment wiring > Codex configuration copy helpers reject destination root, parent, and file symlinks` (`tests/unit/runtime-env-wiring.test.ts`)
 

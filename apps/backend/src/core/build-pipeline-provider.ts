@@ -135,7 +135,10 @@ function tryParseJson(candidate: string): unknown {
  * Extract the well-formed JSON document that begins at `start` in `text`, if
  * one exists, by tracking bracket balance outside of string literals.
  */
-function parseJsonDocumentAt(text: string, start: number): unknown {
+function parseJsonDocumentAt(
+  text: string,
+  start: number,
+): { value: unknown; end: number } | undefined {
   const open = text[start];
   if (open !== "{" && open !== "[") return undefined;
   const close = open === "{" ? "}" : "]";
@@ -161,7 +164,8 @@ function parseJsonDocumentAt(text: string, start: number): unknown {
     } else if (ch === close) {
       depth -= 1;
       if (depth === 0) {
-        return tryParseJson(text.slice(start, i + 1));
+        const value = tryParseJson(text.slice(start, i + 1));
+        return value === undefined ? undefined : { value, end: i };
       }
     }
   }
@@ -170,22 +174,28 @@ function parseJsonDocumentAt(text: string, start: number): unknown {
 
 /**
  * Last-resort recovery for a model that wrapped the required JSON document in
- * prose (a lead-in sentence or a trailing summary). Scans backwards so the
- * last well-formed document wins, and only balanced `{...}`/`[...]` documents
- * are accepted — arbitrary prose is never interpreted as JSON.
+ * prose (a lead-in sentence or a trailing summary). Successful outer documents
+ * are skipped as whole spans so their nested objects and arrays cannot replace
+ * them. The last well-formed outer document wins, and arbitrary prose is never
+ * interpreted as JSON.
  */
 function lastWellFormedJson(text: string): unknown {
   const scanned = text.slice(0, OPEN_CODE_STRUCTURED_RECOVERY_CHARS);
-  let candidates = 0;
-  for (let i = scanned.length - 1; i >= 0; i--) {
+  let failedCandidates = 0;
+  let recovered: unknown;
+  for (let i = 0; i < scanned.length; i++) {
     const ch = scanned[i];
     if (ch !== "{" && ch !== "[") continue;
     const parsed = parseJsonDocumentAt(scanned, i);
-    if (parsed !== undefined) return parsed;
-    candidates += 1;
-    if (candidates >= OPEN_CODE_STRUCTURED_RECOVERY_CANDIDATES) break;
+    if (parsed !== undefined) {
+      recovered = parsed.value;
+      i = parsed.end;
+      continue;
+    }
+    failedCandidates += 1;
+    if (failedCandidates >= OPEN_CODE_STRUCTURED_RECOVERY_CANDIDATES) break;
   }
-  return undefined;
+  return recovered;
 }
 
 function parseOpenCodeStructuredText(parts: unknown): unknown {

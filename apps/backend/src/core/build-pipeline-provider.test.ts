@@ -3947,6 +3947,32 @@ describe("OpenCode build pipeline provider", () => {
       await expect(provider.structured("owned-session", "request-1")).resolves
         .toMatchObject({ ok: true, value: { complete: true } });
 
+      // Nested values belong to the outer schema result and must not replace it
+      // merely because their opening delimiter occurs later in the response.
+      fake.setMessagesResponse(reply(
+        'Result: {"complete":true,"commandsRun":[{"command":"bun test","result":"passed"}]} Done.',
+      ));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({
+          ok: true,
+          value: {
+            complete: true,
+            commandsRun: [{ command: "bun test", result: "passed" }],
+          },
+        });
+
+      fake.setMessagesResponse(reply(
+        'Candidates: [{"id":1,"metadata":{"selected":false}},{"id":2}] Done.',
+      ));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({
+          ok: true,
+          value: [
+            { id: 1, metadata: { selected: false } },
+            { id: 2 },
+          ],
+        });
+
       // A multiline document inside a fence, and a fence without the trailing
       // newline before the closing backticks, are still recovered.
       fake.setMessagesResponse(reply('```json\n{\n  "complete": false\n}\n```'));

@@ -71,7 +71,9 @@ describe("build pipeline prompts", () => {
     value.taskSnapshot.description = "First line.\nSecond line.";
     value.taskSnapshot.comments = [
       { text: "Check reconnects." },
-      { text: "Keep background work alive.\nCover the return path." },
+      {
+        text: "Keep background work alive.\n\nCover the return path.\nPreserve its state.",
+      },
     ];
     value.taskSnapshot.images = [
       { filename: "before state.png", data: "redacted" },
@@ -81,7 +83,14 @@ describe("build pipeline prompts", () => {
     const prompt = buildPrompt(value, "");
     expect(prompt).toContain("**Description**: First line.\nSecond line.");
     expect(prompt).toContain(
-      "**Comments**:\n1. Check reconnects.\n2. Keep background work alive.\nCover the return path.",
+      [
+        "**Comments**:",
+        "1. Check reconnects.",
+        "2. Keep background work alive.",
+        "   ",
+        "   Cover the return path.",
+        "   Preserve its state.",
+      ].join("\n"),
     );
     expect(prompt).toContain(
       "**Attached Images**: before state.png, after-state.webp",

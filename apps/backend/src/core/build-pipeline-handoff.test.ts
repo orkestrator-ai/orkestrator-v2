@@ -72,7 +72,7 @@ describe("build review handoff", () => {
     expect(prompt.match(/<\/orkestrator-handoff>/g)).toHaveLength(1);
   });
 
-  test("retains the newest review messages within the handoff budget", () => {
+  test("retains the initiating context and newest review state within the budget", () => {
     const messages = Array.from({ length: 30 }, (_, index) => ({
       id: `message-${index}`,
       role: "assistant",
@@ -87,7 +87,27 @@ describe("build review handoff", () => {
 
     expect(prompt.length).toBeLessThanOrEqual(BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET);
     expect(prompt).toContain("29:");
-    expect(prompt).not.toContain('"sourceId": "message-0"');
-    expect(prompt).toMatch(/older review messages were omitted/);
+    expect(prompt).toContain('"sourceId": "message-0"');
+    expect(prompt).not.toContain('"sourceId": "message-1"');
+    expect(prompt).toMatch(/review messages were omitted/);
+  });
+
+  test("accounts for nested JSON overhead across many short records", () => {
+    const messages = Array.from({ length: 2_000 }, (_, index) => ({
+      id: `message-${index}`,
+      role: index === 0 ? "user" : "assistant",
+      content: `${index}:${"x".repeat(20)}`,
+    }));
+    const prompt = buildReviewHandoffPrompt({
+      environmentId: "env-1",
+      sourceAgent: "codex",
+      destinationAgent: "claude",
+      sourceSession: session(messages),
+    });
+
+    expect(prompt.length).toBeLessThanOrEqual(BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET);
+    expect(prompt).toContain('"sourceId": "message-0"');
+    expect(prompt).toContain('"sourceId": "message-1999"');
+    expect(prompt).toMatch(/review messages were omitted/);
   });
 });

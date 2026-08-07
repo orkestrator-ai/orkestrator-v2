@@ -9,6 +9,8 @@ export const BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET = 180_000;
 const MESSAGE_STRING_LIMIT = 16_000;
 const MESSAGE_BODY_LIMIT = 32_000;
 const OMISSION_NOTICE_RESERVE = 128;
+/** `"[\n"` plus `"\n]"` around a non-empty pretty-printed JSON array. */
+const TRANSCRIPT_ARRAY_FRAME_OVERHEAD = 4;
 const TRANSCRIPT_OPEN = "<orkestrator-handoff-transcript-json>";
 const TRANSCRIPT_CLOSE = "</orkestrator-handoff-transcript-json>";
 
@@ -106,11 +108,62 @@ function messageCreatedAt(
 }
 
 /** JSON frames cannot synthesize the handoff's structural XML-like tags. */
-function carrierJson(value: unknown): string {
+export function promptCarrierJson(value: unknown): string {
   return JSON.stringify(value, null, 2).replace(
     /[<>&\u2028\u2029]/g,
     (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
+}
+
+/**
+ * Cost of a record inside the pretty-printed transcript array.
+ *
+ * Serializing a record by itself misses the extra indent on every line plus
+ * the separator between array entries. This upper bound charges the separator
+ * to every record, including the last, so the emitted array cannot overrun the
+ * prompt budget even when it contains hundreds of short messages.
+ */
+function nestedRecordCost(record: HandoffTranscriptRecord): number {
+  const serialized = promptCarrierJson(record);
+  let lines = 1;
+  for (let index = 0; index < serialized.length; index += 1) {
+    if (serialized.charCodeAt(index) === 10) lines += 1;
+  }
+  return serialized.length + lines * 2 + 2;
+}
+
+function selectTranscriptRecords(
+  records: HandoffTranscriptRecord[],
+  availableCharacters: number,
+): HandoffTranscriptRecord[] {
+  if (promptCarrierJson(records).length <= availableCharacters) return records;
+
+  const selected: Array<{ index: number; record: HandoffTranscriptRecord }> = [];
+  let used = TRANSCRIPT_ARRAY_FRAME_OVERHEAD;
+  // The first review message contains the ticket, acceptance criteria and
+  // snapshot rules. Match interactive Continue-in by retaining it when it fits
+  // within a bounded share, then spend the rest from newest to oldest.
+  const first = records[0];
+  const firstCost = first ? nestedRecordCost(first) : 0;
+  const firstSelected = Boolean(first)
+    && used + firstCost <= availableCharacters / 3;
+  if (first && firstSelected) {
+    selected.push({ index: 0, record: first });
+    used += firstCost;
+  }
+
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    if (index === 0 && firstSelected) continue;
+    const record = records[index]!;
+    const cost = nestedRecordCost(record);
+    // A large tool result must not prevent a smaller, older ticket or analysis
+    // record from using the remaining context.
+    if (used + cost > availableCharacters) continue;
+    selected.push({ index, record });
+    used += cost;
+  }
+  selected.sort((left, right) => left.index - right.index);
+  return selected.map(({ record }) => record);
 }
 
 function recordFor(
@@ -153,7 +206,7 @@ export function buildReviewHandoffPrompt(
   const destinationLabel = options.destinationAgent === "opencode"
     ? "OpenCode"
     : options.destinationAgent === "codex" ? "Codex" : "Claude";
-  const metadata = carrierJson({
+  const metadata = promptCarrierJson({
     id: `${options.sourceSession.sessionKey}:address-issues`,
     environmentId: options.environmentId,
     sourceProvider: options.sourceAgent,
@@ -181,26 +234,19 @@ ${TRANSCRIPT_CLOSE}
 </orkestrator-handoff>`;
   const records = sourceMessages.map((message, index) =>
     recordFor(message, index, options.sourceSession.startedAt));
-  const selectedNewestFirst: HandoffTranscriptRecord[] = [];
-  let used = header.length + footer.length + OMISSION_NOTICE_RESERVE + 2;
-  for (let index = records.length - 1; index >= 0; index -= 1) {
-    const record = records[index]!;
-    const encoded = carrierJson(record);
-    if (
-      selectedNewestFirst.length > 0
-      && used + encoded.length + 2 > BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET
-    ) {
-      break;
-    }
-    selectedNewestFirst.push(record);
-    used += encoded.length + 2;
-  }
-  const selected = selectedNewestFirst.reverse();
+  const transcriptBudget = Math.max(
+    0,
+    BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET
+      - header.length
+      - footer.length
+      - OMISSION_NOTICE_RESERVE,
+  );
+  const selected = selectTranscriptRecords(records, transcriptBudget);
   const omitted = records.length - selected.length;
   const omissionNotice = omitted > 0
-    ? `\n${omitted} older review ${omitted === 1 ? "message was" : "messages were"} omitted to fit the context budget.`
+    ? `\n${omitted} review ${omitted === 1 ? "message was" : "messages were"} omitted to fit the context budget.`
     : "";
-  return `${header}${carrierJson(selected)}${omissionNotice}${footer}`;
+  return `${header}${promptCarrierJson(selected)}${omissionNotice}${footer}`;
 }
 
 export function prependReviewHandoff(

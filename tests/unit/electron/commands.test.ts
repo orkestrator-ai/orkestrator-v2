@@ -5,6 +5,7 @@ import { existsSync, promises as fs, readFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
   isPaneLayoutRevisionConflict,
@@ -6040,6 +6041,50 @@ exit 0
       "https://github.com",
       "git@github.com:",
     ]);
+  });
+
+  test("injects the current managed GitHub credential into every OpenCode shell", async () => {
+    const directory = await createTempDir("ork-opencode-github-plugin-");
+    const credentialFile = path.join(directory, "github-token");
+    const pluginFile = path.join(directory, "orkestrator-github-env.mjs");
+    await fs.writeFile(
+      pluginFile,
+      commandTesting.buildOpenCodeGitHubEnvironmentPluginSource(credentialFile),
+    );
+    const pluginModule = await import(
+      `${pathToFileURL(pluginFile).href}?test=${randomUUID()}`
+    ) as {
+      OrkestratorGitHubEnvironmentPlugin: () => Promise<{
+        "shell.env": (
+          input: Record<string, string>,
+          output: { env: Record<string, string> },
+        ) => Promise<void>;
+      }>;
+    };
+    const plugin = await pluginModule.OrkestratorGitHubEnvironmentPlugin();
+    const readEnvironment = async (): Promise<Record<string, string>> => {
+      const output = { env: {} as Record<string, string> };
+      await plugin["shell.env"](
+        { cwd: "/workspace", sessionID: "session", callID: "call" },
+        output,
+      );
+      return output.env;
+    };
+
+    await fs.writeFile(credentialFile, "first-token");
+    await expect(readEnvironment()).resolves.toMatchObject({
+      GITHUB_TOKEN: "first-token",
+      GH_TOKEN: "first-token",
+    });
+
+    await fs.writeFile(credentialFile, "rotated-token");
+    await expect(readEnvironment()).resolves.toMatchObject({
+      GITHUB_TOKEN: "rotated-token",
+      GH_TOKEN: "rotated-token",
+    });
+
+    await fs.writeFile(credentialFile, "");
+    await expect(readEnvironment()).resolves.toEqual({});
   });
 
   test("refreshes and clears the managed credential after direct container starts", async () => {
@@ -12300,6 +12345,7 @@ exit 0
         expect(execLog).toContain("export CODEX_BRIDGE_TOKEN=");
         expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=9");
         expect(execLog).toContain("setsid bun /opt/codex-bridge/dist/index.js");
+        expect(execLog).not.toContain("unset GITHUB_TOKEN GH_TOKEN");
         expect(execLog).not.toContain("setsid node");
       });
     } finally {
@@ -12364,6 +12410,10 @@ exit 0
         expect(execLog).not.toContain("setsid node");
         expect(execLog).toContain("/tmp/claude-bridge-token");
         expect(execLog).toContain("export CLAUDE_BRIDGE_TOKEN=");
+        expect(execLog).toContain(
+          "export ORKESTRATOR_GITHUB_CREDENTIAL_FILE='/tmp/orkestrator-ai/github-token'",
+        );
+        expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN");
       });
     } finally {
       const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
@@ -12387,6 +12437,7 @@ exit 0
     const tokenFile = path.join(stateDir, "persisted-password");
     const liveTokenFile = path.join(stateDir, "live-password");
     const healthyFile = path.join(stateDir, "healthy");
+    const pluginFingerprintFile = path.join(stateDir, "plugin-fingerprint");
     const environment = createEnvironment({
       id: "env-container-opencode-auth",
       environmentType: "containerized",
@@ -12400,11 +12451,16 @@ exit 0
       tokenFile: process.env.FAKE_BRIDGE_TOKEN_FILE,
       liveTokenFile: process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE,
       healthyFile: process.env.FAKE_BRIDGE_HEALTHY_FILE,
+      pluginFingerprintFile: process.env.FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE,
+      pluginFingerprint: process.env.FAKE_OPENCODE_PLUGIN_FINGERPRINT,
     };
     process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
     process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
     process.env.FAKE_BRIDGE_LIVE_TOKEN_FILE = liveTokenFile;
     process.env.FAKE_BRIDGE_HEALTHY_FILE = healthyFile;
+    process.env.FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE = pluginFingerprintFile;
+    process.env.FAKE_OPENCODE_PLUGIN_FINGERPRINT =
+      commandTesting.OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT;
 
     const bridge = await startAuthenticatedContainerServer(hostPort, {
       isHealthy: () => existsSync(healthyFile),
@@ -12423,13 +12479,17 @@ case "$1" in
       *"cat /tmp/opencode-server-password"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
         exit 0 ;;
+      *"cat /tmp/orkestrator-ai/opencode-github-env-plugin-fingerprint"*)
+        cat "$FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE" 2>/dev/null || true
+        exit 0 ;;
       *"pkill -f '[o]pencode serve'"*)
-        rm -f "$FAKE_BRIDGE_HEALTHY_FILE" "$FAKE_BRIDGE_TOKEN_FILE"
+        rm -f "$FAKE_BRIDGE_HEALTHY_FILE" "$FAKE_BRIDGE_TOKEN_FILE" "$FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE"
         exit 0 ;;
     esac
     token=$(printf '%s' "$*" | sed -n "s/.*OPENCODE_SERVER_PASSWORD='\\([^']*\\)'.*/\\1/p")
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
     printf '%s' "$token" > "$FAKE_BRIDGE_LIVE_TOKEN_FILE"
+    printf '%s' "$FAKE_OPENCODE_PLUGIN_FINGERPRINT" > "$FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE"
     : > "$FAKE_BRIDGE_HEALTHY_FILE"
     exit 0 ;;
 esac
@@ -12444,6 +12504,16 @@ exit 0
         ) as { hostPort: number; wasRunning: boolean; authToken: string };
         expect(first).toMatchObject({ hostPort, wasRunning: false });
         expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+        // An authenticated server from a build before the GitHub environment
+        // hook existed must also restart instead of being reused indefinitely.
+        await fs.rm(pluginFingerprintFile);
+        const capabilityReplacement = await commands.get("start_opencode_server")?.(
+          { containerId: "container-opencode-auth" },
+          context,
+        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        expect(capabilityReplacement).toMatchObject({ hostPort, wasRunning: false });
+        expect(capabilityReplacement.authToken).not.toBe(first.authToken);
 
         // A reachable legacy process without a readable password is replaced,
         // rather than being handed to the renderer unauthenticated.
@@ -12479,8 +12549,12 @@ exit 0
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(
           execLog.split("\n").filter((line) => line.startsWith("exec -d ")),
-        ).toHaveLength(3);
+        ).toHaveLength(4);
         expect(execLog).toContain("pkill -f '[o]pencode serve'");
+        expect(execLog).toContain(
+          "/home/node/.config/opencode/plugins/orkestrator-github-env.js",
+        );
+        expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN");
       });
     } finally {
       await bridge.close();
@@ -12490,6 +12564,8 @@ exit 0
           tokenFile: "FAKE_BRIDGE_TOKEN_FILE",
           liveTokenFile: "FAKE_BRIDGE_LIVE_TOKEN_FILE",
           healthyFile: "FAKE_BRIDGE_HEALTHY_FILE",
+          pluginFingerprintFile: "FAKE_OPENCODE_PLUGIN_FINGERPRINT_FILE",
+          pluginFingerprint: "FAKE_OPENCODE_PLUGIN_FINGERPRINT",
         }[key]!;
         if (value === undefined) delete process.env[envName];
         else process.env[envName] = value;
@@ -12629,6 +12705,9 @@ case "$1" in
     case "$*" in
       *"cat /tmp/claude-bridge-token"*)
         cat "$FAKE_BRIDGE_TOKEN_FILE"
+        exit 0 ;;
+      *"cat /tmp/orkestrator-ai/claude-github-env-fingerprint"*)
+        printf '%s' '${commandTesting.CLAUDE_GITHUB_ENV_FINGERPRINT}'
         exit 0 ;;
     esac
     exit 0 ;;

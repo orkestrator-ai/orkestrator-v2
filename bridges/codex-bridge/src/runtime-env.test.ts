@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ process.env.CODEX_BRIDGE_NO_SERVER = "1";
 process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 
 const { __testing } = await import("./index.js");
+const { fingerprintRuntimeEnvironment } = await import("./runtime-env.js");
 
 const originalPath = process.env.PATH;
 const originalBunInstall = process.env.BUN_INSTALL;
@@ -16,6 +17,15 @@ const originalCode = process.env.CODEX_PATH;
 const originalBashEnv = process.env.BASH_ENV;
 const originalRuntimeEnvScript = process.env.ORKESTRATOR_RUNTIME_ENV_SCRIPT;
 const originalShell = process.env.SHELL;
+const originalGitHubToken = process.env.GITHUB_TOKEN;
+const originalGhToken = process.env.GH_TOKEN;
+
+beforeEach(() => {
+  // Credential absence is authoritative, so every test starts from a known
+  // state and afterEach restores any credentials inherited by the test runner.
+  delete process.env.GITHUB_TOKEN;
+  delete process.env.GH_TOKEN;
+});
 
 afterEach(() => {
   if (originalPath === undefined) {
@@ -52,6 +62,18 @@ afterEach(() => {
     delete process.env.SHELL;
   } else {
     process.env.SHELL = originalShell;
+  }
+
+  if (originalGitHubToken === undefined) {
+    delete process.env.GITHUB_TOKEN;
+  } else {
+    process.env.GITHUB_TOKEN = originalGitHubToken;
+  }
+
+  if (originalGhToken === undefined) {
+    delete process.env.GH_TOKEN;
+  } else {
+    process.env.GH_TOKEN = originalGhToken;
   }
 });
 
@@ -109,6 +131,51 @@ describe("runtime environment refresh", () => {
     expect(process.env.BUN_INSTALL).toBe("/home/node/.bun");
   });
 
+  test("applies only the managed GitHub credential variables", () => {
+    const updated = __testing.applyRuntimeEnvironmentOutput([
+      "GITHUB_TOKEN=github-token-one",
+      "GH_TOKEN=github-token-one",
+      "UNMANAGED_SECRET=must-not-enter-the-bridge",
+    ].join("\n"));
+
+    expect(updated).toEqual(["GITHUB_TOKEN", "GH_TOKEN"]);
+    expect(process.env.GITHUB_TOKEN).toBe("github-token-one");
+    expect(process.env.GH_TOKEN).toBe("github-token-one");
+    expect(process.env.UNMANAGED_SECRET).not.toBe("must-not-enter-the-bridge");
+  });
+
+  test("clears stale managed GitHub credentials when the shell omits them", () => {
+    process.env.PATH = "/usr/bin:/bin";
+    process.env.GITHUB_TOKEN = "stale-token";
+    process.env.GH_TOKEN = "stale-token";
+
+    const updated = __testing.applyRuntimeEnvironmentOutput("PATH=/usr/bin:/bin");
+
+    expect(updated).toEqual(["GITHUB_TOKEN", "GH_TOKEN"]);
+    expect(process.env.GITHUB_TOKEN).toBeUndefined();
+    expect(process.env.GH_TOKEN).toBeUndefined();
+  });
+
+  test("includes credential rotation and clearing in the environment fingerprint", () => {
+    const base = { PATH: "/usr/bin:/bin" };
+    const first = fingerprintRuntimeEnvironment({
+      ...base,
+      GITHUB_TOKEN: "token-one",
+      GH_TOKEN: "token-one",
+    });
+    const rotated = fingerprintRuntimeEnvironment({
+      ...base,
+      GITHUB_TOKEN: "token-two",
+      GH_TOKEN: "token-two",
+    });
+    const cleared = fingerprintRuntimeEnvironment(base);
+
+    expect(rotated).not.toBe(first);
+    expect(cleared).not.toBe(rotated);
+    expect(first).toMatch(/^sha256:[0-9a-f]{32}$/);
+    expect(first).not.toContain("token-one");
+  });
+
   test("sources configured runtime helper and applies refreshed shell environment", async () => {
     await withTempDir(async (dir) => {
       const helper = join(dir, "runtime-env.sh");
@@ -138,6 +205,46 @@ describe("runtime environment refresh", () => {
       expect(process.env.PATH).toBe(`${refreshedPath}:/usr/bin:/bin`);
       expect(process.env.BUN_INSTALL).toBe(bunInstall);
       expect(process.env.CODEX_PATH).toBe("codex");
+    });
+  });
+
+  test("refreshes and clears GitHub credentials from the managed runtime helper", async () => {
+    await withTempDir(async (dir) => {
+      const helper = join(dir, "runtime-env.sh");
+      writeRuntimeHelper(
+        helper,
+        [
+          "orkestrator_source_runtime_env() {",
+          "  export GITHUB_TOKEN=rotated-token",
+          "  export GH_TOKEN=rotated-token",
+          "}",
+          "",
+        ].join("\n"),
+      );
+
+      process.env.ORKESTRATOR_RUNTIME_ENV_SCRIPT = helper;
+      process.env.GITHUB_TOKEN = "stale-token";
+      process.env.GH_TOKEN = "stale-token";
+
+      await __testing.refreshRuntimeEnvironment();
+
+      expect(process.env.GITHUB_TOKEN).toBe("rotated-token");
+      expect(process.env.GH_TOKEN).toBe("rotated-token");
+
+      writeRuntimeHelper(
+        helper,
+        [
+          "orkestrator_source_runtime_env() {",
+          "  unset GITHUB_TOKEN GH_TOKEN",
+          "}",
+          "",
+        ].join("\n"),
+      );
+
+      await __testing.refreshRuntimeEnvironment();
+
+      expect(process.env.GITHUB_TOKEN).toBeUndefined();
+      expect(process.env.GH_TOKEN).toBeUndefined();
     });
   });
 

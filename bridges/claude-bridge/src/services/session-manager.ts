@@ -48,6 +48,7 @@ import {
   updateSessionPreferences,
   type SessionPreferences,
 } from "./session-preferences.js";
+import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import { debugLog, isDebugLoggingEnabled } from "./logger.js";
 import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
 import { getMcpRuntimeConfig } from "./mcp-config.js";
@@ -5015,11 +5016,16 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     };
     finishTurnInputForThisTurn = finishTurnInputIfSettled;
     session.finishTurnInputIfSettled = finishTurnInputIfSettled;
+    const queryEnvironment = await runtimeEnvironmentForAgentQuery();
     const queryIterator = query({
       prompt: heldSdkPrompt.prompt,
       options: {
         cwd,
         ...claudeExecutableOptions(),
+        // The SDK replaces (rather than merges) the CLI environment when this
+        // option is present. The snapshot therefore carries every ordinary
+        // bridge variable plus the latest managed GitHub credential.
+        env: queryEnvironment,
         model: options?.model,
         agent: options?.agent,
         ...(options?.outputSchema

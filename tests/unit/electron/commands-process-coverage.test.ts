@@ -26,6 +26,10 @@ const originalDockerNoPort = process.env.FAKE_DOCKER_NO_PORT;
 const originalCodexBridgeToken = process.env.FAKE_CODEX_BRIDGE_TOKEN;
 const originalClaudeBridgeToken = process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
 const originalOpenCodeServerPassword = process.env.FAKE_OPENCODE_SERVER_PASSWORD;
+const originalOpenCodeGitHubPluginFingerprint =
+  process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT;
+const originalClaudeGitHubEnvironmentFingerprint =
+  process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT;
 const originalDockerHostResolves = process.env.FAKE_DOCKER_HOST_RESOLVES;
 const originalDockerHostsOutput = process.env.FAKE_DOCKER_HOSTS_OUTPUT;
 const originalDockerGateway = process.env.FAKE_DOCKER_GATEWAY;
@@ -107,8 +111,10 @@ if [ "$1" = "exec" ]; then
       ;;
     *claude-agent-tools-fingerprint*) printf '%s' "\${FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT:-}" ;;
     *codex-agent-tools-fingerprint*) printf '%s' "\${FAKE_CODEX_AGENT_TOOLS_FINGERPRINT:-}" ;;
+    *claude-github-env-fingerprint*) printf '%s' "\${FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT:-}" ;;
     *codex-bridge-token*) printf '%s' "\${FAKE_CODEX_BRIDGE_TOKEN:-}" ;;
     *claude-bridge-token*) printf '%s' "\${FAKE_CLAUDE_BRIDGE_TOKEN:-}" ;;
+    *opencode-github-env-plugin-fingerprint*) printf '%s' "\${FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT:-}" ;;
     *opencode-server-password*) printf '%s' "\${FAKE_OPENCODE_SERVER_PASSWORD:-}" ;;
     *opencode-serve.log*) printf 'opencode log\n' ;;
     *claude-bridge.log*) printf 'claude log\n' ;;
@@ -344,6 +350,10 @@ beforeEach(async () => {
   delete process.env.FAKE_CODEX_BRIDGE_TOKEN;
   delete process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
   delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
+  process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT =
+    __testing.OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT;
+  process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT =
+    __testing.CLAUDE_GITHUB_ENV_FINGERPRINT;
   delete process.env.FAKE_DOCKER_HOST_RESOLVES;
   delete process.env.FAKE_DOCKER_HOSTS_OUTPUT;
   delete process.env.FAKE_DOCKER_GATEWAY;
@@ -385,6 +395,18 @@ afterAll(async () => {
   else process.env.FAKE_CLAUDE_BRIDGE_TOKEN = originalClaudeBridgeToken;
   if (originalOpenCodeServerPassword === undefined) delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
   else process.env.FAKE_OPENCODE_SERVER_PASSWORD = originalOpenCodeServerPassword;
+  if (originalOpenCodeGitHubPluginFingerprint === undefined) {
+    delete process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT;
+  } else {
+    process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT =
+      originalOpenCodeGitHubPluginFingerprint;
+  }
+  if (originalClaudeGitHubEnvironmentFingerprint === undefined) {
+    delete process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT;
+  } else {
+    process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT =
+      originalClaudeGitHubEnvironmentFingerprint;
+  }
   if (originalDockerHostResolves === undefined) delete process.env.FAKE_DOCKER_HOST_RESOLVES;
   else process.env.FAKE_DOCKER_HOST_RESOLVES = originalDockerHostResolves;
   if (originalDockerHostsOutput === undefined) delete process.env.FAKE_DOCKER_HOSTS_OUTPUT;

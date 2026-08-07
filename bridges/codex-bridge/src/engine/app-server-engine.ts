@@ -1175,7 +1175,7 @@ export class AppServerEngine implements CodexEngine {
     };
   }
 
-  /** Re-reads the environment and restarts the child if PATH-ish vars changed. */
+  /** Re-reads the environment and restarts the child if managed vars changed. */
   async ensureEnvironmentIsCurrent(options: {
     hasActiveTurns: () => boolean;
     waitForIdle: () => Promise<void>;

@@ -108,9 +108,15 @@ const ENVIRONMENT_OPTIONS: Array<{
   },
 ];
 
+/**
+ * States both halves of the trade: the access these stages get, and the exact
+ * reach of the check that constrains it. The backend compares HEAD and the
+ * Git-visible uncommitted paths, so ignored files and `.git` internals are not
+ * covered — claiming the workspace is protected outright would overstate it.
+ */
 function validationWorkspaceNotice(uniform: boolean): string {
   const stages = uniform ? "Review and verify" : "This step";
-  return `${stages} will run with full workspace access so validation can write generated outputs and caches. Source edits and commits are forbidden and Git state is checked before the pipeline advances.`;
+  return `${stages} will run with full workspace access so validation can write generated outputs and caches. Source edits and commits are forbidden: the backend rejects the result if the commit or any Git-tracked or untracked path changed. Ignored files are not checked.`;
 }
 
 function Step({

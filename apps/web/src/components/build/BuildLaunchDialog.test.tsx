@@ -608,7 +608,10 @@ describe("BuildLaunchDialog validation workspace disclosure", () => {
     const disclosure = screen.getByRole("note");
     expect(disclosure.textContent).toMatch(notice);
     expect(disclosure.textContent).toContain("Review and verify");
-    expect(disclosure.textContent).toContain("Git state is checked");
+    // The check covers HEAD and Git-visible paths only, so the disclosure has
+    // to name that limit rather than imply the workspace is protected.
+    expect(disclosure.textContent).toContain("Git-tracked or untracked path");
+    expect(disclosure.textContent).toContain("Ignored files are not checked");
   });
 
   test("discloses only the review and verification cards when configured separately", () => {

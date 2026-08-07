@@ -10880,6 +10880,11 @@ export function createCommandRegistry(
    * The build pipeline reads this before and after writable validation stages.
    * Returning HEAD with the porcelain paths lets it reject both ordinary edits
    * and an agent-created commit before accepting a review or verification result.
+   *
+   * Scope is what Git reports and no more: tracked paths, plus untracked paths
+   * Git does not ignore. Ignored files, anything under `.git/`, and paths
+   * outside the worktree are invisible here, so no caller may describe this as
+   * proof that the workspace was untouched.
    */
   register("get_environment_uncommitted_paths", async ({ environmentId }, context) => {
     const environment = await context.storage.getEnvironment(

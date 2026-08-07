@@ -201,6 +201,39 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline(withSession({
       validationWorktreeStatusAtStart: "unknown",
     }))).toBe(true);
+
+    // The baseline path set travels with the head it was observed at.
+    expect(isBuildPipeline(withSession({
+      validationHeadAtStart: "1111111111111111111111111111111111111111",
+      validationWorktreeStatusAtStart: "dirty",
+      validationUncommittedPathsAtStart: ["src/forgotten.ts"],
+    }))).toBe(true);
+    expect(isBuildPipeline(withSession({
+      validationHeadAtStart: "1111111111111111111111111111111111111111",
+      validationWorktreeStatusAtStart: "clean",
+      validationUncommittedPathsAtStart: [],
+    }))).toBe(true);
+    for (const invalid of ["src/a.ts", [1], [null], {}]) {
+      expect(isBuildPipeline(withSession({
+        validationHeadAtStart: "1111111111111111111111111111111111111111",
+        validationWorktreeStatusAtStart: "dirty",
+        validationUncommittedPathsAtStart: invalid,
+      }))).toBe(false);
+    }
+    // Paths without an observation to anchor them are not a baseline at all.
+    expect(isBuildPipeline(withSession({
+      validationUncommittedPathsAtStart: [],
+    }))).toBe(false);
+    expect(isBuildPipeline(withSession({
+      validationWorktreeStatusAtStart: "unknown",
+      validationUncommittedPathsAtStart: [],
+    }))).toBe(false);
+    // A snapshot written before the path list existed still loads, so an
+    // in-flight pipeline is not stranded by the upgrade.
+    expect(isBuildPipeline(withSession({
+      validationHeadAtStart: "1111111111111111111111111111111111111111",
+      validationWorktreeStatusAtStart: "dirty",
+    }))).toBe(true);
   });
 
   test("rejects a client-authored or malformed snapshot", () => {

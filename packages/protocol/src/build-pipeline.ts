@@ -246,12 +246,16 @@ export interface PipelineSession {
    * Immutable Git state captured before a writable validation turn starts.
    *
    * Review and verification may write ignored compiler output and caches, but
-   * the backend refuses to accept their result if HEAD moves or Git reports an
-   * uncommitted path afterwards. Persisting the baseline keeps that guard valid
-   * across backend restarts.
+   * the backend refuses to accept their result if HEAD moves or the set of
+   * Git-visible uncommitted paths changes. The baseline is a *set*, not a
+   * cleanliness flag: the build stage is only asked to commit, so a review can
+   * legitimately start on a dirty tree, and only the paths validation itself
+   * adds or removes are a violation. Persisting it keeps the guard valid across
+   * backend restarts.
    */
   validationHeadAtStart?: string;
   validationWorktreeStatusAtStart?: "clean" | "dirty" | "unknown";
+  validationUncommittedPathsAtStart?: string[];
   /**
    * First tick at which this session was idle with no structured result yet.
    * A turn that ends without ever producing one would otherwise poll forever.
@@ -607,11 +611,27 @@ function isBuildStepConfig(value: unknown): value is BuildStepConfig {
     && isOptionalNonBlankString(value.reasoningEffort);
 }
 
+/**
+ * A baseline is either absent, unestablished, or complete — never half-written.
+ *
+ * The path list is optional even alongside a head so that a snapshot persisted
+ * before the list existed still loads: `save` refuses to persist a pipeline
+ * that fails validation, so tightening this further would strand a live
+ * pipeline mid-upgrade rather than protect it.
+ */
 function hasValidValidationWorktreeBaseline(value: Record<string, unknown>): boolean {
   const head = value.validationHeadAtStart;
   const status = value.validationWorktreeStatusAtStart;
-  if (head === undefined && status === undefined) return true;
-  if (head === undefined && status === "unknown") return true;
+  const paths = value.validationUncommittedPathsAtStart;
+  if (
+    paths !== undefined
+    && (!Array.isArray(paths) || paths.some((entry) => typeof entry !== "string"))
+  ) {
+    return false;
+  }
+  if (head === undefined) {
+    return (status === undefined || status === "unknown") && paths === undefined;
+  }
   return typeof head === "string"
     && /^[0-9a-f]{40,64}$/i.test(head)
     && (status === "clean" || status === "dirty");

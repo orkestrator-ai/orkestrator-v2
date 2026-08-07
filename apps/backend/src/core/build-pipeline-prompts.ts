@@ -41,9 +41,22 @@ export function buildPrompt(pipeline: BuildPipeline, notes: string): string {
  * the pipeline's own evidence rather than something the reviewer re-derives.
  */
 export type ReviewWorktreeSnapshot =
-  | { status: "clean"; head?: string }
-  | { status: "dirty"; paths: string[]; head?: string }
+  | { status: "clean"; head: string }
+  | { status: "dirty"; paths: string[]; head: string }
   | { status: "unknown"; reason: string; head?: never };
+
+/**
+ * A snapshot the certification guard can actually compare against.
+ *
+ * `head` is required on both observed variants so the compiler enforces the
+ * same invariant `isBuildPipeline` does at runtime: a persisted baseline with a
+ * status but no head is rejected outright, which would refuse every later save
+ * and strand the pipeline.
+ */
+export type ObservedWorktreeSnapshot = Exclude<
+  ReviewWorktreeSnapshot,
+  { status: "unknown" }
+>;
 
 /** Keeps a pathological worktree from crowding out the rest of the prompt. */
 export const MAX_REPORTED_UNCOMMITTED_PATHS = 50;

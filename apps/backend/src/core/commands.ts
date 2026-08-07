@@ -9599,7 +9599,7 @@ export function createCommandRegistry(
     if (process.platform === "win32") return runCommand("explorer", ["/select,", target]).then(() => undefined);
     return runCommand("xdg-open", [path.dirname(target)]).then(() => undefined);
   });
-  register("open_in_editor", ({ containerId, editor }) => runCommand(asString(editor, "editor") === "cursor" ? "cursor" : "code", [`vscode-remote://attached-container+${Buffer.from(asString(containerId, "containerId")).toString("hex")}/workspace`]).then(() => undefined));
+  register("open_in_editor", ({ containerId, editor }) => runCommand(asString(editor, "editor") === "cursor" ? "cursor" : "code", ["--folder-uri", `vscode-remote://attached-container+${Buffer.from(asString(containerId, "containerId")).toString("hex")}/workspace`]).then(() => undefined));
   register("open_local_in_editor", ({ path: filePath, editor }) => runCommand(asString(editor, "editor") === "cursor" ? "cursor" : "code", [asString(filePath, "path")]).then(() => undefined));
 
   register("test_domain_resolution", ({ domains }) => Promise.all(asStringArray(domains).map(async (domain) => {

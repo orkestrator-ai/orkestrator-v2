@@ -84,6 +84,35 @@ history rather than two partial ones.
 - **Isolated rerun:** `bun test src/components/opencode/OpenCodeChatTab.test.tsx --parallel` -> 175 passed, 0 failed in 9.29s
 - **Hypothesis:** This is a load-triggered timeout cascade rather than 88 independent regressions. The failing run took 97.22s and stalled many asynchronous UI assertions at their one-second boundary, while the same file passed completely in 9.29s without the three competing component processes.
 
+## `Electron backend command registry > backend-owned diff statistics > invalidates the shared file-list cache after local revert and delete` (`tests/unit/electron/commands.test.ts:6345`)
+
+- **Status:** open
+- **Date observed:** 2026-08-06
+- **Original command:** `bun run test` (root group: `bun test tests --parallel=4`)
+- **Suite counts:** 3,685 passed, 1 skipped, 10 failed; nine failures were deterministic UI regressions from the reviewed change and this was the only unrelated failure
+- **Failure:** `Timed out waiting for changed file to be cached again`; failed duration 3,397.10 ms
+- **Isolated rerun:** `bun test tests/unit/electron/commands.test.ts` -> 362 passed, 1 skipped, 0 failed; the target passed in 195.34 ms
+- **Hypothesis:** The aggregate failure exhausted the cache-repopulation deadline while the same behavior completed quickly in isolation. This is consistent with aggregate scheduling or filesystem-watcher latency, but no narrower root cause has been reproduced.
+
+## `Electron backend command registry > starting a stopped environment resumes backend PR polling` (`tests/unit/electron/commands.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-06
+- **Original command:** `bun run test` (root group: `bun test tests --parallel=4`)
+- **Failure:** `expect(received).toContain(expected)` on the resumed polling assertion; failed duration 472.36 ms
+- **Isolated rerun:** `bun test tests/unit/electron/commands.test.ts` -> 362 passed, 0 failed, twice consecutively; the target also passed when run alone with `-t`
+- **Hypothesis:** A repeat aggregate run did not reproduce this failure and instead failed the agent-completion PR-monitor test below. Both wait for a background poll announcement within the test window, which is consistent with aggregate scheduling latency rather than a demonstrated product defect.
+
+## `an ended agent turn discovers a pull request the agent created itself` (`apps/backend/src/core/pr-monitor-agent-completion.integration.test.ts:203`)
+
+- **Status:** open
+- **Date observed:** 2026-08-06
+- **Original command:** `bun run test` (workspace backend group)
+- **Suite counts:** 1,409 backend tests, 1 failed; every other group passed
+- **Failure:** `expect(received).not.toHaveLength(expected)` because no `PR_MONITOR_CHANGED_EVENT` had been announced; failed duration 380.34 ms
+- **Isolated rerun:** `bun test --cwd apps/backend src/core/pr-monitor-agent-completion.integration.test.ts` -> 3 passed, 0 failed in 803 ms
+- **Hypothesis:** This and the preceding PR-polling test failed in separate aggregate runs but not together. Both wait on an announced PR-monitor event, so the shared hypothesis is that the event can miss the assertion window under aggregate load; no narrower root cause has been reproduced.
+
 ## `container runtime environment wiring > Codex configuration copy helpers reject destination root, parent, and file symlinks` (`tests/unit/runtime-env-wiring.test.ts`)
 
 - **Status:** resolved

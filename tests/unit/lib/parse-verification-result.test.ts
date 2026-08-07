@@ -55,9 +55,12 @@ describe("structured verification prompt", () => {
     expect(prompt).toContain("origin/release");
   });
 
-  test("makes verification explicitly read-only", () => {
+  test("allows verification outputs but forbids source edits", () => {
     expect(verificationPrompt(pipeline(), "", "main")).toContain(
-      "Verification is read-only",
+      "may write generated artifacts and tool caches",
+    );
+    expect(verificationPrompt(pipeline(), "", "main")).toContain(
+      "Do not edit source files or create commits",
     );
   });
 });

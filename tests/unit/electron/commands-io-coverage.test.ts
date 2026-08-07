@@ -535,10 +535,9 @@ done
     )).toThrow("Expected environmentId to be a string");
   });
 
-  // The build pipeline reads this before its review stage, so "clean" and
-  // "dirty" have to be distinguishable against a real Git worktree rather than
-  // inferred from a diff meant for rendering.
-  test("reports the uncommitted paths of a local environment worktree", async () => {
+  // The build pipeline reads this before and after writable validation, so HEAD
+  // and cleanliness must come from the real worktree rather than a render diff.
+  test("reports the HEAD and uncommitted paths of a local environment worktree", async () => {
     const root = await createTempDir("ork-commands-io-uncommitted-");
     const git = async (...args: string[]) => {
       await runCommand("git", args, { cwd: root, timeoutMs: 30_000 });
@@ -559,9 +558,15 @@ done
     const read = () => commands.get("get_environment_uncommitted_paths")?.(
       { environmentId: "env-1" },
       context,
-    ) as Promise<{ paths: string[] }>;
+    ) as Promise<{ head: string; paths: string[] }>;
 
-    await expect(read()).resolves.toEqual({ paths: [] });
+    const initialHead = (await runCommand(
+      "git",
+      ["rev-parse", "--verify", "HEAD^{commit}"],
+      { cwd: root, timeoutMs: 30_000 },
+    )).stdout.trim();
+
+    await expect(read()).resolves.toEqual({ head: initialHead, paths: [] });
 
     await fs.writeFile(path.join(root, "untracked.ts"), "export const b = 2;\n");
     await fs.writeFile(path.join(root, "committed.ts"), "export const a = 2;\n");
@@ -573,7 +578,73 @@ done
     expect((await read()).paths.sort()).toEqual(["committed.ts", "untracked.ts"]);
 
     await git("commit", "-m", "rest");
-    await expect(read()).resolves.toEqual({ paths: [] });
+    const committed = await read();
+    expect(committed.paths).toEqual([]);
+    expect(committed.head).not.toBe(initialHead);
+  });
+
+  // The whole reason review and verify may run writable is that validation
+  // output is ignored and therefore invisible here. If that stopped holding,
+  // every validation turn would fail certification, so pin it against real Git.
+  test("omits ignored validation output from the uncommitted paths", async () => {
+    const root = await createTempDir("ork-commands-io-ignored-");
+    const git = async (...args: string[]) => {
+      await runCommand("git", args, { cwd: root, timeoutMs: 30_000 });
+    };
+    await git("init", "--initial-branch=main");
+    await git("config", "user.email", "test@example.com");
+    await git("config", "user.name", "Test");
+    await fs.writeFile(path.join(root, ".gitignore"), "dist/\n*.tsbuildinfo\n");
+    await git("add", ".gitignore");
+    await git("commit", "-m", "seed");
+
+    const context = createContext({
+      id: "env-1",
+      environmentType: "local",
+      worktreePath: root,
+    });
+    const commands = createCommandRegistry();
+    const read = () => commands.get("get_environment_uncommitted_paths")?.(
+      { environmentId: "env-1" },
+      context,
+    ) as Promise<{ head: string; paths: string[] }>;
+
+    const before = await read();
+    expect(before.paths).toEqual([]);
+
+    await fs.mkdir(path.join(root, "dist"), { recursive: true });
+    await fs.writeFile(path.join(root, "dist", "bundle.js"), "console.log(1);\n");
+    await fs.writeFile(path.join(root, "app.tsbuildinfo"), "{}\n");
+
+    const after = await read();
+    expect(after.paths).toEqual([]);
+    expect(after.head).toBe(before.head);
+
+    // A path the repository does not ignore is still reported, so the empty
+    // result above is ignore semantics rather than a probe that sees nothing.
+    await fs.writeFile(path.join(root, "src.ts"), "export const a = 1;\n");
+    expect((await read()).paths).toEqual(["src.ts"]);
+  });
+
+  // An unborn HEAD makes the probe unusable rather than silently clean; the
+  // build pipeline treats that as a stage it cannot certify.
+  test("fails rather than reporting a clean worktree with no commits", async () => {
+    const root = await createTempDir("ork-commands-io-unborn-");
+    await runCommand("git", ["init", "--initial-branch=main"], {
+      cwd: root,
+      timeoutMs: 30_000,
+    });
+
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("get_environment_uncommitted_paths")?.(
+      { environmentId: "env-1" },
+      createContext({
+        id: "env-1",
+        environmentType: "local",
+        worktreePath: root,
+      }),
+    )).rejects.toThrow();
   });
 
   test("rejects an unknown environment rather than reporting a clean worktree", async () => {

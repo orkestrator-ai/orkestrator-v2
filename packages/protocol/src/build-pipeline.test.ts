@@ -159,6 +159,8 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline(withSession({
       origin: "build-pipeline",
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      validationHeadAtStart: "1111111111111111111111111111111111111111",
+      validationWorktreeStatusAtStart: "clean",
     }))).toBe(true);
     expect(isBuildPipeline(withSession({
       origin: "build-pipeline",
@@ -181,6 +183,57 @@ describe("build pipeline protocol", () => {
         authorization: "await-user",
       },
     }))).toBe(false);
+
+    for (const invalid of ["", "not-a-commit", 1, null]) {
+      expect(isBuildPipeline(withSession({ validationHeadAtStart: invalid }))).toBe(false);
+    }
+    for (const invalid of ["modified", "read-only", 1, null]) {
+      expect(isBuildPipeline(withSession({
+        validationWorktreeStatusAtStart: invalid,
+      }))).toBe(false);
+    }
+    expect(isBuildPipeline(withSession({
+      validationWorktreeStatusAtStart: "clean",
+    }))).toBe(false);
+    expect(isBuildPipeline(withSession({
+      validationHeadAtStart: "1111111111111111111111111111111111111111",
+    }))).toBe(false);
+    expect(isBuildPipeline(withSession({
+      validationWorktreeStatusAtStart: "unknown",
+    }))).toBe(true);
+
+    // The baseline path set travels with the head it was observed at.
+    expect(isBuildPipeline(withSession({
+      validationHeadAtStart: "1111111111111111111111111111111111111111",
+      validationWorktreeStatusAtStart: "dirty",
+      validationUncommittedPathsAtStart: ["src/forgotten.ts"],
+    }))).toBe(true);
+    expect(isBuildPipeline(withSession({
+      validationHeadAtStart: "1111111111111111111111111111111111111111",
+      validationWorktreeStatusAtStart: "clean",
+      validationUncommittedPathsAtStart: [],
+    }))).toBe(true);
+    for (const invalid of ["src/a.ts", [1], [null], {}]) {
+      expect(isBuildPipeline(withSession({
+        validationHeadAtStart: "1111111111111111111111111111111111111111",
+        validationWorktreeStatusAtStart: "dirty",
+        validationUncommittedPathsAtStart: invalid,
+      }))).toBe(false);
+    }
+    // Paths without an observation to anchor them are not a baseline at all.
+    expect(isBuildPipeline(withSession({
+      validationUncommittedPathsAtStart: [],
+    }))).toBe(false);
+    expect(isBuildPipeline(withSession({
+      validationWorktreeStatusAtStart: "unknown",
+      validationUncommittedPathsAtStart: [],
+    }))).toBe(false);
+    // A snapshot written before the path list existed still loads, so an
+    // in-flight pipeline is not stranded by the upgrade.
+    expect(isBuildPipeline(withSession({
+      validationHeadAtStart: "1111111111111111111111111111111111111111",
+      validationWorktreeStatusAtStart: "dirty",
+    }))).toBe(true);
   });
 
   test("rejects a client-authored or malformed snapshot", () => {
@@ -1467,13 +1520,9 @@ describe("verification verdict contract", () => {
 });
 
 describe("execution mode policy", () => {
-  test("sandboxes only the read-only stages, and only where that is possible", () => {
-    // Codex holds review and verify to a read-only sandbox. Claude and OpenCode
-    // cannot be held to it — Claude's plan mode waits on `ExitPlanMode` approval
-    // that a pipeline has nobody to give — so they stay in build mode and the
-    // launcher discloses the difference instead.
-    expect(executionModeForSessionPhase("review", "codex")).toBe("plan");
-    expect(executionModeForSessionPhase("verify", "codex")).toBe("plan");
+  test("keeps every validation stage writable on every harness", () => {
+    expect(executionModeForSessionPhase("review", "codex")).toBe("build");
+    expect(executionModeForSessionPhase("verify", "codex")).toBe("build");
     expect(executionModeForSessionPhase("review", "claude")).toBe("build");
     expect(executionModeForSessionPhase("verify", "claude")).toBe("build");
     expect(executionModeForSessionPhase("review", "opencode")).toBe("build");

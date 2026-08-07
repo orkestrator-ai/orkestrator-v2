@@ -180,6 +180,8 @@ async function withService(
         hasMergeConflicts: boolean | null;
       } | null;
       failCommands: Set<string>;
+      failCommandsOnce: Map<string, number>;
+      currentHead: string;
       uncommittedPaths: string[];
       kanbanTasks: Map<string, {
         id: string;
@@ -235,6 +237,10 @@ async function withService(
       hasMergeConflicts: boolean | null;
     } | null,
     failCommands: new Set<string>(),
+    // Counts down a command's remaining transient failures, so a test can make
+    // a probe fail once and then succeed rather than only fail forever.
+    failCommandsOnce: new Map<string, number>(),
+    currentHead: "1111111111111111111111111111111111111111",
     uncommittedPaths: [] as string[],
     kanbanTasks,
   };
@@ -246,11 +252,19 @@ async function withService(
     if (controls.failCommands.has(command)) {
       throw new Error(`${command} failed`);
     }
+    const transient = controls.failCommandsOnce.get(command) ?? 0;
+    if (transient > 0) {
+      controls.failCommandsOnce.set(command, transient - 1);
+      throw new Error(`${command} failed transiently`);
+    }
     if (command === "detect_pr_local" || command === "detect_pr") {
       return controls.detection as T;
     }
     if (command === "get_environment_uncommitted_paths") {
-      return { paths: [...controls.uncommittedPaths] } as T;
+      return {
+        head: controls.currentHead,
+        paths: [...controls.uncommittedPaths],
+      } as T;
     }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
@@ -1053,19 +1067,260 @@ describe("BuildPipelineService", () => {
     });
   });
 
-  test("still reviews when the worktree probe fails", async () => {
-    await withService(async (service, storage, provider, _invocations, controls) => {
-      controls.failCommands.add("get_environment_uncommitted_paths");
+  // The build stage is only asked to commit, so a review can legitimately open
+  // on a dirty tree. Certification compares against that baseline rather than
+  // against cleanliness, so the leftovers must not fail a review that passed.
+  test("certifies a review that started on a dirty worktree it did not change", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      controls.uncommittedPaths = ["src/forgotten.ts", "src/forgotten.test.ts"];
       const { started } = await startBuilding(service, storage);
       await service.advanceNow(started.id);
+      const reviewing = await pipeline(storage, started.id);
+      expect(reviewing.phase).toBe("reviewing");
+      expect(reviewing.sessions.at(-1)).toMatchObject({
+        validationHeadAtStart: controls.currentHead,
+        validationWorktreeStatusAtStart: "dirty",
+        validationUncommittedPathsAtStart: ["src/forgotten.ts", "src/forgotten.test.ts"],
+      });
 
-      // A probe failure must not fail the pipeline; the reviewer is told to
-      // establish the state itself instead.
+      // Reported in a different order: the baseline is a set, not a sequence.
+      controls.uncommittedPaths = ["src/forgotten.test.ts", "src/forgotten.ts"];
+      await service.advanceNow(started.id);
+
+      expect((await pipeline(storage, started.id)).phase).toBe("verifying");
+    });
+  });
+
+  test("fails closed when validation adds a path to an already dirty worktree", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      controls.uncommittedPaths = ["src/forgotten.ts"];
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
       expect((await pipeline(storage, started.id)).phase).toBe("reviewing");
-      const review = provider.sent.at(-1)!;
-      expect(review.prompt).toContain("could not determine the worktree state");
-      expect(review.prompt).toContain("record it as a limitation");
-      expect(review.prompt).not.toContain("confirmed the environment worktree was clean");
+
+      controls.uncommittedPaths = ["src/forgotten.ts", "src/generated.ts"];
+      await service.advanceNow(started.id);
+
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: "Review cannot be certified because validation left 1 uncommitted path that was not there when it started",
+      });
+    });
+  });
+
+  // Deleting an uncommitted leftover destroys work no commit is holding, so it
+  // is a violation in the same way adding one is.
+  test("fails closed when validation removes an uncommitted path it started with", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      controls.uncommittedPaths = ["src/forgotten.ts", "src/forgotten.test.ts"];
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).phase).toBe("reviewing");
+
+      controls.uncommittedPaths = ["src/forgotten.ts"];
+      await service.advanceNow(started.id);
+
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: "Review cannot be certified because validation removed 1 uncommitted path that was there when it started",
+      });
+    });
+  });
+
+  test("fails the review before dispatching it when the worktree probe fails", async () => {
+    await withService(async (service, storage, provider, _invocations, controls) => {
+      const { started } = await startBuilding(service, storage);
+      const dispatched = provider.sent.length;
+      controls.failCommands.add("get_environment_uncommitted_paths");
+
+      await service.advanceNow(started.id);
+
+      // A state the backend cannot establish can never be certified, so the
+      // stage fails here rather than after burning an agent turn on it.
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error:
+          "Review cannot start because the backend could not establish the environment Git state: probe failed (Error)",
+      });
+      expect(provider.sent.length).toBe(dispatched);
+    });
+  });
+
+  test("retries a transient worktree probe failure instead of failing the stage", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      const { started } = await startBuilding(service, storage);
+      // One lost exec must not decide a stage the pipeline cannot recover.
+      controls.failCommandsOnce.set("get_environment_uncommitted_paths", 1);
+
+      await service.advanceNow(started.id);
+
+      const reviewing = await pipeline(storage, started.id);
+      expect(reviewing.phase).toBe("reviewing");
+      expect(reviewing.sessions.at(-1)).toMatchObject({
+        validationHeadAtStart: controls.currentHead,
+        validationWorktreeStatusAtStart: "clean",
+      });
+
+      controls.failCommandsOnce.set("get_environment_uncommitted_paths", 2);
+      await service.advanceNow(started.id);
+
+      expect((await pipeline(storage, started.id)).phase).toBe("verifying");
+    });
+  });
+
+  test("fails closed when review validation leaves an uncommitted input", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+      const reviewing = await pipeline(storage, started.id);
+      expect(reviewing.phase).toBe("reviewing");
+      expect(reviewing.sessions.at(-1)).toMatchObject({
+        validationHeadAtStart: controls.currentHead,
+        validationWorktreeStatusAtStart: "clean",
+        validationUncommittedPathsAtStart: [],
+      });
+
+      controls.uncommittedPaths = ["src/generated.ts"];
+      await service.advanceNow(started.id);
+
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: "Review cannot be certified because validation left 1 uncommitted path that was not there when it started",
+      });
+    });
+  });
+
+  // A snapshot written before the path list existed still has to certify. The
+  // "clean" status pins the baseline to the empty set on its own.
+  test("certifies a legacy baseline that recorded a clean status without paths", async () => {
+    await withService(async (service, storage) => {
+      const verifying = await startVerifying(service, storage);
+      await mutateStored(storage, verifying.id, (snapshot) => {
+        delete snapshot.sessions[snapshot.currentSessionIndex]!
+          .validationUncommittedPathsAtStart;
+      });
+
+      await service.advanceNow(verifying.id);
+
+      expect((await pipeline(storage, verifying.id)).phase).toBe("creating-pr");
+    });
+  });
+
+  // A legacy "dirty" baseline has no path set to compare against, and guessing
+  // one would either wave through an edit or reject a leftover. Fail instead.
+  test("refuses to certify a legacy dirty baseline that recorded no paths", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      controls.uncommittedPaths = ["src/forgotten.ts"];
+      const verifying = await startVerifying(service, storage);
+      expect(
+        verifying.sessions[verifying.currentSessionIndex]!.validationWorktreeStatusAtStart,
+      ).toBe("dirty");
+      await mutateStored(storage, verifying.id, (snapshot) => {
+        delete snapshot.sessions[snapshot.currentSessionIndex]!
+          .validationUncommittedPathsAtStart;
+      });
+
+      await service.advanceNow(verifying.id);
+
+      expect(await pipeline(storage, verifying.id)).toMatchObject({
+        phase: "failed",
+        error: "Verification cannot be certified because its starting Git state was not recorded",
+      });
+    });
+  });
+
+  // The addressing turn reuses the review session to write fixes, then verify
+  // opens a fresh session. Anything addressing left uncommitted is that new
+  // session's baseline, not a violation of it.
+  test("rebaselines verification against what the addressing turn left behind", async () => {
+    await withService(async (service, storage, provider, _invocations, controls) => {
+      provider.structured = async <T>() => ({
+        ok: true,
+        value: {
+          ...cleanReview,
+          issues: [{
+            severity: "P1",
+            confidence: 90,
+            category: "correctness",
+            title: "Address this exact finding",
+            file: "src/app.ts",
+            line: 12,
+            symbol: "run",
+            description: "The result is wrong.",
+            evidence: "The boundary test fails.",
+            suggestion: "Correct the boundary.",
+            verification: "Run the boundary test.",
+          }],
+          verdict: { ready: "with-fixes", reasoning: "One fix is required." },
+        },
+      }) as StructuredOutputResult<T>;
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+      await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).phase).toBe("addressing");
+
+      // The addressing turn commits its fixes and leaves a scratch file.
+      controls.currentHead = "3333333333333333333333333333333333333333";
+      controls.uncommittedPaths = ["notes/scratch.md"];
+      await service.advanceNow(started.id);
+
+      const verifying = await pipeline(storage, started.id);
+      expect(verifying.phase).toBe("verifying");
+      expect(verifying.sessions.at(-1)).toMatchObject({
+        phase: "verify",
+        validationHeadAtStart: "3333333333333333333333333333333333333333",
+        validationWorktreeStatusAtStart: "dirty",
+        validationUncommittedPathsAtStart: ["notes/scratch.md"],
+      });
+    });
+  });
+
+  test("fails closed when verification validation commits a change", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      const verifying = await startVerifying(service, storage);
+      const session = verifying.sessions[verifying.currentSessionIndex]!;
+      expect(session).toMatchObject({
+        phase: "verify",
+        validationHeadAtStart: controls.currentHead,
+        validationWorktreeStatusAtStart: "clean",
+      });
+
+      controls.currentHead = "2222222222222222222222222222222222222222";
+      await service.advanceNow(verifying.id);
+
+      expect(await pipeline(storage, verifying.id)).toMatchObject({
+        phase: "failed",
+        error: "Verification cannot be certified because validation changed the environment HEAD",
+      });
+    });
+  });
+
+  test("fails closed when Git state cannot be verified after validation", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+      controls.failCommands.add("get_environment_uncommitted_paths");
+
+      await service.advanceNow(started.id);
+
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error:
+          "Review cannot be certified because the backend could not verify Git state after validation: probe failed (Error)",
+      });
+    });
+  });
+
+  test("allows ignored validation output when Git state remains clean", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      const verifying = await startVerifying(service, storage);
+
+      // Ignored caches and build output never appear in the authoritative
+      // porcelain response, so unchanged HEAD plus no paths is the safe case.
+      controls.uncommittedPaths = [];
+      await service.advanceNow(verifying.id);
+
+      expect((await pipeline(storage, verifying.id)).phase).toBe("creating-pr");
     });
   });
 

@@ -599,49 +599,37 @@ describe("BuildLaunchDialog step markers", () => {
   });
 });
 
-describe("BuildLaunchDialog review sandbox disclosure", () => {
+describe("BuildLaunchDialog validation workspace disclosure", () => {
   const notice = /full workspace access/;
 
-  test("warns when the reviewing harness cannot be held read-only", () => {
+  test("discloses writable review and verification on the uniform card", () => {
     renderDialog();
 
-    // Uniform mode configures review and verify too, so the single visible card
-    // has to carry the disclosure.
-    expect(screen.getByText(notice).textContent).toContain("Claude");
-    expect(screen.getByText(notice).textContent).toContain("Review and verify");
+    const disclosure = screen.getByRole("note");
+    expect(disclosure.textContent).toMatch(notice);
+    expect(disclosure.textContent).toContain("Review and verify");
+    // The check covers HEAD and Git-visible paths only, so the disclosure has
+    // to name that limit rather than imply the workspace is protected.
+    expect(disclosure.textContent).toContain("Git-tracked or untracked path");
+    expect(disclosure.textContent).toContain("Ignored files are not checked");
   });
 
-  test("drops the warning once the reviewing harness is sandboxed", () => {
-    renderDialog();
-
-    chooseAgent("All steps", "Codex");
-
-    expect(screen.queryByText(notice)).toBeNull();
-  });
-
-  test("warns only on the steps that actually review", () => {
+  test("discloses only the review and verification cards when configured separately", () => {
     renderDialog();
     separateSteps();
 
-    // Build, PR and conflict resolution are meant to write, so full access
-    // there is the point rather than a surprise.
-    const notices = screen.getAllByText(notice);
-    expect(notices).toHaveLength(2);
-    for (const line of notices) {
-      expect(line.textContent).toContain("This step");
-    }
+    const disclosures = screen.getAllByRole("note");
+    expect(disclosures).toHaveLength(2);
+    expect(disclosures.every((entry) => entry.textContent?.match(notice))).toBe(true);
+    expect(disclosures.every((entry) => entry.textContent?.includes("This step"))).toBe(true);
   });
 
-  test("tracks each step's own harness once they are configured apart", () => {
+  test("keeps the disclosure when the validation harness changes", () => {
     renderDialog();
     separateSteps();
     chooseAgent("Review", "Codex");
+    chooseAgent("Verify", "OpenCode");
 
-    const notices = screen.getAllByText(notice);
-    expect(notices).toHaveLength(1);
-
-    chooseAgent("Verify", "Codex");
-
-    expect(screen.queryByText(notice)).toBeNull();
+    expect(screen.getAllByRole("note")).toHaveLength(2);
   });
 });

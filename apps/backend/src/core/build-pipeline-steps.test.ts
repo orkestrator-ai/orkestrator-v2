@@ -56,6 +56,11 @@ const cleanReview: StructuredReviewReport = {
   reviewSummary: "No findings.",
 };
 
+const CLEAN_GIT_STATE = {
+  head: "1111111111111111111111111111111111111111",
+  paths: [],
+} as const;
+
 type CreatedSession = {
   agent: BuildPipelineAgent;
   phase: PipelineSessionPhase;
@@ -243,6 +248,9 @@ async function withService(
     }
     if (command === "detect_pr_local" || command === "detect_pr") {
       return controls.detection as T;
+    }
+    if (command === "get_environment_uncommitted_paths") {
+      return CLEAN_GIT_STATE as T;
     }
     if (command === "get_kanban_tasks") return [] as T;
     return undefined as T;
@@ -458,6 +466,9 @@ async function withBridgeService(
       || command === "update_environment_agent_settings"
     ) {
       return (await storage.getEnvironment("env-1")) as T;
+    }
+    if (command === "get_environment_uncommitted_paths") {
+      return CLEAN_GIT_STATE as T;
     }
     const local = /^start_local_(claude|codex|opencode)_server_cmd$/.exec(command);
     if (local) {

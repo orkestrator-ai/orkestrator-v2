@@ -108,6 +108,11 @@ const ENVIRONMENT_OPTIONS: Array<{
   },
 ];
 
+function validationWorkspaceNotice(uniform: boolean): string {
+  const stages = uniform ? "Review and verify" : "This step";
+  return `${stages} will run with full workspace access so validation can write generated outputs and caches. Source edits and commits are forbidden and Git state is checked before the pipeline advances.`;
+}
+
 function Step({
   number,
   icon,
@@ -442,6 +447,14 @@ export function BuildLaunchDialog({
                     onChange={(agent) => handleAgentChange(key, agent)}
                     label={`${stepLabel} agent`}
                   />
+                  {(uniform || key === "review" || key === "verify") && (
+                    <p
+                      className="mt-2 text-[11px] leading-snug text-amber-400/80"
+                      role="note"
+                    >
+                      {validationWorkspaceNotice(uniform)}
+                    </p>
+                  )}
                   <div className="mt-2 grid gap-2 sm:grid-cols-2">
                     <div className="min-w-0">
                       <Label

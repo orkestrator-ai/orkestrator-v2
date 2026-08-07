@@ -41,9 +41,9 @@ export function buildPrompt(pipeline: BuildPipeline, notes: string): string {
  * the pipeline's own evidence rather than something the reviewer re-derives.
  */
 export type ReviewWorktreeSnapshot =
-  | { status: "clean" }
-  | { status: "dirty"; paths: string[] }
-  | { status: "unknown"; reason: string };
+  | { status: "clean"; head?: string }
+  | { status: "dirty"; paths: string[]; head?: string }
+  | { status: "unknown"; reason: string; head?: never };
 
 /** Keeps a pathological worktree from crowding out the rest of the prompt. */
 export const MAX_REPORTED_UNCOMMITTED_PATHS = 50;

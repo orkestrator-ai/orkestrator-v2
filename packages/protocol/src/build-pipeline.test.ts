@@ -159,6 +159,8 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline(withSession({
       origin: "build-pipeline",
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+      validationHeadAtStart: "1111111111111111111111111111111111111111",
+      validationWorktreeStatusAtStart: "clean",
     }))).toBe(true);
     expect(isBuildPipeline(withSession({
       origin: "build-pipeline",
@@ -181,6 +183,24 @@ describe("build pipeline protocol", () => {
         authorization: "await-user",
       },
     }))).toBe(false);
+
+    for (const invalid of ["", "not-a-commit", 1, null]) {
+      expect(isBuildPipeline(withSession({ validationHeadAtStart: invalid }))).toBe(false);
+    }
+    for (const invalid of ["modified", "read-only", 1, null]) {
+      expect(isBuildPipeline(withSession({
+        validationWorktreeStatusAtStart: invalid,
+      }))).toBe(false);
+    }
+    expect(isBuildPipeline(withSession({
+      validationWorktreeStatusAtStart: "clean",
+    }))).toBe(false);
+    expect(isBuildPipeline(withSession({
+      validationHeadAtStart: "1111111111111111111111111111111111111111",
+    }))).toBe(false);
+    expect(isBuildPipeline(withSession({
+      validationWorktreeStatusAtStart: "unknown",
+    }))).toBe(true);
   });
 
   test("rejects a client-authored or malformed snapshot", () => {

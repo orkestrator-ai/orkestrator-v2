@@ -106,11 +106,11 @@ history rather than two partial ones.
 ## `an ended agent turn discovers a pull request the agent created itself` (`apps/backend/src/core/pr-monitor-agent-completion.integration.test.ts:203`)
 
 - **Status:** open
-- **Date observed:** 2026-08-06
-- **Original command:** `bun run test` (workspace backend group)
+- **Date observed:** 2026-08-06; reproduced 2026-08-07
+- **Original command:** `bun run test` (workspace backend group); reproduced with the same command using two Bun workers per workspace package and Turbo workspace concurrency 2 alongside the root and bridge groups
 - **Suite counts:** 1,409 backend tests, 1 failed; every other group passed
-- **Failure:** `expect(received).not.toHaveLength(expected)` because no `PR_MONITOR_CHANGED_EVENT` had been announced; failed duration 380.34 ms
-- **Isolated rerun:** `bun test --cwd apps/backend src/core/pr-monitor-agent-completion.integration.test.ts` -> 3 passed, 0 failed in 803 ms
+- **Failure:** `expect(received).not.toHaveLength(expected)` because no `PR_MONITOR_CHANGED_EVENT` had been announced; failed duration 380.34 ms originally and 226.30 ms on 2026-08-07
+- **Isolated rerun:** `bun test ./src/core/pr-monitor-agent-completion.integration.test.ts` from `apps/backend` -> 3 passed, 0 failed, 11 assertions in 783 ms on 2026-08-07
 - **Hypothesis:** This and the preceding PR-polling test failed in separate aggregate runs but not together. Both wait on an announced PR-monitor event, so the shared hypothesis is that the event can miss the assertion window under aggregate load; no narrower root cause has been reproduced.
 
 ## `container runtime environment wiring > Codex configuration copy helpers reject destination root, parent, and file symlinks` (`tests/unit/runtime-env-wiring.test.ts`)

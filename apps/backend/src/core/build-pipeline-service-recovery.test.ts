@@ -74,6 +74,11 @@ const cleanReview: StructuredReviewReport = {
   reviewSummary: "No findings.",
 };
 
+const CLEAN_GIT_STATE = {
+  head: "1111111111111111111111111111111111111111",
+  paths: [],
+} as const;
+
 const reviewWithIssues: StructuredReviewReport = {
   ...cleanReview,
   issues: [{
@@ -257,6 +262,9 @@ async function withService(
         state: "open",
         hasMergeConflicts: false,
       } as T;
+    }
+    if (command === "get_environment_uncommitted_paths") {
+      return CLEAN_GIT_STATE as T;
     }
     if (command === "get_kanban_tasks") {
       return [...kanbanTasks.values()] as T;

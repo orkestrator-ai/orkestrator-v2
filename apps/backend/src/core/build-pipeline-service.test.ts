@@ -180,6 +180,7 @@ async function withService(
         hasMergeConflicts: boolean | null;
       } | null;
       failCommands: Set<string>;
+      currentHead: string;
       uncommittedPaths: string[];
       kanbanTasks: Map<string, {
         id: string;
@@ -235,6 +236,7 @@ async function withService(
       hasMergeConflicts: boolean | null;
     } | null,
     failCommands: new Set<string>(),
+    currentHead: "1111111111111111111111111111111111111111",
     uncommittedPaths: [] as string[],
     kanbanTasks,
   };
@@ -250,7 +252,10 @@ async function withService(
       return controls.detection as T;
     }
     if (command === "get_environment_uncommitted_paths") {
-      return { paths: [...controls.uncommittedPaths] } as T;
+      return {
+        head: controls.currentHead,
+        paths: [...controls.uncommittedPaths],
+      } as T;
     }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
@@ -1066,6 +1071,81 @@ describe("BuildPipelineService", () => {
       expect(review.prompt).toContain("could not determine the worktree state");
       expect(review.prompt).toContain("record it as a limitation");
       expect(review.prompt).not.toContain("confirmed the environment worktree was clean");
+
+      await service.advanceNow(started.id);
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: "Review cannot be certified because its starting Git state was not clean and verifiable",
+      });
+    });
+  });
+
+  test("fails closed when review validation leaves an uncommitted input", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+      const reviewing = await pipeline(storage, started.id);
+      expect(reviewing.phase).toBe("reviewing");
+      expect(reviewing.sessions.at(-1)).toMatchObject({
+        validationHeadAtStart: controls.currentHead,
+        validationWorktreeStatusAtStart: "clean",
+      });
+
+      controls.uncommittedPaths = ["src/generated.ts"];
+      await service.advanceNow(started.id);
+
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: "Review cannot be certified because validation left 1 uncommitted path",
+      });
+    });
+  });
+
+  test("fails closed when verification validation commits a change", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      const verifying = await startVerifying(service, storage);
+      const session = verifying.sessions[verifying.currentSessionIndex]!;
+      expect(session).toMatchObject({
+        phase: "verify",
+        validationHeadAtStart: controls.currentHead,
+        validationWorktreeStatusAtStart: "clean",
+      });
+
+      controls.currentHead = "2222222222222222222222222222222222222222";
+      await service.advanceNow(verifying.id);
+
+      expect(await pipeline(storage, verifying.id)).toMatchObject({
+        phase: "failed",
+        error: "Verification cannot be certified because validation changed the environment HEAD",
+      });
+    });
+  });
+
+  test("fails closed when Git state cannot be verified after validation", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      const { started } = await startBuilding(service, storage);
+      await service.advanceNow(started.id);
+      controls.failCommands.add("get_environment_uncommitted_paths");
+
+      await service.advanceNow(started.id);
+
+      expect(await pipeline(storage, started.id)).toMatchObject({
+        phase: "failed",
+        error: "Review cannot be certified because the backend could not verify Git state after validation",
+      });
+    });
+  });
+
+  test("allows ignored validation output when Git state remains clean", async () => {
+    await withService(async (service, storage, _provider, _invocations, controls) => {
+      const verifying = await startVerifying(service, storage);
+
+      // Ignored caches and build output never appear in the authoritative
+      // porcelain response, so unchanged HEAD plus no paths is the safe case.
+      controls.uncommittedPaths = [];
+      await service.advanceNow(verifying.id);
+
+      expect((await pipeline(storage, verifying.id)).phase).toBe("creating-pr");
     });
   });
 

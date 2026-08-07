@@ -535,10 +535,9 @@ done
     )).toThrow("Expected environmentId to be a string");
   });
 
-  // The build pipeline reads this before its review stage, so "clean" and
-  // "dirty" have to be distinguishable against a real Git worktree rather than
-  // inferred from a diff meant for rendering.
-  test("reports the uncommitted paths of a local environment worktree", async () => {
+  // The build pipeline reads this before and after writable validation, so HEAD
+  // and cleanliness must come from the real worktree rather than a render diff.
+  test("reports the HEAD and uncommitted paths of a local environment worktree", async () => {
     const root = await createTempDir("ork-commands-io-uncommitted-");
     const git = async (...args: string[]) => {
       await runCommand("git", args, { cwd: root, timeoutMs: 30_000 });
@@ -559,9 +558,15 @@ done
     const read = () => commands.get("get_environment_uncommitted_paths")?.(
       { environmentId: "env-1" },
       context,
-    ) as Promise<{ paths: string[] }>;
+    ) as Promise<{ head: string; paths: string[] }>;
 
-    await expect(read()).resolves.toEqual({ paths: [] });
+    const initialHead = (await runCommand(
+      "git",
+      ["rev-parse", "--verify", "HEAD^{commit}"],
+      { cwd: root, timeoutMs: 30_000 },
+    )).stdout.trim();
+
+    await expect(read()).resolves.toEqual({ head: initialHead, paths: [] });
 
     await fs.writeFile(path.join(root, "untracked.ts"), "export const b = 2;\n");
     await fs.writeFile(path.join(root, "committed.ts"), "export const a = 2;\n");
@@ -573,7 +578,9 @@ done
     expect((await read()).paths.sort()).toEqual(["committed.ts", "untracked.ts"]);
 
     await git("commit", "-m", "rest");
-    await expect(read()).resolves.toEqual({ paths: [] });
+    const committed = await read();
+    expect(committed.paths).toEqual([]);
+    expect(committed.head).not.toBe(initialHead);
   });
 
   test("rejects an unknown environment rather than reporting a clean worktree", async () => {

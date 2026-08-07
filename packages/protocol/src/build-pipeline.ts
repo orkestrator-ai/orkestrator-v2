@@ -243,6 +243,16 @@ export interface PipelineSession {
   /** Stable structured-output key for review and verification turns. */
   structuredRequestId?: string;
   /**
+   * Immutable Git state captured before a writable validation turn starts.
+   *
+   * Review and verification may write ignored compiler output and caches, but
+   * the backend refuses to accept their result if HEAD moves or Git reports an
+   * uncommitted path afterwards. Persisting the baseline keeps that guard valid
+   * across backend restarts.
+   */
+  validationHeadAtStart?: string;
+  validationWorktreeStatusAtStart?: "clean" | "dirty" | "unknown";
+  /**
    * First tick at which this session was idle with no structured result yet.
    * A turn that ends without ever producing one would otherwise poll forever.
    */
@@ -597,6 +607,16 @@ function isBuildStepConfig(value: unknown): value is BuildStepConfig {
     && isOptionalNonBlankString(value.reasoningEffort);
 }
 
+function hasValidValidationWorktreeBaseline(value: Record<string, unknown>): boolean {
+  const head = value.validationHeadAtStart;
+  const status = value.validationWorktreeStatusAtStart;
+  if (head === undefined && status === undefined) return true;
+  if (head === undefined && status === "unknown") return true;
+  return typeof head === "string"
+    && /^[0-9a-f]{40,64}$/i.test(head)
+    && (status === "clean" || status === "dirty");
+}
+
 /**
  * Only the keys in {@link BUILD_STEP_KEYS} are accepted. An unknown key would be
  * carried through the snapshot and silently never consulted, which reads as a
@@ -641,6 +661,7 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     && (value.turnStartedAt === undefined
       || isIsoDate(value.turnStartedAt))
     && isOptionalNonBlankString(value.structuredRequestId)
+    && hasValidValidationWorktreeBaseline(value)
     && (value.structuredWaitStartedAt === undefined
       || isIsoDate(value.structuredWaitStartedAt))
     && (value.interactionSummary === undefined

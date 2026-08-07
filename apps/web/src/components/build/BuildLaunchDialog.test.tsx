@@ -598,3 +598,35 @@ describe("BuildLaunchDialog step markers", () => {
     expect(connectors).toHaveLength(iconBadges(container).length - 2);
   });
 });
+
+describe("BuildLaunchDialog validation workspace disclosure", () => {
+  const notice = /full workspace access/;
+
+  test("discloses writable review and verification on the uniform card", () => {
+    renderDialog();
+
+    const disclosure = screen.getByRole("note");
+    expect(disclosure.textContent).toMatch(notice);
+    expect(disclosure.textContent).toContain("Review and verify");
+    expect(disclosure.textContent).toContain("Git state is checked");
+  });
+
+  test("discloses only the review and verification cards when configured separately", () => {
+    renderDialog();
+    separateSteps();
+
+    const disclosures = screen.getAllByRole("note");
+    expect(disclosures).toHaveLength(2);
+    expect(disclosures.every((entry) => entry.textContent?.match(notice))).toBe(true);
+    expect(disclosures.every((entry) => entry.textContent?.includes("This step"))).toBe(true);
+  });
+
+  test("keeps the disclosure when the validation harness changes", () => {
+    renderDialog();
+    separateSteps();
+    chooseAgent("Review", "Codex");
+    chooseAgent("Verify", "OpenCode");
+
+    expect(screen.getAllByRole("note")).toHaveLength(2);
+  });
+});

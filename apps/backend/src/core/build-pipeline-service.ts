@@ -1441,17 +1441,23 @@ export class BuildPipelineService {
     pipeline: BuildPipeline,
   ): Promise<ReviewWorktreeSnapshot> {
     try {
-      const result = await this.invoke<{ paths?: unknown }>(
+      const result = await this.invoke<{ head?: unknown; paths?: unknown }>(
         "get_environment_uncommitted_paths",
         { environmentId: pipeline.environmentId },
       );
       const paths = result?.paths;
-      if (!Array.isArray(paths) || paths.some((entry) => typeof entry !== "string")) {
+      const head = result?.head;
+      if (
+        typeof head !== "string"
+        || !/^[0-9a-f]{40,64}$/i.test(head)
+        || !Array.isArray(paths)
+        || paths.some((entry) => typeof entry !== "string")
+      ) {
         return { status: "unknown", reason: "the worktree probe returned an unusable result" };
       }
       return paths.length === 0
-        ? { status: "clean" }
-        : { status: "dirty", paths: paths as string[] };
+        ? { status: "clean", head }
+        : { status: "dirty", paths: paths as string[], head };
     } catch (error) {
       // The message can quote repository paths, so only the error class name is
       // kept, and only after stripping anything that is not a bare identifier.
@@ -1459,6 +1465,42 @@ export class BuildPipelineService {
         ? error.name.replace(/[^A-Za-z0-9_]/g, "").slice(0, 40)
         : "";
       return { status: "unknown", reason: name ? `probe failed (${name})` : "probe failed" };
+    }
+  }
+
+  /**
+   * A writable validation turn may leave ignored output behind, but it must not
+   * change the commit or any path Git considers part of the worktree. This is
+   * backend-enforced because prompt instructions are not an isolation boundary.
+   */
+  private async assertValidationWorktreeUnchanged(
+    pipeline: BuildPipeline,
+    session: PipelineSession,
+  ): Promise<void> {
+    const stage = session.phase === "review" ? "Review" : "Verification";
+    if (
+      session.validationWorktreeStatusAtStart !== "clean"
+      || !session.validationHeadAtStart
+    ) {
+      throw new Error(
+        `${stage} cannot be certified because its starting Git state was not clean and verifiable`,
+      );
+    }
+    const current = await this.reviewWorktreeSnapshot(pipeline);
+    if (current.status === "unknown" || !current.head) {
+      throw new Error(
+        `${stage} cannot be certified because the backend could not verify Git state after validation`,
+      );
+    }
+    if (current.head !== session.validationHeadAtStart) {
+      throw new Error(
+        `${stage} cannot be certified because validation changed the environment HEAD`,
+      );
+    }
+    if (current.status === "dirty") {
+      throw new Error(
+        `${stage} cannot be certified because validation left ${current.paths.length} uncommitted ${current.paths.length === 1 ? "path" : "paths"}`,
+      );
     }
   }
 
@@ -1652,6 +1694,8 @@ export class BuildPipelineService {
       messages: [],
       messageRevision: 0,
       structuredRequestId: schema !== undefined ? requestId : undefined,
+      validationHeadAtStart: stagePrompt.validationWorktree?.head,
+      validationWorktreeStatusAtStart: stagePrompt.validationWorktree?.status,
     };
     pipeline.sessions.push(session);
     pipeline.currentSessionIndex = pipeline.sessions.length - 1;
@@ -1761,7 +1805,12 @@ export class BuildPipelineService {
   private async promptFor(
     pipeline: BuildPipeline,
     phase: PipelineSessionPhase,
-  ): Promise<{ prompt: string; schema?: JsonSchema; images: BuildPipeline["taskSnapshot"]["images"] }> {
+  ): Promise<{
+    prompt: string;
+    schema?: JsonSchema;
+    images: BuildPipeline["taskSnapshot"]["images"];
+    validationWorktree?: ReviewWorktreeSnapshot;
+  }> {
     const notes = (await this.storage.getProjectNotes(pipeline.projectId)).content;
     const config = await this.storage.loadConfig();
     const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
@@ -1770,23 +1819,27 @@ export class BuildPipelineService {
       return { prompt: buildPrompt(pipeline, notes), images: pipeline.taskSnapshot.images };
     }
     if (phase === "review") {
+      const validationWorktree = await this.reviewWorktreeSnapshot(pipeline);
       return {
         prompt: reviewPrompt(
           pipeline,
           notes,
           target,
           config.global.reviewInstruction,
-          await this.reviewWorktreeSnapshot(pipeline),
+          validationWorktree,
         ),
         schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
         images: pipeline.taskSnapshot.images,
+        validationWorktree,
       };
     }
     if (phase === "verify") {
+      const validationWorktree = await this.reviewWorktreeSnapshot(pipeline);
       return {
         prompt: verificationPrompt(pipeline, notes, target),
         schema: VERIFICATION_SCHEMA,
         images: pipeline.taskSnapshot.images,
+        validationWorktree,
       };
     }
     if (phase === "fix") {
@@ -1817,6 +1870,7 @@ export class BuildPipelineService {
       await this.awaitStructuredResult(pipeline, session, "review");
       return;
     }
+    await this.assertValidationWorktreeUnchanged(pipeline, session);
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
     const report = parseStructuredReviewReport(result.value, {
@@ -1869,6 +1923,7 @@ export class BuildPipelineService {
       await this.awaitStructuredResult(pipeline, session, "verification");
       return;
     }
+    await this.assertValidationWorktreeUnchanged(pipeline, session);
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
     if (!isVerificationVerdict(result.value)) {

@@ -6,6 +6,7 @@ import {
   GitMerge,
   GitPullRequest,
   Hammer,
+  ListChecks,
   MessageSquare,
   ScanSearch,
   ShieldCheck,
@@ -73,8 +74,14 @@ const BUILD_STEPS: Array<{
   {
     key: "review",
     title: "Review",
-    description: "Reviews the diff and addresses its own findings.",
+    description: "Reviews the diff and identifies issues and coverage gaps.",
     icon: <ScanSearch className="size-4" />,
+  },
+  {
+    key: "address",
+    title: "Address issues",
+    description: "Continues from the review context and fixes its findings.",
+    icon: <ListChecks className="size-4" />,
   },
   {
     key: "verify",
@@ -235,7 +242,7 @@ export function BuildLaunchDialog({
   const [steps, setSteps] = useState(() =>
     initialSteps(defaultAgent, catalog, preferredModels, preferredReasoningEfforts));
   // On by default: one configuration for the whole pipeline is the common case,
-  // and it keeps four extra step sections out of the way until they are wanted.
+  // and it keeps five extra step sections out of the way until they are wanted.
   const [uniform, setUniform] = useState(true);
   const [includeComments, setIncludeComments] = useState(
     commentContext?.defaultIncluded ?? true,
@@ -466,8 +473,8 @@ export function BuildLaunchDialog({
                     Use one configuration for every step
                   </span>
                   <span className="mt-0.5 block text-[11px] font-normal leading-snug text-zinc-500">
-                    Untick to give build, review, verify, PR and conflict
-                    resolution their own agent, model and reasoning.
+                    Untick to give build, review, address issues, verify, PR and
+                    conflict resolution their own agent, model and reasoning.
                   </span>
                 </Label>
               </div>
@@ -490,7 +497,7 @@ export function BuildLaunchDialog({
                     </Label>
                     <p className="mt-0.5 text-[11px] leading-snug text-zinc-500">
                       {uniform
-                        ? "Build, review, verify, PR and conflict resolution all run this way."
+                        ? "Build, review, address issues, verify, PR and conflict resolution all run this way."
                         : description}
                     </p>
                   </div>

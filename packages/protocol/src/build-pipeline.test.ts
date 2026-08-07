@@ -957,6 +957,7 @@ describe("build pipeline protocol", () => {
     const steps = {
       build: { agent: "claude", model: "claude-a", reasoningEffort: "high" },
       review: { agent: "codex" },
+      address: { agent: "opencode", model: "provider/model" },
     };
     expect(isBuildPipeline({ ...base, steps })).toBe(true);
     expect(isBuildPipeline({
@@ -1115,6 +1116,7 @@ describe("build pipeline protocol", () => {
   test("maps every phase to its own step, except the fix stage", () => {
     expect(stepKeyForSessionPhase("build")).toBe("build");
     expect(stepKeyForSessionPhase("review")).toBe("review");
+    expect(stepKeyForSessionPhase("address")).toBe("address");
     expect(stepKeyForSessionPhase("verify")).toBe("verify");
     expect(stepKeyForSessionPhase("pr")).toBe("pr");
     expect(stepKeyForSessionPhase("resolve-conflicts")).toBe("resolve-conflicts");
@@ -1130,6 +1132,7 @@ describe("build pipeline protocol", () => {
     const expected: Record<PipelineSessionPhase, BuildStepKey> = {
       build: "build",
       review: "review",
+      address: "address",
       verify: "verify",
       fix: "build",
       pr: "pr",
@@ -1153,6 +1156,7 @@ describe("build pipeline protocol", () => {
     expect([...BUILD_STEP_KEYS]).toEqual([
       "build",
       "review",
+      "address",
       "verify",
       "pr",
       "resolve-conflicts",
@@ -1163,7 +1167,7 @@ describe("build pipeline protocol", () => {
     expect(() => {
       (BUILD_STEP_KEYS as BuildStepKey[]).push("fix" as BuildStepKey);
     }).toThrow();
-    expect(BUILD_STEP_KEYS).toHaveLength(5);
+    expect(BUILD_STEP_KEYS).toHaveLength(6);
   });
 
   test("classifies only nonterminal, nonpaused phases as active", () => {
@@ -1532,6 +1536,7 @@ describe("execution mode policy", () => {
   test("never sandboxes a stage that has to write", () => {
     const writing: PipelineSessionPhase[] = [
       "build",
+      "address",
       "fix",
       "pr",
       "resolve-conflicts",

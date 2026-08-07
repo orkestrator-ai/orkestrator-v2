@@ -105,7 +105,14 @@ function renderDialog(
   return { onConfirm, ...render(<BuildLaunchDialog {...props} />) };
 }
 
-type StepLabel = "All steps" | "Build" | "Review" | "Verify" | "PR" | "Conflicts";
+type StepLabel =
+  | "All steps"
+  | "Build"
+  | "Review"
+  | "Address issues"
+  | "Verify"
+  | "PR"
+  | "Conflicts";
 
 function chooseAgent(step: StepLabel, agent: string) {
   const group = screen.getByRole("radiogroup", { name: `${step} agent` });
@@ -170,6 +177,7 @@ describe("BuildLaunchDialog", () => {
       steps: {
         build: shared,
         review: shared,
+        address: shared,
         verify: shared,
         pr: shared,
         "resolve-conflicts": shared,
@@ -182,8 +190,8 @@ describe("BuildLaunchDialog", () => {
     const environment = screen.getByRole("radiogroup", { name: "Build environment" });
 
     separateSteps();
-    // One environment control for the whole pipeline, five agent controls.
-    expect(screen.getAllByRole("radiogroup").length).toBe(6);
+    // One environment control for the whole pipeline, six agent controls.
+    expect(screen.getAllByRole("radiogroup").length).toBe(7);
     fireEvent.click(within(environment).getByRole("radio", { name: /^Local/ }));
     submit();
 
@@ -208,6 +216,8 @@ describe("BuildLaunchDialog", () => {
 
     separateSteps();
     chooseAgent("Review", "Codex");
+    chooseModel("Address issues", "Claude B");
+    chooseEffort("Address issues", "Extra high");
     chooseAgent("Verify", "OpenCode");
     chooseAgent("PR", "Codex");
     chooseAgent("Conflicts", "OpenCode");
@@ -218,6 +228,7 @@ describe("BuildLaunchDialog", () => {
     expect(onConfirm.mock.calls[0]![0].steps).toEqual({
       build: claudeDefault,
       review: { agent: "codex", model: "codex-a", reasoningEffort: "high" },
+      address: { agent: "claude", model: "claude-b", reasoningEffort: "xhigh" },
       // OpenCode A exposes no efforts, so the step submits none.
       verify: { agent: "opencode", model: "provider/model-a", reasoningEffort: undefined },
       pr: { agent: "codex", model: "codex-a", reasoningEffort: undefined },
@@ -249,6 +260,7 @@ describe("BuildLaunchDialog", () => {
     expect(onConfirm.mock.calls[0]![0].steps).toEqual({
       build: shared,
       review: shared,
+      address: shared,
       verify: shared,
       pr: shared,
       "resolve-conflicts": shared,
@@ -266,6 +278,7 @@ describe("BuildLaunchDialog", () => {
     const steps = onConfirm.mock.calls[0]![0].steps;
     expect(steps.build.agent).toBe("claude");
     expect(steps.review.agent).toBe("codex");
+    expect(steps.address.agent).toBe("codex");
     expect(steps["resolve-conflicts"].agent).toBe("codex");
   });
 
@@ -503,7 +516,7 @@ describe("BuildLaunchDialog", () => {
     expect(onConfirm.mock.calls[0]![0].steps.review.agent).toBe("codex");
   });
 
-  test("unticking keeps the shared model and reasoning on all five steps", () => {
+  test("unticking keeps the shared model and reasoning on all six steps", () => {
     const { onConfirm } = renderDialog();
 
     chooseAgent("All steps", "Codex");
@@ -519,6 +532,7 @@ describe("BuildLaunchDialog", () => {
     expect(onConfirm.mock.calls[0]![0].steps).toEqual({
       build: shared,
       review: shared,
+      address: shared,
       verify: shared,
       pr: shared,
       "resolve-conflicts": shared,
@@ -546,6 +560,7 @@ describe("BuildLaunchDialog", () => {
     expect(onConfirm.mock.calls[0]![0].steps).toEqual({
       build: shared,
       review: shared,
+      address: shared,
       verify: shared,
       pr: shared,
       "resolve-conflicts": shared,
@@ -571,13 +586,13 @@ describe("BuildLaunchDialog step markers", () => {
   test("renders one badge for the header, the environment and each visible step", () => {
     const { container } = renderDialog();
 
-    // Uniform mode collapses the five steps onto one card.
+    // Uniform mode collapses the six steps onto one card.
     expect(iconBadges(container)).toHaveLength(3);
 
     separateSteps();
 
-    // Header + environment + build, review, verify, PR and conflicts.
-    expect(iconBadges(container)).toHaveLength(7);
+    // Header + environment + build, review, address, verify, PR and conflicts.
+    expect(iconBadges(container)).toHaveLength(8);
   });
 
   test("numbers the steps from the environment onwards", () => {
@@ -587,7 +602,7 @@ describe("BuildLaunchDialog step markers", () => {
     const numbers = iconBadges(container)
       .map((badge) => badge.querySelector("span")?.textContent)
       .filter((label) => label !== undefined && label !== "");
-    expect(numbers).toEqual(["1", "2", "3", "4", "5", "6"]);
+    expect(numbers).toEqual(["1", "2", "3", "4", "5", "6", "7"]);
   });
 
   test("shapes every badge identically and never lets one squash", () => {

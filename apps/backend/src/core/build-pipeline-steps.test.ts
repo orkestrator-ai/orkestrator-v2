@@ -71,6 +71,7 @@ type CreatedSession = {
 type SentPrompt = {
   agent: BuildPipelineAgent;
   sessionId: string;
+  prompt: string;
   model?: string;
   effort?: string;
 };
@@ -130,7 +131,7 @@ class RecordingProvider implements BuildPipelineProvider {
 
   async send(
     sessionId: string,
-    _prompt: string,
+    prompt: string,
     options: ProviderSendOptions,
   ): Promise<void> {
     const error = this.sendErrors.shift();
@@ -139,6 +140,7 @@ class RecordingProvider implements BuildPipelineProvider {
     this.sent.push({
       agent: this.agent,
       sessionId,
+      prompt,
       model: options.model,
       effort: options.effort,
     });
@@ -491,6 +493,7 @@ async function withBridgeService(
 const steps = {
   build: { agent: "claude" as const, model: "claude-a", reasoningEffort: "high" },
   review: { agent: "codex" as const, model: "codex-b", reasoningEffort: "low" },
+  address: { agent: "claude" as const, model: "claude-address", reasoningEffort: "high" },
   verify: { agent: "opencode" as const, model: "opencode/c" },
   pr: { agent: "codex" as const, model: "codex-pr" },
   "resolve-conflicts": { agent: "claude" as const, model: "claude-conflicts" },
@@ -633,12 +636,12 @@ describe("per-step build configuration", () => {
       await service.advanceNow(started.id);
 
       expect(sent).toHaveLength(2);
-      expect(sent.at(-1)).toEqual({
+      expect(sent.at(-1)).toEqual(expect.objectContaining({
         agent: "codex",
         sessionId: review.sdkSessionId,
         model: "codex-b",
         effort: "low",
-      });
+      }));
       expect((await snapshot(storage, started.id)).pendingPromptAttempt)
         .toBeUndefined();
     });
@@ -1266,12 +1269,12 @@ describe("per-step stage coverage", () => {
       await service.advanceNow(started.id);
 
       expect(sent.slice(before)).toEqual([
-        {
+        expect.objectContaining({
           agent: "claude",
           sessionId: session.sdkSessionId,
           model: undefined,
           effort: undefined,
-        },
+        }),
       ]);
     });
   });
@@ -1562,8 +1565,8 @@ describe("per-step execution modes", () => {
     });
   });
 
-  test("keeps the writable review session in build mode when addressing findings", async () => {
-    await withService(async ({ service, storage, providerFor }) => {
+  test("runs addressing in a fresh session with its own configured harness and model", async () => {
+    await withService(async ({ service, storage, providerFor, created, sent }) => {
       const codex = providerFor("codex");
       codex.structured = async <T>(
         sessionId: string,
@@ -1595,14 +1598,35 @@ describe("per-step execution modes", () => {
       const started = await service.start({
         ...startInput(),
         agentType: "codex",
-        steps: { build: { agent: "codex" }, review: { agent: "codex" } },
+        steps: {
+          build: { agent: "codex" },
+          review: { agent: "codex" },
+          address: {
+            agent: "opencode",
+            model: "provider/address-model",
+            reasoningEffort: "high",
+          },
+        },
       });
       await advanceToStage(service, storage, started.id, "verify");
 
-      // The review session is reused to write the fixes. It already has write
-      // access for validation, and the addressing turn explicitly stays in
-      // build mode as well.
-      expect(codex.sentModes.slice(0, 3)).toEqual(["build", "build", "build"]);
+      const opencode = providerFor("opencode");
+      expect(opencode.createdModes).toContainEqual(["address", "build"]);
+      expect(created).toContainEqual({
+        agent: "opencode",
+        phase: "address",
+        model: "provider/address-model",
+        effort: "high",
+      });
+      expect(sent).toContainEqual(expect.objectContaining({
+        agent: "opencode",
+        model: "provider/address-model",
+        effort: "high",
+      }));
+      const addressDispatch = sent.find((entry) => entry.agent === "opencode");
+      expect(addressDispatch?.prompt).toContain("orkestrator-handoff-transcript-json");
+      expect(addressDispatch?.prompt).toContain("Off-by-one");
+      expect(codex.sentModes.slice(0, 2)).toEqual(["build", "build"]);
     });
   });
 });

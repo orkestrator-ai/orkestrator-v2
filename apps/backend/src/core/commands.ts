@@ -4660,6 +4660,7 @@ async function startEnvironmentOnce(
       unpersistedContainerId = null;
     }
     await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
+    await ensureContainerProjectFilesAccess(containerId);
     const config = await storage.loadConfig();
     const githubToken = await resolveContainerGitHubToken(config.global);
     await syncContainerGitHubCredential(containerId, githubToken);
@@ -7317,6 +7318,31 @@ async function syncContainerGitHubCredential(
   );
 }
 
+// `docker cp` behaves like `cp -a`: it preserves the staging tree's modes and
+// makes files copied into a container root-owned. The staging root comes from
+// `mkdtemp` (0700), so the image's `node` user cannot even traverse
+// `/project-files` until access is repaired after the container starts. Keep the
+// files root-owned and private, but let the node group read files and traverse
+// directories so workspace-setup.sh can copy them into the workspace.
+const ENSURE_CONTAINER_PROJECT_FILES_ACCESS_COMMAND =
+  "if [ -d /project-files ]; then chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files; fi";
+
+async function ensureContainerProjectFilesAccess(containerId: string): Promise<void> {
+  await runCommand(
+    "docker",
+    [
+      "exec",
+      "--user",
+      "root",
+      containerId,
+      "sh",
+      "-c",
+      ENSURE_CONTAINER_PROJECT_FILES_ACCESS_COMMAND,
+    ],
+    { timeoutMs: 30_000 },
+  );
+}
+
 async function createDockerContainer(environment: Environment, context: CommandContext): Promise<string> {
   const project = await context.storage.getProject(environment.projectId);
   if (!project) throw new Error(`Project not found: ${environment.projectId}`);
@@ -9234,6 +9260,7 @@ export function createCommandRegistry(
   register("docker_start_container", async ({ containerId }, { storage }) => {
     const id = asString(containerId, "containerId");
     await runCommand("docker", ["start", id], { timeoutMs: 60_000 });
+    await ensureContainerProjectFilesAccess(id);
     const config = await storage.loadConfig();
     await syncContainerGitHubCredential(
       id,

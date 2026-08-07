@@ -323,6 +323,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   }, [filteredIssues]);
 
   const selectedPipeline = selectedIssueId ? getIssuePipeline(pipelines, selectedIssueId) : undefined;
+  const hasActiveBuild = isActivePipeline(selectedPipeline);
   const selectedIssueSummary = selectedIssueId ? issues.find((issue) => issue.id === selectedIssueId) : undefined;
 
   const loadDetail = useCallback(async (issueId: string) => {
@@ -375,6 +376,19 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
 
   const handleStartBuild = async (selection: BuildLaunchSelection) => {
     if (!detail) return;
+    // A build can be admitted by another tab while this launcher is open. Read
+    // the authoritative store again at confirmation time so a stale render can
+    // never submit configuration that the backend will discard in favour of the
+    // already-active admission.
+    const activePipeline = getIssuePipeline(
+      useBuildPipelineStore.getState().pipelines,
+      detail.id,
+    );
+    if (activePipeline && isActivePipeline(activePipeline)) {
+      setBuildDialogOpen(false);
+      await navigateToPipeline(activePipeline);
+      return;
+    }
     setBuildDialogOpen(false);
     setIsBuildStarting(true);
     try {
@@ -630,7 +644,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={isBuildStarting || isActivePipeline(selectedPipeline)}
+                    disabled={isBuildStarting || hasActiveBuild}
                     onClick={() => setBuildDialogOpen(true)}
                   >
                     {isBuildStarting ? (
@@ -711,7 +725,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
           open={buildDialogOpen}
           onOpenChange={setBuildDialogOpen}
           catalog={launchCatalog}
-          busy={isBuildStarting}
+          busy={isBuildStarting || hasActiveBuild}
           {...launchDefaults}
           onConfirm={(selection) => void handleStartBuild(selection)}
         />

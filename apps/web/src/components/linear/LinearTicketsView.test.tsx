@@ -321,6 +321,45 @@ describe("LinearTicketsView", () => {
     });
   });
 
+  test("blocks an open launcher when a build becomes active in the background", async () => {
+    renderLinearTicketsView();
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    await screen.findByText("Build Linear support");
+    fireEvent.click(screen.getByRole("button", { name: /^build/i }));
+
+    const startButton = await screen.findByRole("button", {
+      name: "Start build",
+    }) as HTMLButtonElement;
+    const form = startButton.closest("form");
+    expect(form).not.toBeNull();
+    expect(startButton.disabled).toBe(false);
+
+    const activePipeline = buildPipelineFixture({
+      id: "linear-background-build",
+      taskId: "issue-1",
+      environmentId: "env-background-build",
+      phase: "building",
+      source: {
+        type: "linear",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-123",
+      },
+    });
+    act(() => {
+      useBuildPipelineStore.getState().replacePipeline(activePipeline);
+    });
+
+    await waitFor(() => expect(startButton.disabled).toBe(true));
+
+    // A programmatic submit bypasses the disabled button and exercises the
+    // confirmation-time store guard against a stale event ordering.
+    fireEvent.submit(form!);
+    await waitFor(() => {
+      expect(navigateToPipelineMock).toHaveBeenCalledWith(activePipeline);
+    });
+    expect(startBuildFromLinearIssueMock).not.toHaveBeenCalled();
+  });
+
   test("posts a new Linear comment from ticket details", async () => {
     renderLinearTicketsView();
 

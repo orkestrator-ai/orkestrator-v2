@@ -27,6 +27,7 @@ export type LinearIssueListItem = {
   status: string;
   statusType?: string;
   sortOrder?: number;
+  priority?: number;
   updatedAt: string;
   createdAt?: string;
   url?: string;
@@ -197,6 +198,7 @@ function issueFromNode(value: unknown): LinearIssueListItem | null {
     status: asString(state.name, "No status"),
     statusType: optionalString(state.type),
     sortOrder: optionalNumber(value.sortOrder),
+    priority: optionalNumber(value.priority),
     updatedAt,
     createdAt: optionalString(value.createdAt),
     url: optionalString(value.url),
@@ -297,6 +299,7 @@ export async function listLinearIssues(apiKey: string): Promise<LinearIssueListI
             identifier
             title
             sortOrder
+            priority
             updatedAt
             createdAt
             url
@@ -338,6 +341,7 @@ export async function getLinearIssue(apiKey: string, issueId: string): Promise<L
         title
         description
         sortOrder
+        priority
         updatedAt
         createdAt
         url

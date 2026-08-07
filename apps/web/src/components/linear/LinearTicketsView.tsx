@@ -26,6 +26,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
@@ -67,6 +74,7 @@ interface LinearTicketsViewContentProps extends LinearTicketsViewProps {
 }
 
 type LoadState = "idle" | "loading" | "loaded" | "error";
+type IssueOrder = "priority" | "createdAt" | "updatedAt";
 
 const isStringDraft = (value: unknown): value is string => typeof value === "string";
 const isBlankDraft = (value: string): boolean => value.length === 0;
@@ -96,6 +104,42 @@ function getIssuePipeline(pipelines: Map<string, BuildPipeline>, issueId: string
 
 function isActivePipeline(pipeline: BuildPipeline | undefined): boolean {
   return !!pipeline && !["complete", "failed"].includes(pipeline.phase);
+}
+
+const PRIORITY_BY_LABEL: Record<string, number> = {
+  urgent: 1,
+  high: 2,
+  medium: 3,
+  normal: 3,
+  low: 4,
+};
+
+function compareIssueOrder(
+  a: LinearIssueListItem,
+  b: LinearIssueListItem,
+  order: IssueOrder,
+): number {
+  if (order === "priority") {
+    const aPriority = a.priority && a.priority > 0
+      ? a.priority
+      : PRIORITY_BY_LABEL[a.priorityLabel?.toLowerCase() ?? ""];
+    const bPriority = b.priority && b.priority > 0
+      ? b.priority
+      : PRIORITY_BY_LABEL[b.priorityLabel?.toLowerCase() ?? ""];
+    if (aPriority !== undefined && bPriority !== undefined) {
+      return aPriority - bPriority;
+    }
+    if (aPriority !== undefined) return -1;
+    if (bPriority !== undefined) return 1;
+    return 0;
+  }
+
+  const aDate = a[order];
+  const bDate = b[order];
+  if (aDate && bDate) return bDate.localeCompare(aDate);
+  if (aDate) return -1;
+  if (bDate) return 1;
+  return 0;
 }
 
 function IssueMetadata({ issue }: { issue: LinearIssueListItem | LinearIssueDetail }) {
@@ -213,6 +257,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const [issuesState, setIssuesState] = useState<LoadState>("idle");
   const [issuesError, setIssuesError] = useState<string | null>(null);
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set());
+  const [issueOrder, setIssueOrder] = useState<IssueOrder>("priority");
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
   const [detail, setDetail] = useState<LinearIssueDetail | null>(null);
   const [detailState, setDetailState] = useState<LoadState>("idle");
@@ -314,13 +359,15 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
 
   const groupedIssues = useMemo(() => {
     const groups = new Map<string, LinearIssueListItem[]>();
-    for (const issue of filteredIssues) {
+    const orderedIssues = [...filteredIssues].sort((a, b) =>
+      compareIssueOrder(a, b, issueOrder));
+    for (const issue of orderedIssues) {
       const group = groups.get(issue.status) ?? [];
       group.push(issue);
       groups.set(issue.status, group);
     }
     return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [filteredIssues]);
+  }, [filteredIssues, issueOrder]);
 
   const selectedPipeline = selectedIssueId ? getIssuePipeline(pipelines, selectedIssueId) : undefined;
   const hasActiveBuild = isActivePipeline(selectedPipeline);
@@ -396,7 +443,10 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
         detail,
         projectId,
         selection.environmentType,
-        { steps: selection.steps },
+        {
+          steps: selection.steps,
+          includeComments: selection.includeComments ?? true,
+        },
       );
     } finally {
       setIsBuildStarting(false);
@@ -726,6 +776,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
           onOpenChange={setBuildDialogOpen}
           catalog={launchCatalog}
           busy={isBuildStarting || hasActiveBuild}
+          commentContext={detail && detail.comments.length > 0
+            ? { count: detail.comments.length }
+            : undefined}
           {...launchDefaults}
           onConfirm={(selection) => void handleStartBuild(selection)}
         />
@@ -783,33 +836,50 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
       ) : (
         <>
           <div className="border-b border-border px-6 py-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-medium text-muted-foreground">Status</span>
-              {statusCounts.map(([status, count]) => {
-                const checked = selectedStatuses.has(status);
-                return (
-                  <label
-                    key={status}
-                    className={cn(
-                      "inline-flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors",
-                      checked ? "border-primary bg-primary/10 text-foreground" : "border-border bg-background text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={() => handleToggleStatus(status)}
-                      className="h-3.5 w-3.5"
-                    />
-                    <span>{status}</span>
-                    <span className="text-muted-foreground">{count}</span>
-                  </label>
-                );
-              })}
-              {selectedStatuses.size > 0 && (
-                <Button size="sm" variant="ghost" onClick={() => setSelectedStatuses(new Set())}>
-                  Clear
-                </Button>
-              )}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Status</span>
+                {statusCounts.map(([status, count]) => {
+                  const checked = selectedStatuses.has(status);
+                  return (
+                    <label
+                      key={status}
+                      className={cn(
+                        "inline-flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors",
+                        checked ? "border-primary bg-primary/10 text-foreground" : "border-border bg-background text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={() => handleToggleStatus(status)}
+                        className="h-3.5 w-3.5"
+                      />
+                      <span>{status}</span>
+                      <span className="text-muted-foreground">{count}</span>
+                    </label>
+                  );
+                })}
+                {selectedStatuses.size > 0 && (
+                  <Button size="sm" variant="ghost" onClick={() => setSelectedStatuses(new Set())}>
+                    Clear
+                  </Button>
+                )}
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                <label htmlFor="linear-ticket-order" className="text-xs font-medium text-muted-foreground">
+                  Order by
+                </label>
+                <Select value={issueOrder} onValueChange={(value) => setIssueOrder(value as IssueOrder)}>
+                  <SelectTrigger id="linear-ticket-order" size="sm" className="min-w-32" aria-label="Order Linear tickets by">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent align="end">
+                    <SelectItem value="priority">Priority</SelectItem>
+                    <SelectItem value="createdAt">Created date</SelectItem>
+                    <SelectItem value="updatedAt">Updated date</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </div>
 

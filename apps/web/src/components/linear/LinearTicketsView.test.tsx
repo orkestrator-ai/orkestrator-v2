@@ -284,6 +284,84 @@ describe("LinearTicketsView", () => {
     expect(titles).toEqual(["Gamma ticket", "Alpha ticket", "Beta ticket"]);
   });
 
+  test("orders tickets within each status by priority, created date, or updated date", async () => {
+    const sortableIssues: LinearIssueListItem[] = [
+      {
+        id: "issue-low",
+        identifier: "ENG-LOW",
+        title: "Low ticket",
+        status: "Todo",
+        priority: 4,
+        priorityLabel: "Low",
+        createdAt: "2026-06-28T12:00:00.000Z",
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "issue-urgent",
+        identifier: "ENG-URGENT",
+        title: "Urgent ticket",
+        status: "Todo",
+        priorityLabel: "Urgent",
+        createdAt: "2026-06-20T12:00:00.000Z",
+        updatedAt: "2026-06-21T12:00:00.000Z",
+      },
+      {
+        id: "issue-high",
+        identifier: "ENG-HIGH",
+        title: "High ticket",
+        status: "Todo",
+        priority: 2,
+        priorityLabel: "High",
+        createdAt: "2026-06-30T12:00:00.000Z",
+        updatedAt: "2026-06-25T12:00:00.000Z",
+      },
+      {
+        id: "issue-unprioritized",
+        identifier: "ENG-NONE",
+        title: "Unprioritized ticket",
+        status: "Todo",
+        priority: 0,
+        priorityLabel: "No priority",
+        updatedAt: "2026-07-01T12:00:00.000Z",
+      },
+    ];
+    getLinearIssuesMock.mockResolvedValue(sortableIssues);
+    const visibleTitles = () =>
+      screen.getAllByText(/ ticket$/).map((element) => element.textContent);
+
+    renderLinearTicketsView();
+
+    await screen.findByText("Urgent ticket");
+    expect(visibleTitles()).toEqual([
+      "Urgent ticket",
+      "High ticket",
+      "Low ticket",
+      "Unprioritized ticket",
+    ]);
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Created date" }));
+    await waitFor(() => {
+      expect(visibleTitles()).toEqual([
+        "High ticket",
+        "Low ticket",
+        "Urgent ticket",
+        "Unprioritized ticket",
+      ]);
+    });
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Updated date" }));
+    await waitFor(() => {
+      expect(visibleTitles()).toEqual([
+        "Unprioritized ticket",
+        "Low ticket",
+        "High ticket",
+        "Urgent ticket",
+      ]);
+    });
+  });
+
   test("opens the shared build launcher and starts a configured Linear-backed build", async () => {
     renderLinearTicketsView();
 
@@ -299,6 +377,11 @@ describe("LinearTicketsView", () => {
     expect(await screen.findByRole("heading", { name: "Configure build" })).toBeTruthy();
     expect(screen.getByRole("radiogroup", { name: "Build environment" })).toBeTruthy();
     expect(screen.getByRole("radiogroup", { name: "All steps agent" })).toBeTruthy();
+    const includeComments = screen.getByRole("checkbox", {
+      name: "Include 1 comment in build context",
+    }) as HTMLButtonElement;
+    expect(includeComments.getAttribute("data-state")).toBe("checked");
+    fireEvent.click(includeComments);
     fireEvent.click(screen.getByRole("checkbox", {
       name: /Use one configuration for every step/,
     }));
@@ -312,6 +395,7 @@ describe("LinearTicketsView", () => {
         "project-1",
         "local",
         {
+          includeComments: false,
           steps: expect.objectContaining({
             build: expect.objectContaining({ agent: expect.any(String), model: expect.any(String) }),
             review: expect.objectContaining({ agent: expect.any(String), model: expect.any(String) }),
@@ -555,7 +639,7 @@ describe("LinearTicketsView", () => {
         issue2Detail,
         "project-1",
         "containerized",
-        { steps: expect.any(Object) },
+        { includeComments: true, steps: expect.any(Object) },
       );
     });
   });

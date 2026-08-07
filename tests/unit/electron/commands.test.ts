@@ -6110,6 +6110,7 @@ exit 0
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
+  if [ "$2" = "--user" ]; then exit 0; fi
   cat >> "$FAKE_DOCKER_EXEC_LOG.stdin"
   printf '\\n--sync--\\n' >> "$FAKE_DOCKER_EXEC_LOG.stdin"
   exit 0
@@ -6124,6 +6125,8 @@ exit 1
       expect(input).toBe("rotated-token\n--sync--\n\n--sync--\n");
       const calls = await fs.readFile(logs.all, "utf8");
       expect(calls.match(/start container-1/g)).toHaveLength(2);
+      expect(calls.match(/exec --user root container-1 sh -c/g)).toHaveLength(2);
+      expect(calls).toContain("chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files");
     });
   });
 
@@ -6139,6 +6142,7 @@ exit 1
     await withFakeDocker(`#!/bin/sh
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
+  if [ "$2" = "--user" ]; then exit 0; fi
   token="$(cat)"
   printf 'sync rejected %s\\n' "$token" >&2
   exit 7

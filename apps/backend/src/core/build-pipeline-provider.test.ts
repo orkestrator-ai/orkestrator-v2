@@ -3861,7 +3861,58 @@ describe("OpenCode build pipeline provider", () => {
       await expect(provider.structured("owned-session", "request-1")).resolves
         .toMatchObject({
           ok: false,
-          error: { code: "provider_error", retryable: true },
+          error: { code: "malformed_output", retryable: true },
+        });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("parses correlated JSON text when OpenCode structured formats are disabled", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      const parentID = expectedOpenCodeMessageId("request-1");
+      fake.setMessagesResponse({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID,
+            time: { completed: 1 },
+          },
+          parts: [{ type: "text", text: '{"complete":true}' }],
+        }],
+      });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+
+      fake.setMessagesResponse({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID,
+            time: { completed: 1 },
+          },
+          parts: [{ type: "text", text: '```json\n{"complete":false}\n```' }],
+        }],
+      });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: false } });
+
+      fake.setMessagesResponse({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID,
+            time: { completed: 1 },
+          },
+          parts: [{ type: "text", text: "Here is the result: {\"complete\":true}" }],
+        }],
+      });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({
+          ok: false,
+          error: { code: "malformed_output", retryable: true },
         });
     } finally {
       await provider.dispose?.();
@@ -4657,7 +4708,7 @@ describe("OpenCode build pipeline provider dispatch", () => {
     }
   });
 
-  test("passes a structured schema through as a json_schema format", async () => {
+  test("puts a structured schema in the prompt without poisoning OpenCode transcripts", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
     try {
@@ -4667,11 +4718,13 @@ describe("OpenCode build pipeline provider dispatch", () => {
         schema,
       });
 
-      expect(fake.promptCalls[0]!.format).toEqual({
-        type: "json_schema",
-        schema,
-        retryCount: 2,
-      });
+      expect(fake.promptCalls[0]!.format).toBeUndefined();
+      expect(fake.promptCalls[0]!.parts).toEqual([{
+        type: "text",
+        text: expect.stringContaining(JSON.stringify(schema)),
+      }]);
+      expect(String((fake.promptCalls[0]!.parts as Array<{ text?: string }>)[0]?.text))
+        .toContain("Return only one JSON value matching this JSON Schema");
     } finally {
       await provider.dispose?.();
     }

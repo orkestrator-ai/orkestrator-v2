@@ -4,7 +4,13 @@ import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import {
   type CachedOpenCodeModel,
   getCachedOpenCodeModelCatalog,
+  getOpencodeModelPreferences,
+  type OpenCodeModelPreferences,
 } from "@/lib/backend";
+import {
+  EMPTY_OPENCODE_MODEL_PREFERENCES,
+  openCodeModelRefToId,
+} from "@/lib/opencode-model-preferences";
 import {
   useConfigStore,
   useEnvironmentStore,
@@ -57,20 +63,42 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
     projectId: string;
     models: CachedOpenCodeModel[];
   } | null>(null);
+  const [openCodeModelPreferences, setOpenCodeModelPreferences] =
+    useState<OpenCodeModelPreferences>(EMPTY_OPENCODE_MODEL_PREFERENCES);
 
   useEffect(() => {
     let cancelled = false;
     setCachedOpenCodeCatalog(null);
-    if (!enabled || !projectId) return () => { cancelled = true; };
-    void getCachedOpenCodeModelCatalog(projectId)
-      .then((snapshot) => {
-        const models = normalizeCachedOpenCodeModels(snapshot?.models);
-        if (!cancelled && snapshot?.projectId === projectId && models) {
-          setCachedOpenCodeCatalog({ projectId, models });
+    setOpenCodeModelPreferences(EMPTY_OPENCODE_MODEL_PREFERENCES);
+    if (!enabled) return () => { cancelled = true; };
+    if (projectId) {
+      void getCachedOpenCodeModelCatalog(projectId)
+        .then((snapshot) => {
+          const models = normalizeCachedOpenCodeModels(snapshot?.models);
+          if (!cancelled && snapshot?.projectId === projectId && models) {
+            setCachedOpenCodeCatalog({ projectId, models });
+          }
+        })
+        .catch((error) => {
+          console.warn("[useBuildLaunchOptions] Failed to load cached OpenCode models:", error);
+        });
+    }
+    void getOpencodeModelPreferences()
+      .then((preferences) => {
+        if (
+          !cancelled
+          && preferences
+          && Array.isArray(preferences.favorite)
+          && Array.isArray(preferences.recent)
+        ) {
+          setOpenCodeModelPreferences(preferences);
         }
       })
       .catch((error) => {
-        console.warn("[useBuildLaunchOptions] Failed to load cached OpenCode models:", error);
+        console.warn(
+          "[useBuildLaunchOptions] Failed to load OpenCode model preferences:",
+          error,
+        );
       });
     return () => { cancelled = true; };
   }, [enabled, projectId]);
@@ -112,5 +140,17 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
     };
   }, [claudeModels, codexModels, projectOpenCodeModels]);
 
-  return { catalog, defaults };
+  const favoriteOpenCodeModelIds = useMemo(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const favorite of openCodeModelPreferences.favorite) {
+      const id = openCodeModelRefToId(favorite);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+    return ids;
+  }, [openCodeModelPreferences.favorite]);
+
+  return { catalog, defaults, favoriteOpenCodeModelIds };
 }

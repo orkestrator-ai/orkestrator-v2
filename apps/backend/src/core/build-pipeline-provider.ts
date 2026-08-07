@@ -100,6 +100,45 @@ function openCodeMessageIdScope(
 }
 
 /**
+ * OpenCode 1.18.x accepts the legacy `format: { type: "json_schema" }`
+ * request, but then its own legacy transcript route cannot decode the stored
+ * user message. That makes every later `session.messages()` call return 400,
+ * which strands a pipeline in reconnect recovery even after the turn finished.
+ *
+ * Keep the transcript readable by expressing the same contract in the prompt.
+ * The provider adapter parses only the correlated assistant's text back into a
+ * value; the workflow layer still performs the authoritative shape validation.
+ */
+function openCodeStructuredPrompt(prompt: string, schema: JsonSchema): string {
+  return `${prompt}\n\n## Required OpenCode output\n\nReturn only one JSON value matching this JSON Schema. Do not wrap it in Markdown or add commentary.\n\n${JSON.stringify(schema)}`;
+}
+
+function parseOpenCodeStructuredText(parts: unknown): unknown {
+  if (!Array.isArray(parts)) throw new Error("OpenCode returned no structured text");
+  const text = parts
+    .flatMap((part) => {
+      const candidate = asRecord(part);
+      return candidate?.type === "text" && typeof candidate.text === "string"
+        ? [candidate.text]
+        : [];
+    })
+    .join("")
+    .trim();
+  if (!text) throw new Error("OpenCode returned no structured text");
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    // The prompt explicitly forbids fences, but accepting one exact JSON fence
+    // prevents harmless presentation formatting from turning a valid result
+    // into a retry loop. Arbitrary prose is deliberately not searched for JSON.
+    const fenced = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i)?.[1]?.trim();
+    if (!fenced) throw new Error("OpenCode returned malformed structured text");
+    return JSON.parse(fenced);
+  }
+}
+
+/**
  * Validate a bridge-supplied activity token before it can reach the durable
  * projection. An unrecognized value must fail loudly: coercing it to `idle`
  * would silently retire a spinner for a turn that is still running.
@@ -2054,7 +2093,10 @@ class OpenCodeProvider implements BuildPipelineProvider {
     prompt: string,
     options: ProviderSendOptions,
   ): Promise<void> {
-    const parts: Array<Record<string, unknown>> = [{ type: "text", text: prompt }];
+    const shapedPrompt = options.schema
+      ? openCodeStructuredPrompt(prompt, options.schema)
+      : prompt;
+    const parts: Array<Record<string, unknown>> = [{ type: "text", text: shapedPrompt }];
     // OpenCode accepts inline data, so its images need no staging. Attachments
     // that arrive already staged are referenced by path instead.
     for (const image of options.images ?? []) {
@@ -2113,9 +2155,6 @@ class OpenCodeProvider implements BuildPipelineProvider {
             : undefined,
           agent: options.mode ?? "build",
           variant: options.effort ?? this.connection.effort,
-          format: options.schema
-            ? { type: "json_schema", schema: options.schema, retryCount: 2 }
-            : undefined,
         }, this.requestOptions());
       } catch (error) {
         // The request may have reached OpenCode before the response was lost.
@@ -2871,13 +2910,17 @@ class OpenCodeProvider implements BuildPipelineProvider {
       return info.role === "assistant" && info.parentID === providerMessageId;
     });
     if (!assistant) return null;
-    const info = (assistant as { info: Record<string, unknown> }).info as {
+    const assistantRecord = assistant as {
+      info: Record<string, unknown>;
+      parts?: unknown;
+    };
+    const info = assistantRecord.info as {
       error?: unknown;
       structured?: unknown;
       time?: { completed?: unknown };
     };
     if (!info.time?.completed) return null;
-    if (info.error || info.structured === undefined) {
+    if (info.error) {
       return {
         ok: false,
         provider: "opencode",
@@ -2890,11 +2933,29 @@ class OpenCodeProvider implements BuildPipelineProvider {
         },
       };
     }
+    let value: unknown;
+    try {
+      value = info.structured === undefined
+        ? parseOpenCodeStructuredText(assistantRecord.parts)
+        : info.structured;
+    } catch {
+      return {
+        ok: false,
+        provider: "opencode",
+        requestId,
+        error: {
+          code: "malformed_output",
+          message: "OpenCode did not produce a valid JSON result",
+          provider: "opencode",
+          retryable: true,
+        },
+      };
+    }
     return {
       ok: true,
       provider: "opencode",
       requestId,
-      value: info.structured as T,
+      value: value as T,
     };
   }
 

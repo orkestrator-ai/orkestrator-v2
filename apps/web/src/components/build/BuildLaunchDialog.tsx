@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AgentRadioGroup } from "@/components/agents/AgentRadioGroup";
+import { OpenCodeModelSelect } from "@/components/opencode/OpenCodeModelSelect";
 import {
   defaultEffortFor,
   effortLabel,
@@ -161,6 +162,7 @@ interface BuildLaunchDialogProps {
   defaultEnvironmentType: EnvironmentType;
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
+  favoriteOpenCodeModelIds?: string[];
   /** Disables the submit button while a start request is in flight. */
   busy?: boolean;
   onConfirm: (selection: BuildLaunchSelection) => void;
@@ -224,6 +226,7 @@ export function BuildLaunchDialog({
   defaultEnvironmentType,
   preferredModels,
   preferredReasoningEfforts,
+  favoriteOpenCodeModelIds = [],
   busy = false,
   onConfirm,
 }: BuildLaunchDialogProps) {
@@ -476,40 +479,53 @@ export function BuildLaunchDialog({
                       >
                         {stepLabel} model
                       </Label>
-                      <Select
-                        value={step.model?.id ?? steps[key].model}
-                        onValueChange={(model) => handleModelChange(key, model)}
-                      >
-                        <SelectTrigger
+                      {steps[key].agent === "opencode" ? (
+                        <OpenCodeModelSelect
                           id={`build-${key}-model`}
-                          className="min-h-11 w-full border-zinc-700/80 bg-zinc-900 py-2.5 data-[size=default]:h-auto"
+                          value={step.model?.id ?? steps[key].model}
+                          options={step.models}
+                          favoriteModelIds={favoriteOpenCodeModelIds}
+                          onValueChange={(model) => handleModelChange(key, model)}
+                          className="min-h-11 border-zinc-700/80 bg-zinc-900 py-2.5"
+                          showDescriptionInTrigger
+                          emptyLabel="No OpenCode models cached"
+                        />
+                      ) : (
+                        <Select
+                          value={step.model?.id ?? steps[key].model}
+                          onValueChange={(model) => handleModelChange(key, model)}
                         >
-                          <span className="flex min-w-0 flex-1 flex-col text-left">
-                            <span className="truncate text-sm">
-                              {step.model?.name ?? "Choose a model"}
+                          <SelectTrigger
+                            id={`build-${key}-model`}
+                            className="min-h-11 w-full border-zinc-700/80 bg-zinc-900 py-2.5 data-[size=default]:h-auto"
+                          >
+                            <span className="flex min-w-0 flex-1 flex-col text-left">
+                              <span className="truncate text-sm">
+                                {step.model?.name ?? "Choose a model"}
+                              </span>
+                              {step.model?.description && (
+                                <span className="truncate text-[11px] font-normal text-zinc-500">
+                                  {step.model.description}
+                                </span>
+                              )}
                             </span>
-                            {step.model?.description && (
-                              <span className="truncate text-[11px] font-normal text-zinc-500">
-                                {step.model.description}
-                              </span>
-                            )}
-                          </span>
-                        </SelectTrigger>
-                        <SelectContent position="popper" className="max-h-72">
-                          {step.models.map((option) => (
-                            <SelectItem key={option.id} value={option.id} className="py-2">
-                              <span>
-                                <span className="block">{option.name}</span>
-                                {option.description && (
-                                  <span className="block max-w-[28rem] truncate text-[11px] text-zinc-500">
-                                    {option.description}
-                                  </span>
-                                )}
-                              </span>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                          </SelectTrigger>
+                          <SelectContent position="popper" className="max-h-72">
+                            {step.models.map((option) => (
+                              <SelectItem key={option.id} value={option.id} className="py-2">
+                                <span>
+                                  <span className="block">{option.name}</span>
+                                  {option.description && (
+                                    <span className="block max-w-[28rem] truncate text-[11px] text-zinc-500">
+                                      {option.description}
+                                    </span>
+                                  )}
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
                     <div className="min-w-0">
                       <Label

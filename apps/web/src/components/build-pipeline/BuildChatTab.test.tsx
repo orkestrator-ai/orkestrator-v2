@@ -482,6 +482,7 @@ describe("BuildChatTab presentation", () => {
     startedAt: "2026-07-29T00:00:30.000Z",
     label: "Review Session",
     structuredRequestId: "review-request",
+    structuredResultStatus: "accepted",
     messages: [{
       id: "review-answer",
       role: "assistant",
@@ -637,6 +638,7 @@ describe("BuildChatTab presentation", () => {
         {
           ...pipeline.sessions[1]!,
           agent: "codex",
+          structuredResultStatus: "accepted",
           messages: [{
             id: "verification-answer",
             role: "assistant",
@@ -686,6 +688,7 @@ describe("BuildChatTab presentation", () => {
           ...pipeline.sessions[1]!,
           agent: "codex",
           status: "running",
+          structuredResultStatus: "pending",
           messages: [{
             id: "verification-answer",
             role: "assistant",
@@ -711,6 +714,131 @@ describe("BuildChatTab presentation", () => {
         content: "bun test",
       }),
     ]);
+  });
+
+  test("does not reveal an idle provisional verdict after pause or cancellation", () => {
+    const provisional = JSON.stringify({
+      complete: false,
+      rationale: "Validation has not finished yet.",
+    });
+    const verification = {
+      ...pipeline.sessions[1]!,
+      agent: "codex" as const,
+      status: "idle" as const,
+      structuredResultStatus: "pending" as const,
+      messages: [{
+        id: "verification-answer",
+        role: "assistant",
+        content: provisional,
+        parts: [
+          { type: "text", content: provisional },
+          {
+            type: "tool-invocation",
+            content: "bun test",
+            toolName: "bash",
+            toolState: "pending",
+          },
+        ],
+      }],
+    };
+
+    renderTab({
+      ...pipeline,
+      phase: "paused",
+      pausedFromPhase: "verifying",
+      sessions: [pipeline.sessions[0]!, verification],
+    });
+    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(listProps.messages[0]?.parts).toEqual([
+      expect.objectContaining({ type: "tool-invocation", content: "bun test" }),
+    ]);
+
+    cleanup();
+    renderTab({
+      ...pipeline,
+      phase: "failed",
+      error: "Build cancelled",
+      sessions: [pipeline.sessions[0]!, verification],
+    });
+    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(screen.getByText("Build cancelled")).toBeTruthy();
+  });
+
+  test("does not reveal a verdict while an idle session awaits structured output", () => {
+    const provisional = JSON.stringify({
+      complete: false,
+      rationale: "The provider is still finalizing its result.",
+    });
+    renderTab({
+      ...pipeline,
+      phase: "verifying",
+      sessions: [
+        pipeline.sessions[0]!,
+        {
+          ...pipeline.sessions[1]!,
+          status: "idle",
+          structuredResultStatus: "pending",
+          messages: [{
+            id: "verification-answer",
+            role: "assistant",
+            content: provisional,
+            parts: [{ type: "text", content: provisional }],
+          }],
+        },
+      ],
+    });
+
+    expect(screen.queryByText("Verification failed")).toBeNull();
+    expect(listProps.messages).toEqual([]);
+  });
+
+  test("keeps an accepted report visible on an older review stage", async () => {
+    const provisional = JSON.stringify({
+      ...TEST_STRUCTURED_REVIEW_REPORT,
+      verdict: { ready: "no", reasoning: "Still reviewing." },
+    });
+    const historical = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
+    const oldReview = {
+      ...reviewSession,
+      sessionKey: "old-review-key",
+      sdkSessionId: "old-review-session",
+      structuredRequestId: "old-review-request",
+      label: "Old Review Session",
+      messages: [{
+        id: "old-review-answer",
+        role: "assistant",
+        content: historical,
+        parts: [
+          { type: "text", content: provisional },
+          { type: "text", content: historical },
+        ],
+      }],
+    };
+    const latestReview = {
+      ...reviewSession,
+      sessionKey: "latest-review-key",
+      sdkSessionId: "latest-review-session",
+      structuredRequestId: "latest-review-request",
+      label: "Latest Review Session",
+    };
+    renderTab({
+      ...reviewed,
+      sessions: [
+        pipeline.sessions[0]!,
+        oldReview,
+        latestReview,
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 3,
+      structuredReviewRequestId: "latest-review-request",
+    });
+
+    fireEvent.click(screen.getByText("Old Review Session"));
+    await waitFor(() =>
+      expect(screen.getByText("Structured review report")).toBeTruthy());
+    expect(listProps.messages[0]?.parts.map((part: { content: string }) => part.content))
+      .toEqual([historical]);
+    expect(screen.queryByText("Still reviewing.")).toBeNull();
   });
 
   test("keeps the report's sections collapsed and its JSON out of the transcript", async () => {

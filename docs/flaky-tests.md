@@ -153,6 +153,17 @@ history rather than two partial ones.
 - **Isolated rerun:** `bun test src/core/commands-state-sync.test.ts` from `apps/backend` -> 93 passed, 0 failed with 432 assertions in 8.40 s; the target passed in 1006.90 ms
 - **Hypothesis:** The shared readiness probe and the per-caller timeout are both scheduled from the same 1,000 ms deadline. Under aggregate scheduling the shared probe's retry loop can settle first and expose its environment-startup timeout; in isolation the caller timer settles first and returns the contract asserted by the test. This ordering race is visible in the two deadline paths in `await_bridge_ready`, but no production fix was attempted in this unrelated review change.
 
+## `initial prompt attachment command > does not prune through a staging-directory replacement race` (`apps/backend/src/core/commands-state-sync.test.ts:717`)
+
+- **Status:** open
+- **Date observed:** 2026-08-08
+- **Original command:** `bun run test` (workspace backend group, `bun test src tests --parallel=2`)
+- **Worker configuration:** Two Bun workers in the backend package while the web, web-public, protocol, root, and bridge groups ran concurrently
+- **Suite counts:** 1,519 backend tests, 1,518 passed and 1 failed
+- **Failure:** Expected an error containing `symlink or non-directory ancestor`, but received `Confined file write failed (exit 73)`
+- **Isolated rerun:** `bun test src/core/commands-state-sync.test.ts` from `apps/backend` -> 93 passed, 0 failed with 432 assertions in 8.52 s; the target passed in 56.61 ms
+- **Hypothesis:** Aggregate scheduling changes when the staged directory replacement becomes visible. Both observed messages are fail-closed outcomes, but the aggregate run reached the later confined-write failure before the test's expected ancestor-validation branch, so the race-sensitive assertion does not yet identify a product safety failure.
+
 ## `container runtime environment wiring > Codex configuration copy helpers reject destination root, parent, and file symlinks` (`tests/unit/runtime-env-wiring.test.ts`)
 
 - **Status:** resolved

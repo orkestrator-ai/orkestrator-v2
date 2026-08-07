@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import {
   hideRawStructuredReviewMessages,
+  showOnlyFinalStructuredReviewMessage,
   showOnlyFinalVerificationMessage,
 } from "./structured-review-messages";
 
@@ -46,6 +47,50 @@ describe("hideRawStructuredReviewMessages", () => {
     }]);
 
     expect(messages).toHaveLength(1);
+  });
+});
+
+describe("showOnlyFinalStructuredReviewMessage", () => {
+  test("keeps only an accepted historical review's final report", () => {
+    const provisional = JSON.stringify({
+      ...TEST_STRUCTURED_REVIEW_REPORT,
+      verdict: { ready: "no", reasoning: "Review is still running." },
+    });
+    const final = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
+    const messages = showOnlyFinalStructuredReviewMessage([{
+      id: "review",
+      role: "assistant",
+      content: final,
+      parts: [
+        { type: "text", content: provisional },
+        {
+          type: "tool-invocation",
+          content: "git diff --stat",
+          toolName: "shell",
+          toolState: "success",
+        },
+        { type: "text", content: final },
+      ],
+      createdAt: "2026-08-07T22:00:00.000Z",
+    }], true);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe("");
+    expect(messages[0]?.parts.map((part) => part.content)).toEqual([
+      "git diff --stat",
+      final,
+    ]);
+  });
+
+  test("hides every report until the backend accepts one", () => {
+    const report = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
+    expect(showOnlyFinalStructuredReviewMessage([{
+      id: "review",
+      role: "assistant",
+      content: report,
+      parts: [{ type: "text", content: report }],
+      createdAt: "2026-08-07T22:00:00.000Z",
+    }], false)).toEqual([]);
   });
 });
 

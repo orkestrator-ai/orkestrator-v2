@@ -1309,7 +1309,12 @@ describe("build pipeline protocol", () => {
       messagesPersistedAt: "2026-07-29T00:00:01.000Z",
       turnStartedAt: "2026-07-29T00:00:01.500Z",
       structuredWaitStartedAt: "2026-07-29T00:00:02.000Z",
+      structuredResultStatus: "pending",
     }))).toBe(true);
+    expect(isBuildPipeline(withSession({ structuredResultStatus: "accepted" })))
+      .toBe(true);
+    expect(isBuildPipeline(withSession({ structuredResultStatus: "complete" })))
+      .toBe(false);
 
     // A malformed timestamp here is not cosmetic: the supervisor subtracts it
     // from now() to decide whether to fail a stalled turn.

@@ -955,6 +955,7 @@ export class BuildPipelineService {
           structuredReview,
         };
         session.structuredRequestId = structuredReview ? requestId : undefined;
+        session.structuredResultStatus = structuredReview ? "pending" : undefined;
         if (phase === "reviewing") {
           candidate.structuredReviewRequestId = requestId;
           delete candidate.structuredReview;
@@ -1799,6 +1800,7 @@ export class BuildPipelineService {
       messages: [],
       messageRevision: 0,
       structuredRequestId: schema !== undefined ? requestId : undefined,
+      structuredResultStatus: schema !== undefined ? "pending" : undefined,
       validationHeadAtStart: validationWorktree?.head,
       validationWorktreeStatusAtStart: validationWorktree?.status,
       validationUncommittedPathsAtStart: validationWorktree
@@ -2008,6 +2010,7 @@ export class BuildPipelineService {
     const report = parseStructuredReviewReport(result.value, {
       allowLegacyTestResults: true,
     });
+    session.structuredResultStatus = "accepted";
     pipeline.structuredReview = report;
     if (report.issues.length || report.testCoverageGaps.length) {
       await this.startStage(pipeline, "address", "addressing");
@@ -2045,6 +2048,7 @@ export class BuildPipelineService {
       );
     }
     const { complete, rationale } = result.value;
+    session.structuredResultStatus = "accepted";
     pipeline.verificationResult = complete ? "pass" : "fail";
     pipeline.verificationFeedback = rationale;
     if (complete) {

@@ -24,7 +24,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as backend from "@/lib/backend";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import {
-  hideRawStructuredReviewMessages,
+  showOnlyFinalStructuredReviewMessage,
   showOnlyFinalVerificationMessage,
 } from "@/lib/structured-review-messages";
 import { useVirtuosoScrollState } from "@/hooks";
@@ -208,6 +208,29 @@ export function BuildChatTab({
   const selectedSession = pipeline?.sessions.find(
     (session) => session.sdkSessionId === selectedSessionId,
   );
+  const selectedSessionIndex = pipeline?.sessions.findIndex(
+    (session) => session.sdkSessionId === selectedSessionId,
+  ) ?? -1;
+  const reportSession = pipeline ? reviewReportSession(pipeline) : undefined;
+  const ownsCurrentReviewReport = Boolean(
+    pipeline?.structuredReview
+      && selectedSession
+      && reportSession
+      && selectedSession.sessionKey === reportSession.sessionKey,
+  );
+  // New snapshots state this authority explicitly. For old persisted builds,
+  // an idle stage that the pipeline has advanced past is the closest safe
+  // equivalent: the current stage is deliberately excluded because pause,
+  // cancellation and result-finalization waits all leave it idle too.
+  const structuredResultAccepted = Boolean(
+    selectedSession?.structuredResultStatus === "accepted"
+      || (
+        selectedSession?.structuredResultStatus === undefined
+        && selectedSession?.status === "idle"
+        && selectedSessionIndex >= 0
+        && selectedSessionIndex < (pipeline?.currentSessionIndex ?? -1)
+      ),
+  );
   // The harness this session actually ran on, not the pipeline's build agent:
   // steps may choose different harnesses, and decoding a Codex transcript
   // through the Claude adapter silently drops its subagent and tool-group parts.
@@ -223,23 +246,27 @@ export function BuildChatTab({
         selectedSession?.interactionTranscript,
       );
       if (selectedSession?.phase === "review") {
-        return hideRawStructuredReviewMessages(transcript);
+        return showOnlyFinalStructuredReviewMessage(
+          transcript,
+          structuredResultAccepted && !ownsCurrentReviewReport,
+        );
       }
       if (selectedSession?.phase === "verify") {
         return showOnlyFinalVerificationMessage(
           transcript,
-          selectedSession.status === "idle",
+          structuredResultAccepted,
         );
       }
       return transcript;
     },
     [
       agentType,
+      ownsCurrentReviewReport,
       selectedSession?.messages,
       selectedSession?.phase,
-      selectedSession?.status,
       selectedSession?.startedAt,
       selectedSession?.interactionTranscript,
+      structuredResultAccepted,
     ],
   );
 
@@ -333,13 +360,7 @@ export function BuildChatTab({
         (session) => session.sdkSessionId === pipeline.stallWarning?.sessionId,
       )
     : undefined;
-  const reportSession = reviewReportSession(pipeline);
-  const showReviewReport = Boolean(
-    pipeline.structuredReview
-      && selectedSession
-      && reportSession
-      && selectedSession.sessionKey === reportSession.sessionKey,
-  );
+  const showReviewReport = ownsCurrentReviewReport;
   // The report lives on the stage that produced it, but the tab follows the
   // pipeline past review, so by the time a build finishes nothing on screen
   // would say a review had happened at all.

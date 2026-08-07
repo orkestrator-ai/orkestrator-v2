@@ -246,6 +246,15 @@ export interface PipelineSession {
   /** Stable structured-output key for review and verification turns. */
   structuredRequestId?: string;
   /**
+   * Whether the backend is still waiting for this request's schema result or
+   * has validated and accepted it.
+   *
+   * Provider activity cannot answer this: pause and cancellation both leave a
+   * session idle without making its last schema-shaped progress message
+   * authoritative. Optional so snapshots written before this field still load.
+   */
+  structuredResultStatus?: "pending" | "accepted";
+  /**
    * Immutable Git state captured before a writable validation turn starts.
    *
    * Review and verification may write ignored compiler output and caches, but
@@ -685,6 +694,9 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     && (value.turnStartedAt === undefined
       || isIsoDate(value.turnStartedAt))
     && isOptionalNonBlankString(value.structuredRequestId)
+    && (value.structuredResultStatus === undefined
+      || value.structuredResultStatus === "pending"
+      || value.structuredResultStatus === "accepted")
     && hasValidValidationWorktreeBaseline(value)
     && (value.structuredWaitStartedAt === undefined
       || isIsoDate(value.structuredWaitStartedAt))

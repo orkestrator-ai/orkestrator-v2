@@ -10954,10 +10954,14 @@ export function createCommandRegistry(
    * Authoritative uncommitted-path list for one environment, for callers that
    * need the fact itself rather than a diff to render.
    *
-   * The build pipeline reads this before its review stage: the build stage is
-   * only *asked* to commit, so without an observation here a review would have
-   * to re-derive the worktree state from inside the agent turn and could
-   * silently skip validation when the build left work behind.
+   * The build pipeline reads this before and after writable validation stages.
+   * Returning HEAD with the porcelain paths lets it reject both ordinary edits
+   * and an agent-created commit before accepting a review or verification result.
+   *
+   * Scope is what Git reports and no more: tracked paths, plus untracked paths
+   * Git does not ignore. Ignored files, anything under `.git/`, and paths
+   * outside the worktree are invisible here, so no caller may describe this as
+   * proof that the workspace was untouched.
    */
   register("get_environment_uncommitted_paths", async ({ environmentId }, context) => {
     const environment = await context.storage.getEnvironment(
@@ -10965,12 +10969,15 @@ export function createCommandRegistry(
     );
     if (!environment) throw new Error("Environment not found");
     const runner = createEnvironmentCommandRunner(environment);
-    const output = await runner(
-      "git",
-      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-      30_000,
-    );
-    return { paths: parseGitPorcelainPaths(output) };
+    const [head, output] = await Promise.all([
+      runner("git", ["rev-parse", "--verify", "HEAD^{commit}"], 30_000),
+      runner(
+        "git",
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        30_000,
+      ),
+    ]);
+    return { head: head.trim(), paths: parseGitPorcelainPaths(output) };
   });
   register("get_file_tree", async ({ containerId, knownDigest }) => {
     const output = await dockerExec(asString(containerId, "containerId"), "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type l -prune -o -type f -printf '%P\\n' | head -5000");

@@ -1,6 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { BuildStepKey } from "@orkestrator/protocol/build-pipeline";
-import { executionModeForSessionPhase } from "@orkestrator/protocol/build-pipeline";
 import {
   Container,
   FolderGit2,
@@ -33,7 +32,6 @@ import {
   defaultEffortFor,
   effortLabel,
   firstModelFor,
-  LAUNCH_AGENT_OPTIONS,
   type AgentModelCatalog,
   type LaunchAgent,
 } from "@/lib/agent-launch";
@@ -110,22 +108,15 @@ const ENVIRONMENT_OPTIONS: Array<{
   },
 ];
 
-const AGENT_LABELS: Record<LaunchAgent, string> = Object.fromEntries(
-  LAUNCH_AGENT_OPTIONS.map((option) => [option.value, option.label]),
-) as Record<LaunchAgent, string>;
-
 /**
- * Says plainly that this harness reviews with write access.
- *
- * The three agent cards otherwise read as interchangeable, but only Codex holds
- * review and verify to a read-only sandbox — the other two can edit files and
- * run commands during a stage whose job is only to read. That is a real
- * difference in what the pipeline may do to the workspace, so it is disclosed
- * rather than left to be discovered.
+ * States both halves of the trade: the access these stages get, and the exact
+ * reach of the check that constrains it. The backend compares HEAD and the
+ * Git-visible uncommitted paths, so ignored files and `.git` internals are not
+ * covered — claiming the workspace is protected outright would overstate it.
  */
-function reviewSandboxNotice(agent: LaunchAgent, uniform: boolean): string {
+function validationWorkspaceNotice(uniform: boolean): string {
   const stages = uniform ? "Review and verify" : "This step";
-  return `${stages} will run with full workspace access — ${AGENT_LABELS[agent]} cannot be held to a read-only sandbox. Codex reviews read-only.`;
+  return `${stages} will run with full workspace access so validation can write generated outputs and caches. Source edits and commits are forbidden: the backend rejects the result if the commit or any Git-tracked or untracked path changed. Ignored files are not checked.`;
 }
 
 function Step({
@@ -273,13 +264,9 @@ export function BuildLaunchDialog({
           || efforts.includes(step.reasoningEffort))
           ? step.reasoningEffort
           : "default";
-      // Uniform mode configures review and verify too, so the disclosure has to
-      // appear on the single visible card as well as on the review/verify ones.
-      const unsandboxedReview = (uniform || key === "review" || key === "verify")
-        && executionModeForSessionPhase("review", step.agent) !== "plan";
       return [
         key,
-        { models, model, efforts, effort, unsandboxedReview },
+        { models, model, efforts, effort },
       ] as const;
     });
     return Object.fromEntries(entries) as Record<
@@ -289,7 +276,6 @@ export function BuildLaunchDialog({
         model: AgentModelCatalog[LaunchAgent][number] | undefined;
         efforts: string[];
         effort: string;
-        unsandboxedReview: boolean;
       }
     >;
   }, [catalog, steps, uniform]);
@@ -467,12 +453,12 @@ export function BuildLaunchDialog({
                     onChange={(agent) => handleAgentChange(key, agent)}
                     label={`${stepLabel} agent`}
                   />
-                  {step.unsandboxedReview && (
+                  {(uniform || key === "review" || key === "verify") && (
                     <p
                       className="mt-2 text-[11px] leading-snug text-amber-400/80"
                       role="note"
                     >
-                      {reviewSandboxNotice(steps[key].agent, uniform)}
+                      {validationWorkspaceNotice(uniform)}
                     </p>
                   )}
                   <div className="mt-2 grid gap-2 sm:grid-cols-2">

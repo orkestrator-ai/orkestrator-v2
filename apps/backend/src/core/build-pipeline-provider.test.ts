@@ -380,20 +380,18 @@ describe("HTTP build pipeline provider", () => {
     expect(caught instanceof ProviderUnavailableError).toBe(isUnavailable);
   });
 
-  test("lets an explicit session mode override the one the phase implies", async () => {
+  test("defaults sessions to build mode and accepts an explicit override", async () => {
     const { provider, requests } = httpProvider(
       () => Response.json({ sessionId: "codex-1" }),
       codexConnection,
     );
 
-    // `preparation` and `discovery` both reach the bridge as the `review` phase,
-    // which would create a read-only session — but preparation has to commit.
     await provider.createSession("review", "Prepare", { mode: "build" });
     await provider.createSession("review", "Discover", { mode: "plan" });
     await provider.createSession("review", "Unspecified");
 
     expect(requests.map((request) => JSON.parse(String(request.init.body)).mode))
-      .toEqual(["build", "plan", "plan"]);
+      .toEqual(["build", "plan", "build"]);
   });
 
   test("refuses base64 images when nothing can stage them", async () => {
@@ -3971,15 +3969,14 @@ describe("HTTP build pipeline provider (codex)", () => {
       title: "Review Session",
       model: "gpt-5-codex",
       modelReasoningEffort: "high",
-      // Review and verify are read-only turns, so they run in plan mode.
-      mode: "plan",
+      mode: "build",
     });
   });
 
   test.each([
     ["build", "build"],
-    ["review", "plan"],
-    ["verify", "plan"],
+    ["review", "build"],
+    ["verify", "build"],
     ["fix", "build"],
     ["pr", "build"],
     ["resolve-conflicts", "build"],

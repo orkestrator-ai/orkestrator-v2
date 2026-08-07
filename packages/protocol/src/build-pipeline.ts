@@ -116,23 +116,16 @@ export type BuildExecutionMode = "plan" | "build";
 /**
  * The execution mode a session phase runs under on one harness.
  *
- * `review` and `verify` only need to read the workspace, and Codex enforces that
- * with a read-only sandbox. Claude cannot be held to the same guarantee: its
- * `plan` permission mode injects the `ExitPlanMode` approval protocol, which
- * waits for a human to approve before work continues — in a pipeline with nobody
- * to answer, a plan-mode review would simply stall. OpenCode's `plan` agent is
- * likewise a chat-oriented surface rather than a sandbox.
- *
- * The difference is therefore real and cannot be flattened by forcing a mode. It
- * lives here so the supervisor that applies it and the launcher that discloses
- * it read the same definition and cannot drift.
+ * Validation in any phase may write compiler output, snapshots, coverage data,
+ * generated artifacts, or tool caches. Every unattended pipeline session
+ * therefore runs in build mode on every harness. Phase prompts remain
+ * responsible for forbidding source edits and commits in review-only stages.
  */
 export function executionModeForSessionPhase(
-  phase: PipelineSessionPhase,
-  agent: BuildPipelineAgent,
+  _phase: PipelineSessionPhase,
+  _agent: BuildPipelineAgent,
 ): BuildExecutionMode {
-  const readOnly = phase === "review" || phase === "verify";
-  return readOnly && agent === "codex" ? "plan" : "build";
+  return "build";
 }
 
 /**
@@ -249,6 +242,20 @@ export interface PipelineSession {
   turnStartedAt?: string;
   /** Stable structured-output key for review and verification turns. */
   structuredRequestId?: string;
+  /**
+   * Immutable Git state captured before a writable validation turn starts.
+   *
+   * Review and verification may write ignored compiler output and caches, but
+   * the backend refuses to accept their result if HEAD moves or the set of
+   * Git-visible uncommitted paths changes. The baseline is a *set*, not a
+   * cleanliness flag: the build stage is only asked to commit, so a review can
+   * legitimately start on a dirty tree, and only the paths validation itself
+   * adds or removes are a violation. Persisting it keeps the guard valid across
+   * backend restarts.
+   */
+  validationHeadAtStart?: string;
+  validationWorktreeStatusAtStart?: "clean" | "dirty" | "unknown";
+  validationUncommittedPathsAtStart?: string[];
   /**
    * First tick at which this session was idle with no structured result yet.
    * A turn that ends without ever producing one would otherwise poll forever.
@@ -605,6 +612,32 @@ function isBuildStepConfig(value: unknown): value is BuildStepConfig {
 }
 
 /**
+ * A baseline is either absent, unestablished, or complete — never half-written.
+ *
+ * The path list is optional even alongside a head so that a snapshot persisted
+ * before the list existed still loads: `save` refuses to persist a pipeline
+ * that fails validation, so tightening this further would strand a live
+ * pipeline mid-upgrade rather than protect it.
+ */
+function hasValidValidationWorktreeBaseline(value: Record<string, unknown>): boolean {
+  const head = value.validationHeadAtStart;
+  const status = value.validationWorktreeStatusAtStart;
+  const paths = value.validationUncommittedPathsAtStart;
+  if (
+    paths !== undefined
+    && (!Array.isArray(paths) || paths.some((entry) => typeof entry !== "string"))
+  ) {
+    return false;
+  }
+  if (head === undefined) {
+    return (status === undefined || status === "unknown") && paths === undefined;
+  }
+  return typeof head === "string"
+    && /^[0-9a-f]{40,64}$/i.test(head)
+    && (status === "clean" || status === "dirty");
+}
+
+/**
  * Only the keys in {@link BUILD_STEP_KEYS} are accepted. An unknown key would be
  * carried through the snapshot and silently never consulted, which reads as a
  * setting that was applied when it was not.
@@ -648,6 +681,7 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     && (value.turnStartedAt === undefined
       || isIsoDate(value.turnStartedAt))
     && isOptionalNonBlankString(value.structuredRequestId)
+    && hasValidValidationWorktreeBaseline(value)
     && (value.structuredWaitStartedAt === undefined
       || isIsoDate(value.structuredWaitStartedAt))
     && (value.interactionSummary === undefined

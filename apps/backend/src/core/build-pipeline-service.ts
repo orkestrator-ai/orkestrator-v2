@@ -64,8 +64,23 @@ import {
   resolveConflictsPrompt,
   reviewPrompt,
   verificationPrompt,
+  type ObservedWorktreeSnapshot,
   type ReviewWorktreeSnapshot,
 } from "./build-pipeline-prompts.js";
+
+/**
+ * How many times the worktree probe is attempted before its result is treated
+ * as unknown. One command round trip into a container can fail transiently, and
+ * an unknown result is terminal for the stage, so a single failure should not
+ * decide it.
+ */
+const WORKTREE_PROBE_ATTEMPTS = 3;
+
+/** Stage names used in the certification errors a user reads on a failure. */
+const VALIDATION_STAGE_LABELS = {
+  review: "Review",
+  verify: "Verification",
+} as const;
 
 type CommandInvoker = <T>(
   command: string,
@@ -1428,30 +1443,55 @@ export class BuildPipelineService {
   }
 
   /**
-   * Observes the worktree the review is about to read.
+   * Observes the worktree a validation stage is about to run in.
    *
    * The build stage is only *asked* to commit, so a review that re-derived this
    * inside its own turn could quietly decide the tree was dirty and skip
    * validation. Probing here makes the state the pipeline's own evidence.
    *
-   * A probe failure is never fatal: the review still runs and is told to
-   * establish the state itself and record it as a limitation.
+   * The probe is one command round trip into a container or worktree and can
+   * fail transiently, so it is retried a bounded number of times before the
+   * caller is told the state is unknown. Retries are immediate: the supervisor
+   * tick is not a place to sleep, and the failures this covers — a momentarily
+   * busy daemon, a lost exec — do not need a backoff to clear. A state that is
+   * still unknown afterwards is not survivable, because nothing downstream can
+   * certify a turn whose starting point was never established.
    */
   private async reviewWorktreeSnapshot(
     pipeline: BuildPipeline,
   ): Promise<ReviewWorktreeSnapshot> {
+    let last = await this.probeWorktreeOnce(pipeline);
+    for (
+      let attempt = 1;
+      attempt < WORKTREE_PROBE_ATTEMPTS && last.status === "unknown";
+      attempt += 1
+    ) {
+      last = await this.probeWorktreeOnce(pipeline);
+    }
+    return last;
+  }
+
+  private async probeWorktreeOnce(
+    pipeline: BuildPipeline,
+  ): Promise<ReviewWorktreeSnapshot> {
     try {
-      const result = await this.invoke<{ paths?: unknown }>(
+      const result = await this.invoke<{ head?: unknown; paths?: unknown }>(
         "get_environment_uncommitted_paths",
         { environmentId: pipeline.environmentId },
       );
       const paths = result?.paths;
-      if (!Array.isArray(paths) || paths.some((entry) => typeof entry !== "string")) {
+      const head = result?.head;
+      if (
+        typeof head !== "string"
+        || !/^[0-9a-f]{40,64}$/i.test(head)
+        || !Array.isArray(paths)
+        || paths.some((entry) => typeof entry !== "string")
+      ) {
         return { status: "unknown", reason: "the worktree probe returned an unusable result" };
       }
       return paths.length === 0
-        ? { status: "clean" }
-        : { status: "dirty", paths: paths as string[] };
+        ? { status: "clean", head }
+        : { status: "dirty", paths: paths as string[], head };
     } catch (error) {
       // The message can quote repository paths, so only the error class name is
       // kept, and only after stripping anything that is not a bare identifier.
@@ -1459,6 +1499,91 @@ export class BuildPipelineService {
         ? error.name.replace(/[^A-Za-z0-9_]/g, "").slice(0, 40)
         : "";
       return { status: "unknown", reason: name ? `probe failed (${name})` : "probe failed" };
+    }
+  }
+
+  /**
+   * Establishes the baseline a validation stage will later be certified against.
+   *
+   * A dirty start is not a failure. The build stage is only *asked* to commit,
+   * the reviewer is told which paths were left behind, and the guard below cares
+   * about what validation itself changed rather than where it began. Only a
+   * state the backend could not observe at all is fatal, and it is fatal *here*
+   * — before the turn is dispatched — because a stage that can never be
+   * certified is not worth an agent turn, and failing after the fact would
+   * discard a completed review and report it as a Git error.
+   */
+  private async validationBaseline(
+    pipeline: BuildPipeline,
+    sessionPhase: "review" | "verify",
+  ): Promise<ObservedWorktreeSnapshot> {
+    const snapshot = await this.reviewWorktreeSnapshot(pipeline);
+    if (snapshot.status === "unknown") {
+      throw new Error(
+        `${VALIDATION_STAGE_LABELS[sessionPhase]} cannot start because the backend could not establish the environment Git state: ${snapshot.reason}`,
+      );
+    }
+    return snapshot;
+  }
+
+  /**
+   * Rejects a validation turn that changed the workspace rather than only
+   * reading it and writing ignored output.
+   *
+   * Scope is exactly what `git status --porcelain` reports plus HEAD: tracked
+   * paths, and untracked paths Git does not ignore. It deliberately does *not*
+   * cover ignored files, anything under `.git/`, or paths outside the worktree —
+   * writes there are invisible to this check, so the disclosure the launcher
+   * shows and the prompts' own instructions have to claim no more than this.
+   *
+   * The comparison is against the baseline path set, not against cleanliness, so
+   * uncommitted work the build stage left behind survives review instead of
+   * failing the pipeline after the fact.
+   */
+  private async assertValidationWorktreeUnchanged(
+    pipeline: BuildPipeline,
+    session: PipelineSession,
+  ): Promise<void> {
+    const stage = VALIDATION_STAGE_LABELS[
+      session.phase === "review" ? "review" : "verify"
+    ];
+    // A snapshot written before the path list existed still carries a status, and
+    // "clean" pins the baseline to the empty set without it. "dirty" does not,
+    // so that one case still fails closed rather than guessing.
+    const baselinePaths = session.validationUncommittedPathsAtStart
+      ?? (session.validationWorktreeStatusAtStart === "clean" ? [] : undefined);
+    if (!session.validationHeadAtStart || !baselinePaths) {
+      throw new Error(
+        `${stage} cannot be certified because its starting Git state was not recorded`,
+      );
+    }
+    const current = await this.reviewWorktreeSnapshot(pipeline);
+    if (current.status === "unknown") {
+      throw new Error(
+        `${stage} cannot be certified because the backend could not verify Git state after validation: ${current.reason}`,
+      );
+    }
+    if (current.head !== session.validationHeadAtStart) {
+      throw new Error(
+        `${stage} cannot be certified because validation changed the environment HEAD`,
+      );
+    }
+    const before = new Set(baselinePaths);
+    const currentPaths = current.status === "dirty" ? current.paths : [];
+    const after = new Set(currentPaths);
+    const added = currentPaths.filter((path) => !before.has(path));
+    if (added.length) {
+      throw new Error(
+        `${stage} cannot be certified because validation left ${added.length} uncommitted ${added.length === 1 ? "path that was" : "paths that were"} not there when it started`,
+      );
+    }
+    // Removal matters as much as addition: deleting a path the build stage left
+    // uncommitted destroys work that no commit is holding.
+    const removed = baselinePaths.filter((path) => !after.has(path));
+    if (removed.length) {
+      throw new Error(
+        `${stage} cannot be certified because validation removed ${removed.length} uncommitted ${removed.length === 1 ? "path that was" : "paths that were"} there when it started`,
+      );
     }
   }
 
@@ -1597,6 +1722,13 @@ export class BuildPipelineService {
         comment: "🔨 Build started",
       });
     }
+    // Probed before the provider session exists so an unestablishable Git state
+    // fails the stage without leaving a session behind or spending a turn on a
+    // review that could never be certified.
+    const validationWorktree = !override
+        && (sessionPhase === "review" || sessionPhase === "verify")
+      ? await this.validationBaseline(pipeline, sessionPhase)
+      : undefined;
     const { agent, model, effort } = await this.stepSettings(pipeline, sessionPhase);
     const provider = await this.provider(pipeline, agent);
     const label = SESSION_LABELS[sessionPhase];
@@ -1632,7 +1764,7 @@ export class BuildPipelineService {
     });
     const stagePrompt = override
       ? { prompt: override.prompt, images: override.images }
-      : await this.promptFor(pipeline, sessionPhase);
+      : await this.promptFor(pipeline, sessionPhase, validationWorktree);
     const prompt = withUnattendedPolicy(stagePrompt.prompt);
     const { schema, images } = stagePrompt;
     const requestId = randomUUID();
@@ -1652,6 +1784,11 @@ export class BuildPipelineService {
       messages: [],
       messageRevision: 0,
       structuredRequestId: schema !== undefined ? requestId : undefined,
+      validationHeadAtStart: validationWorktree?.head,
+      validationWorktreeStatusAtStart: validationWorktree?.status,
+      validationUncommittedPathsAtStart: validationWorktree
+        ? (validationWorktree.status === "dirty" ? [...validationWorktree.paths] : [])
+        : undefined,
     };
     pipeline.sessions.push(session);
     pipeline.currentSessionIndex = pipeline.sessions.length - 1;
@@ -1726,10 +1863,10 @@ export class BuildPipelineService {
     const step = sessionPhase
       ? await this.stepSettings(pipeline, sessionPhase)
       : undefined;
-    // `addressing` re-uses the review session to write code, so its override
-    // wins over the phase's own read-only mode. Everything else re-states the
-    // mode the session was opened with, so a redispatch cannot land a turn in a
-    // different sandbox than the one that was interrupted.
+    // `addressing` re-uses the review session to write code, so it explicitly
+    // requires build mode even though review now has the same mode for
+    // validation. Everything else re-states the mode the session was opened
+    // with, so a redispatch cannot land in a different sandbox.
     const mode = executionModeOverrideForPhase(attempt.phase)
       ?? (sessionPhase && step
         ? executionModeForSessionPhase(sessionPhase, step.agent)
@@ -1758,10 +1895,20 @@ export class BuildPipelineService {
     }
   }
 
+  /**
+   * The baseline is passed in rather than probed here: the same observation has
+   * to reach both the prompt the reviewer reads and the session field the guard
+   * later compares against, and two probes could disagree.
+   */
   private async promptFor(
     pipeline: BuildPipeline,
     phase: PipelineSessionPhase,
-  ): Promise<{ prompt: string; schema?: JsonSchema; images: BuildPipeline["taskSnapshot"]["images"] }> {
+    validationWorktree?: ReviewWorktreeSnapshot,
+  ): Promise<{
+    prompt: string;
+    schema?: JsonSchema;
+    images: BuildPipeline["taskSnapshot"]["images"];
+  }> {
     const notes = (await this.storage.getProjectNotes(pipeline.projectId)).content;
     const config = await this.storage.loadConfig();
     const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
@@ -1776,7 +1923,7 @@ export class BuildPipelineService {
           notes,
           target,
           config.global.reviewInstruction,
-          await this.reviewWorktreeSnapshot(pipeline),
+          validationWorktree,
         ),
         schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
         images: pipeline.taskSnapshot.images,
@@ -1817,6 +1964,7 @@ export class BuildPipelineService {
       await this.awaitStructuredResult(pipeline, session, "review");
       return;
     }
+    await this.assertValidationWorktreeUnchanged(pipeline, session);
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
     const report = parseStructuredReviewReport(result.value, {
@@ -1869,6 +2017,7 @@ export class BuildPipelineService {
       await this.awaitStructuredResult(pipeline, session, "verification");
       return;
     }
+    await this.assertValidationWorktreeUnchanged(pipeline, session);
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
     if (!isVerificationVerdict(result.value)) {

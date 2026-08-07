@@ -124,21 +124,48 @@ const STATUS_TYPE_ORDER: Record<string, number> = {
   duplicate: 6,
 };
 
-function compareStatusOrder(a: LinearIssueListItem, b: LinearIssueListItem): number {
-  const aTypeOrder = STATUS_TYPE_ORDER[a.statusType ?? ""] ?? Number.MAX_SAFE_INTEGER;
-  const bTypeOrder = STATUS_TYPE_ORDER[b.statusType ?? ""] ?? Number.MAX_SAFE_INTEGER;
+type StatusOrderKey = { typeOrder: number; position?: number };
+
+// Workflow states belong to a team, so the same status name can arrive with a
+// different type or position per team. Collapse each name to its lowest key so
+// section order depends only on the loaded issues, never on which issue happens
+// to sort first under the current ticket order or status filter.
+function buildStatusOrder(issues: LinearIssueListItem[]): Map<string, StatusOrderKey> {
+  const statusOrder = new Map<string, StatusOrderKey>();
+  for (const issue of issues) {
+    const typeOrder = STATUS_TYPE_ORDER[issue.statusType ?? ""] ?? Number.MAX_SAFE_INTEGER;
+    const current = statusOrder.get(issue.status);
+    if (!current || typeOrder < current.typeOrder) {
+      statusOrder.set(issue.status, { typeOrder, position: issue.statusPosition });
+      continue;
+    }
+    if (typeOrder !== current.typeOrder || issue.statusPosition === undefined) continue;
+    if (current.position === undefined || issue.statusPosition < current.position) {
+      statusOrder.set(issue.status, { typeOrder, position: issue.statusPosition });
+    }
+  }
+  return statusOrder;
+}
+
+function compareStatusOrder(
+  aStatus: string,
+  bStatus: string,
+  statusOrder: Map<string, StatusOrderKey>,
+): number {
+  const a = statusOrder.get(aStatus);
+  const b = statusOrder.get(bStatus);
+  const aTypeOrder = a?.typeOrder ?? Number.MAX_SAFE_INTEGER;
+  const bTypeOrder = b?.typeOrder ?? Number.MAX_SAFE_INTEGER;
   if (aTypeOrder !== bTypeOrder) return aTypeOrder - bTypeOrder;
 
-  if (
-    a.statusPosition !== undefined
-    && b.statusPosition !== undefined
-    && a.statusPosition !== b.statusPosition
-  ) {
-    return a.statusPosition - b.statusPosition;
+  const aPosition = a?.position;
+  const bPosition = b?.position;
+  if (aPosition !== undefined && bPosition !== undefined && aPosition !== bPosition) {
+    return aPosition - bPosition;
   }
-  if (a.statusPosition !== undefined && b.statusPosition === undefined) return -1;
-  if (a.statusPosition === undefined && b.statusPosition !== undefined) return 1;
-  return a.status.localeCompare(b.status);
+  if (aPosition !== undefined && bPosition === undefined) return -1;
+  if (aPosition === undefined && bPosition !== undefined) return 1;
+  return aStatus.localeCompare(bStatus);
 }
 
 function compareIssueOrder(
@@ -381,19 +408,16 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     void loadIssues();
   }, [loadIssues]);
 
+  const statusOrder = useMemo(() => buildStatusOrder(issues), [issues]);
+
   const statusCounts = useMemo(() => {
-    const counts = new Map<string, { count: number; issue: LinearIssueListItem }>();
+    const counts = new Map<string, number>();
     for (const issue of issues) {
-      const current = counts.get(issue.status);
-      counts.set(issue.status, {
-        count: (current?.count ?? 0) + 1,
-        issue: current?.issue ?? issue,
-      });
+      counts.set(issue.status, (counts.get(issue.status) ?? 0) + 1);
     }
-    return Array.from(counts.entries())
-      .sort(([, a], [, b]) => compareStatusOrder(a.issue, b.issue))
-      .map(([status, entry]) => [status, entry.count] as const);
-  }, [issues]);
+    return Array.from(counts.entries()).sort(([a], [b]) =>
+      compareStatusOrder(a, b, statusOrder));
+  }, [issues, statusOrder]);
 
   const filteredIssues = useMemo(() => {
     if (selectedStatuses.size === 0) return issues;
@@ -409,9 +433,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
       group.push(issue);
       groups.set(issue.status, group);
     }
-    return Array.from(groups.entries()).sort(([, a], [, b]) =>
-      compareStatusOrder(a[0]!, b[0]!));
-  }, [filteredIssues, issueOrder]);
+    return Array.from(groups.entries()).sort(([a], [b]) =>
+      compareStatusOrder(a, b, statusOrder));
+  }, [filteredIssues, issueOrder, statusOrder]);
 
   const selectedPipeline = selectedIssueId ? getIssuePipeline(pipelines, selectedIssueId) : undefined;
   const hasActiveBuild = isActivePipeline(selectedPipeline);

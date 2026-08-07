@@ -129,6 +129,13 @@ const issue2Detail: LinearIssueDetail = {
   comments: [],
 };
 
+const statusHeadings = () =>
+  screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent);
+
+// Each status filter chip wraps a checkbox in a label rendering "<status><count>".
+const statusChips = () =>
+  screen.getAllByRole("checkbox").map((checkbox) => checkbox.closest("label")?.textContent ?? "");
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -468,8 +475,215 @@ describe("LinearTicketsView", () => {
     renderLinearTicketsView();
 
     await screen.findByText("Backlog issue");
-    expect(screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent))
-      .toEqual(["Backlog", "Todo", "In Progress", "Review", "Done"]);
+    expect(statusHeadings()).toEqual(["Backlog", "Todo", "In Progress", "Review", "Done"]);
+  });
+
+  test("derives status order from every issue so the ticket order cannot reorder sections", async () => {
+    // "Todo" exists on two teams with different workflow positions. The first
+    // issue in the group changes when the ticket order changes, so section order
+    // must be derived from the status name across all issues, not from whichever
+    // issue happens to sort first.
+    getLinearIssuesMock.mockResolvedValue([
+      {
+        id: "todo-low",
+        identifier: "ENG-1",
+        title: "Todo low ticket",
+        status: "Todo",
+        statusType: "unstarted",
+        statusPosition: 0,
+        priority: 4,
+        priorityLabel: "Low",
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "ready",
+        identifier: "OPS-1",
+        title: "Ready ticket",
+        status: "Ready",
+        statusType: "unstarted",
+        statusPosition: 1,
+        priority: 3,
+        priorityLabel: "Medium",
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "todo-urgent",
+        identifier: "OPS-2",
+        title: "Todo urgent ticket",
+        status: "Todo",
+        statusType: "unstarted",
+        statusPosition: 3,
+        priority: 1,
+        priorityLabel: "Urgent",
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+    ]);
+    const visibleTitles = () =>
+      screen.getAllByText(/ ticket$/).map((element) => element.textContent);
+
+    renderLinearTicketsView();
+
+    await screen.findByText("Todo low ticket");
+    expect(statusHeadings()).toEqual(["Todo", "Ready"]);
+    // The filter chips must agree with the section order.
+    expect(statusChips()).toEqual(["Todo2", "Ready1"]);
+    expect(visibleTitles()).toEqual(["Todo low ticket", "Todo urgent ticket", "Ready ticket"]);
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Priority" }));
+    await waitFor(() => {
+      expect(visibleTitles()).toEqual(["Todo urgent ticket", "Todo low ticket", "Ready ticket"]);
+    });
+    expect(statusHeadings()).toEqual(["Todo", "Ready"]);
+    expect(statusChips()).toEqual(["Todo2", "Ready1"]);
+  });
+
+  test("collapses a status name spanning teams to its earliest workflow type", async () => {
+    getLinearIssuesMock.mockResolvedValue([
+      {
+        id: "todo-started",
+        identifier: "ENG-1",
+        title: "Todo started issue",
+        status: "Todo",
+        statusType: "started",
+        statusPosition: 3,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "doing",
+        identifier: "OPS-1",
+        title: "Doing issue",
+        status: "Doing",
+        statusType: "started",
+        statusPosition: 0,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "todo-unstarted",
+        identifier: "OPS-2",
+        title: "Todo unstarted issue",
+        status: "Todo",
+        statusType: "unstarted",
+        statusPosition: 6,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+    ]);
+
+    renderLinearTicketsView();
+
+    // Taking only the first-seen state would rank Todo as "started" at position
+    // 3 and sort it after Doing.
+    await screen.findByText("Doing issue");
+    expect(statusHeadings()).toEqual(["Todo", "Doing"]);
+  });
+
+  test("orders statuses with an unknown or missing workflow type last", async () => {
+    getLinearIssuesMock.mockResolvedValue([
+      {
+        id: "mystery",
+        identifier: "ENG-1",
+        title: "Mystery issue",
+        status: "Mystery",
+        statusPosition: 0,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "frozen",
+        identifier: "ENG-2",
+        title: "Frozen issue",
+        status: "Frozen",
+        statusType: "hibernating",
+        statusPosition: 1,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "todo",
+        identifier: "ENG-3",
+        title: "Todo issue",
+        status: "Todo",
+        statusType: "unstarted",
+        statusPosition: 5,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+    ]);
+
+    renderLinearTicketsView();
+
+    await screen.findByText("Todo issue");
+    expect(statusHeadings()).toEqual(["Todo", "Mystery", "Frozen"]);
+  });
+
+  test("orders statuses without a position after positioned statuses of the same type", async () => {
+    getLinearIssuesMock.mockResolvedValue([
+      {
+        id: "later",
+        identifier: "ENG-1",
+        title: "Later issue",
+        status: "Later",
+        statusType: "unstarted",
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "sooner",
+        identifier: "ENG-2",
+        title: "Sooner issue",
+        status: "Sooner",
+        statusType: "unstarted",
+        statusPosition: 4,
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "anytime",
+        identifier: "ENG-3",
+        title: "Anytime issue",
+        status: "Anytime",
+        statusType: "unstarted",
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+    ]);
+
+    renderLinearTicketsView();
+
+    // Positioned states lead; the rest fall back to the status name.
+    await screen.findByText("Sooner issue");
+    expect(statusHeadings()).toEqual(["Sooner", "Anytime", "Later"]);
+  });
+
+  test("ranks a ticket with prioritySortOrder above an equal-priority ticket without one", async () => {
+    getLinearIssuesMock.mockResolvedValue([
+      {
+        id: "issue-without",
+        identifier: "ENG-1",
+        title: "Without order ticket",
+        status: "Todo",
+        priority: 2,
+        priorityLabel: "High",
+        updatedAt: "2026-06-30T12:00:00.000Z",
+      },
+      {
+        id: "issue-with",
+        identifier: "ENG-2",
+        title: "With order ticket",
+        status: "Todo",
+        priority: 2,
+        priorityLabel: "High",
+        prioritySortOrder: 7,
+        updatedAt: "2026-06-29T12:00:00.000Z",
+      },
+    ]);
+    const visibleTitles = () =>
+      screen.getAllByText(/ ticket$/).map((element) => element.textContent);
+
+    renderLinearTicketsView();
+
+    await screen.findByText("Without order ticket");
+    expect(visibleTitles()).toEqual(["Without order ticket", "With order ticket"]);
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Priority" }));
+    await waitFor(() => {
+      expect(visibleTitles()).toEqual(["With order ticket", "Without order ticket"]);
+    });
   });
 
   test("opens the shared build launcher and starts a configured Linear-backed build", async () => {

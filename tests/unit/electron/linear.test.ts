@@ -116,7 +116,14 @@ describe("Linear backend API", () => {
       prioritySortOrder: 25,
       statusPosition: 1,
     });
-    expect(issues.at(-1)).toMatchObject({ identifier: "ENG-0", status: "Todo" });
+    // ENG-0 carries position 0 and prioritySortOrder 0. Both are legitimate
+    // Linear values, so the mapper must keep them rather than treat them as absent.
+    expect(issues.at(-1)).toMatchObject({
+      identifier: "ENG-0",
+      status: "Todo",
+      statusPosition: 0,
+      prioritySortOrder: 0,
+    });
   });
 
   test("orders issues by sortOrder with updatedAt and identifier tie-breakers", async () => {
@@ -196,6 +203,12 @@ describe("Linear backend API", () => {
   test("maps Linear issue details, labels, and comments", async () => {
     globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body)) as { query: string };
+      if (request.query.includes("OrkestratorLinearIssue(")) {
+        // The detail query is a separate string from the list query, so assert
+        // the ordering fields here too rather than letting the two drift apart.
+        expect(request.query).toContain("prioritySortOrder");
+        expect(request.query).toContain("state { name type position }");
+      }
       if (request.query.includes("OrkestratorLinearIssueComments")) {
         return jsonResponse({
           data: {
@@ -233,8 +246,9 @@ describe("Linear backend API", () => {
             createdAt: "2026-06-20T12:00:00.000Z",
             url: "https://linear.app/acme/issue/ENG-123",
             priority: 2,
+            prioritySortOrder: 17,
             priorityLabel: "High",
-            state: { name: "Todo", type: "unstarted" },
+            state: { name: "Todo", type: "unstarted", position: 2 },
             team: { key: "ENG", name: "Engineering" },
             assignee: { name: "Ada" },
             creator: { name: "Grace" },
@@ -252,6 +266,8 @@ describe("Linear backend API", () => {
       description: "Build the integration",
       sortOrder: 42,
       priority: 2,
+      prioritySortOrder: 17,
+      statusPosition: 2,
       creatorName: "Grace",
       projectName: "Integrations",
       cycleName: "Cycle 1",

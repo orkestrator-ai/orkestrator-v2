@@ -113,6 +113,81 @@ function openCodeStructuredPrompt(prompt: string, schema: JsonSchema): string {
   return `${prompt}\n\n## Required OpenCode output\n\nReturn only one JSON value matching this JSON Schema. Do not wrap it in Markdown or add commentary.\n\n${JSON.stringify(schema)}`;
 }
 
+// Bounds for the prose-wrapped JSON recovery scan. The scan is a last-resort
+// tolerance for models that wrap the required JSON value in a sentence; the
+// bounds keep pathological output from becoming unbounded work.
+const OPEN_CODE_STRUCTURED_RECOVERY_CHARS = 16 * 1024;
+const OPEN_CODE_STRUCTURED_RECOVERY_CANDIDATES = 16;
+
+/**
+ * Try to parse `candidate` as a JSON value. `undefined` is the sentinel for
+ * "not JSON" because `JSON.parse` never produces `undefined`.
+ */
+function tryParseJson(candidate: string): unknown {
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Extract the well-formed JSON document that begins at `start` in `text`, if
+ * one exists, by tracking bracket balance outside of string literals.
+ */
+function parseJsonDocumentAt(text: string, start: number): unknown {
+  const open = text[start];
+  if (open !== "{" && open !== "[") return undefined;
+  const close = open === "{" ? "}" : "]";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === open) {
+      depth += 1;
+    } else if (ch === close) {
+      depth -= 1;
+      if (depth === 0) {
+        return tryParseJson(text.slice(start, i + 1));
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Last-resort recovery for a model that wrapped the required JSON document in
+ * prose (a lead-in sentence or a trailing summary). Scans backwards so the
+ * last well-formed document wins, and only balanced `{...}`/`[...]` documents
+ * are accepted — arbitrary prose is never interpreted as JSON.
+ */
+function lastWellFormedJson(text: string): unknown {
+  const scanned = text.slice(0, OPEN_CODE_STRUCTURED_RECOVERY_CHARS);
+  let candidates = 0;
+  for (let i = scanned.length - 1; i >= 0; i--) {
+    const ch = scanned[i];
+    if (ch !== "{" && ch !== "[") continue;
+    const parsed = parseJsonDocumentAt(scanned, i);
+    if (parsed !== undefined) return parsed;
+    candidates += 1;
+    if (candidates >= OPEN_CODE_STRUCTURED_RECOVERY_CANDIDATES) break;
+  }
+  return undefined;
+}
+
 function parseOpenCodeStructuredText(parts: unknown): unknown {
   if (!Array.isArray(parts)) throw new Error("OpenCode returned no structured text");
   const text = parts
@@ -126,16 +201,25 @@ function parseOpenCodeStructuredText(parts: unknown): unknown {
     .trim();
   if (!text) throw new Error("OpenCode returned no structured text");
 
-  try {
-    return JSON.parse(text);
-  } catch {
-    // The prompt explicitly forbids fences, but accepting one exact JSON fence
-    // prevents harmless presentation formatting from turning a valid result
-    // into a retry loop. Arbitrary prose is deliberately not searched for JSON.
-    const fenced = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i)?.[1]?.trim();
-    if (!fenced) throw new Error("OpenCode returned malformed structured text");
-    return JSON.parse(fenced);
+  // The prompt asks for a bare JSON value; accept it verbatim.
+  const exact = tryParseJson(text);
+  if (exact !== undefined) return exact;
+
+  // One exact JSON fence is harmless presentation formatting. Arbitrary prose
+  // is not searched for JSON here — the bounded recovery below accepts only
+  // balanced JSON documents, never prose.
+  const fenced = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i)?.[1]?.trim();
+  if (fenced !== undefined) {
+    const fencedValue = tryParseJson(fenced);
+    if (fencedValue !== undefined) return fencedValue;
   }
+
+  // Models occasionally wrap the value in a sentence or append a summary.
+  // Recover the last well-formed JSON document before giving up.
+  const recovered = lastWellFormedJson(text);
+  if (recovered !== undefined) return recovered;
+
+  throw new Error("OpenCode returned malformed structured text");
 }
 
 /**

@@ -3910,6 +3910,84 @@ describe("OpenCode build pipeline provider", () => {
         }],
       });
       await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("recovers a prose-wrapped JSON document without interpreting arbitrary prose", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      const parentID = expectedOpenCodeMessageId("request-1");
+      const reply = (text: string) => ({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID,
+            time: { completed: 1 },
+          },
+          parts: [{ type: "text", text }],
+        }],
+      });
+
+      // A trailing summary after the required JSON value is the common recovery case.
+      fake.setMessagesResponse(reply('{"complete":true}\n\nAll checks passed.'));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+
+      // A lead-in sentence before the JSON value.
+      fake.setMessagesResponse(reply('The result is {"complete":false}'));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: false } });
+
+      // The last well-formed document wins when prose contains several.
+      fake.setMessagesResponse(reply('Example {"nope":1}. Answer {"complete":true}.'));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+
+      // A multiline document inside a fence, and a fence without the trailing
+      // newline before the closing backticks, are still recovered.
+      fake.setMessagesResponse(reply('```json\n{\n  "complete": false\n}\n```'));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: false } });
+
+      fake.setMessagesResponse(reply('```json\n{"complete":true}```'));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+
+      // Streaming can split a message across several text parts; joining them
+      // must still recover the document.
+      fake.setMessagesResponse({
+        data: [{
+          info: {
+            role: "assistant",
+            parentID,
+            time: { completed: 1 },
+          },
+          parts: [
+            { type: "text", text: 'Here is the result: {"compl' },
+            { type: "reasoning", text: "ignored" },
+            { type: "text", text: 'ete":true}' },
+          ],
+        }],
+      });
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: { complete: true } });
+
+      // Bare JSON primitives pass through for the workflow layer to validate.
+      fake.setMessagesResponse(reply("true"));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: true });
+
+      fake.setMessagesResponse(reply("42"));
+      await expect(provider.structured("owned-session", "request-1")).resolves
+        .toMatchObject({ ok: true, value: 42 });
+
+      // Prose with no JSON document is still rejected rather than guessed.
+      fake.setMessagesResponse(reply("I could not verify the build."));
+      await expect(provider.structured("owned-session", "request-1")).resolves
         .toMatchObject({
           ok: false,
           error: { code: "malformed_output", retryable: true },

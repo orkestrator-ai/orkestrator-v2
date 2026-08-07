@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -27,24 +27,13 @@ import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
-import { useConfigStore, useProjectStore } from "@/stores";
+import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import {
   BuildLaunchDialog,
   type BuildLaunchSelection,
 } from "@/components/build/BuildLaunchDialog";
-import { buildLaunchDefaults } from "@/lib/build-launch-options";
-import { buildReviewModelCatalog } from "@/lib/review-launch-options";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
-import { useEnvironmentStore } from "@/stores/environmentStore";
 import { readImage } from "@/lib/native/clipboard";
-import {
-  type CachedOpenCodeModel,
-  getCachedOpenCodeModelCatalog,
-  getKanbanImageData,
-  openInBrowser,
-} from "@/lib/backend";
+import { getKanbanImageData, openInBrowser } from "@/lib/backend";
 import {
   composeDraftKey,
   discardComposeDraft,
@@ -115,26 +104,6 @@ function isKanbanCreateDraft(value: unknown): value is KanbanCreateDraft {
     );
 }
 
-function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | null {
-  if (!Array.isArray(value)) return null;
-  if (!value.every((candidate) => {
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
-    const record = candidate as Record<string, unknown>;
-    return typeof record.id === "string"
-      && record.id.trim().length > 0
-      && typeof record.name === "string"
-      && record.name.trim().length > 0
-      && typeof record.provider === "string"
-      && record.provider.trim().length > 0
-      && (record.variants === undefined
-        || (Array.isArray(record.variants)
-          && record.variants.every(
-            (variant) => typeof variant === "string" && variant.trim().length > 0,
-          )));
-  })) return null;
-  return value as CachedOpenCodeModel[];
-}
-
 /** Renders comment text with clickable URLs */
 function CommentText({ text }: { text: string }) {
   const parts = text.split(/(https?:\/\/[^\s]+)/g);
@@ -182,8 +151,6 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
   const { startBuild, navigateToBuild } = useBuildPipeline();
   const getPipelineByTaskId = useBuildPipelineStore((s) => s.getPipelineByTaskId);
-  const config = useConfigStore((s) => s.config);
-  const projects = useProjectStore((s) => s.projects);
   const [isBuildStarting, setIsBuildStarting] = useState(false);
   const [buildDialogOpen, setBuildDialogOpen] = useState(false);
   const [createdTaskForBuild, setCreatedTaskForBuild] = useState<KanbanTask | null>(null);
@@ -195,94 +162,8 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
   const isCreateMode = !!createForProjectId;
   const buildProjectId = createForProjectId ?? task?.projectId ?? "";
-  const buildProjectHasLocalPath = Boolean(
-    projects.find((project) => project.id === buildProjectId)?.localPath,
-  );
-  const launchDefaults = useMemo(
-    () => buildLaunchDefaults(config, buildProjectId, buildProjectHasLocalPath),
-    [buildProjectHasLocalPath, buildProjectId, config],
-  );
-  // Subscribed rather than read through `getState()` inside the render: this
-  // dialog's title, description and comment fields are controlled, so every
-  // keystroke re-renders it and would otherwise rebuild the whole catalog —
-  // including an O(n²) de-dupe across every environment's OpenCode models. The
-  // subscription is also what makes a catalog that arrives after mount reach the
-  // launcher at all.
-  const claudeModels = useClaudeStore((s) => s.models);
-  const codexModels = useCodexStore((s) => s.models);
-  const openCodeModels = useOpenCodeStore((s) => s.models);
-  const openCodeModelSources = useOpenCodeStore((s) => s.modelSource);
-  const environments = useEnvironmentStore((s) => s.environments);
-  const [cachedOpenCodeCatalog, setCachedOpenCodeCatalog] = useState<{
-    projectId: string;
-    models: CachedOpenCodeModel[];
-  } | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setCachedOpenCodeCatalog(null);
-    if (!open || !buildProjectId) return () => { cancelled = true; };
-    void getCachedOpenCodeModelCatalog(buildProjectId)
-      .then((snapshot) => {
-        const models = normalizeCachedOpenCodeModels(snapshot?.models);
-        if (
-          !cancelled
-          && snapshot?.projectId === buildProjectId
-          && models
-        ) {
-          setCachedOpenCodeCatalog({ projectId: buildProjectId, models });
-        }
-      })
-      .catch((error) => {
-        console.warn(
-          "[KanbanTaskDialog] Failed to load cached OpenCode models:",
-          error,
-        );
-      });
-    return () => { cancelled = true; };
-  }, [buildProjectId, open]);
-
-  // OpenCode catalogues are repository-scoped. Only a live environment that is
-  // known to belong to this project may supersede its durable project cache.
-  // A catalogue from another project can contain a model the new environment
-  // cannot start, so it must never be used as a convenient global fallback.
-  const projectOpenCodeModels = useMemo(() => {
-    const projectEnvironmentIds = new Set(
-      environments
-        .filter((environment) => environment.projectId === buildProjectId)
-        .map((environment) => environment.id),
-    );
-    const live = Array.from(projectEnvironmentIds)
-      .filter((environmentId) => openCodeModelSources.get(environmentId) === "server")
-      .flatMap((environmentId) => openCodeModels.get(environmentId) ?? []);
-    const cached = cachedOpenCodeCatalog?.projectId === buildProjectId
-      ? cachedOpenCodeCatalog.models
-      : [];
-    const selected = live.length > 0 ? live : cached;
-    return selected.filter(
-      (model, index, models) =>
-        models.findIndex((candidate) => candidate.id === model.id) === index,
-    );
-  }, [buildProjectId, cachedOpenCodeCatalog, environments, openCodeModelSources, openCodeModels]);
-
-  const launchCatalog = useMemo(
-    () => {
-      // `null` retains the standard Claude/Codex catalogues and the unpinned
-      // OpenCode placeholder without aggregating another project's models.
-      const catalog = buildReviewModelCatalog(null);
-      if (projectOpenCodeModels.length === 0) return catalog;
-      return {
-        ...catalog,
-        opencode: projectOpenCodeModels.map((model) => ({
-          id: model.id,
-          name: model.name,
-          description: model.provider,
-          reasoningEfforts: [...(model.variants ?? [])],
-        })),
-      };
-    },
-    [claudeModels, codexModels, projectOpenCodeModels],
-  );
+  const { catalog: launchCatalog, defaults: launchDefaults } =
+    useBuildLaunchOptions(buildProjectId, open);
 
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");

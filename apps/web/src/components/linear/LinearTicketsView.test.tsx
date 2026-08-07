@@ -47,6 +47,7 @@ const saveComposeDraftMock = mock(async (
   updatedAt: "2026-07-28T00:00:00.000Z",
 }));
 const deleteComposeDraftMock = mock(async (_draftKey: string) => undefined);
+const getCachedOpenCodeModelCatalogMock = mock(async () => null);
 const retryCompletionCommentMock = mock(async (pipelineId: string) => {
   const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
   return {
@@ -70,6 +71,7 @@ mock.module("@/lib/backend", () => ({
   getComposeDraft: getComposeDraftMock,
   saveComposeDraft: saveComposeDraftMock,
   deleteComposeDraft: deleteComposeDraftMock,
+  getCachedOpenCodeModelCatalog: getCachedOpenCodeModelCatalogMock,
   retryBuildPipelineCompletionComment: retryCompletionCommentMock,
 }));
 
@@ -176,6 +178,8 @@ describe("LinearTicketsView", () => {
     }));
     deleteComposeDraftMock.mockReset();
     deleteComposeDraftMock.mockResolvedValue(undefined);
+    getCachedOpenCodeModelCatalogMock.mockReset();
+    getCachedOpenCodeModelCatalogMock.mockResolvedValue(null);
     retryCompletionCommentMock.mockClear();
     startBuildFromLinearIssueMock.mockClear();
     navigateToPipelineMock.mockClear();
@@ -280,7 +284,7 @@ describe("LinearTicketsView", () => {
     expect(titles).toEqual(["Gamma ticket", "Alpha ticket", "Beta ticket"]);
   });
 
-  test("opens ticket details and starts a Linear-backed build", async () => {
+  test("opens the shared build launcher and starts a configured Linear-backed build", async () => {
     renderLinearTicketsView();
 
     fireEvent.click(await screen.findByText("Add Linear integration"));
@@ -290,11 +294,70 @@ describe("LinearTicketsView", () => {
     expect(screen.getByText("Integrations")).toBeTruthy();
     expect(screen.getByText("Initial Linear comment")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /build local/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^build/i }));
+
+    expect(await screen.findByRole("heading", { name: "Configure build" })).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: "Build environment" })).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: "All steps agent" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("checkbox", {
+      name: /Use one configuration for every step/,
+    }));
+    expect(screen.getByRole("radiogroup", { name: "Review agent" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: /^Local/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Start build" }));
 
     await waitFor(() => {
-      expect(startBuildFromLinearIssueMock).toHaveBeenCalledWith(issueDetail, "project-1", "local");
+      expect(startBuildFromLinearIssueMock).toHaveBeenCalledWith(
+        issueDetail,
+        "project-1",
+        "local",
+        {
+          steps: expect.objectContaining({
+            build: expect.objectContaining({ agent: expect.any(String), model: expect.any(String) }),
+            review: expect.objectContaining({ agent: expect.any(String), model: expect.any(String) }),
+          }),
+        },
+      );
     });
+  });
+
+  test("blocks an open launcher when a build becomes active in the background", async () => {
+    renderLinearTicketsView();
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    await screen.findByText("Build Linear support");
+    fireEvent.click(screen.getByRole("button", { name: /^build/i }));
+
+    const startButton = await screen.findByRole("button", {
+      name: "Start build",
+    }) as HTMLButtonElement;
+    const form = startButton.closest("form");
+    expect(form).not.toBeNull();
+    expect(startButton.disabled).toBe(false);
+
+    const activePipeline = buildPipelineFixture({
+      id: "linear-background-build",
+      taskId: "issue-1",
+      environmentId: "env-background-build",
+      phase: "building",
+      source: {
+        type: "linear",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-123",
+      },
+    });
+    act(() => {
+      useBuildPipelineStore.getState().replacePipeline(activePipeline);
+    });
+
+    await waitFor(() => expect(startButton.disabled).toBe(true));
+
+    // A programmatic submit bypasses the disabled button and exercises the
+    // confirmation-time store guard against a stale event ordering.
+    fireEvent.submit(form!);
+    await waitFor(() => {
+      expect(navigateToPipelineMock).toHaveBeenCalledWith(activePipeline);
+    });
+    expect(startBuildFromLinearIssueMock).not.toHaveBeenCalled();
   });
 
   test("posts a new Linear comment from ticket details", async () => {
@@ -485,9 +548,15 @@ describe("LinearTicketsView", () => {
 
     expect(screen.queryByText("Build Linear support")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /build local/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^build/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start build" }));
     await waitFor(() => {
-      expect(startBuildFromLinearIssueMock).toHaveBeenCalledWith(issue2Detail, "project-1", "local");
+      expect(startBuildFromLinearIssueMock).toHaveBeenCalledWith(
+        issue2Detail,
+        "project-1",
+        "containerized",
+        { steps: expect.any(Object) },
+      );
     });
   });
 

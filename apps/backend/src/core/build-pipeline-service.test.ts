@@ -1229,9 +1229,9 @@ describe("BuildPipelineService", () => {
     });
   });
 
-  // The addressing turn reuses the review session to write fixes, then verify
-  // opens a fresh session. Anything addressing left uncommitted is that new
-  // session's baseline, not a violation of it.
+  // Addressing and verification each open fresh sessions. Anything the address
+  // stage leaves uncommitted is the verification session's new baseline, not a
+  // violation of it.
   test("rebaselines verification against what the addressing turn left behind", async () => {
     await withService(async (service, storage, provider, _invocations, controls) => {
       provider.structured = async <T>() => ({
@@ -2395,6 +2395,9 @@ describe("BuildPipelineService", () => {
       const started = await service.start(startInput());
       await service.advanceNow(started.id);
       await service.advanceNow(started.id);
+      // The address stage transfers the completed review conversation into a
+      // fresh session, so construct the retry from a real review stage.
+      await service.advanceNow(started.id);
       const record = await storage.getBuildPipeline(started.id);
       if (!record) throw new Error("Pipeline disappeared");
       const failed = record.snapshot as BuildPipeline;
@@ -2436,11 +2439,12 @@ describe("BuildPipelineService", () => {
       const dispatch = provider.sent.at(-1)!;
       expect(retried.phase).toBe("addressing");
       expect(retried.structuredReview).toEqual(report);
-      expect(retried.sessions.at(-1)).toMatchObject({ phase: "review" });
+      expect(retried.sessions.at(-1)).toMatchObject({ phase: "address" });
       expect(provider.created.at(-1)?.options?.mode).toBe("build");
       expect(dispatch.mode).toBe("build");
       expect(dispatch.schema).toBeUndefined();
       expect(dispatch.prompt).toContain("Address this exact finding");
+      expect(dispatch.prompt).toContain("orkestrator-handoff-transcript-json");
       expect(dispatch.prompt).toContain("non-interactive build session");
     });
   });

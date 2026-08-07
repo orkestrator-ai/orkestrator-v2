@@ -65,6 +65,7 @@ const task: KanbanTask = {
 const steps: BuildStepConfigs = {
   build: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
   review: { agent: "claude", model: "opus[1m]" },
+  address: { agent: "codex", model: "gpt-5.4-mini", reasoningEffort: "medium" },
   verify: { agent: "opencode", model: "provider/model-a" },
   pr: { agent: "claude", model: "sonnet", reasoningEffort: "low" },
   "resolve-conflicts": { agent: "codex", model: "gpt-5.4" },

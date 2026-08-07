@@ -67,6 +67,10 @@ import {
   type ObservedWorktreeSnapshot,
   type ReviewWorktreeSnapshot,
 } from "./build-pipeline-prompts.js";
+import {
+  buildReviewHandoffPrompt,
+  prependReviewHandoff,
+} from "./build-pipeline-handoff.js";
 
 /**
  * How many times the worktree probe is attempted before its result is treated
@@ -95,6 +99,7 @@ const VERIFICATION_SCHEMA: JsonSchema = VERIFICATION_VERDICT_SCHEMA;
 const SESSION_LABELS: Record<PipelineSessionPhase, string> = {
   build: "Build Session",
   review: "Review Session",
+  address: "Address Issues Session",
   verify: "Verification Session",
   fix: "Fix Session",
   pr: "PR Creation Session",
@@ -296,8 +301,9 @@ function sessionPhaseFor(
     case "building":
       return "build";
     case "reviewing":
-    case "addressing":
       return "review";
+    case "addressing":
+      return "address";
     case "verifying":
       return "verify";
     case "fixing":
@@ -1287,11 +1293,7 @@ export class BuildPipelineService {
         if (!pipeline.structuredReview) {
           throw new Error("Cannot retry addressing without the structured review");
         }
-        await this.startStage(pipeline, sessionPhase, phase, {
-          prompt: addressPrompt(pipeline.structuredReview),
-          images: [],
-          mode: "build",
-        });
+        await this.startStage(pipeline, sessionPhase, phase);
       } else {
         await this.startStage(pipeline, sessionPhase, phase);
       }
@@ -1689,6 +1691,8 @@ export class BuildPipelineService {
       ? "build"
       : pipeline.phase === "reviewing"
         ? "review"
+        : pipeline.phase === "addressing"
+          ? "address"
         : pipeline.phase === "verifying"
           ? "verify"
           : pipeline.phase === "fixing"
@@ -1764,7 +1768,7 @@ export class BuildPipelineService {
     });
     const stagePrompt = override
       ? { prompt: override.prompt, images: override.images }
-      : await this.promptFor(pipeline, sessionPhase, validationWorktree);
+      : await this.promptFor(pipeline, sessionPhase, agent, validationWorktree);
     const prompt = withUnattendedPolicy(stagePrompt.prompt);
     const { schema, images } = stagePrompt;
     const requestId = randomUUID();
@@ -1863,10 +1867,8 @@ export class BuildPipelineService {
     const step = sessionPhase
       ? await this.stepSettings(pipeline, sessionPhase)
       : undefined;
-    // `addressing` re-uses the review session to write code, so it explicitly
-    // requires build mode even though review now has the same mode for
-    // validation. Everything else re-states the mode the session was opened
-    // with, so a redispatch cannot land in a different sandbox.
+    // Re-state the mode the session was opened with so a redispatch cannot land
+    // in a different sandbox. Addressing is a writable, independent session.
     const mode = executionModeOverrideForPhase(attempt.phase)
       ?? (sessionPhase && step
         ? executionModeForSessionPhase(sessionPhase, step.agent)
@@ -1903,6 +1905,7 @@ export class BuildPipelineService {
   private async promptFor(
     pipeline: BuildPipeline,
     phase: PipelineSessionPhase,
+    agent: BuildPipelineAgent,
     validationWorktree?: ReviewWorktreeSnapshot,
   ): Promise<{
     prompt: string;
@@ -1927,6 +1930,30 @@ export class BuildPipelineService {
         ),
         schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
         images: pipeline.taskSnapshot.images,
+      };
+    }
+    if (phase === "address") {
+      if (!pipeline.structuredReview) {
+        throw new Error("Cannot address issues without the structured review");
+      }
+      const sourceSession = [...pipeline.sessions].reverse().find(
+        (session) => session.phase === "review",
+      );
+      if (!sourceSession) {
+        throw new Error("Cannot address issues without the review session");
+      }
+      const handoff = buildReviewHandoffPrompt({
+        environmentId: pipeline.environmentId,
+        sourceAgent: sessionAgent(pipeline, sourceSession),
+        destinationAgent: agent,
+        sourceSession,
+      });
+      return {
+        prompt: prependReviewHandoff(
+          handoff,
+          addressPrompt(pipeline.structuredReview),
+        ),
+        images: [],
       };
     }
     if (phase === "verify") {
@@ -1972,26 +1999,7 @@ export class BuildPipelineService {
     });
     pipeline.structuredReview = report;
     if (report.issues.length || report.testCoverageGaps.length) {
-      pipeline.phase = "addressing";
-      const prompt = addressPrompt(report);
-      const request = randomUUID();
-      const startedAt = new Date().toISOString();
-      pipeline.pendingPromptAttempt = {
-        id: randomUUID(),
-        sessionId: session.sdkSessionId,
-        requestId: request,
-        phase: "addressing",
-        prompt,
-        useTaskImages: false,
-        startedAt,
-      };
-      session.turnStartedAt = startedAt;
-      delete pipeline.stallWarning;
-      await this.save(pipeline, pipeline.backendRevision);
-      // Routed through dispatchPending so a lost response keeps the durable
-      // attempt and retries under the same request id, exactly as every other
-      // dispatch does, instead of failing a review that has already succeeded.
-      await this.dispatchPending(pipeline, provider);
+      await this.startStage(pipeline, "address", "addressing");
       return;
     }
     await this.startStage(pipeline, "verify", "verifying");

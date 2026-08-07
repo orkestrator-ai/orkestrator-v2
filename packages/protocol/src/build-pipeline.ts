@@ -59,6 +59,7 @@ export type ResumableBuildPhase = Exclude<
 export type PipelineSessionPhase =
   | "build"
   | "review"
+  | "address"
   | "verify"
   | "fix"
   | "pr"
@@ -68,6 +69,7 @@ export type PipelineSessionPhase =
 export type BuildStepKey =
   | "build"
   | "review"
+  | "address"
   | "verify"
   | "pr"
   | "resolve-conflicts";
@@ -75,6 +77,7 @@ export type BuildStepKey =
 export const BUILD_STEP_KEYS: readonly BuildStepKey[] = Object.freeze([
   "build",
   "review",
+  "address",
   "verify",
   "pr",
   "resolve-conflicts",
@@ -491,6 +494,7 @@ const ENVIRONMENT_TYPES = new Set<BuildPipelineEnvironmentType>([
 const SESSION_PHASES = new Set<PipelineSessionPhase>([
   "build",
   "review",
+  "address",
   "verify",
   "fix",
   "pr",

@@ -165,6 +165,7 @@ function defaultSteps(agent = "claude", model = "sonnet") {
   return {
     build: { ...step },
     review: { ...step },
+    address: { ...step },
     verify: { ...step },
     pr: { ...step },
     "resolve-conflicts": { ...step },
